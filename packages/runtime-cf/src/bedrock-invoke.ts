@@ -1,6 +1,6 @@
 // Bedrock InvokeModel — SigV4-signed POST routed through Cloudflare AI Gateway.
 //
-// The SigV4 + AI-Gateway signing core lives in `@fractalbox/flare-dispatch-bedrock-sigv4`
+// The SigV4 + AI-Gateway signing core lives in `@fractalboxdev/flare-dispatch-bedrock-sigv4`
 // (shared with the demo-agent container twin). This file is the Worker-side
 // caller: it builds the text-only Anthropic-on-Bedrock body, hands it to the
 // shared signer, and parses the response into `{response, usage}`. `pr-review`'s
@@ -12,7 +12,7 @@
 import {
   type AwsCreds,
   invokeBedrockSigned,
-} from "@fractalbox/flare-dispatch-bedrock-sigv4";
+} from "@fractalboxdev/flare-dispatch-bedrock-sigv4";
 
 export type { AwsCreds };
 

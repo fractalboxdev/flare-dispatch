@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — EmailCloudflareLive: the live `email` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — EmailCloudflareLive: the live `email` capability.
 //
 // Backs the `Email` Context.Tag with Cloudflare Email Routing's `send_email`
 // binding (`env.SEND_EMAIL`). The binding's builder overload — `send({ from,
@@ -35,7 +35,7 @@ import {
   type EmailRejection,
   type EmailSendResult,
   type EmailService,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * The minimal surface of Cloudflare's `SendEmail` binding this Layer uses —

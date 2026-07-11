@@ -17,7 +17,7 @@ import { sandbox, type Container } from "../services/sandbox";
 // directories worth caching. The cache key here is the lockfile hash; the
 // runtime `cache` Layer additionally namespaces the R2 archive key per repo,
 // so two repos with an identical lockfile cannot collide (cross-repo
-// poisoning) — see @fractalbox/flare-dispatch-runtime-cf cache-r2.ts.
+// poisoning) — see @fractalboxdev/flare-dispatch-runtime-cf cache-r2.ts.
 const TOOLS = {
   pnpm: {
     lockfile: "pnpm-lock.yaml",

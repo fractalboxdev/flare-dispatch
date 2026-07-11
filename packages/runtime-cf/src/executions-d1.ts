@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — D1ExecutionsLive: the live `executions` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — D1ExecutionsLive: the live `executions` capability.
 //
 // Backs `ExecutionsService` with the D1 binding: one row in `executions` per
 // run invocation, one row in `steps` per step transition (INSERT at entry,
@@ -6,7 +6,7 @@
 //
 // --- One design seam, documented ---------------------------------------------
 //
-// `ExecutionsService.startExecution` (defined in @fractalbox/flare-dispatch-core) carries
+// `ExecutionsService.startExecution` (defined in @fractalboxdev/flare-dispatch-core) carries
 // only `{ id, run, startedAt }`, but the `executions` table has NOT NULL
 // `repo`, `ref`, `sha`, `input_json`, `status` columns. The core interface is
 // fixed and run-agnostic, so the missing columns are supplied *out of band*:
@@ -46,7 +46,7 @@
 // Spec: specs/05-byoc.md § D1 schema, specs/pm/plan.md § PR4.
 
 import { Effect, Layer } from "effect";
-import { Executions, type ExecutionsService } from "@fractalbox/flare-dispatch-core";
+import { Executions, type ExecutionsService } from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * The run-invocation context the `executions` row needs but the core

@@ -17,7 +17,7 @@ All work lands on branch **`alpha`** (keep committing/merging there).
 
 | Phase | What | REWRITE.md | Task |
 | --- | --- | --- | --- |
-| 1 | Monorepo foundation (pnpm workspace, tsconfig, vitest, oxlint, wrangler, `@fractalbox/flare-dispatch-*` skeletons) | §1–§2 | #1 |
+| 1 | Monorepo foundation (pnpm workspace, tsconfig, vitest, oxlint, wrangler, `@fractalboxdev/flare-dispatch-*` skeletons) | §1–§2 | #1 |
 | 2 | PR1 core — `defineRun<O,E,R>` + erased registry; protocol (dedup fingerprint + branded `InstanceId`); `DispatchEvent` + router skeleton; typed `instantiateRun` | §5 PR1, §7, §8 | #2 |
 | 3 | PR1 core — `completeStructured` over `@effect/ai`; four-way `RunOutcome` verdict; `RunError` infra/finding partition | §5 PR1, §8 | #3 |
 | 4 | Capabilities for the slice — `github` (PR diff + post review), `model` (`@effect/ai`), `config`/secrets (`Config`+`Redacted`) | §6 | #4 |

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `childRuns` capability (child-Workflow fan-out).
+// @fractalboxdev/flare-dispatch-core — the `childRuns` capability (child-Workflow fan-out).
 //
 // `spawnChildRun` instantiates an independent `RunWorkflow` instance — a child
 // execution that runs in its own durable Workflow, with its own step budget,
@@ -118,7 +118,7 @@ export interface ChildRunsService {
 }
 
 /** Context.Tag — the child-Workflow dependency a fan-out run carries. */
-export class ChildRuns extends Context.Tag("@fractalbox/flare-dispatch-core/ChildRuns")<
+export class ChildRuns extends Context.Tag("@fractalboxdev/flare-dispatch-core/ChildRuns")<
   ChildRuns,
   ChildRunsService
 >() {}
@@ -131,7 +131,7 @@ export class ChildRuns extends Context.Tag("@fractalbox/flare-dispatch-core/Chil
  * Call inside a `step` for a checkpointed, named spawn — though the deterministic
  * instance id already makes the underlying `create` idempotent on replay even
  * when called outside one. The `fanOut` primitive
- * (`@fractalbox/flare-dispatch-core/primitives`) is the common caller.
+ * (`@fractalboxdev/flare-dispatch-core/primitives`) is the common caller.
  */
 export const spawnChildRun = (
   opts: SpawnChildRunOpts,

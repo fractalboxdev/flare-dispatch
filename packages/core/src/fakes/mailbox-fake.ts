@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Mailbox fake.
+// @fractalboxdev/flare-dispatch-core — Mailbox fake.
 //
 // `RunContext` is the union of *all* capability services, so `CFRuntimeTest`
 // needs a Layer for `Mailbox` even when the run under test never provisions an

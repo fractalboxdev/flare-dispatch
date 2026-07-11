@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — R2ArtifactLive: the live `artifact` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — R2ArtifactLive: the live `artifact` capability.
 //
 // Backs `ArtifactService` with the R2 bucket binding. Two upload modes:
 //
@@ -57,7 +57,7 @@ import {
   Artifact,
   ArtifactUploadFailed,
   type ArtifactService,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import {
   containerTarballPath,
   isRegularFileStat,

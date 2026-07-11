@@ -10,7 +10,7 @@
 //
 // --- Reuse: the SAME review infra as ai-code-review --------------------------
 //
-// The triage model call goes through `@fractalbox/flare-dispatch-review-agent`'s reusable
+// The triage model call goes through `@fractalboxdev/flare-dispatch-review-agent`'s reusable
 // `completeStructured` engine — the `workers-ai` backend machinery
 // `pr-review` uses, resolved from CONFIG_KV under this run's `ci-triage.*`
 // namespace. No model API key (the Workers AI binding is the auth). Reading the
@@ -51,14 +51,14 @@ import {
   type DeploymentRef,
   type SignalT,
   type WorkflowRunRef,
-} from "@fractalbox/flare-dispatch-core";
-import { isoDate, parseList } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { isoDate, parseList } from "@fractalboxdev/flare-dispatch-core/primitives";
 import {
   completeStructured,
   namespacedKey,
   promptKey,
   resolveBackend,
-} from "@fractalbox/flare-dispatch-review-agent";
+} from "@fractalboxdev/flare-dispatch-review-agent";
 
 const NAMESPACE = "ci-triage";
 const key = namespacedKey(NAMESPACE);
@@ -73,7 +73,7 @@ const TRIAGE_MAX_TOKENS = 3072;
 
 // The caller-supplied observability signal contract (`signals/v1`) — the
 // `Signal` shape, `SignalArray` (the capped array runs accept), and the caps —
-// is the canonical `@fractalbox/flare-dispatch-core` contract. This run is one consumer
+// is the canonical `@fractalboxdev/flare-dispatch-core` contract. This run is one consumer
 // of it; see packages/core/src/signals.ts and specs/02-runs.md § Signals.
 
 /** The model's triage of the day's failures. */

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — deferred V0 capability Layers.
+// @fractalboxdev/flare-dispatch-runtime-cf — deferred V0 capability Layers.
 //
 // `RunContext` is the union of *all* capability services, so `CFRuntimeLive`
 // must supply a Layer for every Tag — even the ones a given deploy can't back.
@@ -31,7 +31,7 @@ import {
   Oidc,
   OidcSigningFailed,
   type OidcService,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /** Browser — Browser Rendering binding deferred to V2 (PR9). */
 export const BrowserDeferred: Layer.Layer<Browser> = Layer.succeed(
@@ -91,7 +91,7 @@ export const ConfigDeferred: Layer.Layer<Config> = Layer.succeed(
 /**
  * Github — the fallback until a live HTTP-backed binding lands. The Tag exists
  * so a run author can write `github.openPullRequests(...)` and unit-test it
- * against the in-memory fake (`GithubFake` in `@fractalbox/flare-dispatch-core/testing`).
+ * against the in-memory fake (`GithubFake` in `@fractalboxdev/flare-dispatch-core/testing`).
  * A live deploy that has not wired the GitHub-API caller dies loudly rather
  * than silently returning empty arrays — this surface is V3+ work, paired
  * with the `pr-review-sweep` recipe.

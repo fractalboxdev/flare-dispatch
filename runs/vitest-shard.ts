@@ -32,8 +32,8 @@
 // Spec: specs/02-runs.md § 2, specs/03-dsl.md § Primitives § sandbox.
 
 import { Effect, Schema } from "effect";
-import { artifact, defineRun, sandbox, step } from "@fractalbox/flare-dispatch-core";
-import { sharded, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+import { artifact, defineRun, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
+import { sharded, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract. */
 const VitestShardInput = Schema.Struct({

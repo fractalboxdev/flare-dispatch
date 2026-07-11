@@ -7,7 +7,7 @@
 
 import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
-import { CacheError } from "@fractalbox/flare-dispatch-core";
+import { CacheError } from "@fractalboxdev/flare-dispatch-core";
 import { composeRestoreOr } from "./cache-restore-or";
 
 const container = { id: "c1" } as const;

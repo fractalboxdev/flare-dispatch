@@ -1,4 +1,4 @@
-// Unit tests for the small primitives shipped from @fractalbox/flare-dispatch-core/
+// Unit tests for the small primitives shipped from @fractalboxdev/flare-dispatch-core/
 // primitives. Each primitive composes capability services; tests assert the
 // observable shape (what calls land on the fakes, what shapes are returned)
 // rather than re-asserting the capability behavior under test elsewhere.

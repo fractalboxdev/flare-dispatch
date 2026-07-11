@@ -2,7 +2,7 @@
 // read — every transition is exercised by feeding `decideAdmission` a
 // hand-built observation + a fixed `now`, mirroring `container-lease.test.ts`.
 // The strongly-consistent storage + durable-step poll loop that drive these
-// decisions live in `@fractalbox/flare-dispatch-runtime-cf` / the dispatcher and cannot
+// decisions live in `@fractalboxdev/flare-dispatch-runtime-cf` / the dispatcher and cannot
 // run under plain Node, so the logic is isolated here for full coverage.
 
 import { describe, expect, it } from "vitest";

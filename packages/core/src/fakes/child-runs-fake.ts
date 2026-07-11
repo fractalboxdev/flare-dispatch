@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — ChildRuns fake.
+// @fractalboxdev/flare-dispatch-core — ChildRuns fake.
 //
 // In-memory stand-in for the child-Workflow `create` call. Every `spawn`
 // appends a record to `state.spawned`; tests assert on it directly — e.g.

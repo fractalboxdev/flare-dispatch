@@ -77,8 +77,8 @@ import {
   spawnChildRun,
   StepFailed,
   step,
-} from "@fractalbox/flare-dispatch-core";
-import { loadSecrets, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — specs/02-runs.md § 1. */
 const OffloadTestInput = Schema.Struct({

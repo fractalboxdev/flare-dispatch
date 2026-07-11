@@ -18,11 +18,11 @@
 // Spec: specs/08-self-healing.md § 6.3.
 
 import { Effect, Schema } from "effect";
-import { modelGateway, type ModelCompletionRequest } from "@fractalbox/flare-dispatch-core";
+import { modelGateway, type ModelCompletionRequest } from "@fractalboxdev/flare-dispatch-core";
 // Import from the lean subpath (NOT the package index) so the route's module
 // graph doesn't pull @cloudflare/sandbox — keeps it loadable under plain-node
-// vitest and out of the non-sandbox bundle. Mirrors @fractalbox/flare-dispatch-core/signals.
-import { makeModelGatewayLive } from "@fractalbox/flare-dispatch-runtime-cf/model-gateway";
+// vitest and out of the non-sandbox bundle. Mirrors @fractalboxdev/flare-dispatch-core/signals.
+import { makeModelGatewayLive } from "@fractalboxdev/flare-dispatch-runtime-cf/model-gateway";
 import type { Env } from "../env";
 import {
   callerAgentToken,

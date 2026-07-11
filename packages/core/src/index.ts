@@ -1,12 +1,12 @@
-// @fractalbox/flare-dispatch-core — public API.
+// @fractalboxdev/flare-dispatch-core — public API.
 //
 // The DSL a run author builds against: the run frame (`defineRun`, `step`),
 // the six capability namespaces, and the tagged error types. Primitives — the
 // reusable compositions built on these capabilities — are a separate entry
 // point so the layer boundary stays visible:
 //
-//   import { defineRun, step, sandbox } from "@fractalbox/flare-dispatch-core";
-//   import { workspace, sharded }       from "@fractalbox/flare-dispatch-core/primitives";
+//   import { defineRun, step, sandbox } from "@fractalboxdev/flare-dispatch-core";
+//   import { workspace, sharded }       from "@fractalboxdev/flare-dispatch-core/primitives";
 //
 // Spec: specs/03-dsl.md.
 

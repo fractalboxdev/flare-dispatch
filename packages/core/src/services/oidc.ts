@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `oidc` capability (Worker self-issued OIDC).
+// @fractalboxdev/flare-dispatch-core — the `oidc` capability (Worker self-issued OIDC).
 //
 // The Dispatcher is a first-class OIDC issuer: it mints short-lived JWTs
 // against a stable signing key whose public half is served at the deploy's
@@ -52,12 +52,12 @@ export interface OidcService {
 }
 
 /** Context.Tag — the dependency a run carries until a Layer provides it. */
-export class Oidc extends Context.Tag("@fractalbox/flare-dispatch-core/Oidc")<
+export class Oidc extends Context.Tag("@fractalboxdev/flare-dispatch-core/Oidc")<
   Oidc,
   OidcService
 >() {}
 
-/** The `oidc` accessor namespace — what runs import from `@fractalbox/flare-dispatch-core`. */
+/** The `oidc` accessor namespace — what runs import from `@fractalboxdev/flare-dispatch-core`. */
 export const oidc = {
   sign: (opts: {
     audience: string;

@@ -14,7 +14,7 @@ import {
   enqueueInlineEvent,
   type InlineEventQueue,
   makeCFRuntimeTest,
-} from "@fractalbox/flare-dispatch-core/testing";
+} from "@fractalboxdev/flare-dispatch-core/testing";
 import {
   bumpFor,
   nextVersion,

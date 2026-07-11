@@ -14,7 +14,7 @@
 import {
   __clearTokenCache,
   __clearRepoInstallationCache,
-} from "@fractalbox/flare-dispatch-github-app";
+} from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect } from "effect";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -27,8 +27,8 @@ import {
   expect,
   it,
 } from "vitest";
-import { github } from "@fractalbox/flare-dispatch-core";
-import { TEST_APP_PRIVATE_KEY } from "@fractalbox/flare-dispatch-github-app/testing";
+import { github } from "@fractalboxdev/flare-dispatch-core";
+import { TEST_APP_PRIVATE_KEY } from "@fractalboxdev/flare-dispatch-github-app/testing";
 import { type GithubLiveConfig, makeGithubLive } from "./github-live";
 
 type Recorded = {

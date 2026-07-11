@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — GitHub Actions workflow-run read.
+// @fractalboxdev/flare-dispatch-github-app — GitHub Actions workflow-run read.
 //
 // `listActionRuns` reads a repo's recent workflow runs:
 //   GET /repos/{owner}/{repo}/actions/runs?status={status}&per_page={n}
@@ -6,7 +6,7 @@
 // The `ci-triage` recipe scans these for failures across the repos the App is
 // installed on. Authenticated with an installation access token
 // (installation-token.ts) — never an App JWT, never a PAT. Provider-neutral
-// plain `async`; the Effect Layer (`makeGithubLive` in @fractalbox/flare-dispatch-runtime-cf)
+// plain `async`; the Effect Layer (`makeGithubLive` in @fractalboxdev/flare-dispatch-runtime-cf)
 // wraps it.
 
 import {

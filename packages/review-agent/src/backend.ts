@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-review-agent — configurable model backend.
+// @fractalboxdev/flare-dispatch-review-agent — configurable model backend.
 //
 // The engine is provider-agnostic by construction: every model call goes through
 // the `modelGateway` capability (see engine.ts), which the runtime backs with

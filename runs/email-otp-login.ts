@@ -22,8 +22,8 @@
 // DSL:  provisionInbox + waitForOtp (primitives) + sandbox.exec + io.log.
 
 import { Effect, Schema } from "effect";
-import { AcceptanceFailed, defineRun, io, sandbox, step } from "@fractalbox/flare-dispatch-core";
-import { provisionInbox, waitForOtp } from "@fractalbox/flare-dispatch-core/primitives";
+import { AcceptanceFailed, defineRun, io, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
+import { provisionInbox, waitForOtp } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Substitute `{{email}}` / `{{code}}` placeholders in a JSON body template. */
 export const fillTemplate = (

@@ -5,7 +5,7 @@
 // `parseList` (split a comma/space/newline-separated CONFIG_KV value). They live
 // here, not in a sibling `runs/_shared.ts`, so a recipe that is a verbatim copy
 // of its deployed run still resolves the import (recipes already import from
-// `@fractalbox/flare-dispatch-core/primitives`); a relative sibling import would break the
+// `@fractalboxdev/flare-dispatch-core/primitives`); a relative sibling import would break the
 // copy.
 //
 // Pure — no capability needed (like `sharded`). Layer: 03-dsl § Primitives.

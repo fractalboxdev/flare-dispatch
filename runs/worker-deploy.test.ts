@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { it } from "@effect/vitest";
 import { Cause, Effect, Exit, Option } from "effect";
 import { describe, expect } from "vitest";
-import { makeCFRuntimeTest } from "@fractalbox/flare-dispatch-core/testing";
+import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import { workerDeploy } from "./worker-deploy";
 
 const DEPLOY_CMD = "pnpm build && pnpm exec wrangler deploy";

@@ -11,8 +11,8 @@
 // recipe directory stays self-contained for copy-paste.
 
 import { Effect, Schema } from "effect";
-import { defineRun, io, step } from "@fractalbox/flare-dispatch-core";
-import { probeHttp } from "@fractalbox/flare-dispatch-core/primitives";
+import { defineRun, io, step } from "@fractalboxdev/flare-dispatch-core";
+import { probeHttp } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const DeploySmokeInput = Schema.Struct({
   repo: Schema.String,

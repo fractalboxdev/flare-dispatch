@@ -1,10 +1,10 @@
-// @fractalbox/flare-dispatch-core — the `github` capability (read-only GitHub access).
+// @fractalboxdev/flare-dispatch-core — the `github` capability (read-only GitHub access).
 //
 // The symmetric *read* surface to the `Checks` capability's write side
 // (check-runs callback). Scoped to the installations of the FlareDispatch
 // GitHub App; runs never see a token — the live Layer mints, caches, and
 // scopes them via the same installation-token machinery the Checks Layer
-// uses (`@fractalbox/flare-dispatch-github-app`).
+// uses (`@fractalboxdev/flare-dispatch-github-app`).
 //
 // Deliberately read-only and narrow: a run produces `findings` and an
 // output, and the Dispatcher renders the check-run. The capability exists
@@ -269,7 +269,7 @@ export interface GithubService {
 }
 
 /** Context.Tag — the dependency a run carries until a Layer provides it. */
-export class Github extends Context.Tag("@fractalbox/flare-dispatch-core/Github")<
+export class Github extends Context.Tag("@fractalboxdev/flare-dispatch-core/Github")<
   Github,
   GithubService
 >() {}

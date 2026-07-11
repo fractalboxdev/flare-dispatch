@@ -5,8 +5,8 @@
 import { it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
-import { makeCFRuntimeTest } from "@fractalbox/flare-dispatch-core/testing";
-import type { ModelCompletionResult } from "@fractalbox/flare-dispatch-core";
+import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
+import type { ModelCompletionResult } from "@fractalboxdev/flare-dispatch-core";
 import { specDriftPr } from "./spec-drift-pr";
 
 const firedAt = Date.UTC(2026, 5, 3); // 2026-06-03

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — StepOpts.
+// @fractalboxdev/flare-dispatch-core — StepOpts.
 //
 // Extracted into its own module so both `step` (step.ts) and the `StepRunner`
 // service (services/step-runner.ts) can depend on the type without a cycle.

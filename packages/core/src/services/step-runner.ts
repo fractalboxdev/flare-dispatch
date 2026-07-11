@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `StepRunner` capability: the swappable step seam.
+// @fractalboxdev/flare-dispatch-core — the `StepRunner` capability: the swappable step seam.
 //
 // `step(name, body, opts)` does NOT itself decide *how* a step is checkpointed.
 // It delegates to the `StepRunner` service — a Context.Tag — so the durable
@@ -8,7 +8,7 @@
 //     CF Workflow), records start/end into `ExecutionsService`. This is what
 //     unit tests exercise.
 //
-//   * PR4's CF runtime: `StepRunnerCloudflare` (lives in @fractalbox/flare-dispatch-
+//   * PR4's CF runtime: `StepRunnerCloudflare` (lives in @fractalboxdev/flare-dispatch-
 //     runtime-cf) backs each `step()` call with `WorkflowStep.do(name, ...)`.
 //     CF Workflows is imperative — `step.do` awaits a Promise and expects a
 //     THROWN error to fail+retry a step — so that runner wraps the body with
@@ -64,5 +64,5 @@ export interface StepRunnerService {
 
 /** Context.Tag — the step-execution strategy a run carries until a Layer binds it. */
 export class StepRunner extends Context.Tag(
-  "@fractalbox/flare-dispatch-core/StepRunner",
+  "@fractalboxdev/flare-dispatch-core/StepRunner",
 )<StepRunner, StepRunnerService>() {}

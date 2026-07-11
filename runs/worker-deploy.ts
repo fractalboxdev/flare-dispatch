@@ -58,8 +58,8 @@ import {
   io,
   sandbox,
   step,
-} from "@fractalbox/flare-dispatch-core";
-import { loadSecrets, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const WorkerDeployInput = Schema.Struct({
   repo: Schema.String, // "owner/name"

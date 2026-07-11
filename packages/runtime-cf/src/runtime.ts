@@ -1,7 +1,7 @@
-// @fractalbox/flare-dispatch-runtime-cf — CFRuntimeLive: the composed live runtime Layer.
+// @fractalboxdev/flare-dispatch-runtime-cf — CFRuntimeLive: the composed live runtime Layer.
 //
 // `Layer.mergeAll` of every capability Layer, wired to the real Cloudflare
-// bindings — the production counterpart of `@fractalbox/flare-dispatch-core/testing`'s
+// bindings — the production counterpart of `@fractalboxdev/flare-dispatch-core/testing`'s
 // `CFRuntimeTest`. A run Effect provided this Layer executes against live D1 /
 // R2 / Containers / Workflows. specs/03-dsl.md § Layers sketches `CFRuntimeLive`
 // as a static value; in practice it is per-execution — the D1 `executions`
@@ -17,7 +17,7 @@
 
 import { type Sandbox } from "@cloudflare/sandbox";
 import { Layer } from "effect";
-import type { RunContext } from "@fractalbox/flare-dispatch-core";
+import type { RunContext } from "@fractalboxdev/flare-dispatch-core";
 import { makeR2ArtifactLive } from "./artifact-r2";
 import {
   type BrowserRenderingConfig,

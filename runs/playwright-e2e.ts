@@ -19,8 +19,8 @@ import {
   sandbox,
   step,
   type WebhookPayload,
-} from "@fractalbox/flare-dispatch-core";
-import { sharded, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { sharded, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const PlaywrightE2EInput = Schema.Struct({
   repo: Schema.String,

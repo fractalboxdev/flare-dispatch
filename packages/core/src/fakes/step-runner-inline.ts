@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — StepRunnerInline: the test/dev step runner.
+// @fractalboxdev/flare-dispatch-core — StepRunnerInline: the test/dev step runner.
 //
 // The non-CF `StepRunner` binding: runs each `step()` body Effect *inline* (no
 // CF Workflow, no `WorkflowStep.do`, no Promise boundary) and records the step

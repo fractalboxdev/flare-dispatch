@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — read a container file as a stream + byte size.
+// @fractalboxdev/flare-dispatch-runtime-cf — read a container file as a stream + byte size.
 //
 // The artifact/cache upload path needs `{ content, size }` for
 // `putStream`'s known-length R2 requirement. `readFile(path, { encoding:

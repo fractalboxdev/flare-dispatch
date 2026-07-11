@@ -2,7 +2,7 @@
 // read — every transition is exercised by feeding `decideLease` a hand-built
 // lease row + a fixed `now`, mirroring `artifact-tar-path.test.ts`. The
 // strongly-consistent storage + poll loop that drive these decisions live in
-// `@fractalbox/flare-dispatch-runtime-cf` and cannot run under plain Node, so the logic is
+// `@fractalboxdev/flare-dispatch-runtime-cf` and cannot run under plain Node, so the logic is
 // isolated here for full coverage.
 
 import { describe, expect, it } from "vitest";

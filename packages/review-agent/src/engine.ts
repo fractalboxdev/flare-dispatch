@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-review-agent — the Worker-side review engine.
+// @fractalboxdev/flare-dispatch-review-agent — the Worker-side review engine.
 //
 // Three Effect functions the `pr-review` run composes:
 //
@@ -17,7 +17,7 @@
 // --- Transport (reviewDomain only): the `modelGateway` capability ------------
 //
 // `reviewDomain`'s model calls go through the `modelGateway` capability
-// (`@fractalbox/flare-dispatch-core`), which the runtime backs with the Cloudflare Workers
+// (`@fractalboxdev/flare-dispatch-core`), which the runtime backs with the Cloudflare Workers
 // AI binding (`env.AI`) routed through an AI Gateway. The binding is the auth
 // (Workers AI is account-billed), so NO model API key travels with the request —
 // the engine carries no base url and no secret. The engine just yields the
@@ -43,7 +43,7 @@ import {
   ModelGateway,
   type ModelTool,
   type ModelToolCall,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import { Effect, Either, JSONSchema, ParseResult, Schema } from "effect";
 import { type ReviewMode } from "./backend.js";
 import { ModelCallFailed, StructuredOutputInvalid } from "./errors.js";

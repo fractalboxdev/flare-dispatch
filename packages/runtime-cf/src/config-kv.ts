@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — ConfigKvLive: the live `config` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — ConfigKvLive: the live `config` capability.
 //
 // Backs `ConfigService` with a Workers KV namespace. `config.get(key)` is a
 // plain KV read; `config.getJSON(key, schema)` reads, JSON-parses, and decodes
@@ -14,7 +14,7 @@
 // Spec: specs/03-dsl.md § config, specs/pm/plan.md § PR8.
 
 import { Effect, Layer, Option, Schema } from "effect";
-import { Config, type ConfigService } from "@fractalbox/flare-dispatch-core";
+import { Config, type ConfigService } from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * Build the live `Config` Layer bound to a KV namespace.

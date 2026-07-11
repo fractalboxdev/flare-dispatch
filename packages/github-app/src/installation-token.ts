@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — installation access-token exchange + cache.
+// @fractalboxdev/flare-dispatch-github-app — installation access-token exchange + cache.
 //
 // A GitHub App JWT only authenticates the *App*; to act against a repo the App
 // must exchange the JWT for an *installation access token*

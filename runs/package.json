@@ -1,8 +1,8 @@
 {
-  "name": "@fractalbox/flare-dispatch-runs",
+  "name": "@fractalboxdev/flare-dispatch-runs",
   "version": "0.0.0",
   "private": true,
-  "description": "FlareDispatch starter runs — defineRun programs riding on @fractalbox/flare-dispatch-core.",
+  "description": "FlareDispatch starter runs — defineRun programs riding on @fractalboxdev/flare-dispatch-core.",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -23,8 +23,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fractalbox/flare-dispatch-core": "workspace:*",
-    "@fractalbox/flare-dispatch-review-agent": "workspace:*",
+    "@fractalboxdev/flare-dispatch-core": "workspace:*",
+    "@fractalboxdev/flare-dispatch-review-agent": "workspace:*",
     "effect": "^3.21.0"
   },
   "devDependencies": {

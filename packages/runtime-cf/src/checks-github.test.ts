@@ -13,7 +13,7 @@
 // Spec: specs/04-gha-integration.md § Check-runs callback, specs/pm/plan.md
 // § PR6 acceptance.
 
-import { __clearTokenCache } from "@fractalbox/flare-dispatch-github-app";
+import { __clearTokenCache } from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect } from "effect";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -26,8 +26,8 @@ import {
   expect,
   it,
 } from "vitest";
-import { checks } from "@fractalbox/flare-dispatch-core";
-import { TEST_APP_PRIVATE_KEY } from "@fractalbox/flare-dispatch-github-app/testing";
+import { checks } from "@fractalboxdev/flare-dispatch-core";
+import { TEST_APP_PRIVATE_KEY } from "@fractalboxdev/flare-dispatch-github-app/testing";
 import {
   type ChecksGithubConfig,
   makeChecksGithubLive,

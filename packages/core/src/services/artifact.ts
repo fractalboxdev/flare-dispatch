@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `artifact` capability (R2 artifact upload).
+// @fractalboxdev/flare-dispatch-core — the `artifact` capability (R2 artifact upload).
 //
 // Uploads a file or directory to R2 and returns a signed URL embedded in the
 // check-run summary. Directories tar to .tar.zst. The `r2-artifacts` building
@@ -30,7 +30,7 @@ export interface ArtifactService {
   }) => Effect.Effect<readonly ArtifactInfo[]>;
 }
 
-export class Artifact extends Context.Tag("@fractalbox/flare-dispatch-core/Artifact")<
+export class Artifact extends Context.Tag("@fractalboxdev/flare-dispatch-core/Artifact")<
   Artifact,
   ArtifactService
 >() {}

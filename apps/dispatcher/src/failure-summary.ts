@@ -10,7 +10,7 @@
 // unit-testable without simulating a Workflow.
 
 import { Cause, Exit, Match, Option } from "effect";
-import type { AdmissionTimedOut, RunError } from "@fractalbox/flare-dispatch-core";
+import type { AdmissionTimedOut, RunError } from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * GitHub caps a check-run's `output.summary` at 65535 characters — a longer

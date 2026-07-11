@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — step: the durable checkpoint boundary.
+// @fractalboxdev/flare-dispatch-core — step: the durable checkpoint boundary.
 //
 // `step(name, body)` wraps an Effect in a durable, individually-recorded
 // checkpoint. It does NOT itself decide *how* the checkpoint is realised —

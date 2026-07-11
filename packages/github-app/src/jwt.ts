@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — GitHub App JWT signer.
+// @fractalboxdev/flare-dispatch-github-app — GitHub App JWT signer.
 //
 // A GitHub App authenticates to `/app/*` endpoints with a short-lived JWT
 // signed RS256 with the App's PEM private key. This module produces that JWT

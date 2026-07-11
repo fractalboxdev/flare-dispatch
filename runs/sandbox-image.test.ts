@@ -16,7 +16,7 @@
 // new CDP run, can't slip past an out-of-date table.
 
 import { describe, expect, it } from "vitest";
-import type { Run } from "@fractalbox/flare-dispatch-core";
+import type { Run } from "@fractalboxdev/flare-dispatch-core";
 import * as catalog from "./index";
 
 // `./index` exports run values only; surface them as the catalog under test.

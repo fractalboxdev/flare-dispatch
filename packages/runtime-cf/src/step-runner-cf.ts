@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — StepRunnerCloudflare: the live step boundary.
+// @fractalboxdev/flare-dispatch-runtime-cf — StepRunnerCloudflare: the live step boundary.
 //
 // The production `StepRunner` binding — the CF counterpart to the test
 // runtime's `StepRunnerInline`. It backs each `step(name, body, opts)` call
@@ -32,7 +32,7 @@
 //
 // Spec: specs/03-dsl.md § step + § The runEffect boundary shim, plan § PR4.
 
-import { ApprovalTimedOut, EventPayloadInvalid } from "@fractalbox/flare-dispatch-core";
+import { ApprovalTimedOut, EventPayloadInvalid } from "@fractalboxdev/flare-dispatch-core";
 import { Cause, Duration, Effect, Exit, Layer, Option, Schema } from "effect";
 import {
   Executions,
@@ -45,7 +45,7 @@ import {
   type StepOpts,
   StepRunner,
   type StepRunnerService,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * The minimal `WorkflowStep` surface the runner needs. CF's full type covers

@@ -4,8 +4,8 @@
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect } from "vitest";
-import { makeCFRuntimeTest } from "@fractalbox/flare-dispatch-core/testing";
-import type { CloudflareUsage, ModelCompletionResult } from "@fractalbox/flare-dispatch-core";
+import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
+import type { CloudflareUsage, ModelCompletionResult } from "@fractalboxdev/flare-dispatch-core";
 import { finopsAudit } from "./finops-audit";
 
 const firedAt = Date.UTC(2026, 5, 22); // 2026-06-22 (a Monday)

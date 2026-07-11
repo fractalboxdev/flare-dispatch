@@ -1,7 +1,7 @@
-# @fractalbox/flare-dispatch-review-agent
+# @fractalboxdev/flare-dispatch-review-agent
 
 A provider-agnostic, **Worker-side** code-review engine that calls a model
-through the `modelGateway` capability (`@fractalbox/flare-dispatch-core`) — backed by the
+through the `modelGateway` capability (`@fractalboxdev/flare-dispatch-core`) — backed by the
 **Cloudflare Workers AI binding** (`env.AI`) routed through an AI Gateway. Powers
 the `pr-review` run (`runs/pr-review.ts`) — there is no `review-agent` container
 CLI; every model call happens in the Worker against a configurable backend.

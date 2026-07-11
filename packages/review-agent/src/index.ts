@@ -1,7 +1,7 @@
-// @fractalbox/flare-dispatch-review-agent — public API.
+// @fractalboxdev/flare-dispatch-review-agent — public API.
 //
 // A provider-agnostic, Worker-side code-review engine that calls a model
-// through the `modelGateway` capability (`@fractalbox/flare-dispatch-core`) — backed by the
+// through the `modelGateway` capability (`@fractalboxdev/flare-dispatch-core`) — backed by the
 // Cloudflare Workers AI binding via an AI Gateway, so NO model API key is
 // configured (the binding is the auth). The `pr-review` run composes these into
 // a real review:
@@ -10,7 +10,7 @@
 //     resolveBackend,
 //     riskTier, reviewDomain, coordinate,
 //     stripDiffNoise, ReviewOutput, type Finding,
-//   } from "@fractalbox/flare-dispatch-review-agent";
+//   } from "@fractalboxdev/flare-dispatch-review-agent";
 //
 // Backend selection + the operator config contract live in `backend.ts`; the
 // model-calling engine in `engine.ts`; the shared wire schemas in `schemas.ts`.

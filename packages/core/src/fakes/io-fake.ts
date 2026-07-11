@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — IO fake.
+// @fractalboxdev/flare-dispatch-core — IO fake.
 //
 // Deterministic `now` (a monotonically advancing clock) and `uuid` (a counter)
 // so step replay and test assertions are reproducible. `log` collects entries

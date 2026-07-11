@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — create a GitHub Release.
+// @fractalboxdev/flare-dispatch-github-app — create a GitHub Release.
 //
 // `createRelease` publishes a release:
 //   POST /repos/{owner}/{repo}/releases  { tag_name, target_commitish, name, body, ... }
@@ -11,7 +11,7 @@
 //
 // Authenticated with an installation access token (installation-token.ts) —
 // never an App JWT, never a PAT. Provider-neutral plain `async`; the Effect
-// Layer (`makeGithubLive` in @fractalbox/flare-dispatch-runtime-cf) wraps it.
+// Layer (`makeGithubLive` in @fractalboxdev/flare-dispatch-runtime-cf) wraps it.
 
 import { assertOk, ghHeaders, resolveClient, splitRepo } from "./http";
 

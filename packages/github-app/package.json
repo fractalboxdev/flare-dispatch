@@ -1,5 +1,5 @@
 {
-  "name": "@fractalbox/flare-dispatch-github-app",
+  "name": "@fractalboxdev/flare-dispatch-github-app",
   "version": "0.0.0",
   "private": true,
   "description": "FlareDispatch GitHub App auth — RS256 App JWT signing, installation-token exchange + in-memory cache, and check-runs create/update.",

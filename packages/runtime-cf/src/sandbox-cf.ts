@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — SandboxCloudflareLive: the live `sandbox` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — SandboxCloudflareLive: the live `sandbox` capability.
 //
 // Backs `SandboxService` with the Cloudflare Containers binding, via the
 // `@cloudflare/sandbox` SDK. The SDK's `Sandbox` Durable Object wraps a
@@ -60,8 +60,8 @@ import {
   ReadFileFailed,
   Sandbox as SandboxTag,
   type SandboxService,
-} from "@fractalbox/flare-dispatch-core";
-import { getInstallationToken } from "@fractalbox/flare-dispatch-github-app";
+} from "@fractalboxdev/flare-dispatch-core";
+import { getInstallationToken } from "@fractalboxdev/flare-dispatch-github-app";
 import type { ChecksGithubConfig } from "./checks-github";
 import { previewSafeSandboxId } from "./preview-sandbox-id";
 import { authenticateCloneUrl, repoUrl } from "./sandbox-clone-url";

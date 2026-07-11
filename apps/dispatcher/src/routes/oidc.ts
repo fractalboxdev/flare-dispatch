@@ -17,7 +17,7 @@ import type { Env } from "../env";
 /**
  * Public-only JWK derived from the deploy's signing JWK. Strips the private
  * `d` component, pins `use: "sig"` + `alg: "ES256"`. Inlined here (instead
- * of imported from @fractalbox/flare-dispatch-runtime-cf) so the router doesn't drag
+ * of imported from @fractalboxdev/flare-dispatch-runtime-cf) so the router doesn't drag
  * in @cloudflare/containers via the runtime-cf barrel.
  */
 const publicJwkFromSigning = (jwkJson: string): JsonWebKey => {

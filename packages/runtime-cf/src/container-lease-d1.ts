@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — D1-backed container lease.
+// @fractalboxdev/flare-dispatch-runtime-cf — D1-backed container lease.
 //
 // Serializes runs that share a sandbox container id so they never execute
 // concurrently in one container (the contention the demo runs hit: two runs for
@@ -16,7 +16,7 @@
 // new binding.
 //
 // The PURE decision (acquire / wait / reclaim a stale lease) lives in
-// `@fractalbox/flare-dispatch-core` `container-lease.ts` and is unit-tested there; this
+// `@fractalboxdev/flare-dispatch-core` `container-lease.ts` and is unit-tested there; this
 // module is the I/O shell — the atomic SQL + the bounded poll loop. Container
 // boot cannot run under `vitest-pool-workers`, but the loop's termination is
 // governed by the pure `leaseAcquireAttempts` count (tested), so the untestable
@@ -30,7 +30,7 @@ import {
   decideLease,
   type LeaseRecord,
   leaseAcquireAttempts,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * Heartbeat staleness ceiling. A lease whose last heartbeat is older than this

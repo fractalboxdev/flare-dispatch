@@ -7,7 +7,7 @@
 
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Executions } from "@fractalbox/flare-dispatch-core";
+import { Executions } from "@fractalboxdev/flare-dispatch-core";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
 import { countRows, makeTestBindings, type TestBindings } from "./test-support-workers";
 

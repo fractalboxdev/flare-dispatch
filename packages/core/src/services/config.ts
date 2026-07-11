@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `config` capability (read-only dynamic config).
+// @fractalboxdev/flare-dispatch-core — the `config` capability (read-only dynamic config).
 //
 // KV-backed model routing, provider switches, feature flags. Edits propagate
 // to subsequent executions within seconds, no redeploy. Every failure mode
@@ -19,7 +19,7 @@ export interface ConfigService {
   ) => Effect.Effect<Option.Option<A>>;
 }
 
-export class Config extends Context.Tag("@fractalbox/flare-dispatch-core/Config")<
+export class Config extends Context.Tag("@fractalboxdev/flare-dispatch-core/Config")<
   Config,
   ConfigService
 >() {}

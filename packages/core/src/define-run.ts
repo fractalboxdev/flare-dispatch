@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — defineRun.
+// @fractalboxdev/flare-dispatch-core — defineRun.
 //
 // `defineRun` is a passive constructor: it validates the spec at module load
 // and registers the run for discovery. It binds to no runtime — the same Run

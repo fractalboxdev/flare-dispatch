@@ -26,8 +26,8 @@ import { fileURLToPath } from "node:url";
 import { it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
-import { makeCFRuntimeTest } from "@fractalbox/flare-dispatch-core/testing";
-import { ModelGatewayError } from "@fractalbox/flare-dispatch-core";
+import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
+import { ModelGatewayError } from "@fractalboxdev/flare-dispatch-core";
 import { prReview } from "./pr-review";
 
 const baseInput = {

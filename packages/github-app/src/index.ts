@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — public API.
+// @fractalboxdev/flare-dispatch-github-app — public API.
 //
 // GitHub App authentication helpers for the FlareDispatch check-run callback:
 //
@@ -8,7 +8,7 @@
 //   * `createCheckRun` / `updateCheckRun` — post the run verdict.
 //
 // Provider-neutral fetch code: plain typed `async` functions, no Effect
-// dependency. The Effect Layer (`ChecksGithubLive` in @fractalbox/flare-dispatch-runtime-cf)
+// dependency. The Effect Layer (`ChecksGithubLive` in @fractalboxdev/flare-dispatch-runtime-cf)
 // wraps these.
 //
 // Spec: specs/04-gha-integration.md § Check-runs callback, specs/pm/plan.md

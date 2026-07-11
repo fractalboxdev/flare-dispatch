@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Browser / Cache / Config fakes.
+// @fractalboxdev/flare-dispatch-core — Browser / Cache / Config fakes.
 //
 // `RunContext` is the union of *all* capability services, so `CFRuntimeTest`
 // needs a Layer for `Browser`, `Cache`, and `Config` even when the run under

@@ -36,7 +36,7 @@
 // 3. CDP target reachability is solved by exposing the app port.
 //    `attach-cdp` hands the test command a `CDP_WS_URL` — the container's
 //    Playwright process dials Cloudflare Browser Rendering directly (the
-//    `/connect` WS endpoint, see @fractalbox/flare-dispatch-runtime-cf browser-cf.ts).
+//    `/connect` WS endpoint, see @fractalboxdev/flare-dispatch-runtime-cf browser-cf.ts).
 //    The *browser* runs in Cloudflare's cloud and cannot reach the container's
 //    `localhost`, so a `localhost:<port>` target URL is unreachable. The
 //    `expose-app` step calls `sandbox.exposePort(appPort)` to get a public
@@ -60,8 +60,8 @@ import {
   io,
   sandbox,
   step,
-} from "@fractalbox/flare-dispatch-core";
-import { bootApp, loadSecrets, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { bootApp, loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Where `run-tests-start` writes the suite's `DONE:<exitcode>` sentinel. */
 const SENTINEL_PATH = "/tmp/run-tests.done";

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — commit file edits + open/update a PR (Git Data API).
+// @fractalboxdev/flare-dispatch-github-app — commit file edits + open/update a PR (Git Data API).
 //
 // `commitFilesAndOpenPr` commits a set of file edits (writes AND deletions, with
 // per-file modes) and opens/updates a PR — all from the Worker via the Git Data

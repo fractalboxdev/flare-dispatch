@@ -8,7 +8,7 @@
 // isolates over-spends (security review #1). The DO serializes every reserve so
 // the cap is HARD.
 //
-// All decision logic is the pure `@fractalbox/flare-dispatch-core` state machine
+// All decision logic is the pure `@fractalboxdev/flare-dispatch-core` state machine
 // (`agent-budget.ts`); this class only persists the state and applies those
 // transitions under the DO's single-threaded guarantee.
 //
@@ -22,7 +22,7 @@ import {
   remaining,
   settle,
   type AgentBudgetState,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import type { Env } from "./env";
 
 const STATE_KEY = "state";

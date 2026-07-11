@@ -37,8 +37,8 @@ import {
   io,
   sandbox,
   step,
-} from "@fractalbox/flare-dispatch-core";
-import { loadSecrets } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { loadSecrets } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const Input = Schema.Struct({
   // `repo` + `sha` anchor the check-run callback, same as every run.

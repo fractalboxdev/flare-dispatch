@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-bedrock-sigv4 — SigV4 signing core for AWS Bedrock InvokeModel
+// @fractalboxdev/flare-dispatch-bedrock-sigv4 — SigV4 signing core for AWS Bedrock InvokeModel
 // routed through the Cloudflare AI Gateway forwarder.
 //
 // AWS Bedrock's HTTPS host is `bedrock-runtime.<region>.amazonaws.com`, but AI

@@ -19,7 +19,7 @@
 // semantic instance id still collapses same-sha races — accepted, same as the
 // receiver-level dedup guard above it.
 
-import type { CooldownSpec } from "@fractalbox/flare-dispatch-core";
+import type { CooldownSpec } from "@fractalboxdev/flare-dispatch-core";
 
 /** What the KV value under a cooldown key records. */
 type CooldownRecord = {

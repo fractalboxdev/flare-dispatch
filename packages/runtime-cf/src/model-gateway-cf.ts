@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — ModelGatewayLive: the live `modelGateway` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — ModelGatewayLive: the live `modelGateway` capability.
 //
 // Backs the `ModelGateway` Context.Tag with the Cloudflare Workers AI binding
 // (`env.AI`), optionally routed through an AI Gateway. The binding IS the auth —
@@ -90,7 +90,7 @@ import {
   ModelGatewayError,
   type ModelGatewayService,
   type ModelToolCall,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import { invokeBedrockViaAiGateway } from "./bedrock-invoke";
 
 /** A `messages` entry sent to Workers AI. */

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Github fake (read-only GitHub access).
+// @fractalboxdev/flare-dispatch-core — Github fake (read-only GitHub access).
 //
 // In-memory fake of the `github` capability. Tests pre-populate the state with
 // `repositories` / `pullRequests` arrays; the service applies the documented

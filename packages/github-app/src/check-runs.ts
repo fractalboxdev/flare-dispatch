@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — check-runs create / update.
+// @fractalboxdev/flare-dispatch-github-app — check-runs create / update.
 //
 // The GitHub half of FlareDispatch's `finalize` boundary: post the run's
 // green/red verdict back to the originating commit as a check-run.

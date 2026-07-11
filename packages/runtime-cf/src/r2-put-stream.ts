@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — stream a known-length body into R2 without ever
+// @fractalboxdev/flare-dispatch-runtime-cf — stream a known-length body into R2 without ever
 // materialising it whole in the Worker isolate.
 //
 // Container artifacts (a Playwright video.webm + trace.zip bundle) and caches

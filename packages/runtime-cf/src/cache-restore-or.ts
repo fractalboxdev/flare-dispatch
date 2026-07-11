@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — the pure cache `restoreOr` orchestration.
+// @fractalboxdev/flare-dispatch-runtime-cf — the pure cache `restoreOr` orchestration.
 //
 // Factored out of cache-r2.ts so it imports NO Cloudflare bindings (no
 // `@cloudflare/sandbox`) and is therefore unit-testable in plain vitest —
@@ -8,7 +8,7 @@
 // Spec: specs/03-dsl.md § cache, specs/pm/plan.md § PR8.
 
 import { Effect } from "effect";
-import { CacheError, type Container } from "@fractalbox/flare-dispatch-core";
+import { CacheError, type Container } from "@fractalboxdev/flare-dispatch-core";
 
 /** Restore a cached archive into a container. `true` = hit, `false` = miss. */
 export type RestoreFn = (opts: {

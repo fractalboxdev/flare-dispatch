@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — integration-test support, Workers-pool variant.
+// @fractalboxdev/flare-dispatch-runtime-cf — integration-test support, Workers-pool variant.
 //
 // The sibling `test-support.ts` boots Miniflare from Node and drives its
 // bindings from the outside; this variant is for suites that run *inside* the

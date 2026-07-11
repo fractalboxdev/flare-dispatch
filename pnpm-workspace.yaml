@@ -15,7 +15,7 @@ overrides:
 # ran implicitly; allowing them keeps `pnpm install` from erroring with
 # ERR_PNPM_IGNORED_BUILDS after the bump to pnpm 11.
 allowBuilds:
-  # Pulled in transitively by `tsx` (used by @fractalbox/flare-dispatch-cli to
+  # Pulled in transitively by `tsx` (used by @fractalboxdev/flare-dispatch-cli to
   # run src/main.ts). `@parcel/watcher` ships native bindings via
   # `msgpackr-extract`; both run a postinstall to pick the right prebuilt binary.
   '@parcel/watcher': true

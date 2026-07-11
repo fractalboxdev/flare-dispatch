@@ -62,7 +62,7 @@ export interface Env {
   /**
    * Container binding — the LEAN sandbox image, one instance per execution.
    * Typed as a `DurableObjectNamespace<Sandbox>` so `getSandbox(env.RUNS_SANDBOX,
-   * id)` in `@fractalbox/flare-dispatch-runtime-cf` resolves the typed sandbox RPC surface.
+   * id)` in `@fractalboxdev/flare-dispatch-runtime-cf` resolves the typed sandbox RPC surface.
    * The default for every run except those declaring `sandboxImage: "browser"`.
    */
   readonly RUNS_SANDBOX: DurableObjectNamespace<Sandbox>;
@@ -105,7 +105,7 @@ export interface Env {
    * KV namespace backing the `config` capability — dynamic config + the
    * secret store the `loadSecrets` primitive resolves credentials through.
    * Optional: a deploy without it degrades to the dying `Config` stub (a
-   * config-reading run fails loudly). See `@fractalbox/flare-dispatch-runtime-cf`
+   * config-reading run fails loudly). See `@fractalboxdev/flare-dispatch-runtime-cf`
    * `makeConfigKvLive`.
    */
   readonly CONFIG_KV?: KVNamespace;

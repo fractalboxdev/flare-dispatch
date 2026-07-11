@@ -57,7 +57,7 @@ import {
   Executions,
   type RunContext,
   type RunError,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import {
   ADMISSION_MAX_QUEUE_AGE_MS,
   ADMISSION_POLL_EVERY_MS,
@@ -76,8 +76,8 @@ import {
   resolveAdmissionCap,
   runWriteback,
   type WritebackOutcome,
-} from "@fractalbox/flare-dispatch-runtime-cf";
-import { WRITEBACK_ARTIFACT } from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-runtime-cf";
+import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
 import { selectSandboxNs } from "./sandbox-routing";
 import { queuedSummary } from "./admission-summary";

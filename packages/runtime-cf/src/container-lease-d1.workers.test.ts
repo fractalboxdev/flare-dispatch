@@ -1,5 +1,5 @@
 // Integration tests for the D1-backed container lease — the atomic-correctness
-// surface that the pure decision logic (`@fractalbox/flare-dispatch-core`
+// surface that the pure decision logic (`@fractalboxdev/flare-dispatch-core`
 // container-lease.test.ts) cannot cover: the conditional upsert against a real
 // D1 binding. Runs INSIDE workerd via `@cloudflare/vitest-pool-workers` (see
 // `vitest.workers.config.ts`) — the test body executes in the Workers runtime
@@ -15,7 +15,7 @@
 
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ContainerBusy } from "@fractalbox/flare-dispatch-core";
+import { ContainerBusy } from "@fractalboxdev/flare-dispatch-core";
 import { LEASE_TTL_MS, makeContainerLeaseD1 } from "./container-lease-d1";
 import { makeTestBindings, type TestBindings } from "./test-support-workers";
 

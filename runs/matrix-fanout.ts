@@ -37,8 +37,8 @@
 //       recipes/test-matrix/matrix-fanout.run.ts (the recipe form).
 
 import { Effect, Schema } from "effect";
-import { artifact, defineRun, sandbox, step } from "@fractalbox/flare-dispatch-core";
-import { sharded, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+import { artifact, defineRun, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
+import { sharded, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — specs/02-runs.md § 2. */
 const MatrixFanoutInput = Schema.Struct({

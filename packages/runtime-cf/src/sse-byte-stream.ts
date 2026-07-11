@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — decode the Sandbox SDK's SSE-framed file
+// @fractalboxdev/flare-dispatch-runtime-cf — decode the Sandbox SDK's SSE-framed file
 // stream back into raw bytes.
 //
 // `box.readFileStream(path)` does not yield the file's bytes: it yields the

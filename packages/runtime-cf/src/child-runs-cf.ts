@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — ChildRunsCloudflare: the live `childRuns` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — ChildRunsCloudflare: the live `childRuns` capability.
 //
 // Backs `ChildRunsService.spawn` with the CF `Workflow` binding's
 // `create({ id, params })` — the same call the dispatch route makes for a
@@ -34,7 +34,7 @@ import {
   type ChildRunsService,
   ChildSpawnFailed,
   type ChildStatusRecord,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /** The minimal CF `Workflow`-binding surface `spawn` needs. */
 export type WorkflowBindingLike = {

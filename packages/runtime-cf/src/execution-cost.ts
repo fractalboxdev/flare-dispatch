@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — per-execution cost rollup (the finish path).
+// @fractalboxdev/flare-dispatch-runtime-cf — per-execution cost rollup (the finish path).
 //
 // At `finishExecution` the Workflow calls `recordExecutionCost` to denormalize a
 // cost rollup onto the `executions` row (the columns 0005 added). It combines:
@@ -10,7 +10,7 @@
 //     it includes model round-trips + any in-body waits; refining this to the
 //     true sandbox boot→destroy window is a follow-up).
 //
-// via the pure `@fractalbox/flare-dispatch-core` cost engine, which decides the honest
+// via the pure `@fractalboxdev/flare-dispatch-core` cost engine, which decides the honest
 // `metered | mixed | modeled | unmetered` basis. Best-effort: a cost-rollup
 // failure logs a warning and never flips the run's verdict.
 //
@@ -22,7 +22,7 @@ import {
   type SandboxImage,
   INSTANCE_SPECS,
   estimateExecutionCost,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * The container instance type a run's `sandboxImage` lands on. The Durable

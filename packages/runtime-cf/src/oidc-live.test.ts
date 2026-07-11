@@ -8,7 +8,7 @@
 
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { Oidc } from "@fractalbox/flare-dispatch-core";
+import { Oidc } from "@fractalboxdev/flare-dispatch-core";
 import { makeOidcLive, publicJwkFromSigning } from "./oidc-live";
 
 const decodeSegment = (seg: string): unknown => {

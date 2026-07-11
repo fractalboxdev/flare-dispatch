@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — PR review (comment) create.
+// @fractalboxdev/flare-dispatch-github-app — PR review (comment) create.
 //
 // `createPullReview` posts a top-level review on a PR:
 //   POST /repos/{owner}/{repo}/pulls/{number}/reviews  { event, body, commit_id }
@@ -9,7 +9,7 @@
 //
 // Authenticated with an installation access token (installation-token.ts) —
 // never an App JWT, never a PAT. Provider-neutral plain `async`; the Effect
-// Layer (`makeGithubLive` in @fractalbox/flare-dispatch-runtime-cf) wraps it.
+// Layer (`makeGithubLive` in @fractalboxdev/flare-dispatch-runtime-cf) wraps it.
 
 import { assertOk, ghHeaders, resolveClient, splitRepo } from "./http";
 

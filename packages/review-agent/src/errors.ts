@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-review-agent — tagged errors.
+// @fractalboxdev/flare-dispatch-review-agent — tagged errors.
 //
 // One Schema.TaggedError per failure mode the engine surfaces. Callers
 // (`pr-review` run) recover with `Effect.catchTag` — never `._tag` — so the

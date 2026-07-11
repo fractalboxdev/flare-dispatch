@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — RunContext.
+// @fractalboxdev/flare-dispatch-core — RunContext.
 //
 // The aggregate environment a run's Effect carries in its R channel: the union
 // of every capability service. A runtime Layer (CFRuntimeLive / Dev / Test)

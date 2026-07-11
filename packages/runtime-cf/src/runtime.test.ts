@@ -29,9 +29,9 @@
 
 import { Effect, Exit, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Executions, type RunContext } from "@fractalbox/flare-dispatch-core";
-import { CacheFake, sandboxFakeProgram } from "@fractalbox/flare-dispatch-core/testing";
-import { offloadTest } from "@fractalbox/flare-dispatch-runs";
+import { Executions, type RunContext } from "@fractalboxdev/flare-dispatch-core";
+import { CacheFake, sandboxFakeProgram } from "@fractalboxdev/flare-dispatch-core/testing";
+import { offloadTest } from "@fractalboxdev/flare-dispatch-runs";
 import { makeR2ArtifactLive } from "./artifact-r2";
 import { makeChecksGithubLive } from "./checks-github";
 import {

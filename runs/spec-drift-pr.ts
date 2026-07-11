@@ -9,7 +9,7 @@
 //
 // --- Reuse: the SAME review infra as ai-code-review --------------------------
 //
-// The model call goes through `@fractalbox/flare-dispatch-review-agent`'s reusable
+// The model call goes through `@fractalboxdev/flare-dispatch-review-agent`'s reusable
 // `completeStructured` engine — the very `workers-ai` backend machinery
 // `pr-review` uses (tools/json + auto-fallback + Schema-validated
 // output), resolved from CONFIG_KV. No model API key: the Workers AI binding is
@@ -38,9 +38,9 @@ import {
   StepFailed,
   step,
   type Container,
-} from "@fractalbox/flare-dispatch-core";
-import type { GitHubApiError } from "@fractalbox/flare-dispatch-core";
-import { isoDate, parseList, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import type { GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
+import { isoDate, parseList, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 import {
   type BackendUnconfigured,
   completeStructured,
@@ -49,7 +49,7 @@ import {
   promptKey,
   resolveBackend,
   type StructuredOutputInvalid,
-} from "@fractalbox/flare-dispatch-review-agent";
+} from "@fractalboxdev/flare-dispatch-review-agent";
 
 /** The config namespace — every key this run reads is `spec-drift.*`. */
 const NAMESPACE = "spec-drift";

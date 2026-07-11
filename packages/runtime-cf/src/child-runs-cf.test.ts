@@ -7,7 +7,7 @@
 
 import { Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ChildRuns } from "@fractalbox/flare-dispatch-core";
+import { ChildRuns } from "@fractalboxdev/flare-dispatch-core";
 import {
   type ChildRunsLiveConfig,
   deriveChildInstanceId,

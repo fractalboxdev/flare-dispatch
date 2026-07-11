@@ -2,7 +2,7 @@
 
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { Email } from "@fractalbox/flare-dispatch-core";
+import { Email } from "@fractalboxdev/flare-dispatch-core";
 import {
   makeEmailCloudflareLive,
   type SendEmailBinding,

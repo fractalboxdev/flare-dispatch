@@ -1,5 +1,5 @@
 {
-  "name": "@fractalbox/flare-dispatch-core",
+  "name": "@fractalboxdev/flare-dispatch-core",
   "version": "0.0.0",
   "description": "FlareDispatch DSL — defineRun, step, capabilities, and the primitives recipes ride on.",
   "type": "module",

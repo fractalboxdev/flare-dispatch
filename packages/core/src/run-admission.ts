@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — run-admission: the pure admission decision logic.
+// @fractalboxdev/flare-dispatch-core — run-admission: the pure admission decision logic.
 //
 // A merge burst can create more concurrent run executions than the container
 // pool has instances (`max_instances: 16` per class). Without a gate the
@@ -14,7 +14,7 @@
 // many slots are busy?), the row's enqueue time, and the current time, decide
 // what the run should do — proceed, keep waiting, or give up. The
 // strongly-consistent storage + the durable-step poll loop live in the
-// runtime layer (`@fractalbox/flare-dispatch-runtime-cf` `run-admission-d1.ts` + the
+// runtime layer (`@fractalboxdev/flare-dispatch-runtime-cf` `run-admission-d1.ts` + the
 // dispatcher's `RunWorkflow`), which call in here every iteration. Keeping
 // the logic pure mirrors `container-lease.ts`: it is exercised by plain
 // vitest without a container runtime.

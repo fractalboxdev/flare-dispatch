@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — OidcLive: ES256 OIDC token signing.
+// @fractalboxdev/flare-dispatch-runtime-cf — OidcLive: ES256 OIDC token signing.
 //
 // Signs short-lived JWTs against a stable ES256 (ECDSA on P-256 with SHA-256)
 // signing key whose public half is served at the deploy's `/.well-known/
@@ -37,7 +37,7 @@ import {
   Oidc,
   OidcSigningFailed,
   type OidcService,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /** Live Oidc Layer config — operator-supplied at deploy time. */
 export type OidcLiveConfig = {

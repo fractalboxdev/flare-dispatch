@@ -23,7 +23,7 @@ import {
   INBOX_EVENT_TYPE,
   type InboxMessage,
   parseInboxLocalPart,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import type { Env } from "../env";
 import { signalWorkflow } from "../signal-workflow";
 import { parseEmail } from "../mime";

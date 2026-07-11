@@ -59,8 +59,8 @@ import {
   type DemoChapterResult,
   type DemoFailureKindT,
   type Container,
-} from "@fractalbox/flare-dispatch-core";
-import { awsAssumeRole, loadSecrets } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { awsAssumeRole, loadSecrets } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 // Shell single-quote a value so arbitrary story prose (quotes, URLs, `!`, `$`)
 // survives being embedded in the detached `sh -c` command below.

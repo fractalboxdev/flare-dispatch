@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — tagged run errors.
+// @fractalboxdev/flare-dispatch-core — tagged run errors.
 //
 // Every failure a run can produce is a Schema.TaggedError: serializable,
 // pattern-matchable with Match.tag, and carrying a typed payload. Runs recover

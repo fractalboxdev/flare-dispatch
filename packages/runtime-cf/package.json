@@ -1,8 +1,8 @@
 {
-  "name": "@fractalbox/flare-dispatch-runtime-cf",
+  "name": "@fractalboxdev/flare-dispatch-runtime-cf",
   "version": "0.0.0",
   "private": true,
-  "description": "FlareDispatch live runtime — Cloudflare binding Layers (D1, R2, Containers, Workflows) implementing the @fractalbox/flare-dispatch-core service Tags.",
+  "description": "FlareDispatch live runtime — Cloudflare binding Layers (D1, R2, Containers, Workflows) implementing the @fractalboxdev/flare-dispatch-core service Tags.",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -15,16 +15,16 @@
   },
   "dependencies": {
     "@cloudflare/sandbox": "0.10.1",
-    "@fractalbox/flare-dispatch-bedrock-sigv4": "workspace:*",
-    "@fractalbox/flare-dispatch-core": "workspace:*",
-    "@fractalbox/flare-dispatch-github-app": "workspace:*",
+    "@fractalboxdev/flare-dispatch-bedrock-sigv4": "workspace:*",
+    "@fractalboxdev/flare-dispatch-core": "workspace:*",
+    "@fractalboxdev/flare-dispatch-github-app": "workspace:*",
     "effect": "^3.21.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.21",
     "@cloudflare/workers-types": "^4.20260518.1",
     "@effect/vitest": "^0.29.0",
-    "@fractalbox/flare-dispatch-runs": "workspace:*",
+    "@fractalboxdev/flare-dispatch-runs": "workspace:*",
     "miniflare": "4.20260515.0",
     "msw": "^2.7.0",
     "typescript": "^5.6.3",

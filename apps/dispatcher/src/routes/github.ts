@@ -37,7 +37,7 @@
 //
 //   * `/v1/webhooks/github` — App event receiver + HMAC verify + KV install
 //     map. The manifest declares the hook URL but no receiver is wired yet.
-//   * Installation-token caching — `@fractalbox/flare-dispatch-github-app` already exists
+//   * Installation-token caching — `@fractalboxdev/flare-dispatch-github-app` already exists
 //     but isn't called from the Worker on this PR.
 //   * CSRF state-token *binding*. The form carries a `state` so the GitHub
 //     redirect echoes it back, but we don't persist it to KV yet — single-PR

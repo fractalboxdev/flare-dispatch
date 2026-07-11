@@ -11,7 +11,7 @@ import {
   AcceptanceFailed,
   AdmissionTimedOut,
   ExecFailed,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import {
   CHECK_SUMMARY_MAX_CHARS,
   TRUNCATION_NOTE,

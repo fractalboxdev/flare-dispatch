@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Email fake.
+// @fractalboxdev/flare-dispatch-core — Email fake.
 //
 // `RunContext` is the union of *all* capability services, so `CFRuntimeTest`
 // needs a Layer for `Email` even when the run under test never sends mail. The

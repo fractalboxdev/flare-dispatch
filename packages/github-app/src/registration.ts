@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — App registration read + drift diff.
+// @fractalboxdev/flare-dispatch-github-app — App registration read + drift diff.
 //
 // GitHub exposes NO endpoint to *update* an existing App's registration
 // (permissions / events / name) — those are UI-only at

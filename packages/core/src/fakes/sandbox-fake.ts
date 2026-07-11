@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Sandbox fake.
+// @fractalboxdev/flare-dispatch-core — Sandbox fake.
 //
 // In-memory stand-in for container execution. Records every `acquire` / `exec`
 // / `gitClone` call and returns canned `ExecResult`s. `sandboxFakeProgram`

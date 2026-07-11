@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runs — the FlareDispatch starter run catalog.
+// @fractalboxdev/flare-dispatch-runs — the FlareDispatch starter run catalog.
 //
 // The Dispatcher's `RunWorkflow` resolves a dispatched run by name against
 // this module's exports — the seam each new run slots into. V0 shipped

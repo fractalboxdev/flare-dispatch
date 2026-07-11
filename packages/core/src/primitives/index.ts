@@ -1,11 +1,11 @@
-// @fractalbox/flare-dispatch-core/primitives — public exports.
+// @fractalboxdev/flare-dispatch-core/primitives — public exports.
 //
 // Primitives are reusable Effect-TS compositions built on the capabilities
 // (`sandbox`, `browser`, `cache`, `artifact`, `io`, `config`). Recipes import
 // them from here; the layer boundary stays visible at the top of each recipe:
 //
-//   import { defineRun, step, sandbox } from "@fractalbox/flare-dispatch-core";
-//   import { workspace, sharded } from "@fractalbox/flare-dispatch-core/primitives";
+//   import { defineRun, step, sandbox } from "@fractalboxdev/flare-dispatch-core";
+//   import { workspace, sharded } from "@fractalboxdev/flare-dispatch-core/primitives";
 //
 // See specs/03-dsl.md § Primitives and ./README.md.
 

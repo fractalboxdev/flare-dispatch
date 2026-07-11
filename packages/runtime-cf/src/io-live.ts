@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — IOLive: the live `io` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — IOLive: the live `io` capability.
 //
 // Backs `IOService` with the Workers platform primitives: `Date.now()` for the
 // clock, `globalThis.crypto.randomUUID()` for UUIDs, `console` for structured
@@ -17,7 +17,7 @@
 // Spec: specs/03-dsl.md § io, specs/pm/plan.md § PR4.
 
 import { Duration, Effect, Layer, Option, Schema } from "effect";
-import { IO, type IOService } from "@fractalbox/flare-dispatch-core";
+import { IO, type IOService } from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * Options for {@link makeIOLive}. All optional — IOLive runs with no bindings

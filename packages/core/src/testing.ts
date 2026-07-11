@@ -1,14 +1,14 @@
-// @fractalbox/flare-dispatch-core/testing — the in-memory test runtime.
+// @fractalboxdev/flare-dispatch-core/testing — the in-memory test runtime.
 //
 // `CFRuntimeTest` is the full `RunContext` wired to in-memory fakes: a run
 // Effect executes against it in plain `vitest` with no CF, Docker, or network.
 //
 // specs/03-dsl.md § Unit-testing runs sketches `CFRuntimeTest` and
-// `sandboxFakeProgram` as living in a separate `@fractalbox/flare-dispatch-runtime-test`
-// package. V0 consolidates them here, behind the `@fractalbox/flare-dispatch-core/testing`
+// `sandboxFakeProgram` as living in a separate `@fractalboxdev/flare-dispatch-runtime-test`
+// package. V0 consolidates them here, behind the `@fractalboxdev/flare-dispatch-core/testing`
 // sub-path — one fewer package to publish/pin while the surface is small. If
 // the test runtime grows its own dependencies it can be split out later; the
-// import path (`@fractalbox/flare-dispatch-core/testing`) is the seam that makes that
+// import path (`@fractalboxdev/flare-dispatch-core/testing`) is the seam that makes that
 // move mechanical.
 //
 // Spec: specs/pm/plan.md § PR2, specs/03-dsl.md § Layers + § Unit-testing runs.

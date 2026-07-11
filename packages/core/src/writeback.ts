@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — writeback: the run-declared "propose a diff as a PR"
+// @fractalboxdev/flare-dispatch-core — writeback: the run-declared "propose a diff as a PR"
 // contract + its pure manifest validation.
 //
 // A run definition can declare a `writeback` output. The CONTAINER writes a
@@ -25,7 +25,7 @@
 //      GitHub, no container — the same property `run-admission.ts` keeps.
 //
 // The runtime side (read the manifest + blobs from R2, mint the installation
-// token, drive blob→tree→commit→ref→PR) lives in `@fractalbox/flare-dispatch-runtime-cf`
+// token, drive blob→tree→commit→ref→PR) lives in `@fractalboxdev/flare-dispatch-runtime-cf`
 // and the dispatcher's `RunWorkflow`, which call into the pure validation here.
 //
 // Spec: specs/02-runs.md § Writeback, specs/03-dsl.md § defineRun.

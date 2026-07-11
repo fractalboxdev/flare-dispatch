@@ -55,8 +55,8 @@
 //       Top-level shape + § sandbox + § artifact + § Primitives.
 
 import { Effect, Schema } from "effect";
-import { artifact, defineRun, io, sandbox, step } from "@fractalbox/flare-dispatch-core";
-import { loadSecrets, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+import { artifact, defineRun, io, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
+import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — mirrors `offload-test` + `cdp-acceptance`. */
 const PlaywrightDemoInput = Schema.Struct({

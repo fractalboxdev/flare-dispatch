@@ -27,7 +27,7 @@ import {
   WRITEBACK_MANIFEST_FILE,
   type WritebackManifest,
   type WritebackSpec,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import { runWriteback } from "./writeback-r2";
 import { makeTestBindings, type TestBindings } from "./test-support";
 

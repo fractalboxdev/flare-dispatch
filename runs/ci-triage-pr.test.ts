@@ -5,12 +5,12 @@
 import { it } from "@effect/vitest";
 import { Effect, Either, Schema } from "effect";
 import { describe, expect } from "vitest";
-import { makeCFRuntimeTest } from "@fractalbox/flare-dispatch-core/testing";
+import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import type {
   DeploymentRef,
   ModelCompletionResult,
   WorkflowRunRef,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import { ciTriagePr } from "./ci-triage-pr";
 
 const firedAt = Date.UTC(2026, 5, 3); // 2026-06-03

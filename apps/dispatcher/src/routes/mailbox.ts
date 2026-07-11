@@ -20,7 +20,7 @@
 //
 // Spec: specs/03-dsl.md § mailbox, .tmp/email-otp-design.md § 10.3.
 
-import { extractOtp, isInboxLocalPart } from "@fractalbox/flare-dispatch-core";
+import { extractOtp, isInboxLocalPart } from "@fractalboxdev/flare-dispatch-core";
 import type { Env } from "../env";
 import { resolveMailboxLinkSecret, verifyMailboxToken } from "../mailbox-token";
 

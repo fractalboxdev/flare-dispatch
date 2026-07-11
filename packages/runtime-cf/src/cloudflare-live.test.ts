@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
-import { cloudflare } from "@fractalbox/flare-dispatch-core";
+import { cloudflare } from "@fractalboxdev/flare-dispatch-core";
 import {
   cfReason,
   makeCloudflareLive,

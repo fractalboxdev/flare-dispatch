@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — BrowserRenderingLive: the live `browser` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — BrowserRenderingLive: the live `browser` capability.
 //
 // Backs `BrowserService` for the `cdp-acceptance` run. The acceptance suite
 // runs Playwright *inside the sandbox container*, so what the run needs from
@@ -34,7 +34,7 @@ import {
   Browser,
   BrowserUnavailable,
   type BrowserService,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /** Deploy config for the live `browser` capability. */
 export type BrowserRenderingConfig = {

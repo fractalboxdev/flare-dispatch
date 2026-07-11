@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `sandbox` capability (container execution).
+// @fractalboxdev/flare-dispatch-core — the `sandbox` capability (container execution).
 //
 // One Context.Tag service; the `sandbox` namespace below is the accessor
 // surface runs and primitives import. Backed by a Layer — real CF Containers
@@ -119,7 +119,7 @@ export interface SandboxService {
 }
 
 /** Context.Tag — the dependency a run carries until a Layer provides it. */
-export class Sandbox extends Context.Tag("@fractalbox/flare-dispatch-core/Sandbox")<
+export class Sandbox extends Context.Tag("@fractalboxdev/flare-dispatch-core/Sandbox")<
   Sandbox,
   SandboxService
 >() {}

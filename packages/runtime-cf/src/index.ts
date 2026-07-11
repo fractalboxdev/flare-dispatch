@@ -1,11 +1,11 @@
-// @fractalbox/flare-dispatch-runtime-cf — public API.
+// @fractalboxdev/flare-dispatch-runtime-cf — public API.
 //
 // The live Cloudflare-binding runtime: the Layers that back the
-// `@fractalbox/flare-dispatch-core` capability Tags with real D1 / R2 / Containers /
+// `@fractalboxdev/flare-dispatch-core` capability Tags with real D1 / R2 / Containers /
 // Workflows. The Dispatcher's `RunWorkflow` builds `makeCFRuntimeLive(...)`
 // from a dispatch event and provides it to a run Effect.
 //
-//   import { makeCFRuntimeLive } from "@fractalbox/flare-dispatch-runtime-cf";
+//   import { makeCFRuntimeLive } from "@fractalboxdev/flare-dispatch-runtime-cf";
 //
 // Spec: specs/03-dsl.md § Layers, specs/pm/plan.md § PR4.
 

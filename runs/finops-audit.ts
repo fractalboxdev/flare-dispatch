@@ -19,7 +19,7 @@
 //
 // --- Reuse: the SAME review infra as ai-code-review / ci-triage --------------
 //
-// The analysis goes through `@fractalbox/flare-dispatch-review-agent`'s reusable
+// The analysis goes through `@fractalboxdev/flare-dispatch-review-agent`'s reusable
 // `completeStructured` engine, resolved from CONFIG_KV under this run's
 // `finops.*` namespace. Reading usage uses the `cloudflare.usage` +
 // `cloudflare.deployments` read capabilities; opening the PR uses
@@ -50,14 +50,14 @@ import {
   StepFailed,
   step,
   type WorkerUsage,
-} from "@fractalbox/flare-dispatch-core";
-import { isoDate, parseList } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { isoDate, parseList } from "@fractalboxdev/flare-dispatch-core/primitives";
 import {
   completeStructured,
   namespacedKey,
   promptKey,
   resolveBackend,
-} from "@fractalbox/flare-dispatch-review-agent";
+} from "@fractalboxdev/flare-dispatch-review-agent";
 
 const NAMESPACE = "finops";
 const key = namespacedKey(NAMESPACE);

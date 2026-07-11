@@ -1,7 +1,7 @@
 // FlareDispatch Dispatcher — read-side D1 queries for the log/executions routes.
 //
 // The WRITE side of `executions` / `steps` lives in
-// `@fractalbox/flare-dispatch-runtime-cf` (executions-d1.ts), wired into the Workflow's
+// `@fractalboxdev/flare-dispatch-runtime-cf` (executions-d1.ts), wired into the Workflow's
 // runtime. The READ side belongs to the dispatcher's HTTP surface and is kept
 // here — plain functions over the `D1Database` binding (a `@cloudflare/
 // workers-types` TYPE, not a `cloudflare:workers` runtime import), so the route

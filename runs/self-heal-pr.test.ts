@@ -6,8 +6,8 @@
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect } from "vitest";
-import { makeCFRuntimeTest } from "@fractalbox/flare-dispatch-core/testing";
-import type { IncidentT } from "@fractalbox/flare-dispatch-core";
+import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
+import type { IncidentT } from "@fractalboxdev/flare-dispatch-core";
 import { selfHealPr } from "./self-heal-pr";
 
 const baseIncident: IncidentT = {

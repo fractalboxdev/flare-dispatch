@@ -33,8 +33,8 @@
 // Mode: Schedule mode — specs/04-gha-integration.md § Schedule mode.
 
 import { Effect, Match, Schema } from "effect";
-import { defineRun, github, io, sandbox, step } from "@fractalbox/flare-dispatch-core";
-import { workspace } from "@fractalbox/flare-dispatch-core/primitives";
+import { defineRun, github, io, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
+import { workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 // The repo this run cuts releases for. One scheduled run per release line.
 const TARGET = { repo: "fractalbox/flare-dispatch", ref: "main" } as const;

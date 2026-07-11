@@ -32,8 +32,8 @@ import {
   sandbox,
   step,
   WRITEBACK_ARTIFACT,
-} from "@fractalbox/flare-dispatch-core";
-import { workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const Input = Schema.Struct({
   repo: Schema.String, // "owner/name"

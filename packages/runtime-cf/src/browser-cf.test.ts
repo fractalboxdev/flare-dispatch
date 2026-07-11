@@ -7,7 +7,7 @@
 
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { Browser } from "@fractalbox/flare-dispatch-core";
+import { Browser } from "@fractalboxdev/flare-dispatch-core";
 import {
   composeCdpEndpoint,
   makeBrowserRenderingLive,

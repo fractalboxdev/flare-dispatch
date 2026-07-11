@@ -1,12 +1,12 @@
-// @fractalbox/flare-dispatch-core — the `modelGateway` capability (ask a model).
+// @fractalboxdev/flare-dispatch-core — the `modelGateway` capability (ask a model).
 //
 // A provider-agnostic "ask a model one turn" capability. `complete` sends a
 // system + user message (optionally with a tool the model may call) and returns
 // the model's tool calls and/or free text. It is deliberately NOT "Workers AI"
 // or "/chat/completions" — those are *backends*. The live Layer
-// (`@fractalbox/flare-dispatch-runtime-cf`'s `makeModelGatewayLive`) is backed by the
+// (`@fractalboxdev/flare-dispatch-runtime-cf`'s `makeModelGatewayLive`) is backed by the
 // Cloudflare Workers AI binding (`env.AI`) routed through an AI Gateway; a
-// fake (`@fractalbox/flare-dispatch-core/testing`'s `makeModelGatewayFake`) returns canned
+// fake (`@fractalboxdev/flare-dispatch-core/testing`'s `makeModelGatewayFake`) returns canned
 // outputs. The interface is the seam: an OpenAI / Bedrock / Ollama Layer can
 // back the same Tag without any engine change.
 //
@@ -139,7 +139,7 @@ export interface ModelGatewayService {
 
 /** Context.Tag — the model-gateway dependency a model-calling run/engine carries. */
 export class ModelGateway extends Context.Tag(
-  "@fractalbox/flare-dispatch-core/ModelGateway",
+  "@fractalboxdev/flare-dispatch-core/ModelGateway",
 )<ModelGateway, ModelGatewayService>() {}
 
 /**

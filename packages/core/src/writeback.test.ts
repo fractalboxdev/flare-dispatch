@@ -2,7 +2,7 @@
 // GitHub — every decision is exercised by feeding `validateManifest` a
 // hand-built spec + manifest + a `sizeOf` stub, mirroring run-admission.test.ts.
 // The runtime side (read blobs from R2, mint token, commit) lives in
-// @fractalbox/flare-dispatch-runtime-cf and is tested there against MSW + a fake R2.
+// @fractalboxdev/flare-dispatch-runtime-cf and is tested there against MSW + a fake R2.
 
 import { describe, expect, it } from "vitest";
 import {

@@ -28,8 +28,8 @@ import {
   type ExecResult,
   Sandbox,
   type SandboxService,
-} from "@fractalbox/flare-dispatch-core";
-import { makeCFRuntimeTest, makeSandboxFake } from "@fractalbox/flare-dispatch-core/testing";
+} from "@fractalboxdev/flare-dispatch-core";
+import { makeCFRuntimeTest, makeSandboxFake } from "@fractalboxdev/flare-dispatch-core/testing";
 import { cdpAcceptance, pollSentinelExit } from "./cdp-acceptance";
 
 /**

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `mailbox` capability (disposable inbox).
+// @fractalboxdev/flare-dispatch-core — the `mailbox` capability (disposable inbox).
 //
 // `mailbox.allocate` mints a fresh, disposable email address scoped to this
 // execution and records it durably so the inbound `email()` handler can route a
@@ -15,7 +15,7 @@
 // NOT a method here — the only surface that hibernates a run in this codebase is
 // `StepRunner.waitForEvent`, deliberately, so `waitForOtp` composes that.
 //
-// The live Layer (`@fractalbox/flare-dispatch-runtime-cf`'s `makeMailboxLive`) is backed by
+// The live Layer (`@fractalboxdev/flare-dispatch-runtime-cf`'s `makeMailboxLive`) is backed by
 // Cloudflare Email Routing + D1; absent an `INBOX_DOMAIN` the runtime binds a
 // dying stub so a misconfigured deploy fails loudly rather than minting
 // addresses no inbound rule will ever deliver to.
@@ -46,7 +46,7 @@ export interface MailboxService {
 }
 
 /** Context.Tag — the mailbox dependency a provisioning run carries. */
-export class Mailbox extends Context.Tag("@fractalbox/flare-dispatch-core/Mailbox")<
+export class Mailbox extends Context.Tag("@fractalboxdev/flare-dispatch-core/Mailbox")<
   Mailbox,
   MailboxService
 >() {}

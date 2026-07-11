@@ -42,7 +42,7 @@ import {
   MAX_SIGNAL_URL_CHARS,
   Signal,
   type SignalT,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import type { Env } from "../env";
 import { constantTimeEqual } from "../hmac";
 import { instantiateRun } from "../instantiate";

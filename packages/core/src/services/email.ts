@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `email` capability (notification email).
+// @fractalboxdev/flare-dispatch-core — the `email` capability (notification email).
 //
 // `EmailService.send` delivers an HTML (optionally + plain-text) message to a
 // list of recipients. It is a *reporting* capability, in the same family as
@@ -7,7 +7,7 @@
 // Per-recipient delivery outcomes are returned as data (`accepted` / `rejected`)
 // and a wholly-unbacked deploy degrades to `skipped: true` rather than failing.
 //
-// The live binding (`@fractalbox/flare-dispatch-runtime-cf`'s `makeEmailCloudflareLive`)
+// The live binding (`@fractalboxdev/flare-dispatch-runtime-cf`'s `makeEmailCloudflareLive`)
 // is backed by Cloudflare Email Routing's `send_email` binding — see that
 // module for the verified-destination-address constraint Cloudflare enforces.
 // The interface is provider-agnostic: a Resend / MailChannels / SES Layer can
@@ -59,7 +59,7 @@ export interface EmailService {
 }
 
 /** Context.Tag — the email dependency a run (and the Workflow finalize) carries. */
-export class Email extends Context.Tag("@fractalbox/flare-dispatch-core/Email")<
+export class Email extends Context.Tag("@fractalboxdev/flare-dispatch-core/Email")<
   Email,
   EmailService
 >() {}

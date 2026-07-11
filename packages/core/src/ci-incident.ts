@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — `offload-test` (first-party CI failure) → `incident/v1`.
+// @fractalboxdev/flare-dispatch-core — `offload-test` (first-party CI failure) → `incident/v1`.
 //
 // The CI-class sibling of `storyResultsToIncident` (demo-signals.ts). When the
 // `offload-test` run's command exits non-zero, that IS a deterministic CI

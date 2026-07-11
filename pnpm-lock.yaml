@@ -41,13 +41,13 @@ importers:
       '@effect/platform':
         specifier: ^0.96.1
         version: 0.96.2(effect@3.21.2)
-      '@fractalbox/flare-dispatch-core':
+      '@fractalboxdev/flare-dispatch-core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@fractalbox/flare-dispatch-runs':
+      '@fractalboxdev/flare-dispatch-runs':
         specifier: workspace:*
         version: link:../../runs
-      '@fractalbox/flare-dispatch-runtime-cf':
+      '@fractalboxdev/flare-dispatch-runtime-cf':
         specifier: workspace:*
         version: link:../../packages/runtime-cf
       effect:
@@ -111,7 +111,7 @@ importers:
 
   packages/review-agent:
     dependencies:
-      '@fractalbox/flare-dispatch-core':
+      '@fractalboxdev/flare-dispatch-core':
         specifier: workspace:*
         version: link:../core
       effect:
@@ -133,13 +133,13 @@ importers:
       '@cloudflare/sandbox':
         specifier: 0.10.1
         version: 0.10.1
-      '@fractalbox/flare-dispatch-bedrock-sigv4':
+      '@fractalboxdev/flare-dispatch-bedrock-sigv4':
         specifier: workspace:*
         version: link:../bedrock-sigv4
-      '@fractalbox/flare-dispatch-core':
+      '@fractalboxdev/flare-dispatch-core':
         specifier: workspace:*
         version: link:../core
-      '@fractalbox/flare-dispatch-github-app':
+      '@fractalboxdev/flare-dispatch-github-app':
         specifier: workspace:*
         version: link:../github-app
       effect:
@@ -155,7 +155,7 @@ importers:
       '@effect/vitest':
         specifier: ^0.29.0
         version: 0.29.0(effect@3.21.2)(vitest@3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3)))
-      '@fractalbox/flare-dispatch-runs':
+      '@fractalboxdev/flare-dispatch-runs':
         specifier: workspace:*
         version: link:../../runs
       miniflare:
@@ -173,10 +173,10 @@ importers:
 
   runs:
     dependencies:
-      '@fractalbox/flare-dispatch-core':
+      '@fractalboxdev/flare-dispatch-core':
         specifier: workspace:*
         version: link:../packages/core
-      '@fractalbox/flare-dispatch-review-agent':
+      '@fractalboxdev/flare-dispatch-review-agent':
         specifier: workspace:*
         version: link:../packages/review-agent
       effect:

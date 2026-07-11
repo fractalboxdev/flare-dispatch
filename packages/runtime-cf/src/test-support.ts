@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — integration-test support.
+// @fractalboxdev/flare-dispatch-runtime-cf — integration-test support.
 //
 // The integration tests exercise the live D1 / R2 Layers against real bindings.
 // This is the Node-side Miniflare harness: the test body runs in Node and

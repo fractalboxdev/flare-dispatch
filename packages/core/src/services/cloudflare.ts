@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `cloudflare` capability (read-only Cloudflare API).
+// @fractalboxdev/flare-dispatch-core — the `cloudflare` capability (read-only Cloudflare API).
 //
 // The Cloudflare-side twin of the `github` read surface: a narrow, read-only
 // window into a Cloudflare account so a Schedule-mode run can *discover what to
@@ -99,7 +99,7 @@ export interface CloudflareService {
 }
 
 /** Context.Tag — the dependency a run carries until a Layer provides it. */
-export class Cloudflare extends Context.Tag("@fractalbox/flare-dispatch-core/Cloudflare")<
+export class Cloudflare extends Context.Tag("@fractalboxdev/flare-dispatch-core/Cloudflare")<
   Cloudflare,
   CloudflareService
 >() {}

@@ -1,5 +1,5 @@
 // Integration tests for the D1-backed run admission semaphore — the
-// atomic-correctness surface the pure decision logic (`@fractalbox/flare-dispatch-core`
+// atomic-correctness surface the pure decision logic (`@fractalboxdev/flare-dispatch-core`
 // run-admission.test.ts) cannot cover: the conditional FIFO claim against a
 // real D1 binding, mirroring container-lease-d1.workers.test.ts. Runs INSIDE
 // workerd via `@cloudflare/vitest-pool-workers` (see `vitest.workers.config.ts`).
@@ -16,7 +16,7 @@
 
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AdmissionPool } from "@fractalbox/flare-dispatch-core";
+import type { AdmissionPool } from "@fractalboxdev/flare-dispatch-core";
 import {
   ADMISSION_CAP_DEFAULT,
   ADMISSION_TTL_MS,

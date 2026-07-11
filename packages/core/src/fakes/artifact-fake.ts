@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Artifact fake.
+// @fractalboxdev/flare-dispatch-core — Artifact fake.
 //
 // In-memory name → fake-signed-URL map. `upload` records the call and returns
 // a deterministic `https://fake-r2.local/<name>` URL; `list` returns what was

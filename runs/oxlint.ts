@@ -29,8 +29,8 @@ import {
   defineRun,
   sandbox,
   step,
-} from "@fractalbox/flare-dispatch-core";
-import { workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — repo/sha plus oxlint knobs. */
 const OxlintInput = Schema.Struct({

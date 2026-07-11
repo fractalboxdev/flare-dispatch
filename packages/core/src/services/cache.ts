@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `cache` capability (R2-backed restore/save).
+// @fractalboxdev/flare-dispatch-core — the `cache` capability (R2-backed restore/save).
 //
 // `restoreOr` is the canonical pattern: try to restore a content-addressed
 // key; on a miss run `onMiss` (which populates the paths), then save.
@@ -38,7 +38,7 @@ export interface CacheService {
   }) => Effect.Effect<void, CacheError>;
 }
 
-export class Cache extends Context.Tag("@fractalbox/flare-dispatch-core/Cache")<
+export class Cache extends Context.Tag("@fractalboxdev/flare-dispatch-core/Cache")<
   Cache,
   CacheService
 >() {}

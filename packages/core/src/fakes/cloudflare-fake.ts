@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Cloudflare fake (read-only Cloudflare API).
+// @fractalboxdev/flare-dispatch-core — Cloudflare fake (read-only Cloudflare API).
 //
 // In-memory fake of the `cloudflare` capability. Tests seed `deployments` and
 // the service applies the documented filters (projects allow-list, status,

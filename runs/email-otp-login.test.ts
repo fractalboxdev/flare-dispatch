@@ -13,7 +13,7 @@ import {
   enqueueInlineEvent,
   type InlineEventQueue,
   makeCFRuntimeTest,
-} from "@fractalbox/flare-dispatch-core/testing";
+} from "@fractalboxdev/flare-dispatch-core/testing";
 import { emailOtpLogin, fillTemplate } from "./email-otp-login";
 
 /** A fully-decoded run input with the schema defaults, overridable per test. */

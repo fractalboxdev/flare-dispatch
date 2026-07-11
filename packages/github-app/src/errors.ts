@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — error type.
+// @fractalboxdev/flare-dispatch-github-app — error type.
 //
 // The github-app package is the low-level HTTP layer: plain typed `async`
 // functions, no Effect dependency (the Effect wrapping happens one layer up in

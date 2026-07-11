@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — D1-backed run admission semaphore (issue #109).
+// @fractalboxdev/flare-dispatch-runtime-cf — D1-backed run admission semaphore (issue #109).
 //
 // Meters in-flight runs to the container pool's capacity. A merge burst can
 // create more concurrent RunWorkflow instances than `RunSandbox` /
@@ -20,13 +20,13 @@
 // `RunWorkflow` drives it through durable `step.do` / `step.sleep` calls (so
 // a queued run hibernates for free and survives eviction), calling `attempt`
 // once per iteration and the PURE `decideAdmission`
-// (`@fractalbox/flare-dispatch-core` run-admission.ts, unit-tested) on what it observed.
+// (`@fractalboxdev/flare-dispatch-core` run-admission.ts, unit-tested) on what it observed.
 // This module is the I/O shell — the atomic SQL.
 //
 // Spec: ADR #109 (global D1-backed run admission semaphore).
 
 import { Effect, Schedule } from "effect";
-import type { AdmissionObservation, AdmissionPool } from "@fractalbox/flare-dispatch-core";
+import type { AdmissionObservation, AdmissionPool } from "@fractalboxdev/flare-dispatch-core";
 import { LEASE_TTL_MS } from "./container-lease-d1";
 
 /**

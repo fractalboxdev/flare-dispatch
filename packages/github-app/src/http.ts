@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-github-app — shared REST plumbing.
+// @fractalboxdev/flare-dispatch-github-app — shared REST plumbing.
 //
 // The bits every github-app fetch module repeated: the API host + version, the
 // `owner/repo` splitter, the installation-token header set, the `fetchImpl ??
@@ -7,7 +7,7 @@
 // constant) lives in exactly one place.
 //
 // Provider-neutral plain `async`, no Effect — same property the rest of the
-// package keeps so the Effect Layer in @fractalbox/flare-dispatch-runtime-cf can wrap it.
+// package keeps so the Effect Layer in @fractalboxdev/flare-dispatch-runtime-cf can wrap it.
 
 import { GithubApiError } from "./errors";
 

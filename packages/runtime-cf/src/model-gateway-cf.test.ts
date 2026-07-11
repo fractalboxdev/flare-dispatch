@@ -11,7 +11,7 @@ import { Effect } from "effect";
 import {
   type ModelCompletionRequest,
   modelGateway,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import { type AiBinding, makeModelGatewayLive } from "./model-gateway-cf";
 
 /** A recording `Ai` stub returning a fixed output. */

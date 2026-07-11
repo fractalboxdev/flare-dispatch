@@ -12,8 +12,8 @@ import {
   ModelGateway,
   ModelGatewayError,
   type ModelCompletionResult,
-} from "@fractalbox/flare-dispatch-core";
-import { makeModelGatewayFake } from "@fractalbox/flare-dispatch-core/testing";
+} from "@fractalboxdev/flare-dispatch-core";
+import { makeModelGatewayFake } from "@fractalboxdev/flare-dispatch-core/testing";
 import {
   classifyRisk,
   completeStructured,

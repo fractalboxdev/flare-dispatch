@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the mailbox contract (the keystone every piece shares).
+// @fractalboxdev/flare-dispatch-core — the mailbox contract (the keystone every piece shares).
 //
 // A self-hosted, disposable inbox so a test/demo run can drive an OTP /
 // magic-link auth flow (Auth0 / Clerk / Stytch / Supabase / our own app) end to

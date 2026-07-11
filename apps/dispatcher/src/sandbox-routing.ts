@@ -10,7 +10,7 @@
 // Browser Rendering CDP slot (the run connects *out* to a CF-managed browser and
 // stays on the lean image); `sandboxImage` picks the image the container boots.
 
-import type { SandboxImage } from "@fractalbox/flare-dispatch-core";
+import type { SandboxImage } from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * Pick the Container binding for a run's declared `sandboxImage`. Generic over

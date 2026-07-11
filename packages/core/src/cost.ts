@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the cost engine (rate card + pure cost functions).
+// @fractalboxdev/flare-dispatch-core — the cost engine (rate card + pure cost functions).
 //
 // The single source of truth for "what did an execution cost". Pure: no Effect,
 // no I/O, no bindings — just the rate card (mirrored from `specs/06-cost.md` and

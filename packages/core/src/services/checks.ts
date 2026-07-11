@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `checks` capability (GitHub check-runs).
+// @fractalboxdev/flare-dispatch-core — the `checks` capability (GitHub check-runs).
 //
 // `ChecksService` posts the run's green/red verdict back to the originating
 // commit as a GitHub check-run: `create` on run start (status `in_progress`),
@@ -65,7 +65,7 @@ export interface ChecksService {
 }
 
 /** Context.Tag — the GitHub check-run dependency a run carries. */
-export class Checks extends Context.Tag("@fractalbox/flare-dispatch-core/Checks")<
+export class Checks extends Context.Tag("@fractalboxdev/flare-dispatch-core/Checks")<
   Checks,
   ChecksService
 >() {}

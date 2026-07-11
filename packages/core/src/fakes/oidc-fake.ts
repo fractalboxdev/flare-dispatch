@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Oidc fake (deterministic OIDC issuance).
+// @fractalboxdev/flare-dispatch-core — Oidc fake (deterministic OIDC issuance).
 //
 // Returns a canned JWT-shaped string for each `sign` call — the payload's
 // header+claims are echoed back so a test can decode them and assert on

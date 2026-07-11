@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `executions` capability (D1 metadata writes).
+// @fractalboxdev/flare-dispatch-core — the `executions` capability (D1 metadata writes).
 //
 // `ExecutionsService` records the run lifecycle into D1: one row per execution
 // in `executions`, one row per step transition in `steps` (per the V0 D1
@@ -102,5 +102,5 @@ export interface ExecutionsService {
 
 /** Context.Tag — the D1 metadata-write dependency `step` carries. */
 export class Executions extends Context.Tag(
-  "@fractalbox/flare-dispatch-core/Executions",
+  "@fractalboxdev/flare-dispatch-core/Executions",
 )<Executions, ExecutionsService>() {}

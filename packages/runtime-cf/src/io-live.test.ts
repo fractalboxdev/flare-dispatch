@@ -9,7 +9,7 @@
 
 import { Effect, Option, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Executions, IO } from "@fractalbox/flare-dispatch-core";
+import { Executions, IO } from "@fractalboxdev/flare-dispatch-core";
 import { makeD1ExecutionsLive } from "./executions-d1";
 import { makeIOLive } from "./io-live";
 import { makeTestBindings, type TestBindings } from "./test-support";

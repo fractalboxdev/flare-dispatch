@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — container-lease: the pure lease decision logic.
+// @fractalboxdev/flare-dispatch-core — container-lease: the pure lease decision logic.
 //
 // Two runs that share a sandbox container id (the contention boundary) must
 // never execute concurrently. The runtime serializes them with a lease: before
@@ -10,7 +10,7 @@
 // record for a container id (or none), the id of the run trying to acquire, and
 // the current time, decide what that run should do — proceed, wait, or reclaim a
 // stale lease. The strongly-consistent storage + the bounded poll loop live in
-// the runtime layer (`@fractalbox/flare-dispatch-runtime-cf` `container-lease-d1.ts`),
+// the runtime layer (`@fractalboxdev/flare-dispatch-runtime-cf` `container-lease-d1.ts`),
 // which calls in here for every state transition. Keeping the logic pure mirrors
 // `artifact-tar-path.ts` / `sandbox-clone-url.ts`: it is exercised by plain
 // vitest without a container runtime (`vitest-pool-workers` cannot boot one).

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — MailboxCloudflareLive: the live `mailbox` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — MailboxCloudflareLive: the live `mailbox` capability.
 //
 // Backs the `Mailbox` Tag with Cloudflare Email Routing + D1. `allocate` mints a
 // disposable `demo-<rand>@<INBOX_DOMAIN>` address, signs a short-lived read
@@ -26,7 +26,7 @@ import {
   Mailbox,
   type MailboxService,
   mintLocalPart,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * The Cloudflare config the live `Mailbox` Layer needs. Supplied by

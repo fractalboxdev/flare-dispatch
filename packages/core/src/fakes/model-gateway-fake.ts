@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — ModelGateway fake.
+// @fractalboxdev/flare-dispatch-core — ModelGateway fake.
 //
 // `RunContext` is the union of *all* capability services, so a test runtime
 // needs a Layer for `ModelGateway` even when the run under test never calls a

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-review-agent — shared schemas.
+// @fractalboxdev/flare-dispatch-review-agent — shared schemas.
 //
 // `Finding` + `ReviewOutput` are the wire contract between the engine and the
 // `pr-review` run. They MUST stay byte-for-byte identical to the shapes the run

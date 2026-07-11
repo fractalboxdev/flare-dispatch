@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `signals/v1` contract.
+// @fractalboxdev/flare-dispatch-core — the `signals/v1` contract.
 //
 // A *signal* is one normalized observability finding a CONSUMER collected from
 // a system the dispatcher's read capabilities don't reach — an APM/tracing

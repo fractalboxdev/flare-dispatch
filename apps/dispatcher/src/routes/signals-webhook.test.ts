@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_SIGNAL_DETAIL_CHARS,
   MAX_SIGNAL_TITLE_CHARS,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 import { handleRequest } from "../router";
 import {
   makeFakeEnv,

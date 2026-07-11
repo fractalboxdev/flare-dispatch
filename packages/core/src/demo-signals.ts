@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — `product-demo` → `signals/v1` adapter.
+// @fractalboxdev/flare-dispatch-core — `product-demo` → `signals/v1` adapter.
 //
 // A failed product-demo chapter is, by definition, "an observability finding
 // flare-dispatch collected from a system its read capabilities don't reach" —

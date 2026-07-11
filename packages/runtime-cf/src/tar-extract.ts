@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — expand a stored `.tar.gz` artifact into
+// @fractalboxdev/flare-dispatch-runtime-cf — expand a stored `.tar.gz` artifact into
 // per-file R2 objects, so the dispatcher can serve an artifact's CONTENTS
 // (a Playwright HTML report, a screenshots tree) as a browsable static site
 // instead of an opaque archive download.

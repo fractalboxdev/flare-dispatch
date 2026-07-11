@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `incident/v1` contract.
+// @fractalboxdev/flare-dispatch-core — the `incident/v1` contract.
 //
 // An *incident* is the bounded, model-ready bundle a self-heal run hands to a
 // coding agent: the synthesis of caller-supplied `signals/v1` findings, the

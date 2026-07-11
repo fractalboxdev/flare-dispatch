@@ -1,7 +1,7 @@
-// @fractalbox/flare-dispatch-runtime-cf — GithubLive: the live `github` capability (write).
+// @fractalboxdev/flare-dispatch-runtime-cf — GithubLive: the live `github` capability (write).
 //
 // Backs the one *write* on the `Github` Tag — `pullReview` — with the GitHub
-// App PR-reviews API, via `@fractalbox/flare-dispatch-github-app`: an App JWT is exchanged
+// App PR-reviews API, via `@fractalboxdev/flare-dispatch-github-app`: an App JWT is exchanged
 // for a short-lived installation token (cached in Worker memory), and that
 // token authenticates `POST /repos/{o}/{r}/pulls/{n}/reviews`.
 //
@@ -29,7 +29,7 @@ import {
   openDraftPullRequest,
   resolveRepoInstallationId,
   GithubApiError as GithubAppApiError,
-} from "@fractalbox/flare-dispatch-github-app";
+} from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect, Layer } from "effect";
 import {
   type DraftPullRequestResult,
@@ -38,7 +38,7 @@ import {
   type GithubService,
   type ReleaseResult,
   type WorkflowRunRef,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /** The GitHub App credentials the live `pullReview` write needs. */
 export type GithubLiveConfig = {

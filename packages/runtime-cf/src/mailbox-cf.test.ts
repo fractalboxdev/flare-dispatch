@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { Effect, Exit } from "effect";
-import { mailbox } from "@fractalbox/flare-dispatch-core";
+import { mailbox } from "@fractalboxdev/flare-dispatch-core";
 import {
   makeMailboxCloudflareLive,
   type MailboxCloudflareConfig,

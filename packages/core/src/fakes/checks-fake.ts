@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Checks fake.
+// @fractalboxdev/flare-dispatch-core — Checks fake.
 //
 // Records every GitHub check-run `create` / `update` call so tests can assert
 // "one create with in_progress, one update with conclusion=success". `create`

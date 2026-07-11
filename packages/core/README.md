@@ -1,14 +1,14 @@
-# @fractalbox/flare-dispatch-core
+# @fractalboxdev/flare-dispatch-core
 
 The FlareDispatch DSL — the typed Effect-TS surface that [runs](../../specs/02-runs.md) and [recipes](../../recipes/) are written against.
 
 ## The three tiers
 
-`@fractalbox/flare-dispatch-core` ships the bottom two tiers; recipes are the third.
+`@fractalboxdev/flare-dispatch-core` ships the bottom two tiers; recipes are the third.
 
 ```mermaid
 flowchart LR
-  CAP["capabilities<br/>@fractalbox/flare-dispatch-core"] --> PRIM["primitives<br/>@fractalbox/flare-dispatch-core/primitives"]
+  CAP["capabilities<br/>@fractalboxdev/flare-dispatch-core"] --> PRIM["primitives<br/>@fractalboxdev/flare-dispatch-core/primitives"]
   PRIM --> REC["recipes<br/>your repo"]
   CAP -.->|escape hatch| REC
 ```
@@ -22,8 +22,8 @@ Full design: [specs/03-dsl.md](../../specs/03-dsl.md).
 ## Two entry points
 
 ```ts
-import { defineRun, step, sandbox, artifact } from "@fractalbox/flare-dispatch-core";
-import { workspace, sharded } from "@fractalbox/flare-dispatch-core/primitives";
+import { defineRun, step, sandbox, artifact } from "@fractalboxdev/flare-dispatch-core";
+import { workspace, sharded } from "@fractalboxdev/flare-dispatch-core/primitives";
 ```
 
 The split keeps the layer boundary visible at the top of every recipe file. The `exports` map in [`package.json`](package.json) declares both.
@@ -53,6 +53,6 @@ A new primitive earns its place when a shape recurs across **two or more** recip
 
 ## Distribution
 
-`@fractalbox/flare-dispatch-core` is a library — pinned, not copied. Primitives ship inside it as the `./primitives` sub-path rather than as copy-paste scaffolding, because they are a sub-path of a package every recipe already trusts for `defineRun` / `step`: copying them out shrinks the trusted set by nothing and only makes them un-patchable. Rationale, the opt-in `eject` escape hatch, and the supply-chain surface that actually matters are in [03-dsl § Distribution and supply chain](../../specs/03-dsl.md#distribution-and-supply-chain).
+`@fractalboxdev/flare-dispatch-core` is a library — pinned, not copied. Primitives ship inside it as the `./primitives` sub-path rather than as copy-paste scaffolding, because they are a sub-path of a package every recipe already trusts for `defineRun` / `step`: copying them out shrinks the trusted set by nothing and only makes them un-patchable. Rationale, the opt-in `eject` escape hatch, and the supply-chain surface that actually matters are in [03-dsl § Distribution and supply chain](../../specs/03-dsl.md#distribution-and-supply-chain).
 
 > **Status:** pre-implementation. These files are spec-grade source — the canonical home for the API the [specs](../../specs/) describe and the [recipes](../../recipes/) import. The runtime Layers that back the capabilities land with the V0 build ([pm/plan.md](../../specs/pm/plan.md)).

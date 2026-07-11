@@ -27,7 +27,7 @@ import { describe, expect, vi } from "vitest";
 import {
   type PortNeverOpened,
   Sandbox as SandboxTag,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 // --- The fake `box` the mocked `getSandbox` hands back -----------------------
 

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the per-execution agent token-budget, pure decision
+// @fractalboxdev/flare-dispatch-core — the per-execution agent token-budget, pure decision
 // logic.
 //
 // The self-heal model-proxy (`POST /v1/agent/:execution/inference`) must cap how

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-review-agent — diff noise stripping.
+// @fractalboxdev/flare-dispatch-review-agent — diff noise stripping.
 //
 // `git diff` output includes high-volume, low-signal hunks the model should
 // never burn tokens on: lockfiles, minified bundles, generated code, vendored

@@ -9,7 +9,7 @@
 // Earlier versions shelled out to a `review-agent` CLI baked into the run's
 // container image. That CLI does not exist in the deployed image (every exec
 // exited 127), so reviews silently failed. v3 moves the review into the run
-// body via `@fractalbox/flare-dispatch-review-agent`, which calls a model through the
+// body via `@fractalboxdev/flare-dispatch-review-agent`, which calls a model through the
 // `modelGateway` capability — backed by the Cloudflare Workers AI binding
 // (`env.AI`) via an AI Gateway. The binding is the auth (Workers AI is
 // account-billed), so NO model API key is configured. The ONE container image
@@ -72,8 +72,8 @@ import {
   StepFailed,
   type Container,
   type WebhookPayload,
-} from "@fractalbox/flare-dispatch-core";
-import { awsAssumeRole, workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { awsAssumeRole, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 import {
   type BackendUnconfigured,
   backendConfigKey,
@@ -94,7 +94,7 @@ import {
   stripDiffNoise,
   type StructuredOutputInvalid,
   type Tier,
-} from "@fractalbox/flare-dispatch-review-agent";
+} from "@fractalboxdev/flare-dispatch-review-agent";
 
 // Local helper — true if the PR carries the given label.
 const hasLabel = (payload: WebhookPayload, name: string): boolean =>

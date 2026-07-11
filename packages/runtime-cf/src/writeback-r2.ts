@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — the Worker-side writeback executor.
+// @fractalboxdev/flare-dispatch-runtime-cf — the Worker-side writeback executor.
 //
 // After a run completes SUCCESSFULLY and declares `writeback`, the Dispatcher
 // Worker (NOT the container) turns the container's changed-files artifact into
@@ -29,7 +29,7 @@ import {
   commitFilesAndOpenPr,
   getInstallationToken,
   resolveRepoInstallationId,
-} from "@fractalbox/flare-dispatch-github-app";
+} from "@fractalboxdev/flare-dispatch-github-app";
 import {
   decodeManifest,
   describeRejection,
@@ -39,7 +39,7 @@ import {
   type WritebackSpec,
   WRITEBACK_FILES_DIR,
   WRITEBACK_MANIFEST_FILE,
-} from "@fractalbox/flare-dispatch-core";
+} from "@fractalboxdev/flare-dispatch-core";
 
 /** The R2 prefix the directory artifact named `writeback` expands under. */
 const writebackPrefix = (executionId: string, artifactName: string): string =>
@@ -217,7 +217,7 @@ export const runWriteback = async (
  * + the dispatch's installation id. Prefers the webhook-threaded id; falls back
  * to resolving the repo's installation from the App JWT (the App is the source
  * of truth for which installation covers a repo). Exposed here so the
- * dispatcher mints tokens without importing `@fractalbox/flare-dispatch-github-app`
+ * dispatcher mints tokens without importing `@fractalboxdev/flare-dispatch-github-app`
  * directly — runtime-cf is the only seam onto the GitHub plumbing.
  */
 export const makeWritebackTokenMinter = (

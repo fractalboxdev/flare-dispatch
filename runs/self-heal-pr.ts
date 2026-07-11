@@ -32,8 +32,8 @@ import {
   StepFailed,
   step,
   WRITEBACK_ARTIFACT,
-} from "@fractalbox/flare-dispatch-core";
-import { workspace } from "@fractalbox/flare-dispatch-core/primitives";
+} from "@fractalboxdev/flare-dispatch-core";
+import { workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const PACK_PATH = "incident-pack.json";
 const RESULT_PATH = "agent-result.json";

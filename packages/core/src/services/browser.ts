@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `browser` capability (Browser Rendering access).
+// @fractalboxdev/flare-dispatch-core — the `browser` capability (Browser Rendering access).
 //
 // REST mode (`newPage`) for short, stateless page interactions; CDP mode
 // (`newCDPSession`) for a direct WebSocket attach to a managed Chromium.
@@ -44,7 +44,7 @@ export interface BrowserService {
   }) => Effect.Effect<CDPSession, BrowserUnavailable>;
 }
 
-export class Browser extends Context.Tag("@fractalbox/flare-dispatch-core/Browser")<
+export class Browser extends Context.Tag("@fractalboxdev/flare-dispatch-core/Browser")<
   Browser,
   BrowserService
 >() {}

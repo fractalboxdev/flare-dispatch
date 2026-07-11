@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-review-agent — JSON extraction from model text.
+// @fractalboxdev/flare-dispatch-review-agent — JSON extraction from model text.
 //
 // `mode: "json"` providers return free-form text that should contain one JSON
 // object — but reasoning models (DeepSeek-R1 distills, GLM, Kimi, …) wrap it in

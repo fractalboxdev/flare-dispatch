@@ -16,7 +16,7 @@
 import { it } from "@effect/vitest";
 import { Cause, Effect, Exit, Match, Option } from "effect";
 import { describe, expect } from "vitest";
-import { makeCFRuntimeTest } from "@fractalbox/flare-dispatch-core/testing";
+import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import {
   buildDemoBundleManifest,
   parseStoriesMarkdown,

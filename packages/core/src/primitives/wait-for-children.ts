@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core/primitives — waitForChildren: join on a fan-out.
+// @fractalboxdev/flare-dispatch-core/primitives — waitForChildren: join on a fan-out.
 //
 // The other half of `fanOut`: poll the `childRuns` capability for the status of
 // each spawned child execution until every one has settled (success / failure /

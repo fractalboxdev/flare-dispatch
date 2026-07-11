@@ -6,7 +6,7 @@
 
 import { Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Artifact } from "@fractalbox/flare-dispatch-core";
+import { Artifact } from "@fractalboxdev/flare-dispatch-core";
 import { makeR2ArtifactLive } from "./artifact-r2";
 import { makeTestBindings, type TestBindings } from "./test-support";
 

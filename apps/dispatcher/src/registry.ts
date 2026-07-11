@@ -9,7 +9,7 @@
 // Each run slots in as another entry: `offload-test` (V0), `cdp-acceptance`
 // (V2 browser acceptance, PR9), `product-demo` (V3 — Action + Schedule mode).
 
-import type { Run, ScheduleSpec, TriggerSpec } from "@fractalbox/flare-dispatch-core";
+import type { Run, ScheduleSpec, TriggerSpec } from "@fractalboxdev/flare-dispatch-core";
 import {
   cdpAcceptance,
   ciTriagePr,
@@ -30,7 +30,7 @@ import {
   specDriftPr,
   vitestShard,
   workerDeploy,
-} from "@fractalbox/flare-dispatch-runs";
+} from "@fractalboxdev/flare-dispatch-runs";
 
 /** name → Run. The single seam new runs are registered through. */
 const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {

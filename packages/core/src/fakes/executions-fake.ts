@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — Executions fake.
+// @fractalboxdev/flare-dispatch-core — Executions fake.
 //
 // In-memory stand-in for the D1 `executions` + `steps` tables. Every
 // `startStep` / `finishStep` mutates an in-memory `steps` array; tests assert

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core — the `io` capability (non-deterministic primitives).
+// @fractalboxdev/flare-dispatch-core — the `io` capability (non-deterministic primitives).
 //
 // Effect-friendly access to time, UUIDs, env, sleep, structured logging, and
 // prior-execution metadata. Must be used instead of `Date.now()` /
@@ -57,7 +57,7 @@ export interface IOService {
   readonly viewerUrl: Effect.Effect<Option.Option<string>>;
 }
 
-export class IO extends Context.Tag("@fractalbox/flare-dispatch-core/IO")<IO, IOService>() {}
+export class IO extends Context.Tag("@fractalboxdev/flare-dispatch-core/IO")<IO, IOService>() {}
 
 export const io = {
   now: Effect.flatMap(IO, (s) => s.now),

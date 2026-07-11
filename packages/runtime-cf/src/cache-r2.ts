@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-runtime-cf — CacheR2Live: the live `cache` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — CacheR2Live: the live `cache` capability.
 //
 // Backs `CacheService` with the R2 bucket + the Containers binding. A cache
 // entry is a single gzipped tar of the requested paths.
@@ -37,7 +37,7 @@
 
 import { getSandbox, type Sandbox } from "@cloudflare/sandbox";
 import { Effect, Layer } from "effect";
-import { Cache, CacheError, type CacheService } from "@fractalbox/flare-dispatch-core";
+import { Cache, CacheError, type CacheService } from "@fractalboxdev/flare-dispatch-core";
 import { readContainerFile } from "./container-file-stream";
 import { putStream } from "./r2-put-stream";
 import {

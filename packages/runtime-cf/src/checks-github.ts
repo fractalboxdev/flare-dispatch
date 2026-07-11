@@ -1,7 +1,7 @@
-// @fractalbox/flare-dispatch-runtime-cf — ChecksGithubLive: the live `checks` capability.
+// @fractalboxdev/flare-dispatch-runtime-cf — ChecksGithubLive: the live `checks` capability.
 //
 // Backs the `Checks` Context.Tag with the GitHub App check-runs API, via
-// `@fractalbox/flare-dispatch-github-app`: an RS256 App JWT is exchanged for a short-lived
+// `@fractalboxdev/flare-dispatch-github-app`: an RS256 App JWT is exchanged for a short-lived
 // installation token (cached in Worker memory), and that token authenticates
 // `POST` / `PATCH /repos/{owner}/{repo}/check-runs`. This is the GitHub half of
 // the `finalize` boundary — the D1 half is `D1ExecutionsLive`.
@@ -39,9 +39,9 @@ import {
   getInstallationToken,
   progressCheckRun,
   updateCheckRun,
-} from "@fractalbox/flare-dispatch-github-app";
+} from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect, Layer } from "effect";
-import { Checks, type ChecksService } from "@fractalbox/flare-dispatch-core";
+import { Checks, type ChecksService } from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * The GitHub App credentials + installation context the live `Checks` Layer

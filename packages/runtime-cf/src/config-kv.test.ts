@@ -7,7 +7,7 @@
 
 import { Effect, Option, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Config } from "@fractalbox/flare-dispatch-core";
+import { Config } from "@fractalboxdev/flare-dispatch-core";
 import { makeConfigKvLive } from "./config-kv";
 import { makeTestBindings, type TestBindings } from "./test-support";
 

@@ -1,4 +1,4 @@
-// @fractalbox/flare-dispatch-core/primitives — fanOut: child-Workflow matrix fan-out.
+// @fractalboxdev/flare-dispatch-core/primitives — fanOut: child-Workflow matrix fan-out.
 //
 // Spawn one independent child `RunWorkflow` instance per item in a list, bounded
 // by `concurrency`. The cross-instance counterpart of `sharded` (which fans out
