@@ -1,0 +1,96 @@
+{
+  // FlareDispatch Dispatcher Worker (new-repo deploy).
+  // Non-destructive: distinct name + fresh D1/R2/KV so it never collides with
+  // any prior deployment in the same account. Dashboard SPA assets are omitted
+  // (the SSR fallback in dashboard.ts serves the routes); cron triggers are
+  // omitted for the initial dogfood (the pr-review path is webhook-driven).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "flare-dispatch",
+  "main": "apps/dispatcher/src/index.ts",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": { "enabled": true },
+
+  // Workers AI — backs the modelGateway capability the pr-review engine calls.
+  // The binding IS the auth (account-billed), so no model API key is needed.
+  "ai": { "binding": "AI" },
+
+  // Browser Rendering — backs GET /v1/browser/cdp (unused by pr-review; kept
+  // for parity with the run set).
+  "browser": { "binding": "BROWSER" },
+
+  "vars": {
+    "CLOUDFLARE_ACCOUNT_ID": "c91d52c288c452ab734ede1518b00e11",
+    "ADMISSION_CAP": "16"
+  },
+
+  "workflows": [
+    {
+      "name": "runs-workflow",
+      "binding": "RUNS_WORKFLOW",
+      "class_name": "RunWorkflow"
+    }
+  ],
+
+  // One lean image (Dockerfile.sandbox = cloudflare/sandbox base: Node+git+curl,
+  // all pr-review needs). The browser/agent classes reuse the lean image for
+  // now; the chromium/agent variants return when demo-agent/flare-agent are
+  // ported (parity phase).
+  "containers": [
+    {
+      "class_name": "RunSandbox",
+      "image": "./infra/Dockerfile.sandbox",
+      "instance_type": "standard-2",
+      "max_instances": 16
+    },
+    {
+      "class_name": "RunSandboxBrowser",
+      "image": "./infra/Dockerfile.sandbox",
+      "instance_type": "standard-2",
+      "max_instances": 16
+    },
+    {
+      "class_name": "RunSandboxAgent",
+      "image": "./infra/Dockerfile.sandbox",
+      "instance_type": "standard-3",
+      "max_instances": 8
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "RUNS_SANDBOX", "class_name": "RunSandbox" },
+      { "name": "RUNS_SANDBOX_BROWSER", "class_name": "RunSandboxBrowser" },
+      { "name": "AGENT_BUDGET", "class_name": "AgentBudget" },
+      { "name": "RUNS_SANDBOX_AGENT", "class_name": "RunSandboxAgent" }
+    ]
+  },
+
+  "migrations": [
+    { "tag": "v0", "new_sqlite_classes": ["RunSandbox"] },
+    { "tag": "v1", "new_sqlite_classes": ["RunSandboxBrowser"] },
+    { "tag": "v2", "new_sqlite_classes": ["AgentBudget"] },
+    { "tag": "v3", "new_sqlite_classes": ["RunSandboxAgent"] }
+  ],
+
+  "r2_buckets": [
+    { "binding": "RUNS_STORAGE", "bucket_name": "flare-dispatch" }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "RUNS_METADATA",
+      "database_name": "flare-dispatch",
+      "database_id": "3a365bf1-fae3-4a29-bef7-5b020f8cb283",
+      "migrations_dir": "infra/migrations"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "CONFIG_KV",
+      "id": "dff3e9657cf34c94955c31a333084f1c"
+    }
+  ]
+}
