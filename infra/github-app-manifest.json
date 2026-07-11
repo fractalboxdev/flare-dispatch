@@ -1,0 +1,23 @@
+{
+  "name": "FlareDispatch",
+  "description": "BYOC CI offload running on Cloudflare",
+  "url": "https://runs.example.com",
+  "hook_attributes": {
+    "url": "https://runs.example.com/v1/webhooks/github"
+  },
+  "redirect_url": "https://runs.example.com/v1/github/installed",
+  "public": false,
+  "default_permissions": {
+    "checks": "write",
+    "contents": "read",
+    "deployments": "read",
+    "metadata": "read",
+    "pull_requests": "write"
+  },
+  "default_events": [
+    "check_run",
+    "check_suite",
+    "deployment_status",
+    "pull_request"
+  ]
+}
