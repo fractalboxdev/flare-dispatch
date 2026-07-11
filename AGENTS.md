@@ -33,7 +33,7 @@ A run can be started from three sources:
 
 ## Deployment model
 
-Single-tenant BYOC — no multi-tenant SaaS. Deploy with `wrangler deploy` into your own Cloudflare account. Default deploy domain: `flare-dispatch.openhackers.club`.
+Single-tenant BYOC — no multi-tenant SaaS. Deploy with `wrangler deploy` into your own Cloudflare account. Default deploy domain: `flare-dispatch.fractalbox.dev`.
 
 ## Conventions
 
