@@ -45,6 +45,28 @@
 // / local smokes, where no Access app fronts the Worker). There is no implicit
 // fall-open path: an unconfigured deploy is closed, not open.
 //
+// --- Why plain TS here, not @effect/platform ---------------------------------
+//
+// The HTTP surface IS `@effect/platform` — the route table is a typed
+// `HttpRouter` (http-app.ts) and each route depends on typed PORTS (ports.ts).
+// This module is deliberately NOT: it is the pure functional CORE that gate
+// sits on top of, written against Web-standard primitives alone — `Request` /
+// `Response`, `crypto.subtle`, `fetch`, `atob` — with zero Effect and zero
+// `cloudflare:workers` imports. It is lifted into the Effect world at ONE seam:
+// the `ports.ts` `Access` Layer wraps `gateViewerAccess` in `Effect.promise`
+// and maps its `null`-means-proceed sentinel through `Option.fromNullable`.
+//
+// The payoff is direct unit-testability. `verifyAccessJwt` and
+// `gateViewerAccess` are exercised as plain async functions under Vitest — a
+// throwaway RSA keypair signs real RS256 JWTs, a stubbed `fetch` serves the
+// JWKS — with no Worker fixture, no Layer wiring, and no `ManagedRuntime` to
+// stand up (access-auth.test.ts). Pushing `@effect/platform` down into the
+// crypto/gate layer would buy nothing here (the token verify is inherently a
+// WebCrypto `Promise`) and cost that test simplicity. Same posture as the
+// sibling gate log-auth.ts and the other adapted plain modules the router
+// depends on (executions-read.ts, log-token.ts): functional core in plain TS,
+// Effect only at the port boundary.
+//
 // Spec: specs/07-trust-model.md § Operator → Dispatcher (viewer).
 
 import type { Env } from "./env";
