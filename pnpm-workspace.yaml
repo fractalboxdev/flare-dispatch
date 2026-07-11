@@ -4,6 +4,12 @@ packages:
   - "apps/dashboard"
   - "runs"
 
+# Pin effect to the reference's proven patch. effect 3.21.3+ shifts a type
+# inference (the R channel widens never->any) that trips typecheck in a few
+# suites; 3.21.2 is the version the whole substrate was validated against.
+overrides:
+  effect: 3.21.2
+
 # pnpm 10+ gates dependency lifecycle (build) scripts behind an explicit
 # allowlist. These are the packages whose install/postinstall scripts pnpm 9
 # ran implicitly; allowing them keeps `pnpm install` from erroring with

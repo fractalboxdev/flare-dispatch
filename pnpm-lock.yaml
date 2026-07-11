@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  effect: 3.21.2
+
 importers:
 
   .:
@@ -15,8 +18,8 @@ importers:
         specifier: ^22.19.0
         version: 22.20.1
       effect:
-        specifier: ^3.21.0
-        version: 3.21.4
+        specifier: 3.21.2
+        version: 3.21.2
       oxlint:
         specifier: ^1.71.0
         version: 1.73.0
@@ -46,10 +49,10 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: ^0.29.0
-        version: 0.29.0(effect@3.21.4)(vitest@3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3)))
+        version: 0.29.0(effect@3.21.2)(vitest@3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3)))
       effect:
-        specifier: ^3.21.0
-        version: 3.21.4
+        specifier: 3.21.2
+        version: 3.21.2
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))
@@ -62,6 +65,25 @@ importers:
       msw:
         specifier: ^2.7.0
         version: 2.15.0(@types/node@22.20.1)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))
+
+  packages/review-agent:
+    dependencies:
+      '@fractalbox/flare-dispatch-core':
+        specifier: workspace:*
+        version: link:../core
+      effect:
+        specifier: 3.21.2
+        version: 3.21.2
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.19
+        version: 22.20.1
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
@@ -124,7 +146,7 @@ packages:
   '@effect/vitest@0.29.0':
     resolution: {integrity: sha512-DvWr1aeEcaZ8mtu8hNVb4e3rEYvGEwQSr7wsNrW53t6nKYjkmjRICcvVEsXUhjoCblRHSxRsRV0TOt0+UmcvaQ==}
     peerDependencies:
-      effect: ^3.21.0
+      effect: 3.21.2
       vitest: ^3.2.0
 
   '@emnapi/runtime@1.11.2':
@@ -889,8 +911,8 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
-  effect@3.21.4:
-    resolution: {integrity: sha512-B89v/xSgPbl1J2Ai2u18jxq3odpFauU1rC6/eSs4FeNHi72kwKdJp12VGigvRV2lK+kRnx+OOz41XV8guZd4gQ==}
+  effect@3.21.2:
+    resolution: {integrity: sha512-rXd2FGDM8KdjSIrc+mqEELo7ScW7xTVxEf1iInmPSpIde9/nyGuFM710cjTo7/EreGXiUX2MOonPpprbz2XHCg==}
 
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
@@ -1325,9 +1347,9 @@ snapshots:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
 
-  '@effect/vitest@0.29.0(effect@3.21.4)(vitest@3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3)))':
+  '@effect/vitest@0.29.0(effect@3.21.2)(vitest@3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3)))':
     dependencies:
-      effect: 3.21.4
+      effect: 3.21.2
       vitest: 3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))
 
   '@emnapi/runtime@1.11.2':
@@ -1823,7 +1845,7 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  effect@3.21.4:
+  effect@3.21.2:
     dependencies:
       '@standard-schema/spec': 1.1.0
       fast-check: 3.23.2
