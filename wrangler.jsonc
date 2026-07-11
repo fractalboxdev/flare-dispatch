@@ -12,6 +12,14 @@
 
   "observability": { "enabled": true },
 
+  // Custom domain (requires the fractalbox.dev zone in this account). The
+  // GitHub App install flow substitutes the request origin into the manifest,
+  // so hitting the install page on this host wires the App's webhook/callback
+  // URLs to it.
+  "routes": [
+    { "pattern": "flare-dispatch.fractalbox.dev", "custom_domain": true }
+  ],
+
   // Workers AI — backs the modelGateway capability the pr-review engine calls.
   // The binding IS the auth (account-billed), so no model API key is needed.
   "ai": { "binding": "AI" },
@@ -22,7 +30,11 @@
 
   "vars": {
     "CLOUDFLARE_ACCOUNT_ID": "c91d52c288c452ab734ede1518b00e11",
-    "ADMISSION_CAP": "16"
+    "ADMISSION_CAP": "16",
+    // Opt the human-facing viewer surfaces (incl. the GitHub App install flow)
+    // out of the Cloudflare Access gate for the initial dogfood. Configure
+    // ACCESS_AUD + ACCESS_TEAM_DOMAIN and drop this to re-gate them.
+    "VIEWER_ACCESS_MODE": "token-only"
   },
 
   "workflows": [
