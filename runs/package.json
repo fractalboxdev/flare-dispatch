@@ -1,0 +1,36 @@
+{
+  "name": "@fractalbox/flare-dispatch-runs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "FlareDispatch starter runs — defineRun programs riding on @fractalbox/flare-dispatch-core.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.ts",
+    "./offload-test": "./offload-test.ts",
+    "./cdp-acceptance": "./cdp-acceptance.ts",
+    "./deploy-smoke": "./deploy-smoke.ts",
+    "./worker-deploy": "./worker-deploy.ts",
+    "./matrix-fanout": "./matrix-fanout.ts",
+    "./playwright-e2e": "./playwright-e2e.ts",
+    "./product-demo": "./product-demo.ts",
+    "./pr-review": "./pr-review.ts",
+    "./email-otp-login": "./email-otp-login.ts",
+    "./finops-audit": "./finops-audit.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalbox/flare-dispatch-core": "workspace:*",
+    "@fractalbox/flare-dispatch-review-agent": "workspace:*",
+    "effect": "^3.21.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^0.29.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.0"
+  }
+}
