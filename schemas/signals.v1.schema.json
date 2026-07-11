@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fractalbox.dev/flare-dispatch/schemas/signals.v1.schema.json",
+  "title": "flare-dispatch signals/v1",
+  "description": "Caller-supplied observability signals. Canonical contract: packages/core/src/signals.ts. Producer contract + versioning policy: specs/02-runs.md § Signals.",
+  "x-flare-dispatch-contract-version": "v1",
+  "x-flare-dispatch-source": "packages/core/src/signals.ts",
+  "type": "array",
+  "maxItems": 50,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "source",
+      "title",
+      "detail"
+    ],
+    "properties": {
+      "source": {
+        "type": "string",
+        "maxLength": 120,
+        "description": "Which system produced the signal. Convention: vendor-or-surface[:scope]."
+      },
+      "title": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Short title naming the error."
+      },
+      "detail": {
+        "type": "string",
+        "maxLength": 2000,
+        "description": "Enough detail for a model to triage (message, context, window)."
+      },
+      "url": {
+        "type": "string",
+        "maxLength": 1000,
+        "description": "Optional deep link into the producing system."
+      },
+      "count": {
+        "type": "number",
+        "description": "Optional occurrence count over the caller's window."
+      }
+    }
+  }
+}

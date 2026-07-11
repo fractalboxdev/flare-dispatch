@@ -1,0 +1,307 @@
+// @fractalbox/flare-dispatch-core — the `github` capability (read-only GitHub access).
+//
+// The symmetric *read* surface to the `Checks` capability's write side
+// (check-runs callback). Scoped to the installations of the FlareDispatch
+// GitHub App; runs never see a token — the live Layer mints, caches, and
+// scopes them via the same installation-token machinery the Checks Layer
+// uses (`@fractalbox/flare-dispatch-github-app`).
+//
+// Deliberately read-only and narrow: a run produces `findings` and an
+// output, and the Dispatcher renders the check-run. The capability exists
+// so a run can *discover what to act on* (Schedule-mode enumeration:
+// "every open PR across every installed repo"), not so it can act on GitHub
+// directly.
+//
+// Spec: specs/03-dsl.md § github, specs/04-gha-integration.md § Schedule mode.
+
+import { Context, Effect } from "effect";
+import type { GitHubApiError } from "../errors";
+
+/** A repository the FlareDispatch App is installed on. */
+export type RepoRef = {
+  /** "owner/name". */
+  readonly repo: string;
+  readonly defaultBranch: string;
+  readonly installationId: number;
+  readonly archived: boolean;
+  /** epoch ms — last push to any branch. */
+  readonly pushedAt: number;
+};
+
+/** An open pull request — the unit of work for `pr-review-sweep`. */
+export type PullRequestRef = {
+  /** "owner/name". */
+  readonly repo: string;
+  readonly number: number;
+  readonly headSha: string;
+  readonly baseSha: string;
+  readonly title: string;
+  readonly draft: boolean;
+  readonly labels: readonly string[];
+  readonly author: string;
+  readonly installationId: number;
+  /** epoch ms. */
+  readonly updatedAt: number;
+};
+
+/**
+ * A GitHub Actions workflow run — the unit of work for `ci-triage`. The read
+ * surface a Schedule-mode run enumerates to find recently-failed CI across the
+ * repos the App is installed on.
+ */
+export type WorkflowRunRef = {
+  /** "owner/name". */
+  readonly repo: string;
+  /** The workflow run id (`GET /repos/{o}/{r}/actions/runs/{id}`). */
+  readonly id: number;
+  /** The workflow file's display name (e.g. "CI/CD"). */
+  readonly name: string;
+  /** The head branch the run executed on. */
+  readonly headBranch: string;
+  /** The head SHA the run executed against. */
+  readonly headSha: string;
+  /** GitHub run status — `completed` for a finished run. */
+  readonly status: string;
+  /** The conclusion — `failure` / `timed_out` / `cancelled` / `success` / … */
+  readonly conclusion: string;
+  /** The run's web URL (the failing-run link a triage write-up points at). */
+  readonly url: string;
+  /** epoch ms — when the run was created. */
+  readonly createdAt: number;
+};
+
+/**
+ * A request to open (or update) a **draft pull request** carrying a set of
+ * file edits — the one *content write* on the `github` capability, added for
+ * the `spec-drift` / `ci-triage` recipes. The live Layer commits the files via
+ * the GitHub Git Data API (blob → tree → commit → ref) from the Worker — no
+ * container `git push` — then opens a draft PR. Idempotent on `headBranch`:
+ * re-running updates the branch and reuses the already-open PR.
+ *
+ * Like `pullReview`, this is a deliberate, narrow exception to the capability's
+ * read-only stance — a recipe whose entire purpose is "detect X, propose a fix
+ * as a PR" needs exactly this and nothing more (it never force-merges, never
+ * touches protected refs).
+ */
+export type OpenDraftPullRequest = {
+  /** "owner/name". */
+  readonly repo: string;
+  /**
+   * The base branch to open the PR against and branch the commit from.
+   * Defaults to the repo's default branch when omitted.
+   */
+  readonly baseBranch?: string;
+  /** The head branch to create/update (e.g. `flare-dispatch/spec-drift-2026-06-03`). */
+  readonly headBranch: string;
+  /** PR title. */
+  readonly title: string;
+  /** PR body (markdown). */
+  readonly body: string;
+  /** The commit message for the file edits. */
+  readonly commitMessage: string;
+  /** The files to write — full new contents, keyed by repo-relative path. */
+  readonly files: readonly { readonly path: string; readonly content: string }[];
+  /**
+   * Open the PR as a draft. Defaults to `true` (the spec-drift / ci-triage
+   * recipes want a draft a human promotes). The `release-notes` recipe opens a
+   * NON-draft PR (`draft: false`) so "merge to approve" is a one-click action.
+   */
+  readonly draft?: boolean;
+  /**
+   * The GitHub installation id authenticating the writes. Optional — the live
+   * Layer resolves it from the repo when absent (the App is the source of truth
+   * for which installation covers a repo).
+   */
+  readonly installationId?: number;
+};
+
+/** The outcome of {@link GithubService.openDraftPullRequest}. */
+export type DraftPullRequestResult = {
+  /** The PR number (existing or newly opened). */
+  readonly number: number;
+  /** The PR's web URL. */
+  readonly url: string;
+  /** `true` when this call opened a new PR; `false` when it updated an open one. */
+  readonly created: boolean;
+};
+
+/**
+ * A request to publish a **GitHub Release** — the narrow *release write* the
+ * `release-notes` recipe uses on approval. Like `openDraftPullRequest` and
+ * `pullReview`, this is a deliberate, bounded exception to the capability's
+ * read-only stance: a run that drafts release notes and waits for a human gate
+ * needs exactly "publish this tag with this body" and nothing more.
+ *
+ * The live Layer creates the release via `POST /repos/{o}/{r}/releases`, which
+ * also creates the git tag at `target` when it does not exist — no separate
+ * container `git push --tags`. A deploy without App credentials degrades to a
+ * logged no-op (`published: false`), mirroring the other writes.
+ */
+export type CreateRelease = {
+  /** "owner/name". */
+  readonly repo: string;
+  /** The tag to create/point the release at (e.g. `v0.1.0`). */
+  readonly tag: string;
+  /**
+   * The commit sha (or branch) the tag is created at when it does not already
+   * exist — pin it to the drafted HEAD sha for a reproducible tag. Defaults to
+   * the repo's default-branch tip when omitted.
+   */
+  readonly target?: string;
+  /** The release title — defaults to `tag`. */
+  readonly name?: string;
+  /** The release body (markdown). */
+  readonly body: string;
+  /** Publish as a pre-release. Default `false`. */
+  readonly prerelease?: boolean;
+  /**
+   * The GitHub installation id authenticating the write. Optional — the live
+   * Layer resolves it from the repo when absent.
+   */
+  readonly installationId?: number;
+};
+
+/** The outcome of {@link GithubService.createRelease}. */
+export type ReleaseResult = {
+  /** The release's numeric id (`0` when degraded to a no-op). */
+  readonly id: number;
+  /** The release's web URL (`""` when degraded to a no-op). */
+  readonly url: string;
+  /** The tag the release points at. */
+  readonly tag: string;
+  /** `true` when a release was actually published; `false` on a no-op deploy. */
+  readonly published: boolean;
+};
+
+/**
+ * A top-level PR review to post — `POST /repos/{o}/{r}/pulls/{n}/reviews`.
+ * `event: "COMMENT"` leaves a visible review comment without approving or
+ * requesting changes (the run's *verdict* is reported separately via the
+ * check-run). This is the one *write* on the `github` capability — it exists so
+ * a run can leave an always-visible PR comment (on success AND failure), which
+ * the read-only check-run summary alone does not guarantee.
+ */
+export type PullReviewRequest = {
+  /** "owner/name". */
+  readonly repo: string;
+  /** PR number. */
+  readonly pr: number;
+  /** Head SHA the review is anchored to. */
+  readonly sha: string;
+  /** Markdown body of the review comment. */
+  readonly body: string;
+  /**
+   * The GitHub installation id authenticating the write. A run carries it as an
+   * input (the webhook payload's `installation.id`); the live Layer mints the
+   * installation token from it. Omitted in local dev → the no-op Layer.
+   */
+  readonly installationId?: number;
+};
+
+/** The service contract a runtime Layer implements. */
+export interface GithubService {
+  /**
+   * Every repo the App is installed on — the enumeration surface for
+   * Schedule-mode runs whose unit of work is a repo.
+   */
+  readonly repositories: (opts?: {
+    includeArchived?: boolean;
+    pushedWithinDays?: number;
+  }) => Effect.Effect<readonly RepoRef[], GitHubApiError>;
+
+  /**
+   * Open PRs across every repo the App is installed on. Paginates internally
+   * and backs off on secondary rate limits. The primary surface
+   * Schedule-mode sweeps enumerate against — a cron tick names no target,
+   * so the run must discover them.
+   */
+  readonly openPullRequests: (opts?: {
+    updatedWithinHours?: number;
+    includeDrafts?: boolean;
+    repos?: readonly string[];
+  }) => Effect.Effect<readonly PullRequestRef[], GitHubApiError>;
+
+  /**
+   * Recent GitHub Actions workflow runs across the App's installations — the
+   * enumeration surface `ci-triage` scans for failures. `status` defaults to
+   * `completed`; pass `conclusion: "failure"` to narrow to failed runs.
+   * Paginates internally and backs off on secondary rate limits.
+   */
+  readonly actionRuns: (opts?: {
+    /** Restrict to these repos (else every installed repo). */
+    repos?: readonly string[];
+    /** Only runs created within this window. */
+    createdWithinHours?: number;
+    /** GitHub run status filter — defaults to `completed`. */
+    status?: string;
+    /** Only runs with this conclusion (e.g. `failure`). */
+    conclusion?: string;
+  }) => Effect.Effect<readonly WorkflowRunRef[], GitHubApiError>;
+
+  /**
+   * Post a top-level PR review comment (`event: "COMMENT"`). The run uses this
+   * to leave an always-visible comment on every review — success or failure.
+   * Best-effort reporting: a live deploy without App credentials degrades to a
+   * logged no-op rather than failing the run.
+   */
+  readonly pullReview: (
+    req: PullReviewRequest,
+  ) => Effect.Effect<void, GitHubApiError>;
+
+  /**
+   * Open (or update) a draft PR carrying a set of file edits — the content
+   * write the `spec-drift` / `ci-triage` recipes use to propose a fix. Commits
+   * via the Git Data API from the Worker; idempotent on `headBranch`. A deploy
+   * without App credentials degrades to a logged no-op (`created: false`).
+   */
+  readonly openDraftPullRequest: (
+    req: OpenDraftPullRequest,
+  ) => Effect.Effect<DraftPullRequestResult, GitHubApiError>;
+
+  /**
+   * Publish a GitHub Release (creating the tag at `target` when absent) — the
+   * release write the `release-notes` recipe calls on human approval. A deploy
+   * without App credentials degrades to a logged no-op (`published: false`).
+   */
+  readonly createRelease: (
+    req: CreateRelease,
+  ) => Effect.Effect<ReleaseResult, GitHubApiError>;
+}
+
+/** Context.Tag — the dependency a run carries until a Layer provides it. */
+export class Github extends Context.Tag("@fractalbox/flare-dispatch-core/Github")<
+  Github,
+  GithubService
+>() {}
+
+/**
+ * The `github` accessor namespace. Each function reads the Github service
+ * from context and delegates — so a run writes `github.openPullRequests(...)`
+ * rather than `Effect.flatMap(Github, (g) => g.openPullRequests(...))`.
+ */
+export const github = {
+  repositories: (
+    opts: { includeArchived?: boolean; pushedWithinDays?: number } = {},
+  ) => Effect.flatMap(Github, (g) => g.repositories(opts)),
+  openPullRequests: (
+    opts: {
+      updatedWithinHours?: number;
+      includeDrafts?: boolean;
+      repos?: readonly string[];
+    } = {},
+  ) => Effect.flatMap(Github, (g) => g.openPullRequests(opts)),
+  actionRuns: (
+    opts: {
+      repos?: readonly string[];
+      createdWithinHours?: number;
+      status?: string;
+      conclusion?: string;
+    } = {},
+  ) => Effect.flatMap(Github, (g) => g.actionRuns(opts)),
+  pullReview: (req: PullReviewRequest) =>
+    Effect.flatMap(Github, (g) => g.pullReview(req)),
+  openDraftPullRequest: (req: OpenDraftPullRequest) =>
+    Effect.flatMap(Github, (g) => g.openDraftPullRequest(req)),
+  createRelease: (req: CreateRelease) =>
+    Effect.flatMap(Github, (g) => g.createRelease(req)),
+} as const;

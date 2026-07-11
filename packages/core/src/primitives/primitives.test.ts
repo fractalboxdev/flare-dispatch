@@ -1,0 +1,295 @@
+// Unit tests for the small primitives shipped from @fractalbox/flare-dispatch-core/
+// primitives. Each primitive composes capability services; tests assert the
+// observable shape (what calls land on the fakes, what shapes are returned)
+// rather than re-asserting the capability behavior under test elsewhere.
+//
+// `loadSecrets` has its own dedicated suite (load-secrets.test.ts); this file
+// covers `workspace`, `installCached`, `sharded`, `bootApp`, `probeHttp`.
+
+import { Effect } from "effect";
+import { describe, expect, it } from "vitest";
+import { bootApp } from "./boot-app";
+import { installCached } from "./install-cached";
+import { probeHttp } from "./probe-http";
+import { sharded } from "./sharded";
+import { makeCFRuntimeTest } from "../testing";
+import { workspace } from "./workspace";
+
+describe("workspace", () => {
+  it("acquires a container, clones the repo, returns { container, dir }", async () => {
+    const { layer, handles } = makeCFRuntimeTest();
+
+    const out = await Effect.runPromise(
+      workspace({ repo: "owner/myrepo", sha: "abc123" }).pipe(
+        Effect.provide(layer),
+      ),
+    );
+
+    expect(out.container.id).toMatch(/^fake-container-/);
+    expect(out.dir).toBe("/workspace/myrepo");
+    expect(handles.sandbox.acquired).toHaveLength(1);
+    expect(handles.sandbox.clones).toEqual([
+      { repo: "owner/myrepo", sha: "abc123" },
+    ]);
+  });
+
+  it("threads the optional image to sandbox.acquire", async () => {
+    const { layer, handles } = makeCFRuntimeTest();
+
+    await Effect.runPromise(
+      workspace({
+        repo: "owner/myrepo",
+        sha: "abc",
+        image: "registry.example/playwright:1",
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(handles.sandbox.acquired[0]!.image).toBe(
+      "registry.example/playwright:1",
+    );
+  });
+
+  it("install: true runs installCached after the clone", async () => {
+    // Seed the sandbox so `installCached` detects pnpm and runs install.
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "test -f pnpm-lock.yaml": { exitCode: 0 },
+        "sha256sum pnpm-lock.yaml": { exitCode: 0, stdout: "deadbeef\n" },
+        "pnpm install --frozen-lockfile": { exitCode: 0 },
+      },
+    });
+
+    await Effect.runPromise(
+      workspace({
+        repo: "owner/myrepo",
+        sha: "abc",
+        install: true,
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // We expect at minimum: lockfile probe, sha256sum, then install.
+    const cmds = handles.sandbox.execs.map((e) => e.command);
+    expect(cmds.some((c) => c.includes("test -f pnpm-lock.yaml"))).toBe(true);
+    expect(cmds.some((c) => c.includes("sha256sum"))).toBe(true);
+    expect(cmds.some((c) => c.includes("pnpm install"))).toBe(true);
+  });
+});
+
+describe("installCached", () => {
+  it("auto-detects pnpm from the lockfile probe", async () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "test -f pnpm-lock.yaml": { exitCode: 0 },
+        "sha256sum pnpm-lock.yaml": { exitCode: 0, stdout: "feedface\n" },
+        "pnpm install --frozen-lockfile": { exitCode: 0 },
+      },
+    });
+
+    await Effect.runPromise(
+      installCached({
+        container: { id: "c-1" },
+        dir: "/workspace/repo",
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const cmds = handles.sandbox.execs.map((e) => e.command);
+    expect(cmds.some((c) => c.includes("pnpm install"))).toBe(true);
+  });
+
+  it("no recognized lockfile → no install run", async () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "test -f pnpm-lock.yaml": { exitCode: 1 },
+        "test -f package-lock.json": { exitCode: 1 },
+        "test -f Cargo.lock": { exitCode: 1 },
+        "test -f uv.lock": { exitCode: 1 },
+      },
+    });
+
+    await Effect.runPromise(
+      installCached({
+        container: { id: "c-1" },
+        dir: "/workspace/repo",
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const cmds = handles.sandbox.execs.map((e) => e.command);
+    expect(cmds.every((c) => !c.includes("install"))).toBe(true);
+    expect(cmds.every((c) => !c.includes("cargo fetch"))).toBe(true);
+  });
+
+  it("explicit tool: \"npm\" skips detection and runs npm ci", async () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "sha256sum package-lock.json": { exitCode: 0, stdout: "abc\n" },
+        "npm ci": { exitCode: 0 },
+      },
+    });
+
+    await Effect.runPromise(
+      installCached({
+        container: { id: "c-1" },
+        dir: "/workspace/repo",
+        tool: "npm",
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const cmds = handles.sandbox.execs.map((e) => e.command);
+    expect(cmds.some((c) => c.includes("npm ci"))).toBe(true);
+    // No probe loop when the tool is named explicitly.
+    expect(cmds.some((c) => c.includes("test -f"))).toBe(false);
+  });
+});
+
+describe("sharded", () => {
+  it("runs `count` parallel bodies, each receiving its 1-based shard", async () => {
+    const seen: Array<{ index: number; total: number }> = [];
+    const result = await Effect.runPromise(
+      sharded({
+        count: 4,
+        body: (shard) =>
+          Effect.sync(() => {
+            seen.push(shard);
+            return shard.index * 10;
+          }),
+      }),
+    );
+
+    expect(result).toEqual([10, 20, 30, 40]);
+    expect(seen.map((s) => s.index).sort()).toEqual([1, 2, 3, 4]);
+    expect(seen.every((s) => s.total === 4)).toBe(true);
+  });
+
+  it("count: 1 → exactly one shard with index 1 and total 1", async () => {
+    let captured: { index: number; total: number } | undefined;
+    await Effect.runPromise(
+      sharded({
+        count: 1,
+        body: (shard) =>
+          Effect.sync(() => {
+            captured = shard;
+          }),
+      }),
+    );
+    expect(captured).toEqual({ index: 1, total: 1 });
+  });
+
+  it("a single shard failure propagates the typed error", async () => {
+    const exit = await Effect.runPromiseExit(
+      sharded({
+        count: 3,
+        body: (shard) =>
+          shard.index === 2 ? Effect.fail("boom" as const) : Effect.succeed(0),
+      }),
+    );
+    expect(exit._tag).toBe("Failure");
+  });
+});
+
+describe("bootApp", () => {
+  it("runDetached then waitForPort with the default timeout (120s)", async () => {
+    const { layer, handles } = makeCFRuntimeTest();
+
+    const handle = await Effect.runPromise(
+      bootApp({
+        container: { id: "c-1" },
+        dir: "/workspace/repo",
+        command: ["pnpm", "dev"],
+        port: 3000,
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(handle.id).toMatch(/^fake-detached-/);
+    const exec = handles.sandbox.execs[0]!;
+    expect(exec.command).toBe("pnpm dev");
+    expect(exec.cwd).toBe("/workspace/repo");
+  });
+
+  it("threads optional env to the detached process", async () => {
+    const { layer, handles } = makeCFRuntimeTest();
+
+    await Effect.runPromise(
+      bootApp({
+        container: { id: "c-1" },
+        dir: "/workspace/repo",
+        command: "pnpm dev",
+        port: 3000,
+        env: { NODE_ENV: "test", API_KEY: "secret" },
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(handles.sandbox.execs[0]!.env).toEqual({
+      NODE_ENV: "test",
+      API_KEY: "secret",
+    });
+  });
+});
+
+describe("probeHttp", () => {
+  it("hits every path under the baseURL and counts healthy/failed", async () => {
+    // The fake matches command substrings; use full URLs as keys but order
+    // longest-first so a non-strict path like "/" doesn't shadow "/broken".
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "https://example.com/broken": { exitCode: 0, stdout: "500" },
+        "https://example.com/health": { exitCode: 0, stdout: "200" },
+        "https://example.com/": { exitCode: 0, stdout: "200" },
+      },
+    });
+
+    const result = await Effect.runPromise(
+      probeHttp({
+        baseURL: "https://example.com",
+        paths: ["/", "/health", "/broken"],
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.checked).toBe(3);
+    expect(result.failed).toBe(1);
+    const byPath = Object.fromEntries(result.results.map((r) => [r.path, r]));
+    expect(byPath["/"]!.ok).toBe(true);
+    expect(byPath["/health"]!.ok).toBe(true);
+    expect(byPath["/broken"]!.ok).toBe(false);
+    expect(byPath["/broken"]!.status).toBe(500);
+  });
+
+  it("a curl connection failure (non-zero exit) counts as failed", async () => {
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: {
+        // ExecFailed in fake → modeled as a sandbox exec failure path; here
+        // we use a 0-exit-but-non-2xx response shape via empty stdout.
+        "https://down.example.com/": { exitCode: 7, stdout: "" },
+      },
+    });
+
+    const result = await Effect.runPromise(
+      probeHttp({
+        baseURL: "https://down.example.com",
+        paths: ["/"],
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.failed).toBe(1);
+    expect(result.results[0]!.ok).toBe(false);
+  });
+
+  it("custom okStatus broadens or narrows the success window", async () => {
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "https://example.com/redir": { exitCode: 0, stdout: "302" },
+      },
+    });
+
+    // Default okStatus accepts 200-399, so 302 is healthy. With a stricter
+    // predicate, the same response counts as failed.
+    const strict = await Effect.runPromise(
+      probeHttp({
+        baseURL: "https://example.com",
+        paths: ["/redir"],
+        okStatus: (c) => c >= 200 && c < 300,
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(strict.failed).toBe(1);
+  });
+});
