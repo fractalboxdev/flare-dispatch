@@ -19,6 +19,8 @@ The **problem in the source** was duplication at the *authoring seam* — copy-p
 
 **One improvement we bake in because we're greenfield:** make `defineRun` **generic over `R`** (`defineRun<O, E, R>`) so each run carries its *precise* typed dependencies and a narrowed error channel, while the run **registry stores the erased upper bound** `Run<unknown, RunError, RunContext>`. This is the standard variance pattern (the same way Effects and Layers are stored erased) — a localized type design, not a rewrite. The old codebase's monomorphic `Effect<O, RunError, RunContext>` field was its one genuine typing limitation; we simply don't reproduce it.
 
+**And we make one shape universal:** every run is `Trigger → Gate → Gather → Act → Sink`, with the trigger and the sink as the only variable poles — so a verify run and a gather-signals-then-draft-PR run (self-healing) are the same core with different poles, not two subsystems (§3).
+
 ---
 
 ## 2. The duplication the combinator tier owns
@@ -41,34 +43,55 @@ The recipe "clones" the source carried (verbatim `*.run.ts` copies of their `run
 
 ---
 
-## 3. Target architecture
+## 3. Target architecture — one `run()`, two pluggable poles
+
+Every run — verify *or* draft-PR — is the same pipeline:
+
+```
+Trigger(Source) → Gate → Gather → Act → Sink(emit)
+```
+
+Only the **Trigger** (what starts me) and the **Sink** (what I emit) differ; the middle is Effect composition — trivial for a verify run (checkout, exec), substantive for a draft-PR run (read logs/diff, `completeStructured`). `defineRun` + the dispatcher already unify *execution*; these two poles unify *authoring and causality*.
 
 ```mermaid
-flowchart TD
-  subgraph auth["Authoring — @fractalbox/flare-dispatch-core/recipes"]
-    REC["commandRun · fanoutRun · reportPrRun<br/>+ trigger helpers · render helpers"]
-  end
-  subgraph core["Core substrate"]
-    DR["defineRun&lt;O,E,R&gt; (passive, generic-over-R)"]
-    CAP["capabilities (services/*) — serviceFunctions accessors"]
-    PRIM["primitives (workspace · loadSecrets · sharded · runToCompletion · completeStructured)"]
-    STEP["step() / StepRunner Tag"]
-  end
-  subgraph proto["@fractalbox/flare-dispatch-protocol"]
-    PY["DispatchPayload schema · 1 key/fingerprint fn"]
-  end
-  REC -->|assembles spec, calls| DR
-  REC --> CAP
-  REC --> PRIM
-  DR --> REG["RUN_REGISTRY (erased Run&lt;unknown,RunError,RunContext&gt;)"]
-  PY --> DISP["dispatcher — all create-sites → 1 instantiateRun"]
-  REG --> DISP
+flowchart LR
+  GH["GitHub event"] --> BUS
+  CRON["Cron"] --> BUS
+  WH["Webhook"] --> BUS
+  BUS["event bus (Queue + coordinator DO)"] --> RT["router: match subscriptions → gate → instantiateRun"]
+  RT --> RUN["Run: Gather → Act → Sink<br/>over defineRun&lt;O,E,R&gt; · RUN_REGISTRY (erased)"]
+  RUN -->|publish typed RunOutcome| BUS
 ```
+
+**The two poles.** A trigger is an event *subscription*; a sink is a typed *capability*. Run outcomes are themselves typed events on the same bus, so the dispatcher is a **signal router** and the feedback loop closes:
+
+```ts
+type DispatchEvent =
+  | { _tag: "GitHubEvent"; kind: "pull_request" | "push" | "check_suite" | "webhook"; /* … */ }
+  | { _tag: "Schedule";    cron: string }
+  | { _tag: "RunOutcome";  run: RunName; status: "passed" | "failed"; outcome: Json; cause: RunRef; depth: number }
+
+type Trigger<I> = { match: (e: DispatchEvent) => Option<I> }   // subscription + decode to input
+type Sink<O>    = StatusSink | PrSink | ArtifactSink            // composable — a run may use several
+```
+
+**Self-heal is a preset, not a special case** — a run whose Source is another run's failure and whose Sink is a draft PR:
+
+```ts
+export const selfHeal = (target: RunName) => reportPrRun({
+  trigger: onRunOutcome({ run: target, status: "failed", maxDepth: 2 }),
+  gather:  (o)   => collect({ logs: r2.get(o.outcome.logRef), diff: gh.diff(o.cause) }),
+  act:     (sig) => completeStructured(HealPlan, prompt(sig)),
+  sink:    PrSink.draft,
+});
+```
+
+`commandRun` = `run` with `sink = StatusSink`; `reportPrRun` = `run` with `sink = PrSink`; `selfHeal` = `reportPrRun` + `onRunOutcome`. The three builders survive as presets over one `run()`.
 
 **Combinator hook contracts** (get these right at authoring time):
 
-- Hooks are **effectful** and pin `E ⊆ RunError`: `resolveCommand: (input) => Effect<Plan | Skip, RunError, R>`, `onResult: (r) => Effect<O, RunError, R>`. Effectful `onResult` is what lets a run like `offload-test` run its self-heal there.
-- The `skip` path has its own output type (no `r` reaches `onResult`); the builder makes it a green no-op before checkout.
+- Hooks are **effectful** and pin `E ⊆ RunError` — the core `gather`/`act` (and preset aliases like `commandRun`'s `resolveCommand`/`onResult`) all return `Effect<…, RunError, R>`. Effectful hooks are what let `offload-test` run an inline retry (distinct from the cross-run draft-PR heal above).
+- The `skip` path has its own output type and is a green no-op before checkout.
 - `Effect.serviceFunctions(Tag)` covers **pure-delegation** accessors only. Accessors that default/reshape opts, or that are generic over a method's type parameter (e.g. `completeStructured<A>`), stay hand-written — those are exactly the double-edit hazards, and `serviceFunctions` structurally can't host them.
 - Raw `defineRun` stays the escape hatch for genuinely bespoke runs (`deploy-smoke`, `product-demo`, `pr-review`); combinators cover the ~80% case only.
 
@@ -117,9 +140,9 @@ Each builder ships with a **builder-level test** (fakes + one live smoke) — th
 
 | PR | Scope |
 | --- | --- |
-| **PR1 — Foundations & typed core** | Port `defineRun` as `defineRun<O,E,R>` with the erased `RUN_REGISTRY`. Stand up `@fractalbox/flare-dispatch-protocol` (DispatchPayload + one key/fingerprint fn, single `:` separator). Route **all** dispatch create-sites through one `instantiateRun` + one dedup predicate covering every `already_exists` form. `serviceFunctions` accessors for pure passthrough; hand-write the defaulting/generic ones. **Land `completeStructured` + `json-extract` + `classifyProviderError` in core here** so PR3 and PR5 both consume one implementation. |
-| **PR2 — command + fanout builders** | `commandRun`, `fanoutRun` with effectful hooks (`E ⊆ RunError` pinned, typed `skip`), trigger helpers (`checkSuiteTrigger` / `prPushTrigger`), render helpers (`acceptanceFailure`, `draftPrBody`). Author `oxlint` / `worker-deploy` / `offload-test` and `matrix-fanout` / `vitest-shard` / `playwright-e2e` on them. |
-| **PR3 — reportPr + runToCompletion** | `reportPrRun` (consumes core `completeStructured`) → `ci-triage-pr` / `spec-drift-pr` / `finops-audit`. `sandbox.runToCompletion` (detach → timeout-kill → sentinel-poll → bounded-read) + `uploadBestEffort` → `cdp-acceptance` / `product-demo`. |
+| **PR1 — Foundations & typed core** | Port `defineRun` as `defineRun<O,E,R>` with the erased `RUN_REGISTRY`. Stand up `@fractalbox/flare-dispatch-protocol` (DispatchPayload + one key/fingerprint fn, single `:` separator). Route **all** dispatch create-sites through one `instantiateRun` + one dedup predicate covering every `already_exists` form. `serviceFunctions` accessors for pure passthrough; hand-write the defaulting/generic ones. **Land `completeStructured` + `json-extract` + `classifyProviderError` in core here** so PR3 and PR5 both consume one implementation. Add the `DispatchEvent` union (incl. `RunOutcome`) to the protocol and a publish-outcome `step()` on run completion — the dispatcher becomes the event router, and the outcome→trigger edge funnels through the same `instantiateRun`. |
+| **PR2 — command + fanout builders** | `commandRun`, `fanoutRun` with effectful hooks (`E ⊆ RunError` pinned, typed `skip`), trigger helpers (`checkSuiteTrigger` / `prPushTrigger` / `onRunOutcome`, all the same `Trigger<I>` shape), render helpers (`acceptanceFailure`, `draftPrBody`). Author `oxlint` / `worker-deploy` / `offload-test` and `matrix-fanout` / `vitest-shard` / `playwright-e2e` on them. |
+| **PR3 — reportPr + runToCompletion** | `reportPrRun` (consumes core `completeStructured`) → `ci-triage-pr` / `spec-drift-pr` / `finops-audit`. `sandbox.runToCompletion` (detach → timeout-kill → sentinel-poll → bounded-read) + `uploadBestEffort` → `cdp-acceptance` / `product-demo`. Formalize `StatusSink` / `PrSink` as the Sink capability (so a verify run can also emit a draft PR) and author `selfHeal` as `reportPrRun` + `onRunOutcome`. |
 | **PR4 — runtime-cf CF adapters** | `makeD1(db)` with explicit `FailurePolicy = 'die' | 'retrySurface' | 'degrade'`, `r2` get-or-null/throw, `container-tar` pack/restore. Pure cores and atomic SQL stay as-is. |
 | **PR5 — model-stack unification** | Unify `demo-agent` onto the `modelGateway` seam. Because it runs **in-container with no `env.AI` binding**, this needs a real **HTTP-backed Layer / inference proxy** — net-new transport, the single largest piece, not a rename. Promotes the one `completeStructured` from PR1 to retire the 3-way structured-output reimplementation. |
 
@@ -127,6 +150,8 @@ Each builder ships with a **builder-level test** (fakes + one live smoke) — th
 
 ## 6. Design decisions locked
 
+- **One `run()`, two pluggable poles** — a `Trigger` (event subscription) and a `Sink` (typed capability); `commandRun` / `fanoutRun` / `reportPrRun` are presets, and the dispatcher is a signal router over one event bus. Self-heal is `reportPrRun` + `onRunOutcome`, not a subsystem.
+- **Feedback loops stay finite** — `RunOutcome.depth` increments each causal hop and `onRunOutcome({ maxDepth })` refuses beyond N; the skip-drafts-and-bots gate and the `{run}:{repo_}:{sha12}` dedup key are the other two guards.
 - **Generic-over-`R` `defineRun` + erased registry** — precise typed deps and narrowed error unions from day one; not a conceded limitation.
 - **`serviceFunctions` for pure delegation only** — defaulting/reshaping and method-generic accessors stay hand-written.
 - **Combinator hooks are effectful with `E ⊆ RunError`**; raw `defineRun` remains the escape hatch for bespoke runs.
