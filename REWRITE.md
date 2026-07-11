@@ -32,10 +32,11 @@ Named clusters the source copy-pasted, each of which becomes **one shared abstra
 | command-run skeleton (checkout → loadSecrets → exec → upload-log → fail-on-nonzero) | `commandRun` builder |
 | fan-out skeleton + shard schemas | `fanoutRun` builder |
 | report-PR skeleton (resolveBackend → structured → openDraftPullRequest) | `reportPrRun` builder |
-| detached-exec + DONE-sentinel poll | `sandbox.runToCompletion` primitive |
+| detached-exec + DONE-sentinel poll | `sandbox.runToCompletion` primitive (a `Schedule` + `Effect.timeout`) |
 | capability accessors (pure delegation) | `Effect.serviceFunctions(Tag)` |
-| D1 retry/wrapper shells, R2 get-or-null/throw, container-tar | `runtime-cf/src/cf/*` helpers |
-| model transport + structured-output ("forced tool call → typed result") | one `modelGateway` seam + one `completeStructured` |
+| D1 retry/wrapper shells | **`@effect/sql-d1`** `SqlClient` (adopted) |
+| R2 get-or-null/throw, container-tar | thin `runtime-cf/src/cf/*` helpers |
+| model transport + structured-output | **`@effect/ai`** (+ `-openai` / `-anthropic`); `completeStructured` = thin wrapper over its native structured output |
 | trigger idempotency key `{run}:{repo_}:{sha12}` + skip-drafts/bots | trigger helpers in `-core/recipes` |
 | dispatch create + `already_exists` dedup | one `instantiateRun`, one dedup predicate |
 
@@ -140,19 +141,46 @@ Each builder ships with a **builder-level test** (fakes + one live smoke) — th
 
 | PR | Scope |
 | --- | --- |
-| **PR1 — Foundations & typed core** | Port `defineRun` as `defineRun<O,E,R>` with the erased `RUN_REGISTRY`. Stand up `@fractalbox/flare-dispatch-protocol` (DispatchPayload + one key/fingerprint fn, single `:` separator). Route **all** dispatch create-sites through one `instantiateRun` + one dedup predicate covering every `already_exists` form. `serviceFunctions` accessors for pure passthrough; hand-write the defaulting/generic ones. **Land `completeStructured` + `json-extract` + `classifyProviderError` in core here** so PR3 and PR5 both consume one implementation. Add the `DispatchEvent` union (incl. `RunOutcome`) to the protocol and a publish-outcome `step()` on run completion — the dispatcher becomes the event router, and the outcome→trigger edge funnels through the same `instantiateRun`. |
+| **PR1 — Foundations & typed core** | Port `defineRun` as `defineRun<O,E,R>` with the erased `RUN_REGISTRY`. Stand up `@fractalbox/flare-dispatch-protocol` (DispatchPayload + one key/fingerprint fn, single `:` separator). Route **all** dispatch create-sites through one `instantiateRun` + one dedup predicate covering every `already_exists` form. `serviceFunctions` accessors for pure passthrough; hand-write the defaulting/generic ones. **Land a thin `completeStructured` in core over `@effect/ai`'s native structured output** (drops the forced-tool-call + `json-extract` + hand-rolled `classifyProviderError`) so PR3 and PR5 both consume one implementation. Add the `DispatchEvent` union (incl. `RunOutcome`) to the protocol and a publish-outcome `step()` on run completion — the dispatcher becomes the event router, and the outcome→trigger edge funnels through the same `instantiateRun`. |
 | **PR2 — command + fanout builders** | `commandRun`, `fanoutRun` with effectful hooks (`E ⊆ RunError` pinned, typed `skip`), trigger helpers (`checkSuiteTrigger` / `prPushTrigger` / `onRunOutcome`, all the same `Trigger<I>` shape), render helpers (`acceptanceFailure`, `draftPrBody`). Author `oxlint` / `worker-deploy` / `offload-test` and `matrix-fanout` / `vitest-shard` / `playwright-e2e` on them. |
-| **PR3 — reportPr + runToCompletion** | `reportPrRun` (consumes core `completeStructured`) → `ci-triage-pr` / `spec-drift-pr` / `finops-audit`. `sandbox.runToCompletion` (detach → timeout-kill → sentinel-poll → bounded-read) + `uploadBestEffort` → `cdp-acceptance` / `product-demo`. Formalize `StatusSink` / `PrSink` as the Sink capability (so a verify run can also emit a draft PR) and author `selfHeal` as `reportPrRun` + `onRunOutcome`. |
-| **PR4 — runtime-cf CF adapters** | `makeD1(db)` with explicit `FailurePolicy = 'die' | 'retrySurface' | 'degrade'`, `r2` get-or-null/throw, `container-tar` pack/restore. Pure cores and atomic SQL stay as-is. |
-| **PR5 — model-stack unification** | Unify `demo-agent` onto the `modelGateway` seam. Because it runs **in-container with no `env.AI` binding**, this needs a real **HTTP-backed Layer / inference proxy** — net-new transport, the single largest piece, not a rename. Promotes the one `completeStructured` from PR1 to retire the 3-way structured-output reimplementation. |
+| **PR3 — reportPr + runToCompletion** | `reportPrRun` (consumes core `completeStructured`) → `ci-triage-pr` / `spec-drift-pr` / `finops-audit`. `sandbox.runToCompletion` — a `Schedule` (detach → `Effect.timeout` kill → poll-until-sentinel → bounded-read) — plus best-effort upload via `Effect.option` → `cdp-acceptance` / `product-demo`. Formalize `StatusSink` / `PrSink` as the Sink capability (so a verify run can also emit a draft PR) and author `selfHeal` as `reportPrRun` + `onRunOutcome`. |
+| **PR4 — runtime-cf CF adapters** | Adopt **`@effect/sql-d1`** for the D1 `SqlClient` — retires the `tryPromise` shells + `d1Retry`; failure posture is `Effect.retry` + combinators (`orDie` / propagate / `catchAll`), not a `FailurePolicy` enum. `r2` get-or-null/throw and `container-tar` pack/restore stay as thin `runtime-cf/src/cf/*` helpers. Pure cores and atomic SQL stay as-is. |
+| **PR5 — adopt `@effect/ai`** | Make **`@effect/ai`** (+ `@effect/ai-openai` / `@effect/ai-anthropic`) the single model stack — retires the bespoke `modelGateway` transport and the parallel `demo-agent/model.ts`. `demo-agent` and the review/heal agents share one `@effect/ai` provider `Layer` over the in-container HTTP proxy; `completeStructured` (PR1) is the thin wrapper over its native structured output. Already proven on our CF Workers, so this is `Layer` wiring, not net-new transport. |
 
 ---
 
-## 6. Design decisions locked
+## 6. Effect-TS leverage — built-ins over hand-rolled
+
+The core is already idiomatic Effect (`Schema.TaggedError` union, `defineRun`, the `StepRunner` Tag). Rule for the port: **reach for an Effect built-in before writing a control-flow primitive, and adopt a maintained ecosystem package before hand-rolling a subsystem.**
+
+**Built-ins (in-core, no new deps):**
+
+| Hand-rolled | Effect built-in |
+| --- | --- |
+| `runToCompletion` poll dance (`maxConsecutiveExecFailures`) | `Effect.repeat` + `Schedule` (`spaced`/`exponential` ∘ `recurUntil` ∘ `upTo`); `Effect.timeout` for the kill |
+| `d1Retry` / model-retry loops | `Effect.retry(Schedule…)` with `Schedule.whileInput` on a tagged error |
+| `FailurePolicy` enum | `Effect.orDie` / propagate / `Effect.catchAll(fallback)` combinators |
+| `uploadBestEffort` | `Effect.option` / `Effect.ignore` |
+| `sharded` fan-out | `Effect.all` / `forEach(_, { concurrency })` |
+| `json-extract` + ad-hoc validation | `Schema.parseJson(Schema)` / `Schema.decode` |
+| `Trigger.match` / event + error dispatch | `Match` + `Match.exhaustive`; `catchTags` (never `._tag`/`switch`) |
+
+**Ecosystem packages (already proven on our CF Workers):**
+
+- **`@effect/ai`** (+ `@effect/ai-openai` / `@effect/ai-anthropic`) subsumes `modelGateway` + `completeStructured` and collapses the two-model-stack problem — its native structured output replaces the forced-tool-call emulation. → **PR5**.
+- **`@effect/sql-d1`** replaces the D1 `tryPromise` shells + `d1Retry`. → **PR4**.
+- **`Config` + `Redacted`** back `loadSecrets` (redaction stops secrets leaking to logs); **`@effect/platform` `HttpClient`** for model / `gh` transport.
+
+**Kept bespoke — no Effect equivalent:** the CF-durable event bus (Queue + coordinator DO) and `instantiateRun` dedup (Effect's `PubSub`/`Queue` are in-memory; durability is CF's job — Effect `Stream`/`Match` handle only the *routing* on top); `step()` / `StepRunner` (CF Workflows is the durable engine); `defineRun` generic-over-`R` variance; the combinator tier itself.
+
+---
+
+## 7. Design decisions locked
 
 - **One `run()`, two pluggable poles** — a `Trigger` (event subscription) and a `Sink` (typed capability); `commandRun` / `fanoutRun` / `reportPrRun` are presets, and the dispatcher is a signal router over one event bus. Self-heal is `reportPrRun` + `onRunOutcome`, not a subsystem.
 - **Feedback loops stay finite** — `RunOutcome.depth` increments each causal hop and `onRunOutcome({ maxDepth })` refuses beyond N; the skip-drafts-and-bots gate and the `{run}:{repo_}:{sha12}` dedup key are the other two guards.
 - **Generic-over-`R` `defineRun` + erased registry** — precise typed deps and narrowed error unions from day one; not a conceded limitation.
 - **`serviceFunctions` for pure delegation only** — defaulting/reshaping and method-generic accessors stay hand-written.
 - **Combinator hooks are effectful with `E ⊆ RunError`**; raw `defineRun` remains the escape hatch for bespoke runs.
-- **PR5 owns real inference transport** — the in-container model port is infra work, sequenced last as the heaviest single item; nothing in PR1–PR4 depends on it (the shared `completeStructured` lands in PR1, so PR3 does not).
+- **Effect built-ins over hand-rolled control flow** — `Schedule` / `retry` / `timeout`, `Effect.all({ concurrency })`, `Schema.parseJson`, `Match` / `catchTags`; adopt `@effect/ai` (PR5) and `@effect/sql-d1` (PR4) over bespoke stacks (§6).
+- **PR5 adopts `@effect/ai`** — one provider `Layer` over the in-container HTTP proxy (proven on our CF Workers), not a bespoke transport; nothing in PR1–PR4 depends on it (the shared `completeStructured` lands in PR1, so PR3 does not).
