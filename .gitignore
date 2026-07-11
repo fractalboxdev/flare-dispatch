@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.wrangler/
+
+# Exception: JS Actions are consumed by the GitHub Actions runner, which does
+# NOT `npm install`. The bundle MUST be committed for the Action to work.
+!actions/flare-dispatch-action/dist/
+!actions/flare-dispatch-action/dist/**
+
+# Local config & secrets
+.dev.vars
+.env
+.env.keys
+.env.local
+.env.*.local
+# Deployment-specific wrangler configs are operator-local: keep the canonical
+# copy wherever your deployment is managed and copy it to the repo root as
+# wrangler.<env>.local.jsonc (paths inside resolve relative to the repo root).
+wrangler.*.local.jsonc
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+.obsidian/
+
+# Test
+coverage/
+
+# Local scratch (PR bodies, commit messages, etc.)
+.tmp/
+
+# Local git worktrees (agent + manual) — never track checkouts inside the repo
+.claude/worktrees/
+.worktrees/

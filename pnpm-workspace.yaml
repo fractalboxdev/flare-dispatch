@@ -1,0 +1,23 @@
+packages:
+  - "packages/*"
+  - "apps/dispatcher"
+  - "apps/dashboard"
+  - "runs"
+
+# pnpm 10+ gates dependency lifecycle (build) scripts behind an explicit
+# allowlist. These are the packages whose install/postinstall scripts pnpm 9
+# ran implicitly; allowing them keeps `pnpm install` from erroring with
+# ERR_PNPM_IGNORED_BUILDS after the bump to pnpm 11.
+allowBuilds:
+  # Pulled in transitively by `tsx` (used by @fractalbox/flare-dispatch-cli to
+  # run src/main.ts). `@parcel/watcher` ships native bindings via
+  # `msgpackr-extract`; both run a postinstall to pick the right prebuilt binary.
+  '@parcel/watcher': true
+  esbuild: true
+  msgpackr-extract: true
+  msw: true
+  # Transitive dep of the OTLP/protobuf exporter. Its postinstall is not needed
+  # for the browser bundle, but pnpm requires an explicit decision.
+  protobufjs: true
+  sharp: true
+  workerd: true
