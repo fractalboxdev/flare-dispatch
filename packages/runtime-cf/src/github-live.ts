@@ -30,7 +30,7 @@ import {
   resolveRepoInstallationId,
   GithubApiError as GithubAppApiError,
 } from "@fractalboxdev/flare-dispatch-github-app";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schedule } from "effect";
 import {
   type DraftPullRequestResult,
   Github,
@@ -48,15 +48,54 @@ export type GithubLiveConfig = {
   readonly privateKeyPem: string;
 };
 
-/** Map an HTTP status to the typed `GitHubApiError.reason`. */
-const reasonFor = (status: number): GitHubApiError["reason"] =>
-  status === 401 || status === 403
-    ? "unauthorized"
-    : status === 429
-      ? "rate-limited"
-      : status >= 500
+/**
+ * Classify a GitHub failure into the typed `GitHubApiError.reason`. The
+ * rate-limit signal — not the status alone — decides 403: GitHub returns **403
+ * with a `Retry-After`** for *secondary* rate limits (the ones content-generating
+ * POSTs like a PR review or check-run trip), so a 403 carrying a retry hint is
+ * `rate-limited`, not `unauthorized` (which would send an operator hunting for a
+ * bad PEM). A raw network throw surfaces as status 0 → `transient` (retryable).
+ * Exported for unit tests.
+ */
+export const classifyReason = (
+  status: number,
+  retryAfterMs: number | undefined,
+): GitHubApiError["reason"] =>
+  status === 429 || (status === 403 && retryAfterMs !== undefined)
+    ? "rate-limited"
+    : status === 401 || status === 403
+      ? "unauthorized"
+      : status === 0 || status >= 500
         ? "transient"
         : "other";
+
+/**
+ * Bounded exponential backoff for the two retryable classes — a transient 5xx /
+ * network blip, or a rate limit. Capped at 4 retries with jitter so a burst of
+ * concurrent runs doesn't resynchronise onto GitHub. Non-retryable reasons
+ * (`unauthorized`, `other`) stop immediately and surface to the run boundary.
+ * `whileInput` reads the error's data field (`.reason`) — not a `._tag` — so it
+ * is within the Effect convention for `Schedule` predicates.
+ */
+const githubRetry = Schedule.exponential("250 millis").pipe(
+  Schedule.jittered,
+  Schedule.intersect(Schedule.recurs(4)),
+  Schedule.whileInput(
+    (e: GitHubApiError) =>
+      e.reason === "transient" || e.reason === "rate-limited",
+  ),
+);
+
+/**
+ * Run a github-app call as an Effect: map any throw to the typed
+ * `GitHubApiError` and retry the two retryable classes with bounded backoff.
+ * One chokepoint so every GitHub call gets the same error mapping + resilience,
+ * instead of each site re-deriving `catch: toGitHubApiError`.
+ */
+const ghCall = <A>(thunk: () => Promise<A>): Effect.Effect<A, GitHubApiError> =>
+  Effect.tryPromise({ try: thunk, catch: toGitHubApiError }).pipe(
+    Effect.retry(githubRetry),
+  );
 
 const logSkip = (repo: string, pr: number, why: string): Effect.Effect<void> =>
   Effect.logInfo(
@@ -87,24 +126,20 @@ export const makeGithubLive = (
       const resolvedInstallationId =
         installationId !== undefined && installationId > 0
           ? installationId
-          : yield* Effect.tryPromise({
-              try: () =>
-                resolveRepoInstallationId({
-                  appId: cfg.appId,
-                  privateKeyPem: cfg.privateKeyPem,
-                  repo,
-                }),
-              catch: (cause) => toGitHubApiError(cause),
-            });
-      return yield* Effect.tryPromise({
-        try: () =>
-          getInstallationToken({
-            appId: cfg.appId,
-            privateKeyPem: cfg.privateKeyPem,
-            installationId: resolvedInstallationId,
-          }),
-        catch: (cause) => toGitHubApiError(cause),
-      });
+          : yield* ghCall(() =>
+              resolveRepoInstallationId({
+                appId: cfg.appId,
+                privateKeyPem: cfg.privateKeyPem,
+                repo,
+              }),
+            );
+      return yield* ghCall(() =>
+        getInstallationToken({
+          appId: cfg.appId,
+          privateKeyPem: cfg.privateKeyPem,
+          installationId: resolvedInstallationId,
+        }),
+      );
     });
 
   const service: GithubService = {
@@ -143,15 +178,13 @@ export const makeGithubLive = (
           (repo) =>
             Effect.gen(function* () {
               const token = yield* mintToken(config, repo);
-              const runs = yield* Effect.tryPromise({
-                try: () =>
-                  listActionRuns({
-                    token,
-                    repo,
-                    ...(status !== undefined ? { status } : {}),
-                  }),
-                catch: (cause) => toGitHubApiError(cause),
-              });
+              const runs = yield* ghCall(() =>
+                listActionRuns({
+                  token,
+                  repo,
+                  ...(status !== undefined ? { status } : {}),
+                }),
+              );
               return runs
                 .filter(
                   (r) =>
@@ -183,38 +216,15 @@ export const makeGithubLive = (
           return yield* logSkip(repo, pr, "no GitHub App credentials");
         }
 
-        // Prefer the webhook-threaded installation id, but don't depend on it:
-        // the App is the source of truth for which installation covers a repo,
-        // so resolve it from `GET /repos/{repo}/installation` when the run input
-        // didn't carry one (Action-mode dispatch, or a dropped `installation.id`).
-        const resolvedInstallationId =
-          installationId !== undefined && installationId > 0
-            ? installationId
-            : yield* Effect.tryPromise({
-                try: () =>
-                  resolveRepoInstallationId({
-                    appId: config.appId,
-                    privateKeyPem: config.privateKeyPem,
-                    repo,
-                  }),
-                catch: (cause) => toGitHubApiError(cause),
-              });
+        // `mintToken` prefers the webhook-threaded installation id but falls back
+        // to resolving it from the App JWT (the App is the source of truth for
+        // which installation covers a repo) — Action-mode dispatch, or a dropped
+        // `installation.id`, still posts.
+        const token = yield* mintToken(config, repo, installationId);
 
-        const token = yield* Effect.tryPromise({
-          try: () =>
-            getInstallationToken({
-              appId: config.appId,
-              privateKeyPem: config.privateKeyPem,
-              installationId: resolvedInstallationId,
-            }),
-          catch: (cause) => toGitHubApiError(cause),
-        });
-
-        yield* Effect.tryPromise({
-          try: () =>
-            createPullReview({ token, repo, pr, sha, body, event: "COMMENT" }),
-          catch: (cause) => toGitHubApiError(cause),
-        });
+        yield* ghCall(() =>
+          createPullReview({ token, repo, pr, sha, body, event: "COMMENT" }),
+        );
       }),
 
     openDraftPullRequest: (req): Effect.Effect<DraftPullRequestResult, GitHubApiError> =>
@@ -229,23 +239,21 @@ export const makeGithubLive = (
           return { number: 0, url: "", created: false };
         }
         const token = yield* mintToken(config, req.repo, req.installationId);
-        return yield* Effect.tryPromise({
-          try: () =>
-            openDraftPullRequest({
-              token,
-              repo: req.repo,
-              ...(req.baseBranch !== undefined
-                ? { baseBranch: req.baseBranch }
-                : {}),
-              headBranch: req.headBranch,
-              title: req.title,
-              body: req.body,
-              commitMessage: req.commitMessage,
-              files: req.files,
-              ...(req.draft !== undefined ? { draft: req.draft } : {}),
-            }),
-          catch: (cause) => toGitHubApiError(cause),
-        });
+        return yield* ghCall(() =>
+          openDraftPullRequest({
+            token,
+            repo: req.repo,
+            ...(req.baseBranch !== undefined
+              ? { baseBranch: req.baseBranch }
+              : {}),
+            headBranch: req.headBranch,
+            title: req.title,
+            body: req.body,
+            commitMessage: req.commitMessage,
+            files: req.files,
+            ...(req.draft !== undefined ? { draft: req.draft } : {}),
+          }),
+        );
       }),
 
     createRelease: (req): Effect.Effect<ReleaseResult, GitHubApiError> =>
@@ -261,21 +269,19 @@ export const makeGithubLive = (
           return { id: 0, url: "", tag: req.tag, published: false };
         }
         const token = yield* mintToken(config, req.repo, req.installationId);
-        const result = yield* Effect.tryPromise({
-          try: () =>
-            createRelease({
-              token,
-              repo: req.repo,
-              tag: req.tag,
-              ...(req.target !== undefined ? { target: req.target } : {}),
-              ...(req.name !== undefined ? { name: req.name } : {}),
-              body: req.body,
-              ...(req.prerelease !== undefined
-                ? { prerelease: req.prerelease }
-                : {}),
-            }),
-          catch: (cause) => toGitHubApiError(cause),
-        });
+        const result = yield* ghCall(() =>
+          createRelease({
+            token,
+            repo: req.repo,
+            tag: req.tag,
+            ...(req.target !== undefined ? { target: req.target } : {}),
+            ...(req.name !== undefined ? { name: req.name } : {}),
+            body: req.body,
+            ...(req.prerelease !== undefined
+              ? { prerelease: req.prerelease }
+              : {}),
+          }),
+        );
         return {
           id: result.id,
           url: result.htmlUrl,
@@ -288,9 +294,20 @@ export const makeGithubLive = (
   return Layer.succeed(Github, service);
 };
 
-/** Coerce an unknown thrown value into the core `GitHubApiError`. */
+/**
+ * Coerce an unknown thrown value into the core `GitHubApiError`, carrying the
+ * rate-limit retry hint through from the low-level `GithubApiError` so the
+ * classification (and any backoff) can honour it. A non-API throw (network
+ * failure) has no status → 0 → `transient`.
+ */
 const toGitHubApiError = (cause: unknown): GitHubApiError => {
-  const status =
-    cause instanceof GithubAppApiError ? cause.status : 0;
-  return new GitHubApiError({ status, reason: reasonFor(status) });
+  if (cause instanceof GithubAppApiError) {
+    const retryAfterMs = cause.retryAfterMs;
+    return new GitHubApiError({
+      status: cause.status,
+      reason: classifyReason(cause.status, retryAfterMs),
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    });
+  }
+  return new GitHubApiError({ status: 0, reason: "transient" });
 };

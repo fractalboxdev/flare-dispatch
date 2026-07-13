@@ -52,9 +52,37 @@ export const resolveClient = (opts: {
 });
 
 /**
- * Throw a `GithubApiError` (status + body text attached) when a response is
- * non-2xx. Each caller keeps its own success-body decode after this guard, so
- * decode semantics (strict vs tolerant) stay per-call.
+ * Derive a retry delay (ms) from GitHub's rate-limit response headers, or
+ * `undefined` when none is present. `Retry-After` (whole seconds — GitHub's
+ * signal for secondary rate limits and transient 5xx) takes precedence; failing
+ * that, an exhausted primary quota (`x-ratelimit-remaining: 0`) yields the wait
+ * until `x-ratelimit-reset` (epoch seconds). `nowMs` is injectable for tests.
+ * The HTTP-date form of `Retry-After` is not emitted by GitHub here and is
+ * ignored (a non-numeric value simply yields no delay).
+ */
+export const retryAfterMsFromHeaders = (
+  headers: Headers,
+  nowMs: number = Date.now(),
+): number | undefined => {
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter !== null) {
+    const secs = Number(retryAfter);
+    if (Number.isFinite(secs) && secs >= 0) return Math.ceil(secs * 1000);
+  }
+  const remaining = headers.get("x-ratelimit-remaining");
+  const reset = headers.get("x-ratelimit-reset");
+  if (remaining === "0" && reset !== null) {
+    const resetS = Number(reset);
+    if (Number.isFinite(resetS)) return Math.max(0, Math.ceil(resetS * 1000 - nowMs));
+  }
+  return undefined;
+};
+
+/**
+ * Throw a `GithubApiError` (status + body text + any rate-limit retry hint
+ * attached) when a response is non-2xx. Each caller keeps its own success-body
+ * decode after this guard, so decode semantics (strict vs tolerant) stay
+ * per-call.
  */
 export const assertOk = async (
   res: Response,
@@ -65,6 +93,7 @@ export const assertOk = async (
       message,
       res.status,
       await res.text().catch(() => ""),
+      retryAfterMsFromHeaders(res.headers),
     );
   }
 };

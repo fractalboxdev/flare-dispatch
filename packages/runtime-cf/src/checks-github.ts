@@ -27,9 +27,14 @@
 // GitHub check-run is skipped. PR5 supplies `installation_id`; with real
 // secrets configured the live path is taken.
 //
-// A network/API failure *with* credentials present is different: it is a
-// genuine defect (`Effect.orDie`) — a misconfigured App or a GitHub outage
-// should surface loudly, not be silently swallowed.
+// A failure *with* credentials present is classified, not blanket-`orDie`d — a
+// blanket die contradicted the "never fail an otherwise-green execution" rule
+// above, since one transient 502 while posting a check-run would kill the run.
+// So: a transient (5xx / network) or rate-limited (429, or a 403 carrying a
+// `Retry-After`) failure is RETRIED with bounded backoff, and if it still fails,
+// DEGRADES to the same logged no-op as the no-credentials path — reporting must
+// not fail correctness. A genuine client error (bad App id / 401 / 404 — a
+// misconfiguration) is not retryable and still `orDie`s loudly.
 //
 // Spec: specs/04-gha-integration.md § Check-runs callback, specs/05-byoc.md
 // § Secrets / § Security posture, specs/pm/plan.md § PR6 / § 6.
@@ -37,10 +42,11 @@
 import {
   createCheckRun,
   getInstallationToken,
+  GithubApiError as GithubAppApiError,
   progressCheckRun,
   updateCheckRun,
 } from "@fractalboxdev/flare-dispatch-github-app";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schedule } from "effect";
 import { Checks, type ChecksService } from "@fractalboxdev/flare-dispatch-core";
 
 /**
@@ -59,6 +65,36 @@ export type ChecksGithubConfig = {
 
 /** Sentinel id `create` returns when running degraded (no credentials). */
 export const NOOP_CHECK_RUN_ID = "noop";
+
+/**
+ * A check-run failure worth retrying: a rate limit (429, or a 403 carrying a
+ * `Retry-After`) or a transient 5xx. A client error (401/404/malformed) is not
+ * retryable and falls through to a loud `orDie`. A raw network throw is not a
+ * `GithubApiError`, so it too is treated as a genuine defect (unchanged).
+ */
+const isRetryable = (e: unknown): boolean =>
+  e instanceof GithubAppApiError &&
+  (e.status === 429 ||
+    e.status >= 500 ||
+    (e.status === 403 && e.retryAfterMs !== undefined));
+
+/**
+ * Bounded exponential backoff (4 retries, jittered) gated to the retryable
+ * classes. Jitter keeps a burst of concurrent runs from resynchronising onto
+ * GitHub. `whileInput` reads a data field, not a `._tag`, so it stays within the
+ * Effect convention for `Schedule` predicates.
+ */
+const checksRetry = Schedule.exponential("250 millis").pipe(
+  Schedule.jittered,
+  Schedule.intersect(Schedule.recurs(4)),
+  Schedule.whileInput(isRetryable),
+);
+
+/** Message for the degrade-to-no-op path once retries are exhausted. */
+const degradeMsg = (op: string, e: unknown): string =>
+  `checks.${op} degraded after retries (${
+    e instanceof GithubAppApiError ? `HTTP ${e.status}` : "transient failure"
+  }) — check-run not posted, execution unaffected`;
 
 /**
  * A `ChecksService` that does nothing but log — the graceful-degradation path
@@ -98,9 +134,10 @@ export const makeChecksGithubLive = (
     );
   }
 
-  // Resolve a fresh-or-cached installation token. A failure here (bad PEM,
-  // GitHub down) is a defect — credentials are present, so this *should* work.
-  const token = (): Effect.Effect<string> =>
+  // Resolve a fresh-or-cached installation token. The typed `GithubApiError` is
+  // preserved (not flattened to a generic Error) so the per-method retry can
+  // classify it; the terminal orDie/degrade decision lives at the call site.
+  const token = (): Effect.Effect<string, GithubAppApiError | Error> =>
     Effect.tryPromise({
       try: () =>
         getInstallationToken({
@@ -109,10 +146,12 @@ export const makeChecksGithubLive = (
           installationId: config.installationId,
         }),
       catch: (cause) =>
-        new Error("ChecksGithubLive: installation-token exchange failed", {
-          cause,
-        }),
-    }).pipe(Effect.orDie);
+        cause instanceof GithubAppApiError
+          ? cause
+          : new Error("ChecksGithubLive: installation-token exchange failed", {
+              cause,
+            }),
+    });
 
   const service: ChecksService = {
     create: ({ repo, sha, name, output, detailsUrl }) =>
@@ -129,9 +168,22 @@ export const makeChecksGithubLive = (
               detailsUrl,
             }),
           catch: (cause) =>
-            new Error("ChecksGithubLive: check-run create failed", { cause }),
+            cause instanceof GithubAppApiError
+              ? cause
+              : new Error("ChecksGithubLive: check-run create failed", {
+                  cause,
+                }),
         });
-      }).pipe(Effect.orDie),
+      }).pipe(
+        Effect.retry(checksRetry),
+        Effect.catchIf(isRetryable, (e) =>
+          Effect.as(
+            Effect.logWarning(degradeMsg("create", e)),
+            NOOP_CHECK_RUN_ID,
+          ),
+        ),
+        Effect.orDie,
+      ),
 
     progress: ({ repo, checkRunId, output, detailsUrl }) =>
       Effect.gen(function* () {
@@ -154,11 +206,20 @@ export const makeChecksGithubLive = (
               detailsUrl,
             }),
           catch: (cause) =>
-            new Error("ChecksGithubLive: check-run progress update failed", {
-              cause,
-            }),
+            cause instanceof GithubAppApiError
+              ? cause
+              : new Error(
+                  "ChecksGithubLive: check-run progress update failed",
+                  { cause },
+                ),
         });
-      }).pipe(Effect.orDie),
+      }).pipe(
+        Effect.retry(checksRetry),
+        Effect.catchIf(isRetryable, (e) =>
+          Effect.logWarning(degradeMsg("progress", e)),
+        ),
+        Effect.orDie,
+      ),
 
     update: ({ repo, checkRunId, conclusion, output, detailsUrl }) =>
       Effect.gen(function* () {
@@ -182,9 +243,19 @@ export const makeChecksGithubLive = (
               detailsUrl,
             }),
           catch: (cause) =>
-            new Error("ChecksGithubLive: check-run update failed", { cause }),
+            cause instanceof GithubAppApiError
+              ? cause
+              : new Error("ChecksGithubLive: check-run update failed", {
+                  cause,
+                }),
         });
-      }).pipe(Effect.orDie),
+      }).pipe(
+        Effect.retry(checksRetry),
+        Effect.catchIf(isRetryable, (e) =>
+          Effect.logWarning(degradeMsg("update", e)),
+        ),
+        Effect.orDie,
+      ),
   };
 
   return Layer.succeed(Checks, service);
