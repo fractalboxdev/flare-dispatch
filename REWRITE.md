@@ -154,7 +154,22 @@ Each builder ships with a **builder-level test** (fakes + one live smoke) — th
 
 The core is already idiomatic Effect (`Schema.TaggedError` union, `defineRun`, the `StepRunner` Tag). Rule for the port: **reach for an Effect built-in before writing a control-flow primitive, and adopt a maintained ecosystem package before hand-rolling a subsystem.**
 
-**Built-ins (in-core, no new deps):**
+### 6.0 The primitive-selection rule (four tiers)
+
+When a primitive is needed, choose in this order — the tie-breaker is *does the thing have an adversary, or a spec that evolves without us?* If yes, don't own it.
+
+| Tier | Reach for it when | Examples here |
+| --- | --- | --- |
+| **0. Cloudflare-native** | A CF primitive covers it. The product IS "run on Cloudflare you own" — stay coherent with what it sells. | `fetch(url, { cf: { cacheTtl } })` / Cache API for the Access JWKS cache; KV-backed `cooldown`; D1/DO/Queues/Workflows |
+| **1. Effect built-in** | It's control flow — retry, cache, concurrency, timeout, validation — and Effect already owns that layer. | `Effect.retry(Schedule…)` (GitHub + D1), `Schema.decodeUnknown`, `Match.exhaustive`, `Effect.option` |
+| **2. Ecosystem library** | A *published spec with an adversary / evolving wire format* AND no CF-native or Effect answer. Adopt a maintained package; don't hand-roll a subsystem. | `@effect/ai` (PR5), `@effect/sql-d1` (PR4) |
+| **3. Hand-rolled** | A pure functional core, a *durable* CF-backed primitive Effect can't express, or a ~50-line domain helper where a dep costs more than it saves. | the `access-auth` gate logic, `capability-token` HKDF factory, `bedrock-sigv4`, `tar-extract` |
+
+This does not contradict the "built-ins over hand-rolled" tables below — it adds a tier **0 above them**: prefer a Cloudflare-native primitive to *any* hand-rolled equivalent, including a hand-rolled cache/limiter, because durability and edge-caching are the platform's job. The tables in §6.1/§6.2 refine tiers 1–2.
+
+First enforcement (this branch): the Access JWKS cache moved from a hand-rolled module `Map` to CF-native `fetch` edge-caching (tier 0); the GitHub client's missing resilience became `Effect.retry` + `Schedule` rather than an Octokit dependency (tier 1, not tier 2); and the two constant-time comparators collapsed to one shared primitive (tier 3, deduped).
+
+### 6.1 Built-ins (in-core, no new deps)
 
 | Hand-rolled | Effect built-in |
 | --- | --- |
@@ -167,7 +182,7 @@ The core is already idiomatic Effect (`Schema.TaggedError` union, `defineRun`, t
 | `Trigger.match` / event + error dispatch | `Match` + `Match.exhaustive`; `catchTags` (never `._tag`/`switch`) |
 | per-run model fan-out storm (×N concurrent × step-retry ×6) | shared `Effect.RateLimiter` + `Effect.all({ concurrency })`; retry pinned to the *inner* model call, never the durable `step()` |
 
-**Ecosystem packages (already proven on our CF Workers):**
+### 6.2 Ecosystem packages (already proven on our CF Workers)
 
 - **`@effect/ai`** (+ `@effect/ai-openai` / `@effect/ai-anthropic`) subsumes `modelGateway` + `completeStructured` and collapses the two-model-stack problem — its native structured output replaces the forced-tool-call emulation. → **PR5**.
 - **`@effect/sql-d1`** replaces the D1 `tryPromise` shells + `d1Retry`. → **PR4**.

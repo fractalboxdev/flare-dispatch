@@ -72,9 +72,30 @@ export const AccessLive = Layer.effect(
   Effect.gen(function* () {
     const env = yield* CurrentEnv;
     return Access.of({
+      // `tryPromise`, not `promise`: a throw inside the gate must DENY (fail
+      // closed with a controlled 500), never become an unrecoverable defect
+      // that 500s the whole request off a raw `Effect.promise` rejection. The
+      // gate's own value channel already carries a `Some(response)` denial, so
+      // an unexpected error maps to the same shape.
       gate: (request) =>
-        Effect.promise(() => gateViewerAccess(env, request)).pipe(
+        Effect.tryPromise(() => gateViewerAccess(env, request)).pipe(
           Effect.map(Option.fromNullable),
+          Effect.catchAll(() =>
+            Effect.succeed(
+              Option.some(
+                new Response(
+                  JSON.stringify({
+                    error: "access_check_failed",
+                    message: "the Access check could not be evaluated",
+                  }),
+                  {
+                    status: 500,
+                    headers: { "content-type": "application/json" },
+                  },
+                ),
+              ),
+            ),
+          ),
         ),
     });
   }),

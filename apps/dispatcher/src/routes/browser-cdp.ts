@@ -23,6 +23,7 @@
 // reference); folding it into the dispatcher lets that separate Worker retire.
 
 import type { Env } from "../env";
+import { constantTimeEqual } from "../hmac";
 
 // The BROWSER binding's `/v1/devtools/browser/{sessionId}` upgrade returns 400
 // unless `cf-brapi-client` is the canonical `@cloudflare/playwright@<x.y.z>`
@@ -38,17 +39,6 @@ const log = (event: string, fields: Record<string, unknown>): void => {
   // Single-line structured JSON for `wrangler tail`. (No Date.now in the body
   // hot path beyond logging — fine here, this is the runtime seam.)
   console.log(JSON.stringify({ event, ...fields }));
-};
-
-/** Constant-time string compare without leaking length via early return. */
-const constantTimeCompare = (a: string, b: string): boolean => {
-  const enc = new TextEncoder();
-  const ab = enc.encode(a);
-  const bb = enc.encode(b);
-  if (ab.byteLength !== bb.byteLength) return false;
-  let diff = 0;
-  for (let i = 0; i < ab.byteLength; i++) diff |= ab[i]! ^ bb[i]!;
-  return diff === 0;
 };
 
 /**
@@ -95,7 +85,9 @@ export const handleBrowserCdp = async (
     return new Response("browser cdp auth not configured", { status: 503 });
   }
   const token = callerToken(request, url);
-  if (token === null || !constantTimeCompare(token, expected)) {
+  // One shared constant-time comparator (hmac.ts) — the double-HMAC compare is
+  // both timing- and length-safe (no early return on a length mismatch).
+  if (token === null || !(await constantTimeEqual(token, expected))) {
     log("cdp.unauthorized", { request_id: requestId });
     return new Response("unauthorized", { status: 401 });
   }

@@ -160,6 +160,18 @@ describe("verifyAccessJwt", () => {
     expect(await verifyAccessJwt("not.a.jwt.at.all", params())).toBe(false);
     expect(await verifyAccessJwt("onlyonesegment", params())).toBe(false);
   });
+
+  it("rejects (never throws on) an undecodable signature segment", async () => {
+    // `atob` throws a DOMException on chars outside the base64 alphabet or a
+    // length % 4 === 1. The header/payload are guarded; this asserts the
+    // signature segment is too — otherwise the gate's `Effect.promise` turned
+    // the rejection into a 500. A valid header+payload with a bad signature must
+    // return false, not throw.
+    const jwt = await makeJwt(validClaims());
+    const [h, p] = jwt.split(".");
+    expect(await verifyAccessJwt(`${h}.${p}.@@@@`, params())).toBe(false);
+    expect(await verifyAccessJwt(`${h}.${p}.aaaaa`, params())).toBe(false);
+  });
 });
 
 describe("gateViewerAccess", () => {
@@ -258,11 +270,64 @@ describe("gateViewerAccess", () => {
     expect(denied?.status).toBe(403);
   });
 
-  it("caches the JWKS — a second gated request does not re-fetch certs", async () => {
+  it("delegates JWKS caching to the CF edge via cf.cacheTtl", async () => {
     stubCerts([publicJwk]);
     const jwt = await makeJwt(validClaims());
     await gateViewerAccess(configured(), req({ "Cf-Access-Jwt-Assertion": jwt }));
-    await gateViewerAccess(configured(), req({ "Cf-Access-Jwt-Assertion": jwt }));
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    // Caching is the platform's job (a CF-native primitive), not a hand-rolled
+    // module Map — the certs fetch carries the edge-cache hint.
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      `${ISSUER}/cdn-cgi/access/certs`,
+      expect.objectContaining({
+        cf: expect.objectContaining({ cacheTtl: 3600, cacheEverything: true }),
+      }),
+    );
+  });
+
+  it("revalidates the JWKS on a kid miss (key rotation), then proceeds", async () => {
+    // Access starts signing with a key minted after our last fetch: the token's
+    // kid isn't in the cached JWKS. The gate must revalidate against origin and
+    // pick up the rotated key — not 403 every viewer until the cache lapses.
+    const rotatedJwk = { ...publicJwk, kid: "rotated-kid" };
+    let call = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        if (String(input) === `${ISSUER}/cdn-cgi/access/certs`) {
+          call += 1;
+          return new Response(
+            JSON.stringify({ keys: call === 1 ? [publicJwk] : [rotatedJwk] }),
+            { headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+
+    const jwt = await makeJwt(validClaims(), {
+      alg: "RS256",
+      kid: "rotated-kid",
+      typ: "JWT",
+    });
+    const denied = await gateViewerAccess(
+      configured(),
+      req({ "Cf-Access-Jwt-Assertion": jwt }),
+    );
+    expect(denied).toBeNull(); // proceeded after revalidation
+    expect(call).toBe(2); // one edge-cached read + one revalidate
+  });
+
+  it("does not revalidate on an ordinary bad signature (known kid)", async () => {
+    // A tampered token whose kid IS known must not trigger an origin refetch —
+    // that would let a flood of bad tokens amplify into a flood of fetches.
+    stubCerts([publicJwk]);
+    const jwt = await makeJwt(validClaims());
+    const [h, , s] = jwt.split(".");
+    const tampered = `${h}.${b64urlJson({ ...validClaims(), email: "x@evil.com" })}.${s}`;
+    const denied = await gateViewerAccess(
+      configured(),
+      req({ "Cf-Access-Jwt-Assertion": tampered }),
+    );
+    expect(denied?.status).toBe(403);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1); // no revalidation
   });
 });
