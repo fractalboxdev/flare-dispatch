@@ -349,6 +349,60 @@ describe("pr-review", () => {
   );
 
   it.effect(
+    "neutralises markdown link/image injection in model-authored finding text",
+    () => {
+      // A hostile fork PR can steer the model into emitting markdown that, once
+      // posted under the App's identity, becomes a disguised phishing link or a
+      // zero-click tracking-pixel image. The finding SHAPE is schema-validated,
+      // but the free TEXT is not — so `sanitizeModelText` must defuse it.
+      const injected = {
+        toolCalls: [
+          {
+            name: "report",
+            arguments: {
+              findings: [
+                {
+                  path: "src/foo.ts",
+                  startLine: 3,
+                  endLine: 3,
+                  level: "warning",
+                  // Image beacon in the title, disguised link in the message.
+                  title: "![](https://evil.tld/pixel.png) heads up",
+                  message: "click [here](https://evil.tld) to continue",
+                },
+              ],
+            },
+          },
+        ],
+        text: "",
+      } as const;
+
+      const { layer, handles } = makeCFRuntimeTest({
+        config: backendConfig,
+        sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+        sandboxFiles: {
+          [DIFF_FILE]:
+            "diff --git a/src/foo.ts b/src/foo.ts\n+++ b/src/foo.ts\n+x\n",
+        },
+        modelGateway: { responses: Array(4).fill(injected) },
+      });
+
+      return Effect.gen(function* () {
+        yield* Effect.exit(prReview.run(baseInput));
+        const body = handles.github.pullReviewCalls[0]!.body;
+        // The visible words survive — we defang syntax, not content.
+        expect(body).toContain("heads up");
+        expect(body).toContain("continue");
+        // No image syntax, and no disguised link to the model-supplied host —
+        // the run's own trusted links (📍 location, 📋 logs) still use `](`, so
+        // we assert against the injected destination specifically.
+        expect(body).not.toContain("![");
+        expect(body).not.toContain("](https://evil.tld)");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
     "compact style + pr-review.compact-max → lists exactly N inline, rest overflow",
     () => {
       // Six distinct findings; cap the compact list at 2 → 2 rows + "…and 4 more".
