@@ -1,0 +1,57 @@
+name: deploy
+
+# Redeploy the FlareDispatch dispatcher Worker when upstream (main) updates.
+# Container images (infra/Dockerfile.sandbox) are (re)built by `wrangler deploy`
+# on the runner, so this needs Docker — ubuntu-latest provides it. The path
+# filter keeps doc-only commits from triggering an image rebuild.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "runs/**"
+      - "infra/**"
+      - "schemas/**"
+      - "wrangler.jsonc"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
+
+# Never let two deploys race onto the same Worker.
+concurrency:
+  group: deploy-flare-dispatch
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Deploy from the repo root, which wrangler.jsonc points at
+      # (main: apps/dispatcher/src/index.ts). Uses the pnpm-pinned wrangler.
+      - run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
