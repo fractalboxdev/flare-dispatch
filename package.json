@@ -1,0 +1,26 @@
+{
+  "name": "flare-dispatch",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Offload CI and agentic workflows from GitHub Actions to Cloudflare.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.1.3",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --filter \"./packages/*\" --filter \"./apps/dispatcher\" --filter \"./runs\" exec tsc --noEmit",
+    "lint": "oxlint",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250510.0",
+    "@types/node": "^22.19.0",
+    "effect": "^3.21.0",
+    "oxlint": "^1.71.0",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.50.0"
+  }
+}

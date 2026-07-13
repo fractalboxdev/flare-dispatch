@@ -1,0 +1,12 @@
+# FlareDispatch sandbox image — minimal lean variant.
+#
+# The @cloudflare/sandbox SDK's Sandbox Durable Object speaks an HTTP/RPC
+# protocol to a server baked into the container, so the image MUST derive from
+# the matching cloudflare/sandbox base (a bare node image has no sandbox
+# server). The base already ships Node 22 + git + curl, which is all pr-review
+# needs (git checkout + `git diff`). Pin the tag to @cloudflare/sandbox in
+# package.json and bump both together.
+#
+# NOTE: the full image (demo-agent / flare-agent CLIs, chromium + agent build
+# variants) is reintroduced when those packages are ported in the parity phase.
+FROM docker.io/cloudflare/sandbox:0.10.1

@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fractalbox.dev/flare-dispatch/schemas/incident.v1.schema.json",
+  "title": "flare-dispatch incident/v1",
+  "description": "The bounded fix-side context pack a self-heal coding agent receives. Canonical contract: packages/core/src/incident.ts. Spec: specs/08-self-healing.md § 5. SECURITY: `signals` and `ciFailures[].logTail` are attacker-controlled telemetry — see § 10.1.",
+  "x-flare-dispatch-contract-version": "v1",
+  "x-flare-dispatch-source": "packages/core/src/incident.ts",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "incidentId",
+    "class",
+    "repo"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "incidentId": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Dedup identity of the failure (not the alert delivery)."
+    },
+    "class": {
+      "type": "string",
+      "enum": [
+        "ci",
+        "application",
+        "demo"
+      ]
+    },
+    "repo": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "owner/name."
+    },
+    "suspectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "head"
+      ],
+      "properties": {
+        "base": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "Suspect range base SHA."
+        },
+        "head": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "Suspect range head SHA."
+        },
+        "confidence": {
+          "type": "number",
+          "description": "0–1 correlation confidence."
+        },
+        "advisory": {
+          "type": "boolean",
+          "description": "True when the correlation is low-confidence."
+        }
+      }
+    },
+    "diagnosis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "area",
+        "diagnosis",
+        "suggestedFix"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Short title naming the failure."
+        },
+        "area": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Where it failed."
+        },
+        "diagnosis": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Most likely root cause."
+        },
+        "suggestedFix": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Concrete suggested next step."
+        }
+      }
+    },
+    "signals": {
+      "type": "array",
+      "maxItems": 50,
+      "description": "Caller-supplied observability findings (signals/v1) — ATTACKER-CONTROLLED.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "title",
+          "detail"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Which system produced the signal."
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Short title naming the error."
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Enough detail for a model to triage."
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Optional deep link."
+          },
+          "count": {
+            "type": "number",
+            "description": "Optional occurrence count."
+          }
+        }
+      }
+    },
+    "ciFailures": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "First-party CI failures — `logTail` is ATTACKER-INFLUENCEABLE.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "name",
+          "conclusion"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "actions",
+              "pages",
+              "run-step"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Failing check/job name."
+          },
+          "conclusion": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Conclusion (e.g. failure)."
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "The exact failing command (CI-class repro)."
+          },
+          "logTail": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "Bounded stderr/stdout tail from R2."
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Link to the failure."
+          }
+        }
+      }
+    },
+    "demoChapters": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "Failed product-demo chapters (`demo` class) — `narrative` is ATTACKER-INFLUENCEABLE (an LLM summary of a live page).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Chapter name (operator-authored)."
+          },
+          "narrative": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "UNTRUSTED — the LLM's summary of the page."
+          },
+          "chapterStartMs": {
+            "type": "number",
+            "description": "rrweb chapter start offset (ms)."
+          },
+          "chapterEndMs": {
+            "type": "number",
+            "description": "rrweb chapter end offset (ms)."
+          },
+          "replayUri": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Human deep-link to the replay (not agent-fetched)."
+          },
+          "keyScreenshotUri": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Human deep-link to the key screenshot."
+          },
+          "failedRuns": {
+            "type": "number",
+            "description": "k-of-n: failing runs that gated escalation."
+          },
+          "totalRuns": {
+            "type": "number",
+            "description": "k-of-n: total confirmation runs."
+          }
+        }
+      }
+    },
+    "suspectFiles": {
+      "type": "array",
+      "maxItems": 50,
+      "description": "Files to inspect — from changed-files (CI) or a stack frame (app).",
+      "items": {
+        "type": "string",
+        "maxLength": 400,
+        "description": "Repo-relative path."
+      }
+    },
+    "repro": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "command",
+            "derived",
+            "none"
+          ]
+        },
+        "command": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Exact command to re-run."
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Guidance when derived."
+        }
+      }
+    }
+  }
+}

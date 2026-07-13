@@ -1,0 +1,6 @@
+# Mark the committed JS Action bundle as generated so GitHub collapses it in
+# PR diffs by default and `git diff` doesn't pull it inline. The bundle is
+# verified by CI (`pnpm --filter @fractalboxdev/flare-dispatch-cli build` + `git
+# diff --exit-code`); reviewers should read the source under `packages/cli/src/`.
+actions/flare-dispatch-action/dist/* linguist-generated=true
+actions/flare-dispatch-action/dist/index.js -diff

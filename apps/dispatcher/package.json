@@ -1,0 +1,29 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-dispatcher",
+  "version": "0.0.0",
+  "private": true,
+  "description": "FlareDispatch Dispatcher Worker — HMAC verify, route, instantiate Workflows.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "wrangler dev",
+    "deploy": "pnpm --filter @fractalboxdev/flare-dispatch-dashboard build && wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/sandbox": "0.10.1",
+    "@effect/platform": "^0.96.1",
+    "@fractalboxdev/flare-dispatch-core": "workspace:*",
+    "@fractalboxdev/flare-dispatch-runs": "workspace:*",
+    "@fractalboxdev/flare-dispatch-runtime-cf": "workspace:*",
+    "effect": "^3.21.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260518.1",
+    "msw": "^2.7.0",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.50.0"
+  }
+}

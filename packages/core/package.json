@@ -1,0 +1,25 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-core",
+  "version": "0.0.0",
+  "description": "FlareDispatch DSL — defineRun, step, capabilities, and the primitives recipes ride on.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./primitives": "./src/primitives/index.ts",
+    "./signals": "./src/signals.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "effect": "^3.21.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^0.29.0",
+    "effect": "^3.21.0",
+    "vitest": "^3.2.0"
+  }
+}

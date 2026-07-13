@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/.wrangler/**",
+    "**/.tmp/**",
+    ".worktrees/**",
+    ".claude/**",
+    "**/*.tsbuildinfo",
+    "actions/flare-dispatch-action/dist/**",
+    "apps/docs/**",
+    "apps/dashboard/**"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {}
+}
