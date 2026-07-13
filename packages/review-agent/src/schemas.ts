@@ -13,13 +13,21 @@ import { Schema } from "effect";
  * returns `findings`; the dispatcher renders the annotation set) AND is rolled
  * into the visible PR review comment the engine posts.
  */
+// Bounds are enforced at DECODE time (not render time): `path`/`title`/`message`
+// are model-authored, and the model is steerable by a hostile PR diff. A cap
+// here stops an oversized field from bloating the check-run body or comment
+// before any rendering runs; the non-negative integer line numbers reject the
+// `-1`/`NaN`/fractional values a model can emit (`findingUrl` drops a non-positive
+// line, but the schema is the single choke). Character-level neutralisation of
+// markdown/HTML still happens at render (`sanitizeModelText`); this is the
+// length/shape gate that pairs with it.
 export const Finding = Schema.Struct({
-  path: Schema.String,
-  startLine: Schema.Number,
-  endLine: Schema.Number,
+  path: Schema.String.pipe(Schema.maxLength(400)),
+  startLine: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+  endLine: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
   level: Schema.Literal("notice", "warning", "failure"),
-  title: Schema.String,
-  message: Schema.String,
+  title: Schema.String.pipe(Schema.maxLength(200)),
+  message: Schema.String.pipe(Schema.maxLength(2_000)),
 });
 export type Finding = typeof Finding.Type;
 

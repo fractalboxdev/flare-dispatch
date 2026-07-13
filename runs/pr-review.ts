@@ -826,6 +826,14 @@ const sanitizeModelText = (s: string): string =>
     .replace(/[\r\n]+/g, " ")
     .replace(/[<>]/g, "")
     .replace(/`/g, "'")
+    // Defuse markdown link/image syntax `[text](url)` / `![](url)`. Both require
+    // the square brackets, so stripping `[` and `]` neutralises a disguised link
+    // (a leaked-token phishing anchor) AND an auto-loading image beacon (a
+    // zero-click tracking pixel) — model text is steerable by a hostile fork
+    // PR's diff, and this text is posted under the App's identity. A bare URL
+    // survives as visible, un-disguised text (GitHub autolinks it, but the
+    // destination is no longer hidden behind anchor text).
+    .replace(/[[\]]/g, "")
     .replace(/@(?=[\w-])/g, `@${ZWSP}`)
     .slice(0, SANITIZE_MAX);
 
