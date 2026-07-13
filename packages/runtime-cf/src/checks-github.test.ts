@@ -14,7 +14,7 @@
 // § PR6 acceptance.
 
 import { __clearTokenCache } from "@fractalboxdev/flare-dispatch-github-app";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import {
@@ -150,6 +150,64 @@ describe("ChecksGithubLive — live GitHub App binding", () => {
     // create + update are two GitHub calls but share one installation token —
     // the in-memory cache means exactly one access_tokens exchange.
     expect(recorded.tokenExchanges).toBe(1);
+  });
+
+  const createOnly = (layer: ReturnType<typeof makeChecksGithubLive>) =>
+    checks
+      .create({
+        repo: "owner/name",
+        sha: "abc123",
+        name: "flare-dispatch/offload-test",
+      })
+      .pipe(Effect.provide(layer));
+
+  it("retries a transient 5xx on create, then succeeds on the next attempt", async () => {
+    let attempts = 0;
+    server.use(
+      http.post(
+        "https://api.github.com/repos/:owner/:repo/check-runs",
+        () => {
+          attempts += 1;
+          return attempts === 1
+            ? HttpResponse.json({ message: "upstream" }, { status: 502 })
+            : HttpResponse.json({ id: GH_CHECK_RUN_ID }, { status: 201 });
+        },
+      ),
+    );
+
+    const checkRunId = await Effect.runPromise(createOnly(makeChecksGithubLive(CONFIG)));
+
+    // Recovered: the real id came back (not the degraded sentinel), after one retry.
+    expect(checkRunId).not.toBe(NOOP_CHECK_RUN_ID);
+    expect(attempts).toBe(2);
+  });
+
+  it("degrades a PERSISTENT 5xx to the no-op sentinel — a transient outage never kills a green run", async () => {
+    server.use(
+      http.post(
+        "https://api.github.com/repos/:owner/:repo/check-runs",
+        () => HttpResponse.json({ message: "down" }, { status: 503 }),
+      ),
+    );
+
+    // Resolves (does not reject as a defect): retries are exhausted, then the
+    // create degrades to the sentinel id — exactly the no-credentials posture.
+    const checkRunId = await Effect.runPromise(createOnly(makeChecksGithubLive(CONFIG)));
+    expect(checkRunId).toBe(NOOP_CHECK_RUN_ID);
+  });
+
+  it("a non-retryable client error (404) still fails loudly (orDie), not silently degraded", async () => {
+    server.use(
+      http.post(
+        "https://api.github.com/repos/:owner/:repo/check-runs",
+        () => HttpResponse.json({ message: "not found" }, { status: 404 }),
+      ),
+    );
+
+    const exit = await Effect.runPromiseExit(createOnly(makeChecksGithubLive(CONFIG)));
+    // A 404 is a genuine misconfiguration — it must surface as a defect, not
+    // masquerade as a degraded no-op.
+    expect(Exit.isFailure(exit)).toBe(true);
   });
 
   it("degraded — no App config makes zero GitHub calls and returns the sentinel id", async () => {

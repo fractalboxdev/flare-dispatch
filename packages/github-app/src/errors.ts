@@ -15,6 +15,14 @@ export class GithubApiError extends Error {
     readonly status: number,
     /** The (possibly empty) response body, for diagnostics. */
     readonly body: string,
+    /**
+     * How long to wait before retrying, in milliseconds, when GitHub signalled a
+     * rate limit — derived from the response's `Retry-After` (secondary limits +
+     * 5xx) or `x-ratelimit-reset` (primary quota) headers. `undefined` when the
+     * response carried no rate-limit signal. The Effect Layer one level up uses
+     * its presence to classify a 403 as `rate-limited` rather than `unauthorized`.
+     */
+    readonly retryAfterMs?: number,
   ) {
     super(`${message} (HTTP ${status})`);
   }

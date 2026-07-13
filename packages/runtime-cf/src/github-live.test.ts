@@ -29,7 +29,11 @@ import {
 } from "vitest";
 import { github } from "@fractalboxdev/flare-dispatch-core";
 import { TEST_APP_PRIVATE_KEY } from "@fractalboxdev/flare-dispatch-github-app/testing";
-import { type GithubLiveConfig, makeGithubLive } from "./github-live";
+import {
+  classifyReason,
+  type GithubLiveConfig,
+  makeGithubLive,
+} from "./github-live";
 
 type Recorded = {
   tokenExchanges: number;
@@ -150,5 +154,30 @@ describe("makeGithubLive — pullReview", () => {
       }).pipe(Effect.provide(makeGithubLive(CONFIG))),
     );
     expect(exit._tag).toBe("Failure");
+  });
+});
+
+describe("classifyReason", () => {
+  it("classifies a 403 carrying a Retry-After as rate-limited, not unauthorized", () => {
+    // The headline fix: GitHub returns 403 (not 429) for secondary rate limits,
+    // the ones content-generating POSTs like a PR review trip. Without the retry
+    // hint a 403 is a genuine auth failure.
+    expect(classifyReason(403, 60_000)).toBe("rate-limited");
+    expect(classifyReason(403, undefined)).toBe("unauthorized");
+  });
+
+  it("classifies 429 as rate-limited and 401 as unauthorized", () => {
+    expect(classifyReason(429, undefined)).toBe("rate-limited");
+    expect(classifyReason(401, undefined)).toBe("unauthorized");
+  });
+
+  it("classifies 5xx and a raw network throw (status 0) as transient", () => {
+    expect(classifyReason(502, undefined)).toBe("transient");
+    expect(classifyReason(0, undefined)).toBe("transient");
+  });
+
+  it("classifies other 4xx as other (non-retryable)", () => {
+    expect(classifyReason(404, undefined)).toBe("other");
+    expect(classifyReason(422, undefined)).toBe("other");
   });
 });
