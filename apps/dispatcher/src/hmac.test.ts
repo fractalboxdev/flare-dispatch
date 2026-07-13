@@ -5,7 +5,13 @@
 // directly with no Workers pool.
 
 import { describe, expect, it } from "vitest";
-import { fingerprint, SIGNATURE_HEADER, sign, verify } from "./hmac";
+import {
+  constantTimeEqual,
+  fingerprint,
+  SIGNATURE_HEADER,
+  sign,
+  verify,
+} from "./hmac";
 
 const SECRET = "test-hmac-secret-32-bytes-long!!";
 const encoder = new TextEncoder();
@@ -104,5 +110,28 @@ describe("hmac", () => {
     const header = await sign(SECRET, bytesA);
     expect(await verify(SECRET, header, bytesA)).toBe(true);
     expect(await verify(SECRET, header, bytesB)).toBe(false);
+  });
+});
+
+// The shared constant-time comparator (also used by routes/browser-cdp.ts and
+// routes/signals-webhook.ts) — previously untested despite being the sole auth
+// check on those surfaces.
+describe("constantTimeEqual", () => {
+  it("is true for equal strings", async () => {
+    expect(await constantTimeEqual("s3cret-token", "s3cret-token")).toBe(true);
+  });
+
+  it("is false for different same-length strings", async () => {
+    expect(await constantTimeEqual("s3cret-token", "s3cret-toke0")).toBe(false);
+  });
+
+  it("is false for different-length strings (length-safe, no early return)", async () => {
+    expect(await constantTimeEqual("short", "a-much-longer-token")).toBe(false);
+  });
+
+  it("fails closed on nullish or empty input", async () => {
+    expect(await constantTimeEqual(null, "x")).toBe(false);
+    expect(await constantTimeEqual("x", undefined)).toBe(false);
+    expect(await constantTimeEqual("", "")).toBe(false);
   });
 });

@@ -45,6 +45,28 @@
 // / local smokes, where no Access app fronts the Worker). There is no implicit
 // fall-open path: an unconfigured deploy is closed, not open.
 //
+// --- Why plain TS here, not @effect/platform ---------------------------------
+//
+// The HTTP surface IS `@effect/platform` — the route table is a typed
+// `HttpRouter` (http-app.ts) and each route depends on typed PORTS (ports.ts).
+// This module is deliberately NOT: it is the pure functional CORE that gate
+// sits on top of, written against Web-standard primitives alone — `Request` /
+// `Response`, `crypto.subtle`, `fetch`, `atob` — with zero Effect and zero
+// `cloudflare:workers` imports. It is lifted into the Effect world at ONE seam:
+// the `ports.ts` `Access` Layer wraps `gateViewerAccess` in `Effect.promise`
+// and maps its `null`-means-proceed sentinel through `Option.fromNullable`.
+//
+// The payoff is direct unit-testability. `verifyAccessJwt` and
+// `gateViewerAccess` are exercised as plain async functions under Vitest — a
+// throwaway RSA keypair signs real RS256 JWTs, a stubbed `fetch` serves the
+// JWKS — with no Worker fixture, no Layer wiring, and no `ManagedRuntime` to
+// stand up (access-auth.test.ts). Pushing `@effect/platform` down into the
+// crypto/gate layer would buy nothing here (the token verify is inherently a
+// WebCrypto `Promise`) and cost that test simplicity. Same posture as the
+// sibling gate log-auth.ts and the other adapted plain modules the router
+// depends on (executions-read.ts, log-token.ts): functional core in plain TS,
+// Effect only at the port boundary.
+//
 // Spec: specs/07-trust-model.md § Operator → Dispatcher (viewer).
 
 import type { Env } from "./env";
@@ -158,7 +180,18 @@ export const verifyAccessJwt = async (
   if (candidates.length === 0) return false;
 
   const signed = new TextEncoder().encode(`${headerSeg}.${payloadSeg}`);
-  const signature = base64urlToBytes(sigSeg);
+  // `base64urlToBytes` → `atob` THROWS a `DOMException` on a signature segment
+  // with characters outside the base64 alphabet or a `length % 4 === 1`. The
+  // header/payload segments are guarded (via `decodeJson`), but this one was
+  // not — so an attacker-crafted token produced an unhandled rejection that the
+  // `Effect.promise` gate in ports.ts turned into a defect (HTTP 500), not a
+  // 403. Decode defensively: a malformed signature is simply an invalid token.
+  let signature: Uint8Array;
+  try {
+    signature = base64urlToBytes(sigSeg);
+  } catch {
+    return false;
+  }
 
   let signatureOk = false;
   for (const jwk of candidates) {
@@ -204,18 +237,45 @@ export const verifyAccessJwt = async (
 // JWKS fetch (cached in module memory) + the request-level gate.
 // ---------------------------------------------------------------------------
 
-interface CertsCacheEntry {
-  readonly keys: readonly AccessJwk[];
-  readonly fetchedAtMs: number;
-}
+/**
+ * JWKS caching is delegated to the Cloudflare edge via `fetch`'s `cf.cacheTtl`
+ * (a CF-native primitive) rather than a hand-rolled module `Map` — the platform
+ * already caches HTTP responses, keyed by URL, shared across isolates. Access
+ * rotates signing keys infrequently, so an hour is well within tolerance.
+ */
+const CERTS_TTL_S = 60 * 60;
 
-/** Module-memory JWKS cache, keyed by certs URL. Survives within a Worker isolate. */
-const certsCache = new Map<string, CertsCacheEntry>();
-/** Access rotates signing keys infrequently; an hour is well within tolerance. */
-const CERTS_TTL_MS = 60 * 60 * 1000;
+/**
+ * On a `kid` miss we revalidate against origin (bypassing the edge cache) to
+ * pick up a just-rotated key — but at most once per this window, so a flood of
+ * tokens carrying unknown `kid`s can't amplify into a flood of origin fetches
+ * (the same cooldown `jose`'s `createRemoteJWKSet` applies).
+ */
+const REVALIDATE_COOLDOWN_MS = 30_000;
+let lastRevalidateMs = 0;
 
-/** Visible for tests — drop any cached JWKS so a fresh fetch is forced. */
-export const clearAccessCertsCache = (): void => certsCache.clear();
+/** Visible for tests — reset the revalidation cooldown between cases. */
+export const clearAccessCertsCache = (): void => {
+  lastRevalidateMs = 0;
+};
+
+/** Does the token's `kid` match a published key? A token with no `kid` is
+ *  "known" as long as any key exists (the sole-key fallback `verifyAccessJwt`
+ *  uses). Used to tell a genuine bad-signature from a possible key rotation. */
+const jwtHasKnownKid = (
+  keys: readonly AccessJwk[],
+  jwt: string,
+): boolean => {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) return false;
+  const header = decodeJson(parts[0] as string);
+  const kid =
+    header !== null && typeof header["kid"] === "string"
+      ? header["kid"]
+      : undefined;
+  if (kid === undefined) return keys.length >= 1;
+  return keys.some((k) => k.kid === kid);
+};
 
 /**
  * Normalize `ACCESS_TEAM_DOMAIN` to the issuer origin. Accepts a bare team
@@ -231,23 +291,21 @@ export const accessIssuer = (teamDomain: string): string => {
 
 const fetchAccessCerts = async (
   issuer: string,
-  nowMs: number,
+  opts: { readonly revalidate?: boolean } = {},
 ): Promise<readonly AccessJwk[] | null> => {
   const url = `${issuer}/cdn-cgi/access/certs`;
-  const cached = certsCache.get(url);
-  if (cached !== undefined && nowMs - cached.fetchedAtMs < CERTS_TTL_MS) {
-    return cached.keys;
-  }
   try {
-    const res = await fetch(url);
-    if (!res.ok) return cached?.keys ?? null;
+    // `cf.cacheTtl` caches the JWKS at the CF edge (shared across isolates);
+    // `revalidate` forces a fresh origin read to pick up a rotated key.
+    const res = await fetch(url, {
+      cf: { cacheTtl: opts.revalidate ? 0 : CERTS_TTL_S, cacheEverything: true },
+    });
+    if (!res.ok) return null;
     const body = (await res.json()) as { keys?: readonly AccessJwk[] };
-    const keys = Array.isArray(body.keys) ? body.keys : [];
-    certsCache.set(url, { keys, fetchedAtMs: nowMs });
-    return keys;
+    return Array.isArray(body.keys) ? body.keys : [];
   } catch {
-    // Network blip — serve the last good keys if we have them, else fail closed.
-    return cached?.keys ?? null;
+    // Network blip — fail closed (the gate denies rather than falls open).
+    return null;
   }
 };
 
@@ -360,7 +418,7 @@ export const gateViewerAccess = async (
 
   const issuer = accessIssuer(teamDomain);
   const nowMs = Date.now();
-  const keys = await fetchAccessCerts(issuer, nowMs);
+  let keys = await fetchAccessCerts(issuer);
   if (keys === null || keys.length === 0) {
     return json(
       {
@@ -371,12 +429,26 @@ export const gateViewerAccess = async (
     );
   }
 
-  const ok = await verifyAccessJwt(jwt, {
-    keys,
-    aud,
-    issuer,
-    nowSeconds: Math.floor(nowMs / 1000),
-  });
+  const nowSeconds = Math.floor(nowMs / 1000);
+  let ok = await verifyAccessJwt(jwt, { keys, aud, issuer, nowSeconds });
+
+  // A verify failure whose `kid` isn't in our (edge-cached) JWKS is the
+  // signature of a key rotation: Access started signing with a key minted after
+  // our last fetch. Revalidate once against origin (cooldown-guarded) and retry
+  // before denying — otherwise every viewer 403s until the cache TTL lapses.
+  if (
+    !ok &&
+    !jwtHasKnownKid(keys, jwt) &&
+    nowMs - lastRevalidateMs > REVALIDATE_COOLDOWN_MS
+  ) {
+    lastRevalidateMs = nowMs;
+    const fresh = await fetchAccessCerts(issuer, { revalidate: true });
+    if (fresh !== null && fresh.length > 0) {
+      keys = fresh;
+      ok = await verifyAccessJwt(jwt, { keys, aud, issuer, nowSeconds });
+    }
+  }
+
   if (!ok) {
     return json(
       { error: "access_denied", message: "invalid Cloudflare Access token" },
