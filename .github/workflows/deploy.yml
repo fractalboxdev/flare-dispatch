@@ -1,21 +1,16 @@
 name: deploy
 
-# Redeploy the FlareDispatch dispatcher Worker when upstream (main) updates.
-# Container images (infra/Dockerfile.sandbox) are (re)built by `wrangler deploy`
-# on the runner, so this needs Docker — ubuntu-latest provides it. The path
-# filter keeps doc-only commits from triggering an image rebuild.
+# MANUAL DEPLOY ONLY (for now). Hosted GitHub Actions runners are unavailable on
+# this account, so an auto-deploy-on-push cannot start a runner — it only leaves
+# a failing red run on every push to main. Until that changes, deploy from a
+# workstation with `pnpm run deploy` (gates on lint + typecheck + test, then
+# `wrangler deploy`; needs Docker for the container image build + a wrangler
+# login on the target account). See AGENTS.md § Deploy.
+#
+# The job below is kept as a `workflow_dispatch` entry so it can be triggered
+# (or the `push:` trigger restored) the moment runners become available — the
+# steps are the same gate the manual path runs.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - "runs/**"
-      - "infra/**"
-      - "schemas/**"
-      - "wrangler.jsonc"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch: {}
 
 # Never let two deploys race onto the same Worker.

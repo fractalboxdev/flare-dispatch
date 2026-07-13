@@ -12,7 +12,8 @@
   "scripts": {
     "typecheck": "pnpm -r --filter \"./packages/*\" --filter \"./apps/dispatcher\" --filter \"./runs\" exec tsc --noEmit",
     "lint": "oxlint",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "deploy": "pnpm lint && pnpm typecheck && pnpm test && wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250510.0",

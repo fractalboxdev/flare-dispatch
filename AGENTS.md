@@ -35,6 +35,16 @@ A run can be started from three sources:
 
 Single-tenant BYOC — no multi-tenant SaaS. Deploy with `wrangler deploy` into your own Cloudflare account. Default deploy domain: `flare-dispatch.fractalbox.dev`.
 
+### Deploy (manual, for now)
+
+Hosted GitHub Actions runners are unavailable on this account, so the push-to-`main` auto-deploy in `.github/workflows/deploy.yml` cannot run — deploy from a workstation instead:
+
+```sh
+pnpm run deploy        # lint + typecheck + test, then `wrangler deploy`
+```
+
+Prerequisites: a `wrangler` login on the target account (`wrangler whoami` should show the account id in `wrangler.jsonc`), and Docker running (the container image `infra/Dockerfile.sandbox` is built during `wrangler deploy`). Verify after: `curl https://flare-dispatch.fractalbox.dev/health` → `200 {"status":"ok", …}`. Deploy from `main` (promote `alpha` → `main` first). If runners become available, restore the `push:` trigger in `deploy.yml` — its CI+deploy steps mirror this gate.
+
 ## Conventions
 
 Effect-TS is the core programming model here — follow the Effect-TS rules in the workspace instructions (`Match`/`catchTag` over `._tag`, `Schema.TaggedError` over `throw`, generators over `.flatMap` chains, Layer composition). Prefer `wrangler` CLI over the Cloudflare dashboard for all Cloudflare state changes so infra stays in git and replayable.
