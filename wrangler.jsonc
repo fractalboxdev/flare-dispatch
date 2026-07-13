@@ -33,8 +33,19 @@
     "ADMISSION_CAP": "16",
     // Opt the human-facing viewer surfaces (incl. the GitHub App install flow)
     // out of the Cloudflare Access gate for the initial dogfood. Configure
-    // ACCESS_AUD + ACCESS_TEAM_DOMAIN and drop this to re-gate them.
-    "VIEWER_ACCESS_MODE": "token-only"
+    // ACCESS_AUD and drop this to re-gate them. NOTE: the viewer surfaces still
+    // need their OWN Access app before flipping this — the deploy app below only
+    // path-scopes /deploy. access-auth.ts also reads a single ACCESS_AUD, so
+    // gating both surfaces needs multi-audience support first (issue #2).
+    "VIEWER_ACCESS_MODE": "token-only",
+    // Cloudflare Access team domain (issuer) — shared by the viewer + deploy
+    // gates. The deploy console verifies the Access JWT against this + the AUD
+    // below, and fetches identity from <issuer>/cdn-cgi/access/get-identity.
+    "ACCESS_TEAM_DOMAIN": "fractalbox.cloudflareaccess.com",
+    // Deploy console (/deploy) Access application AUD. Distinct from the viewer
+    // ACCESS_AUD. The app's policy allows the GitHub `fractalboxdev/devs` team;
+    // per-env authorization is CONFIG_KV `deploy.env-authz`. See deploy-access.ts.
+    "DEPLOY_ACCESS_AUD": "44c3a07df1b0a4e454b28da9f55e7dbf3e279d1d09274667467a4d41ba79cafe"
   },
 
   "workflows": [

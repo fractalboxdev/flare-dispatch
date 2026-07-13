@@ -261,8 +261,10 @@ export const clearAccessCertsCache = (): void => {
 
 /** Does the token's `kid` match a published key? A token with no `kid` is
  *  "known" as long as any key exists (the sole-key fallback `verifyAccessJwt`
- *  uses). Used to tell a genuine bad-signature from a possible key rotation. */
-const jwtHasKnownKid = (
+ *  uses). Used to tell a genuine bad-signature from a possible key rotation.
+ *  Exported so the deploy-console gate (deploy-access.ts) reuses the same
+ *  rotation-detection heuristic rather than duplicating it. */
+export const jwtHasKnownKid = (
   keys: readonly AccessJwk[],
   jwt: string,
 ): boolean => {
@@ -289,7 +291,7 @@ export const accessIssuer = (teamDomain: string): string => {
   return new URL(withScheme).origin;
 };
 
-const fetchAccessCerts = async (
+export const fetchAccessCerts = async (
   issuer: string,
   opts: { readonly revalidate?: boolean } = {},
 ): Promise<readonly AccessJwk[] | null> => {
@@ -320,7 +322,7 @@ const fetchAccessCerts = async (
  * the 403 JSON an API caller gets. After SSO the host-scoped `CF_Authorization`
  * cookie carries the JWT back, and the next `/` request verifies and renders.
  */
-const isBrowserNavigation = (request: Request): boolean => {
+export const isBrowserNavigation = (request: Request): boolean => {
   if (request.headers.get("Sec-Fetch-Mode") === "navigate") return true;
   return (request.headers.get("Accept") ?? "").includes("text/html");
 };
@@ -346,7 +348,7 @@ export const accessLoginUrl = (
 };
 
 /** Pull the Access JWT from the header, falling back to the cookie. */
-const readAccessJwt = (request: Request): string | null => {
+export const readAccessJwt = (request: Request): string | null => {
   const header = request.headers.get(ACCESS_JWT_HEADER);
   if (header !== null && header.length > 0) return header;
   const cookie = request.headers.get("Cookie");

@@ -47,6 +47,16 @@ export interface Env {
   readonly ACCESS_TEAM_DOMAIN?: string;
 
   /**
+   * Cloudflare Access application AUD tag for the DEPLOY CONSOLE (`/deploy`) —
+   * a distinct Access app (and AUD) from the viewer `ACCESS_AUD`, because the
+   * deploy console is a privileged WRITE surface with its own policy (GitHub
+   * team `deploy.env-authz`). A var, not a secret (a public app identifier).
+   * Pairs with `ACCESS_TEAM_DOMAIN`. Absent → `/deploy` default-DENIES (503
+   * access_not_configured), never silently open. See `deploy-access.ts`.
+   */
+  readonly DEPLOY_ACCESS_AUD?: string;
+
+  /**
    * Viewer Access enforcement mode. Unset / "required" (the secure default):
    * every viewer surface requires a verified Cloudflare Access JWT. The single
    * explicit opt-out is "token-only" — fall back to the per-execution
