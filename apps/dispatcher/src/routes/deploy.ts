@@ -27,10 +27,7 @@ import {
   ENV_AUTHZ_KEY,
   envRequiresApproval,
   parseEnvAuthzPolicy,
-  policyTeams,
-  type DeployIdentity,
 } from "../deploy-authz";
-import { resolveTeamMemberships } from "../github-teams";
 import {
   renderDeployPage,
   type CommitOption,
@@ -118,24 +115,9 @@ const loadPolicy = async (env: Env) =>
 export const handleDeploy = async (env: Env, request: Request): Promise<Response> => {
   const gate = await gateDeploy(env, request);
   if (!gate.ok) return gate.response;
-  const { raw } = gate;
+  const { identity, raw } = gate;
 
   const policy = await loadPolicy(env);
-
-  // Cloudflare's GitHub IdP never sends teams to the origin, so resolve the
-  // caller's membership from GitHub itself — but only for the teams this policy
-  // actually references. The result becomes the identity's `groups`, which is
-  // what the `githubTeams` policy axis matches on.
-  const wantedTeams = policyTeams(policy);
-  const resolvedTeams =
-    wantedTeams.length > 0 && gate.identity.login !== ""
-      ? await resolveTeamMemberships(env, gate.identity.login, wantedTeams, DEFAULT_REPO)
-      : [];
-  const identity: DeployIdentity = {
-    ...gate.identity,
-    groups: [...gate.identity.groups, ...resolvedTeams],
-  };
-
   const allowed = allowedEnvs(identity, policy);
   const envOptions: readonly DeployEnvOption[] = allowed.map((name) => ({
     name,
@@ -144,16 +126,15 @@ export const handleDeploy = async (env: Env, request: Request): Promise<Response
 
   const url = new URL(request.url);
 
-  // `?debug=identity` — dump what Access actually gave us plus what we derived.
-  // Access-gated like the rest of /deploy, and it only ever reveals the
-  // CALLER'S OWN identity. The setup aid for wiring GitHub-team policies.
+  // `?debug=identity` — dump what Access actually gave us alongside what we
+  // derived from it. Access-gated like the rest of /deploy, and it only ever
+  // reveals the CALLER'S OWN identity. The setup aid for wiring team policies:
+  // paste your teams into `deploy.env-authz` exactly as `groups` shows them.
   if (request.method === "GET" && url.searchParams.get("debug") === "identity") {
     return json(
       {
         rawGetIdentity: raw,
         extracted: { email: identity.email, idp: identity.idp, login: identity.login },
-        policyTeams: wantedTeams,
-        resolvedTeams,
         groups: identity.groups,
         allowedEnvs: allowed,
       },
