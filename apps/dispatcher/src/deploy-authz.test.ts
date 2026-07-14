@@ -11,7 +11,6 @@ import {
   envRequiresApproval,
   isGithubLogin,
   parseEnvAuthzPolicy,
-  policyTeams,
   type DeployIdentity,
   type EnvAuthzPolicy,
 } from "./deploy-authz";
@@ -101,23 +100,6 @@ describe("envRequiresApproval", () => {
     expect(envRequiresApproval("production", POLICY)).toBe(true);
     expect(envRequiresApproval("staging", POLICY)).toBe(false);
     expect(envRequiresApproval("missing", POLICY)).toBe(false);
-  });
-});
-
-describe("policyTeams", () => {
-  it("collects the distinct org/team entries the policy depends on", () => {
-    expect(
-      policyTeams({
-        staging: { githubTeams: ["fractalboxdev/devs"] },
-        production: { githubTeams: ["fractalboxdev/deployers", "fractalboxdev/devs"] },
-      }),
-    ).toEqual(["fractalboxdev/deployers", "fractalboxdev/devs"]);
-  });
-
-  it("ignores bare team slugs (not resolvable without an org) and empty policies", () => {
-    expect(policyTeams({ staging: { githubTeams: ["devs"] } })).toEqual([]);
-    expect(policyTeams({ staging: { anyAuthenticated: true } })).toEqual([]);
-    expect(policyTeams({})).toEqual([]);
   });
 });
 

@@ -1,7 +1,31 @@
 // Deploy-console identity normalization — pure tests (no network).
 
 import { describe, expect, it } from "vitest";
-import { githubLoginFromIdentity, normalizeIdentity } from "./deploy-access";
+import {
+  githubLoginFromIdentity,
+  githubTeamsFromIdentity,
+  normalizeIdentity,
+} from "./deploy-access";
+
+/**
+ * A real Cloudflare Access get-identity payload for a GitHub-IdP session
+ * (trimmed). The shape that matters: `groups` is ABSENT, and team membership
+ * lives in sibling `orgs`/`teams` arrays joined on the org id.
+ */
+const GITHUB_IDENTITY = {
+  name: "debuggingfuture (Vincent)",
+  email: "dev@example.com",
+  idp: { id: "f462ff4f", type: "github" },
+  orgs: [
+    { id: 6076175, name: "code4hk" },
+    { id: 81954718, name: "fractalboxdev" },
+  ],
+  teams: [
+    { name: "Timetable4HK", org_id: 6076175 },
+    { name: "friends", org_id: 81954718 },
+    { name: "devs", org_id: 81954718 },
+  ],
+};
 
 describe("normalizeIdentity", () => {
   it("reads email + idp.type and flattens group identifiers", () => {
@@ -44,6 +68,59 @@ describe("normalizeIdentity", () => {
 
   it("carries the extracted GitHub login", () => {
     expect(normalizeIdentity({ login: "octocat" }).login).toBe("octocat");
+  });
+
+  it("folds the GitHub orgs/teams join into groups", () => {
+    const id = normalizeIdentity(GITHUB_IDENTITY);
+    expect(id.idp).toBe("github");
+    expect(id.groups).toContain("fractalboxdev/devs");
+    // A display name is not a login — nothing in this payload carries one.
+    expect(id.login).toBe("");
+  });
+});
+
+describe("githubTeamsFromIdentity", () => {
+  it("joins teams to their org and emits sorted org/team slugs", () => {
+    expect(githubTeamsFromIdentity(GITHUB_IDENTITY)).toEqual([
+      "code4hk/timetable4hk",
+      "fractalboxdev/devs",
+      "fractalboxdev/friends",
+    ]);
+  });
+
+  it("slugifies display names the way GitHub does", () => {
+    expect(
+      githubTeamsFromIdentity({
+        orgs: [{ id: 1, name: "Acme Corp" }],
+        teams: [{ name: "Site Reliability!", org_id: 1 }],
+      }),
+    ).toEqual(["acme-corp/site-reliability"]);
+  });
+
+  it("prefers an explicit slug over the display name", () => {
+    expect(
+      githubTeamsFromIdentity({
+        orgs: [{ id: 1, name: "acme" }],
+        teams: [{ name: "Site Reliability", slug: "sre", org_id: 1 }],
+      }),
+    ).toEqual(["acme/sre"]);
+  });
+
+  it("drops teams whose org isn't in orgs[] rather than guessing", () => {
+    expect(
+      githubTeamsFromIdentity({ orgs: [{ id: 1, name: "acme" }], teams: [{ name: "ghost", org_id: 999 }] }),
+    ).toEqual([]);
+  });
+
+  it("returns empty for an identity with no orgs/teams (e.g. an OTP session)", () => {
+    expect(githubTeamsFromIdentity({ email: "a@b.com", idp: "onetimepin" })).toEqual([]);
+  });
+
+  it("survives a mistyped payload rather than throwing", () => {
+    const malformed = { orgs: "nope", teams: 3 } as unknown as Parameters<
+      typeof githubTeamsFromIdentity
+    >[0];
+    expect(githubTeamsFromIdentity(malformed)).toEqual([]);
   });
 });
 
