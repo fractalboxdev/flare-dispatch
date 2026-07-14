@@ -15,6 +15,7 @@
     "@cloudflare/sandbox": "0.10.1",
     "@effect/platform": "^0.96.1",
     "@fractalboxdev/flare-dispatch-core": "workspace:*",
+    "@fractalboxdev/flare-dispatch-github-app": "workspace:*",
     "@fractalboxdev/flare-dispatch-runs": "workspace:*",
     "@fractalboxdev/flare-dispatch-runtime-cf": "workspace:*",
     "effect": "^3.21.0"
