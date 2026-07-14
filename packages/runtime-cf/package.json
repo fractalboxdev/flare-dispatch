@@ -1,6 +1,6 @@
 {
   "name": "@fractalboxdev/flare-dispatch-runtime-cf",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "FlareDispatch live runtime — Cloudflare binding Layers (D1, R2, Containers, Workflows) implementing the @fractalboxdev/flare-dispatch-core service Tags.",
   "type": "module",

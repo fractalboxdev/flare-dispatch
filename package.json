@@ -1,6 +1,6 @@
 {
   "name": "flare-dispatch",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Offload CI and agentic workflows from GitHub Actions to Cloudflare.",
   "license": "MIT",

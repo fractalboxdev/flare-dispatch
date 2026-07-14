@@ -1,6 +1,6 @@
 {
   "name": "@fractalboxdev/flare-dispatch-review-agent",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Provider-agnostic, Worker-side code-review engine that calls a model through the `modelGateway` capability (Workers AI binding via an AI Gateway — no model API key). Powers the pr-review run.",
   "type": "module",
   "private": true,

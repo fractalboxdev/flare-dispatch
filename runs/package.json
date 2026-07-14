@@ -1,6 +1,6 @@
 {
   "name": "@fractalboxdev/flare-dispatch-runs",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "FlareDispatch starter runs — defineRun programs riding on @fractalboxdev/flare-dispatch-core.",
   "type": "module",
