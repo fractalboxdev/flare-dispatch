@@ -38,6 +38,7 @@ import type { Env } from "./env";
 import { handleAdminEvent } from "./routes/admin-events";
 import { handleAgentInference } from "./routes/agent-inference";
 import { handleArtifact } from "./routes/artifacts";
+import { handleDeploy } from "./routes/deploy";
 import { handleDispatch } from "./routes/dispatch";
 import {
   handleExecutionDetail,
@@ -415,6 +416,18 @@ const artifactsRoute = Effect.gen(function* () {
   );
 });
 
+/**
+ * `GET/POST /deploy` — the deploy console. NOT a `viewer: true` route: it has
+ * its OWN Cloudflare Access application (a distinct AUD) and gates itself inside
+ * `handleDeploy` (deploy-access.ts) rather than through the viewer gate. The
+ * handler owns method dispatch (GET renders, POST dispatches, else 405).
+ */
+const deployRoute = Effect.gen(function* () {
+  const request = yield* currentRequest;
+  const env = yield* CurrentEnv;
+  return yield* runLegacy(() => handleDeploy(env, request));
+});
+
 // ---------------------------------------------------------------------------
 // The router
 // ---------------------------------------------------------------------------
@@ -427,6 +440,7 @@ const baseRouter = HttpRouter.empty.pipe(
   HttpRouter.all("/executions/*", appShellRoute),
   HttpRouter.all("/analytics", appShellRoute),
   HttpRouter.all("/health", route("GET", () => handleHealth())),
+  HttpRouter.all("/deploy", deployRoute),
   HttpRouter.all(
     "/replay/:sessionId",
     route("GET", ({ env, params }) => handleReplay(env, decode(params, "sessionId")), {

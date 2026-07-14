@@ -44,6 +44,9 @@ importers:
       '@fractalboxdev/flare-dispatch-core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@fractalboxdev/flare-dispatch-github-app':
+        specifier: workspace:*
+        version: link:../../packages/github-app
       '@fractalboxdev/flare-dispatch-runs':
         specifier: workspace:*
         version: link:../../runs
