@@ -18,6 +18,14 @@
 // `failOnNonZeroExit` defaults ON: a lint finding has no other pass/fail
 // signal, so a non-zero exit must turn the check red in every mode.
 //
+// Because it installs nothing and configures nothing, the gate is droppable on
+// ANY repo — including one that never adopted oxlint (no `.oxlintrc.json`, no
+// oxlint dependency), where it lints with oxlint's own defaults. The corollary
+// is that it also lands on repos with NOTHING to lint (no JS/TS at all, or an
+// all-gitignored tree), where oxlint exits 1 on an empty file set — a no-op the
+// body reclassifies as a green `skipped`, never a red check. See `skipped` in
+// the output contract and `isNothingToLint`.
+//
 // Determinism: like `offload-test`, the body reads `durationMs` from the
 // checkpointed `exec` step result and calls no `Date.now()` / `crypto.randomUUID()`
 // (specs/pm/plan.md § 6 "Run replay determinism").
@@ -30,7 +38,10 @@ import {
   sandbox,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
-import { workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  isNothingToLint,
+  workspace,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — repo/sha plus oxlint knobs. */
 const OxlintInput = Schema.Struct({
@@ -59,11 +70,25 @@ const OxlintInput = Schema.Struct({
   }),
 });
 
-/** Output contract — identical shape to `offload-test`. */
+/** Output contract — `offload-test`'s shape plus the no-op signal. */
 const OxlintOutput = Schema.Struct({
+  /**
+   * oxlint's exit — but NORMALIZED to 0 when there was nothing to lint (see
+   * `skipped`). An Action-mode caller gates on this field the way it gates on
+   * `offload-test`'s, so the one non-zero exit that is not a verdict must not
+   * reach it.
+   */
   exitCode: Schema.Number,
   durationMs: Schema.Number,
   logUri: Schema.String, // signed R2 URL to the oxlint log
+  /**
+   * True when oxlint found NOTHING to lint — a repo with no JS/TS surface, an
+   * all-gitignored tree, or an `args` filter matching no file. A clean pass over
+   * zero files, not a clean pass over the repo: the distinction `exitCode: 0`
+   * alone cannot carry, kept out of band so nothing reads a green check as
+   * "oxlint vouched for this code".
+   */
+  skipped: Schema.Boolean,
 });
 
 /** Default `exec` timeout — lint is fast, so a tighter ceiling than tests. */
@@ -71,7 +96,7 @@ const DEFAULT_TIMEOUT_SEC = 300;
 
 export const oxlint = defineRun({
   name: "oxlint",
-  version: "1.0.0",
+  version: "1.1.0",
 
   // Webhook-mode trigger — the zero-GHA lint gate. Fires on every PR push; the
   // run resolves oxlint from `npx`, so the sync, payload-only callback carries
@@ -146,18 +171,28 @@ export const oxlint = defineRun({
         }),
       );
 
+      // nothing-to-lint — oxlint exits 1, with no finding, when the tree holds
+      // no file it can lint: a repo with no JS/TS at all (Rust/Python/Go/docs),
+      // a tree whose sources are entirely gitignored, or an `args` path filter
+      // matching nothing. This run is the INSTALL-FREE gate — it is meant to be
+      // dropped on any repo, including ones that never adopted oxlint — so that
+      // exit is a no-op, not a verdict, and must not turn the check red.
+      // Classified on the output sentinel, never the exit code, which cannot
+      // tell the two apart (see `isNothingToLint`).
+      const skipped = isNothingToLint(`${result.stdout}\n${result.stderr}`);
+
       // fail-on-nonzero — a lint finding (non-zero exit) turns the check red,
       // carrying the log link, the same way `offload-test` renders a failure.
       //
-      // The one infra failure that used to masquerade as a finding here — the
-      // checkout dir reaped between steps, so `npx` could not even `cd` into it —
-      // no longer reaches this point: `sandbox.exec` reclassifies it as a
-      // retryable `ExecFailed` (see sandbox-cf.ts `isWorkingDirFailure`),
-      // surfaced as a generic "execution failed", not a lint verdict. OTHER ways
-      // `npx oxlint` can exit non-zero without a genuine finding (an unfetchable
-      // version, a malformed `.oxlintrc.json`) still land here, so the wording
-      // points at the log rather than asserting violations outright.
-      if (input.failOnNonZeroExit && result.exitCode !== 0) {
+      // Two non-zero exits that are NOT findings are already excluded by the
+      // time we get here: the checkout dir reaped between steps, so `npx` could
+      // not even `cd` into it (`sandbox.exec` reclassifies it as a retryable
+      // `ExecFailed` — see sandbox-cf.ts `isWorkingDirFailure`), and the
+      // nothing-to-lint no-op above. OTHER ways `npx oxlint` can exit non-zero
+      // without a genuine finding (an unfetchable version, a malformed
+      // `.oxlintrc.json`) still land here, so the wording points at the log
+      // rather than asserting violations outright.
+      if (input.failOnNonZeroExit && result.exitCode !== 0 && !skipped) {
         return yield* Effect.fail(
           new AcceptanceFailed({
             exitCode: result.exitCode,
@@ -171,9 +206,12 @@ export const oxlint = defineRun({
       }
 
       return {
-        exitCode: result.exitCode,
+        // A no-op is a pass: report 0 so an Action-mode caller gating on
+        // `exitCode` stays green, and carry the truth in `skipped`.
+        exitCode: skipped ? 0 : result.exitCode,
         durationMs: result.durationMs,
         logUri,
+        skipped,
       };
     }),
 });

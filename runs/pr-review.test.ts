@@ -174,6 +174,39 @@ describe("pr-review", () => {
     },
   );
 
+  it.effect(
+    "oxc grounding — oxlint's empty-file-set sentinel is NOT grounded as a finding",
+    () => {
+      // The diff touches a lintable path, so `oxlint-scan` runs — but the file
+      // is gitignored in the repo, so oxlint reports an empty file set (exit 1,
+      // no finding). That sentinel must not reach the model inside a block
+      // labelled "authoritative": the reviewers see the plain diff.
+      const { layer, handles } = makeCFRuntimeTest({
+        config: backendConfig,
+        sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+        sandboxFiles: {
+          [DIFF_FILE]:
+            "diff --git a/src/x.ts b/src/x.ts\n+++ b/src/x.ts\n+const foo = 1;\n",
+          "/tmp/pr-review.oxlint.txt":
+            "No files found to lint. Please check your paths and ignore patterns.\n",
+        },
+        modelGateway: { responses: Array(7).fill(emptyReport) },
+      });
+
+      return Effect.gen(function* () {
+        yield* Effect.exit(prReview.run(baseInput));
+
+        expect(handles.modelGateway.requests.length).toBeGreaterThan(0);
+        for (const req of handles.modelGateway.requests) {
+          expect(req.user).not.toContain("Static analysis — oxlint findings");
+          expect(req.user).not.toContain("No files found to lint");
+          // The review still ships — just ungrounded, against the raw diff.
+          expect(req.user).toContain("+const foo = 1;");
+        }
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("a non-zero git diff exit FAILS the run (honest red check)", () => {
     const { layer, handles } = makeCFRuntimeTest({
       // Backend configured so the run reaches `prepare-diff` (resolve-backend
