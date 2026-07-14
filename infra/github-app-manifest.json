@@ -11,6 +11,7 @@
     "checks": "write",
     "contents": "read",
     "deployments": "read",
+    "members": "read",
     "metadata": "read",
     "pull_requests": "write"
   },

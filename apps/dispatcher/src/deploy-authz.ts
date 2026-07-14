@@ -42,9 +42,31 @@ export interface DeployIdentity {
   readonly email: string;
   /** The login method that authenticated this session — e.g. "github", "onetimepin". */
   readonly idp: string;
-  /** Normalized group identifiers (GitHub org/team names, group ids/emails). */
+  /**
+   * The caller's GitHub username, when the Access identity carries one ("" if
+   * not). Cloudflare's GitHub IdP does NOT put org/teams in `get-identity`, so
+   * this is the key we resolve real team membership with, against the GitHub
+   * API (github-teams.ts) — that result lands in `groups` below.
+   */
+  readonly login: string;
+  /** Normalized group identifiers — GitHub `org/team` slugs once resolved. */
   readonly groups: readonly string[];
 }
+
+/**
+ * Every distinct GitHub team the policy references (`"org/team"` entries),
+ * deduped. Only these need a membership lookup — we never enumerate the org's
+ * whole team list, just the ones authorization actually depends on.
+ */
+export const policyTeams = (policy: EnvAuthzPolicy): readonly string[] => {
+  const seen = new Set<string>();
+  for (const rule of Object.values(policy)) {
+    for (const team of rule.githubTeams ?? []) {
+      if (team.includes("/")) seen.add(team);
+    }
+  }
+  return [...seen].sort();
+};
 
 const norm = (s: string): string => s.trim().toLowerCase();
 
