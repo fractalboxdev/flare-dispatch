@@ -44,10 +44,21 @@ interface RawGroup {
   readonly name?: unknown;
   readonly email?: unknown;
 }
+interface RawOrg {
+  readonly id?: unknown;
+  readonly name?: unknown;
+}
+interface RawTeam {
+  readonly name?: unknown;
+  readonly slug?: unknown;
+  readonly org_id?: unknown;
+}
 interface RawIdentity {
   readonly email?: unknown;
   readonly idp?: { readonly type?: unknown; readonly id?: unknown } | string;
   readonly groups?: readonly RawGroup[];
+  readonly orgs?: readonly RawOrg[];
+  readonly teams?: readonly RawTeam[];
   readonly [key: string]: unknown;
 }
 
@@ -94,12 +105,60 @@ export const githubLoginFromIdentity = (raw: RawIdentity): string => {
   return "";
 };
 
+/** GitHub's own team-slug rule: lowercase, non-alphanumerics collapse to `-`. */
+const slugify = (name: string): string =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+/**
+ * The caller's GitHub teams, as `org/team` slugs, read straight from the Access
+ * identity.
+ *
+ * Cloudflare's GitHub IdP does NOT put team membership in `groups[]` (that stays
+ * empty) — it sends two sibling arrays instead: `orgs: [{id, name}]` and
+ * `teams: [{name, org_id}]`, joined on the org id. That join is the whole
+ * mechanism: it means per-environment deploy rights can be managed purely by
+ * GitHub team membership, with no GitHub API call in the authorization path.
+ *
+ * `teams[].name` is a DISPLAY name ("Timetable4HK"), so it is slugified the way
+ * GitHub does to match a policy's `org/team` entry. Teams whose org isn't in
+ * `orgs[]` are dropped rather than guessed at.
+ */
+export const githubTeamsFromIdentity = (raw: RawIdentity): readonly string[] => {
+  const orgName = new Map<string, string>();
+  for (const org of Array.isArray(raw.orgs) ? raw.orgs : []) {
+    const id = org?.id;
+    const name = typeof org?.name === "string" ? slugify(org.name) : "";
+    if (name === "" || (typeof id !== "number" && typeof id !== "string")) continue;
+    orgName.set(String(id), name);
+  }
+
+  const out = new Set<string>();
+  for (const team of Array.isArray(raw.teams) ? raw.teams : []) {
+    const label =
+      typeof team?.slug === "string" && team.slug !== ""
+        ? team.slug
+        : typeof team?.name === "string"
+          ? team.name
+          : "";
+    const slug = slugify(label);
+    const org = orgName.get(String(team?.org_id));
+    if (slug === "" || org === undefined) continue;
+    out.add(`${org}/${slug}`);
+  }
+  return [...out].sort();
+};
+
 /**
  * Flatten a get-identity response into the `DeployIdentity` the authz core
- * reads. GitHub org/team memberships arrive in `groups[]`; Cloudflare's exact
- * per-group shape varies, so we collect every string identifier (name, email,
- * id) and let `allowedEnvs` match loosely. Total: missing fields degrade to
- * empty, never throw.
+ * reads. Group membership comes from two places: whatever the IdP put in
+ * `groups[]` (shape varies, so we collect every string identifier and let
+ * `allowedEnvs` match loosely) plus the GitHub `orgs`/`teams` join above — which
+ * is the only one that actually fires for the GitHub IdP. Total: missing fields
+ * degrade to empty, never throw.
  */
 export const normalizeIdentity = (raw: RawIdentity): DeployIdentity => {
   const email = typeof raw.email === "string" ? raw.email : "";
@@ -118,6 +177,7 @@ export const normalizeIdentity = (raw: RawIdentity): DeployIdentity => {
     pushStr(groups, g.email);
     pushStr(groups, g.id);
   }
+  groups.push(...githubTeamsFromIdentity(raw));
   return { email, idp, login: githubLoginFromIdentity(raw), groups };
 };
 
