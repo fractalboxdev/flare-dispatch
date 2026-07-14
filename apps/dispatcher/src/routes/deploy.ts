@@ -27,7 +27,10 @@ import {
   ENV_AUTHZ_KEY,
   envRequiresApproval,
   parseEnvAuthzPolicy,
+  policyTeams,
+  type DeployIdentity,
 } from "../deploy-authz";
+import { resolveTeamMemberships } from "../github-teams";
 import {
   renderDeployPage,
   type CommitOption,
@@ -115,14 +118,48 @@ const loadPolicy = async (env: Env) =>
 export const handleDeploy = async (env: Env, request: Request): Promise<Response> => {
   const gate = await gateDeploy(env, request);
   if (!gate.ok) return gate.response;
-  const { identity } = gate;
+  const { raw } = gate;
 
   const policy = await loadPolicy(env);
+
+  // Cloudflare's GitHub IdP never sends teams to the origin, so resolve the
+  // caller's membership from GitHub itself — but only for the teams this policy
+  // actually references. The result becomes the identity's `groups`, which is
+  // what the `githubTeams` policy axis matches on.
+  const wantedTeams = policyTeams(policy);
+  const resolvedTeams =
+    wantedTeams.length > 0 && gate.identity.login !== ""
+      ? await resolveTeamMemberships(env, gate.identity.login, wantedTeams, DEFAULT_REPO)
+      : [];
+  const identity: DeployIdentity = {
+    ...gate.identity,
+    groups: [...gate.identity.groups, ...resolvedTeams],
+  };
+
   const allowed = allowedEnvs(identity, policy);
   const envOptions: readonly DeployEnvOption[] = allowed.map((name) => ({
     name,
     requiresApproval: envRequiresApproval(name, policy),
   }));
+
+  const url = new URL(request.url);
+
+  // `?debug=identity` — dump what Access actually gave us plus what we derived.
+  // Access-gated like the rest of /deploy, and it only ever reveals the
+  // CALLER'S OWN identity. The setup aid for wiring GitHub-team policies.
+  if (request.method === "GET" && url.searchParams.get("debug") === "identity") {
+    return json(
+      {
+        rawGetIdentity: raw,
+        extracted: { email: identity.email, idp: identity.idp, login: identity.login },
+        policyTeams: wantedTeams,
+        resolvedTeams,
+        groups: identity.groups,
+        allowedEnvs: allowed,
+      },
+      200,
+    );
+  }
 
   if (request.method === "POST") {
     return handleDeployPost(env, request, identity, policy, allowed);
@@ -130,8 +167,6 @@ export const handleDeploy = async (env: Env, request: Request): Promise<Response
   if (request.method !== "GET") {
     return json({ error: "method_not_allowed" }, 405);
   }
-
-  const url = new URL(request.url);
   const deployed = url.searchParams.get("deployed");
   const deployedEnv = url.searchParams.get("env");
   const notice =

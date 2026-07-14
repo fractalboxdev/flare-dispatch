@@ -1,7 +1,7 @@
 // Deploy-console identity normalization — pure tests (no network).
 
 import { describe, expect, it } from "vitest";
-import { normalizeIdentity } from "./deploy-access";
+import { githubLoginFromIdentity, normalizeIdentity } from "./deploy-access";
 
 describe("normalizeIdentity", () => {
   it("reads email + idp.type and flattens group identifiers", () => {
@@ -27,8 +27,12 @@ describe("normalizeIdentity", () => {
   });
 
   it("degrades missing fields to empty, never throws", () => {
-    const id = normalizeIdentity({});
-    expect(id).toEqual({ email: "", idp: "", groups: [] });
+    expect(normalizeIdentity({})).toEqual({
+      email: "",
+      idp: "",
+      login: "",
+      groups: [],
+    });
   });
 
   it("ignores empty/non-string group leaves", () => {
@@ -36,5 +40,37 @@ describe("normalizeIdentity", () => {
       groups: [{ name: "", id: undefined, email: "team@x" }],
     });
     expect(id.groups).toEqual(["team@x"]);
+  });
+
+  it("carries the extracted GitHub login", () => {
+    expect(normalizeIdentity({ login: "octocat" }).login).toBe("octocat");
+  });
+});
+
+describe("githubLoginFromIdentity", () => {
+  it("prefers an explicit login field", () => {
+    expect(githubLoginFromIdentity({ login: "octocat", name: "The Octocat" })).toBe(
+      "octocat",
+    );
+  });
+
+  it("falls back through nickname / preferred_username", () => {
+    expect(githubLoginFromIdentity({ nickname: "octo-cat" })).toBe("octo-cat");
+    expect(githubLoginFromIdentity({ preferred_username: "octo9" })).toBe("octo9");
+  });
+
+  it("reads nested oidc_fields / custom", () => {
+    expect(githubLoginFromIdentity({ oidc_fields: { login: "nested1" } })).toBe("nested1");
+    expect(githubLoginFromIdentity({ custom: { login: "nested2" } })).toBe("nested2");
+  });
+
+  it("accepts `name` only when it looks like a GitHub login", () => {
+    expect(githubLoginFromIdentity({ name: "octocat" })).toBe("octocat");
+    // A display name is NOT a login — spaces are invalid in GitHub usernames.
+    expect(githubLoginFromIdentity({ name: "The Octocat" })).toBe("");
+  });
+
+  it("returns empty when nothing usable is present", () => {
+    expect(githubLoginFromIdentity({ email: "a@b.com" })).toBe("");
   });
 });

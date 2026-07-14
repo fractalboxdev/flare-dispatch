@@ -11,6 +11,7 @@ import {
   envRequiresApproval,
   isGithubLogin,
   parseEnvAuthzPolicy,
+  policyTeams,
   type DeployIdentity,
   type EnvAuthzPolicy,
 } from "./deploy-authz";
@@ -18,6 +19,7 @@ import {
 const gh = (over: Partial<DeployIdentity> = {}): DeployIdentity => ({
   email: "dev@example.com",
   idp: "github",
+  login: "devuser",
   groups: ["fractalboxdev/devs"],
   ...over,
 });
@@ -25,6 +27,7 @@ const gh = (over: Partial<DeployIdentity> = {}): DeployIdentity => ({
 const otp = (over: Partial<DeployIdentity> = {}): DeployIdentity => ({
   email: "dev@example.com",
   idp: "onetimepin",
+  login: "",
   groups: [],
   ...over,
 });
@@ -98,6 +101,23 @@ describe("envRequiresApproval", () => {
     expect(envRequiresApproval("production", POLICY)).toBe(true);
     expect(envRequiresApproval("staging", POLICY)).toBe(false);
     expect(envRequiresApproval("missing", POLICY)).toBe(false);
+  });
+});
+
+describe("policyTeams", () => {
+  it("collects the distinct org/team entries the policy depends on", () => {
+    expect(
+      policyTeams({
+        staging: { githubTeams: ["fractalboxdev/devs"] },
+        production: { githubTeams: ["fractalboxdev/deployers", "fractalboxdev/devs"] },
+      }),
+    ).toEqual(["fractalboxdev/deployers", "fractalboxdev/devs"]);
+  });
+
+  it("ignores bare team slugs (not resolvable without an org) and empty policies", () => {
+    expect(policyTeams({ staging: { githubTeams: ["devs"] } })).toEqual([]);
+    expect(policyTeams({ staging: { anyAuthenticated: true } })).toEqual([]);
+    expect(policyTeams({})).toEqual([]);
   });
 });
 

@@ -87,6 +87,11 @@ export const MANIFEST_TEMPLATE = {
     checks: "write",
     contents: "read",
     deployments: "read",
+    // Organization permission — lets the deploy console resolve the caller's
+    // GitHub TEAM membership (github-teams.ts). Cloudflare Access never
+    // forwards GitHub teams to the origin, so per-environment deploy rights
+    // are checked against GitHub directly. Read-only.
+    members: "read",
     metadata: "read",
     // `write`, not `read`: the check-run callback (workflow.ts) creates/updates
     // check-runs AND the `pr-review` run posts a PR review comment — both need
