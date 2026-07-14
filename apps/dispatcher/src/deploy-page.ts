@@ -71,7 +71,14 @@ const STYLE = `
   .who { font-size: 13.5px; color: #9aa3b2; margin: 0 0 1.5rem; padding: .75rem .9rem;
     background: #11151f; border: 1px solid #232838; border-radius: 8px; }
   .who b { color: #c4cad6; font-weight: 600; }
-  .who .groups { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: #8a93a5; }
+  .who p { margin: 0; }
+  .who h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
+    color: #7c8598; margin: .8rem 0 .35rem; }
+  ul.groups { list-style: none; margin: 0; padding: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  ul.groups li { color: #a9b2c2; padding: .2rem 0; border-top: 1px solid #1b2030; }
+  ul.groups li:first-child { border-top: 0; }
+  ul.groups li.empty { color: #8a93a5; font-style: italic; }
   .notice { margin: 0 0 1.5rem; padding: .7rem .9rem; border-radius: 8px;
     background: #0f2417; border: 1px solid #1f5133; color: #b7f0cf; font-size: 14px; }
   label { display: block; margin: 0 0 .9rem; }
@@ -104,7 +111,13 @@ const STYLE = `
  * but authorized for nothing — a legible message, not an empty form.
  */
 export const renderDeployPage = (data: DeployPageData): string => {
-  const groupsText = data.groups.length > 0 ? data.groups.join(", ") : "(none)";
+  // A list, one group per row — an operator copies a row verbatim into the
+  // `githubTeams` policy, so the value must be readable on its own line rather
+  // than run together with the others.
+  const groupList =
+    data.groups.length > 0
+      ? data.groups.map((g) => `<li>${esc(g)}</li>`).join("")
+      : `<li class="empty">(none)</li>`;
 
   const notice =
     data.notice !== undefined && data.notice !== null && data.notice.length > 0
@@ -162,8 +175,11 @@ export const renderDeployPage = (data: DeployPageData): string => {
 <h1>Deploy console</h1>
 <p class="tagline">Trigger a deploy to an environment you're authorized for.</p>
 ${notice}
-<p class="who">Signed in as <b>${esc(data.email)}</b> via <b>${esc(data.idp)}</b>.<br>
-<span class="groups">groups: ${esc(groupsText)}</span></p>
+<div class="who">
+<p>Signed in as <b>${esc(data.email)}</b> via <b>${esc(data.idp)}</b>.</p>
+<h3>Groups</h3>
+<ul class="groups">${groupList}</ul>
+</div>
 ${body}
 </body>
 </html>`;
