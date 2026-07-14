@@ -115,7 +115,7 @@ const loadPolicy = async (env: Env) =>
 export const handleDeploy = async (env: Env, request: Request): Promise<Response> => {
   const gate = await gateDeploy(env, request);
   if (!gate.ok) return gate.response;
-  const { identity } = gate;
+  const { identity, raw } = gate;
 
   const policy = await loadPolicy(env);
   const allowed = allowedEnvs(identity, policy);
@@ -124,14 +124,30 @@ export const handleDeploy = async (env: Env, request: Request): Promise<Response
     requiresApproval: envRequiresApproval(name, policy),
   }));
 
+  const url = new URL(request.url);
+
+  // `?debug=identity` — dump what Access actually gave us alongside what we
+  // derived from it. Access-gated like the rest of /deploy, and it only ever
+  // reveals the CALLER'S OWN identity. The setup aid for wiring team policies:
+  // paste your teams into `deploy.env-authz` exactly as `groups` shows them.
+  if (request.method === "GET" && url.searchParams.get("debug") === "identity") {
+    return json(
+      {
+        rawGetIdentity: raw,
+        extracted: { email: identity.email, idp: identity.idp, login: identity.login },
+        groups: identity.groups,
+        allowedEnvs: allowed,
+      },
+      200,
+    );
+  }
+
   if (request.method === "POST") {
     return handleDeployPost(env, request, identity, policy, allowed);
   }
   if (request.method !== "GET") {
     return json({ error: "method_not_allowed" }, 405);
   }
-
-  const url = new URL(request.url);
   const deployed = url.searchParams.get("deployed");
   const deployedEnv = url.searchParams.get("env");
   const notice =

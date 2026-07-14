@@ -18,6 +18,7 @@ import {
 const gh = (over: Partial<DeployIdentity> = {}): DeployIdentity => ({
   email: "dev@example.com",
   idp: "github",
+  login: "devuser",
   groups: ["fractalboxdev/devs"],
   ...over,
 });
@@ -25,6 +26,7 @@ const gh = (over: Partial<DeployIdentity> = {}): DeployIdentity => ({
 const otp = (over: Partial<DeployIdentity> = {}): DeployIdentity => ({
   email: "dev@example.com",
   idp: "onetimepin",
+  login: "",
   groups: [],
   ...over,
 });

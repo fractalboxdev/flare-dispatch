@@ -48,9 +48,20 @@ describe("renderDeployPage", () => {
     expect(html).toContain('class="prod"');
   });
 
-  it("shows the resolved groups so policy setup is debuggable", () => {
-    expect(renderDeployPage(base())).toContain("fractalboxdev/devs");
-    expect(renderDeployPage(base({ groups: [] }))).toContain("groups: (none)");
+  it("lists the resolved groups one per row so policy setup is debuggable", () => {
+    const html = renderDeployPage(
+      base({ groups: ["fractalboxdev/devs", "fractalboxdev/friends"] }),
+    );
+    expect(html).toContain("<li>fractalboxdev/devs</li>");
+    expect(html).toContain("<li>fractalboxdev/friends</li>");
+    // Never run together on one line — a row is copied verbatim into the policy.
+    expect(html).not.toContain("fractalboxdev/devs, fractalboxdev/friends");
+  });
+
+  it("says so plainly when the identity carries no groups", () => {
+    expect(renderDeployPage(base({ groups: [] }))).toContain(
+      '<li class="empty">(none)</li>',
+    );
   });
 
   it("shows a legible message when authorized for nothing", () => {

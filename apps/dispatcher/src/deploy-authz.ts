@@ -42,7 +42,16 @@ export interface DeployIdentity {
   readonly email: string;
   /** The login method that authenticated this session — e.g. "github", "onetimepin". */
   readonly idp: string;
-  /** Normalized group identifiers (GitHub org/team names, group ids/emails). */
+  /**
+   * The caller's GitHub username, when the Access identity carries one ("" if
+   * not — Cloudflare's GitHub IdP does not send it). Informational only: team
+   * membership is authorized from `groups`, not from the login.
+   */
+  readonly login: string;
+  /**
+   * Normalized group identifiers — GitHub `org/team` slugs, derived from the
+   * `orgs`/`teams` arrays of the verified Access identity (deploy-access.ts).
+   */
   readonly groups: readonly string[];
 }
 
