@@ -28,16 +28,67 @@ import {
   envRequiresApproval,
   parseEnvAuthzPolicy,
 } from "../deploy-authz";
-import { renderDeployPage, type DeployEnvOption } from "../deploy-page";
+import {
+  renderDeployPage,
+  type CommitOption,
+  type DeployEnvOption,
+  type RefOption,
+} from "../deploy-page";
 import type { Env } from "../env";
+import { listBranches, listRecentCommits, resolveRefHead, shortRef } from "../github-deploy";
 import { toInstanceId } from "../instance-id";
 import { lookupRun } from "../registry";
 
 /** Default deploy target — this repository. */
 const DEFAULT_REPO = "fractalboxdev/flare-dispatch";
-const DEFAULT_REF = "refs/heads/main";
+const DEFAULT_REFS = ["refs/heads/main", "refs/heads/alpha"];
 /** Cooldown window for a production-class deploy (seconds). */
 const PROD_COOLDOWN_SEC = 120;
+
+/** CONFIG_KV overrides for the dropdown option sets. */
+const DEPLOY_REPOS_KEY = "deploy.repos";
+const DEPLOY_REFS_KEY = "deploy.refs";
+
+/** Parse a comma-separated CONFIG_KV list into trimmed, non-empty entries. */
+const csv = (raw: string | null): readonly string[] =>
+  raw === null
+    ? []
+    : raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+
+/** Normalize a configured ref (bare name or full ref) to `refs/heads/<name>`. */
+const toFullRef = (ref: string): string =>
+  ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+
+/**
+ * Build the repo / ref / commit dropdown option sets. Repos come from
+ * `deploy.repos` (or this repo); refs from the active repo's branches via the
+ * GitHub App, falling back to `deploy.refs` / defaults; commits from the active
+ * repo + ref (best-effort — empty when the App can't serve them, the page still
+ * works via the "latest" option). Only the FIRST repo's refs/commits are
+ * pre-rendered; POST re-resolves for whatever the caller actually picks.
+ */
+const buildFormOptions = async (
+  env: Env,
+): Promise<{
+  repos: readonly string[];
+  refs: readonly RefOption[];
+  commits: readonly CommitOption[];
+}> => {
+  const configRepos = env.CONFIG_KV !== undefined ? csv(await env.CONFIG_KV.get(DEPLOY_REPOS_KEY)) : [];
+  const repos = configRepos.length > 0 ? configRepos : [DEFAULT_REPO];
+  const activeRepo = repos[0]!;
+
+  const branches = await listBranches(env, activeRepo);
+  const refValues =
+    branches !== null && branches.length > 0
+      ? branches.map((b) => `refs/heads/${b}`)
+      : (env.CONFIG_KV !== undefined ? csv(await env.CONFIG_KV.get(DEPLOY_REFS_KEY)) : []).map(toFullRef);
+  const refList = refValues.length > 0 ? refValues : DEFAULT_REFS;
+  const refs: readonly RefOption[] = refList.map((value) => ({ value, label: shortRef(value) }));
+
+  const commits = (await listRecentCommits(env, activeRepo, refs[0]!.value)) ?? [];
+  return { repos, refs, commits };
+};
 
 const json = (body: unknown, status: number): Response =>
   new Response(JSON.stringify(body), {
@@ -88,14 +139,17 @@ export const handleDeploy = async (env: Env, request: Request): Promise<Response
       ? `Deploy queued for ${deployedEnv ?? "the selected environment"} — execution ${deployed}.`
       : null;
 
+  const { repos, refs, commits } = await buildFormOptions(env);
+
   return html(
     renderDeployPage({
       email: identity.email,
       idp: identity.idp,
       groups: identity.groups,
       envs: envOptions,
-      repoDefault: DEFAULT_REPO,
-      refDefault: DEFAULT_REF,
+      repos,
+      refs,
+      commits,
       notice,
     }),
     200,
@@ -117,8 +171,8 @@ const handleDeployPost = async (
   const form = await request.formData();
   const targetEnv = formString(form, "env");
   const repo = formString(form, "repo") || DEFAULT_REPO;
-  const ref = formString(form, "ref") || DEFAULT_REF;
-  const sha = formString(form, "sha");
+  const ref = formString(form, "ref") || DEFAULT_REFS[0]!;
+  let sha = formString(form, "sha");
 
   // Server-side authorization — the button being present in the page is NOT
   // trust. Re-derive from the verified identity; a disallowed env is refused
@@ -135,11 +189,20 @@ const handleDeployPost = async (
     );
   }
 
+  // "Latest commit on the selected ref" (the empty-value option) → resolve the
+  // ref's HEAD to a concrete SHA now, so worker-deploy checks out a real commit.
   if (sha === "") {
-    return json(
-      { error: "sha_required", message: "a commit SHA is required to deploy" },
-      400,
-    );
+    const head = await resolveRefHead(env, repo, ref);
+    if (head === null) {
+      return json(
+        {
+          error: "sha_unresolved",
+          message: `could not resolve the latest commit for ${repo}@${shortRef(ref)} — pick a specific commit, or confirm the GitHub App is installed on that repo`,
+        },
+        400,
+      );
+    }
+    sha = head;
   }
 
   const run = lookupRun("worker-deploy");

@@ -17,6 +17,18 @@ export interface DeployEnvOption {
   readonly requiresApproval: boolean;
 }
 
+/** A git-ref dropdown option — `value` is the full ref, `label` the display. */
+export interface RefOption {
+  readonly value: string;
+  readonly label: string;
+}
+
+/** A commit dropdown option. */
+export interface CommitOption {
+  readonly sha: string;
+  readonly label: string;
+}
+
 export interface DeployPageData {
   /** The signed-in identity's email (from get-identity). */
   readonly email: string;
@@ -26,10 +38,12 @@ export interface DeployPageData {
   readonly groups: readonly string[];
   /** The environments the caller may deploy to (already authorization-filtered). */
   readonly envs: readonly DeployEnvOption[];
-  /** Default repository slug prefilled in the form (`owner/name`). */
-  readonly repoDefault: string;
-  /** Default git ref prefilled in the form (e.g. `refs/heads/main`). */
-  readonly refDefault: string;
+  /** Repository options (`owner/name`) — first is the one refs/commits describe. */
+  readonly repos: readonly string[];
+  /** Ref options for the active repo. */
+  readonly refs: readonly RefOption[];
+  /** Recent commit options for the active repo + ref (may be empty). */
+  readonly commits: readonly CommitOption[];
   /** A one-shot notice to surface (e.g. after a queued deploy), or null. */
   readonly notice?: string | null;
 }
@@ -62,11 +76,16 @@ const STYLE = `
     background: #0f2417; border: 1px solid #1f5133; color: #b7f0cf; font-size: 14px; }
   label { display: block; margin: 0 0 .9rem; }
   label span { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #9aa3b2; margin-bottom: .3rem; }
-  input {
+  input, select {
     width: 100%; padding: .5rem .6rem; font: inherit; color: #e7e9ee;
     background: #0b0e14; border: 1px solid #232838; border-radius: 6px;
+    appearance: none; -webkit-appearance: none;
   }
-  input:focus { outline: none; border-color: #3b5bdb; }
+  select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%239aa3b2' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right .7rem center; padding-right: 2rem; cursor: pointer;
+  }
+  input:focus, select:focus { outline: none; border-color: #3b5bdb; }
   h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .08em; color: #9aa3b2; margin: 1.75rem 0 .6rem; }
   .envs { display: flex; flex-wrap: wrap; gap: .6rem; }
   button {
@@ -92,13 +111,29 @@ export const renderDeployPage = (data: DeployPageData): string => {
       ? `<p class="notice">${esc(data.notice)}</p>`
       : "";
 
+  const option = (value: string, label: string): string =>
+    `<option value="${esc(value)}">${esc(label)}</option>`;
+
+  const repoSelect = `<select name="repo">${data.repos
+    .map((r) => option(r, r))
+    .join("")}</select>`;
+  const refSelect = `<select name="ref">${data.refs
+    .map((r) => option(r.value, r.label))
+    .join("")}</select>`;
+  // The Commit dropdown always offers "latest on the selected ref" (resolved
+  // server-side at POST), plus specific recent commits when available.
+  const shaSelect = `<select name="sha">${[
+    option("", "Latest commit on the selected ref"),
+    ...data.commits.map((c) => option(c.sha, c.label)),
+  ].join("")}</select>`;
+
   const body =
     data.envs.length === 0
       ? `<p class="none">Your identity isn't authorized to deploy any environment. Ask an operator to add your GitHub team (or email) to the <code>deploy.env-authz</code> policy.</p>`
       : `<form method="POST" action="/deploy">
-      <label><span>Repository</span><input name="repo" value="${esc(data.repoDefault)}" autocomplete="off" spellcheck="false"></label>
-      <label><span>Ref</span><input name="ref" value="${esc(data.refDefault)}" autocomplete="off" spellcheck="false"></label>
-      <label><span>Commit SHA</span><input name="sha" placeholder="the commit to deploy" autocomplete="off" spellcheck="false"></label>
+      <label><span>Repository</span>${repoSelect}</label>
+      <label><span>Ref</span>${refSelect}</label>
+      <label><span>Commit</span>${shaSelect}</label>
       <h2>Deploy to</h2>
       <div class="envs">
         ${data.envs

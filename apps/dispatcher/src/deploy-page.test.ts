@@ -11,8 +11,12 @@ const base = (over: Partial<DeployPageData> = {}): DeployPageData => ({
     { name: "staging", requiresApproval: false },
     { name: "production", requiresApproval: true },
   ],
-  repoDefault: "fractalboxdev/flare-dispatch",
-  refDefault: "refs/heads/main",
+  repos: ["fractalboxdev/flare-dispatch"],
+  refs: [
+    { value: "refs/heads/main", label: "main" },
+    { value: "refs/heads/alpha", label: "alpha" },
+  ],
+  commits: [{ sha: "abc1234def", label: "abc1234 · fix things" }],
   ...over,
 });
 
@@ -23,6 +27,19 @@ describe("renderDeployPage", () => {
     expect(html).toContain('name="env" value="production"');
     expect(html).toContain('action="/deploy"');
     expect(html).toContain("dev@example.com");
+  });
+
+  it("renders repo/ref/commit as select dropdowns, not text inputs", () => {
+    const html = renderDeployPage(base());
+    expect(html).toContain('<select name="repo">');
+    expect(html).toContain('<select name="ref">');
+    expect(html).toContain('<select name="sha">');
+    expect(html).not.toContain('<input name="repo"');
+    // ref options carry the full ref as value, the short name as label
+    expect(html).toContain('<option value="refs/heads/main">main</option>');
+    // commit dropdown always leads with the resolve-latest option
+    expect(html).toContain('<option value="">Latest commit on the selected ref</option>');
+    expect(html).toContain('<option value="abc1234def">');
   });
 
   it("labels an approval-gated environment", () => {
