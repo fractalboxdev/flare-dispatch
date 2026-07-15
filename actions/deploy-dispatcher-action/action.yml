@@ -1,0 +1,250 @@
+# FlareDispatch — deploy the dispatcher Worker into YOUR Cloudflare account.
+#
+# Composite action using the OPERATOR-OVERLAY pattern: your repo carries one
+# file (`wrangler.jsonc`) with your Worker name + R2/D1/KV ids + vars, plus a
+# 40-char SHA pinning which upstream commit to deploy. This action checks out
+# FlareDispatch at that SHA, overwrites that single file, and runs
+# `wrangler d1 migrations apply` + `wrangler deploy` from the upstream tree.
+#
+# Why composite (not Docker / not JS): the deploy runs with YOUR
+# `pnpm`/`wrangler` toolchain on YOUR runner — secrets like
+# `CLOUDFLARE_API_TOKEN` stay scoped to your `secrets:` block, and
+# `cloudflare/wrangler-action` already does the heavy lifting.
+#
+# Why operator-overlay (not a fork): every BYOC deploy diverges from the
+# flagship config by exactly the same fields — Worker name, the per-account
+# R2/D1/KV ids, `CLOUDFLARE_ACCOUNT_ID`, and (for the bedrock route)
+# `AI_GATEWAY_ID`. A fork to carry those is pure overhead. The overlay is one
+# file you OWN plus a SHA pin, so bumping upstream is a one-line PR with a
+# `compare/<old>...<new>` URL to review.
+name: FlareDispatch — Deploy Dispatcher
+description: >-
+  Deploy the FlareDispatch dispatcher Worker into your Cloudflare account using
+  an operator-overlay wrangler.jsonc + a pinned upstream SHA.
+author: fractalboxdev
+branding:
+  icon: cloud
+  color: orange
+
+inputs:
+  upstream-ref:
+    description: >-
+      Git ref on `fractalboxdev/flare-dispatch` to check out. Almost always a
+      40-char commit SHA pinned in your repo (e.g.
+      `$(cat infra/flare-dispatch/UPSTREAM_SHA)`); a branch / tag also works but
+      isn't reproducible. The action validates the value is non-empty before
+      checkout — a missing pin file fails fast, not at deploy time.
+    required: true
+
+  wrangler-config:
+    description: >-
+      Path (relative to your repo root) to your wrangler.jsonc overlay. The
+      action overwrites the upstream's `wrangler.jsonc` with this file. Must be
+      a JSONC the upstream's wrangler version accepts.
+    required: true
+
+  cloudflare-api-token:
+    description: >-
+      Cloudflare API token scoped for Workers + Workflows + D1 + R2 + KV. The
+      action passes it to `cloudflare/wrangler-action@v4`.
+    required: true
+
+  cloudflare-account-id:
+    description: Cloudflare account id (32-hex from the dashboard URL).
+    required: true
+
+  d1-database-binding:
+    description: >-
+      D1 binding NAME from the overlay's `d1_databases[].binding` (NOT the
+      database id) — passed to `wrangler d1 migrations apply <BINDING> --remote`.
+      Default `RUNS_METADATA` matches upstream's binding; override only when the
+      overlay renames it.
+    required: false
+    default: RUNS_METADATA
+
+  health-check-url:
+    description: >-
+      Worker URL whose `/health` endpoint is polled after deploy. Default is
+      empty (skip the check) so the action works for first-time deploys against
+      a freshly-created Worker that has no DNS yet. Recommended to set after the
+      first successful deploy.
+    required: false
+    default: ""
+
+  health-check-attempts:
+    description: Max poll attempts for the health check (each backs off i*5s).
+    required: false
+    default: "5"
+
+  wrangler-version:
+    description: >-
+      Pinned wrangler version. Default tracks what upstream's package.json
+      resolves; override only when bumping wrangler ahead of upstream's pin.
+    required: false
+    default: "4.110.0"
+
+  pnpm-version:
+    description: pnpm version used for `pnpm install` in the upstream tree.
+    required: false
+    default: "11"
+
+  node-version:
+    description: Node version. Defaults to 22 (matches upstream's CI).
+    required: false
+    default: "22"
+
+  upstream-repo:
+    description: >-
+      Upstream FlareDispatch repo to check out. Default is the canonical repo;
+      an enterprise mirror / private fork can override.
+    required: false
+    default: fractalboxdev/flare-dispatch
+
+  upstream-checkout-path:
+    description: Relative path the upstream tree is checked out into.
+    required: false
+    default: flare-dispatch-upstream
+
+outputs:
+  upstream-sha:
+    description: The 40-char SHA the upstream was checked out at.
+    value: ${{ steps.resolve-pin.outputs.sha }}
+
+  worker-url:
+    description: >-
+      The URL of the deployed Worker (echoed from `health-check-url` after a
+      successful health check, or empty when the check was skipped).
+    value: ${{ steps.health.outputs.worker-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve upstream pin
+      id: resolve-pin
+      # Validate the input as a 40-char hex SHA (or short SHA / branch / tag,
+      # but the recommended path pins to a SHA so bumps are reviewable). A
+      # non-SHA value is allowed but logged so the operator notices.
+      shell: bash
+      run: |
+        REF='${{ inputs.upstream-ref }}'
+        if [ -z "$REF" ]; then
+          echo "::error title=upstream-ref empty::Set inputs.upstream-ref to a SHA from fractalboxdev/flare-dispatch (typically the contents of your repo's UPSTREAM_SHA pin file)." >&2
+          exit 1
+        fi
+        if printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
+          echo "Pinned to SHA $REF"
+          echo "sha=$REF" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning title=upstream-ref is not a 40-char SHA::Got '$REF'. Branch/tag pins are non-reproducible — pin to a commit SHA when possible." >&2
+          echo "sha=$REF" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Checkout upstream FlareDispatch
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ inputs.upstream-repo }}
+        ref: ${{ steps.resolve-pin.outputs.sha }}
+        path: ${{ inputs.upstream-checkout-path }}
+
+    - name: Apply operator overlay
+      # The overlay REPLACES upstream's wrangler.jsonc — single-file overwrite,
+      # nothing else changes. If upstream renames it (or adds a sibling
+      # `wrangler.<env>.jsonc`), your pin bump notices via review; we don't try
+      # to silently merge.
+      shell: bash
+      run: |
+        SRC='${{ inputs.wrangler-config }}'
+        DEST='${{ inputs.upstream-checkout-path }}/wrangler.jsonc'
+        if [ ! -f "$SRC" ]; then
+          echo "::error title=wrangler-config missing::No file at '$SRC' — set inputs.wrangler-config to the path of your operator overlay (relative to the repo root)." >&2
+          exit 1
+        fi
+        cp "$SRC" "$DEST"
+        echo "Applied overlay $SRC → $DEST"
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+        run_install: false
+
+    - name: Setup Node
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: ${{ inputs.upstream-checkout-path }}/pnpm-lock.yaml
+
+    - name: Install upstream dependencies
+      shell: bash
+      working-directory: ${{ inputs.upstream-checkout-path }}
+      run: pnpm install --frozen-lockfile
+
+    - name: Apply D1 migrations
+      uses: cloudflare/wrangler-action@v4
+      with:
+        apiToken: ${{ inputs.cloudflare-api-token }}
+        accountId: ${{ inputs.cloudflare-account-id }}
+        workingDirectory: ${{ inputs.upstream-checkout-path }}
+        packageManager: pnpm
+        wranglerVersion: ${{ inputs.wrangler-version }}
+        # `apply` is idempotent — the `d1_migrations` table tracks applied state,
+        # so re-runs of the same SHA no-op cleanly.
+        command: d1 migrations apply ${{ inputs.d1-database-binding }} --remote
+
+    - name: Deploy worker
+      uses: cloudflare/wrangler-action@v4
+      with:
+        apiToken: ${{ inputs.cloudflare-api-token }}
+        accountId: ${{ inputs.cloudflare-account-id }}
+        workingDirectory: ${{ inputs.upstream-checkout-path }}
+        packageManager: pnpm
+        wranglerVersion: ${{ inputs.wrangler-version }}
+        command: deploy
+
+    - name: Health check
+      id: health
+      # Skip when no URL is given (first-time deploys before DNS); poll with
+      # backoff otherwise. A 200 from `/health` proves the bundle loaded and the
+      # run registry isn't empty — much stronger than just "deploy didn't
+      # error", which can mask boot-time crashes inside the Workflow class.
+      shell: bash
+      run: |
+        URL='${{ inputs.health-check-url }}'
+        if [ -z "$URL" ]; then
+          echo "health-check-url empty — skipping"
+          echo "worker-url=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        ATTEMPTS='${{ inputs.health-check-attempts }}'
+        for i in $(seq 1 "$ATTEMPTS"); do
+          STATUS=$(curl -sS -o /tmp/health.json -w "%{http_code}" "$URL" || true)
+          if [ "$STATUS" = "200" ]; then
+            echo "Health check OK on attempt $i:"
+            cat /tmp/health.json
+            echo
+            echo "worker-url=$URL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Attempt $i: HTTP $STATUS — backing off $((i*5))s"
+          sleep $((i * 5))
+        done
+        echo "::error title=health check never returned 200::URL=$URL" >&2
+        [ -f /tmp/health.json ] && cat /tmp/health.json
+        exit 1
+
+    - name: Deployment summary
+      if: success()
+      shell: bash
+      run: |
+        {
+          echo "## FlareDispatch dispatcher deployed"
+          echo
+          echo "- **Upstream**: \`${{ inputs.upstream-repo }}\`"
+          echo "- **Pinned SHA**: \`${{ steps.resolve-pin.outputs.sha }}\` ([commit](https://github.com/${{ inputs.upstream-repo }}/commit/${{ steps.resolve-pin.outputs.sha }}))"
+          echo "- **Overlay**: \`${{ inputs.wrangler-config }}\`"
+          echo "- **D1 binding migrated**: \`${{ inputs.d1-database-binding }}\`"
+          if [ -n '${{ inputs.health-check-url }}' ]; then
+            echo "- **Worker URL**: ${{ inputs.health-check-url }}"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
