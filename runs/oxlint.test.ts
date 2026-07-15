@@ -92,6 +92,90 @@ describe("oxlint", () => {
     },
   );
 
+  // --- Nothing to lint -------------------------------------------------------
+  //
+  // oxlint exits 1, printing `No files found to lint.` on stdout, when the tree
+  // holds no file it can lint — a repo with no JS/TS at all (Rust/Python/Go/
+  // docs-only), an all-gitignored tree, or an `args` filter matching nothing.
+  // The install-free gate is meant to be droppable on ANY repo, so that exit is
+  // a no-op, not a lint verdict, and must not go red.
+
+  /** oxlint's verbatim empty-file-set output (oxlint 1.x, on stdout). */
+  const NO_FILES_STDOUT =
+    "No files found to lint. Please check your paths and ignore patterns.\n";
+
+  it.effect(
+    "nothing to lint — the exit-1 sentinel is a green skip, NOT a red lint verdict",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          [DEFAULT_CMD]: { exitCode: 1, stdout: NO_FILES_STDOUT },
+        },
+      });
+
+      return Effect.gen(function* () {
+        // failOnNonZeroExit is ON (the default, and what the webhook trigger
+        // hard-codes) — yet the run SUCCEEDS.
+        const exit = yield* Effect.exit(oxlint.run(baseInput));
+        expect(Exit.isSuccess(exit)).toBe(true);
+        if (!Exit.isSuccess(exit)) return;
+
+        // Normalized to 0 so an Action-mode caller gating on `exitCode` (the
+        // `offload-test` contract) stays green too...
+        expect(exit.value.exitCode).toBe(0);
+        // ...with the truth out of band: a pass over ZERO files, which nothing
+        // should read as "oxlint vouched for this code".
+        expect(exit.value.skipped).toBe(true);
+
+        // The log still uploads — it carries the sentinel as the evidence.
+        expect(handles.executions.steps.map((s) => s.name)).toEqual([
+          "checkout",
+          "exec",
+          "upload-log",
+        ]);
+        expect(exit.value.logUri.length).toBeGreaterThan(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "nothing to lint — a genuine finding on the same exit code still goes red",
+    () => {
+      // Guards the reclassification against over-reach: exit 1 WITHOUT the
+      // sentinel is a real lint verdict and must still fail the run.
+      const { layer } = makeCFRuntimeTest({
+        sandboxProgram: {
+          [DEFAULT_CMD]: {
+            exitCode: 1,
+            stdout:
+              "  x eslint(no-unused-vars): 'foo' is never used\n   ╭─[src/x.ts:1:7]\n\nFound 1 error.",
+          },
+        },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(oxlint.run(baseInput));
+        expect(Exit.isFailure(exit)).toBe(true);
+        const failure = Exit.isFailure(exit)
+          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+          : undefined;
+        expect((failure as { _tag?: string })?._tag).toBe("AcceptanceFailed");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a clean lint over real files is NOT reported as skipped", () => {
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: { [DEFAULT_CMD]: { exitCode: 0 } },
+    });
+
+    return Effect.gen(function* () {
+      const result = yield* oxlint.run(baseInput);
+      expect(result.exitCode).toBe(0);
+      expect(result.skipped).toBe(false);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect(
     "advisory mode — failOnNonZeroExit off makes a finding a successful Effect surfacing exitCode",
     () => {

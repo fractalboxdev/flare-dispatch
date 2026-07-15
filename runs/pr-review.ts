@@ -73,7 +73,11 @@ import {
   type Container,
   type WebhookPayload,
 } from "@fractalboxdev/flare-dispatch-core";
-import { awsAssumeRole, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  awsAssumeRole,
+  isNothingToLint,
+  workspace,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
 import {
   type BackendUnconfigured,
   backendConfigKey,
@@ -205,10 +209,17 @@ const changedLintableFiles = (diff: string): readonly string[] => {
   return [...files].slice(0, OXLINT_MAX_FILES);
 };
 
-/** Wrap raw oxlint output in a labelled, capped grounding block (or "" if empty). */
+/**
+ * Wrap raw oxlint output in a labelled, capped grounding block — "" when there
+ * is nothing to ground with. Empty output is the clean case (oxlint prints
+ * nothing when it finds nothing), and `isNothingToLint` catches the other: the
+ * changed files were all gitignored / unlintable, so oxlint reports an empty
+ * file set. That sentinel is not a finding, and the block labels its contents
+ * "authoritative" to the model — so it must never be dressed up as one.
+ */
 const groundingBlock = (raw: string): string => {
   const trimmed = raw.trim();
-  if (trimmed.length === 0) return "";
+  if (trimmed.length === 0 || isNothingToLint(trimmed)) return "";
   const body =
     trimmed.length > OXLINT_MAX_CHARS
       ? `${trimmed.slice(0, OXLINT_MAX_CHARS)}\n…(truncated)`
@@ -228,7 +239,7 @@ const groundingBlock = (raw: string): string => {
 
 export const prReview = defineRun({
   name: "pr-review",
-  version: "3.1.0",
+  version: "3.1.1",
   image: "registry.cloudflare.com/fractalbox/flare-dispatch-review:latest",
 
   triggers: [
