@@ -17,12 +17,22 @@ export class CheckoutFailed extends Schema.TaggedError<CheckoutFailed>()(
 export class ExecFailed extends Schema.TaggedError<ExecFailed>()(
   "ExecFailed",
   { exitCode: Schema.Number, stderrTail: Schema.String },
-) {}
+) {
+  // Workflows attempt record persists only error.name + error.message (#88).
+  override get message(): string {
+    return `exec failed (exit ${this.exitCode}): ${this.stderrTail}`;
+  }
+}
 
 export class ExecTimeout extends Schema.TaggedError<ExecTimeout>()(
   "ExecTimeout",
   { timeoutSec: Schema.Number, command: Schema.String },
-) {}
+) {
+  // Workflows attempt record persists only error.name + error.message (#88).
+  override get message(): string {
+    return `exec timed out after ${this.timeoutSec}s: ${this.command}`;
+  }
+}
 
 /**
  * A container file read failed (missing path, binary content, transport

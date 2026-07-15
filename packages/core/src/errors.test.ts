@@ -274,4 +274,22 @@ describe("cause-carrying messages (#88)", () => {
       `cache save "pnpm-abc123" failed: Error: tar czf exited 2`,
     );
   });
+
+  it("ExecFailed.message carries exit code and stderrTail for Workflows", () => {
+    const err = new ExecFailed({
+      exitCode: -1,
+      stderrTail: "container vanished",
+    });
+    expect(err.message).toBe("exec failed (exit -1): container vanished");
+  });
+
+  it("ExecTimeout.message carries timeout and command for Workflows", () => {
+    const err = new ExecTimeout({
+      timeoutSec: 900,
+      command: "pnpm build && wrangler deploy",
+    });
+    expect(err.message).toBe(
+      "exec timed out after 900s: pnpm build && wrangler deploy",
+    );
+  });
 });
