@@ -89,6 +89,30 @@ const inlineTail = (s: string, viewerUrl?: string): string =>
         viewerUrl !== undefined ? `full log: ${viewerUrl}` : "full log in R2"
       }]…\n${s.slice(s.length - INLINE_TAIL_CHARS)}`;
 
+/**
+ * Bound the diagnostic string that rides on `ExecFailed.stderrTail` (and thus
+ * on `ExecFailed.message`, which Workflows persists as the attempt record).
+ * Prefer stdout/stderr when the thrown error carries them; else the message.
+ */
+const STDERR_TAIL_MAX = 4 * 1024;
+const diagnosticTail = (cause: unknown): string => {
+  let raw: string;
+  if (cause instanceof Error) {
+    const streams = cause as Error & { stdout?: unknown; stderr?: unknown };
+    const parts = [streams.stderr, streams.stdout]
+      .filter((s): s is string => typeof s === "string" && s.length > 0)
+      .join("\n");
+    raw = parts.length > 0 ? parts : cause.message;
+  } else {
+    raw = String(cause);
+  }
+  return raw.length <= STDERR_TAIL_MAX
+    ? raw
+    : `…[${raw.length - STDERR_TAIL_MAX} chars truncated]…\n${raw.slice(
+        -STDERR_TAIL_MAX,
+      )}`;
+};
+
 /** The subset of the SDK's `ExecResult` this layer consumes. */
 interface RawExecResult {
   readonly exitCode: number;
@@ -393,7 +417,9 @@ export const makeSandboxCloudflareLive = (
         },
         catch: (cause): ExecFailed | ExecTimeout => {
           // The SDK throws on timeout; classify by message, fall back to a
-          // generic launch failure.
+          // generic launch failure. Prefer any stdout/stderr the throw carried
+          // (some SDK errors attach them); else the Error message — this is
+          // what Workflows persists via ExecFailed.message (#88).
           const message = cause instanceof Error ? cause.message : String(cause);
           if (/timed?\s*out|timeout/i.test(message)) {
             return new ExecTimeout({
@@ -401,7 +427,10 @@ export const makeSandboxCloudflareLive = (
               command: cmd,
             });
           }
-          return new ExecFailed({ exitCode: -1, stderrTail: message });
+          return new ExecFailed({
+            exitCode: -1,
+            stderrTail: diagnosticTail(cause),
+          });
         },
       });
     },

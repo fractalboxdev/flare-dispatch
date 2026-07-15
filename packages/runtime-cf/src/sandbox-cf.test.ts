@@ -363,8 +363,64 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       const exit = yield* Effect.flatMap(SandboxTag, (s) =>
         s.exec({ command: "anything", cwd: "/w", env: {} }),
       ).pipe(Effect.provide(execLayer()), Effect.exit);
-      const err = failureOf<{ _tag: string }>(exit);
+      const err = failureOf<{ _tag: string; stderrTail?: string; message?: string }>(
+        exit,
+      );
       expect(err?._tag).toBe("ExecFailed");
+      expect(err?.stderrTail).toBe("container vanished");
+      expect(err?.message).toBe("exec failed (exit -1): container vanished");
+    }),
+  );
+
+  it.effect(
+    "ExecFailed.stderrTail prefers stdout/stderr attached to the thrown error",
+    () =>
+      Effect.gen(function* () {
+        currentBox = makeFakeBox({ proc: null });
+        currentBox.exec = vi.fn(async () => {
+          const e = new Error("rpc reset") as Error & {
+            stdout: string;
+            stderr: string;
+          };
+          e.stdout = "partial out";
+          e.stderr = "partial err";
+          throw e;
+        });
+        const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+          s.exec({ command: "deploy", cwd: "/w", env: {} }),
+        ).pipe(Effect.provide(execLayer()), Effect.exit);
+        const err = failureOf<{ _tag: string; stderrTail?: string }>(exit);
+        expect(err?._tag).toBe("ExecFailed");
+        expect(err?.stderrTail).toBe("partial err\npartial out");
+      }),
+  );
+
+  it.effect("timeout throws surface as ExecTimeout with a self-diagnosing message", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => {
+        throw new Error("command timed out after 900000ms");
+      });
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({
+          command: "pnpm build && wrangler deploy",
+          cwd: "/w",
+          env: {},
+          timeoutSec: 900,
+        }),
+      ).pipe(Effect.provide(execLayer()), Effect.exit);
+      const err = failureOf<{
+        _tag: string;
+        timeoutSec?: number;
+        command?: string;
+        message?: string;
+      }>(exit);
+      expect(err?._tag).toBe("ExecTimeout");
+      expect(err?.timeoutSec).toBe(900);
+      expect(err?.command).toBe("pnpm build && wrangler deploy");
+      expect(err?.message).toBe(
+        "exec timed out after 900s: pnpm build && wrangler deploy",
+      );
     }),
   );
 
