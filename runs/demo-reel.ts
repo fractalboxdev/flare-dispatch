@@ -145,7 +145,6 @@ export const demoReel = defineRun({
       // semantics; the deck is unaffected either way.
       const ttsEnv = yield* loadSecrets(
         ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
-        { prefix: "product-demo.secret/" },
       );
 
       const container = yield* step("acquire", () => sandbox.acquire({}));

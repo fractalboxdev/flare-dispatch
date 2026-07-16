@@ -417,6 +417,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         : {}),
       configKv: this.env.CONFIG_KV,
       ...(configOverrides !== undefined ? { configOverrides } : {}),
+      // Secrets capability — Worker string bindings only (never CONFIG_KV).
+      secretsLookup: (name) => {
+        const v = (this.env as Record<string, unknown>)[name];
+        return typeof v === "string" && v !== "" ? v : undefined;
+      },
       browser: resolveBrowserConfig(this.env),
       email: resolveEmailConfig(this.env),
       // `mailbox` capability — live when an INBOX_DOMAIN + mailbox-link secret

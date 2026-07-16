@@ -36,6 +36,7 @@ Thumbs.db
 .vscode/
 .idea/
 .obsidian/
+.zed/
 
 # Test
 coverage/

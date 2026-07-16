@@ -12,6 +12,7 @@ import { Effect, Layer, Option } from "effect";
 import { Browser, type BrowserService } from "../services/browser";
 import { Cache, type CacheService } from "../services/cache";
 import { Config, type ConfigService } from "../services/config";
+import { Secrets, type SecretsService } from "../services/secrets";
 
 /** Inspectable record of every Browser fake call. */
 export type BrowserFakeState = {
@@ -75,3 +76,22 @@ export const makeConfigFake = (
 
 /** Config fake — every key is unset, so a run falls back to its defaults. */
 export const ConfigFake: Layer.Layer<Config> = makeConfigFake();
+
+/**
+ * Build a Secrets fake from an in-memory bare-name→value store. Mirrors Worker
+ * secrets/vars for `loadSecrets` in unit tests.
+ */
+export const makeSecretsFake = (
+  store: Record<string, string> = {},
+): Layer.Layer<Secrets> =>
+  Layer.succeed(Secrets, {
+    get: (name) => {
+      const value = store[name];
+      return Effect.succeed(
+        value !== undefined && value !== "" ? value : undefined,
+      );
+    },
+  } satisfies SecretsService);
+
+/** Secrets fake — every name unset. */
+export const SecretsFake: Layer.Layer<Secrets> = makeSecretsFake();

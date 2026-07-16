@@ -3,8 +3,9 @@
 // Backs `ConfigService` with a Workers KV namespace. `config.get(key)` is a
 // plain KV read; `config.getJSON(key, schema)` reads, JSON-parses, and decodes
 // against the caller's Schema. Edits to KV propagate to subsequent executions
-// within seconds with no redeploy — the dynamic-config + secret-store the
-// `loadSecrets` primitive resolves credentials through.
+// within seconds with no redeploy — dynamic config only (commands, feature
+// flags, secret *name* allowlists). Credential *values* live on the `secrets`
+// capability (Worker secrets/vars), never here.
 //
 // Graceful degradation is the contract (specs/03-dsl.md § config): an unset
 // key is `undefined`, a malformed JSON value or a Schema mismatch is

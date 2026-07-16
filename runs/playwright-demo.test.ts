@@ -169,14 +169,14 @@ describe("playwright-demo", () => {
   );
 
   it.effect(
-    "secrets — loadSecrets resolves prefixed keys into the exec env",
+    "secrets — loadSecrets resolves Worker secrets into the exec env",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
         sandboxProgram: { [PLAYWRIGHT_COMMAND]: { exitCode: 0 } },
-        config: {
-          "staging/CF_ACCESS_CLIENT_ID": "id-123",
-          "staging/CF_ACCESS_CLIENT_SECRET": "sk-456",
-          "staging/STAGING_WEB_BASE": "https://example.pages.dev",
+        secrets: {
+          CF_ACCESS_CLIENT_ID: "id-123",
+          CF_ACCESS_CLIENT_SECRET: "sk-456",
+          STAGING_WEB_BASE: "https://example.pages.dev",
         },
       });
 
@@ -189,15 +189,14 @@ describe("playwright-demo", () => {
             "CF_ACCESS_CLIENT_SECRET",
             "STAGING_WEB_BASE",
           ],
-          secretPrefix: "staging/",
         });
 
         expect(result.exitCode).toBe(0);
 
         // The exec recorded the merged env — resolved secrets surfaced
-        // as bare env-var names (prefix stripped), plus the caller's
-        // non-credential knob. Target the playwright exec by command:
-        // the run also execs a locate-video `find` (no env injected).
+        // as bare env-var names, plus the caller's non-credential knob.
+        // Target the playwright exec by command: the run also execs a
+        // locate-video `find` (no env injected).
         const execCall = handles.sandbox.execs.find((e) =>
           e.command.includes("playwright test"),
         );

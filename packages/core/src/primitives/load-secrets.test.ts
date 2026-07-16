@@ -1,22 +1,25 @@
 // Unit tests for the `loadSecrets` primitive.
 //
-// Drives `loadSecrets` against an in-memory `Config` Layer + the IO fake:
+// Drives `loadSecrets` against an in-memory `Secrets` Layer + the IO fake:
 // present keys land in the env record, unset keys are omitted and logged at
-// `warn`, and the optional prefix namespaces the config lookup without
-// leaking into the env var name.
+// `warn`. Prefix is ignored (deprecated — secrets are bare Worker names).
 
 import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
-import { Config, type ConfigService } from "../services/config";
+import { Secrets, type SecretsService } from "../services/secrets";
 import { makeIOFake } from "../testing";
 import { loadSecrets } from "./load-secrets";
 
-/** A `Config` Layer whose `get` reads from a plain in-memory store. */
-const configLayer = (store: Record<string, string>): Layer.Layer<Config> =>
-  Layer.succeed(Config, {
-    get: (key) => Effect.succeed(store[key]),
-    getJSON: () => Effect.succeed(Option.none()),
-  } satisfies ConfigService);
+/** A `Secrets` Layer whose `get` reads from a plain in-memory store. */
+const secretsLayer = (store: Record<string, string>): Layer.Layer<Secrets> =>
+  Layer.succeed(Secrets, {
+    get: (name) => {
+      const value = store[name];
+      return Effect.succeed(
+        value !== undefined && value !== "" ? value : undefined,
+      );
+    },
+  } satisfies SecretsService);
 
 /** Run `loadSecrets` against `store`, returning the env record + the IO logs. */
 const runLoad = async (
@@ -27,7 +30,7 @@ const runLoad = async (
   const io = makeIOFake();
   const env = await Effect.runPromise(
     loadSecrets(keys, opts).pipe(
-      Effect.provide(Layer.merge(configLayer(store), io.layer)),
+      Effect.provide(Layer.merge(secretsLayer(store), io.layer)),
     ),
   );
   return { env, logs: io.state.logs };
@@ -55,10 +58,10 @@ describe("loadSecrets", () => {
     expect(logs[0]?.msg).toContain("MISSING");
   });
 
-  it("applies the prefix to the config lookup, not the env var name", async () => {
+  it("ignores prefix — looks up the bare Worker secret name", async () => {
     const { env } = await runLoad(
       ["CLERK_SECRET_KEY"],
-      { "secret/CLERK_SECRET_KEY": "sk_live" },
+      { CLERK_SECRET_KEY: "sk_live" },
       { prefix: "secret/" },
     );
     expect(env).toEqual({ CLERK_SECRET_KEY: "sk_live" });
@@ -81,7 +84,7 @@ describe("loadSecrets", () => {
     const io = makeIOFake();
     const exit = await Effect.runPromiseExit(
       loadSecrets(["PRESENT", "ABSENT"], { required: true }).pipe(
-        Effect.provide(Layer.merge(configLayer({ PRESENT: "v" }), io.layer)),
+        Effect.provide(Layer.merge(secretsLayer({ PRESENT: "v" }), io.layer)),
       ),
     );
     expect(Exit.isFailure(exit)).toBe(true);
@@ -99,7 +102,7 @@ describe("loadSecrets", () => {
     const env = await Effect.runPromise(
       loadSecrets(["A", "B"], { required: true }).pipe(
         Effect.provide(
-          Layer.merge(configLayer({ A: "1", B: "2" }), io.layer),
+          Layer.merge(secretsLayer({ A: "1", B: "2" }), io.layer),
         ),
       ),
     );

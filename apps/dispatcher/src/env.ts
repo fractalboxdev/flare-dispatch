@@ -112,11 +112,13 @@ export interface Env {
   readonly RUNS_METADATA: D1Database;
 
   /**
-   * KV namespace backing the `config` capability — dynamic config + the
-   * secret store the `loadSecrets` primitive resolves credentials through.
-   * Optional: a deploy without it degrades to the dying `Config` stub (a
-   * config-reading run fails loudly). See `@fractalboxdev/flare-dispatch-runtime-cf`
-   * `makeConfigKvLive`.
+   * KV namespace backing the `config` capability — dynamic config only
+   * (commands, feature flags, secret *name* allowlists). Credential *values*
+   * live on Worker secrets/vars via the `secrets` capability (`wrangler
+   * secret put CLOUDFLARE_API_TOKEN`; `CLOUDFLARE_ACCOUNT_ID` as a var) —
+   * never in CONFIG_KV. Optional: a deploy without it degrades to the dying
+   * `Config` stub (a config-reading run fails loudly). See
+   * `@fractalboxdev/flare-dispatch-runtime-cf` `makeConfigKvLive`.
    */
   readonly CONFIG_KV?: KVNamespace;
 

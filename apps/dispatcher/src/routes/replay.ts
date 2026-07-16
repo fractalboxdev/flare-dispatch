@@ -8,10 +8,9 @@
 // authenticated with the operator's own Cloudflare credentials — and returns
 // a single HTML page that plays it with `rrweb-player` from a CDN.
 //
-// Credentials: `CLOUDFLARE_ACCOUNT_ID` (Worker var) + a Cloudflare API token.
-// The token is read from `CLOUDFLARE_API_TOKEN` (Worker secret) if present,
-// else from `CONFIG_KV` under `product-demo.secret/CLOUDFLARE_API_TOKEN` — the
-// same key the `product-demo` run pulls, so no extra config is needed.
+// Credentials: `CLOUDFLARE_ACCOUNT_ID` (Worker var) + `CLOUDFLARE_API_TOKEN`
+// (Worker secret). Same bindings `loadSecrets` / `product-demo` use — never
+// CONFIG_KV.
 
 import type { Env } from "../env";
 
@@ -86,15 +85,10 @@ export const handleReplay = async (
     return new Response("bad session id", { status: 400 });
   }
   const accountId = env.CLOUDFLARE_ACCOUNT_ID;
-  const token =
-    env.CLOUDFLARE_API_TOKEN ??
-    (env.CONFIG_KV
-      ? await env.CONFIG_KV.get("product-demo.secret/CLOUDFLARE_API_TOKEN")
-      : null);
+  const token = env.CLOUDFLARE_API_TOKEN;
   if (
     accountId === undefined ||
     accountId === "" ||
-    token === null ||
     token === undefined ||
     token === ""
   ) {

@@ -30,7 +30,7 @@
 import { Effect, Exit, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Executions, type RunContext } from "@fractalboxdev/flare-dispatch-core";
-import { CacheFake, sandboxFakeProgram } from "@fractalboxdev/flare-dispatch-core/testing";
+import { CacheFake, sandboxFakeProgram, SecretsFake } from "@fractalboxdev/flare-dispatch-core/testing";
 import { offloadTest } from "@fractalboxdev/flare-dispatch-runs";
 import { makeR2ArtifactLive } from "./artifact-r2";
 import { makeChecksGithubLive } from "./checks-github";
@@ -98,6 +98,8 @@ const makeRuntimeUnderTest = (
     artifact,
     io,
     ConfigDeferred,
+    // No Worker secrets in this Miniflare suite → empty Secrets fake.
+    SecretsFake,
     GithubDeferred,
     CloudflareDeferred,
     ModelGatewayDeferred,
