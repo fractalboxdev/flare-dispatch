@@ -1,0 +1,100 @@
+# FlareDispatch — dispatch a run. specs/04-gha-integration.md § Action mode.
+#
+# HMAC-signs a dispatch body and POSTs it to a FlareDispatch Dispatcher. The run
+# executes asynchronously on Cloudflare; its verdict is reported back to the PR
+# via a `flare-dispatch/<run>` check-run, NOT via this step. V0 ships
+# fire-and-forget only — the step succeeds the moment the dispatch is accepted
+# (202). Gate branch protection on the check-run name, not this GHA job.
+#
+# Composite (bash + openssl + curl + jq — all preinstalled on GitHub-hosted
+# runners), so there is nothing to `npm install` and no bundle to keep in sync.
+# All logic lives in ./dispatch.sh; this manifest only maps `with:` inputs onto
+# the `INPUT_*` env the script reads.
+name: FlareDispatch
+description: Dispatch a FlareDispatch run — HMAC-signs the request and POSTs it to your Dispatcher.
+author: fractalboxdev
+branding:
+  icon: zap
+  color: orange
+
+inputs:
+  run:
+    description: Run slug. Must exist on the target Dispatcher deploy.
+    required: true
+  endpoint:
+    description: Dispatcher base URL, e.g. https://flare-dispatch.<account>.workers.dev
+    required: true
+  hmac-secret:
+    description: Shared HMAC secret — the same value as the Worker's HMAC_SECRET.
+    required: true
+  inputs:
+    description: JSON object of run inputs. Validated against the run's Schema on the Worker side.
+    required: false
+    default: "{}"
+  collect-command:
+    description: >-
+      Optional consumer-side observability collector. When set, the command runs
+      in a shell (cwd = the workspace) and its STDOUT is parsed as a `signals/v1`
+      payload — a bare JSON array of signals, or an object with a `signals` array.
+      Collected signals are validated (≤50 items; source/title/detail required;
+      per-field length caps) and merged onto any `signals` already in `inputs`
+      (caller-provided first), then folded into the dispatch. The command MUST
+      print ONLY JSON to stdout (diagnostics → stderr) and exit 0; a non-zero exit
+      or malformed output fails the Action BEFORE signing/dispatching. Keeps the
+      Dispatcher vendor-blind — the vendor query logic + credentials live in your
+      collector. See schemas/signals.v1.schema.json.
+    required: false
+    default: ""
+  mode:
+    description: "Dispatch mode. V0 supports 'fire-and-forget' only; 'await' is deferred."
+    required: false
+    default: fire-and-forget
+  installation-id:
+    description: >-
+      GitHub App installation id for the target repo. Optional — when omitted (or
+      0), a Dispatcher that has already seen this repo resolves it server-side
+      from the App's webhook-registered installation map.
+    required: false
+    default: "0"
+  notify-emails:
+    description: >-
+      Optional recipients to email the run's result (verdict + artifact / demo /
+      log links) on completion. Comma/whitespace separated or a JSON array, e.g.
+      "alice@x.com, bob@y.com". Each must be a verified Cloudflare Email Routing
+      destination address on the Dispatcher's zone, and the deploy must have the
+      SEND_EMAIL binding + EMAIL_FROM set; otherwise delivery is skipped.
+    required: false
+    default: ""
+
+outputs:
+  execution-id:
+    description: ULID of the execution on Cloudflare — returned by the Dispatcher in the 202.
+    value: ${{ steps.dispatch.outputs.execution-id }}
+  details-url:
+    description: >-
+      Cloudflare Workflows instance URL for this execution (steps/logs), for BOTH
+      success and failure. Empty when the Dispatcher runs BYOC (no
+      CLOUDFLARE_ACCOUNT_ID) or predates this field.
+    value: ${{ steps.dispatch.outputs.details-url }}
+  logs-url:
+    description: >-
+      Tokened log-viewer URL on the Dispatcher's own origin — the full,
+      untruncated stdout/stderr of every command, live-refreshing while the run
+      executes. Empty when the Dispatcher has no log-link key material.
+    value: ${{ steps.dispatch.outputs.logs-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: dispatch
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/dispatch.sh"
+      env:
+        INPUT_RUN: ${{ inputs.run }}
+        INPUT_ENDPOINT: ${{ inputs.endpoint }}
+        INPUT_HMAC_SECRET: ${{ inputs.hmac-secret }}
+        INPUT_INPUTS: ${{ inputs.inputs }}
+        INPUT_COLLECT_COMMAND: ${{ inputs.collect-command }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_INSTALLATION_ID: ${{ inputs.installation-id }}
+        INPUT_NOTIFY_EMAILS: ${{ inputs.notify-emails }}
