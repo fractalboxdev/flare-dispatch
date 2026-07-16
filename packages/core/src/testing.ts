@@ -237,6 +237,11 @@ export type CFRuntimeTestOptions = {
   readonly browser?: Parameters<typeof makeBrowserFake>[0];
   /** Config-store seed — `config.get` keys a run / `loadSecrets` resolves. */
   readonly config?: Record<string, string>;
+  /**
+   * Worker-env string lookup for credential fallback — same contract as live
+   * `configEnvFallback` (bare name after `/`, Worker wins over store).
+   */
+  readonly configEnvFallback?: (name: string) => string | undefined;
   /** Mailbox fake options — the inbox domain + local-part seed the
    * deterministic `allocate` mint uses. */
   readonly mailbox?: Parameters<typeof makeMailboxFake>[0];
@@ -305,7 +310,7 @@ export const makeCFRuntimeTest = (
     CacheFake,
     artifact.layer,
     io.layer,
-    makeConfigFake(opts.config),
+    makeConfigFake(opts.config, opts.configEnvFallback),
     checks.layer,
     emailFake.layer,
     mailboxFake.layer,

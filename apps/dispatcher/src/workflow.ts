@@ -417,6 +417,13 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         : {}),
       configKv: this.env.CONFIG_KV,
       ...(configOverrides !== undefined ? { configOverrides } : {}),
+      // Worker secrets/vars before CONFIG_KV for `loadSecrets` (e.g.
+      // CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID). Only non-empty strings
+      // resolve — KV/R2/DO bindings are objects and are ignored.
+      configEnvFallback: (name) => {
+        const v = (this.env as Record<string, unknown>)[name];
+        return typeof v === "string" && v !== "" ? v : undefined;
+      },
       browser: resolveBrowserConfig(this.env),
       email: resolveEmailConfig(this.env),
       // `mailbox` capability — live when an INBOX_DOMAIN + mailbox-link secret

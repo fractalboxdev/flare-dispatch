@@ -64,12 +64,27 @@ export const CacheFake: Layer.Layer<Cache> = Layer.succeed(
  * Build a Config fake from an in-memory key→value store. `get` reads the
  * store; `getJSON` is always `none` (a run that needs JSON config builds its
  * own fake). With no store every key is unset — a run falls back to defaults.
+ *
+ * Optional `envFallback` mirrors live ConfigKv precedence for credentials:
+ * Worker-env bare name (after last `/`) wins over the store. Lets run tests
+ * assert "secret names in config, values from Worker env" without Miniflare.
  */
 export const makeConfigFake = (
   store: Record<string, string> = {},
+  envFallback?: (name: string) => string | undefined,
 ): Layer.Layer<Config> =>
   Layer.succeed(Config, {
-    get: (key) => Effect.succeed(store[key]),
+    get: (key) => {
+      if (envFallback !== undefined) {
+        const i = key.lastIndexOf("/");
+        const bare = i === -1 ? key : key.slice(i + 1);
+        const fromEnv = envFallback(bare);
+        if (fromEnv !== undefined && fromEnv !== "") {
+          return Effect.succeed(fromEnv);
+        }
+      }
+      return Effect.succeed(store[key]);
+    },
     getJSON: () => Effect.succeed(Option.none()),
   } satisfies ConfigService);
 

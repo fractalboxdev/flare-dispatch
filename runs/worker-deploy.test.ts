@@ -163,6 +163,47 @@ describe("worker-deploy", () => {
   );
 
   it.effect(
+    "secrets — Worker env values resolve when KV has names but no credential values",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
+        config: {
+          "worker-deploy.command:owner/name": DEPLOY_CMD,
+          "worker-deploy.secrets:owner/name":
+            "CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID",
+          "worker-deploy.secret-prefix:owner/name": "secret/",
+          // no secret/CLOUDFLARE_* values — Worker env supplies them
+        },
+        configEnvFallback: (name) => {
+          if (name === "CLOUDFLARE_API_TOKEN") return "cf_token_from_worker";
+          if (name === "CLOUDFLARE_ACCOUNT_ID") return "cf_account_from_worker";
+          return undefined;
+        },
+      });
+      const input = {
+        repo: "owner/name",
+        sha: "abc123",
+        secrets: [] as readonly string[],
+        install: false,
+        failOnNonZeroExit: true,
+      };
+
+      return Effect.gen(function* () {
+        const result = yield* workerDeploy.run(input);
+        expect(result.deployed).toBe(true);
+
+        const exec = handles.sandbox.execs.find(
+          (e) => e.command === DEPLOY_CMD,
+        );
+        expect(exec?.env).toEqual({
+          CLOUDFLARE_API_TOKEN: "cf_token_from_worker",
+          CLOUDFLARE_ACCOUNT_ID: "cf_account_from_worker",
+        });
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
     "secrets — a named-but-unset key fails with SecretsMissing before the exec",
     () => {
       const { layer, handles } = makeCFRuntimeTest({

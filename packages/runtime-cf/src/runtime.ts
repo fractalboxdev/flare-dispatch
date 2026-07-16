@@ -136,6 +136,13 @@ export type CFRuntimeLiveOptions = {
    */
   readonly configOverrides?: Readonly<Record<string, string>>;
   /**
+   * Worker-env string lookup for credential fallback (`loadSecrets`). Checked
+   * after `configOverrides`, before `configKv`. Bare name after the last `/`
+   * (e.g. `secret/CLOUDFLARE_API_TOKEN` → `CLOUDFLARE_API_TOKEN`). Prefer
+   * Worker secrets/vars over putting API tokens in KV.
+   */
+  readonly configEnvFallback?: (name: string) => string | undefined;
+  /**
    * Browser Rendering connect config for the `browser` capability
    * (`BROWSER_CDP_*` Worker secrets). `undefined` — a deploy with no Browser
    * Rendering configured — selects the dying `Browser` stub: a browser run
@@ -282,7 +289,11 @@ export const makeCFRuntimeLive = (
   const config =
     opts.configKv === undefined
       ? ConfigDeferred
-      : makeConfigKvLive(opts.configKv, opts.configOverrides);
+      : makeConfigKvLive(
+          opts.configKv,
+          opts.configOverrides,
+          opts.configEnvFallback,
+        );
   // `Browser` is live when Browser Rendering is configured; absent, the dying
   // stub keeps a browser run from silently mis-behaving.
   const browser =

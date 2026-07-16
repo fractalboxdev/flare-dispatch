@@ -29,14 +29,22 @@
 //
 // --- Credentials --------------------------------------------------------------
 //
-// Same contract as `offload-test` header note 3: secrets ride the config
-// store, never the dispatch body. Webhook dispatches can't name secrets either
-// (sync, payload-only `inputs`), so the run body resolves the env-var names
-// from `worker-deploy.secrets:<owner/repo>` (comma-separated) and the optional
-// config-store prefix from `worker-deploy.secret-prefix:<owner/repo>`, then
-// loads the values with `loadSecrets({ required: true })` — INLINE, not in a
-// `step(...)`, so plaintext credentials never land in a checkpointed step
-// result. The resolve-config step checkpoints only the key *names*.
+// Same contract as `offload-test` header note 3: secret *names* ride the
+// config store, never the dispatch body. Webhook dispatches can't name
+// secrets either (sync, payload-only `inputs`), so the run body resolves the
+// env-var names from `worker-deploy.secrets:<owner/repo>` (comma-separated)
+// and the optional config-store prefix from
+// `worker-deploy.secret-prefix:<owner/repo>`, then loads the values with
+// `loadSecrets({ required: true })` — INLINE, not in a `step(...)`, so
+// plaintext credentials never land in a checkpointed step result. The
+// resolve-config step checkpoints only the key *names*.
+//
+// Prefer Worker env for credential *values* (never put API tokens in KV):
+//   wrangler secret put CLOUDFLARE_API_TOKEN
+//   CLOUDFLARE_ACCOUNT_ID  — already a wrangler `vars` on the dispatcher
+// `loadSecrets` resolves via config: Worker string binding first (bare name
+// after the prefix), CONFIG_KV second (legacy). Commands + secret names stay
+// in KV.
 //
 // --- Deploy ordering ----------------------------------------------------------
 //
