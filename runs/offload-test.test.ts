@@ -182,20 +182,19 @@ describe("offload-test", () => {
   );
 
   it.effect(
-    "secrets — config-store values are injected into the exec env, per-dispatch env wins",
+    "secrets — Worker secret values are injected into the exec env, per-dispatch env wins",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
         sandboxProgram: { "pnpm test": { exitCode: 0 } },
-        config: {
-          "secret/SOME_API_KEY": "key_from_store",
-          "secret/SOME_BASE_URL": "https://store.example.com",
+        secrets: {
+          SOME_API_KEY: "key_from_worker",
+          SOME_BASE_URL: "https://store.example.com",
         },
       });
       const input = {
         ...baseInput,
         secrets: ["SOME_API_KEY", "SOME_BASE_URL"],
-        secretPrefix: "secret/",
-        // Collides with the config-store key — the per-dispatch value (the
+        // Collides with the Worker secret — the per-dispatch value (the
         // more specific source) must win.
         env: { SOME_BASE_URL: "https://dispatch.example.com" },
       };
@@ -208,7 +207,7 @@ describe("offload-test", () => {
           (e) => e.command === "pnpm test",
         );
         expect(exec?.env).toEqual({
-          SOME_API_KEY: "key_from_store",
+          SOME_API_KEY: "key_from_worker",
           SOME_BASE_URL: "https://dispatch.example.com",
         });
       }).pipe(Effect.provide(layer));

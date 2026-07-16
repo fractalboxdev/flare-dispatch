@@ -33,6 +33,7 @@ import {
   makeChildRunsLive,
 } from "./child-runs-cf";
 import { makeConfigKvLive } from "./config-kv";
+import { makeSecretsLive } from "./secrets-live";
 import {
   type EmailCloudflareConfig,
   makeEmailCloudflareLive,
@@ -126,7 +127,7 @@ export type CFRuntimeLiveOptions = {
    * KV binding for the `config` capability (`env.CONFIG_KV`). `undefined` —
    * a deploy with no `CONFIG_KV` namespace — selects the dying `Config` stub:
    * a run that reads config fails loudly rather than silently seeing every
-   * key as unset. Present, the `loadSecrets` primitive can resolve credentials.
+   * key as unset. Credential values are NOT here — see `secretsLookup`.
    */
   readonly configKv?: KVNamespace;
   /**
@@ -136,12 +137,10 @@ export type CFRuntimeLiveOptions = {
    */
   readonly configOverrides?: Readonly<Record<string, string>>;
   /**
-   * Worker-env string lookup for credential fallback (`loadSecrets`). Checked
-   * after `configOverrides`, before `configKv`. Bare name after the last `/`
-   * (e.g. `secret/CLOUDFLARE_API_TOKEN` → `CLOUDFLARE_API_TOKEN`). Prefer
-   * Worker secrets/vars over putting API tokens in KV.
+   * Worker-env string lookup for the `secrets` capability (`loadSecrets`).
+   * Bare names only (`CLOUDFLARE_API_TOKEN`). No CONFIG_KV involvement.
    */
-  readonly configEnvFallback?: (name: string) => string | undefined;
+  readonly secretsLookup: (name: string) => string | undefined;
   /**
    * Browser Rendering connect config for the `browser` capability
    * (`BROWSER_CDP_*` Worker secrets). `undefined` — a deploy with no Browser
@@ -289,11 +288,8 @@ export const makeCFRuntimeLive = (
   const config =
     opts.configKv === undefined
       ? ConfigDeferred
-      : makeConfigKvLive(
-          opts.configKv,
-          opts.configOverrides,
-          opts.configEnvFallback,
-        );
+      : makeConfigKvLive(opts.configKv, opts.configOverrides);
+  const secrets = makeSecretsLive(opts.secretsLookup);
   // `Browser` is live when Browser Rendering is configured; absent, the dying
   // stub keeps a browser run from silently mis-behaving.
   const browser =
@@ -392,6 +388,7 @@ export const makeCFRuntimeLive = (
     artifact,
     io,
     config,
+    secrets,
     checks,
     email,
     mailbox,

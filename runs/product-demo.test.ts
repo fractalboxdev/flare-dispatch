@@ -161,12 +161,14 @@ describe("product-demo honest check (issue #85)", () => {
     "fails with AcceptanceFailed CARRYING the per-chapter summaryMd when no story passes",
     () => {
       const { layer } = makeCFRuntimeTest({
-        // Seed the secrets `loadSecrets({ required: true })` resolves + the
+        // Seed Worker secrets `loadSecrets({ required: true })` resolves + the
         // mandatory play model — the run dies before any story otherwise.
+        secrets: {
+          CF_AI_GATEWAY_ID: "gw",
+          CLOUDFLARE_ACCOUNT_ID: "acct",
+          CLOUDFLARE_API_TOKEN: "tok",
+        },
         config: {
-          "product-demo.secret/CF_AI_GATEWAY_ID": "gw",
-          "product-demo.secret/CLOUDFLARE_ACCOUNT_ID": "acct",
-          "product-demo.secret/CLOUDFLARE_API_TOKEN": "tok",
           "product-demo.model.play": "claude-opus-4-7",
         },
         // The sentinel poll reads `DONE:1` on its first `cat` (the detached
@@ -222,18 +224,21 @@ describe("product-demo self-heal auto-dispatch (gated)", () => {
       }),
     },
   };
-  const secrets = {
-    "product-demo.secret/CF_AI_GATEWAY_ID": "gw",
-    "product-demo.secret/CLOUDFLARE_ACCOUNT_ID": "acct",
-    "product-demo.secret/CLOUDFLARE_API_TOKEN": "tok",
+  const workerSecrets = {
+    CF_AI_GATEWAY_ID: "gw",
+    CLOUDFLARE_ACCOUNT_ID: "acct",
+    CLOUDFLARE_API_TOKEN: "tok",
+  };
+  const baseConfig = {
     "product-demo.model.play": "claude-opus-4-7",
   };
   const story = { name: "checkout", prose: "Buy an item." };
 
   it.effect("dispatches a demo-class self-heal-pr for a confirmed assertion failure", () => {
     const { layer, handles } = makeCFRuntimeTest({
+      secrets: workerSecrets,
       config: {
-        ...secrets,
+        ...baseConfig,
         "self-heal.demo.enabled": "true",
         "self-heal.demo.test-command": "pnpm test",
         // confirm-runs 1 ⇒ no re-play needed; the original failure alone meets
@@ -262,7 +267,8 @@ describe("product-demo self-heal auto-dispatch (gated)", () => {
 
   it.effect("does NOT dispatch when self-heal.demo.enabled is unset", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      config: { ...secrets, "self-heal.demo.test-command": "pnpm test" },
+      secrets: workerSecrets,
+      config: { ...baseConfig, "self-heal.demo.test-command": "pnpm test" },
       sandboxProgram: assertionFailProgram,
     });
     return Effect.gen(function* () {
@@ -277,7 +283,12 @@ describe("product-demo self-heal auto-dispatch (gated)", () => {
 
   it.effect("does NOT dispatch when no test-command is configured (can't verify)", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      config: { ...secrets, "self-heal.demo.enabled": "true", "self-heal.demo.confirm-runs": "1" },
+      secrets: workerSecrets,
+      config: {
+        ...baseConfig,
+        "self-heal.demo.enabled": "true",
+        "self-heal.demo.confirm-runs": "1",
+      },
       sandboxProgram: assertionFailProgram,
     });
     return Effect.gen(function* () {
@@ -405,10 +416,12 @@ describe("buildDemoBundleManifest (demo-bundle/v1)", () => {
 });
 
 describe("product-demo bundle persistence (demo-bundle/v1)", () => {
-  const secrets = {
-    "product-demo.secret/CF_AI_GATEWAY_ID": "gw",
-    "product-demo.secret/CLOUDFLARE_ACCOUNT_ID": "acct",
-    "product-demo.secret/CLOUDFLARE_API_TOKEN": "tok",
+  const workerSecrets = {
+    CF_AI_GATEWAY_ID: "gw",
+    CLOUDFLARE_ACCOUNT_ID: "acct",
+    CLOUDFLARE_API_TOKEN: "tok",
+  };
+  const baseConfig = {
     "product-demo.model.play": "claude-opus-4-7",
   };
 
@@ -416,7 +429,8 @@ describe("product-demo bundle persistence (demo-bundle/v1)", () => {
     "uploads manifest.json + frames.tar even when every chapter fails (red demo ships its bundle)",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
-        config: secrets,
+        secrets: workerSecrets,
+        config: baseConfig,
         sandboxProgram: {
           // Every sentinel poll reads an exited play → the chapter fails.
           ".done": { exitCode: 0, stdout: "DONE:1" },
@@ -454,7 +468,8 @@ describe("product-demo bundle persistence (demo-bundle/v1)", () => {
     "dispatches the demo-reel child with the bundle URL when demo-reel.enabled=true",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
-        config: { ...secrets, "demo-reel.enabled": "true" },
+        secrets: workerSecrets,
+        config: { ...baseConfig, "demo-reel.enabled": "true" },
         sandboxProgram: { ".done": { exitCode: 0, stdout: "DONE:1" } },
       });
       return Effect.gen(function* () {
@@ -488,7 +503,8 @@ describe("product-demo bundle persistence (demo-bundle/v1)", () => {
 
   it.effect("skips frames.tar when no frames were captured (TAR_EMPTY)", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      config: secrets,
+      secrets: workerSecrets,
+      config: baseConfig,
       // No "tar -cf" entry: the archive-frames exec falls through to the
       // fake's default (exit 0, empty stdout) — no TAR_OK sentinel.
       sandboxProgram: { ".done": { exitCode: 0, stdout: "DONE:1" } },
@@ -511,10 +527,12 @@ describe("product-demo bundle persistence (demo-bundle/v1)", () => {
 });
 
 describe("product-demo launch-retry resilience", () => {
-  const secrets = {
-    "product-demo.secret/CF_AI_GATEWAY_ID": "gw",
-    "product-demo.secret/CLOUDFLARE_ACCOUNT_ID": "acct",
-    "product-demo.secret/CLOUDFLARE_API_TOKEN": "tok",
+  const workerSecrets = {
+    CF_AI_GATEWAY_ID: "gw",
+    CLOUDFLARE_ACCOUNT_ID: "acct",
+    CLOUDFLARE_API_TOKEN: "tok",
+  };
+  const baseConfig = {
     "product-demo.model.play": "claude-opus-4-7",
   };
   // A play that returns a PASSED verdict — the chapter would clearly pass if its
@@ -541,7 +559,8 @@ describe("product-demo launch-retry resilience", () => {
     "retries a transient ContainerLaunchFailed launch so the chapter still passes",
     () => {
       const { layer } = makeCFRuntimeTest({
-        config: secrets,
+        secrets: workerSecrets,
+        config: baseConfig,
         sandboxProgram: passProgram,
         // The `play-0` detached launch is rejected with ContainerLaunchFailed
         // twice before it sticks. Pre-fix (`play` step `retries: 0`, no launch

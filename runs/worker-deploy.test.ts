@@ -126,7 +126,7 @@ describe("worker-deploy", () => {
   );
 
   it.effect(
-    "secrets — names from `worker-deploy.secrets:<repo>` (+ prefix key) resolve and inject into the exec env",
+    "secrets — names from `worker-deploy.secrets:<repo>` resolve from Worker secrets into the exec env",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
         sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
@@ -134,50 +134,10 @@ describe("worker-deploy", () => {
           "worker-deploy.command:owner/name": DEPLOY_CMD,
           "worker-deploy.secrets:owner/name":
             "CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID",
-          "worker-deploy.secret-prefix:owner/name": "secret/",
-          "secret/CLOUDFLARE_API_TOKEN": "cf_token_from_store",
-          "secret/CLOUDFLARE_ACCOUNT_ID": "cf_account_from_store",
         },
-      });
-      const input = {
-        repo: "owner/name",
-        sha: "abc123",
-        secrets: [] as readonly string[],
-        install: false,
-        failOnNonZeroExit: true,
-      };
-
-      return Effect.gen(function* () {
-        const result = yield* workerDeploy.run(input);
-        expect(result.deployed).toBe(true);
-
-        const exec = handles.sandbox.execs.find(
-          (e) => e.command === DEPLOY_CMD,
-        );
-        expect(exec?.env).toEqual({
-          CLOUDFLARE_API_TOKEN: "cf_token_from_store",
-          CLOUDFLARE_ACCOUNT_ID: "cf_account_from_store",
-        });
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "secrets — Worker env values resolve when KV has names but no credential values",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
-        config: {
-          "worker-deploy.command:owner/name": DEPLOY_CMD,
-          "worker-deploy.secrets:owner/name":
-            "CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID",
-          "worker-deploy.secret-prefix:owner/name": "secret/",
-          // no secret/CLOUDFLARE_* values — Worker env supplies them
-        },
-        configEnvFallback: (name) => {
-          if (name === "CLOUDFLARE_API_TOKEN") return "cf_token_from_worker";
-          if (name === "CLOUDFLARE_ACCOUNT_ID") return "cf_account_from_worker";
-          return undefined;
+        secrets: {
+          CLOUDFLARE_API_TOKEN: "cf_token_from_worker",
+          CLOUDFLARE_ACCOUNT_ID: "cf_account_from_worker",
         },
       });
       const input = {
@@ -211,7 +171,7 @@ describe("worker-deploy", () => {
         config: {
           "worker-deploy.command:owner/name": DEPLOY_CMD,
           "worker-deploy.secrets:owner/name": "CLOUDFLARE_API_TOKEN",
-          // the secret value itself is NOT seeded
+          // the Worker secret itself is NOT seeded
         },
       });
       const input = {

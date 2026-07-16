@@ -261,17 +261,16 @@ describe("cdp-acceptance", () => {
   });
 
   it.effect(
-    "secrets — config-store values are injected into the boot + test env",
+    "secrets — Worker secret values are injected into the boot + test env",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
         sandboxProgram: { "run-tests.done": { exitCode: 0, stdout: "DONE:0" } },
         browser: { wsEndpoint: "wss://test-cdp/abc" },
-        config: { "secret/CLERK_SECRET_KEY": "sk_live_x" },
+        secrets: { CLERK_SECRET_KEY: "sk_live_x" },
       });
       const input = {
         ...baseInput,
         secrets: ["CLERK_SECRET_KEY"],
-        secretPrefix: "secret/",
       };
 
       return Effect.gen(function* () {

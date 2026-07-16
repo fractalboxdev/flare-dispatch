@@ -29,6 +29,7 @@ export {
 } from "./browser-cf";
 export { makeCacheR2Live } from "./cache-r2";
 export { makeConfigKvLive } from "./config-kv";
+export { makeSecretsLive } from "./secrets-live";
 export {
   makeEmailCloudflareLive,
   type EmailCloudflareConfig,

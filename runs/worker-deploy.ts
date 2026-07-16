@@ -42,9 +42,8 @@
 // Prefer Worker env for credential *values* (never put API tokens in KV):
 //   wrangler secret put CLOUDFLARE_API_TOKEN
 //   CLOUDFLARE_ACCOUNT_ID  — already a wrangler `vars` on the dispatcher
-// `loadSecrets` resolves via config: Worker string binding first (bare name
-// after the prefix), CONFIG_KV second (legacy). Commands + secret names stay
-// in KV.
+// `loadSecrets` resolves via the `secrets` capability (Worker string
+// bindings only — no CONFIG_KV). Commands + secret *names* stay in KV.
 //
 // --- Deploy ordering ----------------------------------------------------------
 //

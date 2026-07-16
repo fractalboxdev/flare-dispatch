@@ -538,24 +538,21 @@ export const productDemo = defineRun({
       //        ("Authenticated Gateway"), sent as `cf-aig-authorization`.
       //        Orthogonal to `MODEL_API_KEY`; set only when the gateway is
       //        locked down.
-      //    All keys live under `product-demo.secret/` so the operator can
-      //    namespace them away from feature-flag keys.
+      //    Values are Worker secrets/vars by bare name (`wrangler secret put`).
       const requiredAgentEnv = yield* loadSecrets(
         ["CF_AI_GATEWAY_ID", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
-        { prefix: "product-demo.secret/", required: true },
+        { required: true },
       );
       const optionalAgentEnv = yield* loadSecrets(
         ["MODEL_API_KEY", "CF_AI_GATEWAY_TOKEN"],
-        { prefix: "product-demo.secret/" },
       );
       // Optional CF Access service token — when the `deployedUrl` sits behind
       // Cloudflare Access (the numu staging Pages site 302s to the Access login
       // otherwise), demo-agent sets these as extra HTTP headers so the browser
-      // gets past the wall. Reuses the same `staging/CF_ACCESS_*` keys that
-      // cdp-acceptance/playwright-demo already use. Absent ⇒ a public target.
+      // gets past the wall. Same bare Worker secret names as
+      // cdp-acceptance/playwright-demo. Absent ⇒ a public target.
       const cfAccessEnv = yield* loadSecrets(
         ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"],
-        { prefix: "staging/" },
       );
 
       // Optional BYOC Bedrock trust path — when the caller hands in

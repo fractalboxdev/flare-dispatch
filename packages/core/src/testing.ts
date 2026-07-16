@@ -52,6 +52,8 @@ import {
   ConfigFake,
   makeBrowserFake,
   makeConfigFake,
+  makeSecretsFake,
+  SecretsFake,
 } from "./fakes/misc-fakes";
 import {
   GithubFake,
@@ -135,6 +137,8 @@ export {
   ConfigFake,
   makeBrowserFake,
   makeConfigFake,
+  makeSecretsFake,
+  SecretsFake,
 } from "./fakes/misc-fakes";
 export {
   GithubFake,
@@ -190,6 +194,7 @@ export const CFRuntimeTest: Layer.Layer<RunContext> = Layer.mergeAll(
   ArtifactFake,
   IOFake,
   ConfigFake,
+  SecretsFake,
   ChecksFake,
   EmailFake,
   MailboxFake,
@@ -235,13 +240,13 @@ export type CFRuntimeTestOptions = {
   readonly sandboxLaunchFailures?: Parameters<typeof makeSandboxFake>[2];
   /** Browser fake options — e.g. the canned CDP `wsEndpoint`. */
   readonly browser?: Parameters<typeof makeBrowserFake>[0];
-  /** Config-store seed — `config.get` keys a run / `loadSecrets` resolves. */
+  /** Config-store seed — `config.get` keys (commands, flags — not credentials). */
   readonly config?: Record<string, string>;
   /**
-   * Worker-env string lookup for credential fallback — same contract as live
-   * `configEnvFallback` (bare name after `/`, Worker wins over store).
+   * Worker-secret seed — bare names `loadSecrets` resolves (e.g.
+   * `CLOUDFLARE_API_TOKEN`). Separate from `config` on purpose.
    */
-  readonly configEnvFallback?: (name: string) => string | undefined;
+  readonly secrets?: Record<string, string>;
   /** Mailbox fake options — the inbox domain + local-part seed the
    * deterministic `allocate` mint uses. */
   readonly mailbox?: Parameters<typeof makeMailboxFake>[0];
@@ -310,7 +315,8 @@ export const makeCFRuntimeTest = (
     CacheFake,
     artifact.layer,
     io.layer,
-    makeConfigFake(opts.config, opts.configEnvFallback),
+    makeConfigFake(opts.config),
+    makeSecretsFake(opts.secrets),
     checks.layer,
     emailFake.layer,
     mailboxFake.layer,

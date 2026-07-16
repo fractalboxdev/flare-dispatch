@@ -120,6 +120,7 @@ export {
   type PriorExecution,
 } from "./services/io";
 export { config, Config, type ConfigService } from "./services/config";
+export { secrets, Secrets, type SecretsService } from "./services/secrets";
 export {
   modelGateway,
   ModelGateway,

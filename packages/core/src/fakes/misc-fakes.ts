@@ -12,6 +12,7 @@ import { Effect, Layer, Option } from "effect";
 import { Browser, type BrowserService } from "../services/browser";
 import { Cache, type CacheService } from "../services/cache";
 import { Config, type ConfigService } from "../services/config";
+import { Secrets, type SecretsService } from "../services/secrets";
 
 /** Inspectable record of every Browser fake call. */
 export type BrowserFakeState = {
@@ -64,29 +65,33 @@ export const CacheFake: Layer.Layer<Cache> = Layer.succeed(
  * Build a Config fake from an in-memory key→value store. `get` reads the
  * store; `getJSON` is always `none` (a run that needs JSON config builds its
  * own fake). With no store every key is unset — a run falls back to defaults.
- *
- * Optional `envFallback` mirrors live ConfigKv precedence for credentials:
- * Worker-env bare name (after last `/`) wins over the store. Lets run tests
- * assert "secret names in config, values from Worker env" without Miniflare.
  */
 export const makeConfigFake = (
   store: Record<string, string> = {},
-  envFallback?: (name: string) => string | undefined,
 ): Layer.Layer<Config> =>
   Layer.succeed(Config, {
-    get: (key) => {
-      if (envFallback !== undefined) {
-        const i = key.lastIndexOf("/");
-        const bare = i === -1 ? key : key.slice(i + 1);
-        const fromEnv = envFallback(bare);
-        if (fromEnv !== undefined && fromEnv !== "") {
-          return Effect.succeed(fromEnv);
-        }
-      }
-      return Effect.succeed(store[key]);
-    },
+    get: (key) => Effect.succeed(store[key]),
     getJSON: () => Effect.succeed(Option.none()),
   } satisfies ConfigService);
 
 /** Config fake — every key is unset, so a run falls back to its defaults. */
 export const ConfigFake: Layer.Layer<Config> = makeConfigFake();
+
+/**
+ * Build a Secrets fake from an in-memory bare-name→value store. Mirrors Worker
+ * secrets/vars for `loadSecrets` in unit tests.
+ */
+export const makeSecretsFake = (
+  store: Record<string, string> = {},
+): Layer.Layer<Secrets> =>
+  Layer.succeed(Secrets, {
+    get: (name) => {
+      const value = store[name];
+      return Effect.succeed(
+        value !== undefined && value !== "" ? value : undefined,
+      );
+    },
+  } satisfies SecretsService);
+
+/** Secrets fake — every name unset. */
+export const SecretsFake: Layer.Layer<Secrets> = makeSecretsFake();
