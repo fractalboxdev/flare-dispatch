@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { checkAndArmCooldown, cooldownKey } from "./cooldown";
+import {
+  checkAndArmCooldown,
+  cooldownKey,
+  resolveCooldownSeconds,
+} from "./cooldown";
 import { makeFakeKv } from "./test-helpers";
 
-const COOLDOWN = { seconds: 1800, scope: (input: unknown) => `pr-${(input as { pr: number }).pr}` };
+const COOLDOWN = {
+  seconds: 1800,
+  secondsKey: "pr-review.cooldown-seconds",
+  scope: (input: unknown) => `pr-${(input as { pr: number }).pr}`,
+};
 
 const base = {
   runName: "pr-review",
@@ -10,6 +18,45 @@ const base = {
   repo: "acme/widgets",
   inputs: { pr: 7 },
 } as const;
+
+describe("resolveCooldownSeconds", () => {
+  it("returns the default when no key, no CONFIG_KV, or key unset", async () => {
+    const config = makeFakeKv();
+    expect(await resolveCooldownSeconds(3600, undefined, config.binding)).toBe(3600);
+    expect(await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", undefined)).toBe(
+      3600,
+    );
+    expect(
+      await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
+    ).toBe(3600);
+  });
+
+  it("uses a valid CONFIG_KV override, clamped to [60, 86400]", async () => {
+    const config = makeFakeKv();
+    config.store.set("pr-review.cooldown-seconds", "900");
+    expect(
+      await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
+    ).toBe(900);
+    config.store.set("pr-review.cooldown-seconds", "30");
+    expect(
+      await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
+    ).toBe(60);
+    config.store.set("pr-review.cooldown-seconds", "999999");
+    expect(
+      await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
+    ).toBe(86_400);
+  });
+
+  it("falls back to default on junk values", async () => {
+    const config = makeFakeKv();
+    for (const junk of ["", "nope", "0", "-5"]) {
+      config.store.set("pr-review.cooldown-seconds", junk);
+      expect(
+        await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
+      ).toBe(3600);
+    }
+  });
+});
 
 describe("checkAndArmCooldown", () => {
   it("arms an open window and records the execution id", async () => {
@@ -96,6 +143,29 @@ describe("checkAndArmCooldown", () => {
       kv: kv.binding,
       executionId: "exec-2",
       now: 1_000_000,
+    });
+    expect(verdict).toEqual({ state: "armed" });
+  });
+
+  it("honours CONFIG_KV secondsKey override for the cooling window", async () => {
+    const kv = makeFakeKv();
+    const config = makeFakeKv();
+    // 10-minute window via CONFIG_KV (default on the run is 1800).
+    config.store.set("pr-review.cooldown-seconds", "600");
+    await checkAndArmCooldown({
+      ...base,
+      kv: kv.binding,
+      configKv: config.binding,
+      executionId: "exec-1",
+      now: 1_000_000,
+    });
+    // 11 min later — past the 10-min override, still inside the 30-min default.
+    const verdict = await checkAndArmCooldown({
+      ...base,
+      kv: kv.binding,
+      configKv: config.binding,
+      executionId: "exec-2",
+      now: 1_000_000 + 11 * 60 * 1000,
     });
     expect(verdict).toEqual({ state: "armed" });
   });

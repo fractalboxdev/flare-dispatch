@@ -34,6 +34,7 @@
 //   CONFIG_KV  pr-review.bedrock.roleArn IAM role to AssumeRoleWithWebIdentity into — trust policy MUST pin `sub: pr-review:*`
 //   CONFIG_KV  pr-review.style           "default" (verbose verdict-table) | "compact" (LGTM-header + 3-col emoji table)
 //   CONFIG_KV  pr-review.compact-max     how many findings the `compact` layout lists inline before "…and N more" (positive int, clamp 1..100, default 7; no-op for `default`)
+//   CONFIG_KV  pr-review.cooldown-seconds  dispatch throttle window in seconds (positive int, clamp 60..86400, default 3600). Absent → one review per PR per 60 min.
 //
 // No API key: the Workers AI binding is the auth. A "tools"-mode backend that
 // returns no tool calls auto-retries once in "json" mode, so a model that
@@ -298,13 +299,16 @@ export const prReview = defineRun({
 
   limits: { maxDurationSec: 1500, maxConcurrency: FULL_AGENTS.length },
 
-  // At most one review per PR per 60 minutes, across BOTH dispatch paths
-  // (webhook + Action). A rapid push sequence on an active PR collapses to
-  // the first dispatch of the window; the skipped pushes answer 202 with the
-  // prior execution's id, so CI stays green. The LAST state of a busy PR
-  // still gets reviewed on its next dispatch after the window — and a review
-  // can always be forced by re-running the CI job ≥60 min later.
-  cooldown: { seconds: 3600, scope: (input) => `pr-${input.pr}` },
+  // At most one review per PR per window, across BOTH dispatch paths
+  // (webhook + Action). Default 60 min; override via CONFIG_KV
+  // `pr-review.cooldown-seconds`. A rapid push sequence on an active PR
+  // collapses to the first dispatch of the window; the skipped pushes answer
+  // 202 with the prior execution's id, so CI stays green.
+  cooldown: {
+    seconds: 3600,
+    secondsKey: "pr-review.cooldown-seconds",
+    scope: (input) => `pr-${input.pr}`,
+  },
 
   run: (input) =>
     Effect.gen(function* () {

@@ -252,6 +252,7 @@ export const handleGithubWebhook = async (
     // reported (not silently dropped) with the execution it collapsed into.
     const cooldownVerdict = await checkAndArmCooldown({
       kv: env.IDEMPOTENCY_KV,
+      configKv: env.CONFIG_KV,
       runName: run.name,
       cooldown: run.cooldown,
       repo: synthesizeGithubBlock(payload).repo,

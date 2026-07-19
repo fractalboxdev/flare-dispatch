@@ -33,8 +33,17 @@ export type RunLimits = {
  * `skipped: "cooldown"` — never an error, so a gating CI step stays green.
  */
 export type CooldownSpec<I> = {
-  /** Window length in seconds. Effective floor is 60 (KV's minimum TTL). */
+  /**
+   * Default window length in seconds. Effective floor is 60 (KV's minimum TTL).
+   * When `secondsKey` is set, CONFIG_KV may override this at dispatch time.
+   */
   readonly seconds: number;
+  /**
+   * Optional CONFIG_KV key whose value (positive integer seconds) overrides
+   * `seconds` at each dispatch. Absent / unparseable / out-of-range → `seconds`.
+   * e.g. `"pr-review.cooldown-seconds"`.
+   */
+  readonly secondsKey?: string;
   /** Rate-limit bucket within `{run}:{repo}` — e.g. ``pr-${input.pr}``. */
   readonly scope: (input: I) => string;
 };
@@ -188,6 +197,14 @@ export const defineRun = <I, O, IEnc, OEnc>(
   ) {
     throw new Error(
       `defineRun: \`cooldown.seconds\` must be a positive number, got ${spec.cooldown.seconds} for run "${spec.name}"`,
+    );
+  }
+  if (
+    spec.cooldown?.secondsKey !== undefined &&
+    spec.cooldown.secondsKey.trim().length === 0
+  ) {
+    throw new Error(
+      `defineRun: \`cooldown.secondsKey\` must be a non-empty string for run "${spec.name}"`,
     );
   }
   if (spec.writeback !== undefined) {

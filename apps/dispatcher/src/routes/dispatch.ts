@@ -288,6 +288,7 @@ export const handleDispatch = async (
   //     green and its `execution-id` output still points at a real execution.
   const cooldownVerdict = await checkAndArmCooldown({
     kv: env.IDEMPOTENCY_KV,
+    configKv: env.CONFIG_KV,
     runName: body.run,
     cooldown: run.cooldown,
     repo: body.github.repo,
