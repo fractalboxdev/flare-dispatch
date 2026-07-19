@@ -690,7 +690,7 @@ describe("POST /v1/dispatch/:run — cooldown", () => {
     const id1 = ((await res1.json()) as { executionId: string }).executionId;
     expect(workflow.calls).toHaveLength(1);
 
-    // A new push (different sha) on the SAME PR, inside the 30-min window.
+    // A new push (different sha) on the SAME PR, inside the cooldown window.
     const res2 = await handleRequest(
       await dispatchRequest(
         "pr-review",

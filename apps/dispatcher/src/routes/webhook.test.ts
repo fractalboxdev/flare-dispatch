@@ -276,7 +276,7 @@ describe("POST /v1/webhooks/github — run cooldown", () => {
     const firstId = body1.dispatched.find((d) => d.run === "pr-review")!.executionId;
 
     // A new push (different sha, different delivery) on the SAME PR, inside
-    // the 30-min window: pr-review must be skipped, not re-dispatched.
+    // the cooldown window: pr-review must be skipped, not re-dispatched.
     const res2 = await handleRequest(
       await webhookRequest(prPayload("bbbb444455556666"), {
         event: "pull_request",
