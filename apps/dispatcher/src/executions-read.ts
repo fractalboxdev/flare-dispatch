@@ -143,10 +143,17 @@ export type AnalyticsInputRow = {
 /** One recipe's MEASURED rollup over recent finished executions. */
 export type RunAnalytics = {
   readonly run: string;
-  /** Finished executions sampled. */
+  /** Finished executions sampled (including `skipped` capacity bow-outs). */
   readonly count: number;
-  /** Fraction in [0,1] that ended `success`. */
+  /**
+   * Fraction in [0,1] that ended `success`, over the executions that actually
+   * ran (`count - skipped`). A `skipped` execution (capacity bow-out →
+   * neutral check) is neither a success nor a failure, so it must not drag
+   * this rate down like a red run would.
+   */
   readonly successRate: number;
+  /** How many sampled executions were `skipped` (capacity bow-outs). */
+  readonly skipped: number;
   /** Median wall-time, ms (null if no timed samples). */
   readonly p50DurationMs: number | null;
   /** 95th-percentile wall-time, ms (null if no timed samples). */
@@ -182,6 +189,7 @@ export const summarizeRuns = (
     durations: number[];
     count: number;
     successes: number;
+    skipped: number;
     costTotal: number;
     costSamples: number;
     basisCounts: Map<string, number>;
@@ -194,6 +202,7 @@ export const summarizeRuns = (
         durations: [],
         count: 0,
         successes: 0,
+        skipped: 0,
         costTotal: 0,
         costSamples: 0,
         basisCounts: new Map(),
@@ -201,7 +210,13 @@ export const summarizeRuns = (
       byRun.set(r.run, a);
     }
     a.count += 1;
-    if (r.status === "success") a.successes += 1;
+    // A `skipped` execution is a capacity bow-out (`RunSkipped` → neutral
+    // check): neither a success nor a failure, so it is counted on its own
+    // aggregate and excluded from the success-rate denominator below — but
+    // still sampled (duration + cost are real spend), so a run whose recent
+    // history is all-skipped stays visible instead of vanishing entirely.
+    if (r.status === "skipped") a.skipped += 1;
+    else if (r.status === "success") a.successes += 1;
     if (r.started_at !== null && r.completed_at !== null && r.completed_at > r.started_at) {
       a.durations.push(r.completed_at - r.started_at);
     }
@@ -224,10 +239,12 @@ export const summarizeRuns = (
         basis = b;
       }
     }
+    const rated = a.count - a.skipped;
     out.push({
       run,
       count: a.count,
-      successRate: a.count > 0 ? a.successes / a.count : 0,
+      successRate: rated > 0 ? a.successes / rated : 0,
+      skipped: a.skipped,
       p50DurationMs: percentile(sorted, 0.5),
       p95DurationMs: percentile(sorted, 0.95),
       avgCostMicroUsd:

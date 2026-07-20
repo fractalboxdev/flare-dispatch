@@ -110,7 +110,7 @@ import { BackendUnconfigured } from "./errors.js";
 export const BACKENDS = ["workers-ai", "anthropic", "bedrock"] as const;
 export type Backend = (typeof BACKENDS)[number];
 
-export const DEFAULT_BACKEND: Backend = "workers-ai";
+export const BACKEND_DEFAULT: Backend = "workers-ai";
 
 /**
  * How the engine coaxes structured output from the model:
@@ -121,7 +121,7 @@ export const REVIEW_MODES = ["tools", "json"] as const;
 export type ReviewMode = (typeof REVIEW_MODES)[number];
 
 /** The default config namespace — the flagship `pr-review` run. */
-export const DEFAULT_NAMESPACE = "pr-review";
+export const NAMESPACE_DEFAULT = "pr-review";
 
 /** Per-backend key descriptor — the operator contract for one backend. */
 export type BackendKeyDescriptor = {
@@ -129,7 +129,7 @@ export type BackendKeyDescriptor = {
   /** CONFIG_KV key selecting the output mode (`tools` | `json`). */
   readonly modeKey: string;
   /** Mode used when `modeKey` is unset/unrecognized. */
-  readonly defaultMode: ReviewMode;
+  readonly modeDefault: ReviewMode;
   /**
    * Max chars of (noise-stripped) diff a reviewer call may carry — aligned with
    * the backend's context window, NOT one global constant. A cap above the
@@ -137,12 +137,12 @@ export type BackendKeyDescriptor = {
    * provider clips or the model goes needle-blind), which reads as "reviewed
    * everything, found nothing".
    */
-  readonly defaultMaxDiffChars: number;
+  readonly maxDiffCharsDefault: number;
   /**
    * CONFIG_KV key carrying an operator override for the diff cap (a positive
    * integer char count). Lets a big-context Workers AI model (e.g. GLM / Kimi,
    * 128k–256k tokens) carry far more diff than the conservative catalog default
-   * without a redeploy. Unset/blank/non-numeric → `defaultMaxDiffChars`.
+   * without a redeploy. Unset/blank/non-numeric → `maxDiffCharsDefault`.
    */
   readonly maxDiffCharsKey: string;
   /**
@@ -151,10 +151,10 @@ export type BackendKeyDescriptor = {
    * a tight budget truncates the answer and reads as "found nothing". A ceiling,
    * so non-reasoning models that answer briefly are unaffected.
    */
-  readonly defaultMaxTokens: number;
+  readonly maxTokensDefault: number;
   /**
-   * CONFIG_KV key overriding `defaultMaxTokens` (a positive int). Unset/blank/
-   * non-numeric → `defaultMaxTokens`.
+   * CONFIG_KV key overriding `maxTokensDefault` (a positive int). Unset/blank/
+   * non-numeric → `maxTokensDefault`.
    */
   readonly maxTokensKey: string;
   /**
@@ -164,7 +164,7 @@ export type BackendKeyDescriptor = {
    */
   readonly regionKey?: string;
   /** `bedrock` backend's default region when `regionKey` is unset. */
-  readonly defaultRegion?: string;
+  readonly regionDefault?: string;
   /**
    * `bedrock` backend only — CONFIG_KV key carrying the IAM role ARN to
    * AssumeRoleWithWebIdentity into. No default: a missing value fails resolution
@@ -205,7 +205,7 @@ const ANTHROPIC_MAX_TOKENS = 4_096;
 const BEDROCK_MAX_TOKENS = 4_096;
 
 /** Default region a `bedrock` backend resolves to when `regionKey` is unset. */
-const BEDROCK_DEFAULT_REGION = "us-east-1";
+const BEDROCK_REGION_DEFAULT = "us-east-1";
 
 /**
  * Build the per-backend config key names for a given namespace — the operator
@@ -220,41 +220,41 @@ export const namespacedKeys = (
     modeKey: `${namespace}.workers-ai.mode`,
     maxDiffCharsKey: `${namespace}.workers-ai.maxDiffChars`,
     maxTokensKey: `${namespace}.workers-ai.maxTokens`,
-    defaultMaxTokens: CATALOG_MAX_TOKENS,
+    maxTokensDefault: CATALOG_MAX_TOKENS,
     // Default to tool-calling — the common catalog case. Reasoning models
     // (DeepSeek-R1 distills, `deepseek/…`) honour no tool-calls; pin
     // `mode: "json"` for those. A tools-mode call returning zero tool calls
     // also auto-falls-back to one json retry (see engine.ts), so a mis-set
     // reasoning model still answers.
-    defaultMode: "tools",
-    defaultMaxDiffChars: CATALOG_MAX_DIFF_CHARS,
+    modeDefault: "tools",
+    maxDiffCharsDefault: CATALOG_MAX_DIFF_CHARS,
   },
   anthropic: {
     modelKey: `${namespace}.anthropic.model`,
     modeKey: `${namespace}.anthropic.mode`,
     maxDiffCharsKey: `${namespace}.anthropic.maxDiffChars`,
     maxTokensKey: `${namespace}.anthropic.maxTokens`,
-    defaultMaxTokens: ANTHROPIC_MAX_TOKENS,
+    maxTokensDefault: ANTHROPIC_MAX_TOKENS,
     // Claude honours forced tool use (`tool_choice: any`) reliably; tool
     // arguments come back as a parsed object the engine already tolerates.
-    defaultMode: "tools",
-    defaultMaxDiffChars: ANTHROPIC_MAX_DIFF_CHARS,
+    modeDefault: "tools",
+    maxDiffCharsDefault: ANTHROPIC_MAX_DIFF_CHARS,
   },
   bedrock: {
     modelKey: `${namespace}.bedrock.model`,
     modeKey: `${namespace}.bedrock.mode`,
     maxDiffCharsKey: `${namespace}.bedrock.maxDiffChars`,
     maxTokensKey: `${namespace}.bedrock.maxTokens`,
-    defaultMaxTokens: BEDROCK_MAX_TOKENS,
+    maxTokensDefault: BEDROCK_MAX_TOKENS,
     // The shared `invokeBedrockViaAiGateway` helper concatenates the response's
     // text content blocks but does NOT surface tool-use blocks — Bedrock route
     // is text-only V0. Force `json` so the engine doesn't send a `report` tool
     // the route can't return; the model emits a strict-JSON object the engine
     // parses + Schema-decodes.
-    defaultMode: "json",
-    defaultMaxDiffChars: BEDROCK_MAX_DIFF_CHARS,
+    modeDefault: "json",
+    maxDiffCharsDefault: BEDROCK_MAX_DIFF_CHARS,
     regionKey: `${namespace}.bedrock.region`,
-    defaultRegion: BEDROCK_DEFAULT_REGION,
+    regionDefault: BEDROCK_REGION_DEFAULT,
     roleArnKey: `${namespace}.bedrock.roleArn`,
   },
 });
@@ -290,11 +290,11 @@ export const guidelinesKey = (namespace: string): string =>
   namespacedKey(namespace)("guidelines");
 
 /** The CONFIG_KV key naming the active backend (default `pr-review` namespace). */
-export const BACKEND_CONFIG_KEY = backendConfigKey(DEFAULT_NAMESPACE);
+export const BACKEND_CONFIG_KEY = backendConfigKey(NAMESPACE_DEFAULT);
 
 /** Per-backend config key names for the default `pr-review` namespace. */
 export const BACKEND_KEYS: Readonly<Record<Backend, BackendKeyDescriptor>> =
-  namespacedKeys(DEFAULT_NAMESPACE);
+  namespacedKeys(NAMESPACE_DEFAULT);
 
 /** A resolved backend profile — concrete values, ready to call the engine with. */
 export type ResolvedBackend = {
@@ -321,7 +321,7 @@ export type ResolvedBackend = {
 
 /** Narrow an arbitrary config string to a known `Backend`, or the default. */
 export const parseBackend = (raw: string | undefined): Backend =>
-  BACKENDS.includes(raw as Backend) ? (raw as Backend) : DEFAULT_BACKEND;
+  BACKENDS.includes(raw as Backend) ? (raw as Backend) : BACKEND_DEFAULT;
 
 /** Narrow an arbitrary config string to a known `ReviewMode`, or `fallback`. */
 export const parseMode = (
@@ -384,7 +384,7 @@ export const resolveBackend = <R>(
   opts: { readonly namespace?: string } = {},
 ): Effect.Effect<ResolvedBackend, BackendUnconfigured, R> =>
   Effect.gen(function* () {
-    const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
+    const namespace = opts.namespace ?? NAMESPACE_DEFAULT;
     const backend = parseBackend(yield* getConfig(backendConfigKey(namespace)));
     const keys = namespacedKeys(namespace)[backend];
 
@@ -395,14 +395,14 @@ export const resolveBackend = <R>(
       );
     }
 
-    const mode = parseMode(yield* getConfig(keys.modeKey), keys.defaultMode);
+    const mode = parseMode(yield* getConfig(keys.modeKey), keys.modeDefault);
     const maxDiffChars = parseMaxDiffChars(
       yield* getConfig(keys.maxDiffCharsKey),
-      keys.defaultMaxDiffChars,
+      keys.maxDiffCharsDefault,
     );
     const maxTokens = parseMaxTokens(
       yield* getConfig(keys.maxTokensKey),
-      keys.defaultMaxTokens,
+      keys.maxTokensDefault,
     );
 
     if (backend === "bedrock") {
@@ -417,7 +417,7 @@ export const resolveBackend = <R>(
       const region =
         regionRaw !== undefined && regionRaw.trim() !== ""
           ? regionRaw
-          : (keys.defaultRegion ?? BEDROCK_DEFAULT_REGION);
+          : (keys.regionDefault ?? BEDROCK_REGION_DEFAULT);
       const roleArn =
         keys.roleArnKey !== undefined
           ? yield* getConfig(keys.roleArnKey)
@@ -452,9 +452,25 @@ export const classifyModelError = (
   | "rate-limited"
   | "bad-response"
   | "timeout"
+  | "context-overflow"
   | "unknown" => {
   const message = e instanceof Error ? e.message.toLowerCase() : String(e);
   return Match.value(message).pipe(
+    // Context-overflow phrases are TIGHT on purpose (PR #26 review): the reason
+    // downgrades a run to a neutral skip, so only wording that names the
+    // context window / prompt length / token count qualifies — a generic
+    // "too long" ("request took too long") must fall through to its own family.
+    Match.when(
+      (m) =>
+        m.includes("context window") ||
+        m.includes("context length") ||
+        m.includes("context limit") ||
+        m.includes("maximum context") ||
+        m.includes("prompt is too long") ||
+        m.includes("input is too long") ||
+        m.includes("too many tokens"),
+      () => "context-overflow" as const,
+    ),
     Match.when(
       (m) =>
         m.includes("401") || m.includes("403") || m.includes("unauthor"),

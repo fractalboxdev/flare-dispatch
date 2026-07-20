@@ -61,11 +61,11 @@ const normalizeCommand = (command: string | readonly string[]): string =>
  * replay-safe source — see runs/offload-test.ts). A `CannedExec` entry can
  * still override it with an explicit `durationMs`.
  */
-const DEFAULT_FAKE_DURATION_MS = 1234;
+const FAKE_DURATION_MS_DEFAULT = 1234;
 
 const fullResult = (partial: Partial<ExecResult> & { exitCode: number }): ExecResult => ({
   exitCode: partial.exitCode,
-  durationMs: partial.durationMs ?? DEFAULT_FAKE_DURATION_MS,
+  durationMs: partial.durationMs ?? FAKE_DURATION_MS_DEFAULT,
   logPath: partial.logPath ?? "logs/fake/exec.ndjson",
   stdout: partial.stdout ?? "",
   stderr: partial.stderr ?? "",

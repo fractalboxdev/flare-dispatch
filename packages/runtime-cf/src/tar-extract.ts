@@ -47,7 +47,7 @@ export type ExpandCaps = {
   readonly maxEntries: number;
 };
 
-export const DEFAULT_EXPAND_CAPS: ExpandCaps = {
+export const EXPAND_CAPS_DEFAULT: ExpandCaps = {
   maxEntryBytes: 32 * 1024 * 1024, // 32 MiB — a trace.zip / webm fits
   maxTotalBytes: 256 * 1024 * 1024, // 256 MiB per artifact
   maxEntries: 4000,
@@ -258,7 +258,7 @@ export const expandTarGzToR2 = async (
   sourceKey: string,
   destPrefix: string,
   stripPrefix: string,
-  caps: ExpandCaps = DEFAULT_EXPAND_CAPS,
+  caps: ExpandCaps = EXPAND_CAPS_DEFAULT,
 ): Promise<number> => {
   const source = await bucket.get(sourceKey);
   if (source === null) {

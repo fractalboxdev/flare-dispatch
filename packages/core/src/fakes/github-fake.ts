@@ -56,7 +56,7 @@ export type GithubFakeState = {
 };
 
 /** Default reference clock — fakes use this when callers don't override. */
-const DEFAULT_NOW = 1_700_000_000_000;
+const NOW_DEFAULT = 1_700_000_000_000;
 
 export const makeGithubFake = (
   opts: {
@@ -78,7 +78,7 @@ export const makeGithubFake = (
     openDraftPullRequestCalls: [],
     createReleaseCalls: [],
   };
-  const now = opts.now ?? DEFAULT_NOW;
+  const now = opts.now ?? NOW_DEFAULT;
   // Branches the fake has already "opened" a PR for — so a re-run with the same
   // headBranch reports `created: false`, mirroring the live idempotency.
   const openedBranches = new Set<string>();

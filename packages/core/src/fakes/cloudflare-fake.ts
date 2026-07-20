@@ -33,7 +33,7 @@ export type CloudflareFakeState = {
 };
 
 /** Default reference clock — fakes use this when callers don't override. */
-const DEFAULT_NOW = 1_700_000_000_000;
+const NOW_DEFAULT = 1_700_000_000_000;
 
 const EMPTY_USAGE: CloudflareUsage = { windowHours: 168, workers: [], ai: [] };
 
@@ -52,7 +52,7 @@ export const makeCloudflareFake = (
     deploymentsCalls: [],
     usageCalls: [],
   };
-  const now = opts.now ?? DEFAULT_NOW;
+  const now = opts.now ?? NOW_DEFAULT;
 
   const service: CloudflareService = {
     usage: ({ windowHours } = {}) =>

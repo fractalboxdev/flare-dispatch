@@ -10,7 +10,7 @@ import { it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import {
-  DEFAULT_TEST_EXECUTION_ID,
+  TEST_EXECUTION_ID_DEFAULT,
   enqueueInlineEvent,
   type InlineEventQueue,
   makeCFRuntimeTest,
@@ -80,7 +80,7 @@ describe("release-notes run", () => {
       expect(prs[0]!.draft).toBe(false);
       expect(prs[0]!.files[0]!.path).toBe(".flare-dispatch/releases/v0.1.0.md");
       expect(prs[0]!.body).toContain(
-        `<!-- flare-dispatch:release-approval wf=${DEFAULT_TEST_EXECUTION_ID} tag=v0.1.0 -->`,
+        `<!-- flare-dispatch:release-approval wf=${TEST_EXECUTION_ID_DEFAULT} tag=v0.1.0 -->`,
       );
 
       // The release write fired exactly once, pinned to the drafted HEAD sha.

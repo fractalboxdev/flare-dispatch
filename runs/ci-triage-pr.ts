@@ -68,7 +68,7 @@ const REPORT_REPO_KEY = key("report-repo");
 const BASE_KEY = key("base");
 const WINDOW_KEY = key("window-hours");
 
-const DEFAULT_WINDOW_HOURS = 24;
+const WINDOW_HOURS_DEFAULT = 24;
 const TRIAGE_MAX_TOKENS = 3072;
 
 // The caller-supplied observability signal contract (`signals/v1`) — the
@@ -95,7 +95,7 @@ const TriageReport = Schema.Struct({
   ),
 });
 
-const DEFAULT_TRIAGE_PROMPT = `You triage continuous-integration failures.
+const TRIAGE_PROMPT_DEFAULT = `You triage continuous-integration failures.
 You are given a list of recently-failed GitHub Actions workflow runs and
 Cloudflare Pages deployments (repo / workflow / conclusion / branch / URL).
 Cluster related failures, and for each cluster give a short title, the area it
@@ -179,7 +179,7 @@ export const ciTriagePr = defineRun({
         Number.parseInt(
           (yield* step("resolve-window", () => config.get(WINDOW_KEY))) ?? "",
           10,
-        ) || DEFAULT_WINDOW_HOURS;
+        ) || WINDOW_HOURS_DEFAULT;
       const baseBranch =
         (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
       const reportRepo =
@@ -249,7 +249,7 @@ export const ciTriagePr = defineRun({
       );
       const systemPrompt =
         (yield* step("resolve-prompt", () => config.get(promptKey(NAMESPACE)))) ??
-        DEFAULT_TRIAGE_PROMPT;
+        TRIAGE_PROMPT_DEFAULT;
 
       // 4. Triage via the reusable structured-output engine. A model failure is
       //    a real failure for a triage run (its whole job is the write-up), so

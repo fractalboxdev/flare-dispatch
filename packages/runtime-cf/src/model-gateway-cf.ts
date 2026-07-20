@@ -263,11 +263,31 @@ const aigAuthHeader = (
     ? { "cf-aig-authorization": `Bearer ${gatewayAuthToken}` }
     : {};
 
+/**
+ * True when a provider error text describes a context-window overflow. Each
+ * provider words it differently — Workers AI error 5021 ("… exceeded this model
+ * context window limit"), OpenAI ("maximum context length"), Anthropic ("prompt
+ * is too long"), Bedrock-Anthropic ("input is too long") — but all anchor on
+ * the context/prompt/token capacity explicitly.
+ *
+ * Deliberately TIGHT (PR #26 review): this reason downgrades an all-reviewers
+ * failure to a NEUTRAL check via `RunSkipped`, so a loose phrase ("too long",
+ * a bare error number) could let an unrelated provider failure — or upstream
+ * error text echoing request content — conclude neutral instead of red. Every
+ * alternative here names the context window / prompt length / token count;
+ * generic wording ("request took too long", a stray "5021") must NOT match.
+ */
+const isContextOverflow = (text: string): boolean =>
+  /context window|context length|context limit|maximum context|prompt is too long|input is too long|too many tokens/i.test(
+    text,
+  );
+
 /** Map a thrown binding error to a `ModelGatewayError.reason`. */
 const reasonFor = (
   message: string,
 ): ModelGatewayError["reason"] => {
   const m = message.toLowerCase();
+  if (isContextOverflow(m)) return "context-overflow";
   if (m.includes("429") || m.includes("rate")) return "rate-limited";
   if (m.includes("401") || m.includes("403") || m.includes("unauthor"))
     return "auth-failed";
@@ -275,8 +295,16 @@ const reasonFor = (
   return "unknown";
 };
 
-/** Map a universal-endpoint HTTP status to a `ModelGatewayError.reason`. */
-const reasonForStatus = (status: number): ModelGatewayError["reason"] => {
+/**
+ * Map a universal-endpoint HTTP status (+ the response body, when readable) to
+ * a `ModelGatewayError.reason`. A context overflow arrives as a 400 whose only
+ * distinguishing mark is the body text — status alone can't classify it.
+ */
+const reasonForStatus = (
+  status: number,
+  bodyText = "",
+): ModelGatewayError["reason"] => {
+  if (isContextOverflow(bodyText)) return "context-overflow";
   if (status === 429) return "rate-limited";
   if (status === 401 || status === 403) return "auth-failed";
   if (status === 408 || status === 504) return "timeout";
@@ -293,7 +321,7 @@ const ANTHROPIC_PREFIX = "anthropic/";
  * Anthropic's Messages API requires `max_tokens`; used when the caller didn't
  * set one. Matches the review engine's own per-call budget.
  */
-const ANTHROPIC_DEFAULT_MAX_TOKENS = 2048;
+const ANTHROPIC_MAX_TOKENS_DEFAULT = 2048;
 
 /** The Messages API version pin — required on every request. */
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -312,7 +340,7 @@ const anthropicBody = (
   model: string,
 ): unknown => ({
   model,
-  max_tokens: req.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
+  max_tokens: req.maxTokens ?? ANTHROPIC_MAX_TOKENS_DEFAULT,
   system: req.system,
   messages: [{ role: "user", content: req.user }],
   ...(req.tools !== undefined && req.tools.length > 0
@@ -481,7 +509,7 @@ const completeAnthropic = (
       return yield* Effect.fail(
         new ModelGatewayError({
           model: req.model,
-          reason: reasonForStatus(response.status),
+          reason: reasonForStatus(response.status, bodyText),
           message: `anthropic returned ${response.status}: ${bodyText.slice(0, 300)}`,
         }),
       );
@@ -541,7 +569,7 @@ const OPENAI: OpenAiCompatProvider = {
  * Output budget supplied when the caller didn't set one. Matches the review
  * engine's own per-call budget.
  */
-const OPENAI_COMPAT_DEFAULT_MAX_TOKENS = 2048;
+const OPENAI_COMPAT_MAX_TOKENS_DEFAULT = 2048;
 
 /** The slice of an OpenAI Chat Completions `tool_calls` entry this Layer reads. */
 type OpenAiToolCall = {
@@ -569,7 +597,7 @@ const openAiChatBody = (
   tokenLimitField: OpenAiCompatProvider["tokenLimitField"],
 ): unknown => ({
   model,
-  [tokenLimitField]: req.maxTokens ?? OPENAI_COMPAT_DEFAULT_MAX_TOKENS,
+  [tokenLimitField]: req.maxTokens ?? OPENAI_COMPAT_MAX_TOKENS_DEFAULT,
   messages: [
     { role: "system", content: req.system },
     { role: "user", content: req.user },
@@ -698,7 +726,7 @@ const completeOpenAiCompat = (
       return yield* Effect.fail(
         new ModelGatewayError({
           model: req.model,
-          reason: reasonForStatus(response.status),
+          reason: reasonForStatus(response.status, bodyText),
           message: `${p.provider} returned ${response.status}: ${bodyText.slice(0, 300)}`,
         }),
       );
@@ -723,7 +751,7 @@ const completeOpenAiCompat = (
 /** Model ids carrying this prefix route via SigV4 + AI Gateway Bedrock URL. */
 const BEDROCK_PREFIX = "bedrock/";
 
-const BEDROCK_DEFAULT_MAX_TOKENS = 2048;
+const BEDROCK_MAX_TOKENS_DEFAULT = 2048;
 
 /** Anthropic-on-Bedrock body version pin — required on every InvokeModel call. */
 const BEDROCK_ANTHROPIC_VERSION = "bedrock-2023-05-31";
@@ -735,7 +763,7 @@ const BEDROCK_ANTHROPIC_VERSION = "bedrock-2023-05-31";
  */
 const bedrockAnthropicBody = (req: ModelCompletionRequest): unknown => ({
   anthropic_version: BEDROCK_ANTHROPIC_VERSION,
-  max_tokens: req.maxTokens ?? BEDROCK_DEFAULT_MAX_TOKENS,
+  max_tokens: req.maxTokens ?? BEDROCK_MAX_TOKENS_DEFAULT,
   system: req.system,
   messages: [{ role: "user", content: req.user }],
   ...(req.tools !== undefined && req.tools.length > 0

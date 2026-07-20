@@ -56,7 +56,7 @@ const PlaywrightE2EOutput = Schema.Struct({
   ),
 });
 
-const DEFAULT_SHARDS = 4;
+const SHARDS_DEFAULT = 4;
 
 export const playwrightE2E = defineRun({
   name: "playwright-e2e",
@@ -106,7 +106,7 @@ export const playwrightE2E = defineRun({
           ),
         );
       }
-      const shards = input.shards ?? DEFAULT_SHARDS;
+      const shards = input.shards ?? SHARDS_DEFAULT;
       const projectArg = input.project ? ["--project", input.project] : [];
 
       const shardResults = yield* step("run-shards", () =>

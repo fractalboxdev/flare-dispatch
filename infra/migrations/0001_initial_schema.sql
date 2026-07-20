@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS executions (
   repo TEXT NOT NULL,
   ref TEXT NOT NULL,
   sha TEXT NOT NULL,
-  status TEXT NOT NULL,                   -- queued | running | success | failure | cancelled
+  status TEXT NOT NULL,                   -- queued | running | success | failure | skipped | cancelled (free TEXT, no CHECK — comment-only contract)
   started_at INTEGER,                     -- ms epoch
   completed_at INTEGER,
   parent_execution_id TEXT,               -- for matrix children

@@ -26,6 +26,7 @@ import {
   OidcSigningFailed,
   PortNeverOpened,
   type RunError,
+  RunSkipped,
   SecretsMissing,
   StepFailed,
   StsAssumeRoleFailed,
@@ -54,6 +55,7 @@ const summarize = (e: RunError): string =>
       CacheError: ({ phase, key }) => `cache ${phase} ${key}`,
       ArtifactUploadFailed: ({ name }) => `artifact ${name}`,
       StepFailed: ({ step }) => `step ${step}`,
+      RunSkipped: ({ reason }) => `skipped ${reason}`,
       ApprovalTimedOut: ({ eventName }) => `approval ${eventName}`,
       EventPayloadInvalid: ({ reason }) => `event payload ${reason}`,
       SecretsMissing: ({ keys }) => `secrets missing ${keys.join(",")}`,
@@ -141,6 +143,11 @@ const samples: ReadonlyArray<{ name: string; err: RunError; expect: string }> =
       name: "StepFailed",
       err: new StepFailed({ step: "exec", cause: "x" }),
       expect: "step exec",
+    },
+    {
+      name: "RunSkipped",
+      err: new RunSkipped({ reason: "diff exceeds the model context window" }),
+      expect: "skipped diff exceeds the model context window",
     },
     {
       name: "ApprovalTimedOut",

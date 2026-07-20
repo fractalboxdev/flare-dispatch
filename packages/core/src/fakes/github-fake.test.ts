@@ -19,7 +19,7 @@ const HOUR = 3_600_000;
 
 const repo = (overrides: Partial<RepoRef> = {}): RepoRef => ({
   repo: "owner/repo",
-  defaultBranch: "main",
+  branchDefault: "main",
   installationId: 1,
   archived: false,
   pushedAt: NOW - DAY,

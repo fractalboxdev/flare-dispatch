@@ -92,7 +92,7 @@ const OxlintOutput = Schema.Struct({
 });
 
 /** Default `exec` timeout — lint is fast, so a tighter ceiling than tests. */
-const DEFAULT_TIMEOUT_SEC = 300;
+const TIMEOUT_SEC_DEFAULT = 300;
 
 export const oxlint = defineRun({
   name: "oxlint",
@@ -158,7 +158,7 @@ export const oxlint = defineRun({
           cwd: dir,
           container,
           command,
-          timeoutSec: DEFAULT_TIMEOUT_SEC,
+          timeoutSec: TIMEOUT_SEC_DEFAULT,
         }),
       );
 

@@ -46,6 +46,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-core";
 import { Effect, Either, JSONSchema, ParseResult, Schema } from "effect";
 import { type ReviewMode } from "./backend.js";
+import { capDiff } from "./diff.js";
 import { ModelCallFailed, StructuredOutputInvalid } from "./errors.js";
 import { extractJsonCandidates } from "./json-extract.js";
 import {
@@ -92,7 +93,7 @@ const toolParametersSchema = (schema: Schema.Schema<any, any>): unknown => {
 // from config; these are the safe, project-neutral fallbacks.
 
 /** Generic per-domain reviewer instruction. */
-export const DEFAULT_REVIEW_SYSTEM_PROMPT = `You are a focused code reviewer.
+export const REVIEW_SYSTEM_PROMPT_DEFAULT = `You are a focused code reviewer.
 Review the supplied unified diff and report concrete, actionable findings for
 your assigned domain only. Anchor every finding to a real file path and line
 range present in the diff. Prefer a small number of high-signal findings over
@@ -105,7 +106,7 @@ valid). Do not respond with prose — the tool call IS your output.`;
  * one with a blank-line separator. PURE — no I/O — so it unit-tests directly.
  *
  *   - `base`        the reviewer instruction: an operator `*.prompt` override or
- *                   {@link DEFAULT_REVIEW_SYSTEM_PROMPT}.
+ *                   {@link REVIEW_SYSTEM_PROMPT_DEFAULT}.
  *   - `guidelines`  optional ADDITIVE "house rules" (operator `*.guidelines`).
  *                   Layered on top of `base` rather than replacing it, so an
  *                   operator can add a suppression rubric ("what NOT to flag"),
@@ -611,8 +612,29 @@ export const completeStructured = <A>(
 };
 
 /**
+ * How many times a reviewer halves its diff after a `context-overflow` before
+ * giving up. Two shrinks bottom out at a quarter of the original — the diff
+ * caps are hand-tuned char approximations of token windows, so a first call
+ * can overflow by a sliver (the observed 24549-vs-24000 failure); one halving
+ * fixes that, the second covers a cap grossly above the model's real window.
+ */
+const CONTEXT_SHRINK_MAX = 2;
+
+/** Below this many chars there is no meaningful diff left to review — a
+ *  persisting overflow is systemic (tiny-context model / oversized prompt),
+ *  not something further shrinking can fix. */
+const CONTEXT_SHRINK_MIN_CHARS = 2_000;
+
+/**
  * Run one domain reviewer. Returns its findings, Schema-validated — a thin
  * `completeStructured` over the `report` tool's `{ findings }` schema.
+ *
+ * FITS THE INPUT on capacity failures: a `context-overflow` from the provider
+ * (the request's input + output budget exceeded the model's context window)
+ * retries with the diff halved — visibly truncated via `capDiff`, so the
+ * review says it covered a prefix — up to {@link CONTEXT_SHRINK_MAX} times.
+ * The char-based diff caps can't know every model's real token window; this
+ * adapts per call instead of failing the whole reviewer on a miscalibration.
  */
 export const reviewDomain = (
   input: ReviewDomainInput,
@@ -620,22 +642,41 @@ export const reviewDomain = (
   ReadonlyArray<Finding>,
   ModelCallFailed | StructuredOutputInvalid,
   ModelGateway
-> =>
-  completeStructured({
-    backend: input.backend,
-    model: input.model,
-    ...(input.mode !== undefined ? { mode: input.mode } : {}),
-    ...(input.aws !== undefined ? { aws: input.aws } : {}),
-    system: input.systemPrompt ?? DEFAULT_REVIEW_SYSTEM_PROMPT,
-    userBody: renderDomainBody(input),
-    jsonContract: DOMAIN_JSON_CONTRACT,
-    schema: DomainOutput,
-    coerce: coerceDomainOutput,
-    toolName: "report",
-    toolDescription: REPORT_TOOL_DESCRIPTION,
-    surface: "review",
-    maxTokens: input.maxTokens ?? REVIEW_MAX_TOKENS,
-  }).pipe(Effect.map((o) => o.findings));
+> => {
+  const attempt = (
+    diff: string,
+    shrinks: number,
+  ): Effect.Effect<
+    ReadonlyArray<Finding>,
+    ModelCallFailed | StructuredOutputInvalid,
+    ModelGateway
+  > =>
+    completeStructured({
+      backend: input.backend,
+      model: input.model,
+      ...(input.mode !== undefined ? { mode: input.mode } : {}),
+      ...(input.aws !== undefined ? { aws: input.aws } : {}),
+      system: input.systemPrompt ?? REVIEW_SYSTEM_PROMPT_DEFAULT,
+      userBody: renderDomainBody({ ...input, diff }),
+      jsonContract: DOMAIN_JSON_CONTRACT,
+      schema: DomainOutput,
+      coerce: coerceDomainOutput,
+      toolName: "report",
+      toolDescription: REPORT_TOOL_DESCRIPTION,
+      surface: "review",
+      maxTokens: input.maxTokens ?? REVIEW_MAX_TOKENS,
+    }).pipe(
+      Effect.map((o) => o.findings),
+      Effect.catchTag("ModelCallFailed", (e) =>
+        e.reason === "context-overflow" &&
+        shrinks < CONTEXT_SHRINK_MAX &&
+        diff.length > CONTEXT_SHRINK_MIN_CHARS
+          ? attempt(capDiff(diff, Math.floor(diff.length / 2)), shrinks + 1)
+          : Effect.fail(e),
+      ),
+    );
+  return attempt(input.diff, 0);
+};
 
 /** The domain-specific body of a reviewer's user message (no per-mode framing). */
 const renderDomainBody = (input: ReviewDomainInput): string =>

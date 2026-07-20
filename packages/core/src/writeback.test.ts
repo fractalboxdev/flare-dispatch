@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_WRITEBACK_MAX_BYTES,
+  WRITEBACK_MAX_BYTES_DEFAULT,
   decodeManifest,
   isSensitivePath,
   matchGlob,
@@ -203,7 +203,7 @@ describe("validateManifest — size + count caps", () => {
     const r = validateManifest(
       spec(),
       manifest([{ path: "a" }]),
-      sizeOf({ a: DEFAULT_WRITEBACK_MAX_BYTES + 1 }),
+      sizeOf({ a: WRITEBACK_MAX_BYTES_DEFAULT + 1 }),
     );
     expect(r._kind).toBe("rejected");
   });

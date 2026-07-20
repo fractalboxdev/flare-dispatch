@@ -24,6 +24,10 @@ export class ModelCallFailed extends Schema.TaggedError<ModelCallFailed>()(
       "rate-limited",
       "bad-response",
       "timeout",
+      // Input + output budget exceeded the model's context window. A capacity
+      // failure, not a broken call: the engine shrink-retries the diff, and a
+      // run that still can't fit should skip soft (neutral check), not go red.
+      "context-overflow",
       "unknown",
     ),
     message: Schema.String,

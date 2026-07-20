@@ -40,7 +40,7 @@ const safeEqual = (a: string, b: string): boolean => {
 };
 
 /** Default + max page size for the listing. */
-const DEFAULT_LIMIT = 50;
+const LIMIT_DEFAULT = 50;
 const MAX_LIMIT = 200;
 
 /** Public-facing camelCase view of an execution row (no `input_json`). */
@@ -106,7 +106,7 @@ export const handleExecutionsList = (
     const rawLimit = Number.parseInt(q.get("limit") ?? "", 10);
     const limit = Number.isFinite(rawLimit)
       ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT)
-      : DEFAULT_LIMIT;
+      : LIMIT_DEFAULT;
     const rawBefore = Number.parseInt(q.get("before") ?? "", 10);
     const filters = {
       ...(q.get("run") !== null ? { run: q.get("run")! } : {}),

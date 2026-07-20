@@ -74,6 +74,7 @@ export type ChildRunStatus =
   | "running"
   | "success"
   | "failure"
+  | "skipped"
   | "cancelled"
   | "missing";
 
@@ -93,10 +94,11 @@ export type ChildStatusRecord = {
 const TERMINAL: ReadonlySet<ChildRunStatus> = new Set([
   "success",
   "failure",
+  "skipped",
   "cancelled",
 ]);
 
-/** True once a child has settled (success / failure / cancelled). */
+/** True once a child has settled (success / failure / skipped / cancelled). */
 export const isTerminalChildStatus = (status: ChildRunStatus): boolean =>
   TERMINAL.has(status);
 

@@ -12,6 +12,7 @@ import {
   AdmissionTimedOut,
   ExecFailed,
   ExecTimeout,
+  RunSkipped,
   SecretsMissing,
   StepFailed,
 } from "@fractalboxdev/flare-dispatch-core";
@@ -21,6 +22,7 @@ import {
   admissionTimedOutMd,
   appendFailureSummary,
   failureSummaryMd,
+  runSkippedReason,
 } from "./failure-summary";
 
 describe("failureSummaryMd", () => {
@@ -123,6 +125,44 @@ describe("failureSummaryMd", () => {
   it("is undefined for an interrupt", () => {
     expect(
       failureSummaryMd(Exit.failCause(Cause.interrupt(FiberId.none))),
+    ).toBeUndefined();
+  });
+});
+
+describe("runSkippedReason", () => {
+  it("extracts the reason from a RunSkipped failure (issue #21)", () => {
+    const exit = Exit.fail(
+      new RunSkipped({
+        reason:
+          "the PR diff exceeds the model's context window even after truncation, so the review could not run",
+      }),
+    );
+    expect(runSkippedReason(exit)).toBe(
+      "the PR diff exceeds the model's context window even after truncation, so the review could not run",
+    );
+  });
+
+  it("is undefined for other typed run errors (they stay red)", () => {
+    expect(
+      runSkippedReason(
+        Exit.fail(new ExecFailed({ exitCode: 7, stderrTail: "boom" })),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("is undefined for a success Exit", () => {
+    expect(runSkippedReason(Exit.succeed({ ok: true }))).toBeUndefined();
+  });
+
+  it("is undefined for a defect (Cause.die — failureOption is none)", () => {
+    expect(
+      runSkippedReason(Exit.failCause(Cause.die("unexpected"))),
+    ).toBeUndefined();
+  });
+
+  it("is undefined for an interrupt", () => {
+    expect(
+      runSkippedReason(Exit.failCause(Cause.interrupt(FiberId.none))),
     ).toBeUndefined();
   });
 });

@@ -7,12 +7,22 @@
 // mapped to `{ toolCalls, text }`. A thrown `run` → `ModelGatewayError`.
 
 import { describe, expect, it } from "vitest";
-import { Effect } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import {
   type ModelCompletionRequest,
+  type ModelGatewayError,
   modelGateway,
 } from "@fractalboxdev/flare-dispatch-core";
 import { type AiBinding, makeModelGatewayLive } from "./model-gateway-cf";
+
+/** The typed `ModelGatewayError` an exit failed with, or `undefined`. */
+const failureOf = (
+  exit: Exit.Exit<unknown, ModelGatewayError>,
+): ModelGatewayError | undefined =>
+  Exit.match(exit, {
+    onSuccess: () => undefined,
+    onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
+  });
 
 /** A recording `Ai` stub returning a fixed output. */
 const stubAi = (
@@ -157,6 +167,47 @@ describe("makeModelGatewayLive", () => {
         .pipe(Effect.provide(makeModelGatewayLive(ai, undefined))),
     );
     expect(exit._tag).toBe("Failure");
+  });
+
+  it("classifies a context-window overflow (Workers AI error 5021) as context-overflow", async () => {
+    // The verbatim Workers AI error observed on a ~2k-line PR (issue #21) —
+    // must NOT land in `unknown`, so callers can shrink-retry / skip soft.
+    const ai: AiBinding = {
+      run: () =>
+        Promise.reject(
+          new Error(
+            "5021: The estimated number of input and maximum output tokens (24549) exceeded this model context window limit (24000)",
+          ),
+        ),
+    };
+    const exit = await Effect.runPromiseExit(
+      modelGateway
+        .complete({ model: "m", system: "s", user: "u" })
+        .pipe(Effect.provide(makeModelGatewayLive(ai, undefined))),
+    );
+    expect(failureOf(exit)?.reason).toBe("context-overflow");
+  });
+
+  it("does NOT classify unrelated errors as context-overflow (loose-phrase guard)", async () => {
+    // `context-overflow` downgrades an all-reviewers failure to a NEUTRAL
+    // check, so the matcher must not fire on generic wording or a stray error
+    // number an upstream might echo (PR #26 review finding).
+    const cases: ReadonlyArray<{ message: string; expected: string }> = [
+      { message: "request took too long to complete", expected: "unknown" },
+      { message: "upstream error 5021 occurred", expected: "unknown" },
+      { message: "connection timeout after 30s", expected: "timeout" },
+    ];
+    for (const c of cases) {
+      const ai: AiBinding = {
+        run: () => Promise.reject(new Error(c.message)),
+      };
+      const exit = await Effect.runPromiseExit(
+        modelGateway
+          .complete({ model: "m", system: "s", user: "u" })
+          .pipe(Effect.provide(makeModelGatewayLive(ai, undefined))),
+      );
+      expect(failureOf(exit)?.reason).toBe(c.expected);
+    }
   });
 
   it("coerces a non-string `response` (some catalog models return parsed objects) to JSON text", async () => {
@@ -347,6 +398,22 @@ describe("makeModelGatewayLive — anthropic universal route", () => {
         .pipe(Effect.provide(makeModelGatewayLive(ai, "g"))),
     );
     expect(exit._tag).toBe("Failure");
+  });
+
+  it("classifies a 400 whose body names a context overflow as context-overflow", async () => {
+    // Anthropic words it "prompt is too long: N tokens > M maximum" on a plain
+    // 400 — the status alone reads `bad-response`; only the body distinguishes
+    // the capacity failure.
+    const { ai } = stubGatewayAi(
+      { error: { message: "prompt is too long: 250000 tokens > 200000 maximum" } },
+      400,
+    );
+    const exit = await Effect.runPromiseExit(
+      modelGateway
+        .complete({ model: "anthropic/claude-sonnet-4-6", system: "s", user: "u" })
+        .pipe(Effect.provide(makeModelGatewayLive(ai, "g"))),
+    );
+    expect(failureOf(exit)?.reason).toBe("context-overflow");
   });
 
   it("fails with an operator-facing error when no gateway id is configured", async () => {

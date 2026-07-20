@@ -81,7 +81,7 @@ import {
   type SandboxFakeState,
 } from "./fakes/sandbox-fake";
 import {
-  DEFAULT_TEST_EXECUTION_ID,
+  TEST_EXECUTION_ID_DEFAULT,
   makeStepRunnerInline,
   StepRunnerInline,
 } from "./fakes/step-runner-inline";
@@ -173,7 +173,7 @@ export {
 export {
   StepRunnerInline,
   makeStepRunnerInline,
-  DEFAULT_TEST_EXECUTION_ID,
+  TEST_EXECUTION_ID_DEFAULT,
   enqueueInlineEvent,
   type InlineEventQueue,
 } from "./fakes/step-runner-inline";
@@ -292,7 +292,7 @@ export const makeCFRuntimeTest = (
   // One execution id shared by the step runner AND `io.executionId`, so a run
   // that addresses itself (e.g. the release-PR marker) sees the same id its
   // steps record under.
-  const executionId = opts.executionId ?? DEFAULT_TEST_EXECUTION_ID;
+  const executionId = opts.executionId ?? TEST_EXECUTION_ID_DEFAULT;
   const io = makeIOFake({ ...opts.io, executionId });
   const checks = makeChecksFake();
   const emailFake = makeEmailFake();

@@ -40,8 +40,8 @@ import { toInstanceId } from "../instance-id";
 import { lookupRun } from "../registry";
 
 /** Default deploy target — this repository. */
-const DEFAULT_REPO = "fractalboxdev/flare-dispatch";
-const DEFAULT_REFS = ["refs/heads/main", "refs/heads/alpha"];
+const REPO_DEFAULT = "fractalboxdev/flare-dispatch";
+const REFS_DEFAULT = ["refs/heads/main", "refs/heads/alpha"];
 /** Cooldown window for a production-class deploy (seconds). */
 const PROD_COOLDOWN_SEC = 120;
 
@@ -75,7 +75,7 @@ const buildFormOptions = async (
   commits: readonly CommitOption[];
 }> => {
   const configRepos = env.CONFIG_KV !== undefined ? csv(await env.CONFIG_KV.get(DEPLOY_REPOS_KEY)) : [];
-  const repos = configRepos.length > 0 ? configRepos : [DEFAULT_REPO];
+  const repos = configRepos.length > 0 ? configRepos : [REPO_DEFAULT];
   const activeRepo = repos[0]!;
 
   const branches = await listBranches(env, activeRepo);
@@ -83,7 +83,7 @@ const buildFormOptions = async (
     branches !== null && branches.length > 0
       ? branches.map((b) => `refs/heads/${b}`)
       : (env.CONFIG_KV !== undefined ? csv(await env.CONFIG_KV.get(DEPLOY_REFS_KEY)) : []).map(toFullRef);
-  const refList = refValues.length > 0 ? refValues : DEFAULT_REFS;
+  const refList = refValues.length > 0 ? refValues : REFS_DEFAULT;
   const refs: readonly RefOption[] = refList.map((value) => ({ value, label: shortRef(value) }));
 
   const commits = (await listRecentCommits(env, activeRepo, refs[0]!.value)) ?? [];
@@ -186,8 +186,8 @@ const handleDeployPost = async (
 ): Promise<Response> => {
   const form = await request.formData();
   const targetEnv = formString(form, "env");
-  const repo = formString(form, "repo") || DEFAULT_REPO;
-  const ref = formString(form, "ref") || DEFAULT_REFS[0]!;
+  const repo = formString(form, "repo") || REPO_DEFAULT;
+  const ref = formString(form, "ref") || REFS_DEFAULT[0]!;
   let sha = formString(form, "sha");
 
   // Server-side authorization — the button being present in the page is NOT
@@ -237,7 +237,7 @@ const handleDeployPost = async (
       kv: env.IDEMPOTENCY_KV,
       runName: "worker-deploy",
       cooldown: {
-        defaultSeconds: PROD_COOLDOWN_SEC,
+        secondsDefault: PROD_COOLDOWN_SEC,
         scope: () => `deploy-console:${targetEnv}`,
       },
       repo,

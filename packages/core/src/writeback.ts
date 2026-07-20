@@ -53,10 +53,10 @@ export const WRITEBACK_MANIFEST_FILE = "manifest.json";
 export const WRITEBACK_FILES_DIR = "files";
 
 /** Default cap on the total bytes a single writeback commit may carry. */
-export const DEFAULT_WRITEBACK_MAX_BYTES = 5 * 1024 * 1024; // 5 MiB
+export const WRITEBACK_MAX_BYTES_DEFAULT = 5 * 1024 * 1024; // 5 MiB
 
 /** Default cap on the number of files a single writeback commit may touch. */
-export const DEFAULT_WRITEBACK_MAX_FILES = 200;
+export const WRITEBACK_MAX_FILES_DEFAULT = 200;
 
 /** The blob mode for a tree entry — a normal file or an executable. */
 export type WritebackMode = "100644" | "100755";
@@ -141,9 +141,9 @@ export type WritebackSpec = {
    * (still subject to the `.github/workflows/**` gate below).
    */
   readonly pathAllowlist?: readonly string[];
-  /** Override the total-bytes cap. Defaults to {@link DEFAULT_WRITEBACK_MAX_BYTES}. */
+  /** Override the total-bytes cap. Defaults to {@link WRITEBACK_MAX_BYTES_DEFAULT}. */
   readonly maxBytes?: number;
-  /** Override the file-count cap. Defaults to {@link DEFAULT_WRITEBACK_MAX_FILES}. */
+  /** Override the file-count cap. Defaults to {@link WRITEBACK_MAX_FILES_DEFAULT}. */
   readonly maxFiles?: number;
   /**
    * Allow writing under `.github/workflows/**`. Off by default: a run that can
@@ -343,8 +343,8 @@ export const validateManifest = (
   }
 
   const reasons: WritebackRejection[] = [];
-  const maxFiles = spec.maxFiles ?? DEFAULT_WRITEBACK_MAX_FILES;
-  const maxBytes = spec.maxBytes ?? DEFAULT_WRITEBACK_MAX_BYTES;
+  const maxFiles = spec.maxFiles ?? WRITEBACK_MAX_FILES_DEFAULT;
+  const maxBytes = spec.maxBytes ?? WRITEBACK_MAX_BYTES_DEFAULT;
 
   if (manifest.entries.length > maxFiles) {
     reasons.push({

@@ -16,8 +16,9 @@
 //
 // Spec: specs/04-gha-integration.md § Notifications.
 
-/** The terminal verdict — mirrors the GitHub check-run conclusion family. */
-type NotifyStatus = "success" | "failure";
+/** The terminal verdict — mirrors the GitHub check-run conclusion family.
+ *  `skipped` is a capacity bow-out (`RunSkipped` → `neutral` check-run). */
+type NotifyStatus = "success" | "failure" | "skipped";
 
 export type RenderResultEmailInput = {
   readonly run: string;
@@ -155,7 +156,9 @@ const outputRows = (output: unknown): readonly [string, unknown][] => {
 const statusBadge = (status: NotifyStatus): { label: string; color: string } =>
   status === "success"
     ? { label: "✓ Succeeded", color: "#1a7f37" }
-    : { label: "✗ Failed", color: "#cf222e" };
+    : status === "skipped"
+      ? { label: "⊘ Skipped", color: "#57606a" }
+      : { label: "✗ Failed", color: "#cf222e" };
 
 /**
  * For runs whose output carries a per-item `stories` array (`product-demo`),
@@ -203,7 +206,9 @@ export const renderResultEmail = (
       ? `✓ ${tally.passed}/${tally.total} passed`
       : input.status === "success"
         ? "✓ succeeded"
-        : "✗ failed";
+        : input.status === "skipped"
+          ? "⊘ skipped"
+          : "✗ failed";
   const subject = `[FlareDispatch] ${input.run} — ${verdict}`;
 
   // --- HTML body --------------------------------------------------------------
@@ -267,7 +272,13 @@ ${detailsHtml}
 
   // --- Plain-text alternative -------------------------------------------------
   const textLines: string[] = [
-    `FlareDispatch — ${input.run} — ${input.status === "success" ? "SUCCEEDED" : "FAILED"}`,
+    `FlareDispatch — ${input.run} — ${
+      input.status === "success"
+        ? "SUCCEEDED"
+        : input.status === "skipped"
+          ? "SKIPPED"
+          : "FAILED"
+    }`,
     "",
     `Repository: ${input.repo}`,
     `Commit:     ${input.sha}`,

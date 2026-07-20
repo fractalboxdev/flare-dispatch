@@ -10,7 +10,7 @@
 
 import { Effect, Layer } from "effect";
 import {
-  OIDC_TOKEN_DEFAULT_TTL_SEC,
+  OIDC_TOKEN_TTL_SEC_DEFAULT,
   OIDC_TOKEN_MAX_TTL_SEC,
   Oidc,
   type OidcService,
@@ -57,7 +57,7 @@ export const makeOidcFake = (
       Effect.sync((): OidcToken => {
         state.signCalls.push({ audience, subject, ttlSec, claims });
         const effectiveTtl = Math.min(
-          ttlSec ?? OIDC_TOKEN_DEFAULT_TTL_SEC,
+          ttlSec ?? OIDC_TOKEN_TTL_SEC_DEFAULT,
           OIDC_TOKEN_MAX_TTL_SEC,
         );
         const iat = Math.floor((now ?? Date.now()) / 1000);

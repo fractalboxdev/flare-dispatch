@@ -195,6 +195,27 @@ export class StepFailed extends Schema.TaggedError<StepFailed>()(
   { step: Schema.String, cause: Schema.Unknown },
 ) {}
 
+/**
+ * The run could not do its job for a CAPACITY reason and is bowing out — the
+ * work was never attempted-and-failed, it was impossible to attempt (e.g.
+ * pr-review's diff exceeds the model's context window even after truncation).
+ * The dispatcher concludes the check-run `neutral` with `reason` in the
+ * summary instead of `failure`: a review that didn't happen is not a failed
+ * review, and a red that isn't actionable trains people to ignore the check.
+ */
+export class RunSkipped extends Schema.TaggedError<RunSkipped>()(
+  "RunSkipped",
+  {
+    /** Operator/reader-facing one-liner: why the run was skipped. */
+    reason: Schema.String,
+  },
+) {
+  // Workflows attempt record persists only error.name + error.message (#88).
+  override get message(): string {
+    return `run skipped: ${this.reason}`;
+  }
+}
+
 export class ApprovalTimedOut extends Schema.TaggedError<ApprovalTimedOut>()(
   "ApprovalTimedOut",
   { eventName: Schema.String, timeoutMs: Schema.Number },
@@ -309,6 +330,7 @@ export type RunError =
   | CacheError
   | ArtifactUploadFailed
   | StepFailed
+  | RunSkipped
   | ApprovalTimedOut
   | EventPayloadInvalid
   | SecretsMissing

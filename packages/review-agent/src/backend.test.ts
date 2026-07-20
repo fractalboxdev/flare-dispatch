@@ -13,10 +13,11 @@ import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
 import {
   BACKEND_KEYS,
-  DEFAULT_BACKEND,
+  BACKEND_DEFAULT,
   backendConfigKey,
   namespacedKey,
   namespacedKeys,
+  classifyModelError,
   parseBackend,
   parseMaxDiffChars,
   parseMaxTokens,
@@ -38,14 +39,14 @@ describe("parseBackend", () => {
     expect(parseBackend("bedrock")).toBe("bedrock");
   });
   it("falls back to the default for unknown / unset", () => {
-    expect(parseBackend(undefined)).toBe(DEFAULT_BACKEND);
-    expect(parseBackend("openai")).toBe(DEFAULT_BACKEND);
+    expect(parseBackend(undefined)).toBe(BACKEND_DEFAULT);
+    expect(parseBackend("openai")).toBe(BACKEND_DEFAULT);
   });
   it("does NOT recognize the retired opencode/reasonix labels (hard rename)", () => {
     // These were never agentic tools — only model-route misnomers. Post-rename
     // they are unknown values and fall back to the default; they do not alias.
-    expect(parseBackend("opencode")).toBe(DEFAULT_BACKEND);
-    expect(parseBackend("reasonix")).toBe(DEFAULT_BACKEND);
+    expect(parseBackend("opencode")).toBe(BACKEND_DEFAULT);
+    expect(parseBackend("reasonix")).toBe(BACKEND_DEFAULT);
   });
 });
 
@@ -272,5 +273,43 @@ describe("namespaced config (downstream recipe reuse)", () => {
       "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
     );
     expect(resolved.mode).toBe("json");
+  });
+});
+
+describe("classifyModelError", () => {
+  it("classifies a context-window overflow message as context-overflow", () => {
+    expect(
+      classifyModelError(
+        new Error(
+          "5021: The estimated number of input and maximum output tokens (24549) exceeded this model context window limit (24000)",
+        ),
+      ),
+    ).toBe("context-overflow");
+    expect(
+      classifyModelError(
+        new Error("prompt is too long: 250000 tokens > 200000 maximum"),
+      ),
+    ).toBe("context-overflow");
+  });
+
+  it("keeps the existing families for non-overflow errors", () => {
+    expect(classifyModelError(new Error("429 Too Many Requests"))).toBe(
+      "rate-limited",
+    );
+    expect(classifyModelError(new Error("401 unauthorized"))).toBe(
+      "auth-failed",
+    );
+    expect(classifyModelError(new Error("something else"))).toBe("unknown");
+  });
+
+  it("does NOT treat a generic 'too long' as context-overflow (loose-phrase guard)", () => {
+    // "request took too long" is a latency complaint, not a capacity one — it
+    // must never trigger shrink-retries / a neutral skip (PR #26 review).
+    expect(classifyModelError(new Error("request took too long"))).toBe(
+      "unknown",
+    );
+    expect(
+      classifyModelError(new Error("operation timeout — took too long")),
+    ).toBe("timeout");
   });
 });

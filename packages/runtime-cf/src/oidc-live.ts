@@ -32,7 +32,7 @@
 
 import { Effect, Layer } from "effect";
 import {
-  OIDC_TOKEN_DEFAULT_TTL_SEC,
+  OIDC_TOKEN_TTL_SEC_DEFAULT,
   OIDC_TOKEN_MAX_TTL_SEC,
   Oidc,
   OidcSigningFailed,
@@ -57,7 +57,7 @@ export type OidcLiveConfig = {
    * Default subject for tokens that don't supply one. The Dispatcher sets
    * this to `<run-name>:<execution-id>` at Layer construction.
    */
-  readonly defaultSubject?: string;
+  readonly subjectDefault?: string;
 };
 
 /** A JWK with at least the fields we need to sign. */
@@ -136,7 +136,7 @@ export const makeOidcLive = (config: OidcLiveConfig): Layer.Layer<Oidc> => {
         try: async () => {
           const { jwk, key } = await resolveKey();
           const ttl = Math.min(
-            ttlSec ?? OIDC_TOKEN_DEFAULT_TTL_SEC,
+            ttlSec ?? OIDC_TOKEN_TTL_SEC_DEFAULT,
             OIDC_TOKEN_MAX_TTL_SEC,
           );
           const iat = Math.floor(Date.now() / 1000);
@@ -151,7 +151,7 @@ export const makeOidcLive = (config: OidcLiveConfig): Layer.Layer<Oidc> => {
           const payloadSegment = base64url(
             JSON.stringify({
               iss: config.issuerUrl,
-              sub: subject ?? config.defaultSubject ?? "unspecified",
+              sub: subject ?? config.subjectDefault ?? "unspecified",
               aud: audience,
               iat,
               exp,

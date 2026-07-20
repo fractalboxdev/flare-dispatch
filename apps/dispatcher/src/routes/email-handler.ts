@@ -19,7 +19,7 @@
 // undocumented; the message is already accepted by that point).
 
 import {
-  INBOX_DEFAULT_TTL_SEC,
+  INBOX_TTL_SEC_DEFAULT,
   INBOX_EVENT_TYPE,
   type InboxMessage,
   parseInboxLocalPart,
@@ -148,7 +148,7 @@ export const handleInboundEmail = async (
     //    in the HTML alternative as account-takeover material).
     const id = crypto.randomUUID();
     const receivedAt = Date.now();
-    const expiresAt = receivedAt + INBOX_DEFAULT_TTL_SEC * 1000;
+    const expiresAt = receivedAt + INBOX_TTL_SEC_DEFAULT * 1000;
     const textBody = capUtf8(parsed.text, MAX_TEXT_BYTES);
 
     try {

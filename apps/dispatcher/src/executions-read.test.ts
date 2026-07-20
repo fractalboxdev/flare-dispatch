@@ -69,4 +69,34 @@ describe("summarizeRuns", () => {
     ]);
     expect(out.map((r) => r.run)).toEqual(["b", "a"]);
   });
+
+  it("counts skipped executions on their own aggregate, outside the success rate", () => {
+    // A `skipped` execution (capacity bow-out → neutral check, issue #21) is
+    // neither a success nor a failure: it must not drag the success rate down,
+    // but it must stay VISIBLE — sampled in `count`/`skipped` (and cost) — so a
+    // run whose recent history is all-skipped doesn't vanish from the summary.
+    const out = summarizeRuns([
+      row({ run: "pr-review", status: "success" }),
+      row({ run: "pr-review", status: "skipped", cost_micro_usd: 5_000 }),
+      row({ run: "pr-review", status: "failure" }),
+    ]);
+    const pr = out.find((r) => r.run === "pr-review")!;
+    expect(pr.count).toBe(3);
+    expect(pr.skipped).toBe(1);
+    // Rate over the 2 executions that actually ran: 1 success / 2.
+    expect(pr.successRate).toBe(0.5);
+    // The skipped run's model spend is real — still rolled up.
+    expect(pr.totalCostMicroUsd).toBe(5_000);
+  });
+
+  it("keeps an all-skipped run visible with a 0 success rate", () => {
+    const out = summarizeRuns([
+      row({ run: "pr-review", status: "skipped" }),
+      row({ run: "pr-review", status: "skipped" }),
+    ]);
+    const pr = out.find((r) => r.run === "pr-review")!;
+    expect(pr.count).toBe(2);
+    expect(pr.skipped).toBe(2);
+    expect(pr.successRate).toBe(0);
+  });
 });

@@ -81,7 +81,11 @@ import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
 import { selectSandboxNs } from "./sandbox-routing";
 import { queuedSummary } from "./admission-summary";
-import { appendFailureSummary, failureSummaryMd } from "./failure-summary";
+import {
+  appendFailureSummary,
+  failureSummaryMd,
+  runSkippedReason,
+} from "./failure-summary";
 import { renderResultEmail } from "./notify";
 import { workflowDashboardUrl } from "./dashboard-url";
 import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "./log-token";
@@ -419,7 +423,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       ...(configOverrides !== undefined ? { configOverrides } : {}),
       // Secrets capability — Worker string bindings only (never CONFIG_KV).
       secretsLookup: (name) => {
-        const v = (this.env as Record<string, unknown>)[name];
+        const v = (this.env as unknown as Record<string, unknown>)[name];
         return typeof v === "string" && v !== "" ? v : undefined;
       },
       browser: resolveBrowserConfig(this.env),
@@ -471,7 +475,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             oidc: {
               signingJwkJson: this.env.OIDC_SIGNING_JWK,
               issuerUrl: this.env.OIDC_ISSUER_URL,
-              defaultSubject: `${payload.run}:${payload.executionId}`,
+              subjectDefault: `${payload.run}:${payload.executionId}`,
             },
           }
         : {}),
@@ -813,10 +817,20 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       const exit = yield* Effect.exit(gated);
       const completedAt = yield* Effect.sync(() => Date.now());
 
-      const status = Exit.match(exit, {
-        onSuccess: () => "success" as const,
-        onFailure: () => "failure" as const,
-      });
+      // A `RunSkipped` failure is a CAPACITY bow-out (the run's work was
+      // impossible to attempt — e.g. pr-review's diff exceeds the model's
+      // context window even after truncation), not a broken run. It records a
+      // `skipped` executions row and concludes the check-run `neutral` with
+      // the reason in the summary — never `failure`, which would be
+      // indistinguishable from a genuine red and train people to ignore it.
+      const skipReason = runSkippedReason(exit);
+      const status =
+        skipReason !== undefined
+          ? ("skipped" as const)
+          : Exit.match(exit, {
+              onSuccess: () => "success" as const,
+              onFailure: () => "failure" as const,
+            });
 
       // The run-authored failure presentation (issue #85): a typed failure may
       // carry markdown (`AcceptanceFailed.summaryMd` — e.g. `product-demo`'s
@@ -939,22 +953,28 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       yield* checks.update({
         repo: payload.github.repo,
         checkRunId,
-        conclusion: status,
+        // `skipped` has no check-run conclusion of its own in the Checks
+        // service — it lands as `neutral` (passes branch protection, renders
+        // grey), with the skip reason as the whole summary.
+        conclusion: status === "skipped" ? "neutral" : status,
         ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
         output: {
           title: checkRunName,
-          summary: Exit.match(exit, {
-            onSuccess: () =>
-              `✓ ${payload.run} — execution succeeded.${logsSuffix}${demoSuffix}${writebackSuffix}`,
-            // The run's own markdown (when the failure carries one) renders
-            // beneath the generic line + logs link, truncated to GitHub's
-            // 65535-char summary limit.
-            onFailure: () =>
-              appendFailureSummary(
-                `✗ ${payload.run} — execution failed.${logsSuffix}`,
-                failureMd,
-              ),
-          }),
+          summary:
+            skipReason !== undefined
+              ? `⊘ ${payload.run} — skipped: ${skipReason}.${logsSuffix}`
+              : Exit.match(exit, {
+                  onSuccess: () =>
+                    `✓ ${payload.run} — execution succeeded.${logsSuffix}${demoSuffix}${writebackSuffix}`,
+                  // The run's own markdown (when the failure carries one) renders
+                  // beneath the generic line + logs link, truncated to GitHub's
+                  // 65535-char summary limit.
+                  onFailure: () =>
+                    appendFailureSummary(
+                      `✗ ${payload.run} — execution failed.${logsSuffix}`,
+                      failureMd,
+                    ),
+                }),
         },
       });
 
