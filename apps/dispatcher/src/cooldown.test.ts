@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { checkAndArmCooldown, cooldownKey } from "./cooldown";
+import {
+  checkAndArmCooldown,
+  cooldownKey,
+  parseCooldownSeconds,
+} from "./cooldown";
 import { makeFakeKv } from "./test-helpers";
 
-const COOLDOWN = { seconds: 1800, scope: (input: unknown) => `pr-${(input as { pr: number }).pr}` };
+const COOLDOWN = {
+  defaultSeconds: 1800,
+  secondsKey: "pr-review.cooldown-seconds",
+  scope: (input: unknown) => `pr-${(input as { pr: number }).pr}`,
+};
 
 const base = {
   runName: "pr-review",
@@ -10,6 +18,26 @@ const base = {
   repo: "acme/widgets",
   inputs: { pr: 7 },
 } as const;
+
+describe("parseCooldownSeconds", () => {
+  it("returns the fallback when unset or blank", () => {
+    expect(parseCooldownSeconds(undefined, 3600)).toBe(3600);
+    expect(parseCooldownSeconds("", 3600)).toBe(3600);
+    expect(parseCooldownSeconds("   ", 3600)).toBe(3600);
+  });
+
+  it("uses a valid override, clamped to [60, 86400]", () => {
+    expect(parseCooldownSeconds("900", 3600)).toBe(900);
+    expect(parseCooldownSeconds("30", 3600)).toBe(60);
+    expect(parseCooldownSeconds("999999", 3600)).toBe(86_400);
+  });
+
+  it("falls back on junk values", () => {
+    for (const junk of ["nope", "0", "-5", "60.5", "900abc"]) {
+      expect(parseCooldownSeconds(junk, 3600)).toBe(3600);
+    }
+  });
+});
 
 describe("checkAndArmCooldown", () => {
   it("arms an open window and records the execution id", async () => {
@@ -96,6 +124,29 @@ describe("checkAndArmCooldown", () => {
       kv: kv.binding,
       executionId: "exec-2",
       now: 1_000_000,
+    });
+    expect(verdict).toEqual({ state: "armed" });
+  });
+
+  it("honours CONFIG_KV secondsKey override for the cooling window", async () => {
+    const kv = makeFakeKv();
+    const config = makeFakeKv();
+    // 10-minute window via CONFIG_KV (default on the run is 1800).
+    config.store.set("pr-review.cooldown-seconds", "600");
+    await checkAndArmCooldown({
+      ...base,
+      kv: kv.binding,
+      configKv: config.binding,
+      executionId: "exec-1",
+      now: 1_000_000,
+    });
+    // 11 min later — past the 10-min override, still inside the 30-min default.
+    const verdict = await checkAndArmCooldown({
+      ...base,
+      kv: kv.binding,
+      configKv: config.binding,
+      executionId: "exec-2",
+      now: 1_000_000 + 11 * 60 * 1000,
     });
     expect(verdict).toEqual({ state: "armed" });
   });

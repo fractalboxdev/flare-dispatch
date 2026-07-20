@@ -114,6 +114,10 @@
     {
       "binding": "CONFIG_KV",
       "id": "dff3e9657cf34c94955c31a333084f1c"
+    },
+    {
+      "binding": "IDEMPOTENCY_KV",
+      "id": "3002db8dac904fc794cf2686fb5dfe57"
     }
   ]
 }

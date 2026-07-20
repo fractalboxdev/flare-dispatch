@@ -33,8 +33,21 @@ export type RunLimits = {
  * `skipped: "cooldown"` — never an error, so a gating CI step stays green.
  */
 export type CooldownSpec<I> = {
-  /** Window length in seconds. Effective floor is 60 (KV's minimum TTL). */
-  readonly seconds: number;
+  /**
+   * The code-default window length in seconds — the fallback when no operator
+   * override is set. Effective floor is 60 (KV's minimum TTL). Named
+   * `defaultSeconds` (not `seconds`) so the definition site reads honestly: it
+   * is a default, and `secondsKey` may override it — never the authoritative
+   * value. Mirrors the `default<X>` + `<x>Key` convention used for every other
+   * operator-tunable value (see review-agent `defaultMaxTokens`/`maxTokensKey`).
+   */
+  readonly defaultSeconds: number;
+  /**
+   * Optional CONFIG_KV key whose value (positive integer seconds) overrides
+   * `defaultSeconds` at each dispatch. Absent / unparseable / out-of-range →
+   * `defaultSeconds`. e.g. `"pr-review.cooldown-seconds"`.
+   */
+  readonly secondsKey?: string;
   /** Rate-limit bucket within `{run}:{repo}` — e.g. ``pr-${input.pr}``. */
   readonly scope: (input: I) => string;
 };
@@ -184,10 +197,19 @@ export const defineRun = <I, O, IEnc, OEnc>(
   }
   if (
     spec.cooldown !== undefined &&
-    (!Number.isFinite(spec.cooldown.seconds) || spec.cooldown.seconds <= 0)
+    (!Number.isFinite(spec.cooldown.defaultSeconds) ||
+      spec.cooldown.defaultSeconds <= 0)
   ) {
     throw new Error(
-      `defineRun: \`cooldown.seconds\` must be a positive number, got ${spec.cooldown.seconds} for run "${spec.name}"`,
+      `defineRun: \`cooldown.defaultSeconds\` must be a positive number, got ${spec.cooldown.defaultSeconds} for run "${spec.name}"`,
+    );
+  }
+  if (
+    spec.cooldown?.secondsKey !== undefined &&
+    spec.cooldown.secondsKey.trim().length === 0
+  ) {
+    throw new Error(
+      `defineRun: \`cooldown.secondsKey\` must be a non-empty string for run "${spec.name}"`,
     );
   }
   if (spec.writeback !== undefined) {

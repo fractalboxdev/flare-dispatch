@@ -236,7 +236,10 @@ const handleDeployPost = async (
     const verdict = await checkAndArmCooldown({
       kv: env.IDEMPOTENCY_KV,
       runName: "worker-deploy",
-      cooldown: { seconds: PROD_COOLDOWN_SEC, scope: () => `deploy-console:${targetEnv}` },
+      cooldown: {
+        defaultSeconds: PROD_COOLDOWN_SEC,
+        scope: () => `deploy-console:${targetEnv}`,
+      },
       repo,
       inputs: { repo },
       executionId,

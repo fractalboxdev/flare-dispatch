@@ -1,8 +1,9 @@
 // FlareDispatch Dispatcher — run cooldown enforcement.
 //
-// A run may declare `cooldown: { seconds, scope }` (specs/03-dsl.md): at most
-// one execution per window per `{run}:{repo}:{scope}` bucket. This module is
-// the shared check-and-arm both dispatch entry points call — Action-mode
+// A run may declare `cooldown: { defaultSeconds, scope, secondsKey? }`
+// (specs/03-dsl.md): at most one execution per window per `{run}:{repo}:{scope}`
+// bucket. This module is the shared check-and-arm both dispatch entry points
+// call — Action-mode
 // `/v1/dispatch` (routes/dispatch.ts) and the webhook receiver
 // (routes/webhook.ts). Schedule mode is exempt: crons self-pace.
 //
@@ -12,6 +13,10 @@
 // linkable execution — its dispatch collapsed into the recent one, mirroring
 // the semantic-id dedup contract). Without the binding the cooldown is not
 // enforced: best-effort by design, identical to receiver dedup's posture.
+//
+// Window length: `cooldown.defaultSeconds` is the fallback. When `secondsKey`
+// is set, CONFIG_KV may override it at each dispatch (positive int, clamped to
+// [60, 86400]); absent / junk → default.
 //
 // Concurrency: `get` then `put` is not atomic and KV is eventually consistent,
 // so two dispatches racing inside the propagation window can both arm. That
@@ -41,6 +46,30 @@ export type CooldownVerdict =
 /** KV minimum `expirationTtl` — windows shorter than this still persist 60s. */
 const KV_MIN_TTL_SEC = 60;
 
+/** Hard ceiling for a CONFIG_KV override — typo guard (e.g. ms pasted as sec). */
+const KV_MAX_SECONDS = 86_400;
+
+/**
+ * Narrow a CONFIG_KV cooldown-window override to a positive integer count of
+ * seconds, or `fallback` when unset / blank / non-numeric / non-positive. A
+ * valid value is clamped to [{@link KV_MIN_TTL_SEC}, {@link KV_MAX_SECONDS}].
+ *
+ * Pure (no KV fetch) — the same narrow+clamp shape as the review-agent
+ * `parseMaxTokens` / `parseMaxDiffChars` config overrides, so every
+ * operator-tunable value across the codebase resolves the one way:
+ * `parse<X>(getConfig(<x>Key), default<X>)`. The KV read stays at the call
+ * site, keeping this unit-testable without a KV binding.
+ */
+export const parseCooldownSeconds = (
+  raw: string | undefined,
+  fallback: number,
+): number => {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return fallback;
+  return Math.min(KV_MAX_SECONDS, Math.max(KV_MIN_TTL_SEC, n));
+};
+
 /** The cooldown bucket key: `{run}:{repo_}:{scope}`, one path segment. */
 export const cooldownKey = (
   runName: string,
@@ -53,10 +82,13 @@ export const cooldownKey = (
  *
  * Returns `armed` (proceed with the dispatch — the window is now claimed for
  * `executionId`) or `cooling` (skip — answer with `priorExecutionId`). With no
- * `cooldown` on the run or no KV binding, always `armed` and writes nothing.
+ * `cooldown` on the run or no IDEMPOTENCY_KV binding, always `armed` and
+ * writes nothing.
  */
 export const checkAndArmCooldown = async (opts: {
   readonly kv: KVNamespace | undefined;
+  /** CONFIG_KV — used only when `cooldown.secondsKey` is set. */
+  readonly configKv?: KVNamespace;
   readonly runName: string;
   readonly cooldown: CooldownSpec<unknown> | undefined;
   readonly repo: string;
@@ -67,15 +99,23 @@ export const checkAndArmCooldown = async (opts: {
   const { kv, cooldown } = opts;
   if (kv === undefined || cooldown === undefined) return { state: "armed" };
 
+  // Precedence: CONFIG_KV override (via `secondsKey`) > the run's default.
+  // The KV read happens here; the narrow+clamp is the pure `parseCooldownSeconds`.
+  const override =
+    cooldown.secondsKey !== undefined && opts.configKv !== undefined
+      ? ((await opts.configKv.get(cooldown.secondsKey)) ?? undefined)
+      : undefined;
+  const seconds = parseCooldownSeconds(override, cooldown.defaultSeconds);
+
   const key = cooldownKey(opts.runName, opts.repo, cooldown.scope(opts.inputs));
   const raw = await kv.get(key);
   if (raw !== null) {
     try {
       const record = JSON.parse(raw) as CooldownRecord;
       const elapsedSec = (opts.now - record.armedAt) / 1000;
-      const remainingSec = cooldown.seconds - elapsedSec;
+      const remainingSec = seconds - elapsedSec;
       // The KV TTL is floored at 60s, so a record can outlive a sub-minute
-      // window — honour the run's `seconds`, not the key's residual TTL.
+      // window — honour the resolved `seconds`, not the key's residual TTL.
       if (remainingSec > 0 && typeof record.executionId === "string") {
         return {
           state: "cooling",
@@ -94,7 +134,7 @@ export const checkAndArmCooldown = async (opts: {
     armedAt: opts.now,
   };
   await kv.put(key, JSON.stringify(record), {
-    expirationTtl: Math.max(KV_MIN_TTL_SEC, Math.ceil(cooldown.seconds)),
+    expirationTtl: Math.max(KV_MIN_TTL_SEC, Math.ceil(seconds)),
   });
   return { state: "armed" };
 };
