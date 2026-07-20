@@ -34,14 +34,18 @@ export type RunLimits = {
  */
 export type CooldownSpec<I> = {
   /**
-   * Default window length in seconds. Effective floor is 60 (KV's minimum TTL).
-   * When `secondsKey` is set, CONFIG_KV may override this at dispatch time.
+   * The code-default window length in seconds — the fallback when no operator
+   * override is set. Effective floor is 60 (KV's minimum TTL). Named
+   * `defaultSeconds` (not `seconds`) so the definition site reads honestly: it
+   * is a default, and `secondsKey` may override it — never the authoritative
+   * value. Mirrors the `default<X>` + `<x>Key` convention used for every other
+   * operator-tunable value (see review-agent `defaultMaxTokens`/`maxTokensKey`).
    */
-  readonly seconds: number;
+  readonly defaultSeconds: number;
   /**
    * Optional CONFIG_KV key whose value (positive integer seconds) overrides
-   * `seconds` at each dispatch. Absent / unparseable / out-of-range → `seconds`.
-   * e.g. `"pr-review.cooldown-seconds"`.
+   * `defaultSeconds` at each dispatch. Absent / unparseable / out-of-range →
+   * `defaultSeconds`. e.g. `"pr-review.cooldown-seconds"`.
    */
   readonly secondsKey?: string;
   /** Rate-limit bucket within `{run}:{repo}` — e.g. ``pr-${input.pr}``. */
@@ -193,10 +197,11 @@ export const defineRun = <I, O, IEnc, OEnc>(
   }
   if (
     spec.cooldown !== undefined &&
-    (!Number.isFinite(spec.cooldown.seconds) || spec.cooldown.seconds <= 0)
+    (!Number.isFinite(spec.cooldown.defaultSeconds) ||
+      spec.cooldown.defaultSeconds <= 0)
   ) {
     throw new Error(
-      `defineRun: \`cooldown.seconds\` must be a positive number, got ${spec.cooldown.seconds} for run "${spec.name}"`,
+      `defineRun: \`cooldown.defaultSeconds\` must be a positive number, got ${spec.cooldown.defaultSeconds} for run "${spec.name}"`,
     );
   }
   if (

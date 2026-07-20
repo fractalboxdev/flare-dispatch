@@ -1,8 +1,9 @@
 // FlareDispatch Dispatcher — run cooldown enforcement.
 //
-// A run may declare `cooldown: { seconds, scope, secondsKey? }` (specs/03-dsl.md):
-// at most one execution per window per `{run}:{repo}:{scope}` bucket. This module
-// is the shared check-and-arm both dispatch entry points call — Action-mode
+// A run may declare `cooldown: { defaultSeconds, scope, secondsKey? }`
+// (specs/03-dsl.md): at most one execution per window per `{run}:{repo}:{scope}`
+// bucket. This module is the shared check-and-arm both dispatch entry points
+// call — Action-mode
 // `/v1/dispatch` (routes/dispatch.ts) and the webhook receiver
 // (routes/webhook.ts). Schedule mode is exempt: crons self-pace.
 //
@@ -13,8 +14,8 @@
 // the semantic-id dedup contract). Without the binding the cooldown is not
 // enforced: best-effort by design, identical to receiver dedup's posture.
 //
-// Window length: `cooldown.seconds` is the default. When `secondsKey` is set,
-// CONFIG_KV may override it at each dispatch (positive int, clamped to
+// Window length: `cooldown.defaultSeconds` is the fallback. When `secondsKey`
+// is set, CONFIG_KV may override it at each dispatch (positive int, clamped to
 // [60, 86400]); absent / junk → default.
 //
 // Concurrency: `get` then `put` is not atomic and KV is eventually consistent,
@@ -49,19 +50,23 @@ const KV_MIN_TTL_SEC = 60;
 const KV_MAX_SECONDS = 86_400;
 
 /**
- * Resolve the effective cooldown window: CONFIG_KV override when `secondsKey`
- * is set and parses as a positive int in [60, 86400], else `defaultSeconds`.
+ * Narrow a CONFIG_KV cooldown-window override to a positive integer count of
+ * seconds, or `fallback` when unset / blank / non-numeric / non-positive. A
+ * valid value is clamped to [{@link KV_MIN_TTL_SEC}, {@link KV_MAX_SECONDS}].
+ *
+ * Pure (no KV fetch) — the same narrow+clamp shape as the review-agent
+ * `parseMaxTokens` / `parseMaxDiffChars` config overrides, so every
+ * operator-tunable value across the codebase resolves the one way:
+ * `parse<X>(getConfig(<x>Key), default<X>)`. The KV read stays at the call
+ * site, keeping this unit-testable without a KV binding.
  */
-export const resolveCooldownSeconds = async (
-  defaultSeconds: number,
-  secondsKey: string | undefined,
-  configKv: KVNamespace | undefined,
-): Promise<number> => {
-  if (secondsKey === undefined || configKv === undefined) return defaultSeconds;
-  const raw = await configKv.get(secondsKey);
-  if (raw === null) return defaultSeconds;
-  const n = Number.parseInt(raw.trim(), 10);
-  if (!Number.isFinite(n) || n <= 0) return defaultSeconds;
+export const parseCooldownSeconds = (
+  raw: string | undefined,
+  fallback: number,
+): number => {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return fallback;
   return Math.min(KV_MAX_SECONDS, Math.max(KV_MIN_TTL_SEC, n));
 };
 
@@ -94,11 +99,13 @@ export const checkAndArmCooldown = async (opts: {
   const { kv, cooldown } = opts;
   if (kv === undefined || cooldown === undefined) return { state: "armed" };
 
-  const seconds = await resolveCooldownSeconds(
-    cooldown.seconds,
-    cooldown.secondsKey,
-    opts.configKv,
-  );
+  // Precedence: CONFIG_KV override (via `secondsKey`) > the run's default.
+  // The KV read happens here; the narrow+clamp is the pure `parseCooldownSeconds`.
+  const override =
+    cooldown.secondsKey !== undefined && opts.configKv !== undefined
+      ? ((await opts.configKv.get(cooldown.secondsKey)) ?? undefined)
+      : undefined;
+  const seconds = parseCooldownSeconds(override, cooldown.defaultSeconds);
 
   const key = cooldownKey(opts.runName, opts.repo, cooldown.scope(opts.inputs));
   const raw = await kv.get(key);

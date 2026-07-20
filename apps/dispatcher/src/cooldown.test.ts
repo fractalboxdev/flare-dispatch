@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   checkAndArmCooldown,
   cooldownKey,
-  resolveCooldownSeconds,
+  parseCooldownSeconds,
 } from "./cooldown";
 import { makeFakeKv } from "./test-helpers";
 
 const COOLDOWN = {
-  seconds: 1800,
+  defaultSeconds: 1800,
   secondsKey: "pr-review.cooldown-seconds",
   scope: (input: unknown) => `pr-${(input as { pr: number }).pr}`,
 };
@@ -19,41 +19,22 @@ const base = {
   inputs: { pr: 7 },
 } as const;
 
-describe("resolveCooldownSeconds", () => {
-  it("returns the default when no key, no CONFIG_KV, or key unset", async () => {
-    const config = makeFakeKv();
-    expect(await resolveCooldownSeconds(3600, undefined, config.binding)).toBe(3600);
-    expect(await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", undefined)).toBe(
-      3600,
-    );
-    expect(
-      await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
-    ).toBe(3600);
+describe("parseCooldownSeconds", () => {
+  it("returns the fallback when unset or blank", () => {
+    expect(parseCooldownSeconds(undefined, 3600)).toBe(3600);
+    expect(parseCooldownSeconds("", 3600)).toBe(3600);
+    expect(parseCooldownSeconds("   ", 3600)).toBe(3600);
   });
 
-  it("uses a valid CONFIG_KV override, clamped to [60, 86400]", async () => {
-    const config = makeFakeKv();
-    config.store.set("pr-review.cooldown-seconds", "900");
-    expect(
-      await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
-    ).toBe(900);
-    config.store.set("pr-review.cooldown-seconds", "30");
-    expect(
-      await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
-    ).toBe(60);
-    config.store.set("pr-review.cooldown-seconds", "999999");
-    expect(
-      await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
-    ).toBe(86_400);
+  it("uses a valid override, clamped to [60, 86400]", () => {
+    expect(parseCooldownSeconds("900", 3600)).toBe(900);
+    expect(parseCooldownSeconds("30", 3600)).toBe(60);
+    expect(parseCooldownSeconds("999999", 3600)).toBe(86_400);
   });
 
-  it("falls back to default on junk values", async () => {
-    const config = makeFakeKv();
-    for (const junk of ["", "nope", "0", "-5"]) {
-      config.store.set("pr-review.cooldown-seconds", junk);
-      expect(
-        await resolveCooldownSeconds(3600, "pr-review.cooldown-seconds", config.binding),
-      ).toBe(3600);
+  it("falls back on junk values", () => {
+    for (const junk of ["nope", "0", "-5", "60.5", "900abc"]) {
+      expect(parseCooldownSeconds(junk, 3600)).toBe(3600);
     }
   });
 });

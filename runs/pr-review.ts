@@ -305,7 +305,7 @@ export const prReview = defineRun({
   // collapses to the first dispatch of the window; the skipped pushes answer
   // 202 with the prior execution's id, so CI stays green.
   cooldown: {
-    seconds: 3600,
+    defaultSeconds: 3600,
     secondsKey: "pr-review.cooldown-seconds",
     scope: (input) => `pr-${input.pr}`,
   },
