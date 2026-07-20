@@ -12,7 +12,7 @@
 import { GithubApiError } from "./errors";
 
 /** GitHub's API host — overridable per call for tests / GitHub Enterprise. */
-export const DEFAULT_API_BASE = "https://api.github.com";
+export const API_BASE_DEFAULT = "https://api.github.com";
 
 /** The GitHub REST API version every call pins. Bump in one place. */
 const GITHUB_API_VERSION = "2022-11-28";
@@ -47,7 +47,7 @@ export const resolveClient = (opts: {
   apiBase?: string;
   fetchImpl?: typeof fetch;
 }): { apiBase: string; doFetch: typeof fetch } => ({
-  apiBase: opts.apiBase ?? DEFAULT_API_BASE,
+  apiBase: opts.apiBase ?? API_BASE_DEFAULT,
   doFetch: opts.fetchImpl ?? fetch,
 });
 

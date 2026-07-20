@@ -34,17 +34,17 @@ export type AgentBudgetState = {
 };
 
 /** Defaults when a run starts a budget without explicit values. */
-export const DEFAULT_AGENT_TOKEN_BUDGET = 200_000;
-export const DEFAULT_AGENT_MAX_REQUESTS = 64;
+export const AGENT_TOKEN_BUDGET_DEFAULT = 200_000;
+export const AGENT_MAX_REQUESTS_DEFAULT = 64;
 
 export const initialBudget = (opts?: {
   tokenBudget?: number;
   maxRequests?: number;
 }): AgentBudgetState => ({
-  tokenBudget: opts?.tokenBudget ?? DEFAULT_AGENT_TOKEN_BUDGET,
+  tokenBudget: opts?.tokenBudget ?? AGENT_TOKEN_BUDGET_DEFAULT,
   spent: 0,
   reserved: 0,
-  maxRequests: opts?.maxRequests ?? DEFAULT_AGENT_MAX_REQUESTS,
+  maxRequests: opts?.maxRequests ?? AGENT_MAX_REQUESTS_DEFAULT,
   requests: 0,
   live: true,
 });

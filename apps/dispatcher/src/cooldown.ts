@@ -1,6 +1,6 @@
 // FlareDispatch Dispatcher — run cooldown enforcement.
 //
-// A run may declare `cooldown: { defaultSeconds, scope, secondsKey? }`
+// A run may declare `cooldown: { secondsDefault, scope, secondsKey? }`
 // (specs/03-dsl.md): at most one execution per window per `{run}:{repo}:{scope}`
 // bucket. This module is the shared check-and-arm both dispatch entry points
 // call — Action-mode
@@ -14,7 +14,7 @@
 // the semantic-id dedup contract). Without the binding the cooldown is not
 // enforced: best-effort by design, identical to receiver dedup's posture.
 //
-// Window length: `cooldown.defaultSeconds` is the fallback. When `secondsKey`
+// Window length: `cooldown.secondsDefault` is the fallback. When `secondsKey`
 // is set, CONFIG_KV may override it at each dispatch (positive int, clamped to
 // [60, 86400]); absent / junk → default.
 //
@@ -105,7 +105,7 @@ export const checkAndArmCooldown = async (opts: {
     cooldown.secondsKey !== undefined && opts.configKv !== undefined
       ? ((await opts.configKv.get(cooldown.secondsKey)) ?? undefined)
       : undefined;
-  const seconds = parseCooldownSeconds(override, cooldown.defaultSeconds);
+  const seconds = parseCooldownSeconds(override, cooldown.secondsDefault);
 
   const key = cooldownKey(opts.runName, opts.repo, cooldown.scope(opts.inputs));
   const raw = await kv.get(key);

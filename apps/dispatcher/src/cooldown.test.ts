@@ -7,7 +7,7 @@ import {
 import { makeFakeKv } from "./test-helpers";
 
 const COOLDOWN = {
-  defaultSeconds: 1800,
+  secondsDefault: 1800,
   secondsKey: "pr-review.cooldown-seconds",
   scope: (input: unknown) => `pr-${(input as { pr: number }).pr}`,
 };

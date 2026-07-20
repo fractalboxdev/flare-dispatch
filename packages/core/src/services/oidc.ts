@@ -25,7 +25,7 @@ export type OidcToken = {
 export const OIDC_TOKEN_MAX_TTL_SEC = 3600;
 
 /** Default token TTL when the caller omits one (specs/03-dsl § oidc). */
-export const OIDC_TOKEN_DEFAULT_TTL_SEC = 900;
+export const OIDC_TOKEN_TTL_SEC_DEFAULT = 900;
 
 /** The service contract a runtime Layer implements. */
 export interface OidcService {
@@ -33,7 +33,7 @@ export interface OidcService {
    * Sign a fresh OIDC token. `audience` is the IdP-specific value the
    * trust policy pins (e.g. "sts.amazonaws.com" for AWS). `subject` defaults
    * to `<run-name>:<execution-id>` so an IAM trust policy can scope a role
-   * to a *specific run*. `ttlSec` defaults to {@link OIDC_TOKEN_DEFAULT_TTL_SEC}
+   * to a *specific run*. `ttlSec` defaults to {@link OIDC_TOKEN_TTL_SEC_DEFAULT}
    * and caps at {@link OIDC_TOKEN_MAX_TTL_SEC}.
    */
   readonly sign: (opts: {

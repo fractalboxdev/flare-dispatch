@@ -25,7 +25,7 @@
 
 import { type Duration, Effect } from "effect";
 import {
-  INBOX_DEFAULT_WAIT,
+  INBOX_WAIT_DEFAULT,
   INBOX_EVENT_TYPE,
   InboxMessage,
   type InboxAddress,
@@ -64,7 +64,7 @@ export type OtpResult = {
  *
  * @param inbox      the `provisionInbox` result (its `localPart` names the wait
  *                   step so it is unique + replay-stable).
- * @param timeout    max wait — default `INBOX_DEFAULT_WAIT` (120s); raise it for
+ * @param timeout    max wait — default `INBOX_WAIT_DEFAULT` (120s); raise it for
  *                   providers with slow mail.
  * @param codePattern  override the code regex (first capture group); default is
  *                   a context-anchored numeric matcher (see extract.ts).
@@ -86,7 +86,7 @@ export const waitForOtp = (opts: {
   Effect.gen(function* () {
     const message = yield* step.waitForEvent(`wait-otp-${opts.inbox.localPart}`, {
       type: INBOX_EVENT_TYPE,
-      timeout: opts.timeout ?? INBOX_DEFAULT_WAIT,
+      timeout: opts.timeout ?? INBOX_WAIT_DEFAULT,
       payloadSchema: InboxMessage,
     });
     const extracted = extractOtp(

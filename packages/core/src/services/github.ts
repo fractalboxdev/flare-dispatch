@@ -21,7 +21,7 @@ import type { GitHubApiError } from "../errors";
 export type RepoRef = {
   /** "owner/name". */
   readonly repo: string;
-  readonly defaultBranch: string;
+  readonly branchDefault: string;
   readonly installationId: number;
   readonly archived: boolean;
   /** epoch ms — last push to any branch. */

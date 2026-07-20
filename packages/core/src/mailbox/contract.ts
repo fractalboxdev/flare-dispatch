@@ -52,12 +52,12 @@ export const INBOX_LOCAL_PART_RE = /^demo-[a-z0-9]{16,40}$/;
 /** Default lifetime of a provisioned inbox + its read token (seconds). Kept
  * tight: a received OTP / magic link is a live credential, so the row and the
  * token both expire fast and the row is burned on first read. */
-export const INBOX_DEFAULT_TTL_SEC = 600; // 10 minutes
+export const INBOX_TTL_SEC_DEFAULT = 600; // 10 minutes
 
 /** Default wait for the verification email before `waitForOtp` times out. OTP
  * mail tail-latency runs to ~2 min under provider queues + the CF receive hop,
  * so the floor is generous; callers override per provider. */
-export const INBOX_DEFAULT_WAIT = "120 seconds" as const;
+export const INBOX_WAIT_DEFAULT = "120 seconds" as const;
 
 /**
  * One received message — BOTH the `waitForEvent` payload the `email()` handler

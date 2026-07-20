@@ -31,8 +31,8 @@ import type { OtpExtraction } from "./contract";
 /** Default width window for a bare numeric OTP when no `codeWidth` is given.
  * 4–8 digits spans every provider we target (Clerk/Stytch = 6, some banks = 8,
  * a few legacy flows = 4). */
-const DEFAULT_MIN_WIDTH = 4;
-const DEFAULT_MAX_WIDTH = 8;
+const MIN_WIDTH_DEFAULT = 4;
+const MAX_WIDTH_DEFAULT = 8;
 
 /** The single most common OTP width — used to break ties between equally
  * keyword-adjacent candidates (a 6-digit hit wins over a stray 4-digit one). */
@@ -104,7 +104,7 @@ export const extractCode = (
   const width = opts?.codeWidth;
   const digits = width
     ? `\\d{${width}}`
-    : `\\d{${DEFAULT_MIN_WIDTH},${DEFAULT_MAX_WIDTH}}`;
+    : `\\d{${MIN_WIDTH_DEFAULT},${MAX_WIDTH_DEFAULT}}`;
 
   // (2) Keyword-anchored. Subject first, then text. Within each, prefer a
   //     6-digit hit (when no explicit width was pinned) over other widths.

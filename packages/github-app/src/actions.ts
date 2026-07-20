@@ -11,7 +11,7 @@
 
 import {
   assertOk,
-  DEFAULT_API_BASE,
+  API_BASE_DEFAULT,
   ghHeaders,
   resolveClient,
   splitRepo,
@@ -64,7 +64,7 @@ export const actionRunsUrl = (opts: {
   readonly apiBase?: string;
 }): string => {
   const { owner, name } = splitRepo(opts.repo);
-  const base = opts.apiBase ?? DEFAULT_API_BASE;
+  const base = opts.apiBase ?? API_BASE_DEFAULT;
   const params = new URLSearchParams({
     status: opts.status ?? "completed",
     per_page: String(opts.perPage ?? 30),

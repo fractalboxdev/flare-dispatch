@@ -471,7 +471,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             oidc: {
               signingJwkJson: this.env.OIDC_SIGNING_JWK,
               issuerUrl: this.env.OIDC_ISSUER_URL,
-              defaultSubject: `${payload.run}:${payload.executionId}`,
+              subjectDefault: `${payload.run}:${payload.executionId}`,
             },
           }
         : {}),

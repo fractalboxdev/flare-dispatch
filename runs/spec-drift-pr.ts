@@ -80,7 +80,7 @@ const DriftProposal = Schema.Struct({
 });
 
 /** The generic default drift-detection prompt (operator-overridable). */
-const DEFAULT_SPEC_DRIFT_PROMPT = `You keep a project's specs/ in sync with its implementation.
+const SPEC_DRIFT_PROMPT_DEFAULT = `You keep a project's specs/ in sync with its implementation.
 The IMPLEMENTATION is the source of truth: when a spec disagrees with the code,
 the spec is what's wrong — UNLESS the spec explicitly marks a section as not yet
 built (TODO / Planned / 🚧 / unchecked checkbox), which is an intentional plan
@@ -161,7 +161,7 @@ export const specDriftPr = defineRun({
       const promptOverride = yield* step("resolve-prompt", () =>
         config.get(promptKey(NAMESPACE)),
       );
-      const systemPrompt = promptOverride ?? DEFAULT_SPEC_DRIFT_PROMPT;
+      const systemPrompt = promptOverride ?? SPEC_DRIFT_PROMPT_DEFAULT;
 
       // 3. Scan each repo. One repo's failure (model, git, GitHub) is logged and
       //    skipped — never poisons the sibling scans.

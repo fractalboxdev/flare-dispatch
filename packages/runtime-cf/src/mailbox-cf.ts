@@ -21,7 +21,7 @@
 import { Effect, Layer } from "effect";
 import {
   buildInboxAddress,
-  INBOX_DEFAULT_TTL_SEC,
+  INBOX_TTL_SEC_DEFAULT,
   type InboxAddress,
   Mailbox,
   type MailboxService,
@@ -45,7 +45,7 @@ export type MailboxCloudflareConfig = {
   /** Mint a read token bound to (localPart, expiry-seconds). Injected so the
    * crypto stays in the Dispatcher (mailbox-token.ts `signMailboxToken`). */
   readonly signToken: (localPart: string, expEpochS: number) => Promise<string>;
-  /** Inbox + token lifetime (seconds). Default `INBOX_DEFAULT_TTL_SEC`. */
+  /** Inbox + token lifetime (seconds). Default `INBOX_TTL_SEC_DEFAULT`. */
   readonly ttlSec?: number;
 };
 
@@ -74,7 +74,7 @@ export const makeMailboxCloudflareLive = (
 ): Layer.Layer<Mailbox> => {
   if (config === undefined) return MailboxDeferred;
 
-  const ttlSec = config.ttlSec ?? INBOX_DEFAULT_TTL_SEC;
+  const ttlSec = config.ttlSec ?? INBOX_TTL_SEC_DEFAULT;
   const service: MailboxService = {
     allocate: (opts) =>
       Effect.gen(function* () {

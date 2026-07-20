@@ -31,8 +31,8 @@ export {
   WRITEBACK_ARTIFACT,
   WRITEBACK_MANIFEST_FILE,
   WRITEBACK_FILES_DIR,
-  DEFAULT_WRITEBACK_MAX_BYTES,
-  DEFAULT_WRITEBACK_MAX_FILES,
+  WRITEBACK_MAX_BYTES_DEFAULT,
+  WRITEBACK_MAX_FILES_DEFAULT,
   WritebackEntry,
   WritebackManifest,
   decodeManifest,
@@ -76,8 +76,8 @@ export {
 
 // --- Agent token-budget (pure decision logic for the AgentBudget DO) ----------
 export {
-  DEFAULT_AGENT_TOKEN_BUDGET,
-  DEFAULT_AGENT_MAX_REQUESTS,
+  AGENT_TOKEN_BUDGET_DEFAULT,
+  AGENT_MAX_REQUESTS_DEFAULT,
   initialBudget,
   remaining,
   decideReserve,
@@ -149,8 +149,8 @@ export {
   INBOX_EVENT_TYPE,
   INBOX_LOCAL_PREFIX,
   INBOX_LOCAL_PART_RE,
-  INBOX_DEFAULT_TTL_SEC,
-  INBOX_DEFAULT_WAIT,
+  INBOX_TTL_SEC_DEFAULT,
+  INBOX_WAIT_DEFAULT,
   InboxMessage,
   InboxAddress,
   buildInboxAddress,
@@ -187,7 +187,7 @@ export {
   Oidc,
   type OidcService,
   type OidcToken,
-  OIDC_TOKEN_DEFAULT_TTL_SEC,
+  OIDC_TOKEN_TTL_SEC_DEFAULT,
   OIDC_TOKEN_MAX_TTL_SEC,
 } from "./services/oidc";
 export {

@@ -293,7 +293,7 @@ const ANTHROPIC_PREFIX = "anthropic/";
  * Anthropic's Messages API requires `max_tokens`; used when the caller didn't
  * set one. Matches the review engine's own per-call budget.
  */
-const ANTHROPIC_DEFAULT_MAX_TOKENS = 2048;
+const ANTHROPIC_MAX_TOKENS_DEFAULT = 2048;
 
 /** The Messages API version pin — required on every request. */
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -312,7 +312,7 @@ const anthropicBody = (
   model: string,
 ): unknown => ({
   model,
-  max_tokens: req.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
+  max_tokens: req.maxTokens ?? ANTHROPIC_MAX_TOKENS_DEFAULT,
   system: req.system,
   messages: [{ role: "user", content: req.user }],
   ...(req.tools !== undefined && req.tools.length > 0
@@ -541,7 +541,7 @@ const OPENAI: OpenAiCompatProvider = {
  * Output budget supplied when the caller didn't set one. Matches the review
  * engine's own per-call budget.
  */
-const OPENAI_COMPAT_DEFAULT_MAX_TOKENS = 2048;
+const OPENAI_COMPAT_MAX_TOKENS_DEFAULT = 2048;
 
 /** The slice of an OpenAI Chat Completions `tool_calls` entry this Layer reads. */
 type OpenAiToolCall = {
@@ -569,7 +569,7 @@ const openAiChatBody = (
   tokenLimitField: OpenAiCompatProvider["tokenLimitField"],
 ): unknown => ({
   model,
-  [tokenLimitField]: req.maxTokens ?? OPENAI_COMPAT_DEFAULT_MAX_TOKENS,
+  [tokenLimitField]: req.maxTokens ?? OPENAI_COMPAT_MAX_TOKENS_DEFAULT,
   messages: [
     { role: "system", content: req.system },
     { role: "user", content: req.user },
@@ -723,7 +723,7 @@ const completeOpenAiCompat = (
 /** Model ids carrying this prefix route via SigV4 + AI Gateway Bedrock URL. */
 const BEDROCK_PREFIX = "bedrock/";
 
-const BEDROCK_DEFAULT_MAX_TOKENS = 2048;
+const BEDROCK_MAX_TOKENS_DEFAULT = 2048;
 
 /** Anthropic-on-Bedrock body version pin — required on every InvokeModel call. */
 const BEDROCK_ANTHROPIC_VERSION = "bedrock-2023-05-31";
@@ -735,7 +735,7 @@ const BEDROCK_ANTHROPIC_VERSION = "bedrock-2023-05-31";
  */
 const bedrockAnthropicBody = (req: ModelCompletionRequest): unknown => ({
   anthropic_version: BEDROCK_ANTHROPIC_VERSION,
-  max_tokens: req.maxTokens ?? BEDROCK_DEFAULT_MAX_TOKENS,
+  max_tokens: req.maxTokens ?? BEDROCK_MAX_TOKENS_DEFAULT,
   system: req.system,
   messages: [{ role: "user", content: req.user }],
   ...(req.tools !== undefined && req.tools.length > 0

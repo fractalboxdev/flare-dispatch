@@ -33,8 +33,8 @@ import { isValidExecutionId } from "../log-token";
 
 /** Hard ceiling on a single call's output, regardless of what the agent asks. */
 const MAX_OUTPUT_TOKENS_PER_CALL = 8192;
-const DEFAULT_OUTPUT_TOKENS = 2048;
-const DEFAULT_PROXY_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const OUTPUT_TOKENS_DEFAULT = 2048;
+const PROXY_MODEL_DEFAULT = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 const Tool = Schema.Struct({
   name: Schema.String,
@@ -111,7 +111,7 @@ export const handleAgentInference = async (
 
   const maxOut = Math.min(
     MAX_OUTPUT_TOKENS_PER_CALL,
-    Math.max(1, Math.floor(parsed.maxTokens ?? DEFAULT_OUTPUT_TOKENS)),
+    Math.max(1, Math.floor(parsed.maxTokens ?? OUTPUT_TOKENS_DEFAULT)),
   );
 
   // Server-resolved model (never caller-chosen).
@@ -121,7 +121,7 @@ export const handleAgentInference = async (
       ? configModel
       : undefined) ??
     env.AGENT_PROXY_MODEL ??
-    DEFAULT_PROXY_MODEL;
+    PROXY_MODEL_DEFAULT;
 
   // Reserve against the strongly-consistent budget DO BEFORE spending.
   const budget = env.AGENT_BUDGET.get(env.AGENT_BUDGET.idFromName(executionId));
