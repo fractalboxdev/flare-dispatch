@@ -45,6 +45,17 @@ export type ExecOpts = {
   readonly env?: Record<string, string>;
   readonly timeoutSec?: number;
   readonly container?: Container;
+  /**
+   * Plaintext values (typically resolved Worker-secret values injected via
+   * `env`) to scrub from the captured stdout/stderr before EITHER the inline
+   * `ExecResult` tail or the full log streamed to R2 is persisted. A command
+   * that echoes an injected credential — deliberately or via a misbehaving
+   * tool — must not leak it through the log artifact's signed URL. Exact-
+   * substring match, each occurrence replaced with `"***"`. Empty/omitted is
+   * a no-op. A run passing `secrets` to `loadSecrets` should pass the
+   * resolved values here too — see `runs/check.ts`.
+   */
+  readonly redactValues?: readonly string[];
 };
 
 /**

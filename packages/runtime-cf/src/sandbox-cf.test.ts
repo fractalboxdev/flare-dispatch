@@ -497,4 +497,36 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       expect(logBody.length).toBeGreaterThan(190_000);
     }),
   );
+
+  it.effect(
+    "redactValues scrubs secret values from both the R2 log and the inline tail",
+    () =>
+      Effect.gen(function* () {
+        currentBox = makeFakeBox({ proc: null });
+        currentBox.exec = vi.fn(async () => ({
+          exitCode: 0,
+          duration: 1,
+          stdout: "using token super-secret for install",
+          stderr: "auth failed: super-secret",
+        }));
+        const { bucket, puts } = makeBucket();
+        const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+        const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+          s.exec({
+            command: "pnpm install",
+            cwd: "/w",
+            env: {},
+            redactValues: ["super-secret"],
+          }),
+        ).pipe(Effect.provide(layer), Effect.exit);
+        expect(Exit.isSuccess(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) {
+          expect(exit.value.stdout).not.toContain("super-secret");
+          expect(exit.value.stderr).not.toContain("super-secret");
+          expect(exit.value.stdout).toContain("***");
+        }
+        const logBody = puts.map((p) => String(p.body)).join("");
+        expect(logBody).not.toContain("super-secret");
+      }),
+  );
 });

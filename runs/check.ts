@@ -20,13 +20,28 @@
 // `offload-test`): a global default would turn every installed repo's PRs
 // into a lint storm.
 //
-// --- Credentials --------------------------------------------------------------
+// --- Credentials + the untrusted-PR-code trust boundary -----------------------
 //
 // Same contract as `offload-test` header note 3: secret *names* ride the
 // dispatch / config surface, never plaintext values. `loadSecrets` resolves
-// Worker secret bindings INLINE (not in a `step`) so credentials never land
-// in a durable Workflow checkpoint. Per-dispatch `env` wins over a same-named
-// secret. See `runs/README.md`.
+// Worker secret bindings INLINE (not in a `step`) — BEFORE `checkout`, so a
+// missing credential fails before paying for a clone/container — and
+// credentials never land in a durable Workflow checkpoint. Per-dispatch `env`
+// wins over a same-named secret.
+//
+// The webhook trigger below hard-codes `secrets: []` and — unlike
+// `worker-deploy` — this run has NO CONFIG_KV secrets fallback keyed by repo.
+// So a PR-triggered dispatch can NEVER carry secrets: the only way `secrets`
+// is non-empty is an explicit Action-mode dispatch, which the OPERATOR'S OWN
+// CI controls. That CI still executes the command against the caller-selected
+// `sha` — an untrusted fork PR's commit can rewrite the lint config/scripts
+// this run executes — so an operator must not dispatch `check` with `secrets`
+// from a workflow triggered on `pull_request` for repos that accept
+// external/fork PRs (the same guidance GitHub gives for `pull_request_target`
+// + secrets). As defense in depth, every resolved secret VALUE is also
+// scrubbed from the captured log (`redactValues` below) before it is
+// persisted, so a command that echoes its env cannot leak a credential
+// through the log's signed URL. See `runs/README.md` § Secrets and logs.
 //
 // Determinism: `durationMs` comes from the checkpointed `ExecResult`; the
 // body calls no `Date.now()` / `crypto.randomUUID()`.
@@ -173,6 +188,16 @@ export const check = defineRun({
         };
       }
 
+      // load-secrets — resolve named Worker secrets BEFORE provisioning a
+      // container: a missing credential fails fast, before paying for a
+      // clone (see header). INLINE (never in a step): plaintext must not land
+      // in checkpointed Workflow state. No-op when `secrets` is empty.
+      // `required: true` — a named-but-unset credential fails before checkout.
+      const secretEnv = yield* loadSecrets(input.secrets, {
+        prefix: input.secretPrefix,
+        required: true,
+      });
+
       // checkout — container + clone at the SHA (+ optional cached install).
       const { container, dir } = yield* step("checkout", () =>
         workspace({
@@ -182,15 +207,6 @@ export const check = defineRun({
           install: input.install,
         }),
       );
-
-      // load-secrets — resolve named Worker secrets into the exec env. INLINE
-      // (never in a step): plaintext must not land in checkpointed Workflow
-      // state. No-op when `secrets` is empty. `required: true` — a named-but-
-      // unset credential fails fast before the command runs.
-      const secretEnv = yield* loadSecrets(input.secrets, {
-        prefix: input.secretPrefix,
-        required: true,
-      });
 
       // exec — run the check command. A non-zero exit is a normal ExecResult
       // here; the failOnNonZeroExit branch below decides whether it reds the
@@ -203,6 +219,9 @@ export const check = defineRun({
           command,
           // Per-dispatch `env` wins over a same-named Worker secret.
           env: { ...secretEnv, ...input.env },
+          // Defense in depth (header): scrub secret VALUES from the captured
+          // log before it's persisted, in case the command echoes its env.
+          redactValues: Object.values(secretEnv),
           timeoutSec: input.timeoutSec ?? DEFAULT_TIMEOUT_SEC,
         }),
       );

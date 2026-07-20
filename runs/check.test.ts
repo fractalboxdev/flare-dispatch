@@ -250,7 +250,7 @@ describe("check", () => {
   );
 
   it.effect(
-    "secrets — a named-but-unset secret fails with SecretsMissing before the exec",
+    "secrets — a named-but-unset secret fails with SecretsMissing before checkout or exec",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
         sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
@@ -268,8 +268,39 @@ describe("check", () => {
             })
           : undefined;
         expect(tag).toBe("SecretsMissing");
-        // Fail-fast: the check command never ran.
+        // Fail-fast: secrets resolve BEFORE checkout — neither the clone nor
+        // the check command ran, so a misconfigured dispatch never pays for
+        // provisioning a container it can't use.
+        expect(handles.sandbox.clones).toHaveLength(0);
         expect(handles.sandbox.execs).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "log redaction — secret values are scrubbed from captured stdout/stderr",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          [CHECK_CMD]: {
+            exitCode: 0,
+            stdout: "using token super-secret-value for install",
+            stderr: "auth: super-secret-value",
+          },
+        },
+        secrets: { NPM_TOKEN: "super-secret-value" },
+      });
+      const input = { ...baseInput, secrets: ["NPM_TOKEN"] };
+
+      return Effect.gen(function* () {
+        const result = yield* check.run(input);
+        expect(result.exitCode).toBe(0);
+
+        const exec = handles.sandbox.execs.find((e) => e.command === CHECK_CMD);
+        expect(exec?.stdout).not.toContain("super-secret-value");
+        expect(exec?.stderr).not.toContain("super-secret-value");
+        expect(exec?.stdout).toContain("***");
+        expect(exec?.stderr).toContain("***");
       }).pipe(Effect.provide(layer));
     },
   );
