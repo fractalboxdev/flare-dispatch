@@ -218,8 +218,8 @@ export type CFRuntimeLiveOptions = {
    * `undefined`/empty → call Workers AI directly (no gateway). Only used when
    * `ai` is present.
    *
-   * REQUIRED for `anthropic/*` and `bedrock/*` model ids — those routes pin to
-   * an AI Gateway URL pattern.
+   * REQUIRED for `anthropic/*`, `deepseek/*`, `openai/*` and `bedrock/*` model
+   * ids — those routes pin to an AI Gateway URL pattern.
    */
   readonly aiGatewayId?: string;
   /**
@@ -232,7 +232,7 @@ export type CFRuntimeLiveOptions = {
   /**
    * Optional `cf-aig-authorization` token (`AI_GATEWAY_AUTH_TOKEN` secret) —
    * forwarded as a header on every gateway-bound route (`anthropic/*`,
-   * `deepseek/*`, `bedrock/*`) when the operator's AI Gateway has
+   * `deepseek/*`, `openai/*`, `bedrock/*`) when the operator's AI Gateway has
    * [Authenticated Gateway](https://developers.cloudflare.com/ai-gateway/configuration/authentication/)
    * turned on. Orthogonal to AWS SigV4. The `@cf/*` Workers AI route uses the
    * binding (no header seam), so an authenticated gateway must allow first-party

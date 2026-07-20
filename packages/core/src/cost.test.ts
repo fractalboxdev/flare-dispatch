@@ -87,6 +87,16 @@ describe("modelRate — backend-prefixed id resolution", () => {
     });
   });
 
+  it("GPT-5.6 Luna gets its rate; an unknown -pro sibling stays unmetered", () => {
+    expect(modelRate("openai/gpt-5.6-luna")).toMatchObject({
+      inputPerMTokUsd: 1,
+      outputPerMTokUsd: 6,
+    });
+    // `endsWith` matching — a differently-priced sibling must NOT silently
+    // bill at Luna's rate.
+    expect(modelRate("openai/gpt-5.6-luna-pro")).toBeNull();
+  });
+
   it("Workers AI catalog (@cf/…) is UNMETERED — even a catalog distill named deepseek", () => {
     expect(modelRate("@cf/meta/llama-3.3-70b-instruct-fp8-fast")).toBeNull();
     // The @cf check MUST precede the deepseek substring match.

@@ -30,6 +30,13 @@
 
   "vars": {
     "CLOUDFLARE_ACCOUNT_ID": "c91d52c288c452ab734ede1518b00e11",
+    // AI Gateway the modelGateway routes through — REQUIRED for prefixed model
+    // ids (`anthropic/*`, `deepseek/*`, `openai/*`, `bedrock/*`), which ride the
+    // gateway universal endpoint / Bedrock forwarder. `openai/*` additionally
+    // needs unified billing enabled on this gateway (or a stored OpenAI key —
+    // mutually exclusive). If the gateway has Authenticated Gateway turned on,
+    // also set the AI_GATEWAY_AUTH_TOKEN secret.
+    "AI_GATEWAY_ID": "fractalbox-engineering-gateway",
     "ADMISSION_CAP": "16",
     // Opt the human-facing viewer surfaces (incl. the GitHub App install flow)
     // out of the Cloudflare Access gate for the initial dogfood. Configure

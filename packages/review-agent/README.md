@@ -78,7 +78,7 @@ is `config.get("<ns>.backend")` → `workers-ai` (default), `anthropic`, or
 
 | Backend | CONFIG_KV keys |
 |---|---|
-| `workers-ai` (the Workers AI binding / AI Gateway route) | `pr-review.workers-ai.model` (a bare `@cf/...` catalog id, **or** a `deepseek/`-prefixed hosted reasoner like `deepseek/deepseek-reasoner` — BYOK via AI Gateway), `pr-review.workers-ai.mode` (default `tools`; pin `json` for reasoning models) |
+| `workers-ai` (the Workers AI binding / AI Gateway route) | `pr-review.workers-ai.model` (a bare `@cf/...` catalog id, a `deepseek/`-prefixed hosted reasoner like `deepseek/deepseek-reasoner` — BYOK via AI Gateway, **or** an `openai/`-prefixed hosted model like `openai/gpt-5.6-luna` — unified billing via AI Gateway, no provider key), `pr-review.workers-ai.mode` (default `tools`; pin `json` for reasoning models) |
 
 `pr-review.prompt` optionally REPLACES the per-domain reviewer system prompt;
 otherwise the engine's generic default is used (no project-specific rubric is
