@@ -53,7 +53,7 @@ describe("makeOidcLive — sign()", () => {
     const layer = makeOidcLive({
       signingJwkJson: privateJwk,
       issuerUrl: ISSUER,
-      defaultSubject: "ai-code-review:01ABC",
+      subjectDefault: "ai-code-review:01ABC",
     });
 
     const token = await Effect.runPromise(

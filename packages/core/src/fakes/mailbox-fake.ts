@@ -13,7 +13,7 @@
 
 import { Effect, Layer } from "effect";
 import {
-  INBOX_DEFAULT_TTL_SEC,
+  INBOX_TTL_SEC_DEFAULT,
   type InboxAddress,
 } from "../mailbox/contract";
 import {
@@ -56,7 +56,7 @@ export const makeMailboxFake = (
         // Keep it within INBOX_LOCAL_PART_RE (16–40 lowercase hex/base36).
         const body = `${seed}${n}`.slice(0, 32);
         const localPart = `demo-${body}`;
-        const ttl = allocOpts?.ttlSec ?? INBOX_DEFAULT_TTL_SEC;
+        const ttl = allocOpts?.ttlSec ?? INBOX_TTL_SEC_DEFAULT;
         const addr: InboxAddress = {
           address: `${localPart}@${inboxDomain}`,
           localPart,

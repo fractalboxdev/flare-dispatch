@@ -27,8 +27,8 @@ import {
 } from "../services/child-runs";
 import { IO, io } from "../services/io";
 
-const DEFAULT_POLL_EVERY = "5 seconds";
-const DEFAULT_TIMEOUT = "30 minutes";
+const POLL_EVERY_DEFAULT = "5 seconds";
+const TIMEOUT_DEFAULT = "30 minutes";
 
 /**
  * Wait until every child in `ids` reaches a terminal status, returning their
@@ -54,10 +54,10 @@ export const waitForChildren = (opts: {
   ChildWaitTimeout,
   ChildRuns | IO
 > => {
-  const pollEvery = Duration.decode(opts.pollEvery ?? DEFAULT_POLL_EVERY);
+  const pollEvery = Duration.decode(opts.pollEvery ?? POLL_EVERY_DEFAULT);
   const pollEveryMs = Duration.toMillis(pollEvery);
   const timeoutMs = Duration.toMillis(
-    Duration.decode(opts.timeout ?? DEFAULT_TIMEOUT),
+    Duration.decode(opts.timeout ?? TIMEOUT_DEFAULT),
   );
   // At least one poll; one poll per `pollEvery` up to the ceiling.
   const maxAttempts = Math.max(1, Math.ceil(timeoutMs / Math.max(1, pollEveryMs)));

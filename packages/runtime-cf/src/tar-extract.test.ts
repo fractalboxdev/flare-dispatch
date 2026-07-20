@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  DEFAULT_EXPAND_CAPS,
+  EXPAND_CAPS_DEFAULT,
   contentTypeFor,
   expandTarGzToR2,
   iterateTarFiles,
@@ -112,7 +112,7 @@ const collect = async (tar: Uint8Array) => {
   const files: Array<{ path: string; text: string }> = [];
   for await (const f of iterateTarFiles(
     byteStream(tar),
-    DEFAULT_EXPAND_CAPS,
+    EXPAND_CAPS_DEFAULT,
   )) {
     files.push({ path: f.path, text: new TextDecoder().decode(f.bytes) });
   }
@@ -157,7 +157,7 @@ describe("iterateTarFiles", () => {
     ]);
     const files: string[] = [];
     for await (const f of iterateTarFiles(byteStream(tar), {
-      ...DEFAULT_EXPAND_CAPS,
+      ...EXPAND_CAPS_DEFAULT,
       maxEntryBytes: 1024,
     })) {
       files.push(f.path);

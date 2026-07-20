@@ -120,7 +120,7 @@ const WorkerDeployOutput = Schema.Struct({
 });
 
 /** Default `exec` timeout — a build + `wrangler deploy` fits comfortably. */
-const DEFAULT_TIMEOUT_SEC = 900;
+const TIMEOUT_SEC_DEFAULT = 900;
 
 /** CONFIG_KV keys — all strictly per-repo (see header: no global fallback). */
 const commandKey = (repo: string): string => `worker-deploy.command:${repo}`;
@@ -233,7 +233,7 @@ export const workerDeploy = defineRun({
           command,
           // Per-dispatch `env` wins over a same-named config-store secret.
           env: { ...secretEnv, ...input.env },
-          timeoutSec: input.timeoutSec ?? DEFAULT_TIMEOUT_SEC,
+          timeoutSec: input.timeoutSec ?? TIMEOUT_SEC_DEFAULT,
         }),
       );
 

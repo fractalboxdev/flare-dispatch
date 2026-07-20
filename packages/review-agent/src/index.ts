@@ -40,8 +40,8 @@ export {
   type Backend,
   REVIEW_MODES,
   type ReviewMode,
-  DEFAULT_BACKEND,
-  DEFAULT_NAMESPACE,
+  BACKEND_DEFAULT,
+  NAMESPACE_DEFAULT,
   BACKEND_CONFIG_KEY,
   BACKEND_KEYS,
   type BackendKeyDescriptor,
@@ -65,7 +65,7 @@ export {
 } from "./json-extract.js";
 
 export {
-  DEFAULT_REVIEW_SYSTEM_PROMPT,
+  REVIEW_SYSTEM_PROMPT_DEFAULT,
   composeSystemPrompt,
   type CompleteStructuredInput,
   completeStructured,

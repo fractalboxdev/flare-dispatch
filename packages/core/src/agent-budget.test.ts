@@ -3,8 +3,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_AGENT_MAX_REQUESTS,
-  DEFAULT_AGENT_TOKEN_BUDGET,
+  AGENT_MAX_REQUESTS_DEFAULT,
+  AGENT_TOKEN_BUDGET_DEFAULT,
   decideReserve,
   initialBudget,
   kill,
@@ -16,9 +16,9 @@ import {
 describe("agent-budget", () => {
   it("starts with the documented defaults", () => {
     const s = initialBudget();
-    expect(s.tokenBudget).toBe(DEFAULT_AGENT_TOKEN_BUDGET);
-    expect(s.maxRequests).toBe(DEFAULT_AGENT_MAX_REQUESTS);
-    expect(remaining(s)).toBe(DEFAULT_AGENT_TOKEN_BUDGET);
+    expect(s.tokenBudget).toBe(AGENT_TOKEN_BUDGET_DEFAULT);
+    expect(s.maxRequests).toBe(AGENT_MAX_REQUESTS_DEFAULT);
+    expect(remaining(s)).toBe(AGENT_TOKEN_BUDGET_DEFAULT);
     expect(s.live).toBe(true);
   });
 

@@ -146,7 +146,7 @@ const jsonExcerpt = (payload: unknown): string => {
  * the common alert-webhook field names, falling back to a JSON excerpt for
  * `detail` so an unrecognized shape still yields a triageable signal.
  */
-const defaultMap = (
+const mapDefault = (
   payload: unknown,
 ): { title?: string; detail?: string; url?: string; count?: number } => {
   const obj =
@@ -207,7 +207,7 @@ const buildSignal = (
   payload: unknown,
 ): SignalT | undefined => {
   const mapped =
-    template !== undefined ? applyTemplate(template, payload) : defaultMap(payload);
+    template !== undefined ? applyTemplate(template, payload) : mapDefault(payload);
 
   // Unmappable: a custom template that resolved no title AND no detail. (The
   // default mapping always produces a detail floor, so this only bites a

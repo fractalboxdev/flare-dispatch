@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
 import {
   BACKEND_KEYS,
-  DEFAULT_BACKEND,
+  BACKEND_DEFAULT,
   backendConfigKey,
   namespacedKey,
   namespacedKeys,
@@ -38,14 +38,14 @@ describe("parseBackend", () => {
     expect(parseBackend("bedrock")).toBe("bedrock");
   });
   it("falls back to the default for unknown / unset", () => {
-    expect(parseBackend(undefined)).toBe(DEFAULT_BACKEND);
-    expect(parseBackend("openai")).toBe(DEFAULT_BACKEND);
+    expect(parseBackend(undefined)).toBe(BACKEND_DEFAULT);
+    expect(parseBackend("openai")).toBe(BACKEND_DEFAULT);
   });
   it("does NOT recognize the retired opencode/reasonix labels (hard rename)", () => {
     // These were never agentic tools — only model-route misnomers. Post-rename
     // they are unknown values and fall back to the default; they do not alias.
-    expect(parseBackend("opencode")).toBe(DEFAULT_BACKEND);
-    expect(parseBackend("reasonix")).toBe(DEFAULT_BACKEND);
+    expect(parseBackend("opencode")).toBe(BACKEND_DEFAULT);
+    expect(parseBackend("reasonix")).toBe(BACKEND_DEFAULT);
   });
 });
 

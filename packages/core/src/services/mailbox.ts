@@ -31,7 +31,7 @@ export type AllocateOpts = {
    * folded into the durable record + the `provisionInbox` step name. */
   readonly label?: string;
   /** Override the inbox + read-token lifetime (seconds). Default
-   * `INBOX_DEFAULT_TTL_SEC`. */
+   * `INBOX_TTL_SEC_DEFAULT`. */
   readonly ttlSec?: number;
 };
 

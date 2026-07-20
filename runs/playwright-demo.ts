@@ -116,7 +116,7 @@ const PlaywrightDemoOutput = Schema.Struct({
 });
 
 /** Default `exec` timeout when the caller omits `timeoutSec`. */
-const DEFAULT_TIMEOUT_SEC = 1200;
+const TIMEOUT_SEC_DEFAULT = 1200;
 
 /**
  * Headroom added to the `exec` timeout to derive the Workflow STEP timeout.
@@ -197,7 +197,7 @@ export const playwrightDemo = defineRun({
       // default. `retries: 0` because a demo that fails or times out should
       // report that once — not be re-run five times over an hour (which is
       // exactly what the bare default produced).
-      const execTimeoutSec = input.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
+      const execTimeoutSec = input.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
       const stepTimeoutSec = Math.min(
         execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
         MAX_DURATION_SEC,

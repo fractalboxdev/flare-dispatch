@@ -92,7 +92,7 @@ const toolParametersSchema = (schema: Schema.Schema<any, any>): unknown => {
 // from config; these are the safe, project-neutral fallbacks.
 
 /** Generic per-domain reviewer instruction. */
-export const DEFAULT_REVIEW_SYSTEM_PROMPT = `You are a focused code reviewer.
+export const REVIEW_SYSTEM_PROMPT_DEFAULT = `You are a focused code reviewer.
 Review the supplied unified diff and report concrete, actionable findings for
 your assigned domain only. Anchor every finding to a real file path and line
 range present in the diff. Prefer a small number of high-signal findings over
@@ -105,7 +105,7 @@ valid). Do not respond with prose — the tool call IS your output.`;
  * one with a blank-line separator. PURE — no I/O — so it unit-tests directly.
  *
  *   - `base`        the reviewer instruction: an operator `*.prompt` override or
- *                   {@link DEFAULT_REVIEW_SYSTEM_PROMPT}.
+ *                   {@link REVIEW_SYSTEM_PROMPT_DEFAULT}.
  *   - `guidelines`  optional ADDITIVE "house rules" (operator `*.guidelines`).
  *                   Layered on top of `base` rather than replacing it, so an
  *                   operator can add a suppression rubric ("what NOT to flag"),
@@ -626,7 +626,7 @@ export const reviewDomain = (
     model: input.model,
     ...(input.mode !== undefined ? { mode: input.mode } : {}),
     ...(input.aws !== undefined ? { aws: input.aws } : {}),
-    system: input.systemPrompt ?? DEFAULT_REVIEW_SYSTEM_PROMPT,
+    system: input.systemPrompt ?? REVIEW_SYSTEM_PROMPT_DEFAULT,
     userBody: renderDomainBody(input),
     jsonContract: DOMAIN_JSON_CONTRACT,
     schema: DomainOutput,

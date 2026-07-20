@@ -25,7 +25,7 @@ import { IO, type IOService } from "../services/io";
 import { StepRunner, type StepRunnerService } from "../services/step-runner";
 
 /** Default execution id used when a test does not supply one. */
-export const DEFAULT_TEST_EXECUTION_ID = "01TEST00000000000000000000";
+export const TEST_EXECUTION_ID_DEFAULT = "01TEST00000000000000000000";
 
 /**
  * The in-memory event source `StepRunnerInline.waitForEvent` resolves against.
@@ -132,7 +132,7 @@ const errorTagOf = (cause: Cause.Cause<unknown>): string | undefined =>
 export const makeStepRunnerInline = (
   opts: { executionId?: string; eventQueue?: InlineEventQueue } = {},
 ): Layer.Layer<StepRunner, never, Executions | IO> => {
-  const executionId = opts.executionId ?? DEFAULT_TEST_EXECUTION_ID;
+  const executionId = opts.executionId ?? TEST_EXECUTION_ID_DEFAULT;
   const events = opts.eventQueue ?? new Map<string, unknown[]>();
 
   return Layer.effect(

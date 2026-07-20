@@ -419,7 +419,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       ...(configOverrides !== undefined ? { configOverrides } : {}),
       // Secrets capability — Worker string bindings only (never CONFIG_KV).
       secretsLookup: (name) => {
-        const v = (this.env as Record<string, unknown>)[name];
+        const v = (this.env as unknown as Record<string, unknown>)[name];
         return typeof v === "string" && v !== "" ? v : undefined;
       },
       browser: resolveBrowserConfig(this.env),
@@ -471,7 +471,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             oidc: {
               signingJwkJson: this.env.OIDC_SIGNING_JWK,
               issuerUrl: this.env.OIDC_ISSUER_URL,
-              defaultSubject: `${payload.run}:${payload.executionId}`,
+              subjectDefault: `${payload.run}:${payload.executionId}`,
             },
           }
         : {}),

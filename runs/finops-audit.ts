@@ -66,7 +66,7 @@ const BASE_KEY = key("base");
 const WINDOW_KEY = key("window-hours");
 const PROJECTS_KEY = key("projects");
 
-const DEFAULT_WINDOW_HOURS = 168; // 7 days
+const WINDOW_HOURS_DEFAULT = 168; // 7 days
 const ANALYSIS_MAX_TOKENS = 3072;
 
 /** The model's FinOps findings. */
@@ -90,7 +90,7 @@ const FinOpsReport = Schema.Struct({
   ),
 });
 
-const DEFAULT_PROMPT = `You are a FinOps analyst for a BYOC CI/CD platform that runs its jobs on
+const PROMPT_DEFAULT = `You are a FinOps analyst for a BYOC CI/CD platform that runs its jobs on
 Cloudflare: a dispatcher Worker, Containers, and Workers AI (billed in Neurons)
 routed through an AI Gateway. You are given the account's usage over a window:
 Worker invocations + errors by script, and AI-inference requests + cache hits by
@@ -168,7 +168,7 @@ export const finopsAudit = defineRun({
         Number.parseInt(
           (yield* step("resolve-window", () => config.get(WINDOW_KEY))) ?? "",
           10,
-        ) || DEFAULT_WINDOW_HOURS;
+        ) || WINDOW_HOURS_DEFAULT;
       const projects = parseList(
         yield* step("resolve-projects", () => config.get(PROJECTS_KEY)),
       );
@@ -222,7 +222,7 @@ export const finopsAudit = defineRun({
       );
       const systemPrompt =
         (yield* step("resolve-prompt", () => config.get(promptKey(NAMESPACE)))) ??
-        DEFAULT_PROMPT;
+        PROMPT_DEFAULT;
 
       // 4. Analyse via the reusable structured-output engine. A model failure is
       //    a real failure for an audit run (its whole job is the write-up).

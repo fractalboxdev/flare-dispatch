@@ -20,7 +20,7 @@ import {
   composeSystemPrompt,
   coordinate,
   coordinateReview,
-  DEFAULT_REVIEW_SYSTEM_PROMPT,
+  REVIEW_SYSTEM_PROMPT_DEFAULT,
   reviewDomain,
   riskTier,
 } from "./engine.js";
@@ -76,11 +76,11 @@ describe("composeSystemPrompt (pure — prompt layering)", () => {
 
   it("appends guidelines as an authoritative block, layered on the base", () => {
     const out = composeSystemPrompt({
-      base: DEFAULT_REVIEW_SYSTEM_PROMPT,
+      base: REVIEW_SYSTEM_PROMPT_DEFAULT,
       guidelines: "Do not flag style nits already enforced by the linter.",
     });
     // The base is preserved (additive, not a replacement)...
-    expect(out.startsWith(DEFAULT_REVIEW_SYSTEM_PROMPT)).toBe(true);
+    expect(out.startsWith(REVIEW_SYSTEM_PROMPT_DEFAULT)).toBe(true);
     // ...and the guidelines are appended under an authoritative label.
     expect(out).toContain("authoritative house rules");
     expect(out).toContain(

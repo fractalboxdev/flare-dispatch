@@ -33,7 +33,7 @@ const CDP_CLIENT_ID = "@cloudflare/playwright@1.3.0";
 const BROWSER_CLOSE_MESSAGE_ID = -9999;
 // CF Browser session keep_alive ceiling (10 min = CF's documented max). One
 // session must outlive the whole acceptance run.
-const DEFAULT_KEEP_ALIVE_MS = 600_000;
+const KEEP_ALIVE_MS_DEFAULT = 600_000;
 
 const log = (event: string, fields: Record<string, unknown>): void => {
   // Single-line structured JSON for `wrangler tail`. (No Date.now in the body
@@ -92,7 +92,7 @@ export const handleBrowserCdp = async (
     return new Response("unauthorized", { status: 401 });
   }
 
-  const keepAliveMs = Number(env.KEEP_ALIVE_MS ?? DEFAULT_KEEP_ALIVE_MS);
+  const keepAliveMs = Number(env.KEEP_ALIVE_MS ?? KEEP_ALIVE_MS_DEFAULT);
   // Session recording (Browser Run rrweb capture, Beta) — opt-in per session
   // via `?recording=true` on the caller's URL. Propagated to BOTH the acquire
   // and the upstream devtools connect (the docs put it on the devtools WS URL;

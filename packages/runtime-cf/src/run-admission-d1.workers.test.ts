@@ -294,9 +294,9 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     expect(observed).toMatchObject({ admitted: false, poolBusy: 2 });
 
     // The same state under the DEFAULT cap admits — only the cap differs.
-    const defaultStore = makeRunAdmissionD1(bindings.db, () => T0);
+    const storeDefault = makeRunAdmissionD1(bindings.db, () => T0);
     const admitted = await Effect.runPromise(
-      defaultStore.attempt(A, "lean", enqueuedAt),
+      storeDefault.attempt(A, "lean", enqueuedAt),
     );
     expect(admitted.admitted).toBe(true);
   });

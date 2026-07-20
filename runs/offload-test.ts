@@ -133,7 +133,7 @@ const OffloadTestOutput = Schema.Struct({
 });
 
 /** Default `exec` timeout when the caller omits `timeoutSec`. */
-const DEFAULT_TIMEOUT_SEC = 600;
+const TIMEOUT_SEC_DEFAULT = 600;
 
 /**
  * CONFIG_KV keys the run body resolves the command from when a dispatch carries
@@ -260,7 +260,7 @@ export const offloadTest = defineRun({
           // Per-dispatch `env` wins over a same-named config-store secret —
           // the more specific source overrides the global one.
           env: { ...secretEnv, ...input.env },
-          timeoutSec: input.timeoutSec ?? DEFAULT_TIMEOUT_SEC,
+          timeoutSec: input.timeoutSec ?? TIMEOUT_SEC_DEFAULT,
         }),
       );
 

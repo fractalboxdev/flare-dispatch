@@ -32,7 +32,7 @@ export type AwsCredentials = {
 };
 
 /** Default session duration when the caller omits one (AWS caps at 3600). */
-const DEFAULT_DURATION_SEC = 900;
+const DURATION_SEC_DEFAULT = 900;
 
 /** Parse a single XML element body from an STS response. */
 const xmlText = (xml: string, tag: string): string | undefined => {
@@ -57,7 +57,7 @@ export const awsAssumeRole = (opts: {
 }) =>
   Effect.gen(function* () {
     const audience = opts.audience ?? "sts.amazonaws.com";
-    const durationSec = Math.min(opts.durationSec ?? DEFAULT_DURATION_SEC, 3600);
+    const durationSec = Math.min(opts.durationSec ?? DURATION_SEC_DEFAULT, 3600);
     const sessionName = opts.sessionName ?? `flare-dispatch-${yield* io.uuid}`;
     const region = opts.region ?? "us-east-1";
     const doFetch = opts.fetchImpl ?? fetch;

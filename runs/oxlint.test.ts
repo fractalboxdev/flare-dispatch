@@ -32,12 +32,12 @@ const baseInput = {
 } as const;
 
 /** The command the default input produces. */
-const DEFAULT_CMD = "npx --yes oxlint@1";
+const CMD_DEFAULT = "npx --yes oxlint@1";
 
 describe("oxlint", () => {
   it.effect("green path — oxlint exits 0, no install, three steps", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { [DEFAULT_CMD]: { exitCode: 0 } },
+      sandboxProgram: { [CMD_DEFAULT]: { exitCode: 0 } },
     });
 
     return Effect.gen(function* () {
@@ -55,7 +55,7 @@ describe("oxlint", () => {
         "upload-log",
       ]);
       expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
-        DEFAULT_CMD,
+        CMD_DEFAULT,
       ]);
       expect(
         handles.sandbox.execs
@@ -69,7 +69,7 @@ describe("oxlint", () => {
     "red path — exit 1 with failOnNonZeroExit ON fails with AcceptanceFailed carrying the exit",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: { [DEFAULT_CMD]: { exitCode: 1, stderr: "1 error" } },
+        sandboxProgram: { [CMD_DEFAULT]: { exitCode: 1, stderr: "1 error" } },
       });
 
       return Effect.gen(function* () {
@@ -109,7 +109,7 @@ describe("oxlint", () => {
     () => {
       const { layer, handles } = makeCFRuntimeTest({
         sandboxProgram: {
-          [DEFAULT_CMD]: { exitCode: 1, stdout: NO_FILES_STDOUT },
+          [CMD_DEFAULT]: { exitCode: 1, stdout: NO_FILES_STDOUT },
         },
       });
 
@@ -145,7 +145,7 @@ describe("oxlint", () => {
       // sentinel is a real lint verdict and must still fail the run.
       const { layer } = makeCFRuntimeTest({
         sandboxProgram: {
-          [DEFAULT_CMD]: {
+          [CMD_DEFAULT]: {
             exitCode: 1,
             stdout:
               "  x eslint(no-unused-vars): 'foo' is never used\n   ╭─[src/x.ts:1:7]\n\nFound 1 error.",
@@ -166,7 +166,7 @@ describe("oxlint", () => {
 
   it.effect("a clean lint over real files is NOT reported as skipped", () => {
     const { layer } = makeCFRuntimeTest({
-      sandboxProgram: { [DEFAULT_CMD]: { exitCode: 0 } },
+      sandboxProgram: { [CMD_DEFAULT]: { exitCode: 0 } },
     });
 
     return Effect.gen(function* () {
@@ -180,7 +180,7 @@ describe("oxlint", () => {
     "advisory mode — failOnNonZeroExit off makes a finding a successful Effect surfacing exitCode",
     () => {
       const { layer } = makeCFRuntimeTest({
-        sandboxProgram: { [DEFAULT_CMD]: { exitCode: 1 } },
+        sandboxProgram: { [CMD_DEFAULT]: { exitCode: 1 } },
       });
       const input = { ...baseInput, failOnNonZeroExit: false };
 

@@ -85,8 +85,8 @@ import {
   capDiff,
   composeSystemPrompt,
   coordinate as engineCoordinate,
-  DEFAULT_NAMESPACE,
-  DEFAULT_REVIEW_SYSTEM_PROMPT,
+  NAMESPACE_DEFAULT,
+  REVIEW_SYSTEM_PROMPT_DEFAULT,
   type Finding,
   guidelinesKey,
   type ModelCallFailed,
@@ -129,14 +129,14 @@ const TRIVIAL_AGENTS = ["code-quality"] as const;
 const GENERAL_AGENT = ["general"] as const;
 const AGENT_MODES = ["single", "multi"] as const;
 type AgentMode = (typeof AGENT_MODES)[number];
-const DEFAULT_AGENT_MODE: AgentMode = "multi";
+const AGENT_MODE_DEFAULT: AgentMode = "multi";
 
 /** Narrow an arbitrary config string to a known agent mode, or the default. */
 const parseAgentMode = (raw: string | undefined): AgentMode =>
-  AGENT_MODES.includes(raw as AgentMode) ? (raw as AgentMode) : DEFAULT_AGENT_MODE;
+  AGENT_MODES.includes(raw as AgentMode) ? (raw as AgentMode) : AGENT_MODE_DEFAULT;
 
 /** Config namespace this run's backend + prompt keys live under (`pr-review.*`). */
-const NS = DEFAULT_NAMESPACE;
+const NS = NAMESPACE_DEFAULT;
 
 // The run's output. `findings` becomes the check-run annotation set; the rest
 // renders in the summary. Imported from the engine package so the run's
@@ -305,7 +305,7 @@ export const prReview = defineRun({
   // collapses to the first dispatch of the window; the skipped pushes answer
   // 202 with the prior execution's id, so CI stays green.
   cooldown: {
-    defaultSeconds: 3600,
+    secondsDefault: 3600,
     secondsKey: "pr-review.cooldown-seconds",
     scope: (input) => `pr-${input.pr}`,
   },
@@ -470,7 +470,7 @@ const reviewBody = (input: RunInput, viewerUrl?: string) =>
       config.get(guidelinesKey(NS)),
     );
     const systemPrompt = composeSystemPrompt({
-      base: promptOverride ?? DEFAULT_REVIEW_SYSTEM_PROMPT,
+      base: promptOverride ?? REVIEW_SYSTEM_PROMPT_DEFAULT,
       ...(guidelines !== undefined ? { guidelines } : {}),
       ...(input.focusArea !== undefined ? { focus: input.focusArea } : {}),
     });
@@ -914,11 +914,11 @@ const tableCell = (s: string): string => sanitizeModelText(s).replace(/\|/g, "\\
  *  authored text would otherwise be able to inject layout). */
 const STYLES = ["default", "compact"] as const;
 type Style = (typeof STYLES)[number];
-const DEFAULT_STYLE: Style = "default";
+const STYLE_DEFAULT: Style = "default";
 
 /** Narrow an arbitrary config string to a known style, or fall back to default. */
 const parseStyle = (raw: string | undefined): Style =>
-  STYLES.includes(raw as Style) ? (raw as Style) : DEFAULT_STYLE;
+  STYLES.includes(raw as Style) ? (raw as Style) : STYLE_DEFAULT;
 
 /** Default for how many findings the `compact` style lists (most-critical
  *  first) when `pr-review.compact-max` is unset. The full set is still emitted
@@ -952,7 +952,7 @@ const renderReviewComment = (
   input: Pick<RunInput, "repo" | "sha">,
   output: Schema.Schema.Type<typeof ReviewOutput>,
   domainCounts: ReadonlyArray<DomainCount>,
-  style: Style = DEFAULT_STYLE,
+  style: Style = STYLE_DEFAULT,
   viewerUrl?: string,
   compactMax: number = COMPACT_MAX_LISTED_DEFAULT,
 ): string =>
