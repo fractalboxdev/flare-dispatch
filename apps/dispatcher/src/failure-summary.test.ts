@@ -11,6 +11,9 @@ import {
   AcceptanceFailed,
   AdmissionTimedOut,
   ExecFailed,
+  ExecTimeout,
+  SecretsMissing,
+  StepFailed,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
   CHECK_SUMMARY_MAX_CHARS,
@@ -65,12 +68,46 @@ describe("failureSummaryMd", () => {
     expect(md).toContain("not a test failure");
   });
 
-  it("is undefined for other typed run errors", () => {
-    expect(
-      failureSummaryMd(
-        Exit.fail(new ExecFailed({ exitCode: 7, stderrTail: "boom" })),
+  it("renders ExecFailed with exit code + stderr tail", () => {
+    const md = failureSummaryMd(
+      Exit.fail(new ExecFailed({ exitCode: 7, stderrTail: "boom" })),
+    );
+    expect(md).toContain("Exec failed");
+    expect(md).toContain("exit `7`");
+    expect(md).toContain("boom");
+  });
+
+  it("renders ExecTimeout with the command", () => {
+    const md = failureSummaryMd(
+      Exit.fail(
+        new ExecTimeout({ timeoutSec: 30, command: "pnpm test --watch" }),
       ),
-    ).toBeUndefined();
+    );
+    expect(md).toContain("Exec timed out");
+    expect(md).toContain("30s");
+    expect(md).toContain("pnpm test --watch");
+  });
+
+  it("renders StepFailed with the step name + cause", () => {
+    const md = failureSummaryMd(
+      Exit.fail(
+        new StepFailed({
+          step: "resolve-command",
+          cause: "offload-test: no command",
+        }),
+      ),
+    );
+    expect(md).toContain("Step `resolve-command` failed");
+    expect(md).toContain("offload-test: no command");
+  });
+
+  it("renders SecretsMissing with the absent keys", () => {
+    const md = failureSummaryMd(
+      Exit.fail(new SecretsMissing({ keys: ["NPM_TOKEN", "FOO"] })),
+    );
+    expect(md).toContain("Missing Worker secrets");
+    expect(md).toContain("`NPM_TOKEN`");
+    expect(md).toContain("`FOO`");
   });
 
   it("is undefined for a success Exit", () => {

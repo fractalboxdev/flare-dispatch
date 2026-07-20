@@ -10,7 +10,14 @@
 // unit-testable without simulating a Workflow.
 
 import { Cause, Exit, Match, Option } from "effect";
-import type { AdmissionTimedOut, RunError } from "@fractalboxdev/flare-dispatch-core";
+import type {
+  AdmissionTimedOut,
+  ExecFailed,
+  ExecTimeout,
+  RunError,
+  SecretsMissing,
+  StepFailed,
+} from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * GitHub caps a check-run's `output.summary` at 65535 characters — a longer
@@ -23,6 +30,12 @@ export const CHECK_SUMMARY_MAX_CHARS = 65_535;
 /** Appended when the run's markdown is cut — exported for the boundary test. */
 export const TRUNCATION_NOTE =
   "\n\n_… summary truncated to fit the check-run limit._";
+
+/** Cap stderr / cause tails so one noisy step cannot dominate the summary. */
+const TAIL_MAX_CHARS = 4_000;
+
+const clip = (s: string, max = TAIL_MAX_CHARS): string =>
+  s.length <= max ? s : `${s.slice(0, max)}\n_… truncated._`;
 
 /**
  * Render an `AdmissionTimedOut` for the check-run summary. The run never
@@ -38,13 +51,34 @@ export const admissionTimedOutMd = (e: AdmissionTimedOut): string =>
   `the whole wait, so this is capacity back-pressure — **not a test ` +
   `failure**. Re-run once in-flight runs drain.`;
 
+const execFailedMd = (e: ExecFailed): string =>
+  `**Exec failed** (exit \`${e.exitCode}\`):\n\n\`\`\`\n${clip(e.stderrTail)}\n\`\`\``;
+
+const execTimeoutMd = (e: ExecTimeout): string =>
+  `**Exec timed out** after \`${e.timeoutSec}s\`:\n\n\`${clip(e.command, 500)}\``;
+
+const stepFailedMd = (e: StepFailed): string => {
+  const cause =
+    typeof e.cause === "string"
+      ? e.cause
+      : e.cause instanceof Error
+        ? e.cause.message
+        : JSON.stringify(e.cause);
+  return `**Step \`${e.step}\` failed**:\n\n\`\`\`\n${clip(String(cause ?? "unknown"))}\n\`\`\``;
+};
+
+const secretsMissingMd = (e: SecretsMissing): string =>
+  `**Missing Worker secrets**: ${e.keys.map((k) => `\`${k}\``).join(", ")}\n\n` +
+  `Set them with \`wrangler secret put <NAME>\` — do not put credentials in dispatch \`env\`.`;
+
 /**
  * Extract the run-authored failure markdown from a run's `Exit`, when one is
  * present. `undefined` on success, on a defect/interrupt (`Cause.failureOption`
- * is none — there is no typed failure to read), and on any typed failure that
- * carries no presentation. `AcceptanceFailed` carries its own
- * (run-authored) markdown; `AdmissionTimedOut` renders the infra-wait
- * explanation above; new error variants opt in by growing a branch here.
+ * is none — there is no typed failure to read), and on typed failures we have
+ * not opted into rendering. `AcceptanceFailed` carries run-authored markdown;
+ * `AdmissionTimedOut` / `ExecFailed` / `ExecTimeout` / `StepFailed` /
+ * `SecretsMissing` render structured infra explanations so a red check is not
+ * only a Cloudflare workflow link.
  *
  * `Cause.failureOption` picks the LEFTMOST failure, so a multi-error Cause
  * (parallel/sequential composition) surfaces at most one summary — and
@@ -63,6 +97,10 @@ export const failureSummaryMd = (
           Match.value(failure).pipe(
             Match.tag("AcceptanceFailed", (e) => e.summaryMd),
             Match.tag("AdmissionTimedOut", (e) => admissionTimedOutMd(e)),
+            Match.tag("ExecFailed", (e) => execFailedMd(e)),
+            Match.tag("ExecTimeout", (e) => execTimeoutMd(e)),
+            Match.tag("StepFailed", (e) => stepFailedMd(e)),
+            Match.tag("SecretsMissing", (e) => secretsMissingMd(e)),
             Match.orElse(() => undefined),
           ),
       }),
