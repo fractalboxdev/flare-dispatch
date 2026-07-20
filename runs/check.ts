@@ -48,7 +48,11 @@ const CheckInput = Schema.Struct({
   image: Schema.optional(Schema.String), // container image override
   /** Run the R2-cached dependency install after the clone. */
   install: Schema.optionalWith(Schema.Boolean, { default: () => false }),
-  /** Non-sensitive env only — dispatch inputs are persisted. */
+  /**
+   * Non-sensitive env only. Dispatch inputs are persisted (executions row +
+   * Workflow params) — never put credentials here. Same contract as
+   * `offload-test` / `worker-deploy`; see `runs/README.md`.
+   */
   env: Schema.optional(
     Schema.Record({ key: Schema.String, value: Schema.String }),
   ),
@@ -172,6 +176,8 @@ export const check = defineRun({
       );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.
+      // 30-day TTL matches the catalog (`oxlint` / `offload-test` / …); operators
+      // must not print secrets from the check command (see runs/README.md).
       const logUri = yield* step("upload-log", () =>
         artifact.upload({
           name: "check.log",
