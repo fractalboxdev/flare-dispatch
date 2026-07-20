@@ -188,6 +188,10 @@ export const summarizeRuns = (
   };
   const byRun = new Map<string, Acc>();
   for (const r of rows) {
+    // A `skipped` execution is a capacity bow-out (`RunSkipped` → neutral
+    // check) — the run never did its work, so it is neither a success nor a
+    // failure and must not drag the success rate down like a red run would.
+    if (r.status === "skipped") continue;
     let a = byRun.get(r.run);
     if (a === undefined) {
       a = {

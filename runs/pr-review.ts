@@ -25,7 +25,7 @@
 //   CONFIG_KV  pr-review.guidelines      (optional) ADDITIVE house rules appended to the reviewer prompt (suppression rubric / conventions / severity calibration)
 //   CONFIG_KV  pr-review.workers-ai.model  model id — a bare Workers AI catalog id (e.g. @cf/meta/llama-3.3-70b-instruct-fp8-fast, account-billed, no key) OR a `deepseek/`-prefixed hosted reasoner (e.g. deepseek/deepseek-reasoner, BYOK via AI Gateway — the real model)
 //   CONFIG_KV  pr-review.workers-ai.mode   "tools" | "json"  (default "tools"; pin "json" for reasoning models — DeepSeek-class models ignore tool-calls)
-//   CONFIG_KV  pr-review.<backend>.maxDiffChars  (optional) override the per-backend diff cap — a positive int clamped to [1_000, 1_000_000]. Defaults: workers-ai 60_000, anthropic/bedrock 240_000. Raise it for a big-context Workers AI model (GLM / Kimi); a value above the model's context overflows invisibly.
+//   CONFIG_KV  pr-review.<backend>.maxDiffChars  (optional) override the per-backend diff cap — a positive int clamped to [1_000, 1_000_000]. Defaults: workers-ai 60_000, anthropic/bedrock 240_000. Raise it for a big-context Workers AI model (GLM / Kimi). A value above the model's context makes the provider reject with a context-overflow: the engine shrink-retries the diff (halved, visibly truncated), and if it still can't fit the run SKIPS soft (neutral check via `RunSkipped`), never a red failure.
 //   CONFIG_KV  pr-review.<backend>.maxTokens  (optional) override the per-backend output-token budget — a positive int clamped to [256, 32_768]. Defaults: workers-ai 8_192, anthropic/bedrock 4_096. A ceiling (non-reasoning models unaffected); raise it if a reasoning model truncates inside <think> before the JSON answer.
 //   CONFIG_KV  pr-review.anthropic.model `anthropic/`-prefixed model id (e.g. anthropic/claude-sonnet-4-6) — BYOK via AI Gateway
 //   CONFIG_KV  pr-review.anthropic.mode  "tools" | "json"  (default "tools")
@@ -70,6 +70,7 @@ import {
   io,
   github,
   type ReadFileFailed,
+  RunSkipped,
   StepFailed,
   type Container,
   type WebhookPayload,
@@ -319,42 +320,104 @@ export const prReview = defineRun({
       const viewerUrl = Option.getOrUndefined(yield* io.viewerUrl);
       // The whole review is wrapped in an error boundary that ALWAYS posts a PR
       // comment — success or failure. `reviewBody` produces the output; the
-      // catch arm posts a "could not complete" comment and re-fails (as a
-      // `StepFailed`, a member of `RunError`) so the check still goes red
-      // honestly. The comment post itself is best-effort — a failure to post
-      // must not mask the original cause.
+      // catch arm posts a comment and re-fails so the check reflects what
+      // happened. Two failure families (issue #21):
+      //   - CAPACITY (`ModelCallFailed` reason `context-overflow`, i.e. every
+      //     reviewer overflowed the model's context even after the engine's
+      //     shrink-retries): the review never ran — post a "skipped" comment
+      //     and fail `RunSkipped`, which the dispatcher concludes as a
+      //     `neutral` check-run, never `failure`.
+      //   - everything else: post "could not complete" and re-fail as
+      //     `StepFailed`, so the check goes red honestly.
+      // The comment post itself is best-effort — a failure to post must not
+      // mask the original cause.
       return yield* reviewBody(input, viewerUrl).pipe(
         Effect.catchAll((err) =>
-          Effect.gen(function* () {
-            const reason = describeError(err);
-            // Post inside a step so a CF Workflow instance retry replays from
-            // the checkpoint instead of posting a duplicate failure comment.
-            yield* step("post-failure-comment", () =>
-              postComment(
-                input,
-                [
-                  `⚠️ **pr-review could not complete**: ${reason}`,
-                  ...viewerFooter(viewerUrl),
-                  "",
-                  COMMENT_MARKER,
-                ].join("\n"),
-              ).pipe(
-                Effect.catchAll((postErr) =>
-                  io.log(
-                    "warn",
-                    `pr-review: failure-comment post failed — ${describeError(postErr)}`,
-                  ),
-                ),
-              ),
-            );
-            return yield* Effect.fail(
-              new StepFailed({ step: "pr-review", cause: reason }),
-            );
-          }),
+          Match.value(err).pipe(
+            Match.tag("ModelCallFailed", (e) =>
+              e.reason === "context-overflow"
+                ? skipReview(input, viewerUrl, e)
+                : failReview(input, viewerUrl, e),
+            ),
+            Match.orElse(() => failReview(input, viewerUrl, err)),
+          ),
         ),
       );
     }),
 });
+
+/** The boundary's red arm: post "could not complete", re-fail as `StepFailed`. */
+const failReview = (
+  input: RunInput,
+  viewerUrl: string | undefined,
+  err: unknown,
+) =>
+  Effect.gen(function* () {
+    const reason = describeError(err);
+    // Post inside a step so a CF Workflow instance retry replays from
+    // the checkpoint instead of posting a duplicate failure comment.
+    yield* step("post-failure-comment", () =>
+      postComment(
+        input,
+        [
+          `⚠️ **pr-review could not complete**: ${reason}`,
+          ...viewerFooter(viewerUrl),
+          "",
+          COMMENT_MARKER,
+        ].join("\n"),
+      ).pipe(
+        Effect.catchAll((postErr) =>
+          io.log(
+            "warn",
+            `pr-review: failure-comment post failed — ${describeError(postErr)}`,
+          ),
+        ),
+      ),
+    );
+    return yield* Effect.fail(
+      new StepFailed({ step: "pr-review", cause: reason }),
+    );
+  });
+
+/** Reader-facing line for a capacity skip — the check-run summary AND the
+ *  `RunSkipped.reason`, so both surfaces tell the same story. */
+const CONTEXT_SKIP_REASON =
+  "the PR diff exceeds the model's context window even after truncation, so the review could not run";
+
+/** The boundary's neutral arm: the review was IMPOSSIBLE for capacity reasons
+ *  (context overflow after shrink-retries) — post a "skipped" comment and fail
+ *  `RunSkipped` so the dispatcher concludes the check `neutral`, not red. */
+const skipReview = (
+  input: RunInput,
+  viewerUrl: string | undefined,
+  err: ModelCallFailed,
+) =>
+  Effect.gen(function* () {
+    yield* step("post-skip-comment", () =>
+      postComment(
+        input,
+        [
+          `⊘ **pr-review skipped**: ${CONTEXT_SKIP_REASON}.`,
+          "",
+          `A model-capacity limit, not a code problem (${describeError(err)}). ` +
+            "The check concludes `neutral`. To review PRs this size, configure a " +
+            "larger-context model (`pr-review.<backend>.model`) or lower " +
+            "`pr-review.<backend>.maxDiffChars`.",
+          ...viewerFooter(viewerUrl),
+          "",
+          COMMENT_MARKER,
+        ].join("\n"),
+      ).pipe(
+        Effect.catchAll((postErr) =>
+          io.log(
+            "warn",
+            `pr-review: skip-comment post failed — ${describeError(postErr)}`,
+          ),
+        ),
+      ),
+    );
+    return yield* Effect.fail(new RunSkipped({ reason: CONTEXT_SKIP_REASON }));
+  });
 
 // ---------------------------------------------------------------------------
 // The review proper.

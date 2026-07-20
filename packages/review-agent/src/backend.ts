@@ -452,9 +452,18 @@ export const classifyModelError = (
   | "rate-limited"
   | "bad-response"
   | "timeout"
+  | "context-overflow"
   | "unknown" => {
   const message = e instanceof Error ? e.message.toLowerCase() : String(e);
   return Match.value(message).pipe(
+    Match.when(
+      (m) =>
+        m.includes("context window") ||
+        m.includes("context length") ||
+        m.includes("too long") ||
+        m.includes("too many tokens"),
+      () => "context-overflow" as const,
+    ),
     Match.when(
       (m) =>
         m.includes("401") || m.includes("403") || m.includes("unauthor"),

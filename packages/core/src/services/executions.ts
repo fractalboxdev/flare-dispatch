@@ -17,6 +17,14 @@ import { Context, type Effect } from "effect";
 /** Terminal status of a finished step or execution. */
 export type StepStatus = "success" | "failure";
 
+/**
+ * Terminal status of a finished EXECUTION row. Steps stay binary; an execution
+ * additionally records `"skipped"` when its run bowed out for a capacity
+ * reason (`RunSkipped`) — the dispatcher reports those as a `neutral`
+ * check-run, and analytics must not count them as failures.
+ */
+export type ExecutionStatus = StepStatus | "skipped";
+
 /** A step lifecycle record — written once at start, updated once at end. */
 export type StepRecord = {
   readonly executionId: string;
@@ -39,7 +47,7 @@ export type ExecutionRecord = {
   readonly run: string;
   readonly startedAt: number;
   readonly completedAt?: number;
-  readonly status?: StepStatus;
+  readonly status?: ExecutionStatus;
   /**
    * The execution id of the parent that spawned this one via `spawnChildRun`,
    * or absent for a top-level (dispatched / scheduled) execution. The lineage
@@ -71,7 +79,7 @@ export interface ExecutionsService {
   readonly finishExecution: (opts: {
     id: string;
     completedAt: number;
-    status: StepStatus;
+    status: ExecutionStatus;
     /**
      * The run's terminal output, JSON-encoded. When provided, the live
      * runtime persists it to the `executions.summary_json` column so

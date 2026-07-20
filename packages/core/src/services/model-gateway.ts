@@ -124,6 +124,10 @@ export class ModelGatewayError extends Schema.TaggedError<ModelGatewayError>()(
       "rate-limited",
       "bad-response",
       "timeout",
+      // The request (input + output budget) exceeded the model's context
+      // window — a CAPACITY failure, not a broken call: the same request with
+      // a smaller input would succeed. Callers shrink-and-retry or skip soft.
+      "context-overflow",
       "unknown",
     ),
     message: Schema.String,

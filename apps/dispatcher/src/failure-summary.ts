@@ -39,6 +39,29 @@ export const admissionTimedOutMd = (e: AdmissionTimedOut): string =>
   `failure**. Re-run once in-flight runs drain.`;
 
 /**
+ * Extract a `RunSkipped` failure's reason from a run's `Exit`. `undefined` on
+ * success, on a defect/interrupt, and on any other typed failure. A skipped
+ * run bowed out for a capacity reason (the work was impossible to attempt, not
+ * attempted-and-failed) — the workflow maps it to a `neutral` check-run
+ * conclusion + a `skipped` executions row instead of a red `failure`.
+ */
+export const runSkippedReason = (
+  exit: Exit.Exit<unknown, RunError>,
+): string | undefined =>
+  Exit.match(exit, {
+    onSuccess: () => undefined,
+    onFailure: (cause) =>
+      Option.match(Cause.failureOption(cause), {
+        onNone: () => undefined,
+        onSome: (failure) =>
+          Match.value(failure).pipe(
+            Match.tag("RunSkipped", (e) => e.reason),
+            Match.orElse(() => undefined),
+          ),
+      }),
+  });
+
+/**
  * Extract the run-authored failure markdown from a run's `Exit`, when one is
  * present. `undefined` on success, on a defect/interrupt (`Cause.failureOption`
  * is none — there is no typed failure to read), and on any typed failure that

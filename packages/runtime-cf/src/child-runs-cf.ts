@@ -82,6 +82,7 @@ const toChildStatus = (raw: string | null | undefined): ChildRunStatus => {
   switch (raw) {
     case "success":
     case "failure":
+    case "skipped":
     case "cancelled":
     case "running":
       return raw;
