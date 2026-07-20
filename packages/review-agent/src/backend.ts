@@ -34,22 +34,29 @@
 // Each backend is a profile of (model id, output mode), for namespace `pr-review`:
 //
 //   backend "workers-ai"  (the Workers AI binding / AI Gateway route — no key)
-//     CONFIG_KV  pr-review.workers-ai.model   model id — either:
+//     CONFIG_KV  pr-review.workers-ai.model   model id — one of:
 //                  • a bare Workers AI catalog id (account-billed, no key):
 //                        @cf/meta/llama-3.3-70b-instruct-fp8-fast      (tool-calling)
 //                        @cf/deepseek-ai/deepseek-r1-distill-qwen-32b  (reasoning)
 //                  • a `deepseek/`-prefixed hosted reasoner (BYOK via AI
 //                    Gateway — the real, far stronger model):
 //                        deepseek/deepseek-reasoner
+//                  • an `openai/`-prefixed hosted model (UNIFIED BILLING via AI
+//                    Gateway — account-billed like the catalog, no provider key):
+//                        openai/gpt-5.6-luna    (tool-calling; ~1M-token context,
+//                                                so catalog-size 5021 context
+//                                                overflows can't occur)
 //     CONFIG_KV  pr-review.workers-ai.mode    "tools" | "json"  (default "tools")
 //       Reasoning models (DeepSeek-R1 distills, `deepseek/…`) honour NO
 //       tool-calls and emit `<think>…</think>` prose — pin `mode: "json"` for
 //       those. A `"tools"`-mode call that returns zero tool calls auto-falls-
 //       back to one json-mode retry, so a mis-set reasoning model still answers.
-//       A `deepseek/` model routes via the AI Gateway universal endpoint (like
-//       `anthropic/`): requires AI_GATEWAY_ID on the deploy + a DeepSeek key
-//       stored in that gateway (BYOK). Still no key in config — the gateway
-//       injects it. A bare `@cf/...` model needs neither.
+//       A `deepseek/` or `openai/` model routes via the AI Gateway universal
+//       endpoint (like `anthropic/`): requires AI_GATEWAY_ID on the deploy.
+//       Upstream auth is per provider — DeepSeek needs its key stored in that
+//       gateway (BYOK); OpenAI needs unified billing enabled on the gateway (or
+//       a stored OpenAI key — the two are mutually exclusive). Either way no
+//       key in config. A bare `@cf/...` model needs neither.
 //
 //   backend "anthropic" (Claude via the AI Gateway universal endpoint — BYOK)
 //     CONFIG_KV  pr-review.anthropic.model  `anthropic/`-prefixed model id
@@ -73,9 +80,10 @@
 //
 // NOTE: Workers AI model ids are bare `@cf/...` (the binding's own naming) —
 // NOT the AI-Gateway-compat `workers-ai/@cf/...` prefix the old HTTP path used.
-// Anthropic and DeepSeek model ids carry the `anthropic/` / `deepseek/` prefix;
-// the runtime routes them via `env.AI.gateway(id).run(...)` against the AI
-// Gateway universal endpoint (see runtime-cf's model-gateway-cf.ts).
+// Anthropic, DeepSeek and OpenAI model ids carry the `anthropic/` / `deepseek/`
+// / `openai/` prefix; the runtime routes them via `env.AI.gateway(id).run(...)`
+// against the AI Gateway universal endpoint (see runtime-cf's
+// model-gateway-cf.ts).
 //
 // --- Output mode: "tools" vs "json" -----------------------------------------
 //

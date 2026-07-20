@@ -16,7 +16,7 @@
 //
 // Cost is METERED only where we have a real measured number. Today that is model
 // tokens, and ONLY for backends whose gateway response carries a usage block
-// (Anthropic / Bedrock / DeepSeek). It is MODELED everywhere else:
+// (Anthropic / Bedrock / DeepSeek / OpenAI). It is MODELED everywhere else:
 //
 //   * container compute is ALWAYS modeled — `instance vCPU/mem rate × active
 //     seconds`. Cloudflare meters container vCPU-s at the ACCOUNT level only
@@ -114,7 +114,8 @@ export type ModelRate = {
  *
  * Matching is by family substring so the prefixed ids the runtime actually sees
  * resolve: `anthropic/claude-sonnet-4-6`, `bedrock/us.anthropic.claude-opus-4-6-v1`,
- * `deepseek/deepseek-reasoner`, `@cf/meta/llama-3.3-70b-instruct-fp8-fast`.
+ * `deepseek/deepseek-reasoner`, `openai/gpt-5.6-luna`,
+ * `@cf/meta/llama-3.3-70b-instruct-fp8-fast`.
  */
 export const modelRate = (model: string): ModelRate | null => {
   const id = model.toLowerCase();
@@ -150,6 +151,17 @@ export const modelRate = (model: string): ModelRate | null => {
       source: "DeepSeek reasoner published rate (approx, planning estimate)",
     };
   }
+  // GPT-5.6 Luna (`openai/gpt-5.6-luna`, unified billing via AI Gateway).
+  // `endsWith`, not `includes`, so a differently-priced sibling (e.g. a
+  // `…-luna-pro`) never silently bills at Luna's rate — an unknown sibling
+  // stays honestly unmetered until its rate is added.
+  if (id.endsWith("gpt-5.6-luna")) {
+    return {
+      inputPerMTokUsd: 1,
+      outputPerMTokUsd: 6,
+      source: "GPT-5.6 Luna rate card ($1 / $6 per 1M tok)",
+    };
+  }
   return null;
 };
 
@@ -160,7 +172,7 @@ export const modelRate = (model: string): ModelRate | null => {
  *  but no USD figure is invented. */
 export type ModelCost = {
   readonly microUsd: number | null;
-  /** True when a per-token rate was found (Anthropic/Bedrock/DeepSeek). */
+  /** True when a per-token rate was found (Anthropic/Bedrock/DeepSeek/OpenAI). */
   readonly rateKnown: boolean;
   readonly inputTokens: number;
   readonly outputTokens: number;

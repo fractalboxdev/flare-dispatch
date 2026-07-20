@@ -528,6 +528,100 @@ describe("makeModelGatewayLive — deepseek universal route", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The openai/* universal route (unified billing; OpenAI-compatible
+// chat/completions with `max_completion_tokens`).
+
+describe("makeModelGatewayLive — openai universal route", () => {
+  it("routes openai/* through gateway.run and carries the budget on max_completion_tokens", async () => {
+    const { ai, seen } = stubGatewayAi({
+      choices: [{ message: { content: '{"findings":[]}' } }],
+      usage: { prompt_tokens: 4321, completion_tokens: 87 },
+    });
+    const result = await run(ai, "my-gateway", {
+      model: "openai/gpt-5.6-luna",
+      system: "you are a reviewer",
+      user: "review this",
+      maxTokens: 1024,
+    });
+
+    expect(result.text).toBe('{"findings":[]}');
+    expect(result.toolCalls).toEqual([]);
+    // usage maps onto the token fields (metered — unified billing bills them).
+    expect(result.inputTokens).toBe(4321);
+    expect(result.outputTokens).toBe(87);
+
+    expect(seen.gatewayId).toBe("my-gateway");
+    expect(seen.request?.provider).toBe("openai");
+    expect(seen.request?.endpoint).toBe("chat/completions");
+    const query = seen.request?.query as Record<string, unknown>;
+    // The `openai/` prefix is stripped — the provider gets its own naming.
+    expect(query.model).toBe("gpt-5.6-luna");
+    // GPT-5-family rejects the legacy `max_tokens` field — the budget MUST
+    // ride `max_completion_tokens`, and `max_tokens` must be absent.
+    expect(query.max_completion_tokens).toBe(1024);
+    expect("max_tokens" in query).toBe(false);
+    expect(query.messages).toEqual([
+      { role: "system", content: "you are a reviewer" },
+      { role: "user", content: "review this" },
+    ]);
+  });
+
+  it("maps tools to the OpenAI function-tool shape with forced tool use and defaults the budget", async () => {
+    const { ai, seen } = stubGatewayAi({
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                type: "function",
+                function: { name: "report", arguments: '{"findings":[]}' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await run(ai, "g", {
+      model: "openai/gpt-5.6-luna",
+      system: "s",
+      user: "u",
+      tools: [
+        { name: "report", description: "d", parameters: { type: "object" } },
+      ],
+    });
+
+    expect(result.toolCalls).toEqual([
+      { name: "report", arguments: '{"findings":[]}' },
+    ]);
+    const query = seen.request?.query as Record<string, unknown>;
+    expect(query.tool_choice).toBe("required");
+    expect(query.max_completion_tokens).toBe(2048);
+    expect("max_tokens" in query).toBe(false);
+  });
+
+  it("fails with an operator-facing error when no gateway id is configured", async () => {
+    const { ai } = stubGatewayAi({ choices: [] });
+    const exit = await Effect.runPromiseExit(
+      modelGateway
+        .complete({ model: "openai/gpt-5.6-luna", system: "s", user: "u" })
+        .pipe(Effect.provide(makeModelGatewayLive(ai, undefined))),
+    );
+    expect(exit._tag).toBe("Failure");
+  });
+
+  it("maps a non-2xx provider response to ModelGatewayError by status", async () => {
+    const { ai } = stubGatewayAi({ error: { message: "rate limited" } }, 429);
+    const exit = await Effect.runPromiseExit(
+      modelGateway
+        .complete({ model: "openai/gpt-5.6-luna", system: "s", user: "u" })
+        .pipe(Effect.provide(makeModelGatewayLive(ai, "g"))),
+    );
+    expect(exit._tag).toBe("Failure");
+  });
+});
+
 // --- The Bedrock-via-AI-Gateway route ---------------------------------------
 
 describe("makeModelGatewayLive — bedrock-via-AI-Gateway route", () => {

@@ -7,22 +7,30 @@
 // gateway's OpenAI-compatible `/chat/completions` endpoint: it eliminates the
 // per-backend secret.
 //
-// --- Four routes, selected by the model id prefix ---------------------------
+// --- Five routes, selected by the model id prefix ----------------------------
 //
-// `@cf/...` (Workers AI catalog)          → `ai.run(model, inputs, {gateway})`
-// `anthropic/<model>` (provider via BYOK)  → `ai.gateway(id).run({provider,...})`
-// `deepseek/<model>` (provider via BYOK)   → `ai.gateway(id).run({provider,...})`
-// `bedrock/<model>` (AWS Bedrock via SigV4) → `invokeBedrockViaAiGateway(...)`
+// `@cf/...` (Workers AI catalog)               → `ai.run(model, inputs, {gateway})`
+// `anthropic/<model>` (provider via BYOK)      → `ai.gateway(id).run({provider,...})`
+// `deepseek/<model>` (provider via BYOK)       → `ai.gateway(id).run({provider,...})`
+// `openai/<model>` (provider, unified billing) → `ai.gateway(id).run({provider,...})`
+// `bedrock/<model>` (AWS Bedrock via SigV4)    → `invokeBedrockViaAiGateway(...)`
 //
-// The Anthropic AND DeepSeek routes are both the AI Gateway UNIVERSAL endpoint,
-// still through the binding (`env.AI.gateway(id)`), so the no-secret property is
-// preserved: the gateway holds the provider key (BYOK / stored keys) and
-// injects it upstream; the Worker authenticates by being in-account. DeepSeek
-// is the home of the strongest open reasoning models (DeepSeek-R1 /
-// `deepseek-reasoner`); routing it here lets a `workers-ai` backend (json mode)
-// target the real hosted reasoner — `deepseek/deepseek-reasoner` — instead of
-// the weaker Workers AI catalog distill (`@cf/deepseek-ai/...`), same no-secret
-// property.
+// The Anthropic, DeepSeek AND OpenAI routes are all the AI Gateway UNIVERSAL
+// endpoint, still through the binding (`env.AI.gateway(id)`), so the no-secret
+// property is preserved: the gateway resolves the upstream auth and the Worker
+// authenticates by being in-account. How the gateway resolves it differs:
+//
+//   * BYOK (Anthropic / DeepSeek today) — the gateway holds a stored provider
+//     key and injects it upstream. DeepSeek is the home of the strongest open
+//     reasoning models (DeepSeek-R1 / `deepseek-reasoner`); routing it here
+//     lets a `workers-ai` backend (json mode) target the real hosted reasoner —
+//     `deepseek/deepseek-reasoner` — instead of the weaker Workers AI catalog
+//     distill (`@cf/deepseek-ai/...`).
+//   * UNIFIED BILLING (OpenAI) — the gateway holds NO provider key at all;
+//     inference bills to the Cloudflare account (AI Gateway credits). Even more
+//     keyless than BYOK: nothing to store, nothing to rotate. Requires unified
+//     billing enabled on the gateway (mutually exclusive with a stored OpenAI
+//     key — a stored key makes the same route BYOK instead).
 //
 // The Bedrock route is different: AWS InvokeModel requires a SigV4-signed
 // request, and Workers AI doesn't currently expose a `bedrock` provider on the
@@ -56,22 +64,31 @@
 // response's `content` blocks map back: `text` blocks concatenate into `text`,
 // `tool_use` blocks become `toolCalls` (arguments already a parsed object).
 //
-// --- The DeepSeek contract (universal route, OpenAI-compatible) ---------------
+// --- The OpenAI-compatible contract (universal route: DeepSeek, OpenAI) -------
 //
-//   ai.gateway(id).run({ provider: "deepseek", endpoint: "chat/completions",
+//   ai.gateway(id).run({ provider: "deepseek" | "openai",
+//                        endpoint: "chat/completions",
 //                        headers, query: <OpenAI ChatCompletions body> }) → Response
 //
-// DeepSeek speaks the OpenAI Chat Completions wire shape: `messages` carries the
-// system + user turns; the answer comes back at `choices[0].message.content`
-// (a STRING), and tool calls — if any — at `choices[0].message.tool_calls`,
-// each `{ function: { name, arguments } }` where `arguments` is a JSON STRING
-// (OpenAI shape; the review engine's `parseToolArguments` already tolerates a
-// string vs an object). `deepseek-reasoner` emits its chain-of-thought on a
-// separate `reasoning_content` field — NOT inside `content` — so the engine's
-// json-mode `text` is already the clean answer; the `<think>` stripper is a
-// harmless backstop. Reasoning models run as `workers-ai` in json mode (no
-// tools), matching the reasoner's "no function calling" reality; the tool-call
-// mapping is there so a future `deepseek-chat` tools-mode call works.
+// Both providers speak the OpenAI Chat Completions wire shape: `messages`
+// carries the system + user turns; the answer comes back at
+// `choices[0].message.content` (a STRING), and tool calls — if any — at
+// `choices[0].message.tool_calls`, each `{ function: { name, arguments } }`
+// where `arguments` is a JSON STRING (OpenAI shape; the review engine's
+// `parseToolArguments` already tolerates a string vs an object).
+//
+// Per-provider wrinkles the shared route absorbs:
+//
+//   * DeepSeek — `deepseek-reasoner` emits its chain-of-thought on a separate
+//     `reasoning_content` field, NOT inside `content`, so the engine's json-mode
+//     `text` is already the clean answer; the `<think>` stripper is a harmless
+//     backstop. Reasoning models run as `workers-ai` in json mode (no tools),
+//     matching the reasoner's "no function calling" reality; the tool-call
+//     mapping is there so a future `deepseek-chat` tools-mode call works.
+//     The output budget rides the legacy `max_tokens` field.
+//   * OpenAI — GPT-5-family models REJECT the legacy `max_tokens` field
+//     (`400: use 'max_completion_tokens'`), so this provider's budget rides
+//     `max_completion_tokens`. Tool-calling is first-class (`tools` mode).
 //
 // --- Locally-typed binding surface -------------------------------------------
 //
@@ -484,16 +501,47 @@ const completeAnthropic = (
   });
 
 // ---------------------------------------------------------------------------
-// The DeepSeek universal route (OpenAI-compatible Chat Completions).
-
-/** Model ids carrying this prefix route via the universal endpoint to DeepSeek. */
-const DEEPSEEK_PREFIX = "deepseek/";
+// The OpenAI-compatible universal routes (Chat Completions: DeepSeek, OpenAI).
 
 /**
- * DeepSeek (OpenAI-compatible) accepts `max_tokens`; supplied when the caller
- * didn't set one. Matches the review engine's own per-call budget.
+ * One OpenAI-compatible provider on the universal endpoint. `tokenLimitField`
+ * names where the output budget rides: DeepSeek keeps the legacy `max_tokens`;
+ * OpenAI's GPT-5-family rejects it in favour of `max_completion_tokens`.
+ * `authHint` finishes the operator-facing missing-gateway error — it names how
+ * the gateway is expected to resolve the upstream auth for this provider.
  */
-const DEEPSEEK_DEFAULT_MAX_TOKENS = 2048;
+type OpenAiCompatProvider = {
+  readonly provider: string;
+  readonly prefix: string;
+  readonly tokenLimitField: "max_tokens" | "max_completion_tokens";
+  readonly authHint: string;
+};
+
+/** DeepSeek via BYOK — the gateway injects its stored DeepSeek key. */
+const DEEPSEEK: OpenAiCompatProvider = {
+  provider: "deepseek",
+  prefix: "deepseek/",
+  tokenLimitField: "max_tokens",
+  authHint: "a stored DeepSeek key",
+};
+
+/**
+ * OpenAI via UNIFIED BILLING — the gateway holds no provider key; inference
+ * bills to the Cloudflare account (AI Gateway credits). A stored OpenAI key
+ * (BYOK) works on the same route, but the two are mutually exclusive.
+ */
+const OPENAI: OpenAiCompatProvider = {
+  provider: "openai",
+  prefix: "openai/",
+  tokenLimitField: "max_completion_tokens",
+  authHint: "unified billing enabled, or a stored OpenAI key",
+};
+
+/**
+ * Output budget supplied when the caller didn't set one. Matches the review
+ * engine's own per-call budget.
+ */
+const OPENAI_COMPAT_DEFAULT_MAX_TOKENS = 2048;
 
 /** The slice of an OpenAI Chat Completions `tool_calls` entry this Layer reads. */
 type OpenAiToolCall = {
@@ -514,13 +562,14 @@ type OpenAiChatResponse = {
   };
 };
 
-/** Build the OpenAI Chat Completions request body for DeepSeek. */
-const deepseekBody = (
+/** Build the OpenAI Chat Completions request body for a compatible provider. */
+const openAiChatBody = (
   req: ModelCompletionRequest,
   model: string,
+  tokenLimitField: OpenAiCompatProvider["tokenLimitField"],
 ): unknown => ({
   model,
-  max_tokens: req.maxTokens ?? DEEPSEEK_DEFAULT_MAX_TOKENS,
+  [tokenLimitField]: req.maxTokens ?? OPENAI_COMPAT_DEFAULT_MAX_TOKENS,
   messages: [
     { role: "system", content: req.system },
     { role: "user", content: req.user },
@@ -577,18 +626,21 @@ const fromOpenAiChat = (
 };
 
 /**
- * The DeepSeek universal route — `ai.gateway(id).run({provider:"deepseek"})`.
- * Mirrors {@link completeAnthropic}: the gateway's stored DeepSeek key (BYOK) is
- * the upstream auth; the binding is the gateway auth (no per-backend secret on
- * the Worker). Requires both the `gateway` accessor on the binding and a
- * configured gateway id — each absence fails with a `ModelGatewayError` naming
- * what to set, so the run's error boundary can tell the operator.
+ * An OpenAI-compatible universal route — `ai.gateway(id).run({provider})` for
+ * DeepSeek (BYOK) and OpenAI (unified billing). Mirrors
+ * {@link completeAnthropic}: the gateway resolves the upstream auth (per
+ * {@link OpenAiCompatProvider}'s `authHint`); the binding is the gateway auth
+ * (no per-backend secret on the Worker). Requires both the `gateway` accessor
+ * on the binding and a configured gateway id — each absence fails with a
+ * `ModelGatewayError` naming what to set, so the run's error boundary can tell
+ * the operator.
  */
-const completeDeepSeek = (
+const completeOpenAiCompat = (
   ai: AiBinding,
   gatewayId: string | undefined,
   gatewayAuthToken: string | undefined,
   req: ModelCompletionRequest,
+  p: OpenAiCompatProvider,
 ): Effect.Effect<ModelCompletionResult, ModelGatewayError> =>
   Effect.gen(function* () {
     if (ai.gateway === undefined) {
@@ -596,8 +648,7 @@ const completeDeepSeek = (
         new ModelGatewayError({
           model: req.model,
           reason: "unknown",
-          message:
-            "AI binding has no gateway() accessor — deepseek/* models need a Workers AI binding with AI Gateway support",
+          message: `AI binding has no gateway() accessor — ${p.prefix}* models need a Workers AI binding with AI Gateway support`,
         }),
       );
     }
@@ -606,31 +657,30 @@ const completeDeepSeek = (
         new ModelGatewayError({
           model: req.model,
           reason: "unknown",
-          message:
-            "deepseek/* models route via the AI Gateway universal endpoint — set AI_GATEWAY_ID (a gateway with a stored DeepSeek key)",
+          message: `${p.prefix}* models route via the AI Gateway universal endpoint — set AI_GATEWAY_ID (a gateway with ${p.authHint})`,
         }),
       );
     }
     const gateway = ai.gateway(gatewayId);
-    const model = req.model.slice(DEEPSEEK_PREFIX.length);
+    const model = req.model.slice(p.prefix.length);
 
     const response = yield* Effect.tryPromise({
       try: () =>
         gateway.run({
-          provider: "deepseek",
+          provider: p.provider,
           endpoint: "chat/completions",
           headers: {
             "content-type": "application/json",
             ...aigAuthHeader(gatewayAuthToken),
           },
-          query: deepseekBody(req, model),
+          query: openAiChatBody(req, model, p.tokenLimitField),
         }),
       catch: (cause) => {
         const message = cause instanceof Error ? cause.message : String(cause);
         return new ModelGatewayError({
           model: req.model,
           reason: reasonFor(message),
-          message: `AI Gateway deepseek run failed: ${message}`,
+          message: `AI Gateway ${p.provider} run failed: ${message}`,
         });
       },
     });
@@ -642,14 +692,14 @@ const completeDeepSeek = (
           new ModelGatewayError({
             model: req.model,
             reason: reasonForStatus(response.status),
-            message: `deepseek returned ${response.status} (unreadable body)`,
+            message: `${p.provider} returned ${response.status} (unreadable body)`,
           }),
       });
       return yield* Effect.fail(
         new ModelGatewayError({
           model: req.model,
           reason: reasonForStatus(response.status),
-          message: `deepseek returned ${response.status}: ${bodyText.slice(0, 300)}`,
+          message: `${p.provider} returned ${response.status}: ${bodyText.slice(0, 300)}`,
         }),
       );
     }
@@ -660,7 +710,7 @@ const completeDeepSeek = (
         new ModelGatewayError({
           model: req.model,
           reason: "bad-response",
-          message: "deepseek response body was not valid JSON",
+          message: `${p.provider} response body was not valid JSON`,
         }),
     });
 
@@ -798,23 +848,25 @@ const completeBedrock = (
  *   `bedrock/<model>`   → AI Gateway Bedrock forwarder (SigV4, BYOC creds)
  *   `anthropic/<model>` → AI Gateway universal endpoint (BYOK Anthropic key)
  *   `deepseek/<model>`  → AI Gateway universal endpoint (BYOK DeepSeek key)
+ *   `openai/<model>`    → AI Gateway universal endpoint (unified billing — no
+ *                         provider key; bills to the Cloudflare account)
  *   anything else       → Workers AI catalog (`@cf/...`)
  *
  * @param ai                   `env.AI` — the Workers AI binding.
  * @param gatewayId            optional AI Gateway id (`AI_GATEWAY_ID`). Required
- *                             for the `anthropic/*`, `deepseek/*` and
- *                             `bedrock/*` routes.
+ *                             for the `anthropic/*`, `deepseek/*`, `openai/*`
+ *                             and `bedrock/*` routes.
  * @param cloudflareAccountId  Cloudflare account id (`CLOUDFLARE_ACCOUNT_ID`).
  *                             Required for the `bedrock/*` route — it's the
  *                             first segment of the AI Gateway Bedrock URL.
  * @param gatewayAuthToken     optional `cf-aig-authorization` token for
  *                             Authenticated Gateway. Forwarded on every route
  *                             that hits the gateway — `anthropic/*`,
- *                             `deepseek/*`, and `bedrock/*`. The `@cf/*`
- *                             Workers AI route goes through the binding (not the
- *                             universal endpoint), which has no header seam, so
- *                             an authenticated gateway must allow first-party
- *                             Workers AI binding traffic.
+ *                             `deepseek/*`, `openai/*`, and `bedrock/*`. The
+ *                             `@cf/*` Workers AI route goes through the binding
+ *                             (not the universal endpoint), which has no header
+ *                             seam, so an authenticated gateway must allow
+ *                             first-party Workers AI binding traffic.
  */
 /**
  * Where the gateway records per-call token usage for cost attribution — the D1
@@ -832,7 +884,7 @@ export type ModelUsageSink = {
  * Upsert-SUM on the deterministic PK `${executionId}:${model}` so a fan-out's
  * many same-model calls accumulate and a Workflow resume (memoized step → body
  * not re-run) doesn't double-count. `metered = 1` only when the backend returned
- * a usage block (Anthropic/Bedrock/DeepSeek); Workers AI catalog leaves tokens 0
+ * a usage block (Anthropic/Bedrock/DeepSeek/OpenAI); Workers AI catalog leaves tokens 0
  * and metered 0. NEVER fails the model call — a metering error is swallowed.
  */
 const recordModelUsage = (
@@ -873,9 +925,11 @@ export const makeModelGatewayLive = (
       ? completeBedrock(cloudflareAccountId, gatewayId, gatewayAuthToken, req)
       : req.model.startsWith(ANTHROPIC_PREFIX)
         ? completeAnthropic(ai, gatewayId, gatewayAuthToken, req)
-        : req.model.startsWith(DEEPSEEK_PREFIX)
-          ? completeDeepSeek(ai, gatewayId, gatewayAuthToken, req)
-          : completeWorkersAi(ai, gatewayId, req);
+        : req.model.startsWith(DEEPSEEK.prefix)
+          ? completeOpenAiCompat(ai, gatewayId, gatewayAuthToken, req, DEEPSEEK)
+          : req.model.startsWith(OPENAI.prefix)
+            ? completeOpenAiCompat(ai, gatewayId, gatewayAuthToken, req, OPENAI)
+            : completeWorkersAi(ai, gatewayId, req);
 
   const service: ModelGatewayService = {
     complete: (req) =>
