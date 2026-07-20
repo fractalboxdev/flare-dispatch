@@ -20,6 +20,14 @@
 // `offload-test`): a global default would turn every installed repo's PRs
 // into a lint storm.
 //
+// --- Credentials --------------------------------------------------------------
+//
+// Same contract as `offload-test` header note 3: secret *names* ride the
+// dispatch / config surface, never plaintext values. `loadSecrets` resolves
+// Worker secret bindings INLINE (not in a `step`) so credentials never land
+// in a durable Workflow checkpoint. Per-dispatch `env` wins over a same-named
+// secret. See `runs/README.md`.
+//
 // Determinism: `durationMs` comes from the checkpointed `ExecResult`; the
 // body calls no `Date.now()` / `crypto.randomUUID()`.
 
@@ -33,7 +41,7 @@ import {
   sandbox,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
-import { workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
+import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const CheckInput = Schema.Struct({
   repo: Schema.String, // "owner/name"
@@ -56,6 +64,19 @@ const CheckInput = Schema.Struct({
   env: Schema.optional(
     Schema.Record({ key: Schema.String, value: Schema.String }),
   ),
+  /**
+   * Config-store / Worker-secret keys whose values are injected — as env vars
+   * of the same name — into the command's env. Empty when the command needs
+   * no credentials. See `loadSecrets` + header.
+   */
+  secrets: Schema.optionalWith(Schema.Array(Schema.String), {
+    default: () => [],
+  }),
+  /**
+   * @deprecated Ignored by `loadSecrets` (Worker bindings are bare names).
+   * Kept so Action inputs / call sites match `offload-test`.
+   */
+  secretPrefix: Schema.optional(Schema.String),
   timeoutSec: Schema.optional(Schema.Number), // default 600
   /**
    * Fail the run Effect (→ red `flare-dispatch/check` check) on a non-zero
@@ -120,6 +141,7 @@ export const check = defineRun({
         failOnNonZeroExit: true,
         // Decoded-shape defaults the trigger return must restate.
         install: false,
+        secrets: [],
       }),
     },
   ],
@@ -161,6 +183,15 @@ export const check = defineRun({
         }),
       );
 
+      // load-secrets — resolve named Worker secrets into the exec env. INLINE
+      // (never in a step): plaintext must not land in checkpointed Workflow
+      // state. No-op when `secrets` is empty. `required: true` — a named-but-
+      // unset credential fails fast before the command runs.
+      const secretEnv = yield* loadSecrets(input.secrets, {
+        prefix: input.secretPrefix,
+        required: true,
+      });
+
       // exec — run the check command. A non-zero exit is a normal ExecResult
       // here; the failOnNonZeroExit branch below decides whether it reds the
       // check. `result` is the checkpointed step output — replay restores it
@@ -170,7 +201,8 @@ export const check = defineRun({
           cwd: dir,
           container,
           command,
-          env: input.env,
+          // Per-dispatch `env` wins over a same-named Worker secret.
+          env: { ...secretEnv, ...input.env },
           timeoutSec: input.timeoutSec ?? DEFAULT_TIMEOUT_SEC,
         }),
       );

@@ -10,7 +10,8 @@
 //   (e) red path       — exit 1 + failOnNonZeroExit → AcceptanceFailed
 //   (f) advisory       — failOnNonZeroExit off → successful Effect, exitCode 1
 //   (g) install        — install:true runs cached dep install before command
-//   (h) webhook trig   — PR payload maps to inputs; gate skips drafts/dependabot
+//   (h) secrets        — Worker secrets inject into exec env; missing → SecretsMissing
+//   (i) webhook trig   — PR payload maps to inputs; gate skips drafts/dependabot
 //
 // Plus the standard determinism source guard.
 
@@ -29,6 +30,7 @@ const baseInput = {
   sha: "abc123",
   command: CHECK_CMD,
   install: false,
+  secrets: [] as readonly string[],
   failOnNonZeroExit: false,
 } as const;
 
@@ -43,6 +45,7 @@ describe("check", () => {
         repo: "owner/name",
         sha: "abc123",
         install: false,
+        secrets: [] as readonly string[],
         failOnNonZeroExit: true,
       };
 
@@ -73,6 +76,7 @@ describe("check", () => {
         repo: "owner/name",
         sha: "abc123",
         install: false,
+        secrets: [] as readonly string[],
         failOnNonZeroExit: true,
       };
 
@@ -215,6 +219,61 @@ describe("check", () => {
     },
   );
 
+  it.effect(
+    "secrets — Worker secret values are injected into the exec env, per-dispatch env wins",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
+        secrets: {
+          NPM_TOKEN: "token_from_worker",
+          REGISTRY_URL: "https://store.example.com",
+        },
+      });
+      const input = {
+        ...baseInput,
+        secrets: ["NPM_TOKEN", "REGISTRY_URL"],
+        // Collides with the Worker secret — the per-dispatch value wins.
+        env: { REGISTRY_URL: "https://dispatch.example.com" },
+      };
+
+      return Effect.gen(function* () {
+        const result = yield* check.run(input);
+        expect(result.exitCode).toBe(0);
+
+        const exec = handles.sandbox.execs.find((e) => e.command === CHECK_CMD);
+        expect(exec?.env).toEqual({
+          NPM_TOKEN: "token_from_worker",
+          REGISTRY_URL: "https://dispatch.example.com",
+        });
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "secrets — a named-but-unset secret fails with SecretsMissing before the exec",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
+      });
+      const input = { ...baseInput, secrets: ["NPM_TOKEN"] };
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(check.run(input));
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        const tag = Exit.isFailure(exit)
+          ? Option.match(Cause.failureOption(exit.cause), {
+              onSome: (f) => (f as { _tag?: string })._tag,
+              onNone: () => undefined,
+            })
+          : undefined;
+        expect(tag).toBe("SecretsMissing");
+        // Fail-fast: the check command never ran.
+        expect(handles.sandbox.execs).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   // --- Webhook trigger -------------------------------------------------------
 
   const prPayload = (
@@ -241,6 +300,7 @@ describe("check", () => {
       sha: "abcdef0123456789cafe",
       failOnNonZeroExit: true,
       install: false,
+      secrets: [],
     });
     expect(trigger?.idempotencyKey(ctx)).toBe("check:owner_name:abcdef012345");
   });

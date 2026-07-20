@@ -62,6 +62,8 @@ command needs `node_modules` / a lockfile install.
 | `install` | `false` | R2-cached dep install after clone |
 | `image` | omit | container image override |
 | `env` | omit | **non-sensitive only** — dispatch inputs are persisted |
+| `secrets` | `[]` | Worker-secret **names** injected into the command env via `loadSecrets` (inline, never checkpointed) |
+| `secretPrefix` | omit | deprecated / ignored — Worker bindings are bare names (kept for `offload-test` parity) |
 | `timeoutSec` | `600` | `sandbox.exec` timeout |
 | `failOnNonZeroExit` | `false` | Action default; webhook trigger sets `true` |
 
@@ -83,7 +85,24 @@ command needs `node_modules` / a lockfile install.
 
 ### Secrets and logs
 
-- Put credentials in Worker secrets / `loadSecrets`, **not** in `env` or the
-  command string — dispatch inputs and Workflow params are persisted.
+- Name credentials in `secrets` (e.g. `["NPM_TOKEN"]`). Values come from Worker
+  secrets (`wrangler secret put NPM_TOKEN`) via `loadSecrets` — resolved
+  **inline**, never inside a `step`, so plaintext never lands in a Workflow
+  checkpoint. Per-dispatch `env` wins over a same-named secret.
+- Do **not** put credentials in `env` or the command string — dispatch inputs
+  and Workflow params are persisted.
 - Stdout/stderr land in `check.log` behind a signed URL (catalog-wide 30-day
   TTL). Do not print tokens or personal data from the check command.
+
+```yaml
+# Action mode — private registry / authenticated tool
+inputs: |
+  {
+    "repo": "${{ github.repository }}",
+    "sha": "${{ github.sha }}",
+    "command": "pnpm lint",
+    "install": true,
+    "secrets": ["NPM_TOKEN"],
+    "failOnNonZeroExit": true
+  }
+```
