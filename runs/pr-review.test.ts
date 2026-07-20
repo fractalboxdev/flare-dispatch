@@ -24,10 +24,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { it } from "@effect/vitest";
-import { Effect, Exit } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import { ModelGatewayError } from "@fractalboxdev/flare-dispatch-core";
+import {
+  ModelGatewayError,
+  RunSkipped,
+} from "@fractalboxdev/flare-dispatch-core";
 import { prReview } from "./pr-review";
 
 const baseInput = {
@@ -248,6 +251,50 @@ describe("pr-review", () => {
         const body = handles.github.pullReviewCalls[0]!.body;
         expect(body).toContain("misconfigured");
         expect(body).toContain("pr-review.workers-ai.model");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "a context-overflow across every reviewer SKIPS the run (RunSkipped → neutral), never a red failure",
+    () => {
+      // Issue #21: the diff exceeds the model's context window on every
+      // reviewer call (the fake repeats its last response), even after the
+      // engine's shrink-retries. A review that didn't happen is not a failed
+      // review — the run posts a "skipped" comment and fails `RunSkipped`,
+      // which the dispatcher concludes as a NEUTRAL check-run.
+      const overflow = new ModelGatewayError({
+        model: "@cf/test/model",
+        reason: "context-overflow",
+        message:
+          "Workers AI run failed: 5021: The estimated number of input and maximum output tokens (24549) exceeded this model context window limit (24000)",
+      });
+      const { layer, handles } = makeCFRuntimeTest({
+        config: backendConfig,
+        sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+        sandboxFiles: {
+          [DIFF_FILE]: "diff --git a/x.ts b/x.ts\n+++ b/x.ts\n+x\n",
+        },
+        modelGateway: { responses: [overflow] },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(prReview.run(baseInput));
+        const failure = Exit.match(exit, {
+          onSuccess: () => undefined,
+          onFailure: (cause) =>
+            Option.getOrUndefined(Cause.failureOption(cause)),
+        });
+        expect(failure).toBeInstanceOf(RunSkipped);
+
+        // The PR comment says SKIPPED with the capacity reason — a different
+        // message family from the red "could not complete" boundary.
+        expect(handles.github.pullReviewCalls).toHaveLength(1);
+        const body = handles.github.pullReviewCalls[0]!.body;
+        expect(body).toContain("pr-review skipped");
+        expect(body).toContain("context window");
+        expect(body).not.toContain("could not complete");
+        expect(body).toContain("<!-- flare-dispatch: pr-review -->");
       }).pipe(Effect.provide(layer));
     },
   );

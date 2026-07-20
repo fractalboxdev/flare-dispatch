@@ -7,7 +7,7 @@
 //   * `coordinate` / `riskTier` are PURE — tested directly, no fake.
 
 import { describe, expect, it } from "vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schema } from "effect";
 import {
   ModelGateway,
   ModelGatewayError,
@@ -515,6 +515,91 @@ describe("reviewDomain", () => {
       }).pipe(Effect.provide(layer)),
     );
     expect(exit._tag).toBe("Failure");
+  });
+
+  // --- context-overflow shrink-retries (issue #21) ---------------------------
+  //
+  // The char-based diff caps are hand-tuned approximations of token windows, so
+  // a first call can overflow the model's context (Workers AI error 5021). The
+  // reviewer halves the diff (visibly, via `capDiff`) and retries — up to two
+  // shrinks — before the failure propagates to the run's skip-soft boundary.
+
+  const overflowError = new ModelGatewayError({
+    model: conn.model,
+    reason: "context-overflow",
+    message:
+      "Workers AI run failed: 5021: The estimated number of input and maximum output tokens (24549) exceeded this model context window limit (24000)",
+  });
+
+  /** A diff large enough that two halvings stay above the shrink floor. */
+  const bigDiff = `diff --git a/src/a.ts b/src/a.ts\n${"+const x = 1;\n".repeat(800)}`;
+
+  it("context-overflow — retries with a halved, visibly-truncated diff and succeeds", async () => {
+    const fake = makeModelGatewayFake({
+      responses: [overflowError, toolsResult("report", { findings: [finding] })],
+    });
+    const result = await Effect.runPromise(
+      reviewDomain({
+        ...conn,
+        agent: "security",
+        diff: bigDiff,
+        tier: "full",
+        backend: "workers-ai",
+        mode: "tools",
+      }).pipe(Effect.provide(fake.layer)),
+    );
+    expect(result).toEqual([finding]);
+    expect(fake.state.requests).toHaveLength(2);
+    // The retry carries roughly half the diff, cut with the visible marker so
+    // the review says it covered a prefix — never an invisible clip.
+    const first = fake.state.requests[0]!.user;
+    const second = fake.state.requests[1]!.user;
+    expect(second.length).toBeLessThan(first.length);
+    expect(second).toContain("diff truncated at");
+  });
+
+  it("context-overflow — gives up after two shrinks (three calls), keeping the typed reason", async () => {
+    // The fake repeats its last response, so every attempt overflows.
+    const fake = makeModelGatewayFake({ responses: [overflowError] });
+    const exit = await Effect.runPromiseExit(
+      reviewDomain({
+        ...conn,
+        agent: "security",
+        diff: bigDiff,
+        tier: "full",
+        backend: "workers-ai",
+        mode: "tools",
+      }).pipe(Effect.provide(fake.layer)),
+    );
+    expect(fake.state.requests).toHaveLength(3);
+    const failure = Exit.match(exit, {
+      onSuccess: () => undefined,
+      onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
+    });
+    expect(failure?.reason).toBe("context-overflow");
+  });
+
+  it("context-overflow on an already-tiny diff fails without a shrink loop", async () => {
+    // Below the shrink floor there is nothing meaningful left to halve — the
+    // overflow is systemic (tiny-context model / oversized prompt), so exactly
+    // one call is made and the failure propagates.
+    const fake = makeModelGatewayFake({ responses: [overflowError] });
+    const exit = await Effect.runPromiseExit(
+      reviewDomain({
+        ...conn,
+        agent: "security",
+        diff: "x",
+        tier: "lite",
+        backend: "workers-ai",
+        mode: "tools",
+      }).pipe(Effect.provide(fake.layer)),
+    );
+    expect(fake.state.requests).toHaveLength(1);
+    const failure = Exit.match(exit, {
+      onSuccess: () => undefined,
+      onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
+    });
+    expect(failure?.reason).toBe("context-overflow");
   });
 });
 

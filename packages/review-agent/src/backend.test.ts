@@ -17,6 +17,7 @@ import {
   backendConfigKey,
   namespacedKey,
   namespacedKeys,
+  classifyModelError,
   parseBackend,
   parseMaxDiffChars,
   parseMaxTokens,
@@ -272,5 +273,43 @@ describe("namespaced config (downstream recipe reuse)", () => {
       "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
     );
     expect(resolved.mode).toBe("json");
+  });
+});
+
+describe("classifyModelError", () => {
+  it("classifies a context-window overflow message as context-overflow", () => {
+    expect(
+      classifyModelError(
+        new Error(
+          "5021: The estimated number of input and maximum output tokens (24549) exceeded this model context window limit (24000)",
+        ),
+      ),
+    ).toBe("context-overflow");
+    expect(
+      classifyModelError(
+        new Error("prompt is too long: 250000 tokens > 200000 maximum"),
+      ),
+    ).toBe("context-overflow");
+  });
+
+  it("keeps the existing families for non-overflow errors", () => {
+    expect(classifyModelError(new Error("429 Too Many Requests"))).toBe(
+      "rate-limited",
+    );
+    expect(classifyModelError(new Error("401 unauthorized"))).toBe(
+      "auth-failed",
+    );
+    expect(classifyModelError(new Error("something else"))).toBe("unknown");
+  });
+
+  it("does NOT treat a generic 'too long' as context-overflow (loose-phrase guard)", () => {
+    // "request took too long" is a latency complaint, not a capacity one — it
+    // must never trigger shrink-retries / a neutral skip (PR #26 review).
+    expect(classifyModelError(new Error("request took too long"))).toBe(
+      "unknown",
+    );
+    expect(
+      classifyModelError(new Error("operation timeout — took too long")),
+    ).toBe("timeout");
   });
 });
