@@ -188,6 +188,28 @@ describe("makeModelGatewayLive", () => {
     expect(failureOf(exit)?.reason).toBe("context-overflow");
   });
 
+  it("does NOT classify unrelated errors as context-overflow (loose-phrase guard)", async () => {
+    // `context-overflow` downgrades an all-reviewers failure to a NEUTRAL
+    // check, so the matcher must not fire on generic wording or a stray error
+    // number an upstream might echo (PR #26 review finding).
+    const cases: ReadonlyArray<{ message: string; expected: string }> = [
+      { message: "request took too long to complete", expected: "unknown" },
+      { message: "upstream error 5021 occurred", expected: "unknown" },
+      { message: "connection timeout after 30s", expected: "timeout" },
+    ];
+    for (const c of cases) {
+      const ai: AiBinding = {
+        run: () => Promise.reject(new Error(c.message)),
+      };
+      const exit = await Effect.runPromiseExit(
+        modelGateway
+          .complete({ model: "m", system: "s", user: "u" })
+          .pipe(Effect.provide(makeModelGatewayLive(ai, undefined))),
+      );
+      expect(failureOf(exit)?.reason).toBe(c.expected);
+    }
+  });
+
   it("coerces a non-string `response` (some catalog models return parsed objects) to JSON text", async () => {
     // Some Workers AI models occasionally return `response` as a parsed
     // object instead of a string. Without coercion here, the downstream

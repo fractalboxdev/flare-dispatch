@@ -301,4 +301,15 @@ describe("classifyModelError", () => {
     );
     expect(classifyModelError(new Error("something else"))).toBe("unknown");
   });
+
+  it("does NOT treat a generic 'too long' as context-overflow (loose-phrase guard)", () => {
+    // "request took too long" is a latency complaint, not a capacity one — it
+    // must never trigger shrink-retries / a neutral skip (PR #26 review).
+    expect(classifyModelError(new Error("request took too long"))).toBe(
+      "unknown",
+    );
+    expect(
+      classifyModelError(new Error("operation timeout — took too long")),
+    ).toBe("timeout");
+  });
 });

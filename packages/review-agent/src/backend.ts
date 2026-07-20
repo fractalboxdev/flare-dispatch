@@ -456,11 +456,18 @@ export const classifyModelError = (
   | "unknown" => {
   const message = e instanceof Error ? e.message.toLowerCase() : String(e);
   return Match.value(message).pipe(
+    // Context-overflow phrases are TIGHT on purpose (PR #26 review): the reason
+    // downgrades a run to a neutral skip, so only wording that names the
+    // context window / prompt length / token count qualifies — a generic
+    // "too long" ("request took too long") must fall through to its own family.
     Match.when(
       (m) =>
         m.includes("context window") ||
         m.includes("context length") ||
-        m.includes("too long") ||
+        m.includes("context limit") ||
+        m.includes("maximum context") ||
+        m.includes("prompt is too long") ||
+        m.includes("input is too long") ||
         m.includes("too many tokens"),
       () => "context-overflow" as const,
     ),

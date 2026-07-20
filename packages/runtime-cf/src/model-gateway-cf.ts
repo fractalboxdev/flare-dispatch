@@ -267,11 +267,18 @@ const aigAuthHeader = (
  * True when a provider error text describes a context-window overflow. Each
  * provider words it differently — Workers AI error 5021 ("… exceeded this model
  * context window limit"), OpenAI ("maximum context length"), Anthropic ("prompt
- * is too long") — but all name the context/length capacity, none of which
- * appears in other failure modes' wording.
+ * is too long"), Bedrock-Anthropic ("input is too long") — but all anchor on
+ * the context/prompt/token capacity explicitly.
+ *
+ * Deliberately TIGHT (PR #26 review): this reason downgrades an all-reviewers
+ * failure to a NEUTRAL check via `RunSkipped`, so a loose phrase ("too long",
+ * a bare error number) could let an unrelated provider failure — or upstream
+ * error text echoing request content — conclude neutral instead of red. Every
+ * alternative here names the context window / prompt length / token count;
+ * generic wording ("request took too long", a stray "5021") must NOT match.
  */
 const isContextOverflow = (text: string): boolean =>
-  /context window|context length|context limit|prompt is too long|input is too long|too many tokens|\b5021\b/i.test(
+  /context window|context length|context limit|maximum context|prompt is too long|input is too long|too many tokens/i.test(
     text,
   );
 
