@@ -10,3 +10,8 @@
 # NOTE: the full image (demo-agent / flare-agent CLIs, chromium + agent build
 # variants) is reintroduced when those packages are ported in the parity phase.
 FROM docker.io/cloudflare/sandbox:0.10.1
+
+# Corepack is the standard bootstrap for repos that pin `"packageManager"`.
+# The sandbox base ships Node 22 without Corepack on PATH, so install the tested
+# release and activate its pnpm/Yarn shims for both explicit and bare commands.
+RUN npm install -g corepack@0.35.0 && corepack enable
