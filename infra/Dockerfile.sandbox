@@ -11,13 +11,7 @@
 # variants) is reintroduced when those packages are ported in the parity phase.
 FROM docker.io/cloudflare/sandbox:0.10.1
 
-# corepack — the standard bootstrap for repos that pin `"packageManager"`
-# (pnpm/yarn). The sandbox base ships Node 22 but WITHOUT corepack on PATH, so
-# any consumer command opening with `corepack enable` dies with exit 127 before
-# running project code (observed: fractalboxdev/flare-encrypt offload-test —
-# `bash: corepack: command not found`). Install it globally and pre-activate the
-# shims so both `corepack enable && pnpm …` and bare `pnpm …` bootstraps work.
-# `@latest` is deliberate: corepack is a version-resolving shim (the consumer's
-# packageManager pin decides the real tool version), so pinning corepack itself
-# buys no reproducibility for consumers — the image tag above stays the pin.
-RUN npm install -g corepack@latest && corepack enable
+# Corepack is the standard bootstrap for repos that pin `"packageManager"`.
+# The sandbox base ships Node 22 without Corepack on PATH, so install the tested
+# release and activate its pnpm/Yarn shims for both explicit and bare commands.
+RUN npm install -g corepack@0.35.0 && corepack enable
