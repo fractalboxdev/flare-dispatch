@@ -90,6 +90,22 @@ const inlineTail = (s: string, viewerUrl?: string): string =>
       }]…\n${s.slice(s.length - INLINE_TAIL_CHARS)}`;
 
 /**
+ * Scrub `ExecOpts.redactValues` from captured text — applied to BOTH the full
+ * R2 log and the inline checkpoint tail, before either is written, so an
+ * injected credential a command echoes never reaches a persisted log. Exact-
+ * substring match; empty/omitted values is a no-op.
+ */
+const redact = (text: string, values?: readonly string[]): string => {
+  if (values === undefined || values.length === 0) return text;
+  let out = text;
+  for (const value of values) {
+    if (value.length === 0) continue;
+    out = out.split(value).join("***");
+  }
+  return out;
+};
+
+/**
  * Bound the diagnostic string that rides on `ExecFailed.stderrTail` (and thus
  * on `ExecFailed.message`, which Workflows persists as the attempt record).
  * Prefer stdout/stderr when the thrown error carries them; else the message.
@@ -372,7 +388,7 @@ export const makeSandboxCloudflareLive = (
         catch: (cause) => new CheckoutFailed({ repo, sha, cause }),
       }),
 
-    exec: ({ command, cwd, env, timeoutSec }) => {
+    exec: ({ command, cwd, env, timeoutSec, redactValues }) => {
       const cmd = asCommand(command);
       return Effect.tryPromise({
         // `tryPromise` failure path is `ExecFailed | ExecTimeout` — a command
@@ -382,11 +398,16 @@ export const makeSandboxCloudflareLive = (
         // `execToResult` so a failing demo still uploads its report + log.
         try: async () => {
           const result = await execToResult(box, cmd, { cwd, env, timeoutSec });
+          // Scrub any injected secret VALUES before either persisted form
+          // (the full R2 log below, and the inline tail further down) is
+          // written — see `ExecOpts.redactValues`.
+          const stdout = redact(result.stdout, redactValues);
+          const stderr = redact(result.stderr, redactValues);
           const logPath = nextLogKey();
           // FULL output → R2 (the durable log the artifact step promotes). Kept
           // even on the working-dir-missing path below, so the failure is
           // diagnosable from the log viewer.
-          await writeLog(logPath, cmd, result.stdout, result.stderr);
+          await writeLog(logPath, cmd, stdout, stderr);
           // A command whose shell could not even enter its working directory
           // never ran — the checkout did not survive to this exec (container
           // recycled between durable steps). Raise a real ExecFailed rather than
@@ -395,7 +416,7 @@ export const makeSandboxCloudflareLive = (
           // classified by the `catch` below.
           if (isWorkingDirFailure(result, cwd)) {
             throw new Error(
-              `working directory '${cwd}' was missing at exec time — the checkout did not survive to this step (container recycled). stderr: ${result.stderr.slice(0, 200)}`,
+              `working directory '${cwd}' was missing at exec time — the checkout did not survive to this step (container recycled). stderr: ${stderr.slice(0, 200)}`,
             );
           }
           // Only a bounded TAIL is inlined in the step's return value, so the
@@ -411,8 +432,8 @@ export const makeSandboxCloudflareLive = (
             exitCode: result.exitCode,
             durationMs: result.durationMs,
             logPath,
-            stdout: inlineTail(result.stdout, viewerUrl),
-            stderr: inlineTail(result.stderr, viewerUrl),
+            stdout: inlineTail(stdout, viewerUrl),
+            stderr: inlineTail(stderr, viewerUrl),
           };
         },
         catch: (cause): ExecFailed | ExecTimeout => {

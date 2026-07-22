@@ -41,6 +41,9 @@ export type SandboxFakeState = {
     command: string;
     cwd?: string;
     env?: Record<string, string>;
+    /** the (redacted, per `redactValues`) returned stdout/stderr — absent on a canned failure. */
+    stdout?: string;
+    stderr?: string;
   }[];
   /** every `exposePort` call, in order — lets tests assert the port was exposed. */
   readonly exposed: { port: number; name?: string }[];
@@ -67,6 +70,17 @@ const fullResult = (partial: Partial<ExecResult> & { exitCode: number }): ExecRe
   stdout: partial.stdout ?? "",
   stderr: partial.stderr ?? "",
 });
+
+/** Mirrors the live layer's `redact` (sandbox-cf.ts) — see `ExecOpts.redactValues`. */
+const redact = (text: string, values?: readonly string[]): string => {
+  if (values === undefined || values.length === 0) return text;
+  let out = text;
+  for (const value of values) {
+    if (value.length === 0) continue;
+    out = out.split(value).join("***");
+  }
+  return out;
+};
 
 /**
  * Build a Sandbox fake from a canned command→result program plus an
@@ -121,7 +135,12 @@ export const makeSandboxFake = (
 
     exec: (opts: ExecOpts) => {
       const command = normalizeCommand(opts.command);
-      state.execs.push({ command, cwd: opts.cwd, env: opts.env });
+      const entry: SandboxFakeState["execs"][number] = {
+        command,
+        cwd: opts.cwd,
+        env: opts.env,
+      };
+      state.execs.push(entry);
       const canned = resolve(command);
       if (canned && "fail" in canned) {
         return canned.fail === "ExecTimeout"
@@ -138,7 +157,12 @@ export const makeSandboxFake = (
               }),
             );
       }
-      return Effect.succeed(fullResult(canned ?? { exitCode: 0 }));
+      const result = fullResult(canned ?? { exitCode: 0 });
+      const stdout = redact(result.stdout, opts.redactValues);
+      const stderr = redact(result.stderr, opts.redactValues);
+      entry.stdout = stdout;
+      entry.stderr = stderr;
+      return Effect.succeed({ ...result, stdout, stderr });
     },
 
     // Mirrors the live layer: a seeded path returns its content, anything

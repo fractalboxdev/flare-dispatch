@@ -24,6 +24,7 @@ export { refreshFixtures } from "./refresh-fixtures";
 export { selfHealPr } from "./self-heal-pr";
 export { releaseNotes } from "./release-notes";
 export { oxlint } from "./oxlint";
+export { check } from "./check";
 export { emailOtpLogin } from "./email-otp-login";
 export { finopsAudit } from "./finops-audit";
 export { demoReel } from "./demo-reel";
