@@ -113,6 +113,7 @@ describe("GET /health", () => {
       status: "ok",
       runs: [
         "cdp-acceptance",
+        "check",
         "ci-triage-pr",
         "demo-reel",
         "deploy-smoke",
