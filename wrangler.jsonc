@@ -63,15 +63,21 @@
     }
   ],
 
-  // One lean image (Dockerfile.sandbox = cloudflare/sandbox base: Node+git+curl,
-  // all pr-review needs). The browser/agent classes reuse the lean image for
-  // now; the chromium/agent variants return when demo-agent/flare-agent are
-  // ported (parity phase).
+  // One Dockerfile (Dockerfile.sandbox = cloudflare/sandbox base: Node+git+curl)
+  // builds every class; per-class `image_vars` gate the optional layers. The
+  // browser/agent classes stay lean; the chromium/agent variants return when
+  // demo-agent/flare-agent are ported (parity phase).
+  //
+  // RunSandbox (the offload-test/check executor) bakes the native toolchain +
+  // Rust: webhook-mode runs have no setup step to install one, and consumer
+  // Rust workspaces with `*-sys` crates both need `cc` to link and more memory
+  // than standard-2 gives a cold `cargo test` of a large dep graph.
   "containers": [
     {
       "class_name": "RunSandbox",
       "image": "./infra/Dockerfile.sandbox",
-      "instance_type": "standard-2",
+      "image_vars": { "WITH_BUILD_TOOLS": "true", "WITH_RUST": "true" },
+      "instance_type": "standard-4",
       "max_instances": 16
     },
     {

@@ -15,3 +15,54 @@ FROM docker.io/cloudflare/sandbox:0.10.1
 # The sandbox base ships Node 22 without Corepack on PATH, so install the tested
 # release and activate its pnpm/Yarn shims for both explicit and bare commands.
 RUN npm install -g corepack@0.35.0 && corepack enable
+
+# ── Optional native build toolchain (gated by the WITH_BUILD_TOOLS build arg) ─
+#
+# The lean base has NO C compiler. Any `offload-test` suite that compiles
+# native code in the sandbox needs a `cc`/linker — most commonly Rust (`rustc`
+# shells out to `cc` to link every binary) and node-gyp addons (make + g++).
+# Without it a native suite dies at link with `error: linker 'cc' not found` —
+# green on the author's machine, red in the sandbox, deterministically.
+#
+# Default off so the lean image stays lean; a consumer flips it per container
+# class in wrangler.jsonc — `image_vars: { "WITH_BUILD_TOOLS": "true" }`.
+# `build-essential` pulls gcc/g++/make/libc6-dev; `pkg-config` is the tiny,
+# near-universal gateway for `*-sys` crates. A suite needing a specific system
+# lib (e.g. `libssl-dev`) appends it in its own run command.
+ARG WITH_BUILD_TOOLS=false
+RUN if [ "$WITH_BUILD_TOOLS" = "true" ]; then \
+      set -eux; \
+      export DEBIAN_FRONTEND=noninteractive; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends build-essential pkg-config; \
+      rm -rf /var/lib/apt/lists/*; \
+      cc --version; \
+    else \
+      echo "WITH_BUILD_TOOLS=false — no native toolchain baked. Lean image."; \
+    fi
+
+# ── Optional Rust toolchain (gated by the WITH_RUST build arg) ───────────────
+#
+# A webhook-mode `offload-test` command like `cargo test --workspace` has no
+# GitHub-Actions setup step to install a toolchain, and per-run rustup installs
+# would pay the download on every PR — so Rust is baked at image build time
+# behind a flag. Installed system-wide (not $HOME) so it is on PATH for
+# whatever user the sandbox server execs as; RUSTUP_HOME/CARGO_HOME are
+# world-readable so a non-root exec can still resolve the toolchain. rustup
+# itself stays available for per-run `rustup target add …` in a run command.
+# `stable` floats by design: the image is rebuilt on every dispatcher deploy,
+# and a consumer that needs a pinned toolchain pins it in its own run command.
+# Requires WITH_BUILD_TOOLS=true to be useful — rustc cannot link without cc.
+ARG WITH_RUST=false
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN if [ "$WITH_RUST" = "true" ]; then \
+      set -eux; \
+      curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
+        --default-toolchain stable --target wasm32-wasip2 --no-modify-path; \
+      chmod -R a+rX "$RUSTUP_HOME" "$CARGO_HOME"; \
+      cargo --version; rustc --version; \
+    else \
+      echo "WITH_RUST=false — no Rust toolchain baked. Lean image."; \
+    fi
