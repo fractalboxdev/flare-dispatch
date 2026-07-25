@@ -27,16 +27,19 @@ const SAMPLE_BODY = JSON.stringify({
   trigger: {},
 });
 
-/** Reproduce dispatch.sh's signing pipeline: openssl dgst | xxd -p. */
+/**
+ * Reproduce dispatch.sh's signing pipeline: openssl dgst | xxd -p. The xxd
+ * half is plain hex encoding, done here in Node (`Buffer.toString("hex")`) —
+ * byte-for-byte what `xxd -p -c 256` prints for a 32-byte digest — because
+ * the sandbox image the suite runs in ships openssl but not xxd.
+ */
 const opensslHmacHex = (secret: string, body: string): string => {
   const digest = execFileSync(
     "openssl",
     ["dgst", "-sha256", "-hmac", secret, "-binary"],
     { input: body },
   );
-  return execFileSync("xxd", ["-p", "-c", "256"], { input: digest })
-    .toString()
-    .trim();
+  return Buffer.from(digest).toString("hex");
 };
 
 describe("dispatch.sh ↔ hmac.ts HMAC cross-check", () => {
@@ -69,12 +72,8 @@ describe("dispatch.sh ↔ hmac.ts HMAC cross-check", () => {
       ["dgst", "-sha256", "-binary"],
       { input: SECRET },
     );
-    const opensslFp = execFileSync("xxd", ["-p", "-c", "256"], {
-      input: opensslDigest,
-    })
-      .toString()
-      .trim()
-      .slice(0, 8);
+    // Hex-encode in Node (== `xxd -p -c 256`), then `cut -c1-8`.
+    const opensslFp = Buffer.from(opensslDigest).toString("hex").slice(0, 8);
 
     expect(await fingerprint(SECRET)).toBe(opensslFp);
   });
