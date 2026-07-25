@@ -88,6 +88,7 @@ import {
 } from "./failure-summary";
 import { renderResultEmail } from "./notify";
 import { workflowDashboardUrl } from "./dashboard-url";
+import { checkRunNameFor } from "./check-name";
 import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "./log-token";
 import { resolveMailboxLinkSecret, signMailboxToken } from "./mailbox-token";
 import { resolveAgentProxySecret, signAgentToken } from "./agent-token";
@@ -308,7 +309,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // installation token the Worker (never the container) commits with.
     const bucket = this.env.RUNS_STORAGE;
     const githubAppConfig = resolveGithubAppConfig(this.env);
-    const checkRunName = `flare-dispatch/${payload.run}`;
+    // `flare-dispatch/<run>`, plus a `:<label>` suffix when the inputs carry a
+    // `checkLabel` — the seam that lets one run definition post several
+    // separately-requirable checks on the same commit (check-name.ts). Every
+    // run without that input names identically to before.
+    const checkRunName = checkRunNameFor(payload.run, payload.inputs);
     // The Cloudflare Workflows instance page for this execution — the "Details"
     // link on the GitHub check-run + a markdown link in its summary. `undefined`
     // when CLOUDFLARE_ACCOUNT_ID is unset (BYOC default): the check-run renders

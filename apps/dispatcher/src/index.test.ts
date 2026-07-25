@@ -609,6 +609,86 @@ describe("POST /v1/dispatch/:run — dedup", () => {
     expect(workflow.calls).toHaveLength(1);
   });
 
+  it("two DIFFERENTLY-LABELLED check dispatches of one commit stay two executions", async () => {
+    // A repo with several gates dispatches `check` once per gate against the
+    // same commit. If `checkLabel` were left out of the semantic id these would
+    // collapse: the first gate runs, every other gate's `flare-dispatch/check:*`
+    // check-run never posts, and a branch protection requiring them waits
+    // forever on a check that will not arrive.
+    const { env, workflow, idempotencyKv } = fixture({
+      withIdempotencyKv: true,
+    });
+    expect(idempotencyKv).toBeDefined();
+
+    const labelled = (checkLabel: string) =>
+      JSON.stringify({
+        ...validBody,
+        run: "check",
+        inputs: { repo: "owner/test-repo", sha: "abc123def456", checkLabel },
+      });
+
+    const res1 = await handleRequest(
+      await dispatchRequest("check", labelled("codegen")),
+      env,
+    );
+    const res2 = await handleRequest(
+      await dispatchRequest("check", labelled("lint-shell")),
+      env,
+    );
+    expect(res1.status).toBe(202);
+    expect(res2.status).toBe(202);
+
+    const id1 = (await res1.json() as { executionId: string }).executionId;
+    const id2 = (await res2.json() as { executionId: string }).executionId;
+    expect(id1).not.toBe(id2);
+    expect(workflow.calls).toHaveLength(2);
+  });
+
+  it("the SAME label dispatched twice still collapses — labelling doesn't defeat dedup", async () => {
+    const { env, workflow, idempotencyKv } = fixture({
+      withIdempotencyKv: true,
+    });
+    expect(idempotencyKv).toBeDefined();
+
+    const bodyText = JSON.stringify({
+      ...validBody,
+      run: "check",
+      inputs: {
+        repo: "owner/test-repo",
+        sha: "abc123def456",
+        checkLabel: "codegen",
+      },
+    });
+
+    const res1 = await handleRequest(
+      await dispatchRequest("check", bodyText),
+      env,
+    );
+    const res2 = await handleRequest(
+      await dispatchRequest("check", bodyText),
+      env,
+    );
+    const id1 = (await res1.json() as { executionId: string }).executionId;
+    const id2 = (await res2.json() as { executionId: string }).executionId;
+
+    expect(id1).toBe(id2);
+    expect(workflow.calls).toHaveLength(1);
+  });
+
+  it("an UNLABELLED check dispatch keeps its pre-feature semantic id", async () => {
+    // The webhook trigger's idempotencyKey is `check:{repo_}:{sha12}` — an
+    // Action-mode unlabelled dispatch of the same commit must still collapse
+    // onto it, so the id derivation cannot gain a label segment unconditionally.
+    const { env, workflow } = fixture();
+    const bodyText = JSON.stringify({
+      ...validBody,
+      run: "check",
+      inputs: { repo: "owner/test-repo", sha: "abc123def456" },
+    });
+    await handleRequest(await dispatchRequest("check", bodyText), env);
+    expect(workflow.calls[0]!.id).toBe("check_owner_test-repo_abc123def456");
+  });
+
   it("without IDEMPOTENCY_KV bound, semantic id is still used — duplicate Workflow.create is the dedup", async () => {
     const { env, workflow } = fixture();
     const bodyText = JSON.stringify(validBody);

@@ -59,7 +59,17 @@ import {
 import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const CheckInput = Schema.Struct({
-  repo: Schema.String, // "owner/name"
+  /**
+   * `owner/name`. Constrained to GitHub's legal charset — which excludes `:` —
+   * because the CONFIG_KV command key is `check.command:<repo>[:<label>]` and
+   * an unconstrained `repo` makes those segments ambiguous: a dispatch naming
+   * repo `owner/name:codegen` with no label would resolve the key belonging to
+   * `owner/name`'s `codegen` gate. Rejecting `:` at the schema keeps one repo's
+   * config unreachable from another's dispatch.
+   */
+  repo: Schema.String.pipe(
+    Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/),
+  ),
   sha: Schema.String,
   /**
    * The check command, e.g. `pnpm lint` / `npx eslint .` / `cargo clippy`.
@@ -68,6 +78,26 @@ const CheckInput = Schema.Struct({
    * no-ops green (see header).
    */
   command: Schema.optional(Schema.String),
+  /**
+   * Distinguishes this gate from the repo's OTHER gates. A repo with more than
+   * one deterministic check — a source guard, `shellcheck`, a codegen-drift
+   * check — dispatches `check` once per gate, and without a label all of those
+   * land as check-runs named `flare-dispatch/check`, which branch protection
+   * cannot require individually. Two effects:
+   *   - the check-run becomes `flare-dispatch/check:<label>` (check-name.ts),
+   *     so each gate is separately requirable;
+   *   - the CONFIG_KV lookup prefers `check.command:<owner/repo>:<label>`, so
+   *     each gate carries its own command.
+   * Omit for a repo's single default gate — the behaviour before this input
+   * existed, unchanged.
+   *
+   * The pattern is enforced here so a malformed label is a clean 400 at
+   * dispatch rather than a check-run whose name silently doesn't match what an
+   * operator typed into branch protection.
+   */
+  checkLabel: Schema.optional(
+    Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/)),
+  ),
   image: Schema.optional(Schema.String), // container image override
   /** Run the R2-cached dependency install after the clone. */
   install: Schema.optionalWith(Schema.Boolean, { default: () => false }),
@@ -121,9 +151,32 @@ const DEFAULT_TIMEOUT_SEC = 600;
 /** CONFIG_KV key — strictly per-repo (see header: no global fallback). */
 const commandKey = (repo: string): string => `check.command:${repo}`;
 
+/**
+ * The CONFIG_KV lookup ladder, most specific first. Unlabelled dispatches read
+ * the single per-repo key exactly as before; a labelled one prefers its own key
+ * and falls back to the repo's default gate, so adding a second gate to a repo
+ * never requires re-keying the first.
+ *
+ *   wrangler kv key put --binding=CONFIG_KV \
+ *     "check.command:owner/repo:codegen" "pnpm generate && git diff --exit-code"
+ *
+ * Still NO dispatcher-wide rung — the header's reasoning is unchanged: a global
+ * default would turn every installed repo's PRs into a lint storm.
+ */
+const commandKeys = (
+  repo: string,
+  checkLabel: string | undefined,
+): readonly string[] =>
+  checkLabel === undefined
+    ? [commandKey(repo)]
+    : [`${commandKey(repo)}:${checkLabel}`, commandKey(repo)];
+
 export const check = defineRun({
   name: "check",
-  version: "1.0.0",
+  // 1.1.0 — additive: `checkLabel` + the labelled CONFIG_KV rung. An existing
+  // unlabelled dispatch resolves the same key, names the same check-run, and
+  // gets the same instance id as under 1.0.0.
+  version: "1.1.0",
 
   inputs: CheckInput,
   outputs: CheckOutput,
@@ -171,15 +224,32 @@ export const check = defineRun({
       // resolve-config — the per-repo check command. Missing → the repo hasn't
       // opted in; no-op green rather than failing every PR of every installed
       // repo.
+      const keys = commandKeys(input.repo, input.checkLabel);
       const command = yield* step("resolve-config", () =>
         Effect.gen(function* () {
-          return input.command ?? (yield* config.get(commandKey(input.repo)));
+          if (input.command !== undefined) return input.command;
+          return yield* Effect.reduce(
+            keys,
+            undefined as string | undefined,
+            (found, key) =>
+              found !== undefined
+                ? Effect.succeed(found)
+                : config
+                    .get(key)
+                    .pipe(
+                      Effect.map((value) =>
+                        value !== undefined && value.trim().length > 0
+                          ? value
+                          : undefined,
+                      ),
+                    ),
+          );
         }),
       );
       if (command === undefined || command.trim().length === 0) {
         yield* io.log(
           "warn",
-          `check: no \`${commandKey(input.repo)}\` in the config store — repo not opted in, skipping`,
+          `check: no ${keys.map((k) => `\`${k}\``).join(" / ")} in the config store — repo not opted in, skipping`,
         );
         return {
           exitCode: 0,
@@ -242,7 +312,9 @@ export const check = defineRun({
           new AcceptanceFailed({
             exitCode: result.exitCode,
             summaryMd: [
-              `\`${command}\` exited \`${result.exitCode}\` — check reported problems (or failed to run; see the log).`,
+              // Name the specific gate — a repo running several must be able to
+              // tell which one went red without opening the log.
+              `\`${input.checkLabel === undefined ? "check" : `check:${input.checkLabel}`}\` — \`${command}\` exited \`${result.exitCode}\`; problems reported (or the command failed to run; see the log).`,
               "",
               `[View full check log ↗](${logUri})`,
             ].join("\n"),
