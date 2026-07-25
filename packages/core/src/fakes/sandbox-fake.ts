@@ -41,6 +41,14 @@ export type SandboxFakeState = {
     command: string;
     cwd?: string;
     env?: Record<string, string>;
+    /**
+     * the effective timeout the run passed down. Recorded because a run may
+     * resolve it from somewhere other than its own input (offload-test reads
+     * `offload-test.timeoutSec:<repo>` from CONFIG_KV in webhook mode), and a
+     * wrong value here is invisible in the command string — a timeout that is
+     * too short kills a healthy run, and a NaN is a timeout that never fires.
+     */
+    timeoutSec?: number;
     /** the (redacted, per `redactValues`) returned stdout/stderr — absent on a canned failure. */
     stdout?: string;
     stderr?: string;
@@ -139,6 +147,7 @@ export const makeSandboxFake = (
         command,
         cwd: opts.cwd,
         env: opts.env,
+        timeoutSec: opts.timeoutSec,
       };
       state.execs.push(entry);
       const canned = resolve(command);

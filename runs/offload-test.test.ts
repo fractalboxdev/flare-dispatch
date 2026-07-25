@@ -182,6 +182,153 @@ describe("offload-test", () => {
   );
 
   it.effect(
+    "webhook exec options — install + timeoutSec resolve from CONFIG_KV when the dispatch omits them",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+        config: {
+          "offload-test.command:owner/name": "pnpm test",
+          "offload-test.install:owner/name": "true",
+          "offload-test.timeoutSec:owner/name": "1800",
+        },
+      });
+      // Webhook-shaped: no command, no install, no timeoutSec.
+      const input = {
+        repo: "owner/name",
+        sha: "abc123",
+        secrets: [] as readonly string[],
+        failOnNonZeroExit: true,
+      };
+
+      return Effect.gen(function* () {
+        const result = yield* offloadTest.run(input);
+        expect(result.exitCode).toBe(0);
+
+        // install:true came from config — the cached install ran before the
+        // command, which is the whole point (a suite needs its deps).
+        const commands = handles.sandbox.execs.map((e) => e.command);
+        expect(commands).toContain("pnpm install --frozen-lockfile");
+
+        // timeoutSec:1800 came from config, not the 600s default — the other
+        // half of the pair, since a suite that needs an install outruns 600s.
+        const testExec = handles.sandbox.execs.find(
+          (e) => e.command === "pnpm test",
+        );
+        expect(testExec?.timeoutSec).toBe(1800);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "webhook exec options — an explicit dispatch value beats CONFIG_KV",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+        config: {
+          "offload-test.install:owner/name": "true",
+          "offload-test.timeoutSec:owner/name": "1800",
+        },
+      });
+
+      return Effect.gen(function* () {
+        yield* offloadTest.run({
+          ...baseInput,
+          install: false,
+          timeoutSec: 120,
+        });
+        // `install: false` is now distinguishable from "unset" — the whole
+        // reason the schema default was removed — so config must NOT win.
+        expect(
+          handles.sandbox.execs.map((e) => e.command),
+        ).not.toContain("pnpm install --frozen-lockfile");
+        expect(
+          handles.sandbox.execs.find((e) => e.command === "pnpm test")
+            ?.timeoutSec,
+        ).toBe(120);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "webhook exec options — no config and no dispatch value keeps the historical defaults",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+        config: { "offload-test.command:owner/name": "pnpm test" },
+      });
+
+      return Effect.gen(function* () {
+        yield* offloadTest.run({
+          repo: "owner/name",
+          sha: "abc123",
+          secrets: [] as readonly string[],
+          failOnNonZeroExit: true,
+        });
+        // Unchanged from before this feature: no install, 600s.
+        expect(
+          handles.sandbox.execs.map((e) => e.command),
+        ).not.toContain("pnpm install --frozen-lockfile");
+        expect(
+          handles.sandbox.execs.find((e) => e.command === "pnpm test")
+            ?.timeoutSec,
+        ).toBe(600);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "webhook exec options — a malformed config value degrades to the default, never NaN",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+        config: {
+          "offload-test.command:owner/name": "pnpm test",
+          "offload-test.install:owner/name": "yes-please",
+          "offload-test.timeoutSec:owner/name": "half an hour",
+        },
+      });
+
+      return Effect.gen(function* () {
+        yield* offloadTest.run({
+          repo: "owner/name",
+          sha: "abc123",
+          secrets: [] as readonly string[],
+          failOnNonZeroExit: true,
+        });
+        // A typo'd timeout must not reach sandbox.exec as NaN — that is a
+        // timeout that never fires, i.e. a hung run holding a container.
+        expect(
+          handles.sandbox.execs.find((e) => e.command === "pnpm test")
+            ?.timeoutSec,
+        ).toBe(600);
+        expect(
+          handles.sandbox.execs.map((e) => e.command),
+        ).not.toContain("pnpm install --frozen-lockfile");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it("webhook trigger — omits install so CONFIG_KV can supply it", () => {
+    const inputs = offloadTest.triggers?.[0]?.inputs?.({
+      payload: {
+        repository: { full_name: "owner/name" },
+        pull_request: {
+          draft: false,
+          user: { login: "a-human" },
+          head: { sha: "0123456789abcdef" },
+        },
+      },
+    } as never) as Record<string, unknown> | undefined;
+
+    // Restating `install: false` here would read as an explicit caller choice
+    // and shadow `offload-test.install:<repo>` — the exact bug this guards.
+    expect(inputs && "install" in inputs).toBe(false);
+    expect(inputs && "timeoutSec" in inputs).toBe(false);
+    // `secrets` stays pinned empty — a PR-triggered dispatch carries no creds.
+    expect(inputs?.["secrets"]).toEqual([]);
+  });
+
+  it.effect(
     "secrets — Worker secret values are injected into the exec env, per-dispatch env wins",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
@@ -266,14 +413,15 @@ describe("offload-test", () => {
     expect(trigger?.actions).toContain("synchronize");
 
     const ctx = { payload: prPayload() };
-    // command omitted (resolved from CONFIG_KV in the body); fail-on-nonzero
-    // forced on so a red suite turns the check red; install/secrets restate the
-    // decoded-shape defaults the trigger return must carry.
+    // command / install / timeoutSec all omitted — resolved from CONFIG_KV in
+    // the body. `install` must NOT be restated: doing so reads as an explicit
+    // caller choice and shadows `offload-test.install:<repo>`. fail-on-nonzero
+    // is forced on so a red suite turns the check red; `secrets` stays pinned
+    // empty because a PR-triggered dispatch must never carry credentials.
     expect(trigger?.inputs(ctx)).toEqual({
       repo: "owner/name",
       sha: "abcdef0123456789cafe",
       failOnNonZeroExit: true,
-      install: false,
       secrets: [],
     });
     // instanceId mirrors Action mode's `{run}:{repo_}:{sha12}`.
