@@ -152,3 +152,33 @@ command needs `node_modules` / a lockfile install.
         "failOnNonZeroExit": true
       }
 ```
+
+## `offload-test` — webhook mode needs two CONFIG_KV keys to run a real suite
+
+`offload-test`'s `pull_request` trigger can only pass what it computes from the
+PR payload, so a webhook dispatch historically ran with `install: false` and the
+600s default timeout. That is fine for a source-only command and unusable for
+the case the run exists to serve — a repo's actual test suite, which needs its
+dependency tree and routinely outruns ten minutes.
+
+Both are now resolvable per repo. They are a pair: a suite that needs an install
+almost always needs the longer ceiling too.
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.command:owner/repo"    "pnpm -r --if-present test"
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.install:owner/repo"    "true"     # "true"/"1" | "false"/"0"
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.timeoutSec:owner/repo" "1800"     # positive integer
+```
+
+Precedence is dispatch value → CONFIG_KV → default (`install: false`,
+`timeoutSec: 600`). An Action-mode dispatch that passes a value always wins, and
+one that passes `command` skips the config read entirely.
+
+A malformed value degrades to the default rather than propagating: a non-integer
+timeout would otherwise reach `sandbox.exec` as `NaN` — a timeout that never
+fires, i.e. a hung run holding a container until `maxDurationSec`.
+
+`timeoutSec` is still bounded by the run's `maxDurationSec` (1800).

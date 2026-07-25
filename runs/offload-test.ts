@@ -95,8 +95,16 @@ const OffloadTestInput = Schema.Struct({
    * Run the R2-cached dependency install (`installCached`: lockfile-detected
    * tool, content-addressed restore) after the clone, so the command doesn't
    * have to open with its own cold `pnpm install` / `npm ci` / `cargo fetch`.
+   *
+   * Plain `optional`, NOT
+   * `optionalWith({default: false})`: a schema default is applied at decode, so
+   * the body could never tell "caller explicitly chose false" from "caller said
+   * nothing" — and that distinction is what lets a webhook dispatch fall through
+   * to `offload-test.install:<repo>`. The false default now lives in the body's
+   * resolution chain instead, so the effective behaviour is unchanged for every
+   * caller that passes a value.
    */
-  install: Schema.optionalWith(Schema.Boolean, { default: () => false }),
+  install: Schema.optional(Schema.Boolean),
   /** Non-sensitive env only — dispatch inputs are persisted (header note 3). */
   env: Schema.optional(
     Schema.Record({ key: Schema.String, value: Schema.String }),
@@ -145,6 +153,47 @@ const TIMEOUT_SEC_DEFAULT = 600;
 const COMMAND_KEY = "offload-test.command";
 const repoCommandKey = (repo: string): string => `offload-test.command:${repo}`;
 
+/**
+ * Per-repo CONFIG_KV overrides for the two knobs a webhook dispatch cannot
+ * supply. Same reason `command` needs a key: a trigger's `inputs` is a sync,
+ * payload-only callback, so anything it cannot compute from the PR payload has
+ * to be resolvable in the run body.
+ *
+ * Without these, webhook mode is pinned to `install: false` and a 600s timeout,
+ * which is fine for a source-only command and unusable for the case this run
+ * exists to serve — running a repo's actual test suite, which needs its
+ * dependency tree and routinely outruns ten minutes. The two are a pair: a
+ * suite that needs an install almost always needs the longer ceiling too.
+ *
+ *   wrangler kv key put --binding=CONFIG_KV "offload-test.install:owner/repo" "true"
+ *   wrangler kv key put --binding=CONFIG_KV "offload-test.timeoutSec:owner/repo" "1800"
+ *
+ * An explicit dispatch value always wins; these only fill the gap the trigger
+ * leaves. `timeoutSec` is still clamped by the run's `maxDurationSec`.
+ */
+const repoInstallKey = (repo: string): string => `offload-test.install:${repo}`;
+const repoTimeoutKey = (repo: string): string =>
+  `offload-test.timeoutSec:${repo}`;
+
+/** `"true"`/`"1"` → true, `"false"`/`"0"` → false, anything else → undefined. */
+const parseBoolConfig = (raw: string | undefined): boolean | undefined => {
+  const v = raw?.trim().toLowerCase();
+  if (v === "true" || v === "1") return true;
+  if (v === "false" || v === "0") return false;
+  return undefined;
+};
+
+/**
+ * A positive integer, or `undefined` for absent/garbage. Deliberately does NOT
+ * fall back to the default on a malformed value's behalf — the caller does that,
+ * so a typo'd key degrades to the documented default rather than to `NaN`, which
+ * would reach `sandbox.exec` as a timeout that never fires.
+ */
+const parseIntConfig = (raw: string | undefined): number | undefined => {
+  const n = Number(raw?.trim());
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+};
+
 export const offloadTest = defineRun({
   name: "offload-test",
   version: "1.1.0",
@@ -175,11 +224,14 @@ export const offloadTest = defineRun({
       inputs: ({ payload }) => ({
         repo: String(payload.repository?.full_name ?? "unknown/unknown"),
         sha: String(payload.pull_request?.head?.sha ?? ""),
-        // command omitted — resolved from CONFIG_KV in the run body.
+        // command / install / timeoutSec omitted — all three resolved from
+        // CONFIG_KV in the run body. `install` in particular MUST stay omitted:
+        // restating it here would look like an explicit caller choice and take
+        // precedence over `offload-test.install:<repo>`, which is exactly the
+        // override webhook mode has no other way to express.
         failOnNonZeroExit: true,
-        // The decoded input type carries these (their schema defaults); the
-        // trigger restates them since `inputs` returns the decoded shape.
-        install: false,
+        // `secrets` keeps its schema default restated — a PR-triggered dispatch
+        // must never carry credentials, so pinning it empty here is deliberate.
         secrets: [],
       }),
     },
@@ -203,17 +255,39 @@ export const offloadTest = defineRun({
       // `checkout → exec → upload-log` step shape (the `??` short-circuits before
       // the `yield*`). A command missing everywhere fails fast — running an empty
       // command would post a meaningless green check.
-      const command =
-        input.command ??
-        (yield* step("resolve-command", () =>
-          config.get(repoCommandKey(input.repo)).pipe(
-            Effect.flatMap((perRepo) =>
-              perRepo !== undefined && perRepo.trim().length > 0
-                ? Effect.succeed(perRepo)
-                : config.get(COMMAND_KEY),
-            ),
-          ),
-        ));
+      // `install` / `timeoutSec` are resolved INSIDE this same step, not a
+      // second one. They are a webhook-mode concern, and webhook mode is
+      // exactly the case that omits `command` — so folding them in here means
+      // an Action dispatch (which passes `command`) still skips the whole thing
+      // and keeps the historical `checkout → exec → upload-log` step shape that
+      // the suite pins. One step, one checkpoint, no new config reads for
+      // callers that supply everything.
+      const resolved =
+        input.command === undefined
+          ? yield* step("resolve-command", () =>
+              Effect.gen(function* () {
+                const perRepo = yield* config.get(repoCommandKey(input.repo));
+                const command =
+                  perRepo !== undefined && perRepo.trim().length > 0
+                    ? perRepo
+                    : yield* config.get(COMMAND_KEY);
+                return {
+                  command,
+                  install: parseBoolConfig(
+                    yield* config.get(repoInstallKey(input.repo)),
+                  ),
+                  timeoutSec: parseIntConfig(
+                    yield* config.get(repoTimeoutKey(input.repo)),
+                  ),
+                };
+              }),
+            )
+          : {
+              command: input.command,
+              install: undefined,
+              timeoutSec: undefined,
+            };
+      const command = resolved.command;
       if (command === undefined || command.trim().length === 0) {
         return yield* Effect.fail(
           new StepFailed({
@@ -225,6 +299,13 @@ export const offloadTest = defineRun({
         );
       }
 
+      // Dispatch value → CONFIG_KV → documented default. The `false` here is the
+      // schema default that used to live on the input (see its doc comment), so
+      // a caller that passes nothing anywhere lands exactly where it always did.
+      const install = input.install ?? resolved.install ?? false;
+      const timeoutSec =
+        input.timeoutSec ?? resolved.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
+
       // checkout — acquire a container (honouring the `image` override), clone
       // the repo at the requested SHA, and optionally run the R2-cached
       // dependency install. One primitive, same opening move as cdp-acceptance.
@@ -233,7 +314,7 @@ export const offloadTest = defineRun({
           repo: input.repo,
           sha: input.sha,
           image: input.image,
-          install: input.install,
+          install,
         }),
       );
 
@@ -260,7 +341,7 @@ export const offloadTest = defineRun({
           // Per-dispatch `env` wins over a same-named config-store secret —
           // the more specific source overrides the global one.
           env: { ...secretEnv, ...input.env },
-          timeoutSec: input.timeoutSec ?? TIMEOUT_SEC_DEFAULT,
+          timeoutSec,
         }),
       );
 
