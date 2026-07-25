@@ -28,6 +28,7 @@ import { workflowDashboardUrl } from "../dashboard-url";
 import type { Env } from "../env";
 import { fingerprint, SIGNATURE_HEADER, verify } from "../hmac";
 import { toInstanceId } from "../instance-id";
+import { readCheckLabel } from "../check-name";
 import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "../log-token";
 import { lookupRun } from "../registry";
 
@@ -40,12 +41,28 @@ const IDEMPOTENCY_TTL_SEC = 86_400;
  * id is a single path segment. Two dispatches naming the same logical work
  * collapse onto one execution at the CF Workflows layer.
  *
+ * A `checkLabel` is part of "the same logical work": a repo with several gates
+ * dispatches ONE run (`check`) once per gate against the SAME commit, and each
+ * posts its own `flare-dispatch/check:<label>` check. Without the label in the
+ * id those dispatches collapse onto one execution — the first gate runs, every
+ * other gate's check-run never posts, and a branch protection requiring them
+ * hangs forever on a check that will not arrive. Fail-closed, but broken. The
+ * label is read with the SAME helper that names the check-run, so the two can
+ * never drift apart.
+ *
  * SHA is truncated to 12 chars to keep the id well within CF Workflows'
  * 64-char instance-id limit; 12 hex chars is ~4.7e14 — collision space large
- * enough for a single repo's worth of unique commits.
+ * enough for a single repo's worth of unique commits. A label can push the
+ * composed key past 64, which `toInstanceId` absorbs by truncating with a hash
+ * suffix derived from the FULL key — so labelled ids stay distinct.
  */
-const semanticInstanceId = (run: string, repo: string, sha: string): string =>
-  `${run}:${repo.replace(/\//g, "_")}:${sha.slice(0, 12)}`;
+const semanticInstanceId = (
+  run: string,
+  repo: string,
+  sha: string,
+  checkLabel: string | undefined,
+): string =>
+  `${run}${checkLabel === undefined ? "" : `:${checkLabel}`}:${repo.replace(/\//g, "_")}:${sha.slice(0, 12)}`;
 
 /** JSON helper — a `Response` with the right content-type. */
 const json = (body: unknown, status: number): Response =>
@@ -247,7 +264,12 @@ export const handleDispatch = async (
   const executionId = toInstanceId(
     headerKey && headerKey.length > 0
       ? headerKey
-      : semanticInstanceId(body.run, body.github.repo, body.github.sha),
+      : semanticInstanceId(
+          body.run,
+          body.github.repo,
+          body.github.sha,
+          readCheckLabel(body.inputs),
+        ),
   );
 
   // The Cloudflare Workflows instance page for this execution. Returned in the

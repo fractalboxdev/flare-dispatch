@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { it } from "@effect/vitest";
-import { Cause, Effect, Exit, Option } from "effect";
+import { Cause, Effect, Either, Exit, Option, Schema } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import { check } from "./check";
@@ -169,6 +169,27 @@ describe("check", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it("key confusion — a `repo` carrying `:` is rejected by the input schema", () => {
+    // `check.command:<repo>[:<label>]` has two `:`-delimited segments, so an
+    // unconstrained `repo` makes them ambiguous: repo `owner/name:lint-shell`
+    // with no label resolves the key belonging to `owner/name`'s `lint-shell`
+    // gate. GitHub repo names cannot contain `:`, so rejecting it at the schema
+    // keeps one repo's config unreachable from another's dispatch.
+    const decode = Schema.decodeUnknownEither(check.inputs);
+    expect(
+      Either.isLeft(
+        decode({ repo: "owner/name:lint-shell", sha: "abc123" }),
+      ),
+    ).toBe(true);
+    expect(Either.isRight(decode({ repo: "owner/name", sha: "abc123" }))).toBe(
+      true,
+    );
+    // Legal GitHub names keep working — dots, underscores, hyphens.
+    expect(
+      Either.isRight(decode({ repo: "my-org/my_repo.js", sha: "abc123" })),
+    ).toBe(true);
+  });
 
   it.effect(
     "labelled gate — the red-check summary names the gate that failed",

@@ -62,6 +62,24 @@ describe("checkRunNameFor", () => {
     }
   });
 
+  it("rejects a TRAILING line terminator, not just a leading one", () => {
+    // JS `$` in a non-`m` pattern asserts end-of-input, so these already fail —
+    // unlike Python / PCRE, where `$` matches before a final newline. Pinned
+    // explicitly so adding an `m` flag to CHECK_LABEL_PATTERN breaks a test
+    // rather than silently admitting `flare-dispatch/check:codegen\n`, a name
+    // that would never match what an operator typed into branch protection.
+    for (const checkLabel of [
+      "codegen\n",
+      "codegen\r",
+      "codegen\r\n",
+      "code\ngen",
+    ]) {
+      expect(checkRunNameFor("check", { checkLabel })).toBe(
+        "flare-dispatch/check",
+      );
+    }
+  });
+
   it("accepts a label exactly at the 32-char ceiling", () => {
     const label = "a".repeat(32);
     expect(checkRunNameFor("check", { checkLabel: label })).toBe(

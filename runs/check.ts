@@ -59,7 +59,17 @@ import {
 import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const CheckInput = Schema.Struct({
-  repo: Schema.String, // "owner/name"
+  /**
+   * `owner/name`. Constrained to GitHub's legal charset — which excludes `:` —
+   * because the CONFIG_KV command key is `check.command:<repo>[:<label>]` and
+   * an unconstrained `repo` makes those segments ambiguous: a dispatch naming
+   * repo `owner/name:codegen` with no label would resolve the key belonging to
+   * `owner/name`'s `codegen` gate. Rejecting `:` at the schema keeps one repo's
+   * config unreachable from another's dispatch.
+   */
+  repo: Schema.String.pipe(
+    Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/),
+  ),
   sha: Schema.String,
   /**
    * The check command, e.g. `pnpm lint` / `npx eslint .` / `cargo clippy`.
@@ -163,7 +173,10 @@ const commandKeys = (
 
 export const check = defineRun({
   name: "check",
-  version: "1.0.0",
+  // 1.1.0 — additive: `checkLabel` + the labelled CONFIG_KV rung. An existing
+  // unlabelled dispatch resolves the same key, names the same check-run, and
+  // gets the same instance id as under 1.0.0.
+  version: "1.1.0",
 
   inputs: CheckInput,
   outputs: CheckOutput,
