@@ -31,6 +31,32 @@ wrangler kv key put --binding=CONFIG_KV \
 Do **not** require `flare-dispatch/check` in branch protection until that key is
 set — an unconfigured skip would otherwise satisfy the required check.
 
+### Several gates on one repo
+
+A repo usually has more than one deterministic check worth requiring — a source
+guard, `shellcheck`, a codegen-drift check. Dispatch `check` once per gate with
+a distinct `checkLabel`; each lands as its own check-run
+(`flare-dispatch/check:<label>`) and is separately requirable in branch
+protection. Without a label they would all be named `flare-dispatch/check`,
+which branch protection cannot tell apart.
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "check.command:owner/repo:lint-shell" "shellcheck scripts/*.sh"
+wrangler kv key put --binding=CONFIG_KV \
+  "check.command:owner/repo:codegen" "pnpm generate && git diff --exit-code"
+```
+
+A labelled dispatch reads `check.command:<repo>:<label>` and falls back to
+`check.command:<repo>`, so adding a second gate never requires re-keying the
+first. The fallback does not run in reverse: an **unlabelled** dispatch reads
+only `check.command:<repo>`, so configuring a labelled gate never silently opts
+the webhook-triggered default gate in.
+
+The webhook trigger fires the unlabelled gate only — a trigger's `inputs`
+callback is sync and payload-only, so it cannot enumerate a repo's labels from
+KV. Labelled gates are dispatched Action-mode, one step per gate.
+
 ### Action mode
 
 Pass `command` in the dispatch body (skips KV). Set `install: true` when the
@@ -59,6 +85,7 @@ command needs `node_modules` / a lockfile install.
 | `repo` | required | `owner/name` |
 | `sha` | required | commit to checkout |
 | `command` | omit | shell command; webhook resolves `check.command:<repo>` |
+| `checkLabel` | omit | names a second/third gate — see *Several gates on one repo*. `[A-Za-z0-9][A-Za-z0-9._-]{0,31}` |
 | `install` | `false` | R2-cached dep install after clone |
 | `image` | omit | container image override |
 | `env` | omit | **non-sensitive only** — dispatch inputs are persisted |

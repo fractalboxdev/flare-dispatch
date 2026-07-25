@@ -92,6 +92,110 @@ describe("check", () => {
   );
 
   it.effect(
+    "labelled gate — `check.command:<repo>:<label>` wins over the repo's default gate",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "shellcheck scripts/deploy.sh": { exitCode: 0 } },
+        config: {
+          "check.command:owner/name:lint-shell": "shellcheck scripts/deploy.sh",
+          "check.command:owner/name": CHECK_CMD,
+        },
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* check.run({
+          repo: "owner/name",
+          sha: "abc123",
+          checkLabel: "lint-shell",
+          install: false,
+          secrets: [] as readonly string[],
+          failOnNonZeroExit: true,
+        });
+        expect(result.exitCode).toBe(0);
+        expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+          "shellcheck scripts/deploy.sh",
+        ]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "labelled gate — a label with no key of its own falls back to the repo's default gate",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
+        config: { "check.command:owner/name": CHECK_CMD },
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* check.run({
+          repo: "owner/name",
+          sha: "abc123",
+          checkLabel: "unconfigured",
+          install: false,
+          secrets: [] as readonly string[],
+          failOnNonZeroExit: true,
+        });
+        // Adding a second gate to a repo must not require re-keying the first.
+        expect(result.exitCode).toBe(0);
+        expect(handles.sandbox.execs.map((e) => e.command)).toContain(CHECK_CMD);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "labelled gate — an UNLABELLED dispatch never reads a labelled key",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "shellcheck scripts/deploy.sh": { exitCode: 0 } },
+        // Only a labelled key exists — the repo's default gate is unconfigured.
+        config: {
+          "check.command:owner/name:lint-shell": "shellcheck scripts/deploy.sh",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* check.run({
+          repo: "owner/name",
+          sha: "abc123",
+          install: false,
+          secrets: [] as readonly string[],
+          failOnNonZeroExit: true,
+        });
+        // The opt-out contract is per-key: configuring one labelled gate must
+        // not silently opt the repo's webhook-triggered default gate in.
+        expect(result.skippedReason).toBe("not-configured");
+        expect(handles.sandbox.execs).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "labelled gate — the red-check summary names the gate that failed",
+    () => {
+      const { layer } = makeCFRuntimeTest({
+        sandboxProgram: { [CHECK_CMD]: { exitCode: 1 } },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          check.run({
+            ...baseInput,
+            checkLabel: "codegen",
+            failOnNonZeroExit: true,
+          }),
+        );
+        const failure = Exit.isFailure(exit)
+          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+          : undefined;
+        expect((failure as { summaryMd?: string } | undefined)?.summaryMd).toContain(
+          "check:codegen",
+        );
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
     "input command wins — explicit command skips needing KV",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
