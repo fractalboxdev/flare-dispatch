@@ -9,7 +9,7 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { bootApp } from "./boot-app";
-import { installCached } from "./install-cached";
+import { installCached, TOOLS } from "./install-cached";
 import { probeHttp } from "./probe-http";
 import { sharded } from "./sharded";
 import { makeCFRuntimeTest } from "../testing";
@@ -76,6 +76,34 @@ describe("workspace", () => {
 });
 
 describe("installCached", () => {
+  // PROOF (the cache stores what the install produces, nothing else): a
+  // build directory under a dependency key grows monotonically — the key only
+  // moves when a dependency does — and is expanded onto the container disk
+  // before the run's first command. One consumer's cached `target/` reached
+  // 14 GB against an 18 GB disk, so every run started at 100% full and died on
+  // the first write with a bare `disk I/O error` naming neither.
+  //
+  // Asserted against the table rather than a command trace because `paths`
+  // never reaches the sandbox: it is handed to `cache.restoreOr` / `cache.save`,
+  // so nothing a run executes would reveal a regression here.
+  it("caches only directories the tool's own install command populates", () => {
+    // `cargo fetch` downloads sources into CARGO_HOME; it never writes `target`.
+    // The entry is inert today — the sandbox sets CARGO_HOME outside the
+    // checkout, so this path does not exist and nothing is cached. Asserted
+    // anyway: it pins that cargo caches NO build directory, which is the
+    // property that matters.
+    expect(TOOLS.cargo.paths).toEqual([".cargo-registry"]);
+    // The controls: every other tool's paths ARE its install's output, so this
+    // test fails on a real regression rather than on the cargo entry alone.
+    expect(TOOLS.pnpm.paths).toEqual(["node_modules", ".pnpm-store"]);
+    expect(TOOLS.npm.paths).toEqual(["node_modules"]);
+    expect(TOOLS.uv.paths).toEqual([".venv"]);
+    // Nothing anywhere caches a build directory.
+    for (const [tool, spec] of Object.entries(TOOLS)) {
+      expect(spec.paths, `${tool} caches a build directory`).not.toContain("target");
+    }
+  });
+
   it("auto-detects pnpm from the lockfile probe", async () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: {
