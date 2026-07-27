@@ -18,7 +18,33 @@ import { sandbox, type Container } from "../services/sandbox";
 // runtime `cache` Layer additionally namespaces the R2 archive key per repo,
 // so two repos with an identical lockfile cannot collide (cross-repo
 // poisoning) — see @fractalboxdev/flare-dispatch-runtime-cf cache-r2.ts.
-const TOOLS = {
+//
+// INVARIANT: `paths` are the directories the tool's own `install` command
+// POPULATES, relative to the checkout — nothing else. `pnpm install` writes
+// `node_modules` + the store, `npm ci` writes `node_modules`, `uv sync` writes
+// `.venv`. Caching anything else stores a BUILD OUTPUT under a dependency key,
+// and build outputs have neither of the two properties that make this cache
+// safe:
+//
+//   * They are not bounded by the lockfile. A `target/` accumulates every
+//     feature combination, profile and test binary ever produced, while the
+//     key only changes when a dependency does — so it grows monotonically and
+//     nothing ever evicts it.
+//   * They are not free to restore. The archive is expanded onto the
+//     container's disk BEFORE the run's first command. Past a point that is
+//     not a speed-up but a hard failure: a consumer's cached `target/` reached
+//     14 GB against an 18 GB disk, so every run began at 100% full and died on
+//     the first write with a bare `disk I/O error` naming neither the disk nor
+//     the cache.
+//
+// Build caching is a real want, but it needs its own key (toolchain + profile +
+// feature set), its own eviction, and a size ceiling checked before restore. It
+// is not this primitive.
+// Exported so the invariant above is assertable. It is the contract this
+// primitive makes with every consumer's disk, and the failure it prevents is
+// silent (a run that dies at 100% full names neither the cache nor the disk),
+// so "someone will notice" is not a guard.
+export const TOOLS = {
   pnpm: {
     lockfile: "pnpm-lock.yaml",
     install: "pnpm install --frozen-lockfile",
@@ -28,7 +54,24 @@ const TOOLS = {
   cargo: {
     lockfile: "Cargo.lock",
     install: "cargo fetch --locked",
-    paths: ["target", ".cargo-registry"],
+    // NOT `target` — see the invariant above. `cargo fetch` downloads sources;
+    // it never writes `target`, so caching it was always storing something the
+    // install step did not produce.
+    //
+    // Which leaves cargo with NOTHING CACHEABLE TODAY, and that is stated
+    // rather than papered over: `.cargo-registry` does not exist in a checkout.
+    // The sandbox image sets `CARGO_HOME=/usr/local/cargo` (infra/Dockerfile.sandbox),
+    // so `cargo fetch` populates `/usr/local/cargo/registry`, while `save`/`restore`
+    // tar these paths with `cwd` at the checkout — an absolute path outside it
+    // cannot be named here. So this entry is inert: a Rust consumer re-downloads
+    // its registry every run.
+    //
+    // That is a deliberate trade, not an oversight. Inert costs a download;
+    // caching `target` cost every run outright. Making the registry genuinely
+    // cacheable needs `CARGO_HOME` pointed inside the checkout for the install
+    // AND for the run command that follows it — a change to how execs carry
+    // env, not to this table.
+    paths: [".cargo-registry"],
   },
   uv: { lockfile: "uv.lock", install: "uv sync --frozen", paths: [".venv"] },
 } as const;
