@@ -372,6 +372,34 @@ export const makeSandboxCloudflareLive = (
             const token = await getInstallationToken(githubAuth);
             cloneUrl = authenticateCloneUrl(cloneUrl, token);
           }
+          // Clear the target BEFORE cloning: `targetDir` is derived from the
+          // repo name, so it is the same path for every execution of a repo,
+          // and a container whose filesystem is not fresh still has the last
+          // execution's tree at it.
+          //
+          // That is not theoretical. A consumer's run reported
+          // `cargo test --workspace` → `Finished in 0.73s` with nothing
+          // compiled, against a 14 GB `target/`, on a supposedly fresh clone
+          // with no cache entry for its lockfile. A clean workspace cannot do
+          // that. Two failures follow, and the quiet one is worse:
+          //
+          //   * DISK — the leftover build tree fills an 18 GB container disk,
+          //     so the run dies on its first write with a bare `disk I/O error`
+          //     that names neither the disk nor the workspace.
+          //   * CORRECTNESS — the build tool reuses those artifacts. A run whose
+          //     sources match the previous execution's rebuilds nothing and
+          //     returns a verdict on another commit's code. A merge gate that
+          //     tests the wrong tree and reports green is worse than a red one.
+          //
+          // `git clone` into a non-empty directory fails rather than merging,
+          // so this is also what keeps a reused container from erroring on
+          // checkout instead of running.
+          const clear = await box.exec(`rm -rf ${targetDir}`);
+          if (clear.exitCode !== 0) {
+            throw new Error(
+              `rm -rf ${targetDir} exited ${clear.exitCode}: ${clear.stderr}`,
+            );
+          }
           await box.gitCheckout(cloneUrl, { targetDir });
           // `gitCheckout` clones a branch tip; pin the exact SHA so the run is
           // reproducible. A bare clone leaves the repo at the default branch.
