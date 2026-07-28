@@ -92,6 +92,60 @@ describe("check", () => {
   );
 
   it.effect(
+    "per-repo timeout — `check.timeoutSec:<repo>` reaches exec, over the 600s default",
+    () => {
+      // This gate was built for linters, so the default is 600s. A repo whose
+      // `check.command` COMPILES has to say otherwise, and webhook mode has no
+      // other channel: the trigger's `inputs` is sync + payload-only and omits
+      // `timeoutSec` entirely, so without this key such a command is killed
+      // mid-build with nothing an operator can configure.
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
+        config: {
+          "check.command:owner/name": CHECK_CMD,
+          "check.timeoutSec:owner/name": "1800",
+        },
+      });
+      const input = {
+        repo: "owner/name",
+        sha: "abc123",
+        install: false,
+        secrets: [] as readonly string[],
+        failOnNonZeroExit: true,
+      };
+
+      return Effect.gen(function* () {
+        yield* check.run(input);
+        const exec = handles.sandbox.execs.find((e) => e.command === CHECK_CMD);
+        expect(exec).toBeDefined();
+        expect(exec?.timeoutSec).toBe(1800);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("per-repo timeout — absent key keeps the 600s default", () => {
+    // The control. Without it the assertion above passes for a run that ignores
+    // the key entirely and is handed 1800 by some other path.
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
+      config: { "check.command:owner/name": CHECK_CMD },
+    });
+    const input = {
+      repo: "owner/name",
+      sha: "abc123",
+      install: false,
+      secrets: [] as readonly string[],
+      failOnNonZeroExit: true,
+    };
+
+    return Effect.gen(function* () {
+      yield* check.run(input);
+      const exec = handles.sandbox.execs.find((e) => e.command === CHECK_CMD);
+      expect(exec?.timeoutSec).toBe(600);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
     "labelled gate — `check.command:<repo>:<label>` wins over the repo's default gate",
     () => {
       const { layer, handles } = makeCFRuntimeTest({

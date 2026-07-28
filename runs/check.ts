@@ -171,6 +171,39 @@ const commandKeys = (
     ? [commandKey(repo)]
     : [`${commandKey(repo)}:${checkLabel}`, commandKey(repo)];
 
+/**
+ * Per-repo `exec` timeout, same ladder as the command.
+ *
+ * The webhook trigger's `inputs` is sync and payload-only, so it cannot carry a
+ * per-repo timeout — it omits the field and the body falls back to
+ * {@link DEFAULT_TIMEOUT_SEC} (600). That default suits the linters this gate
+ * was built for and is far too short for a command that compiles: a repo whose
+ * `check.command` is a cold native build gets killed mid-compile with no way to
+ * say otherwise, and webhook mode is exactly the mode with no other channel.
+ *
+ * `offload-test` already resolves `offload-test.timeoutSec:<repo>` for the same
+ * reason; this is that key, one run over. A dispatch that passes `timeoutSec`
+ * still wins, and the value stays clamped by the run's `maxDurationSec`.
+ */
+const timeoutKeys = (
+  repo: string,
+  checkLabel: string | undefined,
+): readonly string[] =>
+  checkLabel === undefined
+    ? [`check.timeoutSec:${repo}`]
+    : [`check.timeoutSec:${repo}:${checkLabel}`, `check.timeoutSec:${repo}`];
+
+/**
+ * A positive integer, or `undefined` for absent/garbage. Deliberately does NOT
+ * substitute the default on a malformed value's behalf — the caller does that,
+ * so a typo'd key degrades to the documented default rather than to `NaN`,
+ * which would reach `sandbox.exec` as a timeout that never fires.
+ */
+const parseIntConfig = (raw: string | undefined): number | undefined => {
+  const n = Number(raw?.trim());
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+};
+
 export const check = defineRun({
   name: "check",
   // 1.1.0 — additive: `checkLabel` + the labelled CONFIG_KV rung. An existing
@@ -225,10 +258,25 @@ export const check = defineRun({
       // opted in; no-op green rather than failing every PR of every installed
       // repo.
       const keys = commandKeys(input.repo, input.checkLabel);
-      const command = yield* step("resolve-config", () =>
+      // Resolved together in ONE step, not two: both are webhook-mode concerns
+      // (a dispatch that passes `command` also passes `timeoutSec` if it cares),
+      // so folding them keeps the step shape the suite pins and adds no config
+      // read for callers that supply everything.
+      const { command, timeoutSec } = yield* step("resolve-config", () =>
         Effect.gen(function* () {
-          if (input.command !== undefined) return input.command;
-          return yield* Effect.reduce(
+          const resolvedTimeout =
+            input.timeoutSec ??
+            (yield* Effect.reduce(
+              timeoutKeys(input.repo, input.checkLabel),
+              undefined as number | undefined,
+              (found, key) =>
+                found !== undefined
+                  ? Effect.succeed(found)
+                  : config.get(key).pipe(Effect.map(parseIntConfig)),
+            ));
+          if (input.command !== undefined)
+            return { command: input.command, timeoutSec: resolvedTimeout };
+          const resolvedCommand = yield* Effect.reduce(
             keys,
             undefined as string | undefined,
             (found, key) =>
@@ -244,6 +292,7 @@ export const check = defineRun({
                       ),
                     ),
           );
+          return { command: resolvedCommand, timeoutSec: resolvedTimeout };
         }),
       );
       if (command === undefined || command.trim().length === 0) {
@@ -292,7 +341,7 @@ export const check = defineRun({
           // Defense in depth (header): scrub secret VALUES from the captured
           // log before it's persisted, in case the command echoes its env.
           redactValues: Object.values(secretEnv),
-          timeoutSec: input.timeoutSec ?? DEFAULT_TIMEOUT_SEC,
+          timeoutSec: timeoutSec ?? DEFAULT_TIMEOUT_SEC,
         }),
       );
 
