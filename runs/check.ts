@@ -331,18 +331,27 @@ export const check = defineRun({
       // here; the failOnNonZeroExit branch below decides whether it reds the
       // check. `result` is the checkpointed step output — replay restores it
       // identically, which is why `durationMs` is read from it.
-      const result = yield* step("exec", () =>
-        sandbox.exec({
-          cwd: dir,
-          container,
-          command,
-          // Per-dispatch `env` wins over a same-named Worker secret.
-          env: { ...secretEnv, ...input.env },
-          // Defense in depth (header): scrub secret VALUES from the captured
-          // log before it's persisted, in case the command echoes its env.
-          redactValues: Object.values(secretEnv),
-          timeoutSec: timeoutSec ?? DEFAULT_TIMEOUT_SEC,
-        }),
+      // The STEP carries the same ceiling as the exec inside it — see the same
+      // note in `offload-test`. Two timeouts that must agree are one timeout
+      // with a bug in it: leave the step's unset and its 600s default silently
+      // wins over a configured `check.timeoutSec`, surfacing as
+      // `WorkflowTimeoutError` from a limit the repo's config never mentions.
+      const effectiveTimeoutSec = timeoutSec ?? DEFAULT_TIMEOUT_SEC;
+      const result = yield* step(
+        "exec",
+        () =>
+          sandbox.exec({
+            cwd: dir,
+            container,
+            command,
+            // Per-dispatch `env` wins over a same-named Worker secret.
+            env: { ...secretEnv, ...input.env },
+            // Defense in depth (header): scrub secret VALUES from the captured
+            // log before it's persisted, in case the command echoes its env.
+            redactValues: Object.values(secretEnv),
+            timeoutSec: effectiveTimeoutSec,
+          }),
+        { timeoutSec: effectiveTimeoutSec },
       );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.

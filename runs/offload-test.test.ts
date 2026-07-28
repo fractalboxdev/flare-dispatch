@@ -215,6 +215,17 @@ describe("offload-test", () => {
           (e) => e.command === "pnpm test",
         );
         expect(testExec?.timeoutSec).toBe(1800);
+
+        // ...and the STEP wrapping that exec carries the same ceiling.
+        //
+        // Two timeouts, and only one of them was being set. A Workflow step
+        // defaults to 600s, so a repo configuring 1800 got
+        // `WorkflowTimeoutError: Execution timed out after 600000ms` at ten
+        // minutes — from a limit its config never mentions, with an empty log
+        // because the step died rather than the command. The assertion above
+        // passed throughout: it only ever proved the inner half.
+        const execStep = handles.executions.steps.find((s) => s.name === "exec");
+        expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800);
       }).pipe(Effect.provide(layer));
     },
   );
