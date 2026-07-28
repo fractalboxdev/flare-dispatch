@@ -333,16 +333,32 @@ export const offloadTest = defineRun({
       // ExecTimeout, which propagate out of the run unchanged. `result` is the
       // checkpointed step output — replay restores it identically, which is
       // why the run's `durationMs` is read from it (see header note 2).
-      const result = yield* step("exec", () =>
-        sandbox.exec({
-          cwd: dir,
-          container,
-          command,
-          // Per-dispatch `env` wins over a same-named config-store secret —
-          // the more specific source overrides the global one.
-          env: { ...secretEnv, ...input.env },
-          timeoutSec,
-        }),
+      // The STEP carries the same ceiling as the exec inside it.
+      //
+      // There are two timeouts and they are not the same one. `timeoutSec`
+      // below bounds the command; the Workflow step wrapping it has its own,
+      // defaulting to 600s. Leave the step's unset and the lower ceiling wins
+      // silently: a repo configuring `offload-test.timeoutSec = 1800` gets
+      // `WorkflowTimeoutError: Execution timed out after 600000ms` at ten
+      // minutes, from a limit nothing in its config mentions, and the artifact
+      // is empty because the step died rather than the command.
+      //
+      // So the step timeout is DERIVED from the exec timeout rather than
+      // configured beside it — two knobs that must agree are one knob with a
+      // bug in it. `maxDurationSec` still clamps the whole run above both.
+      const result = yield* step(
+        "exec",
+        () =>
+          sandbox.exec({
+            cwd: dir,
+            container,
+            command,
+            // Per-dispatch `env` wins over a same-named config-store secret —
+            // the more specific source overrides the global one.
+            env: { ...secretEnv, ...input.env },
+            timeoutSec,
+          }),
+        { timeoutSec },
       );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.

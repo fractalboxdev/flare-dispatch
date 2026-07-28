@@ -149,7 +149,26 @@ export const makeStepRunnerInline = (
               executionId,
               name,
               startedAt,
-              metadata: stepOpts?.metadata,
+              // `timeoutSec` / `retries` are folded into the recorded metadata
+              // under a `stepOpts.` prefix so a test can assert a run actually
+              // SET them. They are otherwise invisible: this runner consumed
+              // `stepOpts` and forwarded only `metadata`, so a run that forgot
+              // to pass a step timeout looked identical to one that passed it,
+              // and the ceiling that then applied was CF's 600s default rather
+              // than the configured one.
+              //
+              // Fake-only, and namespaced to say so — production `metadata` is
+              // whatever the run put there. The real runner carries these to
+              // `WorkflowStep.do`'s config instead (step-runner-cf.ts).
+              metadata:
+                stepOpts?.timeoutSec !== undefined ||
+                stepOpts?.retries !== undefined
+                  ? {
+                      ...stepOpts?.metadata,
+                      "stepOpts.timeoutSec": stepOpts?.timeoutSec,
+                      "stepOpts.retries": stepOpts?.retries,
+                    }
+                  : stepOpts?.metadata,
             });
 
             // Run the body to an Exit so failure is data, not control flow.
