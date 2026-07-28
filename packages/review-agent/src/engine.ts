@@ -730,19 +730,46 @@ export type CoordinateInput = {
   readonly findings: ReadonlyArray<Finding>;
 };
 
-/** A finding's dedup identity — same (path, startLine, title) is the same issue. */
-const findingKey = (f: Finding): string =>
-  `${f.path} ${f.startLine} ${f.title}`;
+/**
+ * Do two findings describe the same issue? Same file, and line ranges that
+ * touch.
+ *
+ * Exact-identity dedup (path + startLine + title) does not survive the persona
+ * fan-out. Up to seven reviewers read the SAME hunk independently and each
+ * writes its own title and its own line span — `security` reports
+ * `wrangler.toml:365-376 "shares the staging pool"`, `compliance` reports
+ * `wrangler.toml:364-376 "undocumented rate-limit change"`. Different key,
+ * identical issue: nothing merged, and one hunk produced four comment sections.
+ * Range overlap is the identity that holds when a reviewer rewords the title or
+ * picks a boundary line off by one.
+ */
+const overlaps = (a: Finding, b: Finding): boolean =>
+  a.path === b.path &&
+  Math.max(a.startLine, b.startLine) <= Math.min(a.endLine, b.endLine);
+
+/** Severity rank — a merged group is represented by its most severe member. */
+const LEVEL_RANK: Record<Finding["level"], number> = {
+  notice: 0,
+  warning: 1,
+  failure: 2,
+};
 
 /**
  * Coordinate the per-domain findings into one verdict — PURE, no model call, so
  * it can never produce `StructuredOutputInvalid`. Returns `CoordinatedReview`
  * (no `tier` — the run stitches that back on from its plan).
  *
- *   - dedup by (path, startLine, title), keeping the first occurrence;
- *   - counts straight from `level` (failure/warning/notice);
+ *   - merge findings that {@link overlaps} — same file, touching line ranges —
+ *     keeping the most severe (ties → the first reviewer to raise it);
+ *   - counts straight from the surviving `level`s (failure/warning/notice);
  *   - verdict by rule: any failure → request-changes; else any warning →
  *     comment; else approve (bias toward approval unless critical).
+ *
+ * A merge keeps the MOST SEVERE member, never simply the first, so the loss
+ * direction is safe: a `failure` on line 44 survives a file-level `notice`
+ * spanning 36-100, not the other way round. The per-domain engagement counts the
+ * run renders are PRE-merge, so a collapsed pile-up stays visible as "7
+ * reviewers reported 14" above a five-finding comment.
  *
  * The current run is AUTHORITATIVE — only the findings the reviewers raise on
  * this push count. Nothing is carried over from a prior run, so a finding the
@@ -758,13 +785,18 @@ export const coordinate = (
 export const coordinateReview = (
   input: CoordinateInput,
 ): CoordinatedReviewType => {
-  const seen = new Set<string>();
+  // Merge in reviewer order, so the surviving set keeps the order the domains
+  // reported in. A finding overlapping one already kept replaces it only when
+  // strictly more severe; otherwise it is dropped as a duplicate.
   const findings: Finding[] = [];
   for (const f of input.findings) {
-    const key = findingKey(f);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    findings.push(f);
+    const at = findings.findIndex((kept) => overlaps(kept, f));
+    if (at === -1) {
+      findings.push(f);
+      continue;
+    }
+    const kept = findings[at] as Finding;
+    if (LEVEL_RANK[f.level] > LEVEL_RANK[kept.level]) findings[at] = f;
   }
 
   const critical = findings.filter((f) => f.level === "failure").length;

@@ -32,7 +32,7 @@
 //   CONFIG_KV  pr-review.bedrock.model   `bedrock/`-prefixed model id (e.g. bedrock/us.anthropic.claude-opus-4-6-v1) — BYOC via AI Gateway
 //   CONFIG_KV  pr-review.bedrock.region  AWS region (default us-east-1)
 //   CONFIG_KV  pr-review.bedrock.roleArn IAM role to AssumeRoleWithWebIdentity into — trust policy MUST pin `sub: pr-review:*`
-//   CONFIG_KV  pr-review.style           "default" (verbose verdict-table) | "compact" (LGTM-header + 3-col emoji table)
+//   CONFIG_KV  pr-review.style           "default" (one detailed section per finding) | "compact" (LGTM-header + 3-col emoji table)
 //   CONFIG_KV  pr-review.compact-max     how many findings the `compact` layout lists inline before "…and N more" (positive int, clamp 1..100, default 7; no-op for `default`)
 //   CONFIG_KV  pr-review.cooldown-seconds  dispatch throttle window in seconds (positive int, clamp 60..86400, default 3600). Absent → one review per PR per 60 min.
 //
@@ -241,7 +241,7 @@ const groundingBlock = (raw: string): string => {
 
 export const prReview = defineRun({
   name: "pr-review",
-  version: "3.1.1",
+  version: "3.2.0",
   image: "registry.cloudflare.com/fractalbox/flare-dispatch-review:latest",
 
   triggers: [
@@ -1027,8 +1027,14 @@ const renderReviewComment = (
     Match.exhaustive,
   );
 
-/** Verbose verdict-table layout: summary table + per-finding details + per-domain
- *  engagement line. Full reviewer transparency — the historical default. */
+/** Verbose layout: one section per finding + the per-domain engagement line.
+ *  Full reviewer transparency — the default.
+ *
+ *  There is deliberately NO summary table above the sections. It listed the
+ *  severity, title, and location of every finding, and each section below then
+ *  repeated all three — so a 14-finding review rendered 28 times and the reader
+ *  scrolled past a table that carried nothing the sections didn't. `compact` is
+ *  the layout for operators who want a table; it renders each finding once. */
 const renderDefault = (
   input: Pick<RunInput, "repo" | "sha">,
   output: Schema.Schema.Type<typeof ReviewOutput>,
@@ -1056,16 +1062,6 @@ const renderDefault = (
 
   const rendered = output.findings.slice(0, MAX_RENDERED_FINDINGS);
 
-  const summaryTable = [
-    "",
-    "| # | Severity | Change required | Location |",
-    "| --- | --- | --- | --- |",
-    ...rendered.map(
-      (f, i) =>
-        `| ${i + 1} | ${severityBadge(f.level)} | ${tableCell(f.title)} | [${tableCell(findingLoc(f))}](${findingUrl(input.repo, input.sha, f)}) |`,
-    ),
-  ];
-
   const details = rendered.flatMap((f, i) => [
     "",
     `#### ${i + 1}. ${severityBadge(f.level)} — ${sanitizeModelText(f.title)}`,
@@ -1079,7 +1075,6 @@ const renderDefault = (
     output.findings.length === 0
       ? ["", "_No findings._"]
       : [
-          ...summaryTable,
           ...details,
           ...(output.findings.length > MAX_RENDERED_FINDINGS
             ? [
