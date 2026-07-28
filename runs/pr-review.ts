@@ -895,25 +895,47 @@ const describeError = (err: unknown): string =>
  * — the verdict derives only from the schema-constrained `level`.)
  */
 const SANITIZE_MAX = 500;
+/**
+ * Cap for a finding's `message` in the detailed layout. The schema already
+ * bounds `message` at 2 000 chars, but every field shared the title-sized 500,
+ * which cut the body of a finding off mid-word — "…since neither can starve"
+ * with no marker, reading as a model that failed to finish its sentence rather
+ * than as text the renderer clipped. Titles, paths, and table cells keep 500.
+ */
+const SANITIZE_MAX_MESSAGE = 2_000;
 // U+200B zero-width space — inserted after `@` it breaks GitHub's @mention
 // autolink without visibly altering the text. Built from a code point so the
 // source stays ASCII-only.
 const ZWSP = String.fromCharCode(0x200b);
-const sanitizeModelText = (s: string): string =>
-  s
-    .replace(/[\r\n]+/g, " ")
-    .replace(/[<>]/g, "")
-    .replace(/`/g, "'")
-    // Defuse markdown link/image syntax `[text](url)` / `![](url)`. Both require
-    // the square brackets, so stripping `[` and `]` neutralises a disguised link
-    // (a leaked-token phishing anchor) AND an auto-loading image beacon (a
-    // zero-click tracking pixel) — model text is steerable by a hostile fork
-    // PR's diff, and this text is posted under the App's identity. A bare URL
-    // survives as visible, un-disguised text (GitHub autolinks it, but the
-    // destination is no longer hidden behind anchor text).
-    .replace(/[[\]]/g, "")
-    .replace(/@(?=[\w-])/g, `@${ZWSP}`)
-    .slice(0, SANITIZE_MAX);
+/**
+ * Clip at a word boundary and mark the cut with an ellipsis, so truncated text
+ * reads as truncated. Falls back to a hard cut when the tail has no space near
+ * the limit (a long URL, a minified line).
+ */
+const clip = (s: string, max: number): string => {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+};
+const sanitizeModelText = (s: string, max: number = SANITIZE_MAX): string =>
+  clip(
+    s
+      .replace(/[\r\n]+/g, " ")
+      .replace(/[<>]/g, "")
+      .replace(/`/g, "'")
+      // Defuse markdown link/image syntax `[text](url)` / `![](url)`. Both
+      // require the square brackets, so stripping `[` and `]` neutralises a
+      // disguised link (a leaked-token phishing anchor) AND an auto-loading
+      // image beacon (a zero-click tracking pixel) — model text is steerable by
+      // a hostile fork PR's diff, and this text is posted under the App's
+      // identity. A bare URL survives as visible, un-disguised text (GitHub
+      // autolinks it, but the destination is no longer hidden behind anchor
+      // text).
+      .replace(/[[\]]/g, "")
+      .replace(/@(?=[\w-])/g, `@${ZWSP}`),
+    max,
+  );
 
 /** One domain reviewer's engagement — how many findings it reported, or
  *  `errored: true` when its model call failed and it was skipped (count 0). */
@@ -1068,7 +1090,7 @@ const renderDefault = (
     "",
     `📍 [${findingLoc(f)}](${findingUrl(input.repo, input.sha, f)})`,
     "",
-    sanitizeModelText(f.message),
+    sanitizeModelText(f.message, SANITIZE_MAX_MESSAGE),
   ]);
 
   const findingsBlock =
