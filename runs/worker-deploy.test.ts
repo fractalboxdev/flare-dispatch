@@ -200,6 +200,47 @@ describe("worker-deploy", () => {
   );
 
   it.effect(
+    "log redaction — secret values are scrubbed from captured stdout/stderr",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          [DEPLOY_CMD]: {
+            exitCode: 0,
+            stdout: "wrangler: authenticating with cf_token_from_worker",
+            stderr: "auth failed for cf_token_from_worker",
+          },
+        },
+        config: {
+          "worker-deploy.command:owner/name": DEPLOY_CMD,
+          "worker-deploy.secrets:owner/name": "CLOUDFLARE_API_TOKEN",
+        },
+        secrets: { CLOUDFLARE_API_TOKEN: "cf_token_from_worker" },
+      });
+      const input = {
+        repo: "owner/name",
+        sha: "abc123",
+        secrets: [] as readonly string[],
+        install: false,
+        failOnNonZeroExit: true,
+      };
+
+      return Effect.gen(function* () {
+        const result = yield* workerDeploy.run(input);
+        expect(result.deployed).toBe(true);
+
+        // The deploy log is uploaded to R2 on a stable path, so an echoed
+        // token there is durable — this is the run that carries a
+        // write-scoped cloud credential.
+        const exec = handles.sandbox.execs.find((e) => e.command === DEPLOY_CMD);
+        expect(exec?.stdout).not.toContain("cf_token_from_worker");
+        expect(exec?.stderr).not.toContain("cf_token_from_worker");
+        expect(exec?.stdout).toContain("***");
+        expect(exec?.stderr).toContain("***");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
     "failOnNonZeroExit — a failed deploy turns into AcceptanceFailed (red check) carrying the exit code",
     () => {
       const { layer, handles } = makeCFRuntimeTest({

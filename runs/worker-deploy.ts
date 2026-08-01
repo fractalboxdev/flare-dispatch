@@ -233,6 +233,13 @@ export const workerDeploy = defineRun({
           command,
           // Per-dispatch `env` wins over a same-named config-store secret.
           env: { ...secretEnv, ...input.env },
+          // Scrub secret VALUES from the captured log before it is persisted,
+          // in case the command echoes its env. Not hypothetical here: a deploy
+          // command is the one that carries a cloud provider's write-scoped API
+          // token, and `wrangler`-class tools print their environment on some
+          // error paths. The log lands in R2 on a stable path (artifact TTLs are
+          // not yet enforced), so a leak there is durable.
+          redactValues: Object.values(secretEnv),
           timeoutSec: input.timeoutSec ?? TIMEOUT_SEC_DEFAULT,
         }),
       );
