@@ -32,7 +32,7 @@
 //   CONFIG_KV  pr-review.bedrock.model   `bedrock/`-prefixed model id (e.g. bedrock/us.anthropic.claude-opus-4-6-v1) — BYOC via AI Gateway
 //   CONFIG_KV  pr-review.bedrock.region  AWS region (default us-east-1)
 //   CONFIG_KV  pr-review.bedrock.roleArn IAM role to AssumeRoleWithWebIdentity into — trust policy MUST pin `sub: pr-review:*`
-//   CONFIG_KV  pr-review.style           "default" (verbose verdict-table) | "compact" (LGTM-header + 3-col emoji table)
+//   CONFIG_KV  pr-review.style           "default" (one detailed section per finding) | "compact" (LGTM-header + 3-col emoji table)
 //   CONFIG_KV  pr-review.compact-max     how many findings the `compact` layout lists inline before "…and N more" (positive int, clamp 1..100, default 7; no-op for `default`)
 //   CONFIG_KV  pr-review.cooldown-seconds  dispatch throttle window in seconds (positive int, clamp 60..86400, default 3600). Absent → one review per PR per 60 min.
 //
@@ -241,7 +241,7 @@ const groundingBlock = (raw: string): string => {
 
 export const prReview = defineRun({
   name: "pr-review",
-  version: "3.1.1",
+  version: "3.2.0",
   image: "registry.cloudflare.com/fractalbox/flare-dispatch-review:latest",
 
   triggers: [
@@ -895,25 +895,47 @@ const describeError = (err: unknown): string =>
  * — the verdict derives only from the schema-constrained `level`.)
  */
 const SANITIZE_MAX = 500;
+/**
+ * Cap for a finding's `message` in the detailed layout. The schema already
+ * bounds `message` at 2 000 chars, but every field shared the title-sized 500,
+ * which cut the body of a finding off mid-word — "…since neither can starve"
+ * with no marker, reading as a model that failed to finish its sentence rather
+ * than as text the renderer clipped. Titles, paths, and table cells keep 500.
+ */
+const SANITIZE_MAX_MESSAGE = 2_000;
 // U+200B zero-width space — inserted after `@` it breaks GitHub's @mention
 // autolink without visibly altering the text. Built from a code point so the
 // source stays ASCII-only.
 const ZWSP = String.fromCharCode(0x200b);
-const sanitizeModelText = (s: string): string =>
-  s
-    .replace(/[\r\n]+/g, " ")
-    .replace(/[<>]/g, "")
-    .replace(/`/g, "'")
-    // Defuse markdown link/image syntax `[text](url)` / `![](url)`. Both require
-    // the square brackets, so stripping `[` and `]` neutralises a disguised link
-    // (a leaked-token phishing anchor) AND an auto-loading image beacon (a
-    // zero-click tracking pixel) — model text is steerable by a hostile fork
-    // PR's diff, and this text is posted under the App's identity. A bare URL
-    // survives as visible, un-disguised text (GitHub autolinks it, but the
-    // destination is no longer hidden behind anchor text).
-    .replace(/[[\]]/g, "")
-    .replace(/@(?=[\w-])/g, `@${ZWSP}`)
-    .slice(0, SANITIZE_MAX);
+/**
+ * Clip at a word boundary and mark the cut with an ellipsis, so truncated text
+ * reads as truncated. Falls back to a hard cut when the tail has no space near
+ * the limit (a long URL, a minified line).
+ */
+const clip = (s: string, max: number): string => {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+};
+const sanitizeModelText = (s: string, max: number = SANITIZE_MAX): string =>
+  clip(
+    s
+      .replace(/[\r\n]+/g, " ")
+      .replace(/[<>]/g, "")
+      .replace(/`/g, "'")
+      // Defuse markdown link/image syntax `[text](url)` / `![](url)`. Both
+      // require the square brackets, so stripping `[` and `]` neutralises a
+      // disguised link (a leaked-token phishing anchor) AND an auto-loading
+      // image beacon (a zero-click tracking pixel) — model text is steerable by
+      // a hostile fork PR's diff, and this text is posted under the App's
+      // identity. A bare URL survives as visible, un-disguised text (GitHub
+      // autolinks it, but the destination is no longer hidden behind anchor
+      // text).
+      .replace(/[[\]]/g, "")
+      .replace(/@(?=[\w-])/g, `@${ZWSP}`),
+    max,
+  );
 
 /** One domain reviewer's engagement — how many findings it reported, or
  *  `errored: true` when its model call failed and it was skipped (count 0). */
@@ -1027,8 +1049,14 @@ const renderReviewComment = (
     Match.exhaustive,
   );
 
-/** Verbose verdict-table layout: summary table + per-finding details + per-domain
- *  engagement line. Full reviewer transparency — the historical default. */
+/** Verbose layout: one section per finding + the per-domain engagement line.
+ *  Full reviewer transparency — the default.
+ *
+ *  There is deliberately NO summary table above the sections. It listed the
+ *  severity, title, and location of every finding, and each section below then
+ *  repeated all three — so a 14-finding review rendered 28 times and the reader
+ *  scrolled past a table that carried nothing the sections didn't. `compact` is
+ *  the layout for operators who want a table; it renders each finding once. */
 const renderDefault = (
   input: Pick<RunInput, "repo" | "sha">,
   output: Schema.Schema.Type<typeof ReviewOutput>,
@@ -1056,30 +1084,19 @@ const renderDefault = (
 
   const rendered = output.findings.slice(0, MAX_RENDERED_FINDINGS);
 
-  const summaryTable = [
-    "",
-    "| # | Severity | Change required | Location |",
-    "| --- | --- | --- | --- |",
-    ...rendered.map(
-      (f, i) =>
-        `| ${i + 1} | ${severityBadge(f.level)} | ${tableCell(f.title)} | [${tableCell(findingLoc(f))}](${findingUrl(input.repo, input.sha, f)}) |`,
-    ),
-  ];
-
   const details = rendered.flatMap((f, i) => [
     "",
     `#### ${i + 1}. ${severityBadge(f.level)} — ${sanitizeModelText(f.title)}`,
     "",
     `📍 [${findingLoc(f)}](${findingUrl(input.repo, input.sha, f)})`,
     "",
-    sanitizeModelText(f.message),
+    sanitizeModelText(f.message, SANITIZE_MAX_MESSAGE),
   ]);
 
   const findingsBlock =
     output.findings.length === 0
       ? ["", "_No findings._"]
       : [
-          ...summaryTable,
           ...details,
           ...(output.findings.length > MAX_RENDERED_FINDINGS
             ? [

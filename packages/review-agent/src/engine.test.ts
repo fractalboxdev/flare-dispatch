@@ -742,27 +742,57 @@ describe("coordinate / coordinateReview (pure — no model call)", () => {
     });
   });
 
-  it("dedups by (path, startLine, title), keeping the first occurrence", () => {
-    const first = mk({ path: "a.ts", startLine: 5, title: "dup", level: "warning", message: "keep me" });
-    const same = mk({ path: "a.ts", startLine: 5, title: "dup", level: "failure", message: "drop me" });
-    const r = coordinateReview({ findings: [first, same] });
-    expect(r.findings).toHaveLength(1);
-    expect(r.findings[0]!.message).toBe("keep me");
-    // The dropped duplicate's level does not inflate the counts.
-    expect(r.warnings).toBe(1);
-    expect(r.critical).toBe(0);
-  });
-
-  it("does NOT dedup findings that differ in path / line / title", () => {
+  it("merges same-path findings whose line ranges overlap, however they are titled", () => {
+    // The persona pile-up: four reviewers on one hunk, four different titles,
+    // boundaries off by a line. Exact-identity dedup kept all four.
     const r = coordinateReview({
       findings: [
-        mk({ path: "a.ts", startLine: 5, title: "x", level: "notice" }),
-        mk({ path: "b.ts", startLine: 5, title: "x", level: "notice" }), // diff path
-        mk({ path: "a.ts", startLine: 6, title: "x", level: "notice" }), // diff line
-        mk({ path: "a.ts", startLine: 5, title: "y", level: "notice" }), // diff title
+        mk({ path: "wrangler.toml", startLine: 365, endLine: 376, title: "shares the staging pool", level: "warning" }),
+        mk({ path: "wrangler.toml", startLine: 364, endLine: 376, title: "undocumented rate limit", level: "warning" }),
+        mk({ path: "wrangler.toml", startLine: 364, endLine: 376, title: "config drift", level: "warning" }),
+        mk({ path: "wrangler.toml", startLine: 365, endLine: 376, title: "no rate-limit docs", level: "warning" }),
       ],
     });
-    expect(r.findings).toHaveLength(4);
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0]!.title).toBe("shares the staging pool");
+    expect(r.warnings).toBe(1);
+  });
+
+  it("a merged group is represented by its most severe member, not the first", () => {
+    // A file-level notice spanning the hunk must not swallow a real failure
+    // inside it — the loss direction has to favour severity.
+    const r = coordinateReview({
+      findings: [
+        mk({ path: "a.ts", startLine: 36, endLine: 100, title: "broad observation", level: "notice" }),
+        mk({ path: "a.ts", startLine: 44, endLine: 44, title: "tenant filter missing", level: "failure" }),
+      ],
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0]!.title).toBe("tenant filter missing");
+    expect(r.critical).toBe(1);
+    expect(r.suggestions).toBe(0);
+    expect(r.verdict).toBe("request-changes");
+  });
+
+  it("does NOT merge a different file or a non-touching range", () => {
+    const r = coordinateReview({
+      findings: [
+        mk({ path: "a.ts", startLine: 5, endLine: 10, title: "x", level: "notice" }),
+        mk({ path: "b.ts", startLine: 5, endLine: 10, title: "x", level: "notice" }), // diff path
+        mk({ path: "a.ts", startLine: 11, endLine: 20, title: "x", level: "notice" }), // adjacent, not overlapping
+      ],
+    });
+    expect(r.findings).toHaveLength(3);
+  });
+
+  it("merges ranges that touch at exactly one line", () => {
+    const r = coordinateReview({
+      findings: [
+        mk({ path: "a.ts", startLine: 5, endLine: 10, title: "x", level: "notice" }),
+        mk({ path: "a.ts", startLine: 10, endLine: 20, title: "y", level: "notice" }),
+      ],
+    });
+    expect(r.findings).toHaveLength(1);
   });
 
   it("is authoritative on the current run — a fixed finding clears (no carry-over)", () => {
