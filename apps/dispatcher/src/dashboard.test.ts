@@ -3,11 +3,16 @@
 
 import { describe, expect, it } from "vitest";
 
-import { renderDashboard, type DashboardRow } from "./dashboard";
+import {
+  renderDashboard,
+  type DashboardFilters,
+  type DashboardPagination,
+  type DashboardRow,
+} from "./dashboard";
 import { handleRequest } from "./router";
 import { makeFakeD1, makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "./test-helpers";
 
-const baseRow = (over: Partial<DashboardRow>): DashboardRow => ({
+const baseRow = (over: Partial<DashboardRow> = {}): DashboardRow => ({
   id: "offload-test:owner_repo:abc123",
   run: "offload-test",
   repo: "owner/repo",
@@ -26,9 +31,19 @@ const baseRow = (over: Partial<DashboardRow>): DashboardRow => ({
 });
 
 describe("renderDashboard", () => {
-  const data = (rows: readonly DashboardRow[]) => ({
+  const data = (
+    rows: readonly DashboardRow[],
+    over: { filters?: DashboardFilters; pagination?: DashboardPagination } = {},
+  ) => ({
     origin: "https://flare-dispatch-app.fractalbox.dev",
     rows,
+    filters: over.filters ?? {},
+    pagination: over.pagination ?? {
+      limit: 20,
+      hasMore: false,
+      nextBefore: null,
+      nextBeforeId: null,
+    },
     nowMs: 60_000,
     repoSlug: "fractalbox/flare-dispatch",
   });
@@ -105,6 +120,101 @@ describe("renderDashboard", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 
+  it("renders the filter form echoing active values and preselecting status", () => {
+    const html = renderDashboard(
+      data([baseRow()], {
+        filters: { run: "offload-test", repo: "a<b", status: "failure" },
+      }),
+    );
+    expect(html).toContain('name="run" value="offload-test"');
+    expect(html).toContain('name="repo" value="a&lt;b"');
+    expect(html).toContain('<option value="failure" selected>failure</option>');
+    expect(html).toContain("Clear filters");
+    // The form's named fields carry only the filters — submitting resets paging.
+    expect(html).toContain('<form class="filters" method="get" action="/">');
+  });
+
+  it("omits the clear link when no filter is active", () => {
+    const html = renderDashboard(data([baseRow()]));
+    expect(html).not.toContain("Clear filters");
+  });
+
+  it("links the older page with cursor + filters + page size", () => {
+    const html = renderDashboard(
+      data([baseRow()], {
+        filters: { status: "failure" },
+        pagination: {
+          limit: 20,
+          hasMore: true,
+          nextBefore: 1000,
+          nextBeforeId: "a:b:c",
+          before: 5000,
+          beforeId: "x:y:z",
+          prevBefore: 9000,
+          prevBeforeId: "p:q:r",
+        },
+      }),
+    );
+    expect(html).toContain(
+      'href="/?status=failure&amp;limit=20&amp;before=1000&amp;beforeId=a%3Ab%3Ac&amp;prevBefore=5000&amp;prevBeforeId=x%3Ay%3Az"',
+    );
+    expect(html).toContain("Older →");
+  });
+
+  it("links the newer page via prevBefore and a first-page reset", () => {
+    const html = renderDashboard(
+      data([baseRow()], {
+        filters: { run: "offload-test" },
+        pagination: {
+          limit: 20,
+          hasMore: true,
+          nextBefore: 100,
+          nextBeforeId: "l",
+          before: 5000,
+          beforeId: "b5",
+          prevBefore: 9000,
+          prevBeforeId: "b9",
+        },
+      }),
+    );
+    // Newer replays the previous page's cursor.
+    expect(html).toContain(
+      'href="/?run=offload-test&amp;limit=20&amp;before=9000&amp;beforeId=b9"',
+    );
+    // First resets to page one with filters kept.
+    expect(html).toContain('href="/?run=offload-test&amp;limit=20">← First</a>');
+  });
+
+  it("newer from page two targets the bare first page", () => {
+    const html = renderDashboard(
+      data([baseRow()], {
+        pagination: {
+          limit: 20,
+          hasMore: true,
+          nextBefore: 100,
+          nextBeforeId: "l",
+          before: 5000,
+          beforeId: "b5",
+        },
+      }),
+    );
+    expect(html).toContain('<a href="/?limit=20">← Newer</a>');
+  });
+
+  it("omits the pager on an unfetched first page", () => {
+    const html = renderDashboard(data([baseRow()]));
+    expect(html).not.toContain('class="pager"');
+    expect(html).not.toContain("Older →");
+    expect(html).not.toContain("← Newer");
+  });
+
+  it("explains a filter-matched empty result and links to clear", () => {
+    const html = renderDashboard(data([], { filters: { status: "queued" } }));
+    expect(html).toContain("No executions match the current filters");
+    expect(html).toContain('<a href="/">Clear filters</a>');
+    expect(html).not.toContain("No executions yet");
+  });
+
   it("emits canonical + OG metadata pointing at the origin root", () => {
     const html = renderDashboard(data([]));
     expect(html).toContain(
@@ -158,6 +268,117 @@ describe("GET / — dashboard route", () => {
     const res = await handleRequest(new Request("https://flare-dispatch-app.fractalbox.dev/"), env);
     const body = await res.text();
     expect(body).toContain("/demos/demo1?t=");
+  });
+
+  it("filters executions by run/repo/status query params", async () => {
+    const { env } = fixture([
+      execRow({ id: "a:1", run: "offload-test", status: "success" }),
+      execRow({ id: "b:1", run: "pr-review", status: "failure" }),
+      execRow({ id: "c:1", run: "offload-test", status: "failure" }),
+    ]);
+    const res = await handleRequest(
+      new Request("https://flare-dispatch-app.fractalbox.dev/?status=failure&run=offload-test"),
+      env,
+    );
+    const body = await res.text();
+    // Execution ids are URL-encoded in the tokened log links.
+    expect(body).toContain("/logs/c%3A1?t=");
+    expect(body).not.toContain("/logs/a%3A1?t=");
+    expect(body).not.toContain("/logs/b%3A1?t=");
+  });
+
+  it("ignores blank filter params", async () => {
+    const { env } = fixture([
+      execRow({ id: "a:1", run: "offload-test" }),
+      execRow({ id: "b:1", run: "pr-review" }),
+    ]);
+    const res = await handleRequest(
+      new Request("https://flare-dispatch-app.fractalbox.dev/?run=&status=%20"),
+      env,
+    );
+    const body = await res.text();
+    expect(body).toContain("offload-test");
+    expect(body).toContain("pr-review");
+  });
+
+  it("pages older executions via the before cursor", async () => {
+    const { env } = fixture([
+      execRow({ id: "r1", started_at: 3000 }),
+      execRow({ id: "r2", started_at: 2000 }),
+      execRow({ id: "r3", started_at: 1000 }),
+    ]);
+    const page1 = await handleRequest(
+      new Request("https://flare-dispatch-app.fractalbox.dev/?limit=1"),
+      env,
+    );
+    const body1 = await page1.text();
+    expect(body1).toContain("r1");
+    expect(body1).not.toContain("r2");
+    expect(body1).toContain("Older →");
+
+    const page2 = await handleRequest(
+      new Request("https://flare-dispatch-app.fractalbox.dev/?limit=1&before=3000"),
+      env,
+    );
+    const body2 = await page2.text();
+    expect(body2).toContain("r2");
+    expect(body2).not.toContain("r1");
+    expect(body2).toContain("← First");
+  });
+
+  it("paginates same-ms executions with the id tiebreak (no skip)", async () => {
+    const { env } = fixture([
+      execRow({ id: "a1", started_at: 1000 }),
+      execRow({ id: "a2", started_at: 1000 }),
+      execRow({ id: "b1", started_at: 500 }),
+    ]);
+    // Page boundary lands mid-tie at (1000, a2): the same-ms a1 must not vanish.
+    const res = await handleRequest(
+      new Request("https://flare-dispatch-app.fractalbox.dev/?limit=2&before=1000&beforeId=a2"),
+      env,
+    );
+    const body = await res.text();
+    expect(body).toContain("/logs/a1?t=");
+    expect(body).toContain("/logs/b1?t=");
+    expect(body).not.toContain("/logs/a2?t=");
+  });
+
+  it("round-trips the prevBefore cursor chain through the pager links", async () => {
+    const { env } = fixture([
+      execRow({ id: "r1", started_at: 3000 }),
+      execRow({ id: "r2", started_at: 2000 }),
+      execRow({ id: "r3", started_at: 1000 }),
+    ]);
+    const page1 = await handleRequest(
+      new Request("https://flare-dispatch-app.fractalbox.dev/?limit=1"),
+      env,
+    );
+    const html1 = await page1.text();
+    // Page 1's Older link opens page 2 (no prevBefore yet).
+    expect(html1).toContain('href="/?limit=1&amp;before=3000&amp;beforeId=r1"');
+
+    const page2 = await handleRequest(
+      new Request("https://flare-dispatch-app.fractalbox.dev/?limit=1&before=3000&beforeId=r1"),
+      env,
+    );
+    const html2 = await page2.text();
+    expect(html2).toContain("r2");
+    // Page 2's Older link replays its own bound as prevBefore for the next hop.
+    expect(html2).toContain(
+      'href="/?limit=1&amp;before=2000&amp;beforeId=r2&amp;prevBefore=3000&amp;prevBeforeId=r1"',
+    );
+    // Its Newer link returns to the first page via prevBefore.
+    expect(html2).toContain('<a href="/?limit=1">← Newer</a>');
+
+    const page3 = await handleRequest(
+      new Request(
+        "https://flare-dispatch-app.fractalbox.dev/?limit=1&before=2000&beforeId=r2&prevBefore=3000&prevBeforeId=r1",
+      ),
+      env,
+    );
+    const html3 = await page3.text();
+    expect(html3).toContain("r3");
+    expect(html3).toContain('href="/?limit=1&amp;before=3000&amp;beforeId=r1">← Newer</a>');
   });
 
   it("405s a non-GET method", async () => {
@@ -268,6 +489,62 @@ describe("GET /v1/dashboard.json — SPA feed", () => {
     );
     const body = (await res.json()) as { rows: { selfHealPrUrl: string | null }[] };
     expect(body.rows[0]?.selfHealPrUrl).toBeNull();
+  });
+
+  it("echoes filters and pagination, clamping limit", async () => {
+    const { env } = fixture([
+      execRow({ id: "a:1", run: "offload-test", status: "success", started_at: 2000 }),
+      execRow({ id: "b:1", run: "pr-review", status: "failure", started_at: 1000 }),
+    ]);
+    const res = await handleRequest(
+      new Request(
+        "https://flare-dispatch-app.fractalbox.dev/v1/dashboard.json?limit=999&status=failure",
+      ),
+      env,
+    );
+    const body = (await res.json()) as {
+      filters: { status: string };
+      pagination: {
+        limit: number;
+        hasMore: boolean;
+        nextBefore: number | null;
+        nextBeforeId: string | null;
+      };
+      rows: { id: string }[];
+    };
+    expect(body.filters.status).toBe("failure");
+    expect(body.pagination.limit).toBe(100);
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]?.id).toBe("b:1");
+    expect(body.pagination.hasMore).toBe(false);
+    expect(body.pagination.nextBefore).toBeNull();
+    expect(body.pagination.nextBeforeId).toBeNull();
+  });
+
+  it("reports hasMore and the next-page cursor on a short page", async () => {
+    const { env } = fixture([
+      execRow({ id: "a:1", started_at: 2000 }),
+      execRow({ id: "b:1", started_at: 1000 }),
+    ]);
+    const res = await handleRequest(
+      new Request("https://flare-dispatch-app.fractalbox.dev/v1/dashboard.json?limit=1"),
+      env,
+    );
+    const body = (await res.json()) as {
+      rows: { id: string }[];
+      pagination: {
+        limit: number;
+        hasMore: boolean;
+        nextBefore: number;
+        nextBeforeId: string;
+      };
+    };
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]?.id).toBe("a:1");
+    expect(body.pagination.limit).toBe(1);
+    expect(body.pagination.hasMore).toBe(true);
+    expect(body.pagination.nextBefore).toBe(2000);
+    expect(body.pagination.nextBeforeId).toBe("a:1");
   });
 
   it("405s a non-GET method", async () => {

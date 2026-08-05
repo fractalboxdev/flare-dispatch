@@ -209,9 +209,13 @@ const parsePrStaged = (summaryJson: string | null): boolean => {
 
 /**
  * Resolve the latest executions into `DashboardRow`s with their tokened viewer
- * links. Shared by the SSR `GET /` page and the `GET /v1/dashboard.json` feed
- * the static-asset SPA consumes — one D1 read + token-minting path, two renders.
+ * links, applying the `run`/`repo`/`status` filters and keyset cursor from the
+ * query string. Shared by the SSR `GET /` page and the `GET /v1/dashboard.json`
+ * feed the static-asset SPA consumes — one D1 read + token-minting path, two
+ * renders. Pages are probed with `limit + 1` rows so `hasMore` needs no COUNT.
  */
+const LIMIT_DEFAULT = 20;
+const MAX_LIMIT = 100;
 const dashboardData = Effect.gen(function* () {
   const reads = yield* ExecutionsRead;
   const logTokens = yield* LogToken;
@@ -226,7 +230,49 @@ const dashboardData = Effect.gen(function* () {
   // have no request host.
   const origin = url.origin;
 
-  const rows = yield* reads.list({ limit: 20 });
+  // Filters + keyset pagination from the query string. Blank values are
+  // dropped (`?run=` must not become a filter that matches nothing).
+  const q = url.searchParams;
+  const filterParam = (name: string): string | undefined => {
+    const raw = q.get(name)?.trim();
+    return raw === undefined || raw === "" ? undefined : raw;
+  };
+  const intParam = (name: string): number | undefined => {
+    const raw = Number.parseInt(q.get(name) ?? "", 10);
+    return Number.isFinite(raw) ? raw : undefined;
+  };
+  const run = filterParam("run");
+  const repo = filterParam("repo");
+  const status = filterParam("status");
+  const filters = {
+    ...(run !== undefined ? { run } : {}),
+    ...(repo !== undefined ? { repo } : {}),
+    ...(status !== undefined ? { status } : {}),
+  };
+  const rawLimit = intParam("limit");
+  const limit = rawLimit === undefined ? LIMIT_DEFAULT : Math.min(Math.max(rawLimit, 1), MAX_LIMIT);
+  const before = intParam("before");
+  const beforeId = before !== undefined ? (q.get("beforeId") ?? undefined) : undefined;
+  // `prevBefore` is page-state the SSR pager carries forward; only meaningful
+  // when this page was itself reached via a cursor.
+  const prevBefore = before !== undefined ? intParam("prevBefore") : undefined;
+  const prevBeforeId =
+    before !== undefined && prevBefore !== undefined
+      ? (q.get("prevBeforeId") ?? undefined)
+      : undefined;
+
+  const fetched = yield* reads.list({
+    ...filters,
+    limit: limit + 1,
+    ...(before !== undefined ? { before, ...(beforeId !== undefined ? { beforeId } : {}) } : {}),
+  });
+  const hasMore = fetched.length > limit;
+  const rows = hasMore ? fetched.slice(0, limit) : fetched;
+  const last = rows[rows.length - 1];
+  const nextBefore =
+    hasMore && last !== undefined && last.started_at !== null ? last.started_at : null;
+  const nextBeforeId = hasMore && last !== undefined ? last.id : null;
+
   const dashRows = yield* Effect.forEach(rows, (row) =>
     Effect.gen(function* () {
       const logsUrl = yield* logTokens.logsUrl(origin, row.id);
@@ -264,7 +310,17 @@ const dashboardData = Effect.gen(function* () {
       } satisfies DashboardRow;
     }),
   );
-  return { origin, rows: dashRows };
+  const pagination = {
+    limit,
+    ...(before !== undefined ? { before, ...(beforeId !== undefined ? { beforeId } : {}) } : {}),
+    ...(prevBefore !== undefined
+      ? { prevBefore, ...(prevBeforeId !== undefined ? { prevBeforeId } : {}) }
+      : {}),
+    hasMore,
+    nextBefore,
+    nextBeforeId,
+  };
+  return { origin, rows: dashRows, filters, pagination };
 });
 
 /**
@@ -296,10 +352,12 @@ const appShellRoute = Effect.gen(function* () {
     return fromWebResponse(shell);
   }
 
-  const { origin, rows } = yield* dashboardData;
+  const { origin, rows, filters, pagination } = yield* dashboardData;
   const html = renderDashboard({
     origin,
     rows,
+    filters,
+    pagination,
     nowMs: Date.now(),
     repoSlug: REPO_SLUG,
   });
@@ -322,11 +380,14 @@ const dashboardJsonRoute = Effect.gen(function* () {
   if (Option.isSome(denied)) return fromWebResponse(denied.value);
   if (request.method !== "GET") return methodNotAllowed;
 
-  const { origin, rows } = yield* dashboardData;
-  return HttpServerResponse.raw(JSON.stringify({ origin, repoSlug: REPO_SLUG, rows }), {
-    status: 200,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  const { origin, rows, filters, pagination } = yield* dashboardData;
+  return HttpServerResponse.raw(
+    JSON.stringify({ origin, repoSlug: REPO_SLUG, rows, filters, pagination }),
+    {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    },
+  );
 });
 
 /** How many recent finished executions the analytics aggregate samples. */

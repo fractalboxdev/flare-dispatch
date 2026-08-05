@@ -9,7 +9,7 @@
 //
 // This module is PURE: `renderDashboard` is a string → string template with no
 // I/O, so it stays trivially testable (dashboard.test.ts). The route that feeds
-// it (token signing, D1 reads, the Access gate) is wired in http-app.ts.
+// it (query-param parsing, the D1 reads, the Access gate) is wired in http-app.ts.
 
 /** One execution row, pre-resolved with its tokened viewer links. */
 export interface DashboardRow {
@@ -44,11 +44,104 @@ export interface DashboardData {
   /** The dispatcher's public origin (no trailing slash), for canonical/OG. */
   readonly origin: string;
   readonly rows: readonly DashboardRow[];
+  /** The active `run`/`repo`/`status` filters (absent keys = unfiltered). */
+  readonly filters: DashboardFilters;
+  /** Keyset-pagination state for the pager links. */
+  readonly pagination: DashboardPagination;
   /** Wall clock for relative timestamps (injected for deterministic tests). */
   readonly nowMs: number;
   /** `owner/repo` slug for the source link. */
   readonly repoSlug: string;
 }
+
+/** Server-side filters, parsed from the `run`/`repo`/`status` query params. */
+export interface DashboardFilters {
+  readonly run?: string;
+  readonly repo?: string;
+  readonly status?: string;
+}
+
+/**
+ * Keyset-pagination state, fully resolved by the caller so the renderer stays
+ * pure. Rows are newest-first, so "Older" moves forward in time and "Newer"
+ * back toward the top of the list.
+ */
+export interface DashboardPagination {
+  /** Page size the caller applied. */
+  readonly limit: number;
+  /**
+   * Lower bound of THIS page — the `started_at` (and `beforeId`) the page was
+   * fetched with. Absent on the first page.
+   */
+  readonly before?: number;
+  /** Same-ms tiebreak id for `before`. */
+  readonly beforeId?: string;
+  /**
+   * Lower bound of the PREVIOUS page, carried through the URL so the "Newer"
+   * link can round-trip without a backward cursor query. Absent on page two
+   * and earlier (its "Newer" target is the unfettered first page).
+   */
+  readonly prevBefore?: number;
+  readonly prevBeforeId?: string;
+  /** True when an older page exists (the caller probed with `limit + 1`). */
+  readonly hasMore: boolean;
+  /** `started_at` of the last row on this page — the "Older" cursor. */
+  readonly nextBefore: number | null;
+  readonly nextBeforeId: string | null;
+}
+
+/** The status values the filter select offers (known execution states). */
+const STATUS_OPTIONS = [
+  "success",
+  "failure",
+  "cancelled",
+  "running",
+  "started",
+  "skipped",
+  "queued",
+] as const;
+
+/** True iff any filter is active. */
+const hasFilters = (f: DashboardFilters): boolean =>
+  f.run !== undefined || f.repo !== undefined || f.status !== undefined;
+
+/** Build a same-origin link carrying the given query params. */
+const qs = (pairs: ReadonlyArray<readonly [string, string]>): string => {
+  const sp = new URLSearchParams();
+  for (const [k, v] of pairs) sp.set(k, v);
+  const s = sp.toString();
+  return s === "" ? "/" : `/?${s}`;
+};
+
+/** The filter params shared by every pager link. */
+const filterPairs = (f: DashboardFilters): ReadonlyArray<readonly [string, string]> => {
+  const out: [string, string][] = [];
+  if (f.run !== undefined) out.push(["run", f.run]);
+  if (f.repo !== undefined) out.push(["repo", f.repo]);
+  if (f.status !== undefined) out.push(["status", f.status]);
+  return out;
+};
+
+/** A `before`/`beforeId` cursor pair, omitting the tiebreak when absent. */
+const cursorPairs = (
+  before: number,
+  beforeId: string | null | undefined,
+): ReadonlyArray<readonly [string, string]> =>
+  beforeId === undefined || beforeId === null
+    ? [["before", String(before)]]
+    : [
+        ["before", String(before)],
+        ["beforeId", beforeId],
+      ];
+
+/** THIS page's bound, replayed as `prevBefore` for the next hop back. */
+const prevCursorPairs = (p: DashboardPagination): ReadonlyArray<readonly [string, string]> =>
+  p.before === undefined
+    ? []
+    : [
+        ["prevBefore", String(p.before)],
+        ...(p.beforeId !== undefined ? [["prevBeforeId", p.beforeId] as const] : []),
+      ];
 
 /** HTML-escape a value for safe interpolation into element text / attributes. */
 const esc = (value: string): string =>
@@ -134,6 +227,16 @@ const STYLE = `
   .badge.selfheal { color: #c9b3ff; background: #1d1730; border-color: #3b2d63; position: relative; z-index: 1; margin-left: .45rem; }
   .badge.selfheal:hover { text-decoration: none; border-color: #5a47a0; }
   .empty { color: #9aa3b2; padding: 1.5rem .5rem; border: 1px dashed #2b313f; border-radius: .5rem; text-align: center; }
+  form.filters { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  form.filters input, form.filters select, form.filters button {
+    font: inherit; color: #e7e9ee; background: #11151f; border: 1px solid #2b313f;
+    border-radius: .35rem; padding: .35rem .55rem; font-size: 13.5px;
+  }
+  form.filters button { background: #1c3a5f; border-color: #2b4a75; cursor: pointer; }
+  form.filters button:hover { background: #234a78; }
+  form.filters .clear { margin-left: .25rem; }
+  nav.pager { display: flex; gap: 1.25rem; margin-top: 1rem; font-size: 14px; }
+  nav.pager a { white-space: nowrap; }
   footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid #171b27; color: #8a93a5; font-size: 13px; }
   footer a { margin-right: 1rem; }
 `;
@@ -169,9 +272,67 @@ const renderRow = (row: DashboardRow, nowMs: number): string => {
   </tr>`;
 };
 
+/**
+ * The filter form. A GET form whose named fields carry only the filters — the
+ * cursor params are intentionally NOT named fields, so submitting drops them
+ * and starts a fresh first page. Values are echoed (escaped) so the active
+ * filters survive a page reload.
+ */
+const renderFilters = (filters: DashboardFilters): string => {
+  const options = [
+    '<option value="">Any status</option>',
+    ...STATUS_OPTIONS.map(
+      (s) => `<option value="${s}"${filters.status === s ? " selected" : ""}>${s}</option>`,
+    ),
+  ].join("\n");
+  const clear = hasFilters(filters) ? ` <a href="/" class="clear">Clear filters</a>` : "";
+  return `<form class="filters" method="get" action="/">
+  <input type="text" name="run" value="${esc(filters.run ?? "")}" placeholder="Run" aria-label="Filter by run" />
+  <input type="text" name="repo" value="${esc(filters.repo ?? "")}" placeholder="Repo" aria-label="Filter by repo" />
+  <select name="status" aria-label="Filter by status">
+${options}
+  </select>
+  <button type="submit">Filter</button>${clear}
+</form>`;
+};
+
+/**
+ * The keyset pager. "Older" uses the caller's `nextBefore` probe; "Newer"
+ * replays the previous page's `before` (carried in the URL as `prevBefore`),
+ * which needs no extra query. "First" resets to the unfettered first page.
+ */
+const renderPager = (filters: DashboardFilters, p: DashboardPagination): string => {
+  // Filters + page size ride along on every pager link.
+  const base = [...filterPairs(filters), ["limit", String(p.limit)] as const];
+  const links: string[] = [];
+  if (p.before !== undefined) {
+    links.push(`<a href="${esc(qs(base))}">← First</a>`);
+    const newer =
+      p.prevBefore !== undefined
+        ? qs([...base, ...cursorPairs(p.prevBefore, p.prevBeforeId)])
+        : qs(base);
+    links.push(`<a href="${esc(newer)}">← Newer</a>`);
+  }
+  if (p.hasMore && p.nextBefore !== null) {
+    const older = qs([
+      ...base,
+      ...cursorPairs(p.nextBefore, p.nextBeforeId),
+      // Replay THIS page's bound as `prevBefore` so the next "Newer" link
+      // (which carries it back) can return here without a backward query.
+      ...prevCursorPairs(p),
+    ]);
+    links.push(`<a href="${esc(older)}">Older →</a>`);
+  }
+  if (links.length === 0) return "";
+  return `<nav class="pager">${links.join("")}</nav>`;
+};
+
 const renderTable = (data: DashboardData): string => {
   if (data.rows.length === 0) {
-    return `<p class="empty">No executions yet. Dispatch a run to see it appear here.</p>`;
+    const body = hasFilters(data.filters)
+      ? `No executions match the current filters. <a href="/">Clear filters</a>`
+      : `No executions yet. Dispatch a run to see it appear here.`;
+    return `<p class="empty">${body}</p>`;
   }
   const body = data.rows.map((row) => renderRow(row, data.nowMs)).join("\n");
   return `<table>
@@ -181,7 +342,8 @@ const renderTable = (data: DashboardData): string => {
     <tbody>
 ${body}
     </tbody>
-  </table>`;
+  </table>
+${renderPager(data.filters, data.pagination)}`;
 };
 
 /**
@@ -216,6 +378,7 @@ export const renderDashboard = (data: DashboardData): string => {
 
 <main>
   <h2>Latest executions</h2>
+  ${renderFilters(data.filters)}
   ${renderTable(data)}
 </main>
 
