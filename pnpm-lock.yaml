@@ -76,6 +76,31 @@ importers:
         specifier: ^4.50.0
         version: 4.110.0(@cloudflare/workers-types@4.20260702.1)
 
+  apps/substrate:
+    dependencies:
+      '@cloudflare/sandbox':
+        specifier: 0.12.4
+        version: 0.12.4
+      '@fractalboxdev/flare-dispatch-substrate-contract':
+        specifier: workspace:*
+        version: link:../../packages/substrate-contract
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20260518.1
+        version: 4.20260702.1
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))
+      wrangler:
+        specifier: ^4.50.0
+        version: 4.110.0(@cloudflare/workers-types@4.20260702.1)
+
   packages/bedrock-sigv4:
     devDependencies:
       '@types/node':
@@ -177,6 +202,12 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))
 
+  packages/substrate-contract:
+    devDependencies:
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))
+
   runs:
     dependencies:
       '@fractalboxdev/flare-dispatch-core':
@@ -217,6 +248,20 @@ packages:
 
   '@cloudflare/sandbox@0.10.1':
     resolution: {integrity: sha512-l5QH0zemshvsYGvF5K/Lee1WydL93Oc1jZlVC2gRQkRwsNxNvHpfNn59B4/u68lax6iLGemWGd/TdJHzoq6MiQ==}
+    peerDependencies:
+      '@openai/agents': ^0.3.3
+      '@opencode-ai/sdk': ^1.1.40
+      '@xterm/xterm': '>=5.0.0'
+    peerDependenciesMeta:
+      '@openai/agents':
+        optional: true
+      '@opencode-ai/sdk':
+        optional: true
+      '@xterm/xterm':
+        optional: true
+
+  '@cloudflare/sandbox@0.12.4':
+    resolution: {integrity: sha512-0gpkd+a58Q5aGjgXvLFZSdIDAZpvh89QlaiHBpTtkDZWqHPKfyISV76/pIUzzo9ACJzVIpUO8hNv2X+LFTTiRQ==}
     peerDependencies:
       '@openai/agents': ^0.3.3
       '@opencode-ai/sdk': ^1.1.40
@@ -1394,6 +1439,9 @@ packages:
   capnweb@0.6.1:
     resolution: {integrity: sha512-fmhV26QPd1ewf5R74h55oVZnGwIcSaRMzbfLQUy8+zOBjuTmT3KXoT8wxHvnp1m9Ht9BoUUS5ZwNLoVLfQTyBg==}
 
+  capnweb@0.8.0:
+    resolution: {integrity: sha512-BK/TuXUiyfLSKsmjojn70yN7oYG/JJzoURZ3tckjg5Zj2KcygPm0A5jyOlswK7SYB4f0Gh9tt+RZ132b80iLfA==}
+
   chai@5.3.3:
     resolution: {integrity: sha512-4zNhdJD/iOjSH0A05ea+Ke6MU5mmpQcbQsSOkgdaUMJ9zTlDTD/GYlwohmIE2u0gaxHYiVHEn1Fw9mZ/ktJWgw==}
     engines: {node: '>=18'}
@@ -1952,6 +2000,13 @@ snapshots:
       '@cloudflare/containers': 0.3.7
       aws4fetch: 1.0.20
       capnweb: 0.6.1
+      hono: 4.12.29
+
+  '@cloudflare/sandbox@0.12.4':
+    dependencies:
+      '@cloudflare/containers': 0.3.7
+      aws4fetch: 1.0.20
+      capnweb: 0.8.0
       hono: 4.12.29
 
   '@cloudflare/unenv-preset@2.15.0(unenv@2.0.0-rc.24)(workerd@1.20260310.1)':
@@ -2658,6 +2713,8 @@ snapshots:
   cac@6.7.14: {}
 
   capnweb@0.6.1: {}
+
+  capnweb@0.8.0: {}
 
   chai@5.3.3:
     dependencies:

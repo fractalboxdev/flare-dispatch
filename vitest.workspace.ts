@@ -11,4 +11,5 @@ export default [
   "packages/runtime-cf/vitest.workers.config.ts",
   "runs",
   "apps/dispatcher",
+  "apps/substrate",
 ];

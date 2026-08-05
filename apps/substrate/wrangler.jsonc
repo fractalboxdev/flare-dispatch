@@ -1,0 +1,107 @@
+{
+  // flare-dispatch substrate — its own worker, frozen at this name from the
+  // first BYOC deploy (specs/platform.md). Structural reason it is separate:
+  // container DO classes live in whichever worker defines them, and deploying
+  // that worker churns running containers — product iteration on the
+  // dispatcher (or fractalbot) must never kill long-lived work mid-run.
+  //
+  // Deploy order per org: this worker FIRST (consumers' service bindings
+  // require it), then the dispatcher; fractalbot binds from its own repo with
+  //   services: [{ binding: "SUBSTRATE", service: "flare-dispatch-substrate",
+  //                entrypoint: "FractalbotFacade" }]
+  //
+  // Pre-deploy provisioning (once per account; ids below are placeholders
+  // until then — `wrangler deploy` fails loudly on them, by design):
+  //   wrangler d1 create flare-dispatch-substrate
+  //   wrangler d1 migrations apply flare-dispatch-substrate --remote
+  //   wrangler r2 bucket create flare-dispatch-substrate
+  //   wrangler secret put TICKET_SECRET
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "flare-dispatch-substrate",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": { "enabled": true },
+  "keep_vars": true,
+
+  "vars": {
+    // Idle window before a finished container sleeps (see sandbox-do.ts).
+    "SANDBOX_SLEEP_AFTER": "10m",
+    // Account Containers headroom the pool cap-sum must fit while the
+    // dispatcher still runs its own fleet (pools.ts validatePoolCaps).
+    "CONTAINERS_CEILING": "16",
+  },
+
+  // One Dockerfile (the dispatcher's sandbox base: Node + git + curl) builds
+  // every class; per-class `image_vars` gate the optional layers
+  // (ADR-0010: named image classes). The `task` class runs fractalbot's
+  // workloads — its dedicated image (OpenCode harness, git-lfs, python,
+  // CA bundle) replaces the build-tools variant in a follow-up; until then the
+  // class exists so the facade contract and pool partition are real.
+  "containers": [
+    {
+      "class_name": "SubstrateSandboxLean",
+      "image": "../../infra/Dockerfile.sandbox",
+      "instance_type": "standard-2",
+      "max_instances": 6,
+    },
+    {
+      "class_name": "SubstrateSandboxBrowser",
+      "image": "../../infra/Dockerfile.sandbox",
+      "image_vars": { "WITH_BROWSER": "true" },
+      "instance_type": "standard-2",
+      "max_instances": 3,
+    },
+    {
+      "class_name": "SubstrateSandboxAgent",
+      "image": "../../infra/Dockerfile.sandbox",
+      "image_vars": { "WITH_BUILD_TOOLS": "true" },
+      "instance_type": "standard-3",
+      "max_instances": 3,
+    },
+    {
+      "class_name": "SubstrateSandboxTask",
+      "image": "../../infra/Dockerfile.sandbox",
+      "image_vars": { "WITH_BUILD_TOOLS": "true" },
+      "instance_type": "standard-3",
+      "max_instances": 4,
+    },
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "SANDBOX_LEAN", "class_name": "SubstrateSandboxLean" },
+      { "name": "SANDBOX_BROWSER", "class_name": "SubstrateSandboxBrowser" },
+      { "name": "SANDBOX_AGENT", "class_name": "SubstrateSandboxAgent" },
+      { "name": "SANDBOX_TASK", "class_name": "SubstrateSandboxTask" },
+    ],
+  },
+
+  "migrations": [
+    {
+      "tag": "v0",
+      "new_sqlite_classes": [
+        "SubstrateSandboxLean",
+        "SubstrateSandboxBrowser",
+        "SubstrateSandboxAgent",
+        "SubstrateSandboxTask",
+      ],
+    },
+  ],
+
+  "r2_buckets": [
+    { "binding": "BACKUP_BUCKET", "bucket_name": "flare-dispatch-substrate" },
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "ADMISSION_DB",
+      "database_name": "flare-dispatch-substrate",
+      // Placeholder until `wrangler d1 create flare-dispatch-substrate` runs
+      // in the target account — deploy fails loudly on it, never silently.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+}
