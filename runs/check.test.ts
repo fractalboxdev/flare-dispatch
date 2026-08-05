@@ -112,6 +112,14 @@ describe("check", () => {
         const exec = handles.sandbox.execs.find((e) => e.command === CHECK_CMD);
         expect(exec).toBeDefined();
         expect(exec?.timeoutSec).toBe(1800);
+
+        // The STEP wrapping the exec carries that ceiling plus headroom (the
+        // exec's own deadline must fire first, yielding a log), and must not
+        // be replayed on failure — CF's default `limit: 5` replays the run
+        // body from the top on every attempt.
+        const execStep = handles.executions.steps.find((s) => s.name === "exec");
+        expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 + 120);
+        expect(execStep?.metadata?.["stepOpts.retries"]).toBe(0);
       }).pipe(Effect.provide(layer));
     },
   );
