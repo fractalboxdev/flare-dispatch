@@ -201,7 +201,10 @@ describe("offload-test", () => {
         const testExec = handles.sandbox.execs.find((e) => e.command === "pnpm test");
         expect(testExec?.timeoutSec).toBe(1800);
 
-        // ...and the STEP wrapping that exec carries the same ceiling.
+        // ...and the STEP wrapping that exec carries that ceiling plus the
+        // headroom, so the exec's own deadline fires first (a clean
+        // `ExecTimeout` with a log) rather than the platform killing both at
+        // the same instant (`WorkflowTimeoutError`, empty artifact).
         //
         // Two timeouts, and only one of them was being set. A Workflow step
         // defaults to 600s, so a repo configuring 1800 got
@@ -210,7 +213,12 @@ describe("offload-test", () => {
         // because the step died rather than the command. The assertion above
         // passed throughout: it only ever proved the inner half.
         const execStep = handles.executions.steps.find((s) => s.name === "exec");
-        expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800);
+        expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 + 120);
+
+        // ...and the step must NOT be replayed on failure: CF's default
+        // `limit: 5` turns one wedged 30-minute exec into six attempts over
+        // three hours, each replay re-entering the run body from the top.
+        expect(execStep?.metadata?.["stepOpts.retries"]).toBe(0);
       }).pipe(Effect.provide(layer));
     },
   );
