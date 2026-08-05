@@ -144,6 +144,14 @@ type CheckI = Schema.Schema.Type<typeof CheckInput>;
 /** Default `exec` timeout — lint is usually fast; install + slow tools get headroom via `timeoutSec`. */
 const DEFAULT_TIMEOUT_SEC = 600;
 
+/**
+ * Headroom added to the `exec` timeout to derive the Workflow STEP timeout, so
+ * `sandbox.exec`'s own deadline fires first (a clean `ExecTimeout` with the
+ * log streamed so far) instead of the platform hard-killing the step at the
+ * same instant. Unclamped, same reasoning as offload-test's constant.
+ */
+const STEP_TIMEOUT_HEADROOM_SEC = 120;
+
 /** CONFIG_KV key — strictly per-repo (see header: no global fallback). */
 const commandKey = (repo: string): string => `check.command:${repo}`;
 
@@ -318,11 +326,14 @@ export const check = defineRun({
       // here; the failOnNonZeroExit branch below decides whether it reds the
       // check. `result` is the checkpointed step output — replay restores it
       // identically, which is why `durationMs` is read from it.
-      // The STEP carries the same ceiling as the exec inside it — see the same
+      // The STEP timeout derives from the exec's plus headroom — see the same
       // note in `offload-test`. Two timeouts that must agree are one timeout
       // with a bug in it: leave the step's unset and its 600s default silently
       // wins over a configured `check.timeoutSec`, surfacing as
       // `WorkflowTimeoutError` from a limit the repo's config never mentions.
+      // `retries: 0` for the same reason as offload-test: a check is not a
+      // transient, and CF's default `limit: 5` replays the run body from the
+      // top on every attempt.
       const effectiveTimeoutSec = timeoutSec ?? DEFAULT_TIMEOUT_SEC;
       const result = yield* step(
         "exec",
@@ -338,7 +349,7 @@ export const check = defineRun({
             redactValues: Object.values(secretEnv),
             timeoutSec: effectiveTimeoutSec,
           }),
-        { timeoutSec: effectiveTimeoutSec },
+        { timeoutSec: effectiveTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC, retries: 0 },
       );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.

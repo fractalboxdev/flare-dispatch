@@ -142,6 +142,19 @@ const OffloadTestOutput = Schema.Struct({
 const TIMEOUT_SEC_DEFAULT = 600;
 
 /**
+ * Headroom added to the `exec` timeout to derive the Workflow STEP timeout, so
+ * the sandbox's own deadline fires first (a clean `ExecTimeout` with the log
+ * streamed so far) instead of the platform hard-killing the step at the same
+ * instant (`WorkflowTimeoutError`, no log, nothing for `upload-log` to serve).
+ * Same idea as playwright-demo's headroom, with one deliberate difference: NOT
+ * clamped to `maxDurationSec`. At the documented `offload-test.timeoutSec =
+ * 1800` config the clamp would collapse the headroom to zero — step and exec
+ * expire together and the platform kill wins, which is exactly the failure
+ * this exists to prevent.
+ */
+const STEP_TIMEOUT_HEADROOM_SEC = 120;
+
+/**
  * CONFIG_KV keys the run body resolves the command from when a dispatch carries
  * no `command` (webhook mode — the `pull_request` trigger's `inputs` is a sync,
  * payload-only callback that can't read config). The per-repo key wins over the
@@ -324,8 +337,6 @@ export const offloadTest = defineRun({
       // ExecTimeout, which propagate out of the run unchanged. `result` is the
       // checkpointed step output — replay restores it identically, which is
       // why the run's `durationMs` is read from it (see header note 2).
-      // The STEP carries the same ceiling as the exec inside it.
-      //
       // There are two timeouts and they are not the same one. `timeoutSec`
       // below bounds the command; the Workflow step wrapping it has its own,
       // defaulting to 600s. Leave the step's unset and the lower ceiling wins
@@ -336,7 +347,16 @@ export const offloadTest = defineRun({
       //
       // So the step timeout is DERIVED from the exec timeout rather than
       // configured beside it — two knobs that must agree are one knob with a
-      // bug in it. `maxDurationSec` still clamps the whole run above both.
+      // bug in it — with `STEP_TIMEOUT_HEADROOM_SEC` on top so the exec's
+      // deadline is the one that fires (see the constant's doc).
+      //
+      // `retries: 0` because a command that fails or times out should report
+      // that once — not be replayed to CF's default `limit: 5` (six attempts
+      // over hours on a long `timeoutSec`). A gate is not a transient: the
+      // same tree re-runs to the same result, and each platform-level replay
+      // re-enters the run body from the top (see pr-review's cap for the same
+      // reasoning). Genuine infra flakes re-run via a fresh dispatch, which
+      // also records a fresh attempt instead of silently swallowing this one.
       const result = yield* step(
         "exec",
         () =>
@@ -349,7 +369,7 @@ export const offloadTest = defineRun({
             env: { ...secretEnv, ...input.env },
             timeoutSec,
           }),
-        { timeoutSec },
+        { timeoutSec: timeoutSec + STEP_TIMEOUT_HEADROOM_SEC, retries: 0 },
       );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.
