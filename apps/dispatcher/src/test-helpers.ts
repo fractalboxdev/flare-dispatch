@@ -158,17 +158,38 @@ export const makeFakeD1 = (seed?: {
   };
 
   const query = (sql: string, binds: unknown[]): Record<string, unknown>[] => {
-    const conditions = [...sql.matchAll(/(\w+)\s*(=|<)\s*\?/g)].map((m) => ({
-      col: m[1]!,
-      op: m[2]!,
-    }));
-    const hasLimit = /LIMIT\s*\?/.test(sql);
-    const limit = hasLimit ? Number(binds[conditions.length]) : Infinity;
-
     const source = /FROM\s+steps/.test(sql) ? steps : executions;
-    let rows = source.filter((row) =>
-      conditions.every((c, i) => matches(row, c.col, c.op, binds[i])),
-    );
+    const hasLimit = /LIMIT\s*\?/.test(sql);
+    // The composite keyset shape `listExecutions` emits for the same-ms
+    // tiebreak: `(started_at < ?) OR (started_at = ? AND id < ?)`. Its three
+    // `?`s bind in string order like any other condition, but it is ONE logical
+    // predicate, not three AND-ed ones.
+    const composite = /\((\w+)\s*<\s*\?\)\s*OR\s*\((\w+)\s*=\s*\?\s*AND\s*(\w+)\s*<\s*\?/.exec(sql);
+
+    const conditions: { col: string; op: string; bind: unknown }[] = [];
+    let bindIdx = 0;
+    let compositeBinds: unknown[] | null = null;
+    for (const m of sql.matchAll(/(\w+)\s*(=|<)\s*\?/g)) {
+      if (composite !== null && (m.index ?? 0) >= composite.index) {
+        if (compositeBinds === null) compositeBinds = binds.slice(bindIdx, bindIdx + 3);
+        bindIdx += 3;
+        continue;
+      }
+      conditions.push({ col: m[1]!, op: m[2]!, bind: binds[bindIdx] });
+      bindIdx += 1;
+    }
+
+    let rows = source.filter((row) => conditions.every((c) => matches(row, c.col, c.op, c.bind)));
+    if (compositeBinds !== null) {
+      const [lt, eq, idLt] = compositeBinds as unknown[];
+      rows = rows.filter((row) => {
+        const older = matches(row, "started_at", "<", lt);
+        const sameMs = matches(row, "started_at", "=", eq);
+        const idBefore = String(row["id"]) < String(idLt);
+        return older || (sameMs && idBefore);
+      });
+    }
+    const limit = hasLimit ? Number(binds[bindIdx]) : Infinity;
     if (/FROM\s+executions/.test(sql)) {
       rows = [...rows].sort((a, b) => Number(b["started_at"] ?? 0) - Number(a["started_at"] ?? 0));
     } else {

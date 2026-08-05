@@ -62,13 +62,19 @@ export type ListFilters = {
   readonly status?: string;
   /** Page size, already clamped by the caller. */
   readonly limit: number;
-  /** Keyset cursor: only rows with `started_at < before`. */
+  /**
+   * Keyset cursor: only rows with `started_at < before` — or, when `beforeId`
+   * is also given, `(started_at, id) < (before, beforeId)` so rows that share
+   * the same `started_at` ms (concurrent runs) are not skipped or repeated at
+   * page boundaries.
+   */
   readonly before?: number;
+  readonly beforeId?: string;
 };
 
 /**
  * List executions newest-first, with optional `run`/`repo`/`status` filters and
- * a `started_at` keyset cursor. Returns at most `limit` rows.
+ * a `(started_at, id)` keyset cursor. Returns at most `limit` rows.
  */
 export const listExecutions = async (
   db: D1Database,
@@ -89,8 +95,15 @@ export const listExecutions = async (
     binds.push(filters.status);
   }
   if (filters.before !== undefined) {
-    where.push("started_at < ?");
-    binds.push(filters.before);
+    if (filters.beforeId !== undefined) {
+      // Composite keyset: strictly older, or same-millisecond and lexically
+      // earlier id — so page boundaries never drop same-ms rows.
+      where.push("(started_at < ?) OR (started_at = ? AND id < ?)");
+      binds.push(filters.before, filters.before, filters.beforeId);
+    } else {
+      where.push("started_at < ?");
+      binds.push(filters.before);
+    }
   }
   const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
   const sql = `SELECT * FROM executions ${whereSql}
