@@ -11,6 +11,7 @@
   "compatibility_flags": ["nodejs_compat"],
 
   "observability": { "enabled": true },
+  "keep_vars": true,
 
   // Custom domain (requires the fractalbox.dev zone in this account). The
   // GitHub App install flow substitutes the request origin into the manifest,
