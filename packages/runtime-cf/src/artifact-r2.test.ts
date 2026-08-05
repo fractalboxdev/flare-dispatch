@@ -41,9 +41,7 @@ describe("R2ArtifactLive", () => {
     expect(url).toBe(`/v1/artifacts/${EXECUTION_ID}/step.log`);
 
     // The artifact object exists at the expected key with the source content.
-    const artifactObj = await bindings.bucket.get(
-      `artifacts/${EXECUTION_ID}/step.log`,
-    );
+    const artifactObj = await bindings.bucket.get(`artifacts/${EXECUTION_ID}/step.log`);
     expect(artifactObj).not.toBeNull();
     expect(await artifactObj?.text()).toBe(logBody);
   });
@@ -75,9 +73,7 @@ describe("R2ArtifactLive", () => {
       }).pipe(Effect.provide(layer)),
     );
 
-    expect(url).toBe(
-      `https://dispatcher.example.com/v1/artifacts/${EXECUTION_ID}/step.log`,
-    );
+    expect(url).toBe(`https://dispatcher.example.com/v1/artifacts/${EXECUTION_ID}/step.log`);
     expect(listed[0]?.url).toBe(
       `https://dispatcher.example.com/v1/artifacts/${EXECUTION_ID}/step.log`,
     );

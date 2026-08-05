@@ -80,19 +80,19 @@ command needs `node_modules` / a lockfile install.
 
 ### Inputs
 
-| Field | Default | Notes |
-| --- | --- | --- |
-| `repo` | required | `owner/name` |
-| `sha` | required | commit to checkout |
-| `command` | omit | shell command; webhook resolves `check.command:<repo>` |
-| `checkLabel` | omit | names a second/third gate — see *Several gates on one repo*. `[A-Za-z0-9][A-Za-z0-9._-]{0,31}` |
-| `install` | `false` | R2-cached dep install after clone |
-| `image` | omit | container image override |
-| `env` | omit | **non-sensitive only** — dispatch inputs are persisted |
-| `secrets` | `[]` | Worker-secret **names** injected into the command env via `loadSecrets` (inline, never checkpointed) |
-| `secretPrefix` | omit | deprecated / ignored — Worker bindings are bare names (kept for `offload-test` parity) |
-| `timeoutSec` | `600` | `sandbox.exec` timeout |
-| `failOnNonZeroExit` | `false` | Action default; webhook trigger sets `true` |
+| Field               | Default  | Notes                                                                                                |
+| ------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `repo`              | required | `owner/name`                                                                                         |
+| `sha`               | required | commit to checkout                                                                                   |
+| `command`           | omit     | shell command; webhook resolves `check.command:<repo>`                                               |
+| `checkLabel`        | omit     | names a second/third gate — see _Several gates on one repo_. `[A-Za-z0-9][A-Za-z0-9._-]{0,31}`       |
+| `install`           | `false`  | R2-cached dep install after clone                                                                    |
+| `image`             | omit     | container image override                                                                             |
+| `env`               | omit     | **non-sensitive only** — dispatch inputs are persisted                                               |
+| `secrets`           | `[]`     | Worker-secret **names** injected into the command env via `loadSecrets` (inline, never checkpointed) |
+| `secretPrefix`      | omit     | deprecated / ignored — Worker bindings are bare names (kept for `offload-test` parity)               |
+| `timeoutSec`        | `600`    | `sandbox.exec` timeout                                                                               |
+| `failOnNonZeroExit` | `false`  | Action default; webhook trigger sets `true`                                                          |
 
 ### Webhook behavior
 
@@ -103,12 +103,12 @@ command needs `node_modules` / a lockfile install.
 
 ### Outputs
 
-| Field | Notes |
-| --- | --- |
-| `exitCode` | `0` when skipped |
-| `durationMs` | from checkpointed exec; `0` when skipped |
-| `logUri` | signed R2 URL to `check.log` (30-day TTL, same as sibling runs); absent when skipped |
-| `skippedReason` | `"not-configured"` when opted out |
+| Field           | Notes                                                                                |
+| --------------- | ------------------------------------------------------------------------------------ |
+| `exitCode`      | `0` when skipped                                                                     |
+| `durationMs`    | from checkpointed exec; `0` when skipped                                             |
+| `logUri`        | signed R2 URL to `check.log` (30-day TTL, same as sibling runs); absent when skipped |
+| `skippedReason` | `"not-configured"` when opted out                                                    |
 
 ### Secrets and logs
 

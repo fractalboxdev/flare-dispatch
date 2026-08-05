@@ -21,10 +21,7 @@ export const sharded = <A, E, R>(opts: {
   body: (shard: Shard) => Effect.Effect<A, E, R>;
 }): Effect.Effect<readonly A[], E, R> =>
   Effect.forEach(
-    Array.from(
-      { length: opts.count },
-      (_, i): Shard => ({ index: i + 1, total: opts.count }),
-    ),
+    Array.from({ length: opts.count }, (_, i): Shard => ({ index: i + 1, total: opts.count })),
     opts.body,
     { concurrency: opts.concurrency ?? opts.count },
   );

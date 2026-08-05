@@ -40,8 +40,7 @@ type PlaywrightE2EInputT = Schema.Schema.Type<typeof PlaywrightE2EInput>;
 /** True when the PR carries `name` as a label — the opt-in gate for Webhook mode. */
 const hasLabel = (payload: WebhookPayload, name: string): boolean =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
-  payload.pull_request?.labels?.some((l: { name: string }) => l.name === name) ??
-  false;
+  payload.pull_request?.labels?.some((l: { name: string }) => l.name === name) ?? false;
 
 const PlaywrightE2EOutput = Schema.Struct({
   shards: Schema.Number,
@@ -61,8 +60,7 @@ const SHARDS_DEFAULT = 4;
 export const playwrightE2E = defineRun({
   name: "playwright-e2e",
   version: "1.0.0",
-  image:
-    "registry.cloudflare.com/fractalbox/flare-dispatch-playwright:latest",
+  image: "registry.cloudflare.com/fractalbox/flare-dispatch-playwright:latest",
   inputs: PlaywrightE2EInput,
   outputs: PlaywrightE2EOutput,
   limits: { maxDurationSec: 2400, maxConcurrency: 8, requiresBrowser: true },
@@ -80,8 +78,7 @@ export const playwrightE2E = defineRun({
       event: "pull_request",
       actions: ["opened", "synchronize", "ready_for_review", "labeled"],
       gate: ({ payload }) =>
-        hasLabel(payload, "request-e2e") &&
-        !payload.pull_request.user.login.endsWith("[bot]"),
+        hasLabel(payload, "request-e2e") && !payload.pull_request.user.login.endsWith("[bot]"),
       idempotencyKey: ({ payload }) =>
         `playwright-e2e:${payload.repository.full_name.replace(/\//g, "_")}:${payload.pull_request.head.sha.slice(0, 12)}`,
       inputs: ({ payload }): PlaywrightE2EInputT => ({
@@ -96,8 +93,7 @@ export const playwrightE2E = defineRun({
       // Resolve the target URL up front so a misconfigured wiring dies cheaply,
       // before any shard container boots. Action mode passes `baseURL`; Webhook
       // mode leaves it unset and we fall back to CONFIG_KV.
-      const baseURL =
-        input.baseURL ?? (yield* config.get("playwright-e2e.base-url"));
+      const baseURL = input.baseURL ?? (yield* config.get("playwright-e2e.base-url"));
       if (!baseURL) {
         return yield* Effect.die(
           new Error(
@@ -124,8 +120,12 @@ export const playwrightE2E = defineRun({
                 container,
                 env: { BASE_URL: baseURL },
                 command: [
-                  "pnpm", "exec", "playwright", "test",
-                  "--shard", `${index}/${total}`,
+                  "pnpm",
+                  "exec",
+                  "playwright",
+                  "test",
+                  "--shard",
+                  `${index}/${total}`,
                   ...projectArg,
                 ],
               });

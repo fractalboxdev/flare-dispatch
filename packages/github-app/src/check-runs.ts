@@ -18,12 +18,7 @@
 import { assertOk, ghHeaders, resolveClient, splitRepo } from "./http";
 
 /** A check-run conclusion — the terminal verdict GitHub renders. */
-export type CheckConclusion =
-  | "success"
-  | "failure"
-  | "neutral"
-  | "cancelled"
-  | "timed_out";
+export type CheckConclusion = "success" | "failure" | "neutral" | "cancelled" | "timed_out";
 
 /** The output block GitHub renders under the check-run detail page. */
 export type CheckRunOutput = {
@@ -67,27 +62,22 @@ export type CreateCheckRunOptions = ClientOptions & {
  *
  * @throws {GithubApiError} when the API returns non-2xx.
  */
-export const createCheckRun = async (
-  opts: CreateCheckRunOptions,
-): Promise<string> => {
+export const createCheckRun = async (opts: CreateCheckRunOptions): Promise<string> => {
   const { owner, name: repoName } = splitRepo(opts.repo);
   const { apiBase, doFetch } = resolveClient(opts);
 
-  const res = await doFetch(
-    `${apiBase}/repos/${owner}/${repoName}/check-runs`,
-    {
-      method: "POST",
-      headers: ghHeaders(opts.token, { json: true }),
-      body: JSON.stringify({
-        name: opts.name,
-        head_sha: opts.sha,
-        status: "in_progress",
-        started_at: new Date().toISOString(),
-        ...(opts.detailsUrl ? { details_url: opts.detailsUrl } : {}),
-        ...(opts.output ? { output: opts.output } : {}),
-      }),
-    },
-  );
+  const res = await doFetch(`${apiBase}/repos/${owner}/${repoName}/check-runs`, {
+    method: "POST",
+    headers: ghHeaders(opts.token, { json: true }),
+    body: JSON.stringify({
+      name: opts.name,
+      head_sha: opts.sha,
+      status: "in_progress",
+      started_at: new Date().toISOString(),
+      ...(opts.detailsUrl ? { details_url: opts.detailsUrl } : {}),
+      ...(opts.output ? { output: opts.output } : {}),
+    }),
+  });
 
   await assertOk(res, "check-run create failed");
 
@@ -129,24 +119,19 @@ export type ProgressCheckRunOptions = ClientOptions & {
  *
  * @throws {GithubApiError} when the API returns non-2xx.
  */
-export const progressCheckRun = async (
-  opts: ProgressCheckRunOptions,
-): Promise<void> => {
+export const progressCheckRun = async (opts: ProgressCheckRunOptions): Promise<void> => {
   const { owner, name: repoName } = splitRepo(opts.repo);
   const { apiBase, doFetch } = resolveClient(opts);
 
-  const res = await doFetch(
-    `${apiBase}/repos/${owner}/${repoName}/check-runs/${opts.checkRunId}`,
-    {
-      method: "PATCH",
-      headers: ghHeaders(opts.token, { json: true }),
-      body: JSON.stringify({
-        status: "in_progress",
-        ...(opts.detailsUrl ? { details_url: opts.detailsUrl } : {}),
-        output: opts.output,
-      }),
-    },
-  );
+  const res = await doFetch(`${apiBase}/repos/${owner}/${repoName}/check-runs/${opts.checkRunId}`, {
+    method: "PATCH",
+    headers: ghHeaders(opts.token, { json: true }),
+    body: JSON.stringify({
+      status: "in_progress",
+      ...(opts.detailsUrl ? { details_url: opts.detailsUrl } : {}),
+      output: opts.output,
+    }),
+  });
 
   await assertOk(res, "check-run progress update failed");
 };
@@ -156,26 +141,21 @@ export const progressCheckRun = async (
  *
  * @throws {GithubApiError} when the API returns non-2xx.
  */
-export const updateCheckRun = async (
-  opts: UpdateCheckRunOptions,
-): Promise<void> => {
+export const updateCheckRun = async (opts: UpdateCheckRunOptions): Promise<void> => {
   const { owner, name: repoName } = splitRepo(opts.repo);
   const { apiBase, doFetch } = resolveClient(opts);
 
-  const res = await doFetch(
-    `${apiBase}/repos/${owner}/${repoName}/check-runs/${opts.checkRunId}`,
-    {
-      method: "PATCH",
-      headers: ghHeaders(opts.token, { json: true }),
-      body: JSON.stringify({
-        status: "completed",
-        conclusion: opts.conclusion,
-        completed_at: new Date().toISOString(),
-        ...(opts.detailsUrl ? { details_url: opts.detailsUrl } : {}),
-        ...(opts.output ? { output: opts.output } : {}),
-      }),
-    },
-  );
+  const res = await doFetch(`${apiBase}/repos/${owner}/${repoName}/check-runs/${opts.checkRunId}`, {
+    method: "PATCH",
+    headers: ghHeaders(opts.token, { json: true }),
+    body: JSON.stringify({
+      status: "completed",
+      conclusion: opts.conclusion,
+      completed_at: new Date().toISOString(),
+      ...(opts.detailsUrl ? { details_url: opts.detailsUrl } : {}),
+      ...(opts.output ? { output: opts.output } : {}),
+    }),
+  });
 
   await assertOk(res, "check-run update failed");
 };

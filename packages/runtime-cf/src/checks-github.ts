@@ -74,9 +74,7 @@ export const NOOP_CHECK_RUN_ID = "noop";
  */
 const isRetryable = (e: unknown): boolean =>
   e instanceof GithubAppApiError &&
-  (e.status === 429 ||
-    e.status >= 500 ||
-    (e.status === 403 && e.retryAfterMs !== undefined));
+  (e.status === 429 || e.status >= 500 || (e.status === 403 && e.retryAfterMs !== undefined));
 
 /**
  * Bounded exponential backoff (4 retries, jittered) gated to the retryable
@@ -104,19 +102,13 @@ const degradeMsg = (op: string, e: unknown): string =>
 const makeNoopChecks = (reason: string): ChecksService => ({
   create: ({ name }) =>
     Effect.as(
-      Effect.logInfo(
-        `checks.create skipped (${reason}) — check-run "${name}" not posted`,
-      ),
+      Effect.logInfo(`checks.create skipped (${reason}) — check-run "${name}" not posted`),
       NOOP_CHECK_RUN_ID,
     ),
   progress: () =>
-    Effect.logInfo(
-      `checks.progress skipped (${reason}) — in-progress output not posted`,
-    ),
+    Effect.logInfo(`checks.progress skipped (${reason}) — in-progress output not posted`),
   update: ({ conclusion }) =>
-    Effect.logInfo(
-      `checks.update skipped (${reason}) — conclusion "${conclusion}" not posted`,
-    ),
+    Effect.logInfo(`checks.update skipped (${reason}) — conclusion "${conclusion}" not posted`),
 });
 
 /**
@@ -128,10 +120,7 @@ export const makeChecksGithubLive = (
   config: ChecksGithubConfig | undefined,
 ): Layer.Layer<Checks> => {
   if (config === undefined) {
-    return Layer.succeed(
-      Checks,
-      makeNoopChecks("GitHub App credentials not configured"),
-    );
+    return Layer.succeed(Checks, makeNoopChecks("GitHub App credentials not configured"));
   }
 
   // Resolve a fresh-or-cached installation token. The typed `GithubApiError` is
@@ -177,10 +166,7 @@ export const makeChecksGithubLive = (
       }).pipe(
         Effect.retry(checksRetry),
         Effect.catchIf(isRetryable, (e) =>
-          Effect.as(
-            Effect.logWarning(degradeMsg("create", e)),
-            NOOP_CHECK_RUN_ID,
-          ),
+          Effect.as(Effect.logWarning(degradeMsg("create", e)), NOOP_CHECK_RUN_ID),
         ),
         Effect.orDie,
       ),
@@ -190,9 +176,7 @@ export const makeChecksGithubLive = (
         // Same sentinel handling as `update`: a degraded create has no real
         // check-run to PATCH.
         if (checkRunId === NOOP_CHECK_RUN_ID) {
-          yield* Effect.logInfo(
-            "checks.progress skipped — create returned the no-op sentinel id",
-          );
+          yield* Effect.logInfo("checks.progress skipped — create returned the no-op sentinel id");
           return;
         }
         const accessToken = yield* token();
@@ -208,16 +192,11 @@ export const makeChecksGithubLive = (
           catch: (cause) =>
             cause instanceof GithubAppApiError
               ? cause
-              : new Error(
-                  "ChecksGithubLive: check-run progress update failed",
-                  { cause },
-                ),
+              : new Error("ChecksGithubLive: check-run progress update failed", { cause }),
         });
       }).pipe(
         Effect.retry(checksRetry),
-        Effect.catchIf(isRetryable, (e) =>
-          Effect.logWarning(degradeMsg("progress", e)),
-        ),
+        Effect.catchIf(isRetryable, (e) => Effect.logWarning(degradeMsg("progress", e))),
         Effect.orDie,
       ),
 
@@ -226,9 +205,7 @@ export const makeChecksGithubLive = (
         // A no-op create (degraded earlier in the same execution) yields the
         // sentinel id — there is no real check-run to PATCH, so skip cleanly.
         if (checkRunId === NOOP_CHECK_RUN_ID) {
-          yield* Effect.logInfo(
-            "checks.update skipped — create returned the no-op sentinel id",
-          );
+          yield* Effect.logInfo("checks.update skipped — create returned the no-op sentinel id");
           return;
         }
         const accessToken = yield* token();
@@ -251,9 +228,7 @@ export const makeChecksGithubLive = (
         });
       }).pipe(
         Effect.retry(checksRetry),
-        Effect.catchIf(isRetryable, (e) =>
-          Effect.logWarning(degradeMsg("update", e)),
-        ),
+        Effect.catchIf(isRetryable, (e) => Effect.logWarning(degradeMsg("update", e))),
         Effect.orDie,
       ),
   };

@@ -59,9 +59,7 @@ describe("renderDeployPage", () => {
   });
 
   it("says so plainly when the identity carries no groups", () => {
-    expect(renderDeployPage(base({ groups: [] }))).toContain(
-      '<li class="empty">(none)</li>',
-    );
+    expect(renderDeployPage(base({ groups: [] }))).toContain('<li class="empty">(none)</li>');
   });
 
   it("shows a legible message when authorized for nothing", () => {
@@ -76,9 +74,7 @@ describe("renderDeployPage", () => {
   });
 
   it("escapes identity + group values (no HTML injection)", () => {
-    const html = renderDeployPage(
-      base({ email: "<script>@x", groups: ['a"><b'] }),
-    );
+    const html = renderDeployPage(base({ email: "<script>@x", groups: ['a"><b'] }));
     expect(html).not.toContain("<script>@x");
     expect(html).toContain("&lt;script&gt;@x");
     expect(html).not.toContain('a"><b');

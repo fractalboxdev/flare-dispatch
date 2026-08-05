@@ -10,9 +10,7 @@ import {
 
 describe("stripThinkBlocks", () => {
   it("removes a complete <think>…</think> block", () => {
-    expect(stripThinkBlocks("<think>reasoning</think>{\"a\":1}").trim()).toBe(
-      '{"a":1}',
-    );
+    expect(stripThinkBlocks('<think>reasoning</think>{"a":1}').trim()).toBe('{"a":1}');
   });
 
   it("removes an unterminated <think> opener (truncated output)", () => {
@@ -75,16 +73,12 @@ describe("extractJsonText", () => {
 
 describe("stripThinkBlocks — reasoning-model variants", () => {
   it("removes <thinking> and <reasoning> blocks", () => {
-    expect(stripThinkBlocks("<thinking>x</thinking>{\"a\":1}").trim()).toBe(
-      '{"a":1}',
-    );
+    expect(stripThinkBlocks('<thinking>x</thinking>{"a":1}').trim()).toBe('{"a":1}');
     expect(stripThinkBlocks("<reasoning>y</reasoning>ok").trim()).toBe("ok");
   });
 
   it("removes Kimi's ◁think▷…◁/think▷ blocks", () => {
-    expect(stripThinkBlocks("◁think▷reasoning◁/think▷payload").trim()).toBe(
-      "payload",
-    );
+    expect(stripThinkBlocks("◁think▷reasoning◁/think▷payload").trim()).toBe("payload");
   });
 });
 

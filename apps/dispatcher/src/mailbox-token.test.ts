@@ -18,71 +18,49 @@ describe("mailbox-token", () => {
   it("signs and verifies a token bound to local-part + expiry", async () => {
     const tok = await signMailboxToken("secret-a", LOCAL, EXP);
     expect(tok).toHaveLength(22);
-    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, tok, NOW)).toBe(
-      true,
-    );
+    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, tok, NOW)).toBe(true);
   });
 
   it("rejects an expired token even when the MAC matches", async () => {
     const tok = await signMailboxToken("secret-a", LOCAL, EXP);
     // The MAC is over (LOCAL, EXP) and is correct — but the clock is past EXP.
-    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, tok, EXP + 1)).toBe(
-      false,
-    );
+    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, tok, EXP + 1)).toBe(false);
     // Exactly at the deadline is still valid (nowS > expEpochS is the cutoff).
-    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, tok, EXP)).toBe(
-      true,
-    );
+    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, tok, EXP)).toBe(true);
   });
 
   it("rejects a non-finite expiry before touching the MAC", async () => {
     const tok = await signMailboxToken("secret-a", LOCAL, EXP);
-    expect(
-      await verifyMailboxToken("secret-a", LOCAL, Number.NaN, tok, NOW),
-    ).toBe(false);
-    expect(
-      await verifyMailboxToken("secret-a", LOCAL, Number.POSITIVE_INFINITY, tok, NOW),
-    ).toBe(false);
+    expect(await verifyMailboxToken("secret-a", LOCAL, Number.NaN, tok, NOW)).toBe(false);
+    expect(await verifyMailboxToken("secret-a", LOCAL, Number.POSITIVE_INFINITY, tok, NOW)).toBe(
+      false,
+    );
   });
 
   it("rejects a token for a different local-part", async () => {
     const tok = await signMailboxToken("secret-a", LOCAL, EXP);
-    expect(
-      await verifyMailboxToken("secret-a", "otp-other-0000", EXP, tok, NOW),
-    ).toBe(false);
+    expect(await verifyMailboxToken("secret-a", "otp-other-0000", EXP, tok, NOW)).toBe(false);
   });
 
   it("rejects a token verified against a different expiry (expiry is signed)", async () => {
     const tok = await signMailboxToken("secret-a", LOCAL, EXP);
     // Pushing the deadline out without re-signing must fail — the MAC covers exp.
-    expect(
-      await verifyMailboxToken("secret-a", LOCAL, EXP + 1, tok, NOW),
-    ).toBe(false);
+    expect(await verifyMailboxToken("secret-a", LOCAL, EXP + 1, tok, NOW)).toBe(false);
   });
 
   it("rejects a token minted under a different secret", async () => {
     const tok = await signMailboxToken("secret-a", LOCAL, EXP);
-    expect(await verifyMailboxToken("secret-b", LOCAL, EXP, tok, NOW)).toBe(
-      false,
-    );
+    expect(await verifyMailboxToken("secret-b", LOCAL, EXP, tok, NOW)).toBe(false);
   });
 
   it("rejects tampered / missing / malformed tokens", async () => {
     const tok = await signMailboxToken("secret-a", LOCAL, EXP);
     const tampered = `${tok.slice(0, -1)}${tok.endsWith("A") ? "B" : "A"}`;
-    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, tampered, NOW)).toBe(
-      false,
-    );
-    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, null, NOW)).toBe(
-      false,
-    );
-    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, undefined, NOW)).toBe(
-      false,
-    );
+    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, tampered, NOW)).toBe(false);
+    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, null, NOW)).toBe(false);
+    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, undefined, NOW)).toBe(false);
     expect(await verifyMailboxToken("secret-a", LOCAL, EXP, "", NOW)).toBe(false);
-    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, "short", NOW)).toBe(
-      false,
-    );
+    expect(await verifyMailboxToken("secret-a", LOCAL, EXP, "short", NOW)).toBe(false);
   });
 
   it("is domain-separated from the log-link key (distinct HKDF label)", async () => {
@@ -124,9 +102,7 @@ describe("mailbox-token", () => {
         HMAC_SECRET: "h",
       } as unknown as Env),
     ).toBe("h");
-    expect(
-      resolveMailboxLinkSecret({ HMAC_SECRET: "" } as unknown as Env),
-    ).toBe(undefined);
+    expect(resolveMailboxLinkSecret({ HMAC_SECRET: "" } as unknown as Env)).toBe(undefined);
   });
 
   it("builds tokened mailbox URLs, encoding the local-part and carrying exp", () => {

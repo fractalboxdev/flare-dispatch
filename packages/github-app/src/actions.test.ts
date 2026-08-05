@@ -8,12 +8,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  actionRunsUrl,
-  GithubApiError,
-  listActionRuns,
-  normalizeRun,
-} from "./index";
+import { actionRunsUrl, GithubApiError, listActionRuns, normalizeRun } from "./index";
 
 type Captured = { authorization: string | null; url: string };
 let gets: Captured[] = [];
@@ -31,19 +26,16 @@ const sampleRun = (over: Record<string, unknown> = {}) => ({
 });
 
 const server = setupServer(
-  http.get(
-    "https://api.github.com/repos/:owner/:repo/actions/runs",
-    ({ request }) => {
-      gets.push({
-        authorization: request.headers.get("authorization"),
-        url: request.url,
-      });
-      return HttpResponse.json(
-        { workflow_runs: [sampleRun(), sampleRun({ id: 22, conclusion: "success" })] },
-        { status: 200 },
-      );
-    },
-  ),
+  http.get("https://api.github.com/repos/:owner/:repo/actions/runs", ({ request }) => {
+    gets.push({
+      authorization: request.headers.get("authorization"),
+      url: request.url,
+    });
+    return HttpResponse.json(
+      { workflow_runs: [sampleRun(), sampleRun({ id: 22, conclusion: "success" })] },
+      { status: 200 },
+    );
+  }),
 );
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -91,13 +83,12 @@ describe("listActionRuns", () => {
 
   it("surfaces a GithubApiError on non-2xx", async () => {
     server.use(
-      http.get(
-        "https://api.github.com/repos/:owner/:repo/actions/runs",
-        () => HttpResponse.text("forbidden", { status: 403 }),
+      http.get("https://api.github.com/repos/:owner/:repo/actions/runs", () =>
+        HttpResponse.text("forbidden", { status: 403 }),
       ),
     );
-    await expect(
-      listActionRuns({ token: "t", repo: "owner/name" }),
-    ).rejects.toBeInstanceOf(GithubApiError);
+    await expect(listActionRuns({ token: "t", repo: "owner/name" })).rejects.toBeInstanceOf(
+      GithubApiError,
+    );
   });
 });

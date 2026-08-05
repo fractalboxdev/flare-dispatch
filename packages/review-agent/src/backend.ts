@@ -271,12 +271,10 @@ export const namespacedKey =
     `${namespace}.${suffix}`;
 
 /** The CONFIG_KV key naming the active backend for a namespace. */
-export const backendConfigKey = (namespace: string): string =>
-  namespacedKey(namespace)("backend");
+export const backendConfigKey = (namespace: string): string => namespacedKey(namespace)("backend");
 
 /** The CONFIG_KV key carrying a namespace's optional system-prompt override. */
-export const promptKey = (namespace: string): string =>
-  namespacedKey(namespace)("prompt");
+export const promptKey = (namespace: string): string => namespacedKey(namespace)("prompt");
 
 /**
  * The CONFIG_KV key carrying a namespace's optional review GUIDELINES — operator
@@ -286,8 +284,7 @@ export const promptKey = (namespace: string): string =>
  * top of a `*.prompt` override): e.g. a "what NOT to flag" suppression list, a
  * project's conventions, or severity calibration. See `composeSystemPrompt`.
  */
-export const guidelinesKey = (namespace: string): string =>
-  namespacedKey(namespace)("guidelines");
+export const guidelinesKey = (namespace: string): string => namespacedKey(namespace)("guidelines");
 
 /** The CONFIG_KV key naming the active backend (default `pr-review` namespace). */
 export const BACKEND_CONFIG_KEY = backendConfigKey(NAMESPACE_DEFAULT);
@@ -324,10 +321,7 @@ export const parseBackend = (raw: string | undefined): Backend =>
   BACKENDS.includes(raw as Backend) ? (raw as Backend) : BACKEND_DEFAULT;
 
 /** Narrow an arbitrary config string to a known `ReviewMode`, or `fallback`. */
-export const parseMode = (
-  raw: string | undefined,
-  fallback: ReviewMode,
-): ReviewMode =>
+export const parseMode = (raw: string | undefined, fallback: ReviewMode): ReviewMode =>
   REVIEW_MODES.includes(raw as ReviewMode) ? (raw as ReviewMode) : fallback;
 
 /** Lower bound for a diff-cap override — below this a review sees nothing useful. */
@@ -340,10 +334,7 @@ const MAX_MAX_DIFF_CHARS = 1_000_000;
  * `fallback` when unset/blank/non-numeric/non-positive. Clamped to
  * [{@link MIN_MAX_DIFF_CHARS}, {@link MAX_MAX_DIFF_CHARS}].
  */
-export const parseMaxDiffChars = (
-  raw: string | undefined,
-  fallback: number,
-): number => {
+export const parseMaxDiffChars = (raw: string | undefined, fallback: number): number => {
   if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) return fallback;
@@ -360,10 +351,7 @@ const MAX_MAX_TOKENS = 32_768;
  * when unset/blank/non-numeric/non-positive. Clamped to
  * [{@link MIN_MAX_TOKENS}, {@link MAX_MAX_TOKENS}].
  */
-export const parseMaxTokens = (
-  raw: string | undefined,
-  fallback: number,
-): number => {
+export const parseMaxTokens = (raw: string | undefined, fallback: number): number => {
   if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) return fallback;
@@ -390,9 +378,7 @@ export const resolveBackend = <R>(
 
     const model = yield* getConfig(keys.modelKey);
     if (model === undefined || model.trim() === "") {
-      return yield* Effect.fail(
-        new BackendUnconfigured({ backend, missing: keys.modelKey }),
-      );
+      return yield* Effect.fail(new BackendUnconfigured({ backend, missing: keys.modelKey }));
     }
 
     const mode = parseMode(yield* getConfig(keys.modeKey), keys.modeDefault);
@@ -400,28 +386,19 @@ export const resolveBackend = <R>(
       yield* getConfig(keys.maxDiffCharsKey),
       keys.maxDiffCharsDefault,
     );
-    const maxTokens = parseMaxTokens(
-      yield* getConfig(keys.maxTokensKey),
-      keys.maxTokensDefault,
-    );
+    const maxTokens = parseMaxTokens(yield* getConfig(keys.maxTokensKey), keys.maxTokensDefault);
 
     if (backend === "bedrock") {
       // The bedrock backend needs the AWS role to assume + region to sign in.
       // Region is optional (default us-east-1); roleArn is required — without
       // it the run can't mint STS creds and the modelGateway Bedrock route
       // would fail far less informatively.
-      const regionRaw =
-        keys.regionKey !== undefined
-          ? yield* getConfig(keys.regionKey)
-          : undefined;
+      const regionRaw = keys.regionKey !== undefined ? yield* getConfig(keys.regionKey) : undefined;
       const region =
         regionRaw !== undefined && regionRaw.trim() !== ""
           ? regionRaw
           : (keys.regionDefault ?? BEDROCK_REGION_DEFAULT);
-      const roleArn =
-        keys.roleArnKey !== undefined
-          ? yield* getConfig(keys.roleArnKey)
-          : undefined;
+      const roleArn = keys.roleArnKey !== undefined ? yield* getConfig(keys.roleArnKey) : undefined;
       if (roleArn === undefined || roleArn.trim() === "") {
         return yield* Effect.fail(
           new BackendUnconfigured({
@@ -447,13 +424,7 @@ export const resolveBackend = <R>(
 /** Map a `Match`-classified provider error to a `ModelCallFailed.reason`. */
 export const classifyModelError = (
   e: unknown,
-):
-  | "auth-failed"
-  | "rate-limited"
-  | "bad-response"
-  | "timeout"
-  | "context-overflow"
-  | "unknown" => {
+): "auth-failed" | "rate-limited" | "bad-response" | "timeout" | "context-overflow" | "unknown" => {
   const message = e instanceof Error ? e.message.toLowerCase() : String(e);
   return Match.value(message).pipe(
     // Context-overflow phrases are TIGHT on purpose (PR #26 review): the reason
@@ -472,18 +443,19 @@ export const classifyModelError = (
       () => "context-overflow" as const,
     ),
     Match.when(
-      (m) =>
-        m.includes("401") || m.includes("403") || m.includes("unauthor"),
+      (m) => m.includes("401") || m.includes("403") || m.includes("unauthor"),
       () => "auth-failed" as const,
     ),
     Match.when(
       (m) => m.includes("429") || m.includes("rate"),
       () => "rate-limited" as const,
     ),
-    Match.when((m) => m.includes("timeout"), () => "timeout" as const),
     Match.when(
-      (m) =>
-        m.includes("bad") || m.includes("invalid") || m.includes("decode"),
+      (m) => m.includes("timeout"),
+      () => "timeout" as const,
+    ),
+    Match.when(
+      (m) => m.includes("bad") || m.includes("invalid") || m.includes("decode"),
       () => "bad-response" as const,
     ),
     Match.orElse(() => "unknown" as const),

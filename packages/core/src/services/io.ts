@@ -67,9 +67,7 @@ export const io = {
   sleep: (d: Duration.Duration | string) => Effect.flatMap(IO, (s) => s.sleep(d)),
   log: (level: LogLevel, msg: string, attrs?: Record<string, unknown>) =>
     Effect.flatMap(IO, (s) => s.log(level, msg, attrs)),
-  priorExecution: <O, I>(opts: {
-    family: string;
-    outputSchema: Schema.Schema<O, I>;
-  }) => Effect.flatMap(IO, (s) => s.priorExecution(opts)),
+  priorExecution: <O, I>(opts: { family: string; outputSchema: Schema.Schema<O, I> }) =>
+    Effect.flatMap(IO, (s) => s.priorExecution(opts)),
   viewerUrl: Effect.flatMap(IO, (s) => s.viewerUrl),
 } as const;

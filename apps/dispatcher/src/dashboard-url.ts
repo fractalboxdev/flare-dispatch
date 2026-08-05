@@ -36,9 +36,6 @@ export const aiGatewayAnalyticsUrl = (
   accountId: string | undefined,
   gatewayId: string | undefined,
 ): string | undefined =>
-  accountId !== undefined &&
-  accountId.length > 0 &&
-  gatewayId !== undefined &&
-  gatewayId.length > 0
+  accountId !== undefined && accountId.length > 0 && gatewayId !== undefined && gatewayId.length > 0
     ? `https://dash.cloudflare.com/${accountId}/ai/ai-gateway/${encodeURIComponent(gatewayId)}`
     : undefined;

@@ -244,9 +244,7 @@ export interface GithubService {
    * Best-effort reporting: a live deploy without App credentials degrades to a
    * logged no-op rather than failing the run.
    */
-  readonly pullReview: (
-    req: PullReviewRequest,
-  ) => Effect.Effect<void, GitHubApiError>;
+  readonly pullReview: (req: PullReviewRequest) => Effect.Effect<void, GitHubApiError>;
 
   /**
    * Open (or update) a draft PR carrying a set of file edits — the content
@@ -263,9 +261,7 @@ export interface GithubService {
    * release write the `release-notes` recipe calls on human approval. A deploy
    * without App credentials degrades to a logged no-op (`published: false`).
    */
-  readonly createRelease: (
-    req: CreateRelease,
-  ) => Effect.Effect<ReleaseResult, GitHubApiError>;
+  readonly createRelease: (req: CreateRelease) => Effect.Effect<ReleaseResult, GitHubApiError>;
 }
 
 /** Context.Tag — the dependency a run carries until a Layer provides it. */
@@ -280,9 +276,8 @@ export class Github extends Context.Tag("@fractalboxdev/flare-dispatch-core/Gith
  * rather than `Effect.flatMap(Github, (g) => g.openPullRequests(...))`.
  */
 export const github = {
-  repositories: (
-    opts: { includeArchived?: boolean; pushedWithinDays?: number } = {},
-  ) => Effect.flatMap(Github, (g) => g.repositories(opts)),
+  repositories: (opts: { includeArchived?: boolean; pushedWithinDays?: number } = {}) =>
+    Effect.flatMap(Github, (g) => g.repositories(opts)),
   openPullRequests: (
     opts: {
       updatedWithinHours?: number;
@@ -298,10 +293,8 @@ export const github = {
       conclusion?: string;
     } = {},
   ) => Effect.flatMap(Github, (g) => g.actionRuns(opts)),
-  pullReview: (req: PullReviewRequest) =>
-    Effect.flatMap(Github, (g) => g.pullReview(req)),
+  pullReview: (req: PullReviewRequest) => Effect.flatMap(Github, (g) => g.pullReview(req)),
   openDraftPullRequest: (req: OpenDraftPullRequest) =>
     Effect.flatMap(Github, (g) => g.openDraftPullRequest(req)),
-  createRelease: (req: CreateRelease) =>
-    Effect.flatMap(Github, (g) => g.createRelease(req)),
+  createRelease: (req: CreateRelease) => Effect.flatMap(Github, (g) => g.createRelease(req)),
 } as const;

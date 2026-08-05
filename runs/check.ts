@@ -67,9 +67,7 @@ const CheckInput = Schema.Struct({
    * `owner/name`'s `codegen` gate. Rejecting `:` at the schema keeps one repo's
    * config unreachable from another's dispatch.
    */
-  repo: Schema.String.pipe(
-    Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/),
-  ),
+  repo: Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/)),
   sha: Schema.String,
   /**
    * The check command, e.g. `pnpm lint` / `npx eslint .` / `cargo clippy`.
@@ -106,9 +104,7 @@ const CheckInput = Schema.Struct({
    * Workflow params) — never put credentials here. Same contract as
    * `offload-test` / `worker-deploy`; see `runs/README.md`.
    */
-  env: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
+  env: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
   /**
    * Config-store / Worker-secret keys whose values are injected — as env vars
    * of the same name — into the command's env. Empty when the command needs
@@ -163,10 +159,7 @@ const commandKey = (repo: string): string => `check.command:${repo}`;
  * Still NO dispatcher-wide rung — the header's reasoning is unchanged: a global
  * default would turn every installed repo's PRs into a lint storm.
  */
-const commandKeys = (
-  repo: string,
-  checkLabel: string | undefined,
-): readonly string[] =>
+const commandKeys = (repo: string, checkLabel: string | undefined): readonly string[] =>
   checkLabel === undefined
     ? [commandKey(repo)]
     : [`${commandKey(repo)}:${checkLabel}`, commandKey(repo)];
@@ -185,10 +178,7 @@ const commandKeys = (
  * reason; this is that key, one run over. A dispatch that passes `timeoutSec`
  * still wins, and the value stays clamped by the run's `maxDurationSec`.
  */
-const timeoutKeys = (
-  repo: string,
-  checkLabel: string | undefined,
-): readonly string[] =>
+const timeoutKeys = (repo: string, checkLabel: string | undefined): readonly string[] =>
   checkLabel === undefined
     ? [`check.timeoutSec:${repo}`]
     : [`check.timeoutSec:${repo}:${checkLabel}`, `check.timeoutSec:${repo}`];
@@ -225,11 +215,10 @@ export const check = defineRun({
       event: "pull_request",
       actions: ["opened", "synchronize", "reopened", "ready_for_review"],
       idempotencyKey: ({ payload }) =>
-        `check:${String(
-          payload.repository?.full_name ?? "unknown/unknown",
-        ).replace(/\//g, "_")}:${String(
-          payload.pull_request?.head?.sha ?? "",
-        ).slice(0, 12)}`,
+        `check:${String(payload.repository?.full_name ?? "unknown/unknown").replace(
+          /\//g,
+          "_",
+        )}:${String(payload.pull_request?.head?.sha ?? "").slice(0, 12)}`,
       gate: ({ payload }) =>
         payload.pull_request?.draft !== true &&
         payload.pull_request?.user?.login !== "dependabot[bot]",
@@ -286,9 +275,7 @@ export const check = defineRun({
                     .get(key)
                     .pipe(
                       Effect.map((value) =>
-                        value !== undefined && value.trim().length > 0
-                          ? value
-                          : undefined,
+                        value !== undefined && value.trim().length > 0 ? value : undefined,
                       ),
                     ),
           );

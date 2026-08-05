@@ -57,12 +57,7 @@ import {
  *                     container, a killed step) — nothing to do with the app.
  *   - `unparseable` — the agent produced no parseable verdict (crash / empty).
  */
-export const DemoFailureKind = Schema.Literal(
-  "assertion",
-  "timeout",
-  "infra",
-  "unparseable",
-);
+export const DemoFailureKind = Schema.Literal("assertion", "timeout", "infra", "unparseable");
 export type DemoFailureKindT = typeof DemoFailureKind.Type;
 
 /**
@@ -190,17 +185,16 @@ export const storyResultsToIncident = (
   // Fingerprint = repo + the sorted operator-authored chapter NAMEs (stable;
   // a reworded narrative can't mint a fresh identity → dedup/cooldown hold).
   const names = failed.map((c) => c.name).sort();
-  const incidentId = clamp(
-    `demo:${ctx.repo}:${names.join("|")}`,
-    MAX_INCIDENT_SHORT_CHARS,
-  );
+  const incidentId = clamp(`demo:${ctx.repo}:${names.join("|")}`, MAX_INCIDENT_SHORT_CHARS);
 
   const demoChapters = failed.map((c) => ({
     name: clamp(c.name, MAX_INCIDENT_SHORT_CHARS),
     narrative: clamp(c.narrative, MAX_INCIDENT_LOGTAIL_CHARS),
     ...(c.chapterStartMs !== undefined ? { chapterStartMs: c.chapterStartMs } : {}),
     ...(c.chapterEndMs !== undefined ? { chapterEndMs: c.chapterEndMs } : {}),
-    ...((c.replayUri ?? "") !== "" ? { replayUri: clamp(c.replayUri!, MAX_INCIDENT_URL_CHARS) } : {}),
+    ...((c.replayUri ?? "") !== ""
+      ? { replayUri: clamp(c.replayUri!, MAX_INCIDENT_URL_CHARS) }
+      : {}),
     ...((c.keyScreenshotUri ?? "") !== ""
       ? { keyScreenshotUri: clamp(c.keyScreenshotUri!, MAX_INCIDENT_URL_CHARS) }
       : {}),
@@ -212,10 +206,7 @@ export const storyResultsToIncident = (
   // is built ONLY from trusted parts — chapter names + the deployed URL + our
   // own note. The narrative NEVER enters it.
   const diagnosis = {
-    title: clamp(
-      `product-demo: ${failed.length} chapter(s) failed`,
-      MAX_INCIDENT_TEXT_CHARS,
-    ),
+    title: clamp(`product-demo: ${failed.length} chapter(s) failed`, MAX_INCIDENT_TEXT_CHARS),
     area: "product-demo",
     diagnosis: clamp(
       `The deployed app at ${ctx.deployedUrl} failed ${failed.length} user-journey ` +

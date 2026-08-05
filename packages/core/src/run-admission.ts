@@ -113,8 +113,5 @@ export const decideAdmission = (
  * resume — exactly the bound `leaseAcquireAttempts` and `waitForChildren`
  * use for their poll loops.
  */
-export const admissionAcquireAttempts = (
-  maxQueueAgeMs: number,
-  pollEveryMs: number,
-): number =>
+export const admissionAcquireAttempts = (maxQueueAgeMs: number, pollEveryMs: number): number =>
   Math.max(1, Math.ceil(maxQueueAgeMs / Math.max(1, pollEveryMs)));

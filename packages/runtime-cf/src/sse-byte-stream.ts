@@ -67,10 +67,7 @@ const makeFrameParser = () => {
   // frame precedes the first chunk, the historical base64 behaviour applies.
   let binaryChunks = true;
   return {
-    push(
-      bytes: Uint8Array,
-      controller: TransformStreamDefaultController<Uint8Array>,
-    ): void {
+    push(bytes: Uint8Array, controller: TransformStreamDefaultController<Uint8Array>): void {
       lineBuffer += textDecoder.decode(bytes, { stream: true });
       for (;;) {
         const nl = lineBuffer.indexOf("\n");
@@ -93,9 +90,7 @@ const makeFrameParser = () => {
         }
         if (frame.type === "chunk" && typeof frame.data === "string") {
           controller.enqueue(
-            binaryChunks
-              ? base64ToBytes(frame.data)
-              : textEncoder.encode(frame.data),
+            binaryChunks ? base64ToBytes(frame.data) : textEncoder.encode(frame.data),
           );
         }
       }

@@ -25,9 +25,7 @@ export interface ArtifactService {
     signedUrlTTL?: Duration.Duration | string;
     container?: Container;
   }) => Effect.Effect<string, ArtifactUploadFailed>;
-  readonly list: (opts: {
-    executionId: string;
-  }) => Effect.Effect<readonly ArtifactInfo[]>;
+  readonly list: (opts: { executionId: string }) => Effect.Effect<readonly ArtifactInfo[]>;
 }
 
 export class Artifact extends Context.Tag("@fractalboxdev/flare-dispatch-core/Artifact")<
@@ -43,6 +41,5 @@ export const artifact = {
     signedUrlTTL?: Duration.Duration | string;
     container?: Container;
   }) => Effect.flatMap(Artifact, (a) => a.upload(opts)),
-  list: (opts: { executionId: string }) =>
-    Effect.flatMap(Artifact, (a) => a.list(opts)),
+  list: (opts: { executionId: string }) => Effect.flatMap(Artifact, (a) => a.list(opts)),
 } as const;

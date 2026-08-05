@@ -41,9 +41,7 @@ export const readContainerFile = async (
 ): Promise<{ content: ReadableStream<Uint8Array>; size: number }> => {
   const stat = await box.exec(`stat -c %s ${path}`);
   if (stat.exitCode !== 0) {
-    throw new Error(
-      `stat -c %s ${path} exited ${stat.exitCode}: ${stat.stderr.trim()}`,
-    );
+    throw new Error(`stat -c %s ${path} exited ${stat.exitCode}: ${stat.stderr.trim()}`);
   }
   const size = parseStatSize(stat.stdout);
   // The SDK streams the SSE endpoint body, not the file bytes (#90) — decode

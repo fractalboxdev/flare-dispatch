@@ -49,11 +49,7 @@ import { type ReviewMode } from "./backend.js";
 import { capDiff } from "./diff.js";
 import { ModelCallFailed, StructuredOutputInvalid } from "./errors.js";
 import { extractJsonCandidates } from "./json-extract.js";
-import {
-  type CoordinatedReview as CoordinatedReviewType,
-  Finding,
-  type Tier,
-} from "./schemas.js";
+import { type CoordinatedReview as CoordinatedReviewType, Finding, type Tier } from "./schemas.js";
 
 /**
  * Fallback token budget for a domain review model call when the resolved backend
@@ -225,8 +221,7 @@ const parseStructured = <A>(
       ...ctx,
       reason: "empty",
       excerpt: excerpt(text),
-      message:
-        "no JSON object found in the model response (after stripping <think> + code fences)",
+      message: "no JSON object found in the model response (after stripping <think> + code fences)",
     });
     for (let i = candidates.length - 1; i >= 0; i--) {
       const candidate = candidates[i] as string;
@@ -496,16 +491,11 @@ export const completeStructured = <A>(
     model: input.model,
     surface: input.surface ?? "review",
   };
-  const decode = (
-    u: unknown,
-  ): Either.Either<A, ParseResult.ParseError> =>
-    Schema.decodeUnknownEither(input.schema)(
-      input.coerce !== undefined ? input.coerce(u) : u,
-    );
+  const decode = (u: unknown): Either.Either<A, ParseResult.ParseError> =>
+    Schema.decodeUnknownEither(input.schema)(input.coerce !== undefined ? input.coerce(u) : u);
   const tool: ModelTool = {
     name: toolName,
-    description:
-      input.toolDescription ?? "Report your structured output for this task.",
+    description: input.toolDescription ?? "Report your structured output for this task.",
     parameters: toolParametersSchema(input.schema),
   };
 
@@ -516,9 +506,7 @@ export const completeStructured = <A>(
       ? input.renderUser(m)
       : frameUserMessage(input.userBody ?? "", m, {
           toolName,
-          ...(input.jsonContract !== undefined
-            ? { jsonContract: input.jsonContract }
-            : {}),
+          ...(input.jsonContract !== undefined ? { jsonContract: input.jsonContract } : {}),
         });
 
   // One json-mode attempt with a given user message + token budget — the body
@@ -548,10 +536,7 @@ export const completeStructured = <A>(
   // object must FIT, or we'd fail `empty`/`not-json` a second time for the very
   // same reason. `max` never lowers a configured budget; the ceiling keeps a
   // short answer cheap (`max_tokens` is a ceiling, not a target).
-  const repairMaxTokens = Math.max(
-    input.maxTokens ?? REVIEW_MAX_TOKENS,
-    REVIEW_MAX_TOKENS,
-  );
+  const repairMaxTokens = Math.max(input.maxTokens ?? REVIEW_MAX_TOKENS, REVIEW_MAX_TOKENS);
 
   // The json-mode attempt WITH a single repair retry. A model asked for strict
   // JSON sometimes answers in prose, or truncates inside a reasoning block —
@@ -744,8 +729,7 @@ export type CoordinateInput = {
  * picks a boundary line off by one.
  */
 const overlaps = (a: Finding, b: Finding): boolean =>
-  a.path === b.path &&
-  Math.max(a.startLine, b.startLine) <= Math.min(a.endLine, b.endLine);
+  a.path === b.path && Math.max(a.startLine, b.startLine) <= Math.min(a.endLine, b.endLine);
 
 /** Severity rank — a merged group is represented by its most severe member. */
 const LEVEL_RANK: Record<Finding["level"], number> = {
@@ -776,15 +760,11 @@ const LEVEL_RANK: Record<Finding["level"], number> = {
  * author has fixed (no longer in the diff → not re-raised) clears on its own and
  * the verdict can return to `approve`.
  */
-export const coordinate = (
-  input: CoordinateInput,
-): Effect.Effect<CoordinatedReviewType> =>
+export const coordinate = (input: CoordinateInput): Effect.Effect<CoordinatedReviewType> =>
   Effect.sync(() => coordinateReview(input));
 
 /** The pure core of {@link coordinate} — exported for direct unit testing. */
-export const coordinateReview = (
-  input: CoordinateInput,
-): CoordinatedReviewType => {
+export const coordinateReview = (input: CoordinateInput): CoordinatedReviewType => {
   // Merge in reviewer order, so the surviving set keeps the order the domains
   // reported in. A finding overlapping one already kept replaces it only when
   // strictly more severe; otherwise it is dropped as a duplicate.
@@ -848,9 +828,7 @@ export const RISK_THRESHOLDS = { trivial: 25, lite: 200 } as const;
  *
  * An empty diff is `trivial`.
  */
-export const riskTier = (
-  input: RiskTierInput,
-): Effect.Effect<Tier> =>
+export const riskTier = (input: RiskTierInput): Effect.Effect<Tier> =>
   Effect.sync(() => classifyRisk(input.diff));
 
 /** The pure core of {@link riskTier} — exported for direct unit testing. */
@@ -859,10 +837,7 @@ export const classifyRisk = (diff: string): Tier => {
 
   // Changed lines: added/removed content lines, excluding the +++/--- headers.
   const changed = lines.filter(
-    (l) =>
-      (l.startsWith("+") || l.startsWith("-")) &&
-      !l.startsWith("+++") &&
-      !l.startsWith("---"),
+    (l) => (l.startsWith("+") || l.startsWith("-")) && !l.startsWith("+++") && !l.startsWith("---"),
   ).length;
 
   // Touched paths: the `+++ b/<path>` headers of the unified diff.

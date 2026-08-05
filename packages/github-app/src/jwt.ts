@@ -29,8 +29,7 @@ const base64url = (bytes: Uint8Array): string => {
 };
 
 /** base64url-encode a UTF-8 string — used for the JWT header + claim set. */
-const base64urlText = (text: string): string =>
-  base64url(new TextEncoder().encode(text));
+const base64urlText = (text: string): string => base64url(new TextEncoder().encode(text));
 
 /**
  * Decode a PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----` … ) into raw DER bytes.
@@ -81,10 +80,7 @@ export type SignAppJwtOptions = {
  */
 export const signAppJwt = async (opts: SignAppJwtOptions): Promise<string> => {
   const nowSec = opts.nowSec ?? Math.floor(Date.now() / 1000);
-  const lifetimeSec = Math.min(
-    opts.lifetimeSec ?? MAX_JWT_LIFETIME_SEC,
-    MAX_JWT_LIFETIME_SEC,
-  );
+  const lifetimeSec = Math.min(opts.lifetimeSec ?? MAX_JWT_LIFETIME_SEC, MAX_JWT_LIFETIME_SEC);
 
   const header = { alg: "RS256", typ: "JWT" };
   const claims = {

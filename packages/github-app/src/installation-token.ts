@@ -76,9 +76,7 @@ type AccessTokenResponse = {
  *
  * @throws {GithubApiError} when the `access_tokens` endpoint returns non-2xx.
  */
-export const getInstallationToken = async (
-  opts: GetInstallationTokenOptions,
-): Promise<string> => {
+export const getInstallationToken = async (opts: GetInstallationTokenOptions): Promise<string> => {
   const key = String(opts.installationId);
   const now = Date.now();
 
@@ -134,8 +132,7 @@ export type ResolveRepoInstallationOptions = {
 const repoInstallationCache = new Map<string, number>();
 
 /** Test-only: drop the repo→installation cache. */
-export const __clearRepoInstallationCache = (): void =>
-  repoInstallationCache.clear();
+export const __clearRepoInstallationCache = (): void => repoInstallationCache.clear();
 
 /**
  * Resolve the installation id for a repo via `GET /repos/{owner}/{repo}/installation`

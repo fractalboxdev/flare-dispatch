@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  checkAndArmCooldown,
-  cooldownKey,
-  parseCooldownSeconds,
-} from "./cooldown";
+import { checkAndArmCooldown, cooldownKey, parseCooldownSeconds } from "./cooldown";
 import { makeFakeKv } from "./test-helpers";
 
 const COOLDOWN = {

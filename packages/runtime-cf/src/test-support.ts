@@ -34,9 +34,7 @@ export type TestBindings = {
  * drift (the old single d1-schema.sql had no applied-state tracking and is
  * gone).
  */
-const MIGRATIONS_DIR = fileURLToPath(
-  new URL("../../../infra/migrations/", import.meta.url),
-);
+const MIGRATIONS_DIR = fileURLToPath(new URL("../../../infra/migrations/", import.meta.url));
 const D1_SCHEMA = readdirSync(MIGRATIONS_DIR)
   .filter((f) => f.endsWith(".sql"))
   .sort()
@@ -60,12 +58,8 @@ export const makeTestBindings = async (): Promise<TestBindings> => {
   });
 
   const db = (await mf.getD1Database("RUNS_METADATA")) as unknown as D1Database;
-  const bucket = (await mf.getR2Bucket(
-    "RUNS_STORAGE",
-  )) as unknown as R2Bucket;
-  const kv = (await mf.getKVNamespace(
-    "CONFIG_KV",
-  )) as unknown as KVNamespace;
+  const bucket = (await mf.getR2Bucket("RUNS_STORAGE")) as unknown as R2Bucket;
+  const kv = (await mf.getKVNamespace("CONFIG_KV")) as unknown as KVNamespace;
 
   // Apply the migrations. D1's `exec` runs one statement per line, so the
   // multi-line `CREATE TABLE`s are collapsed to single lines. Comments are
@@ -86,12 +80,7 @@ export const makeTestBindings = async (): Promise<TestBindings> => {
 };
 
 /** Count rows in a table — the D1-write-rate assertion helper (plan § 6). */
-export const countRows = async (
-  db: D1Database,
-  table: string,
-): Promise<number> => {
-  const row = await db
-    .prepare(`SELECT COUNT(*) AS n FROM ${table}`)
-    .first<{ n: number }>();
+export const countRows = async (db: D1Database, table: string): Promise<number> => {
+  const row = await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
   return row?.n ?? 0;
 };

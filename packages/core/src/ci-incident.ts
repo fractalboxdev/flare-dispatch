@@ -63,9 +63,7 @@ export interface CiIncidentContext {
  * `command` repro, so `self-heal-pr` proceeds: agent → re-run the command in
  * the sandbox → draft PR only if it goes green.
  */
-export const commandFailureToIncident = (
-  ctx: CiIncidentContext,
-): IncidentInput | null => {
+export const commandFailureToIncident = (ctx: CiIncidentContext): IncidentInput | null => {
   if (ctx.exitCode === 0) return null;
   if ((ctx.command ?? "").trim() === "") return null;
 
@@ -82,7 +80,10 @@ export const commandFailureToIncident = (
   // diagnosis is TRUSTED — built only from the command + repo + sha + our note.
   // The untrusted log NEVER enters it.
   const diagnosis = {
-    title: clamp(`offload-test: \`${ctx.command}\` exited ${ctx.exitCode}`, MAX_INCIDENT_TEXT_CHARS),
+    title: clamp(
+      `offload-test: \`${ctx.command}\` exited ${ctx.exitCode}`,
+      MAX_INCIDENT_TEXT_CHARS,
+    ),
     area: "ci",
     diagnosis: clamp(
       `The command \`${ctx.command}\` exited ${ctx.exitCode} on ${ctx.repo}@${ctx.sha}.`,
@@ -111,6 +112,10 @@ export const commandFailureToIncident = (
     diagnosis,
     ciFailures,
     ...(suspectRef !== undefined ? { suspectRef } : {}),
-    repro: { kind: "command" as const, command: clamp(ctx.command, MAX_INCIDENT_TEXT_CHARS), note: clamp(TRUSTED_CI_NOTE, MAX_INCIDENT_TEXT_CHARS) },
+    repro: {
+      kind: "command" as const,
+      command: clamp(ctx.command, MAX_INCIDENT_TEXT_CHARS),
+      note: clamp(TRUSTED_CI_NOTE, MAX_INCIDENT_TEXT_CHARS),
+    },
   };
 };

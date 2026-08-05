@@ -38,10 +38,7 @@ import {
 
 /** The minimal CF `Workflow`-binding surface `spawn` needs. */
 export type WorkflowBindingLike = {
-  readonly create: (opts: {
-    id: string;
-    params: unknown;
-  }) => Promise<unknown>;
+  readonly create: (opts: { id: string; params: unknown }) => Promise<unknown>;
 };
 
 /** The github context children inherit from their spawning parent. */
@@ -145,9 +142,7 @@ export const deriveChildInstanceId = (opts: {
 };
 
 /** Build the live `ChildRuns` Layer bound to a CF `Workflow` binding. */
-export const makeChildRunsLive = (
-  cfg: ChildRunsLiveConfig,
-): Layer.Layer<ChildRuns> => {
+export const makeChildRunsLive = (cfg: ChildRunsLiveConfig): Layer.Layer<ChildRuns> => {
   const service: ChildRunsService = {
     spawn: ({ run, input, instanceId }) => {
       const id = deriveChildInstanceId({
@@ -216,9 +211,7 @@ export const makeChildRunsLive = (
           return {
             executionId: id,
             status: toChildStatus(row.status),
-            ...(row.summary_json !== null
-              ? { summaryJson: row.summary_json }
-              : {}),
+            ...(row.summary_json !== null ? { summaryJson: row.summary_json } : {}),
           };
         });
       }).pipe(

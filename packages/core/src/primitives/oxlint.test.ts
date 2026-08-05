@@ -10,8 +10,7 @@ import { describe, expect, it } from "vitest";
 import { isNothingToLint } from "./oxlint";
 
 /** oxlint 1.x's verbatim output when the file set is empty (stdout, exit 1). */
-const SENTINEL =
-  "No files found to lint. Please check your paths and ignore patterns.";
+const SENTINEL = "No files found to lint. Please check your paths and ignore patterns.";
 
 describe("isNothingToLint", () => {
   it("matches oxlint's empty-file-set output", () => {

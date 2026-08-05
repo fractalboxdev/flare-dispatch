@@ -143,9 +143,7 @@ describe("estimateExecutionCost — honesty basis", () => {
     expect(cost.basis).toBe("mixed");
     expect(cost.modelMicroUsd).toBe(20_000 * 3 + 2_000 * 15); // 90_000
     expect(cost.containerMicroUsd).toBeGreaterThan(0);
-    expect(cost.totalMicroUsd).toBe(
-      (cost.modelMicroUsd ?? 0) + (cost.containerMicroUsd ?? 0),
-    );
+    expect(cost.totalMicroUsd).toBe((cost.modelMicroUsd ?? 0) + (cost.containerMicroUsd ?? 0));
   });
 
   it("container only → modeled (the offload-test shape)", () => {
@@ -204,10 +202,7 @@ describe("docs benchmark rate-card mirror (drift latch)", () => {
   // pattern). On failure: re-run `node scripts/emit-benchmarks.mjs`.
   const HERE = dirname(fileURLToPath(import.meta.url));
   const benchmarks = JSON.parse(
-    readFileSync(
-      resolve(HERE, "../../../apps/docs/src/data/benchmarks.json"),
-      "utf8",
-    ),
+    readFileSync(resolve(HERE, "../../../apps/docs/src/data/benchmarks.json"), "utf8"),
   ) as {
     rateCard: {
       vcpuMicroUsdPerSec: number;

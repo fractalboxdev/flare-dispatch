@@ -109,6 +109,7 @@ export interface ExecutionsService {
 }
 
 /** Context.Tag — the D1 metadata-write dependency `step` carries. */
-export class Executions extends Context.Tag(
-  "@fractalboxdev/flare-dispatch-core/Executions",
-)<Executions, ExecutionsService>() {}
+export class Executions extends Context.Tag("@fractalboxdev/flare-dispatch-core/Executions")<
+  Executions,
+  ExecutionsService
+>() {}

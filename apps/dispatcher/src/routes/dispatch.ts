@@ -107,7 +107,7 @@ const GithubContext = Schema.Struct({
     Schema.Number.pipe(
       Schema.positive({
         message: () =>
-          'installation_id must be a positive GitHub App installation id (got 0). Either pass the `installation-id` action input — resolve via `gh api orgs/<org>/installations` — or omit the field entirely to dispatch without posting a check-run.',
+          "installation_id must be a positive GitHub App installation id (got 0). Either pass the `installation-id` action input — resolve via `gh api orgs/<org>/installations` — or omit the field entirely to dispatch without posting a check-run.",
       }),
     ),
   ),
@@ -359,9 +359,7 @@ export const handleDispatch = async (
       ...(body.github.installation_id !== undefined
         ? { installation_id: body.github.installation_id }
         : {}),
-      ...(body.github.pr_number !== undefined
-        ? { pr_number: body.github.pr_number }
-        : {}),
+      ...(body.github.pr_number !== undefined ? { pr_number: body.github.pr_number } : {}),
     },
     inputs,
     // Forward completion-notify recipients (empty `emails` is dropped — the

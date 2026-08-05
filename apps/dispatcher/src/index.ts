@@ -55,14 +55,8 @@ export default {
    * alive long enough to fan out (each match's `env.RUNS_WORKFLOW.create()`
    * is an async I/O the runtime would otherwise tear down on handler return).
    */
-  scheduled(
-    controller: ScheduledController,
-    env: Env,
-    ctx: ExecutionContext,
-  ): void {
-    ctx.waitUntil(
-      handleScheduled(env, controller.cron, controller.scheduledTime),
-    );
+  scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
+    ctx.waitUntil(handleScheduled(env, controller.cron, controller.scheduledTime));
   },
   /**
    * Email Routing entry — Cloudflare invokes this for every message a routing
@@ -73,11 +67,7 @@ export default {
    * `routes/email-handler.ts`. No wrangler binding is needed for inbound — the
    * routing rule wires the address to this Worker.
    */
-  async email(
-    message: ForwardableEmailMessage,
-    env: Env,
-    _ctx: ExecutionContext,
-  ): Promise<void> {
+  async email(message: ForwardableEmailMessage, env: Env, _ctx: ExecutionContext): Promise<void> {
     await handleInboundEmail(message, env);
   },
 } satisfies ExportedHandler<Env>;

@@ -114,9 +114,7 @@ describe("cdp-acceptance", () => {
         "upload-report",
         "upload-screenshots",
       ]);
-      expect(
-        handles.executions.steps.every((s) => s.status === "success"),
-      ).toBe(true);
+      expect(handles.executions.steps.every((s) => s.status === "success")).toBe(true);
 
       // The app port was exposed to get a publicly-reachable URL.
       expect(handles.sandbox.exposed).toEqual([{ port: 4173, name: undefined }]);
@@ -129,67 +127,61 @@ describe("cdp-acceptance", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect(
-    "red path — test command exits 1, the run FAILS with AcceptanceFailed",
-    () => {
-      const { layer } = makeCFRuntimeTest({
-        // Suite finished with a non-zero exit (a failing spec). The cat exec
-        // itself succeeds; the suite's code lives in the sentinel's `DONE:1`.
-        sandboxProgram: { "run-tests.done": { exitCode: 0, stdout: "DONE:1" } },
+  it.effect("red path — test command exits 1, the run FAILS with AcceptanceFailed", () => {
+    const { layer } = makeCFRuntimeTest({
+      // Suite finished with a non-zero exit (a failing spec). The cat exec
+      // itself succeeds; the suite's code lives in the sentinel's `DONE:1`.
+      sandboxProgram: { "run-tests.done": { exitCode: 0, stdout: "DONE:1" } },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(cdpAcceptance.run(baseInput));
+
+      // A non-zero suite exit fails the run → the dispatcher reports a
+      // `failure` check-run (was a false-green: a succeeding value).
+      expect(Exit.isFailure(exit)).toBe(true);
+      const tag = Exit.isFailure(exit)
+        ? Option.match(Cause.failureOption(exit.cause), {
+            onSome: (f) => (f as { _tag?: string })._tag,
+            onNone: () => undefined,
+          })
+        : undefined;
+      expect(tag).toBe("AcceptanceFailed");
+
+      // The failure carries a short markdown summary linking the already-
+      // uploaded report + screenshots bundles (issue #85), so the red
+      // check-run points straight at the debugging artifacts.
+      const summaryMd = Exit.isFailure(exit)
+        ? Option.match(Cause.failureOption(exit.cause), {
+            onNone: () => undefined,
+            onSome: (failure) =>
+              Match.value(failure).pipe(
+                Match.tag("AcceptanceFailed", (e) => e.summaryMd),
+                Match.orElse(() => undefined),
+              ),
+          })
+        : undefined;
+      expect(summaryMd).toBeDefined();
+      expect(summaryMd).toContain("exited `1`");
+      expect(summaryMd).toContain("[Playwright report](");
+      expect(summaryMd).toContain("[Screenshots](");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("pollSentinelExit — returns the suite exit code parsed from the DONE sentinel", () => {
+    const { layer } = makeSandboxFake({
+      "run-tests.done": { exitCode: 0, stdout: "DONE:7" },
+    });
+    return Effect.gen(function* () {
+      const code = yield* pollSentinelExit({
+        container: { id: "c1" },
+        dir: "/workspace/app",
+        maxAttempts: 5,
+        pollEvery: "1 millis",
       });
-
-      return Effect.gen(function* () {
-        const exit = yield* Effect.exit(cdpAcceptance.run(baseInput));
-
-        // A non-zero suite exit fails the run → the dispatcher reports a
-        // `failure` check-run (was a false-green: a succeeding value).
-        expect(Exit.isFailure(exit)).toBe(true);
-        const tag = Exit.isFailure(exit)
-          ? Option.match(Cause.failureOption(exit.cause), {
-              onSome: (f) => (f as { _tag?: string })._tag,
-              onNone: () => undefined,
-            })
-          : undefined;
-        expect(tag).toBe("AcceptanceFailed");
-
-        // The failure carries a short markdown summary linking the already-
-        // uploaded report + screenshots bundles (issue #85), so the red
-        // check-run points straight at the debugging artifacts.
-        const summaryMd = Exit.isFailure(exit)
-          ? Option.match(Cause.failureOption(exit.cause), {
-              onNone: () => undefined,
-              onSome: (failure) =>
-                Match.value(failure).pipe(
-                  Match.tag("AcceptanceFailed", (e) => e.summaryMd),
-                  Match.orElse(() => undefined),
-                ),
-            })
-          : undefined;
-        expect(summaryMd).toBeDefined();
-        expect(summaryMd).toContain("exited `1`");
-        expect(summaryMd).toContain("[Playwright report](");
-        expect(summaryMd).toContain("[Screenshots](");
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "pollSentinelExit — returns the suite exit code parsed from the DONE sentinel",
-    () => {
-      const { layer } = makeSandboxFake({
-        "run-tests.done": { exitCode: 0, stdout: "DONE:7" },
-      });
-      return Effect.gen(function* () {
-        const code = yield* pollSentinelExit({
-          container: { id: "c1" },
-          dir: "/workspace/app",
-          maxAttempts: 5,
-          pollEvery: "1 millis",
-        });
-        expect(code).toBe(7);
-      }).pipe(Effect.provide(layer));
-    },
-  );
+      expect(code).toBe(7);
+    }).pipe(Effect.provide(layer));
+  });
 
   // Plain `it` (real clock) — the poll sleeps between attempts, and `it.effect`'s
   // TestClock would never advance them, hanging the test.
@@ -260,66 +252,58 @@ describe("cdp-acceptance", () => {
     expect(state.calls).toBe(3); // stopped at the ceiling, not after 100 attempts
   });
 
-  it.effect(
-    "secrets — Worker secret values are injected into the boot + test env",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: { "run-tests.done": { exitCode: 0, stdout: "DONE:0" } },
-        browser: { wsEndpoint: "wss://test-cdp/abc" },
-        secrets: { CLERK_SECRET_KEY: "sk_live_x" },
+  it.effect("secrets — Worker secret values are injected into the boot + test env", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "run-tests.done": { exitCode: 0, stdout: "DONE:0" } },
+      browser: { wsEndpoint: "wss://test-cdp/abc" },
+      secrets: { CLERK_SECRET_KEY: "sk_live_x" },
+    });
+    const input = {
+      ...baseInput,
+      secrets: ["CLERK_SECRET_KEY"],
+    };
+
+    return Effect.gen(function* () {
+      yield* cdpAcceptance.run(input);
+
+      // The app boot gets the resolved secret.
+      const boot = handles.sandbox.execs.find((e) => e.command === "pnpm dev");
+      expect(boot?.env).toEqual({ CLERK_SECRET_KEY: "sk_live_x" });
+
+      // The test command (now wrapped in the sentinel writer) gets the
+      // secret, the CDP endpoint, and the publicly-reachable target URL.
+      const test = handles.sandbox.execs.find((e) => e.command.includes("pnpm test:acceptance"));
+      expect(test?.env).toEqual({
+        CLERK_SECRET_KEY: "sk_live_x",
+        CDP_WS_URL: "wss://test-cdp/abc",
+        CDP_TARGET_URL: "https://4173-fake-sandbox.example.com",
       });
-      const input = {
-        ...baseInput,
-        secrets: ["CLERK_SECRET_KEY"],
-      };
+    }).pipe(Effect.provide(layer));
+  });
 
-      return Effect.gen(function* () {
-        yield* cdpAcceptance.run(input);
+  it.effect("secrets — a named-but-unset secret fails the run with SecretsMissing", () => {
+    // No `config` seed — the named secret resolves to nothing. `loadSecrets`
+    // runs with `required: true`, so the run fails fast instead of booting
+    // the app without the credential.
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: { "pnpm test:acceptance": { exitCode: 0 } },
+      browser: { wsEndpoint: "wss://test-cdp/abc" },
+    });
+    const input = { ...baseInput, secrets: ["CLERK_SECRET_KEY"] };
 
-        // The app boot gets the resolved secret.
-        const boot = handles.sandbox.execs.find((e) => e.command === "pnpm dev");
-        expect(boot?.env).toEqual({ CLERK_SECRET_KEY: "sk_live_x" });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(cdpAcceptance.run(input));
 
-        // The test command (now wrapped in the sentinel writer) gets the
-        // secret, the CDP endpoint, and the publicly-reachable target URL.
-        const test = handles.sandbox.execs.find((e) =>
-          e.command.includes("pnpm test:acceptance"),
-        );
-        expect(test?.env).toEqual({
-          CLERK_SECRET_KEY: "sk_live_x",
-          CDP_WS_URL: "wss://test-cdp/abc",
-          CDP_TARGET_URL: "https://4173-fake-sandbox.example.com",
-        });
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "secrets — a named-but-unset secret fails the run with SecretsMissing",
-    () => {
-      // No `config` seed — the named secret resolves to nothing. `loadSecrets`
-      // runs with `required: true`, so the run fails fast instead of booting
-      // the app without the credential.
-      const { layer } = makeCFRuntimeTest({
-        sandboxProgram: { "pnpm test:acceptance": { exitCode: 0 } },
-        browser: { wsEndpoint: "wss://test-cdp/abc" },
-      });
-      const input = { ...baseInput, secrets: ["CLERK_SECRET_KEY"] };
-
-      return Effect.gen(function* () {
-        const exit = yield* Effect.exit(cdpAcceptance.run(input));
-
-        expect(Exit.isFailure(exit)).toBe(true);
-        const tag = Exit.isFailure(exit)
-          ? Option.match(Cause.failureOption(exit.cause), {
-              onSome: (f) => (f as { _tag?: string })._tag,
-              onNone: () => undefined,
-            })
-          : undefined;
-        expect(tag).toBe("SecretsMissing");
-      }).pipe(Effect.provide(layer));
-    },
-  );
+      expect(Exit.isFailure(exit)).toBe(true);
+      const tag = Exit.isFailure(exit)
+        ? Option.match(Cause.failureOption(exit.cause), {
+            onSome: (f) => (f as { _tag?: string })._tag,
+            onNone: () => undefined,
+          })
+        : undefined;
+      expect(tag).toBe("SecretsMissing");
+    }).pipe(Effect.provide(layer));
+  });
 });
 
 // --- Source guard: no direct Date.now() / crypto.randomUUID() in the run -----

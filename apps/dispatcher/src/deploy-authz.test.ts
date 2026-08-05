@@ -42,16 +42,11 @@ describe("allowedEnvs", () => {
   });
 
   it("matches a bare team slug against an `org/team` policy entry", () => {
-    expect(allowedEnvs(gh({ groups: ["devs"] }), POLICY)).toEqual([
-      "production",
-      "staging",
-    ]);
+    expect(allowedEnvs(gh({ groups: ["devs"] }), POLICY)).toEqual(["production", "staging"]);
   });
 
   it("matches case-insensitively", () => {
-    expect(allowedEnvs(gh({ groups: ["FractalBoxDev/Devs"] }), POLICY)).toContain(
-      "staging",
-    );
+    expect(allowedEnvs(gh({ groups: ["FractalBoxDev/Devs"] }), POLICY)).toContain("staging");
   });
 
   it("denies a GitHub identity not in the team", () => {

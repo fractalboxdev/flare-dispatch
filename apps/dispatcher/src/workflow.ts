@@ -81,11 +81,7 @@ import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
 import { selectSandboxNs } from "./sandbox-routing";
 import { queuedSummary } from "./admission-summary";
-import {
-  appendFailureSummary,
-  failureSummaryMd,
-  runSkippedReason,
-} from "./failure-summary";
+import { appendFailureSummary, failureSummaryMd, runSkippedReason } from "./failure-summary";
 import { renderResultEmail } from "./notify";
 import { workflowDashboardUrl } from "./dashboard-url";
 import { checkRunNameFor } from "./check-name";
@@ -138,9 +134,7 @@ const DispatchPayload = Schema.Struct({
    * dispatch route fills this in from the request body's `notify`. Delivery is
    * best-effort: a send failure is logged, never fails the run.
    */
-  notify: Schema.optional(
-    Schema.Struct({ emails: Schema.Array(Schema.String) }),
-  ),
+  notify: Schema.optional(Schema.Struct({ emails: Schema.Array(Schema.String) })),
   /**
    * The dispatcher's public origin (e.g. `https://<worker>.workers.dev`) —
    * prefixed onto the `/v1/artifacts/...` URLs the run uploads so the links
@@ -193,9 +187,7 @@ const resolveChecksConfig = (
  * the capability resolves the per-repo installation itself. `undefined` when
  * the App secrets are absent → the write surface is a logged no-op.
  */
-const resolveGithubAppConfig = (
-  env: Env,
-): { appId: string; privateKeyPem: string } | undefined =>
+const resolveGithubAppConfig = (env: Env): { appId: string; privateKeyPem: string } | undefined =>
   env.GITHUB_APP_ID === undefined || env.GITHUB_APP_PRIVATE_KEY === undefined
     ? undefined
     : { appId: env.GITHUB_APP_ID, privateKeyPem: env.GITHUB_APP_PRIVATE_KEY };
@@ -205,11 +197,8 @@ const resolveGithubAppConfig = (
  * account id. `undefined` when either is absent → `CloudflareDeferred` (the
  * read-only capability returns empty). Only `ci-triage` touches the Tag.
  */
-const resolveCloudflareConfig = (
-  env: Env,
-): { apiToken: string; accountId: string } | undefined =>
-  env.CLOUDFLARE_API_TOKEN === undefined ||
-  env.CLOUDFLARE_ACCOUNT_ID === undefined
+const resolveCloudflareConfig = (env: Env): { apiToken: string; accountId: string } | undefined =>
+  env.CLOUDFLARE_API_TOKEN === undefined || env.CLOUDFLARE_ACCOUNT_ID === undefined
     ? undefined
     : { apiToken: env.CLOUDFLARE_API_TOKEN, accountId: env.CLOUDFLARE_ACCOUNT_ID };
 
@@ -243,12 +232,8 @@ const resolveEmailConfig = (env: Env): EmailCloudflareConfig | undefined => {
   return {
     sendEmail: env.SEND_EMAIL,
     fromAddress: env.EMAIL_FROM,
-    ...(env.EMAIL_FROM_NAME !== undefined
-      ? { fromName: env.EMAIL_FROM_NAME }
-      : {}),
-    ...(allowed !== undefined && allowed.length > 0
-      ? { allowedRecipients: allowed }
-      : {}),
+    ...(env.EMAIL_FROM_NAME !== undefined ? { fromName: env.EMAIL_FROM_NAME } : {}),
+    ...(allowed !== undefined && allowed.length > 0 ? { allowedRecipients: allowed } : {}),
   };
 };
 
@@ -257,14 +242,9 @@ const resolveEmailConfig = (env: Env): EmailCloudflareConfig | undefined => {
  * URL segment. MUST stay in sync with `wrangler.jsonc` → `workflows[0].name`.
  */
 export class RunWorkflow extends WorkflowEntrypoint<Env> {
-  override async run(
-    event: WorkflowEvent<unknown>,
-    step: WorkflowStep,
-  ): Promise<void> {
+  override async run(event: WorkflowEvent<unknown>, step: WorkflowStep): Promise<void> {
     // Decode the dispatch payload — a malformed event is a hard failure.
-    const payload: DispatchPayload = Schema.decodeUnknownSync(DispatchPayload)(
-      event.payload,
-    );
+    const payload: DispatchPayload = Schema.decodeUnknownSync(DispatchPayload)(event.payload);
 
     const run = lookupRun(payload.run);
     if (run === undefined) {
@@ -291,8 +271,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // actually consume.
     const admissionPool = selectSandboxNs<AdmissionPool>(run.sandboxImage, {
       lean: "lean",
-      browser:
-        this.env.RUNS_SANDBOX_BROWSER !== undefined ? "browser" : undefined,
+      browser: this.env.RUNS_SANDBOX_BROWSER !== undefined ? "browser" : undefined,
       agent: this.env.RUNS_SANDBOX_AGENT !== undefined ? "agent" : undefined,
     });
     // The per-pool slot cap, from the plain `ADMISSION_CAP` wrangler var
@@ -318,10 +297,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // link on the GitHub check-run + a markdown link in its summary. `undefined`
     // when CLOUDFLARE_ACCOUNT_ID is unset (BYOC default): the check-run renders
     // exactly as before, no link.
-    const detailsUrl = workflowDashboardUrl(
-      this.env.CLOUDFLARE_ACCOUNT_ID,
-      payload.executionId,
-    );
+    const detailsUrl = workflowDashboardUrl(this.env.CLOUDFLARE_ACCOUNT_ID, payload.executionId);
     // The public origin absolutizing artifact URLs: the dispatch request's
     // origin (captured by the route) wins; `PUBLIC_ORIGIN` covers payloads
     // that predate the field or came from the cron path.
@@ -355,9 +331,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // summary so a reviewer reaches the hero replay + per-chapter gallery in one
     // click, not just the raw replay link the run posts in its PR comment.
     const demoUrl =
-      payload.run === "product-demo" &&
-      publicOrigin !== undefined &&
-      logToken !== undefined
+      payload.run === "product-demo" && publicOrigin !== undefined && logToken !== undefined
         ? `${publicOrigin.replace(/\/$/, "")}/demos/${encodeURIComponent(
             payload.executionId,
           )}?t=${logToken}`
@@ -389,12 +363,12 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           (await this.env.CONFIG_KV?.get("self-heal.max-iterations")) ?? "",
           10,
         );
-        await this.env.AGENT_BUDGET.get(
-          this.env.AGENT_BUDGET.idFromName(payload.executionId),
-        ).init({
-          ...(Number.isFinite(tokenBudget) ? { tokenBudget } : {}),
-          ...(Number.isFinite(maxRequests) ? { maxRequests } : {}),
-        });
+        await this.env.AGENT_BUDGET.get(this.env.AGENT_BUDGET.idFromName(payload.executionId)).init(
+          {
+            ...(Number.isFinite(tokenBudget) ? { tokenBudget } : {}),
+            ...(Number.isFinite(maxRequests) ? { maxRequests } : {}),
+          },
+        );
         configOverrides = {
           "self-heal.proxy-url": proxyUrl,
           "self-heal.agent-token": token,
@@ -455,9 +429,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // engine's model backend). The binding is the auth — no model API key.
       // `AI_GATEWAY_ID`, when set, routes the calls through an AI Gateway.
       ...(this.env.AI !== undefined ? { ai: this.env.AI } : {}),
-      ...(this.env.AI_GATEWAY_ID !== undefined
-        ? { aiGatewayId: this.env.AI_GATEWAY_ID }
-        : {}),
+      ...(this.env.AI_GATEWAY_ID !== undefined ? { aiGatewayId: this.env.AI_GATEWAY_ID } : {}),
       // `bedrock/*` model ids route through the AI Gateway Bedrock forwarder —
       // the URL needs the Cloudflare account id, and Authenticated Gateway (when
       // turned on) needs a separate `cf-aig-authorization` token. Both absent →
@@ -474,8 +446,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // Wire the live OIDC signing Layer when both the JWK + issuer URL are
       // configured. Subject defaults to `<run>:<execution-id>` so an IAM
       // trust policy can scope a role to a single run+execution.
-      ...(this.env.OIDC_SIGNING_JWK !== undefined &&
-      this.env.OIDC_ISSUER_URL !== undefined
+      ...(this.env.OIDC_SIGNING_JWK !== undefined && this.env.OIDC_ISSUER_URL !== undefined
         ? {
             oidc: {
               signingJwkJson: this.env.OIDC_SIGNING_JWK,
@@ -532,12 +503,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           .prepare(`UPDATE executions SET check_run_id = ? WHERE id = ?`)
           .bind(checkRunId, payload.executionId)
           .run(),
-      ).pipe(
-        Effect.retry(
-          Schedule.once.pipe(Schedule.addDelay(() => "500 millis")),
-        ),
-        Effect.orDie,
-      );
+      ).pipe(Effect.retry(Schedule.once.pipe(Schedule.addDelay(() => "500 millis"))), Effect.orDie);
 
       // --- Global run admission (the per-pool semaphore, issue #109) -------
       //
@@ -574,126 +540,104 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // results are plain JSON records, so bridge through the simple
       // `(name, callback)` view — the same narrowing `step-runner-cf.ts` uses
       // for its `WorkflowStepLike`.
-      const stepDo = <T>(
-        name: string,
-        body: () => Promise<T>,
-      ): Effect.Effect<T> =>
+      const stepDo = <T>(name: string, body: () => Promise<T>): Effect.Effect<T> =>
         Effect.tryPromise(() =>
-          (
-            step.do as unknown as (
-              n: string,
-              cb: () => Promise<T>,
-            ) => Promise<T>
-          )(name, body),
+          (step.do as unknown as (n: string, cb: () => Promise<T>) => Promise<T>)(name, body),
         ).pipe(Effect.orDie);
 
-      const admissionGate: Effect.Effect<void, AdmissionTimedOut> = Effect.gen(
-        function* () {
-          // Enqueue — the row's `enqueued_at` (FIFO key + dispatch-age basis)
-          // is read inside the step, so a replay sees the SAME timestamp.
-          const { enqueuedAt } = yield* stepDo("admission-enqueue", () =>
-            Effect.runPromise(
-              admissions.enqueue(
-                payload.executionId,
-                admissionPool,
-                payload.parentExecutionId,
-              ),
-            ),
-          );
+      const admissionGate: Effect.Effect<void, AdmissionTimedOut> = Effect.gen(function* () {
+        // Enqueue — the row's `enqueued_at` (FIFO key + dispatch-age basis)
+        // is read inside the step, so a replay sees the SAME timestamp.
+        const { enqueuedAt } = yield* stepDo("admission-enqueue", () =>
+          Effect.runPromise(
+            admissions.enqueue(payload.executionId, admissionPool, payload.parentExecutionId),
+          ),
+        );
 
-          // Bounded claim/sleep loop — a COUNT (≤60 claims + 60 sleeps at the
-          // defaults), not a wall-clock read, so the bound is replay-stable
-          // and trivial against the Workflows step cap (#83 precedent).
-          const maxAttempts = admissionAcquireAttempts(
+        // Bounded claim/sleep loop — a COUNT (≤60 claims + 60 sleeps at the
+        // defaults), not a wall-clock read, so the bound is replay-stable
+        // and trivial against the Workflows step cap (#83 precedent).
+        const maxAttempts = admissionAcquireAttempts(
+          ADMISSION_MAX_QUEUE_AGE_MS,
+          ADMISSION_POLL_EVERY_MS,
+        );
+        let lastReportedPosition: number | undefined;
+
+        for (let i = 0; i < maxAttempts; i++) {
+          const observed = yield* stepDo(`admission-claim-${i}`, () =>
+            Effect.runPromise(admissions.attempt(payload.executionId, admissionPool, enqueuedAt)),
+          );
+          const decision = decideAdmission(
+            observed,
+            enqueuedAt,
+            observed.now,
             ADMISSION_MAX_QUEUE_AGE_MS,
-            ADMISSION_POLL_EVERY_MS,
           );
-          let lastReportedPosition: number | undefined;
 
-          for (let i = 0; i < maxAttempts; i++) {
-            const observed = yield* stepDo(`admission-claim-${i}`, () =>
-              Effect.runPromise(
-                admissions.attempt(
-                  payload.executionId,
-                  admissionPool,
-                  enqueuedAt,
-                ),
-              ),
+          if (decision._kind === "admit") return;
+          if (decision._kind === "timeout") {
+            return yield* Effect.fail(
+              new AdmissionTimedOut({
+                queuedForMs: decision.queuedForMs,
+                position: decision.position,
+                poolBusy: decision.poolBusy,
+              }),
             );
-            const decision = decideAdmission(
-              observed,
-              enqueuedAt,
-              observed.now,
-              ADMISSION_MAX_QUEUE_AGE_MS,
-            );
-
-            if (decision._kind === "admit") return;
-            if (decision._kind === "timeout") {
-              return yield* Effect.fail(
-                new AdmissionTimedOut({
-                  queuedForMs: decision.queuedForMs,
-                  position: decision.position,
-                  poolBusy: decision.poolBusy,
-                }),
-              );
-            }
-
-            // `wait`: surface the queue position on the in-progress check-run
-            // — only when it CHANGED, bounding GitHub API writes to at most
-            // one per drained peer. Best-effort: a GitHub blip while queued
-            // must never kill the run.
-            if (decision.position !== lastReportedPosition) {
-              lastReportedPosition = decision.position;
-              yield* checks
-                .progress({
-                  repo: payload.github.repo,
-                  checkRunId,
-                  ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
-                  output: {
-                    title: checkRunName,
-                    summary: queuedSummary(
-                      decision.position,
-                      decision.poolBusy,
-                      admissionCap,
-                      enqueuedAt + ADMISSION_MAX_QUEUE_AGE_MS,
-                    ),
-                  },
-                })
-                .pipe(
-                  Effect.catchAllCause((cause) =>
-                    Effect.logWarning(
-                      `admission: queue-position update failed — ${cause}`,
-                    ),
-                  ),
-                );
-            }
-
-            // Durable, free hibernation between polls. Don't sleep after the
-            // final attempt — fall straight through to timeout.
-            if (i < maxAttempts - 1) {
-              yield* Effect.tryPromise(() =>
-                step.sleep(`admission-wait-${i}`, ADMISSION_POLL_EVERY_MS),
-              ).pipe(Effect.orDie);
-            } else {
-              return yield* Effect.fail(
-                new AdmissionTimedOut({
-                  queuedForMs: Math.max(0, observed.now - enqueuedAt),
-                  position: decision.position,
-                  poolBusy: decision.poolBusy,
-                }),
-              );
-            }
           }
-          // Unreachable — the final attempt returns or fails above.
-          return yield* Effect.fail(
-            new AdmissionTimedOut({
-              queuedForMs: ADMISSION_MAX_QUEUE_AGE_MS,
-              position: 0,
-              poolBusy: 0,
-            }),
-          );
-        },
-      );
+
+          // `wait`: surface the queue position on the in-progress check-run
+          // — only when it CHANGED, bounding GitHub API writes to at most
+          // one per drained peer. Best-effort: a GitHub blip while queued
+          // must never kill the run.
+          if (decision.position !== lastReportedPosition) {
+            lastReportedPosition = decision.position;
+            yield* checks
+              .progress({
+                repo: payload.github.repo,
+                checkRunId,
+                ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
+                output: {
+                  title: checkRunName,
+                  summary: queuedSummary(
+                    decision.position,
+                    decision.poolBusy,
+                    admissionCap,
+                    enqueuedAt + ADMISSION_MAX_QUEUE_AGE_MS,
+                  ),
+                },
+              })
+              .pipe(
+                Effect.catchAllCause((cause) =>
+                  Effect.logWarning(`admission: queue-position update failed — ${cause}`),
+                ),
+              );
+          }
+
+          // Durable, free hibernation between polls. Don't sleep after the
+          // final attempt — fall straight through to timeout.
+          if (i < maxAttempts - 1) {
+            yield* Effect.tryPromise(() =>
+              step.sleep(`admission-wait-${i}`, ADMISSION_POLL_EVERY_MS),
+            ).pipe(Effect.orDie);
+          } else {
+            return yield* Effect.fail(
+              new AdmissionTimedOut({
+                queuedForMs: Math.max(0, observed.now - enqueuedAt),
+                position: decision.position,
+                poolBusy: decision.poolBusy,
+              }),
+            );
+          }
+        }
+        // Unreachable — the final attempt returns or fails above.
+        return yield* Effect.fail(
+          new AdmissionTimedOut({
+            queuedForMs: ADMISSION_MAX_QUEUE_AGE_MS,
+            position: 0,
+            poolBusy: 0,
+          }),
+        );
+      });
 
       // --- Per-container-id serialization (the lease) ----------------------
       //
@@ -743,46 +687,37 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         Effect.timeout(Duration.seconds(30)),
         Effect.asVoid,
         Effect.catchAllCause((cause) =>
-          Effect.logWarning(
-            `sandbox teardown failed (sleepAfter reaps) — ${cause}`,
-          ),
+          Effect.logWarning(`sandbox teardown failed (sleepAfter reaps) — ${cause}`),
         ),
       );
 
-      const leased: Effect.Effect<unknown, RunError, RunContext> = Effect.gen(
-        function* () {
-          const lease = yield* leaseStore.acquire(
-            containerId,
-            payload.executionId,
+      const leased: Effect.Effect<unknown, RunError, RunContext> = Effect.gen(function* () {
+        const lease = yield* leaseStore.acquire(containerId, payload.executionId);
+        // Keep the heartbeat fresh in the background so a long run (a 25-min
+        // matrix) is never reclaimed as stale mid-flight. Each beat swallows
+        // its own error so a transient D1 blip never propagates; forked into
+        // the scope, interrupted when the scope closes; the lease is released
+        // on EVERY exit path via `ensuring`. (The admission slot has its own
+        // beat fiber one scope OUT — see `admissionHeld` below — because it
+        // must stay fresh through the lease-acquire WAIT, too.)
+        const heartbeatLoop: Effect.Effect<void, never> = lease
+          .heartbeat()
+          .pipe(
+            Effect.ignore,
+            Effect.repeat(Schedule.spaced(Duration.millis(LEASE_HEARTBEAT_EVERY_MS))),
+            Effect.asVoid,
           );
-          // Keep the heartbeat fresh in the background so a long run (a 25-min
-          // matrix) is never reclaimed as stale mid-flight. Each beat swallows
-          // its own error so a transient D1 blip never propagates; forked into
-          // the scope, interrupted when the scope closes; the lease is released
-          // on EVERY exit path via `ensuring`. (The admission slot has its own
-          // beat fiber one scope OUT — see `admissionHeld` below — because it
-          // must stay fresh through the lease-acquire WAIT, too.)
-          const heartbeatLoop: Effect.Effect<void, never> = lease
-            .heartbeat()
-            .pipe(
-              Effect.ignore,
-              Effect.repeat(
-                Schedule.spaced(Duration.millis(LEASE_HEARTBEAT_EVERY_MS)),
-              ),
-              Effect.asVoid,
-            );
-          yield* Effect.forkScoped(heartbeatLoop);
-          // Finalizer order matters: `ensuring`s run inner-first, so the
-          // container is destroyed BEFORE the lease is released — a waiting
-          // peer never sees its freshly-acquired container torn down.
-          return yield* run
-            .run(input)
-            .pipe(
-              Effect.ensuring(destroySandbox),
-              Effect.ensuring(lease.release().pipe(Effect.ignore)),
-            );
-        },
-      ).pipe(Effect.scoped);
+        yield* Effect.forkScoped(heartbeatLoop);
+        // Finalizer order matters: `ensuring`s run inner-first, so the
+        // container is destroyed BEFORE the lease is released — a waiting
+        // peer never sees its freshly-acquired container torn down.
+        return yield* run
+          .run(input)
+          .pipe(
+            Effect.ensuring(destroySandbox),
+            Effect.ensuring(lease.release().pipe(Effect.ignore)),
+          );
+      }).pipe(Effect.scoped);
 
       // The admitted slot, held live for the WHOLE post-gate window. The beat
       // fiber forks OUTSIDE `leased` on purpose: the lease-acquire wait can
@@ -791,20 +726,17 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // heartbeat) would let the slot stale mid-wait, a peer's claim COUNT
       // would stop seeing it, and the pool would overcommit by the runs stuck
       // in that window. Same cadence + swallow-errors shape as the lease beat.
-      const admissionHeld: Effect.Effect<unknown, RunError, RunContext> =
-        Effect.gen(function* () {
-          const admissionBeat: Effect.Effect<void, never> = admissions
-            .heartbeat(payload.executionId)
-            .pipe(
-              Effect.ignore,
-              Effect.repeat(
-                Schedule.spaced(Duration.millis(LEASE_HEARTBEAT_EVERY_MS)),
-              ),
-              Effect.asVoid,
-            );
-          yield* Effect.forkScoped(admissionBeat);
-          return yield* leased;
-        }).pipe(Effect.scoped);
+      const admissionHeld: Effect.Effect<unknown, RunError, RunContext> = Effect.gen(function* () {
+        const admissionBeat: Effect.Effect<void, never> = admissions
+          .heartbeat(payload.executionId)
+          .pipe(
+            Effect.ignore,
+            Effect.repeat(Schedule.spaced(Duration.millis(LEASE_HEARTBEAT_EVERY_MS))),
+            Effect.asVoid,
+          );
+        yield* Effect.forkScoped(admissionBeat);
+        return yield* leased;
+      }).pipe(Effect.scoped);
 
       // Admission gate FIRST, then the leased run body; the admission slot is
       // released on every exit path (success / run failure / AdmissionTimedOut
@@ -812,13 +744,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // peer rows. An `AdmissionTimedOut` flows into `exit` as a normal
       // `failure`: recorded + reported through the same check-run path, with
       // failure-summary.ts rendering it unmistakably as an infra-wait timeout.
-      const gated: Effect.Effect<unknown, RunError, RunContext> =
-        admissionGate.pipe(
-          Effect.andThen(admissionHeld),
-          Effect.ensuring(
-            admissions.release(payload.executionId).pipe(Effect.ignore),
-          ),
-        );
+      const gated: Effect.Effect<unknown, RunError, RunContext> = admissionGate.pipe(
+        Effect.andThen(admissionHeld),
+        Effect.ensuring(admissions.release(payload.executionId).pipe(Effect.ignore)),
+      );
       const exit = yield* Effect.exit(gated);
       const completedAt = yield* Effect.sync(() => Date.now());
 
@@ -943,18 +872,14 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // Cloudflare Workflows instance page (step timeline) and the readable
       // full-log viewer on the dispatcher's own origin.
       const cfLogsSuffix =
-        detailsUrl !== undefined
-          ? ` — [view step logs in Cloudflare ↗](${detailsUrl})`
-          : "";
+        detailsUrl !== undefined ? ` — [view step logs in Cloudflare ↗](${detailsUrl})` : "";
       const viewLogsSuffix =
         logsBaseUrl !== undefined ? ` — [view full logs ↗](${logsBaseUrl})` : "";
       const logsSuffix = `${cfLogsSuffix}${viewLogsSuffix}`;
       // Only surfaced on the success branch below — a failed `product-demo`
       // has no `summary_json` for `/demos/:execution` to render.
-      const demoSuffix =
-        demoUrl !== undefined ? ` — [▶ view product demo ↗](${demoUrl})` : "";
-      const writebackSuffix =
-        writebackLine !== undefined ? `\n\n${writebackLine}` : "";
+      const demoSuffix = demoUrl !== undefined ? ` — [▶ view product demo ↗](${demoUrl})` : "";
+      const writebackSuffix = writebackLine !== undefined ? `\n\n${writebackLine}` : "";
       yield* checks.update({
         repo: payload.github.repo,
         checkRunId,
@@ -1020,9 +945,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             Effect.tap((result) =>
               Effect.logInfo(
                 `notify: emailed ${result.accepted.length}/${notifyEmails.length} recipient(s)` +
-                  (result.rejected.length > 0
-                    ? ` (${result.rejected.length} rejected)`
-                    : ""),
+                  (result.rejected.length > 0 ? ` (${result.rejected.length} rejected)` : ""),
               ),
             ),
             // `send` is total, but guard defects so a notify bug never turns a
@@ -1042,9 +965,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // budget after the execution finishes. Best-effort — the hard token cap
       // already bounds spend; this revokes the post-run tail. specs/08 § 6.3.
       if (configOverrides !== undefined && this.env.AGENT_BUDGET !== undefined) {
-        await this.env.AGENT_BUDGET.get(
-          this.env.AGENT_BUDGET.idFromName(payload.executionId),
-        )
+        await this.env.AGENT_BUDGET.get(this.env.AGENT_BUDGET.idFromName(payload.executionId))
           .kill()
           .catch(() => {});
       }

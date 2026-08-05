@@ -97,8 +97,7 @@ describe("parseMaxTokens", () => {
 describe("resolveBackend", () => {
   it("resolves the default backend (workers-ai) from config — no API key", async () => {
     const store = {
-      [BACKEND_KEYS["workers-ai"].modelKey]:
-        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      [BACKEND_KEYS["workers-ai"].modelKey]: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     };
     const resolved = await Effect.runPromise(resolveBackend(getter(store)));
     expect(resolved.backend).toBe("workers-ai");
@@ -127,24 +126,19 @@ describe("resolveBackend", () => {
     expect(def.maxTokens).toBe(8_192);
 
     const overridden = await Effect.runPromise(
-      resolveBackend(
-        getter({ ...base, [BACKEND_KEYS["workers-ai"].maxTokensKey]: "16000" }),
-      ),
+      resolveBackend(getter({ ...base, [BACKEND_KEYS["workers-ai"].maxTokensKey]: "16000" })),
     );
     expect(overridden.maxTokens).toBe(16_000);
   });
 
   it("resolves a reasoning model (workers-ai + mode=json, @cf distill)", async () => {
     const store = {
-      [BACKEND_KEYS["workers-ai"].modelKey]:
-        "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+      [BACKEND_KEYS["workers-ai"].modelKey]: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
       [BACKEND_KEYS["workers-ai"].modeKey]: "json",
     };
     const resolved = await Effect.runPromise(resolveBackend(getter(store)));
     expect(resolved.backend).toBe("workers-ai");
-    expect(resolved.model).toBe(
-      "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
-    );
+    expect(resolved.model).toBe("@cf/deepseek-ai/deepseek-r1-distill-qwen-32b");
     // Pinned json — DeepSeek-class models honour no tool-calls.
     expect(resolved.mode).toBe("json");
   });
@@ -203,10 +197,8 @@ describe("resolveBackend", () => {
   it("resolves bedrock with model + roleArn + region (default mode = json)", async () => {
     const store = {
       "pr-review.backend": "bedrock",
-      [BACKEND_KEYS.bedrock.modelKey]:
-        "bedrock/us.anthropic.claude-opus-4-6-v1",
-      [BACKEND_KEYS.bedrock.roleArnKey as string]:
-        "arn:aws:iam::123456789012:role/PrReviewBedrock",
+      [BACKEND_KEYS.bedrock.modelKey]: "bedrock/us.anthropic.claude-opus-4-6-v1",
+      [BACKEND_KEYS.bedrock.roleArnKey as string]: "arn:aws:iam::123456789012:role/PrReviewBedrock",
       [BACKEND_KEYS.bedrock.regionKey as string]: "us-west-2",
     };
     const resolved = await Effect.runPromise(resolveBackend(getter(store)));
@@ -214,18 +206,14 @@ describe("resolveBackend", () => {
     expect(resolved.model).toBe("bedrock/us.anthropic.claude-opus-4-6-v1");
     expect(resolved.mode).toBe("json");
     expect(resolved.region).toBe("us-west-2");
-    expect(resolved.roleArn).toBe(
-      "arn:aws:iam::123456789012:role/PrReviewBedrock",
-    );
+    expect(resolved.roleArn).toBe("arn:aws:iam::123456789012:role/PrReviewBedrock");
   });
 
   it("bedrock — region defaults to us-east-1 when the region key is unset", async () => {
     const store = {
       "pr-review.backend": "bedrock",
-      [BACKEND_KEYS.bedrock.modelKey]:
-        "bedrock/us.anthropic.claude-opus-4-6-v1",
-      [BACKEND_KEYS.bedrock.roleArnKey as string]:
-        "arn:aws:iam::123456789012:role/PrReviewBedrock",
+      [BACKEND_KEYS.bedrock.modelKey]: "bedrock/us.anthropic.claude-opus-4-6-v1",
+      [BACKEND_KEYS.bedrock.roleArnKey as string]: "arn:aws:iam::123456789012:role/PrReviewBedrock",
     };
     const resolved = await Effect.runPromise(resolveBackend(getter(store)));
     expect(resolved.region).toBe("us-east-1");
@@ -234,8 +222,7 @@ describe("resolveBackend", () => {
   it("bedrock — fails with BackendUnconfigured when roleArn is unset", async () => {
     const store = {
       "pr-review.backend": "bedrock",
-      [BACKEND_KEYS.bedrock.modelKey]:
-        "bedrock/us.anthropic.claude-opus-4-6-v1",
+      [BACKEND_KEYS.bedrock.modelKey]: "bedrock/us.anthropic.claude-opus-4-6-v1",
     };
     const exit = await Effect.runPromiseExit(resolveBackend(getter(store)));
     expect(exit._tag).toBe("Failure");
@@ -247,20 +234,15 @@ describe("namespaced config (downstream recipe reuse)", () => {
     expect(namespacedKey("spec-drift")("repos")).toBe("spec-drift.repos");
     expect(backendConfigKey("spec-drift")).toBe("spec-drift.backend");
     expect(promptKey("spec-drift")).toBe("spec-drift.prompt");
-    expect(namespacedKeys("ci-triage")["workers-ai"].modelKey).toBe(
-      "ci-triage.workers-ai.model",
-    );
+    expect(namespacedKeys("ci-triage")["workers-ai"].modelKey).toBe("ci-triage.workers-ai.model");
     // The default namespace's keys are unchanged (pr-review compatibility).
-    expect(BACKEND_KEYS["workers-ai"].modelKey).toBe(
-      "pr-review.workers-ai.model",
-    );
+    expect(BACKEND_KEYS["workers-ai"].modelKey).toBe("pr-review.workers-ai.model");
   });
 
   it("resolveBackend reads the given namespace's keys", async () => {
     const store = {
       "spec-drift.backend": "workers-ai",
-      "spec-drift.workers-ai.model":
-        "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+      "spec-drift.workers-ai.model": "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
       "spec-drift.workers-ai.mode": "json",
       // A pr-review key must NOT leak into the spec-drift resolution.
       "pr-review.workers-ai.model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
@@ -269,9 +251,7 @@ describe("namespaced config (downstream recipe reuse)", () => {
       resolveBackend(getter(store), { namespace: "spec-drift" }),
     );
     expect(resolved.backend).toBe("workers-ai");
-    expect(resolved.model).toBe(
-      "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
-    );
+    expect(resolved.model).toBe("@cf/deepseek-ai/deepseek-r1-distill-qwen-32b");
     expect(resolved.mode).toBe("json");
   });
 });
@@ -286,30 +266,20 @@ describe("classifyModelError", () => {
       ),
     ).toBe("context-overflow");
     expect(
-      classifyModelError(
-        new Error("prompt is too long: 250000 tokens > 200000 maximum"),
-      ),
+      classifyModelError(new Error("prompt is too long: 250000 tokens > 200000 maximum")),
     ).toBe("context-overflow");
   });
 
   it("keeps the existing families for non-overflow errors", () => {
-    expect(classifyModelError(new Error("429 Too Many Requests"))).toBe(
-      "rate-limited",
-    );
-    expect(classifyModelError(new Error("401 unauthorized"))).toBe(
-      "auth-failed",
-    );
+    expect(classifyModelError(new Error("429 Too Many Requests"))).toBe("rate-limited");
+    expect(classifyModelError(new Error("401 unauthorized"))).toBe("auth-failed");
     expect(classifyModelError(new Error("something else"))).toBe("unknown");
   });
 
   it("does NOT treat a generic 'too long' as context-overflow (loose-phrase guard)", () => {
     // "request took too long" is a latency complaint, not a capacity one — it
     // must never trigger shrink-retries / a neutral skip (PR #26 review).
-    expect(classifyModelError(new Error("request took too long"))).toBe(
-      "unknown",
-    );
-    expect(
-      classifyModelError(new Error("operation timeout — took too long")),
-    ).toBe("timeout");
+    expect(classifyModelError(new Error("request took too long"))).toBe("unknown");
+    expect(classifyModelError(new Error("operation timeout — took too long"))).toBe("timeout");
   });
 });

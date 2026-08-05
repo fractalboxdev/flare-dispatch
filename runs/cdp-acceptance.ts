@@ -183,7 +183,6 @@ const CdpAcceptanceOutput = Schema.Struct({
   screenshotsUri: Schema.String, // signed R2 URL to the screenshots + trace bundle
 });
 
-
 /** Wait-for-port ceiling for the app boot, in seconds. */
 const APP_BOOT_TIMEOUT_SEC = 120;
 
@@ -290,11 +289,10 @@ export const cdpAcceptance = defineRun({
           }),
         { retries: 0 },
       );
-      const exitCode = yield* step(
-        "run-tests-wait",
-        () => pollSentinelExit({ container, dir }),
-        { timeoutSec: 1740, retries: 0 },
-      );
+      const exitCode = yield* step("run-tests-wait", () => pollSentinelExit({ container, dir }), {
+        timeoutSec: 1740,
+        retries: 0,
+      });
 
       // upload-report / upload-screenshots — promote both bundles to signed R2
       // URLs surfaced in the check-run summary.
@@ -311,9 +309,7 @@ export const cdpAcceptance = defineRun({
           .upload({ name, path, container, signedUrlTTL: "30 days" })
           .pipe(
             Effect.catchAll((cause) =>
-              io
-                .log("warn", `cdp-acceptance ${label} upload failed: ${cause}`)
-                .pipe(Effect.as("")),
+              io.log("warn", `cdp-acceptance ${label} upload failed: ${cause}`).pipe(Effect.as("")),
             ),
           );
 
@@ -340,14 +336,10 @@ export const cdpAcceptance = defineRun({
               // index.html / a generated listing); the bare uri stays the
               // .tar.gz download.
               ...(reportUri !== ""
-                ? [
-                    `- [Playwright report](${reportUri}/) ([download](${reportUri}))`,
-                  ]
+                ? [`- [Playwright report](${reportUri}/) ([download](${reportUri}))`]
                 : []),
               ...(screenshotsUri !== ""
-                ? [
-                    `- [Screenshots](${screenshotsUri}/) ([download](${screenshotsUri}))`,
-                  ]
+                ? [`- [Screenshots](${screenshotsUri}/) ([download](${screenshotsUri}))`]
                 : []),
             ].join("\n"),
           }),

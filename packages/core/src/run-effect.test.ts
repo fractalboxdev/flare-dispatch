@@ -29,8 +29,6 @@ describe("runEffect — the Workflow boundary shim", () => {
   });
 
   it("throws a rendered Error for a defect (no typed failure)", async () => {
-    await expect(
-      runEffect(Effect.die(new Error("kaboom"))),
-    ).rejects.toBeInstanceOf(Error);
+    await expect(runEffect(Effect.die(new Error("kaboom")))).rejects.toBeInstanceOf(Error);
   });
 });

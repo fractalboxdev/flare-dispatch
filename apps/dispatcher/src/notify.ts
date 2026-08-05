@@ -66,8 +66,7 @@ const esc = (s: string): string =>
     .replace(/'/g, "&#39;");
 
 /** An `http(s)` URL is the only value we turn into a link. */
-const isHttpUrl = (v: unknown): v is string =>
-  typeof v === "string" && /^https?:\/\//.test(v);
+const isHttpUrl = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//.test(v);
 
 /**
  * Humanize an output key for a label: `videoUri` → "Video", `logUri` → "Log",
@@ -136,9 +135,7 @@ const objectArrayHtml = (items: readonly Record<string, unknown>[]): string =>
         )
         .join("");
       return `<div style="margin:0 0 10px;">${
-        title === ""
-          ? ""
-          : `<div style="font-weight:600;margin-bottom:2px;">${esc(title)}</div>`
+        title === "" ? "" : `<div style="font-weight:600;margin-bottom:2px;">${esc(title)}</div>`
       }<table style="border-collapse:collapse;font-size:13px;">${rows}</table></div>`;
     })
     .join("");
@@ -168,9 +165,7 @@ const statusBadge = (status: NotifyStatus): { label: string; color: string } =>
  * passed") instead. Returns `undefined` for runs with no `stories` array — their
  * subject is left unchanged.
  */
-const storyTally = (
-  output: unknown,
-): { passed: number; total: number } | undefined => {
+const storyTally = (output: unknown): { passed: number; total: number } | undefined => {
   if (output === null || typeof output !== "object" || Array.isArray(output)) {
     return undefined;
   }
@@ -180,9 +175,7 @@ const storyTally = (
   return { passed, total: stories.length };
 };
 
-export const renderResultEmail = (
-  input: RenderResultEmailInput,
-): RenderedEmail => {
+export const renderResultEmail = (input: RenderResultEmailInput): RenderedEmail => {
   const badge = statusBadge(input.status);
   const rows = input.status === "success" ? outputRows(input.output) : [];
   // The run-authored failure markdown, failure branch only. Caller-influenced
@@ -273,11 +266,7 @@ ${detailsHtml}
   // --- Plain-text alternative -------------------------------------------------
   const textLines: string[] = [
     `FlareDispatch — ${input.run} — ${
-      input.status === "success"
-        ? "SUCCEEDED"
-        : input.status === "skipped"
-          ? "SKIPPED"
-          : "FAILED"
+      input.status === "success" ? "SUCCEEDED" : input.status === "skipped" ? "SKIPPED" : "FAILED"
     }`,
     "",
     `Repository: ${input.repo}`,

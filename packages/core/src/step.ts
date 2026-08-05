@@ -24,11 +24,7 @@
 
 import { Cause, type Duration, Effect, Exit, Option, type Schema } from "effect";
 import type { RunContext } from "./context";
-import type {
-  ApprovalTimedOut,
-  EventPayloadInvalid,
-  StepFailed,
-} from "./errors";
+import type { ApprovalTimedOut, EventPayloadInvalid, StepFailed } from "./errors";
 import { StepRunner } from "./services/step-runner";
 import type { StepOpts } from "./step-opts";
 
@@ -50,10 +46,7 @@ export const runEffect = <A, E>(eff: Effect.Effect<A, E, never>) =>
         // Some => a typed run failure; None => a defect, rendered from the
         // pretty Cause. Branch the Option — never read `._tag` raw.
         const err = Option.match(Cause.failureOption(cause), {
-          onSome: (failure) =>
-            failure instanceof Error
-              ? failure
-              : new Error(String(failure)),
+          onSome: (failure) => (failure instanceof Error ? failure : new Error(String(failure))),
           onNone: () => new Error(Cause.pretty(cause)),
         });
         (err as { cause?: unknown }).cause = cause;

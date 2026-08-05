@@ -18,22 +18,10 @@ import {
 import { Effect } from "effect";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { github } from "@fractalboxdev/flare-dispatch-core";
 import { TEST_APP_PRIVATE_KEY } from "@fractalboxdev/flare-dispatch-github-app/testing";
-import {
-  classifyReason,
-  type GithubLiveConfig,
-  makeGithubLive,
-} from "./github-live";
+import { classifyReason, type GithubLiveConfig, makeGithubLive } from "./github-live";
 
 type Recorded = {
   tokenExchanges: number;
@@ -43,23 +31,17 @@ type Recorded = {
 let recorded: Recorded;
 
 const server = setupServer(
-  http.get(
-    "https://api.github.com/repos/:owner/:repo/installation",
-    () => {
-      recorded.installationLookups += 1;
-      return HttpResponse.json({ id: 778899 }, { status: 200 });
-    },
-  ),
-  http.post(
-    "https://api.github.com/app/installations/:id/access_tokens",
-    () => {
-      recorded.tokenExchanges += 1;
-      return HttpResponse.json({
-        token: "ghs_install_token",
-        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-      });
-    },
-  ),
+  http.get("https://api.github.com/repos/:owner/:repo/installation", () => {
+    recorded.installationLookups += 1;
+    return HttpResponse.json({ id: 778899 }, { status: 200 });
+  }),
+  http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
+    recorded.tokenExchanges += 1;
+    return HttpResponse.json({
+      token: "ghs_install_token",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+  }),
   http.post(
     "https://api.github.com/repos/:owner/:repo/pulls/:pr/reviews",
     async ({ request, params }) => {
@@ -90,8 +72,7 @@ const CONFIG: GithubLiveConfig = {
 const post = (
   layer: ReturnType<typeof makeGithubLive>,
   req: Parameters<typeof github.pullReview>[0],
-): Promise<void> =>
-  Effect.runPromise(github.pullReview(req).pipe(Effect.provide(layer)));
+): Promise<void> => Effect.runPromise(github.pullReview(req).pipe(Effect.provide(layer)));
 
 describe("makeGithubLive — pullReview", () => {
   it("configured — exchanges a token then POSTs a COMMENT review", async () => {
@@ -139,19 +120,20 @@ describe("makeGithubLive — pullReview", () => {
 
   it("surfaces a GitHub API failure as a typed GitHubApiError", async () => {
     server.use(
-      http.post(
-        "https://api.github.com/repos/:owner/:repo/pulls/:pr/reviews",
-        () => HttpResponse.json({ message: "gone" }, { status: 404 }),
+      http.post("https://api.github.com/repos/:owner/:repo/pulls/:pr/reviews", () =>
+        HttpResponse.json({ message: "gone" }, { status: 404 }),
       ),
     );
     const exit = await Effect.runPromiseExit(
-      github.pullReview({
-        repo: "owner/name",
-        pr: 42,
-        sha: "headsha",
-        body: "summary",
-        installationId: 12345,
-      }).pipe(Effect.provide(makeGithubLive(CONFIG))),
+      github
+        .pullReview({
+          repo: "owner/name",
+          pr: 42,
+          sha: "headsha",
+          body: "summary",
+          installationId: 12345,
+        })
+        .pipe(Effect.provide(makeGithubLive(CONFIG))),
     );
     expect(exit._tag).toBe("Failure");
   });

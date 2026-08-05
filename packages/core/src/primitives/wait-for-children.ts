@@ -20,11 +20,7 @@
 
 import { Duration, Effect } from "effect";
 import { ChildWaitTimeout } from "../errors";
-import {
-  type ChildStatusRecord,
-  ChildRuns,
-  isTerminalChildStatus,
-} from "../services/child-runs";
+import { type ChildStatusRecord, ChildRuns, isTerminalChildStatus } from "../services/child-runs";
 import { IO, io } from "../services/io";
 
 const POLL_EVERY_DEFAULT = "5 seconds";
@@ -49,16 +45,10 @@ export const waitForChildren = (opts: {
   readonly pollEvery?: Duration.DurationInput;
   /** Overall wait ceiling before `ChildWaitTimeout`. Default 30m. */
   readonly timeout?: Duration.DurationInput;
-}): Effect.Effect<
-  readonly ChildStatusRecord[],
-  ChildWaitTimeout,
-  ChildRuns | IO
-> => {
+}): Effect.Effect<readonly ChildStatusRecord[], ChildWaitTimeout, ChildRuns | IO> => {
   const pollEvery = Duration.decode(opts.pollEvery ?? POLL_EVERY_DEFAULT);
   const pollEveryMs = Duration.toMillis(pollEvery);
-  const timeoutMs = Duration.toMillis(
-    Duration.decode(opts.timeout ?? TIMEOUT_DEFAULT),
-  );
+  const timeoutMs = Duration.toMillis(Duration.decode(opts.timeout ?? TIMEOUT_DEFAULT));
   // At least one poll; one poll per `pollEvery` up to the ceiling.
   const maxAttempts = Math.max(1, Math.ceil(timeoutMs / Math.max(1, pollEveryMs)));
 

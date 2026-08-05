@@ -105,17 +105,11 @@ export const listExecutions = async (
 };
 
 /** Fetch one execution by id, or `null` if there is no such row. */
-export const getExecution = async (
-  db: D1Database,
-  id: string,
-): Promise<ExecutionRow | null> =>
+export const getExecution = async (db: D1Database, id: string): Promise<ExecutionRow | null> =>
   db.prepare("SELECT * FROM executions WHERE id = ?").bind(id).first<ExecutionRow>();
 
 /** Fetch an execution's steps, ordered by start time then name. */
-export const getSteps = async (
-  db: D1Database,
-  executionId: string,
-): Promise<StepRow[]> => {
+export const getSteps = async (db: D1Database, executionId: string): Promise<StepRow[]> => {
   const { results } = await db
     .prepare(
       `SELECT * FROM steps WHERE execution_id = ?
@@ -182,9 +176,7 @@ const percentile = (sortedAsc: readonly number[], p: number): number | null => {
  * wall-time, and average/total cost (over rows that carry a rollup), and picks
  * the dominant cost basis so the surface can label metered vs modeled honestly.
  */
-export const summarizeRuns = (
-  rows: readonly AnalyticsInputRow[],
-): RunAnalytics[] => {
+export const summarizeRuns = (rows: readonly AnalyticsInputRow[]): RunAnalytics[] => {
   type Acc = {
     durations: number[];
     count: number;
@@ -247,8 +239,7 @@ export const summarizeRuns = (
       skipped: a.skipped,
       p50DurationMs: percentile(sorted, 0.5),
       p95DurationMs: percentile(sorted, 0.95),
-      avgCostMicroUsd:
-        a.costSamples > 0 ? Math.round(a.costTotal / a.costSamples) : null,
+      avgCostMicroUsd: a.costSamples > 0 ? Math.round(a.costTotal / a.costSamples) : null,
       totalCostMicroUsd: a.costTotal,
       costSamples: a.costSamples,
       basis,
@@ -264,10 +255,7 @@ export const summarizeRuns = (
  * executions. Bounded by `limit` (newest-first) so the aggregate is a cheap
  * single scan, not an unbounded table sweep.
  */
-export const aggregateByRun = async (
-  db: D1Database,
-  limit: number,
-): Promise<RunAnalytics[]> => {
+export const aggregateByRun = async (db: D1Database, limit: number): Promise<RunAnalytics[]> => {
   const { results } = await db
     .prepare(
       `SELECT run, status, started_at, completed_at, cost_micro_usd, cost_basis

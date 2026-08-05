@@ -55,10 +55,7 @@ export const loadSecrets = (
       // almost always a misconfiguration, not an intentional value.
       if (value === undefined || value === "") {
         missing.push(key);
-        yield* io.log(
-          "warn",
-          `loadSecrets: Worker secret "${key}" is unset`,
-        );
+        yield* io.log("warn", `loadSecrets: Worker secret "${key}" is unset`);
         continue;
       }
       env[key] = value;

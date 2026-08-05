@@ -54,14 +54,10 @@ describe("oxlint", () => {
         "exec",
         "upload-log",
       ]);
-      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
-        CMD_DEFAULT,
-      ]);
-      expect(
-        handles.sandbox.execs
-          .map((e) => e.command)
-          .some((c) => c.includes("install")),
-      ).toBe(false);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([CMD_DEFAULT]);
+      expect(handles.sandbox.execs.map((e) => e.command).some((c) => c.includes("install"))).toBe(
+        false,
+      );
     }).pipe(Effect.provide(layer));
   });
 
@@ -101,68 +97,61 @@ describe("oxlint", () => {
   // a no-op, not a lint verdict, and must not go red.
 
   /** oxlint's verbatim empty-file-set output (oxlint 1.x, on stdout). */
-  const NO_FILES_STDOUT =
-    "No files found to lint. Please check your paths and ignore patterns.\n";
+  const NO_FILES_STDOUT = "No files found to lint. Please check your paths and ignore patterns.\n";
 
-  it.effect(
-    "nothing to lint — the exit-1 sentinel is a green skip, NOT a red lint verdict",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: {
-          [CMD_DEFAULT]: { exitCode: 1, stdout: NO_FILES_STDOUT },
+  it.effect("nothing to lint — the exit-1 sentinel is a green skip, NOT a red lint verdict", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [CMD_DEFAULT]: { exitCode: 1, stdout: NO_FILES_STDOUT },
+      },
+    });
+
+    return Effect.gen(function* () {
+      // failOnNonZeroExit is ON (the default, and what the webhook trigger
+      // hard-codes) — yet the run SUCCEEDS.
+      const exit = yield* Effect.exit(oxlint.run(baseInput));
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (!Exit.isSuccess(exit)) return;
+
+      // Normalized to 0 so an Action-mode caller gating on `exitCode` (the
+      // `offload-test` contract) stays green too...
+      expect(exit.value.exitCode).toBe(0);
+      // ...with the truth out of band: a pass over ZERO files, which nothing
+      // should read as "oxlint vouched for this code".
+      expect(exit.value.skipped).toBe(true);
+
+      // The log still uploads — it carries the sentinel as the evidence.
+      expect(handles.executions.steps.map((s) => s.name)).toEqual([
+        "checkout",
+        "exec",
+        "upload-log",
+      ]);
+      expect(exit.value.logUri.length).toBeGreaterThan(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("nothing to lint — a genuine finding on the same exit code still goes red", () => {
+    // Guards the reclassification against over-reach: exit 1 WITHOUT the
+    // sentinel is a real lint verdict and must still fail the run.
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [CMD_DEFAULT]: {
+          exitCode: 1,
+          stdout:
+            "  x eslint(no-unused-vars): 'foo' is never used\n   ╭─[src/x.ts:1:7]\n\nFound 1 error.",
         },
-      });
+      },
+    });
 
-      return Effect.gen(function* () {
-        // failOnNonZeroExit is ON (the default, and what the webhook trigger
-        // hard-codes) — yet the run SUCCEEDS.
-        const exit = yield* Effect.exit(oxlint.run(baseInput));
-        expect(Exit.isSuccess(exit)).toBe(true);
-        if (!Exit.isSuccess(exit)) return;
-
-        // Normalized to 0 so an Action-mode caller gating on `exitCode` (the
-        // `offload-test` contract) stays green too...
-        expect(exit.value.exitCode).toBe(0);
-        // ...with the truth out of band: a pass over ZERO files, which nothing
-        // should read as "oxlint vouched for this code".
-        expect(exit.value.skipped).toBe(true);
-
-        // The log still uploads — it carries the sentinel as the evidence.
-        expect(handles.executions.steps.map((s) => s.name)).toEqual([
-          "checkout",
-          "exec",
-          "upload-log",
-        ]);
-        expect(exit.value.logUri.length).toBeGreaterThan(0);
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "nothing to lint — a genuine finding on the same exit code still goes red",
-    () => {
-      // Guards the reclassification against over-reach: exit 1 WITHOUT the
-      // sentinel is a real lint verdict and must still fail the run.
-      const { layer } = makeCFRuntimeTest({
-        sandboxProgram: {
-          [CMD_DEFAULT]: {
-            exitCode: 1,
-            stdout:
-              "  x eslint(no-unused-vars): 'foo' is never used\n   ╭─[src/x.ts:1:7]\n\nFound 1 error.",
-          },
-        },
-      });
-
-      return Effect.gen(function* () {
-        const exit = yield* Effect.exit(oxlint.run(baseInput));
-        expect(Exit.isFailure(exit)).toBe(true);
-        const failure = Exit.isFailure(exit)
-          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
-          : undefined;
-        expect((failure as { _tag?: string })?._tag).toBe("AcceptanceFailed");
-      }).pipe(Effect.provide(layer));
-    },
-  );
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(oxlint.run(baseInput));
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      expect((failure as { _tag?: string })?._tag).toBe("AcceptanceFailed");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("a clean lint over real files is NOT reported as skipped", () => {
     const { layer } = makeCFRuntimeTest({
@@ -192,34 +181,29 @@ describe("oxlint", () => {
     },
   );
 
-  it.effect(
-    "command — version + args compose the npx oxlint invocation",
-    () => {
-      const command = "npx --yes oxlint@1.2.3 src --deny-warnings";
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: { [command]: { exitCode: 0, durationMs: 1234 } },
-      });
-      const input = {
-        ...baseInput,
-        version: "1.2.3",
-        args: "src --deny-warnings",
-      };
+  it.effect("command — version + args compose the npx oxlint invocation", () => {
+    const command = "npx --yes oxlint@1.2.3 src --deny-warnings";
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [command]: { exitCode: 0, durationMs: 1234 } },
+    });
+    const input = {
+      ...baseInput,
+      version: "1.2.3",
+      args: "src --deny-warnings",
+    };
 
-      return Effect.gen(function* () {
-        const result = yield* oxlint.run(input);
-        expect(result.exitCode).toBe(0);
-        // durationMs is the checkpointed exec result's value (replay-safe).
-        expect(result.durationMs).toBe(1234);
-        expect(handles.sandbox.execs.map((e) => e.command)).toEqual([command]);
-      }).pipe(Effect.provide(layer));
-    },
-  );
+    return Effect.gen(function* () {
+      const result = yield* oxlint.run(input);
+      expect(result.exitCode).toBe(0);
+      // durationMs is the checkpointed exec result's value (replay-safe).
+      expect(result.durationMs).toBe(1234);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([command]);
+    }).pipe(Effect.provide(layer));
+  });
 
   // --- Webhook trigger -------------------------------------------------------
 
-  const prPayload = (
-    overrides: Record<string, unknown> = {},
-  ): Record<string, unknown> => ({
+  const prPayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     action: "synchronize",
     repository: { full_name: "owner/name" },
     pull_request: {
@@ -278,10 +262,7 @@ describe("oxlint", () => {
 describe("oxlint source determinism", () => {
   it.effect("the run body never calls Date.now()/crypto.randomUUID()", () =>
     Effect.sync(() => {
-      const src = readFileSync(
-        fileURLToPath(new URL("./oxlint.ts", import.meta.url)),
-        "utf8",
-      );
+      const src = readFileSync(fileURLToPath(new URL("./oxlint.ts", import.meta.url)), "utf8");
       const code = src.replace(/\/\/.*$/gm, "");
       expect(code).not.toMatch(/\bDate\s*\.\s*now\b/);
       expect(code).not.toMatch(/\bcrypto\s*\.\s*randomUUID\b/);

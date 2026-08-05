@@ -10,12 +10,7 @@ import { describe, expect, it } from "vitest";
 import { playwrightE2E } from "./playwright-e2e";
 
 type Label = { name: string };
-const makePayload = (opts: {
-  labels?: string[];
-  login?: string;
-  repo?: string;
-  sha?: string;
-}) => ({
+const makePayload = (opts: { labels?: string[]; login?: string; repo?: string; sha?: string }) => ({
   repository: { full_name: opts.repo ?? "owner/name" },
   pull_request: {
     head: { sha: opts.sha ?? "abcdef0123456789" },
@@ -36,9 +31,7 @@ describe("playwright-e2e webhook trigger", () => {
   });
 
   it("fires for a non-bot PR carrying request-e2e", () => {
-    expect(
-      trigger?.gate?.({ payload: makePayload({ labels: ["request-e2e"] }) }),
-    ).toBe(true);
+    expect(trigger?.gate?.({ payload: makePayload({ labels: ["request-e2e"] }) })).toBe(true);
   });
 
   it("never fires for a bot author, even when labeled", () => {

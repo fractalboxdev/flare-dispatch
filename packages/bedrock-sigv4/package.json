@@ -1,10 +1,10 @@
 {
   "name": "@fractalboxdev/flare-dispatch-bedrock-sigv4",
   "version": "0.0.1",
-  "description": "Shared SigV4 signing core for AWS Bedrock InvokeModel routed through the Cloudflare AI Gateway. Zero-dependency (Web Crypto + fetch only) so it bundles into both the Worker runtime and the demo sandbox container.",
-  "type": "module",
   "private": true,
+  "description": "Shared SigV4 signing core for AWS Bedrock InvokeModel routed through the Cloudflare AI Gateway. Zero-dependency (Web Crypto + fetch only) so it bundles into both the Worker runtime and the demo sandbox container.",
   "license": "MIT",
+  "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },

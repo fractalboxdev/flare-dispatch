@@ -163,9 +163,7 @@ export const ciTriagePr = defineRun({
 
       // 1. Scope from config.
       const repos = parseList(yield* step("resolve-repos", () => config.get(REPOS_KEY)));
-      const projects = parseList(
-        yield* step("resolve-projects", () => config.get(PROJECTS_KEY)),
-      );
+      const projects = parseList(yield* step("resolve-projects", () => config.get(PROJECTS_KEY)));
       if (repos.length === 0 && projects.length === 0 && signals.length === 0) {
         yield* step("log-empty", () =>
           io.log(
@@ -176,15 +174,11 @@ export const ciTriagePr = defineRun({
         return empty;
       }
       const windowHours =
-        Number.parseInt(
-          (yield* step("resolve-window", () => config.get(WINDOW_KEY))) ?? "",
-          10,
-        ) || WINDOW_HOURS_DEFAULT;
-      const baseBranch =
-        (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
+        Number.parseInt((yield* step("resolve-window", () => config.get(WINDOW_KEY))) ?? "", 10) ||
+        WINDOW_HOURS_DEFAULT;
+      const baseBranch = (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
       const reportRepo =
-        (yield* step("resolve-report-repo", () => config.get(REPORT_REPO_KEY))) ??
-        repos[0];
+        (yield* step("resolve-report-repo", () => config.get(REPORT_REPO_KEY))) ?? repos[0];
       if (reportRepo === undefined) {
         // CF projects configured but no repo to open the triage PR on.
         yield* step("log-no-report-repo", () =>
@@ -225,10 +219,7 @@ export const ciTriagePr = defineRun({
       // open the triage PR.
       if (actionFailures.length === 0 && deployFailures.length === 0 && signals.length === 0) {
         yield* step("log-green", () =>
-          io.log(
-            "info",
-            "ci-triage-pr: no CI failures or signals in window — nothing to triage",
-          ),
+          io.log("info", "ci-triage-pr: no CI failures or signals in window — nothing to triage"),
         );
         return empty;
       }

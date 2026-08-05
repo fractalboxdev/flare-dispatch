@@ -169,16 +169,12 @@ const KEBAB_CASE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** A pragmatic semver match — `major.minor.patch` with optional pre-release. */
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?$/;
 
-export const defineRun = <I, O, IEnc, OEnc>(
-  spec: RunSpec<I, O, IEnc, OEnc>,
-): Run<I, O> => {
+export const defineRun = <I, O, IEnc, OEnc>(spec: RunSpec<I, O, IEnc, OEnc>): Run<I, O> => {
   // Load-time validation: a malformed run spec is a build-time bug, not a
   // dispatch-time surprise — fail fast at module load. (specs/03-dsl.md
   // § defineRun: "validates the spec at module load".)
   if (!KEBAB_CASE.test(spec.name)) {
-    throw new Error(
-      `defineRun: \`name\` must be kebab-case, got ${JSON.stringify(spec.name)}`,
-    );
+    throw new Error(`defineRun: \`name\` must be kebab-case, got ${JSON.stringify(spec.name)}`);
   }
   if (!SEMVER.test(spec.version)) {
     throw new Error(
@@ -187,35 +183,27 @@ export const defineRun = <I, O, IEnc, OEnc>(
       )} for run "${spec.name}"`,
     );
   }
-  if (
-    !Number.isFinite(spec.limits.maxDurationSec) ||
-    spec.limits.maxDurationSec <= 0
-  ) {
+  if (!Number.isFinite(spec.limits.maxDurationSec) || spec.limits.maxDurationSec <= 0) {
     throw new Error(
       `defineRun: \`limits.maxDurationSec\` must be a positive number, got ${spec.limits.maxDurationSec} for run "${spec.name}"`,
     );
   }
   if (
     spec.cooldown !== undefined &&
-    (!Number.isFinite(spec.cooldown.secondsDefault) ||
-      spec.cooldown.secondsDefault <= 0)
+    (!Number.isFinite(spec.cooldown.secondsDefault) || spec.cooldown.secondsDefault <= 0)
   ) {
     throw new Error(
       `defineRun: \`cooldown.secondsDefault\` must be a positive number, got ${spec.cooldown.secondsDefault} for run "${spec.name}"`,
     );
   }
-  if (
-    spec.cooldown?.secondsKey !== undefined &&
-    spec.cooldown.secondsKey.trim().length === 0
-  ) {
+  if (spec.cooldown?.secondsKey !== undefined && spec.cooldown.secondsKey.trim().length === 0) {
     throw new Error(
       `defineRun: \`cooldown.secondsKey\` must be a non-empty string for run "${spec.name}"`,
     );
   }
   if (spec.writeback !== undefined) {
     const wb = spec.writeback;
-    const branchName =
-      typeof wb.branch === "string" ? wb.branch : wb.branch.prefix;
+    const branchName = typeof wb.branch === "string" ? wb.branch : wb.branch.prefix;
     if (branchName.trim().length === 0) {
       throw new Error(
         `defineRun: \`writeback.branch\` must be a non-empty branch name (or { prefix }) for run "${spec.name}"`,

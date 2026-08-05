@@ -64,13 +64,8 @@ export const ChildRunsDeferred: Layer.Layer<ChildRuns> = Layer.succeed(
   ChildRuns,
   ((): ChildRunsService => ({
     spawn: ({ run }) =>
-      Effect.die(
-        `spawnChildRun: no RUNS_WORKFLOW binding on this runtime (run="${run}")`,
-      ),
-    poll: () =>
-      Effect.die(
-        "waitForChildren: no RUNS_WORKFLOW binding on this runtime",
-      ),
+      Effect.die(`spawnChildRun: no RUNS_WORKFLOW binding on this runtime (run="${run}")`),
+    poll: () => Effect.die("waitForChildren: no RUNS_WORKFLOW binding on this runtime"),
   }))(),
 );
 
@@ -83,8 +78,7 @@ export const ConfigDeferred: Layer.Layer<Config> = Layer.succeed(
   Config,
   ((): ConfigService => ({
     get: () => Effect.die("config.get: no CONFIG_KV binding on this deploy"),
-    getJSON: () =>
-      Effect.die("config.getJSON: no CONFIG_KV binding on this deploy"),
+    getJSON: () => Effect.die("config.getJSON: no CONFIG_KV binding on this deploy"),
   }))(),
 );
 
@@ -100,20 +94,16 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
   Github,
   ((): GithubService => ({
     repositories: () =>
-      Effect.die(
-        "github.repositories: not implemented in this deploy — V3 capability",
-      ),
+      Effect.die("github.repositories: not implemented in this deploy — V3 capability"),
     openPullRequests: () =>
-      Effect.die(
-        "github.openPullRequests: not implemented in this deploy — V3 capability",
-      ),
+      Effect.die("github.openPullRequests: not implemented in this deploy — V3 capability"),
     // `actionRuns` (a read) degrades to empty on an uncredentialed deploy — a
     // Schedule-mode sweep simply finds nothing rather than dying. The live
     // credentialed path is `makeGithubLive` (github-live.ts).
     actionRuns: () =>
-      Effect.logInfo(
-        "github.actionRuns skipped (no GitHub App credentials) — empty",
-      ).pipe(Effect.as([])),
+      Effect.logInfo("github.actionRuns skipped (no GitHub App credentials) — empty").pipe(
+        Effect.as([]),
+      ),
     // `pullReview` is *reporting*, not correctness — a deploy without GitHub
     // App credentials degrades to a logged no-op (the same posture as the no-op
     // `Checks` Layer), never failing an otherwise-green run. The live
@@ -147,13 +137,13 @@ export const CloudflareDeferred: Layer.Layer<Cloudflare> = Layer.succeed(
   Cloudflare,
   ((): CloudflareService => ({
     deployments: () =>
-      Effect.logInfo(
-        "cloudflare.deployments skipped (no CLOUDFLARE_API_TOKEN) — empty",
-      ).pipe(Effect.as([])),
+      Effect.logInfo("cloudflare.deployments skipped (no CLOUDFLARE_API_TOKEN) — empty").pipe(
+        Effect.as([]),
+      ),
     usage: ({ windowHours } = {}) =>
-      Effect.logInfo(
-        "cloudflare.usage skipped (no CLOUDFLARE_API_TOKEN) — empty snapshot",
-      ).pipe(Effect.as({ windowHours: windowHours ?? 168, workers: [], ai: [] })),
+      Effect.logInfo("cloudflare.usage skipped (no CLOUDFLARE_API_TOKEN) — empty snapshot").pipe(
+        Effect.as({ windowHours: windowHours ?? 168, workers: [], ai: [] }),
+      ),
   }))(),
 );
 
@@ -201,4 +191,3 @@ export const OidcDeferred: Layer.Layer<Oidc> = Layer.succeed(
     issuer: () => Effect.succeed("https://oidc-not-configured.local"),
   }))(),
 );
-

@@ -29,11 +29,10 @@ const wellKnownRequest = (path: string): Request =>
   new Request(`https://dispatcher.example/.well-known/${path}`);
 
 const freshJwk = async (): Promise<string> => {
-  const pair = (await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
+  const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
   const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
   (jwk as JsonWebKey & { kid?: string }).kid = "test-kid-1";
   return JSON.stringify(jwk);
@@ -42,10 +41,7 @@ const freshJwk = async (): Promise<string> => {
 describe("GET /.well-known/openid-configuration", () => {
   it("with OIDC_ISSUER_URL set → 200 + discovery doc", async () => {
     const env = minimalEnv({ OIDC_ISSUER_URL: ISSUER });
-    const res = await handleRequest(
-      wellKnownRequest("openid-configuration"),
-      env,
-    );
+    const res = await handleRequest(wellKnownRequest("openid-configuration"), env);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.issuer).toBe(ISSUER);
@@ -55,10 +51,7 @@ describe("GET /.well-known/openid-configuration", () => {
 
   it("strips trailing slashes from the configured issuer", async () => {
     const env = minimalEnv({ OIDC_ISSUER_URL: `${ISSUER}//` });
-    const res = await handleRequest(
-      wellKnownRequest("openid-configuration"),
-      env,
-    );
+    const res = await handleRequest(wellKnownRequest("openid-configuration"), env);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { issuer: string; jwks_uri: string };
     expect(body.issuer).toBe(ISSUER);
@@ -67,10 +60,7 @@ describe("GET /.well-known/openid-configuration", () => {
 
   it("without OIDC_ISSUER_URL → 503 oidc_not_configured", async () => {
     const env = minimalEnv();
-    const res = await handleRequest(
-      wellKnownRequest("openid-configuration"),
-      env,
-    );
+    const res = await handleRequest(wellKnownRequest("openid-configuration"), env);
     expect(res.status).toBe(503);
   });
 });

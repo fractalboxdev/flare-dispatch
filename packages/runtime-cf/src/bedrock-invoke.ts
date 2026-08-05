@@ -9,10 +9,7 @@
 // Spec: specs/05-byoc.md § AWS federation; CF docs:
 // https://developers.cloudflare.com/ai-gateway/usage/providers/bedrock/
 
-import {
-  type AwsCreds,
-  invokeBedrockSigned,
-} from "@fractalboxdev/flare-dispatch-bedrock-sigv4";
+import { type AwsCreds, invokeBedrockSigned } from "@fractalboxdev/flare-dispatch-bedrock-sigv4";
 
 export type { AwsCreds };
 
@@ -78,12 +75,8 @@ export const invokeBedrockViaAiGateway = async (
 
   const result: BedrockInvokeResult = {
     response,
-    ...(json.usage?.input_tokens !== undefined
-      ? { inputTokens: json.usage.input_tokens }
-      : {}),
-    ...(json.usage?.output_tokens !== undefined
-      ? { outputTokens: json.usage.output_tokens }
-      : {}),
+    ...(json.usage?.input_tokens !== undefined ? { inputTokens: json.usage.input_tokens } : {}),
+    ...(json.usage?.output_tokens !== undefined ? { outputTokens: json.usage.output_tokens } : {}),
   };
   return result;
 };

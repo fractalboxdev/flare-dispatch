@@ -45,8 +45,7 @@ import { type ScheduleMatch, schedulesByCron } from "../registry";
 import type { Env } from "../env";
 
 /** Trim a long cron to fit inline in a log message. */
-const fmt = (cron: string): string =>
-  cron.length > 40 ? `${cron.slice(0, 37)}...` : cron;
+const fmt = (cron: string): string => (cron.length > 40 ? `${cron.slice(0, 37)}...` : cron);
 
 /**
  * The scheduled-handler entry point — fan one cron tick out across every
@@ -69,17 +68,13 @@ export const handleScheduled = async (
     // `wrangler.jsonc` declared a cron the registry does not bind any run to.
     // Most likely a left-over expression after a run was retired, or a typo
     // between the wrangler entry and the run's `schedules[].cron`.
-    console.warn(
-      `[scheduled] cron tick "${fmt(cron)}" matched no registered runs`,
-    );
+    console.warn(`[scheduled] cron tick "${fmt(cron)}" matched no registered runs`);
     return;
   }
 
   const ctx = { cron, firedAt: scheduledTime };
 
-  await Promise.all(
-    matches.map(async (match) => fireOne(env, match, ctx)),
-  );
+  await Promise.all(matches.map(async (match) => fireOne(env, match, ctx)));
 };
 
 /** Fire a single (run, schedule-spec) match, swallowing individual failures. */
@@ -92,9 +87,7 @@ const fireOne = async (
 
   // Optional caller-side gate — freeze windows, holiday skips, etc.
   if (schedule.gate && !schedule.gate(ctx)) {
-    console.info(
-      `[scheduled] gate skipped run="${run.name}" cron="${fmt(ctx.cron)}"`,
-    );
+    console.info(`[scheduled] gate skipped run="${run.name}" cron="${fmt(ctx.cron)}"`);
     return;
   }
 
@@ -119,22 +112,16 @@ const fireOne = async (
 
   try {
     await env.RUNS_WORKFLOW.create({ id, params });
-    console.info(
-      `[scheduled] fired run="${run.name}" id="${id}" cron="${fmt(ctx.cron)}"`,
-    );
+    console.info(`[scheduled] fired run="${run.name}" id="${id}" cron="${fmt(ctx.cron)}"`);
   } catch (cause) {
     // CF Workflows throws on a duplicate `create({ id })` — that is the dedup
     // path. Treat it as success and move on.
     const message = cause instanceof Error ? cause.message : String(cause);
     if (/already exists|duplicate/i.test(message)) {
-      console.info(
-        `[scheduled] dedup run="${run.name}" id="${id}" cron="${fmt(ctx.cron)}"`,
-      );
+      console.info(`[scheduled] dedup run="${run.name}" id="${id}" cron="${fmt(ctx.cron)}"`);
       return;
     }
-    console.error(
-      `[scheduled] create failed run="${run.name}" id="${id}": ${message}`,
-    );
+    console.error(`[scheduled] create failed run="${run.name}" id="${id}": ${message}`);
   }
 };
 
@@ -156,9 +143,9 @@ const scheduleGithubTarget = (
   const obj = (inputs ?? {}) as Record<string, unknown>;
   const repo = typeof obj.repo === "string" ? obj.repo : "schedule/unknown";
   const ref = typeof obj.ref === "string" ? obj.ref : "refs/heads/main";
-  const sha = typeof obj.sha === "string" ? obj.sha : (typeof obj.ref === "string" ? obj.ref : "main");
-  const installation_id =
-    typeof obj.installation_id === "number" ? obj.installation_id : undefined;
+  const sha =
+    typeof obj.sha === "string" ? obj.sha : typeof obj.ref === "string" ? obj.ref : "main";
+  const installation_id = typeof obj.installation_id === "number" ? obj.installation_id : undefined;
 
   // Warn when the run's `schedules[].inputs()` returned a shape without
   // the fields the `executions` row expects — a Schema mismatch between
@@ -176,7 +163,5 @@ const scheduleGithubTarget = (
     );
   }
 
-  return installation_id !== undefined
-    ? { repo, ref, sha, installation_id }
-    : { repo, ref, sha };
+  return installation_id !== undefined ? { repo, ref, sha, installation_id } : { repo, ref, sha };
 };

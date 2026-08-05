@@ -36,10 +36,7 @@ const toolsResult = (name: string, args: unknown): ModelCompletionResult => ({
 });
 
 /** A tools-mode result whose `arguments` is a JSON STRING (the OpenAI shape). */
-const toolsResultString = (
-  name: string,
-  args: unknown,
-): ModelCompletionResult => ({
+const toolsResultString = (name: string, args: unknown): ModelCompletionResult => ({
   toolCalls: [{ name, arguments: JSON.stringify(args) }],
   text: "",
 });
@@ -69,9 +66,7 @@ const conn = { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" } as const;
 
 describe("composeSystemPrompt (pure — prompt layering)", () => {
   it("returns the trimmed base alone when no guidelines/focus", () => {
-    expect(composeSystemPrompt({ base: "  base instruction  " })).toBe(
-      "base instruction",
-    );
+    expect(composeSystemPrompt({ base: "  base instruction  " })).toBe("base instruction");
   });
 
   it("appends guidelines as an authoritative block, layered on the base", () => {
@@ -83,9 +78,7 @@ describe("composeSystemPrompt (pure — prompt layering)", () => {
     expect(out.startsWith(REVIEW_SYSTEM_PROMPT_DEFAULT)).toBe(true);
     // ...and the guidelines are appended under an authoritative label.
     expect(out).toContain("authoritative house rules");
-    expect(out).toContain(
-      "Do not flag style nits already enforced by the linter.",
-    );
+    expect(out).toContain("Do not flag style nits already enforced by the linter.");
   });
 
   it("orders base → guidelines → focus", () => {
@@ -100,9 +93,7 @@ describe("composeSystemPrompt (pure — prompt layering)", () => {
   });
 
   it("drops whitespace-only layers", () => {
-    expect(
-      composeSystemPrompt({ base: "BASE", guidelines: "   ", focus: "" }),
-    ).toBe("BASE");
+    expect(composeSystemPrompt({ base: "BASE", guidelines: "   ", focus: "" })).toBe("BASE");
   });
 });
 
@@ -176,9 +167,7 @@ describe("reviewDomain", () => {
   };
 
   it("tools mode — returns findings from the `report` tool call (object args)", async () => {
-    const { layer } = withGateway([
-      toolsResult("report", { findings: [finding] }),
-    ]);
+    const { layer } = withGateway([toolsResult("report", { findings: [finding] })]);
     const result = await Effect.runPromise(
       reviewDomain({
         ...conn,
@@ -193,9 +182,7 @@ describe("reviewDomain", () => {
   });
 
   it("tools mode — also accepts a JSON-STRING `arguments` (OpenAI shape)", async () => {
-    const { layer } = withGateway([
-      toolsResultString("report", { findings: [finding] }),
-    ]);
+    const { layer } = withGateway([toolsResultString("report", { findings: [finding] })]);
     const result = await Effect.runPromise(
       reviewDomain({
         ...conn,
@@ -213,9 +200,7 @@ describe("reviewDomain", () => {
     // Workers AI tool-calling sometimes double-encodes the nested array: the
     // tool `arguments` object carries `findings` as a JSON string ("[{…}]")
     // rather than an array. The engine parses it before Schema-decode.
-    const { layer } = withGateway([
-      toolsResult("report", { findings: JSON.stringify([finding]) }),
-    ]);
+    const { layer } = withGateway([toolsResult("report", { findings: JSON.stringify([finding]) })]);
     const result = await Effect.runPromise(
       reviewDomain({
         ...conn,
@@ -418,9 +403,7 @@ describe("reviewDomain", () => {
     // Exactly two calls: the first (no JSON) + one repair retry.
     expect(fake.state.requests).toHaveLength(2);
     // The repair call carries the blunt "ONLY the JSON object" correction.
-    expect(fake.state.requests[1]!.user).toContain(
-      "did not contain a valid JSON object",
-    );
+    expect(fake.state.requests[1]!.user).toContain("did not contain a valid JSON object");
   });
 
   it("json mode — gives up after a SINGLE repair retry (no loop)", async () => {
@@ -670,9 +653,7 @@ describe("completeStructured (the reusable structured-output engine)", () => {
       responses: [emptyToolsResult(), textResult(JSON.stringify(value))],
     });
     const out = await Effect.runPromise(
-      completeStructured({ ...input, mode: "tools" }).pipe(
-        Effect.provide(fake.layer),
-      ),
+      completeStructured({ ...input, mode: "tools" }).pipe(Effect.provide(fake.layer)),
     );
     expect(out).toEqual(value);
     expect(fake.state.requests).toHaveLength(2);
@@ -747,10 +728,34 @@ describe("coordinate / coordinateReview (pure — no model call)", () => {
     // boundaries off by a line. Exact-identity dedup kept all four.
     const r = coordinateReview({
       findings: [
-        mk({ path: "wrangler.toml", startLine: 365, endLine: 376, title: "shares the staging pool", level: "warning" }),
-        mk({ path: "wrangler.toml", startLine: 364, endLine: 376, title: "undocumented rate limit", level: "warning" }),
-        mk({ path: "wrangler.toml", startLine: 364, endLine: 376, title: "config drift", level: "warning" }),
-        mk({ path: "wrangler.toml", startLine: 365, endLine: 376, title: "no rate-limit docs", level: "warning" }),
+        mk({
+          path: "wrangler.toml",
+          startLine: 365,
+          endLine: 376,
+          title: "shares the staging pool",
+          level: "warning",
+        }),
+        mk({
+          path: "wrangler.toml",
+          startLine: 364,
+          endLine: 376,
+          title: "undocumented rate limit",
+          level: "warning",
+        }),
+        mk({
+          path: "wrangler.toml",
+          startLine: 364,
+          endLine: 376,
+          title: "config drift",
+          level: "warning",
+        }),
+        mk({
+          path: "wrangler.toml",
+          startLine: 365,
+          endLine: 376,
+          title: "no rate-limit docs",
+          level: "warning",
+        }),
       ],
     });
     expect(r.findings).toHaveLength(1);
@@ -763,8 +768,20 @@ describe("coordinate / coordinateReview (pure — no model call)", () => {
     // inside it — the loss direction has to favour severity.
     const r = coordinateReview({
       findings: [
-        mk({ path: "a.ts", startLine: 36, endLine: 100, title: "broad observation", level: "notice" }),
-        mk({ path: "a.ts", startLine: 44, endLine: 44, title: "tenant filter missing", level: "failure" }),
+        mk({
+          path: "a.ts",
+          startLine: 36,
+          endLine: 100,
+          title: "broad observation",
+          level: "notice",
+        }),
+        mk({
+          path: "a.ts",
+          startLine: 44,
+          endLine: 44,
+          title: "tenant filter missing",
+          level: "failure",
+        }),
       ],
     });
     expect(r.findings).toHaveLength(1);
@@ -812,9 +829,7 @@ describe("coordinate / coordinateReview (pure — no model call)", () => {
   });
 
   it("coordinate is the Effect wrapper of coordinateReview and never fails", async () => {
-    const findings = [
-      mk({ path: "a.ts", startLine: 1, title: "boom", level: "failure" }),
-    ];
+    const findings = [mk({ path: "a.ts", startLine: 1, title: "boom", level: "failure" })];
     const r = await Effect.runPromise(coordinate({ findings }));
     expect(r).toEqual(coordinateReview({ findings }));
     expect(r.verdict).toBe("request-changes");

@@ -11,15 +11,10 @@ export const artifactKey = (execution: string, name: string): string =>
   `artifacts/${execution}/${name}`;
 
 /** R2 key for a per-execution exec log — matches `SandboxCloudflareLive`. */
-export const logKey = (execution: string, file: string): string =>
-  `logs/${execution}/${file}`;
+export const logKey = (execution: string, file: string): string => `logs/${execution}/${file}`;
 
 /** A JSON `{ error, message }` response. */
-export const jsonError = (
-  error: string,
-  message: string,
-  status: number,
-): Response =>
+export const jsonError = (error: string, message: string, status: number): Response =>
   new Response(JSON.stringify({ error, message }), {
     status,
     headers: { "content-type": "application/json" },
@@ -52,9 +47,7 @@ export const streamObject = async (
   object.writeHttpMetadata(headers);
   headers.set(
     "content-type",
-    opts.contentType ??
-      object.httpMetadata?.contentType ??
-      "application/octet-stream",
+    opts.contentType ?? object.httpMetadata?.contentType ?? "application/octet-stream",
   );
   headers.set("etag", object.httpEtag);
   if (opts.cacheControl !== undefined) {

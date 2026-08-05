@@ -99,14 +99,11 @@ const TERMINAL: ReadonlySet<ChildRunStatus> = new Set([
 ]);
 
 /** True once a child has settled (success / failure / skipped / cancelled). */
-export const isTerminalChildStatus = (status: ChildRunStatus): boolean =>
-  TERMINAL.has(status);
+export const isTerminalChildStatus = (status: ChildRunStatus): boolean => TERMINAL.has(status);
 
 /** The service contract a runtime Layer implements. */
 export interface ChildRunsService {
-  readonly spawn: (
-    opts: SpawnChildRunOpts,
-  ) => Effect.Effect<ChildRunHandle, ChildSpawnFailed>;
+  readonly spawn: (opts: SpawnChildRunOpts) => Effect.Effect<ChildRunHandle, ChildSpawnFailed>;
   /**
    * Read the current status of each child execution id. Returns one record per
    * requested id, in the input order; an id with no `executions` row yet is
@@ -114,9 +111,7 @@ export interface ChildRunsService {
    * non-terminal status (the `waitForChildren` timeout is the real backstop)
    * rather than failing the poll.
    */
-  readonly poll: (opts: {
-    ids: readonly string[];
-  }) => Effect.Effect<readonly ChildStatusRecord[]>;
+  readonly poll: (opts: { ids: readonly string[] }) => Effect.Effect<readonly ChildStatusRecord[]>;
 }
 
 /** Context.Tag — the child-Workflow dependency a fan-out run carries. */

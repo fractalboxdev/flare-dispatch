@@ -29,13 +29,7 @@ const PUBLIC_APP = {
     metadata: "read",
     pull_requests: "write",
   },
-  events: [
-    "check_run",
-    "check_suite",
-    "deployment_status",
-    "pull_request",
-    "pull_request_review",
-  ],
+  events: ["check_run", "check_suite", "deployment_status", "pull_request", "pull_request_review"],
 };
 
 let requestedSlugs: string[] = [];
@@ -68,12 +62,9 @@ describe("fetchPublicAppRegistration", () => {
   });
 
   it("builds the personal-App settings URL for a user-owned App", () => {
-    expect(
-      appSettingsUrl(
-        { ownerLogin: "octocat", ownerType: "User" },
-        "my-app",
-      ),
-    ).toBe("https://github.com/settings/apps/my-app");
+    expect(appSettingsUrl({ ownerLogin: "octocat", ownerType: "User" }, "my-app")).toBe(
+      "https://github.com/settings/apps/my-app",
+    );
   });
 
   it("surfaces a non-2xx (unknown slug) as a GithubApiError", async () => {
@@ -82,9 +73,7 @@ describe("fetchPublicAppRegistration", () => {
         HttpResponse.json({ message: "Not Found" }, { status: 404 }),
       ),
     );
-    await expect(fetchPublicAppRegistration("nope")).rejects.toBeInstanceOf(
-      GithubApiError,
-    );
+    await expect(fetchPublicAppRegistration("nope")).rejects.toBeInstanceOf(GithubApiError);
   });
 });
 
@@ -97,12 +86,7 @@ describe("diffRegistration", () => {
       metadata: "read",
       pull_requests: "write",
     },
-    default_events: [
-      "check_run",
-      "check_suite",
-      "deployment_status",
-      "pull_request",
-    ],
+    default_events: ["check_run", "check_suite", "deployment_status", "pull_request"],
   };
 
   const live: AppRegistration = {

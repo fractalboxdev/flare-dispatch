@@ -81,8 +81,7 @@ const githubRetry = Schedule.exponential("250 millis").pipe(
   Schedule.jittered,
   Schedule.intersect(Schedule.recurs(4)),
   Schedule.whileInput(
-    (e: GitHubApiError) =>
-      e.reason === "transient" || e.reason === "rate-limited",
+    (e: GitHubApiError) => e.reason === "transient" || e.reason === "rate-limited",
   ),
 );
 
@@ -93,14 +92,10 @@ const githubRetry = Schedule.exponential("250 millis").pipe(
  * instead of each site re-deriving `catch: toGitHubApiError`.
  */
 const ghCall = <A>(thunk: () => Promise<A>): Effect.Effect<A, GitHubApiError> =>
-  Effect.tryPromise({ try: thunk, catch: toGitHubApiError }).pipe(
-    Effect.retry(githubRetry),
-  );
+  Effect.tryPromise({ try: thunk, catch: toGitHubApiError }).pipe(Effect.retry(githubRetry));
 
 const logSkip = (repo: string, pr: number, why: string): Effect.Effect<void> =>
-  Effect.logInfo(
-    `github.pullReview skipped (${why}) — PR comment on ${repo}#${pr} not posted`,
-  );
+  Effect.logInfo(`github.pullReview skipped (${why}) — PR comment on ${repo}#${pr} not posted`);
 
 /**
  * Build the live `Github` Layer. When `config` is `undefined` (no App secrets)
@@ -108,9 +103,7 @@ const logSkip = (repo: string, pr: number, why: string): Effect.Effect<void> =>
  * dies (V3 work). With credentials, `pullReview` mints an installation token
  * from each request's `installationId` and posts the review.
  */
-export const makeGithubLive = (
-  config: GithubLiveConfig | undefined,
-): Layer.Layer<Github> => {
+export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Layer<Github> => {
   /**
    * Mint a fresh installation token for a repo. Prefers an explicit
    * `installationId`, else resolves the repo's installation from the App JWT
@@ -144,20 +137,14 @@ export const makeGithubLive = (
 
   const service: GithubService = {
     repositories: () =>
-      Effect.die(
-        "github.repositories: not implemented in this deploy — V3 capability",
-      ),
+      Effect.die("github.repositories: not implemented in this deploy — V3 capability"),
     openPullRequests: () =>
-      Effect.die(
-        "github.openPullRequests: not implemented in this deploy — V3 capability",
-      ),
+      Effect.die("github.openPullRequests: not implemented in this deploy — V3 capability"),
 
     actionRuns: ({ repos, createdWithinHours, status, conclusion } = {}) =>
       Effect.gen(function* () {
         if (config === undefined) {
-          yield* Effect.logInfo(
-            "github.actionRuns skipped (no GitHub App credentials) — empty",
-          );
+          yield* Effect.logInfo("github.actionRuns skipped (no GitHub App credentials) — empty");
           return [];
         }
         if (repos === undefined || repos.length === 0) {
@@ -191,19 +178,17 @@ export const makeGithubLive = (
                     (conclusion === undefined || r.conclusion === conclusion) &&
                     (cutoff === undefined || r.createdAt >= cutoff),
                 )
-                .map(
-                  (r): WorkflowRunRef => ({
-                    repo,
-                    id: r.id,
-                    name: r.name,
-                    headBranch: r.headBranch,
-                    headSha: r.headSha,
-                    status: r.status,
-                    conclusion: r.conclusion,
-                    url: r.url,
-                    createdAt: r.createdAt,
-                  }),
-                );
+                .map((r): WorkflowRunRef => ({
+                  repo,
+                  id: r.id,
+                  name: r.name,
+                  headBranch: r.headBranch,
+                  headSha: r.headSha,
+                  status: r.status,
+                  conclusion: r.conclusion,
+                  url: r.url,
+                  createdAt: r.createdAt,
+                }));
             }),
           { concurrency: 4 },
         );
@@ -222,9 +207,7 @@ export const makeGithubLive = (
         // `installation.id`, still posts.
         const token = yield* mintToken(config, repo, installationId);
 
-        yield* ghCall(() =>
-          createPullReview({ token, repo, pr, sha, body, event: "COMMENT" }),
-        );
+        yield* ghCall(() => createPullReview({ token, repo, pr, sha, body, event: "COMMENT" }));
       }),
 
     openDraftPullRequest: (req): Effect.Effect<DraftPullRequestResult, GitHubApiError> =>
@@ -243,9 +226,7 @@ export const makeGithubLive = (
           openDraftPullRequest({
             token,
             repo: req.repo,
-            ...(req.baseBranch !== undefined
-              ? { baseBranch: req.baseBranch }
-              : {}),
+            ...(req.baseBranch !== undefined ? { baseBranch: req.baseBranch } : {}),
             headBranch: req.headBranch,
             title: req.title,
             body: req.body,
@@ -277,9 +258,7 @@ export const makeGithubLive = (
             ...(req.target !== undefined ? { target: req.target } : {}),
             ...(req.name !== undefined ? { name: req.name } : {}),
             body: req.body,
-            ...(req.prerelease !== undefined
-              ? { prerelease: req.prerelease }
-              : {}),
+            ...(req.prerelease !== undefined ? { prerelease: req.prerelease } : {}),
           }),
         );
         return {

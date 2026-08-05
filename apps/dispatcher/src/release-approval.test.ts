@@ -1,14 +1,9 @@
 // Unit tests for the release-PR approval resolver (pure).
 
 import { describe, expect, it } from "vitest";
-import {
-  APPROVE_LABEL,
-  REJECT_LABEL,
-  resolveReleaseApproval,
-} from "./release-approval";
+import { APPROVE_LABEL, REJECT_LABEL, resolveReleaseApproval } from "./release-approval";
 
-const MARKER =
-  "<!-- flare-dispatch:release-approval wf=release-notes-2026-W26 tag=v0.1.0 -->";
+const MARKER = "<!-- flare-dispatch:release-approval wf=release-notes-2026-W26 tag=v0.1.0 -->";
 
 /** A bot-authored release PR payload with the marker in the body. */
 const prPayload = (over: Record<string, unknown> = {}) => ({
@@ -87,10 +82,7 @@ describe("resolveReleaseApproval", () => {
   });
 
   it("falls back to 'unknown' decider when sender is absent", () => {
-    const r = resolveReleaseApproval(
-      "pull_request",
-      prPayload({ sender: undefined }),
-    );
+    const r = resolveReleaseApproval("pull_request", prPayload({ sender: undefined }));
     expect(r?.decider).toBe("unknown");
   });
 });

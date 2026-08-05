@@ -9,11 +9,7 @@
 // Spec: specs/pm/plan.md § 3 (fakes/), specs/03-dsl.md § Layers.
 
 import { Effect, Layer } from "effect";
-import {
-  Email,
-  type EmailSendRequest,
-  type EmailService,
-} from "../services/email";
+import { Email, type EmailSendRequest, type EmailService } from "../services/email";
 
 /** Inspectable record of every Email fake call. */
 export type EmailFakeState = {

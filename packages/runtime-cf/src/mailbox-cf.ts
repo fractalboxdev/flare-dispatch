@@ -82,9 +82,7 @@ export const makeMailboxCloudflareLive = (
         const expiresAtMs = nowMs + (opts?.ttlSec ?? ttlSec) * 1000;
         const expiresAtS = Math.floor(expiresAtMs / 1000);
         const localPart = mintLocalPart(crypto.randomUUID());
-        const token = yield* Effect.promise(() =>
-          config.signToken(localPart, expiresAtS),
-        );
+        const token = yield* Effect.promise(() => config.signToken(localPart, expiresAtS));
         // Durable `localPart → executionId` record the inbound handler resolves
         // against. A write failure is a real run failure (the inbox would never
         // route), so let it die — `provisionInbox`'s `step` reports it.

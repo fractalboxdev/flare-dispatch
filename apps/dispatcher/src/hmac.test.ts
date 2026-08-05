@@ -5,13 +5,7 @@
 // directly with no Workers pool.
 
 import { describe, expect, it } from "vitest";
-import {
-  constantTimeEqual,
-  fingerprint,
-  SIGNATURE_HEADER,
-  sign,
-  verify,
-} from "./hmac";
+import { constantTimeEqual, fingerprint, SIGNATURE_HEADER, sign, verify } from "./hmac";
 
 const SECRET = "test-hmac-secret-32-bytes-long!!";
 const encoder = new TextEncoder();
@@ -36,9 +30,7 @@ describe("hmac", () => {
 
   it("rejects when the body bytes differ by one octet", async () => {
     const header = await sign(SECRET, encoder.encode("payload-A"));
-    expect(await verify(SECRET, header, encoder.encode("payload-B"))).toBe(
-      false,
-    );
+    expect(await verify(SECRET, header, encoder.encode("payload-B"))).toBe(false);
   });
 
   it("rejects a missing/empty/malformed header", async () => {

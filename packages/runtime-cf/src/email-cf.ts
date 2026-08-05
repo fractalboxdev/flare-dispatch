@@ -84,9 +84,7 @@ export type EmailCloudflareConfig = {
 const makeNoopEmail = (reason: string): EmailService => ({
   send: ({ to }) =>
     Effect.as(
-      Effect.logInfo(
-        `email.send skipped (${reason}) — ${to.length} recipient(s) not notified`,
-      ),
+      Effect.logInfo(`email.send skipped (${reason}) — ${to.length} recipient(s) not notified`),
       { accepted: [], rejected: [], skipped: true },
     ),
 });
@@ -100,10 +98,7 @@ export const makeEmailCloudflareLive = (
   config: EmailCloudflareConfig | undefined,
 ): Layer.Layer<Email> => {
   if (config === undefined) {
-    return Layer.succeed(
-      Email,
-      makeNoopEmail("SEND_EMAIL binding / EMAIL_FROM not configured"),
-    );
+    return Layer.succeed(Email, makeNoopEmail("SEND_EMAIL binding / EMAIL_FROM not configured"));
   }
 
   const from =
@@ -116,8 +111,7 @@ export const makeEmailCloudflareLive = (
       Effect.gen(function* () {
         // Partition by the optional operator allowlist first.
         const allow = config.allowedRecipients;
-        const eligible =
-          allow === undefined ? to : to.filter((r) => allow.includes(r));
+        const eligible = allow === undefined ? to : to.filter((r) => allow.includes(r));
         const disallowed: EmailRejection[] =
           allow === undefined
             ? []
@@ -129,9 +123,7 @@ export const makeEmailCloudflareLive = (
                 }));
 
         if (eligible.length === 0) {
-          yield* Effect.logInfo(
-            "email.send — no eligible recipients after allowlist filter",
-          );
+          yield* Effect.logInfo("email.send — no eligible recipients after allowlist filter");
           return {
             accepted: [],
             rejected: disallowed,
@@ -155,10 +147,7 @@ export const makeEmailCloudflareLive = (
                 }),
               catch: (cause) => ({ address, cause }),
             }).pipe(
-              Effect.map(
-                (res) =>
-                  ({ ok: true, address, messageId: res.messageId }) as const,
-              ),
+              Effect.map((res) => ({ ok: true, address, messageId: res.messageId }) as const),
               Effect.catchAll((err) =>
                 Effect.as(
                   Effect.logWarning(
@@ -167,10 +156,7 @@ export const makeEmailCloudflareLive = (
                   {
                     ok: false,
                     address: err.address,
-                    reason:
-                      err.cause instanceof Error
-                        ? err.cause.message
-                        : String(err.cause),
+                    reason: err.cause instanceof Error ? err.cause.message : String(err.cause),
                   } as const,
                 ),
               ),
@@ -178,9 +164,7 @@ export const makeEmailCloudflareLive = (
           { concurrency: "unbounded" },
         );
 
-        const accepted = outcomes
-          .filter((o) => o.ok)
-          .map((o) => o.address);
+        const accepted = outcomes.filter((o) => o.ok).map((o) => o.address);
         const rejected: EmailRejection[] = [
           ...disallowed,
           ...outcomes

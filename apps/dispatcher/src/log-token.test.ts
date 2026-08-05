@@ -67,13 +67,11 @@ describe("log-token", () => {
   });
 
   it("resolves key material: LOG_LINK_SECRET, then HMAC_SECRET, else undefined", () => {
-    expect(
-      resolveLogLinkSecret({ LOG_LINK_SECRET: "dedicated", HMAC_SECRET: "h" } as Env),
-    ).toBe("dedicated");
-    expect(resolveLogLinkSecret({ HMAC_SECRET: "h" } as Env)).toBe("h");
-    expect(resolveLogLinkSecret({ HMAC_SECRET: "" } as unknown as Env)).toBe(
-      undefined,
+    expect(resolveLogLinkSecret({ LOG_LINK_SECRET: "dedicated", HMAC_SECRET: "h" } as Env)).toBe(
+      "dedicated",
     );
+    expect(resolveLogLinkSecret({ HMAC_SECRET: "h" } as Env)).toBe("h");
+    expect(resolveLogLinkSecret({ HMAC_SECRET: "" } as unknown as Env)).toBe(undefined);
   });
 
   it("builds tokened viewer URLs, encoding the id and fragment", () => {

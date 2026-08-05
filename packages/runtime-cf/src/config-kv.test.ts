@@ -25,9 +25,7 @@ describe("ConfigKvLive", () => {
 
   /** Run an effect against a live `Config` Layer over the Miniflare KV. */
   const run = <A>(effect: Effect.Effect<A, never, Config>): Promise<A> =>
-    Effect.runPromise(
-      effect.pipe(Effect.provide(makeConfigKvLive(bindings.kv))),
-    );
+    Effect.runPromise(effect.pipe(Effect.provide(makeConfigKvLive(bindings.kv))));
 
   it("get returns the stored string value", async () => {
     await bindings.kv.put("model", "claude-opus-4-7");
@@ -42,32 +40,24 @@ describe("ConfigKvLive", () => {
 
   it("getJSON decodes a stored value against the schema", async () => {
     await bindings.kv.put("flags", JSON.stringify({ beta: true }));
-    const value = await run(
-      Effect.flatMap(Config, (c) => c.getJSON("flags", Flags)),
-    );
+    const value = await run(Effect.flatMap(Config, (c) => c.getJSON("flags", Flags)));
     expect(Option.getOrNull(value)).toEqual({ beta: true });
   });
 
   it("getJSON is none for an unset key", async () => {
-    const value = await run(
-      Effect.flatMap(Config, (c) => c.getJSON("absent", Flags)),
-    );
+    const value = await run(Effect.flatMap(Config, (c) => c.getJSON("absent", Flags)));
     expect(Option.isNone(value)).toBe(true);
   });
 
   it("getJSON is none for malformed JSON", async () => {
     await bindings.kv.put("flags", "{not json");
-    const value = await run(
-      Effect.flatMap(Config, (c) => c.getJSON("flags", Flags)),
-    );
+    const value = await run(Effect.flatMap(Config, (c) => c.getJSON("flags", Flags)));
     expect(Option.isNone(value)).toBe(true);
   });
 
   it("getJSON is none when the value fails schema validation", async () => {
     await bindings.kv.put("flags", JSON.stringify({ beta: "yes" }));
-    const value = await run(
-      Effect.flatMap(Config, (c) => c.getJSON("flags", Flags)),
-    );
+    const value = await run(Effect.flatMap(Config, (c) => c.getJSON("flags", Flags)));
     expect(Option.isNone(value)).toBe(true);
   });
 
@@ -101,9 +91,7 @@ describe("ConfigKvLive", () => {
       overrides: Record<string, string>,
       effect: Effect.Effect<A, never, Config>,
     ): Promise<A> =>
-      Effect.runPromise(
-        effect.pipe(Effect.provide(makeConfigKvLive(bindings.kv, overrides))),
-      );
+      Effect.runPromise(effect.pipe(Effect.provide(makeConfigKvLive(bindings.kv, overrides))));
 
     it("an override value wins over KV (KV not consulted)", async () => {
       await bindings.kv.put("self-heal.agent-token", "kv-stale-token");

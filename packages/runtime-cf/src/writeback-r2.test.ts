@@ -12,15 +12,7 @@
 
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   WRITEBACK_ARTIFACT,
   WRITEBACK_FILES_DIR,
@@ -117,10 +109,7 @@ const seed = async (
   blobs: Record<string, string>,
 ) => {
   const prefix = `artifacts/${EXEC}/${WRITEBACK_ARTIFACT}/`;
-  await bucket.put(
-    `${prefix}${WRITEBACK_MANIFEST_FILE}`,
-    JSON.stringify(manifest),
-  );
+  await bucket.put(`${prefix}${WRITEBACK_MANIFEST_FILE}`, JSON.stringify(manifest));
   for (const [path, content] of Object.entries(blobs)) {
     await bucket.put(`${prefix}${WRITEBACK_FILES_DIR}/${path}`, content);
   }
@@ -181,11 +170,7 @@ describe("runWriteback", () => {
   });
 
   it("rejects a traversal manifest BEFORE any GitHub call", async () => {
-    await seed(
-      bindings.bucket,
-      { entries: [{ path: "../escape" }] },
-      { "../escape": "x" },
-    );
+    await seed(bindings.bucket, { entries: [{ path: "../escape" }] }, { "../escape": "x" });
     const outcome = await runWriteback(baseOpts(bindings.bucket));
     expect(outcome.kind).toBe("rejected");
     expect(calls).toHaveLength(0);
@@ -219,9 +204,7 @@ describe("runWriteback", () => {
       { entries: [{ path: "big.json" }] },
       { "big.json": "x".repeat(100) },
     );
-    const outcome = await runWriteback(
-      baseOpts(bindings.bucket, { maxBytes: 10 }),
-    );
+    const outcome = await runWriteback(baseOpts(bindings.bucket, { maxBytes: 10 }));
     expect(outcome.kind).toBe("rejected");
     expect(calls).toHaveLength(0);
   });
@@ -232,9 +215,7 @@ describe("runWriteback", () => {
       { entries: [{ path: "fixtures/a.json" }] },
       { "fixtures/a.json": "{}" },
     );
-    const outcome = await runWriteback(
-      baseOpts(bindings.bucket, { pr: false }),
-    );
+    const outcome = await runWriteback(baseOpts(bindings.bucket, { pr: false }));
     expect(outcome.kind).toBe("committed");
     if (outcome.kind === "committed") expect(outcome.url).toBeUndefined();
     expect(calls).not.toContain("POST pull");

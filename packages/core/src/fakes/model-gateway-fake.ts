@@ -24,9 +24,7 @@ import {
 } from "../services/model-gateway";
 
 /** A scripted answer: a successful result or a backend failure. */
-export type ModelGatewayFakeResponse =
-  | ModelCompletionResult
-  | ModelGatewayError;
+export type ModelGatewayFakeResponse = ModelCompletionResult | ModelGatewayError;
 
 export type ModelGatewayFakeOptions = {
   /**
@@ -65,8 +63,7 @@ export const makeModelGatewayFake = (
         const r =
           responses.length === 0
             ? EMPTY_RESULT
-            : (responses[Math.min(i, responses.length - 1)] as
-                ModelGatewayFakeResponse);
+            : (responses[Math.min(i, responses.length - 1)] as ModelGatewayFakeResponse);
         return isError(r) ? Effect.fail(r) : Effect.succeed(r);
       }),
   };
@@ -75,5 +72,4 @@ export const makeModelGatewayFake = (
 };
 
 /** A ready-to-use ModelGateway fake Layer — empty results, records calls. */
-export const ModelGatewayFake: Layer.Layer<ModelGateway> =
-  makeModelGatewayFake().layer;
+export const ModelGatewayFake: Layer.Layer<ModelGateway> = makeModelGatewayFake().layer;

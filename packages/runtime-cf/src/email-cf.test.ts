@@ -3,10 +3,7 @@
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { Email } from "@fractalboxdev/flare-dispatch-core";
-import {
-  makeEmailCloudflareLive,
-  type SendEmailBinding,
-} from "./email-cf";
+import { makeEmailCloudflareLive, type SendEmailBinding } from "./email-cf";
 
 type Sent = {
   from: string | { name: string; email: string };
@@ -78,9 +75,7 @@ describe("makeEmailCloudflareLive", () => {
     });
 
     const result = await run(
-      Effect.flatMap(Email, (s) =>
-        s.send(req(["ok@x.test", "bad@x.test"])),
-      ),
+      Effect.flatMap(Email, (s) => s.send(req(["ok@x.test", "bad@x.test"]))),
       layer,
     );
 
@@ -98,9 +93,7 @@ describe("makeEmailCloudflareLive", () => {
     });
 
     const result = await run(
-      Effect.flatMap(Email, (s) =>
-        s.send(req(["allowed@x.test", "blocked@x.test"])),
-      ),
+      Effect.flatMap(Email, (s) => s.send(req(["allowed@x.test", "blocked@x.test"]))),
       layer,
     );
 

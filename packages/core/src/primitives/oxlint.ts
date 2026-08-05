@@ -28,5 +28,4 @@ const NOTHING_TO_LINT = /^No files found to lint\b/m;
  * verdict, however the process exited. Pass the command's stdout (the stream the
  * sentinel is written to); combined stdout+stderr works too.
  */
-export const isNothingToLint = (output: string): boolean =>
-  NOTHING_TO_LINT.test(output);
+export const isNothingToLint = (output: string): boolean => NOTHING_TO_LINT.test(output);

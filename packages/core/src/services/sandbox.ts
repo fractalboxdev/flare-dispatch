@@ -90,9 +90,7 @@ export interface SandboxService {
     sha: string;
     container?: Container;
   }) => Effect.Effect<string, CheckoutFailed>;
-  readonly exec: (
-    opts: ExecOpts,
-  ) => Effect.Effect<ExecResult, ExecFailed | ExecTimeout>;
+  readonly exec: (opts: ExecOpts) => Effect.Effect<ExecResult, ExecFailed | ExecTimeout>;
   /**
    * Read a container file's full text content into the Worker. The companion
    * to `exec` for large outputs: `ExecResult.stdout` inlines only a bounded
@@ -104,9 +102,7 @@ export interface SandboxService {
     path: string;
     container?: Container;
   }) => Effect.Effect<string, ReadFileFailed>;
-  readonly runDetached: (
-    opts: ExecOpts,
-  ) => Effect.Effect<DetachedHandle, ContainerLaunchFailed>;
+  readonly runDetached: (opts: ExecOpts) => Effect.Effect<DetachedHandle, ContainerLaunchFailed>;
   readonly waitForExit: (opts: {
     handle: DetachedHandle;
     pollEvery?: Duration.Duration;
@@ -150,15 +146,11 @@ export const sandbox = {
   exec: (opts: ExecOpts) => Effect.flatMap(Sandbox, (s) => s.exec(opts)),
   readFile: (opts: { path: string; container?: Container }) =>
     Effect.flatMap(Sandbox, (s) => s.readFile(opts)),
-  runDetached: (opts: ExecOpts) =>
-    Effect.flatMap(Sandbox, (s) => s.runDetached(opts)),
+  runDetached: (opts: ExecOpts) => Effect.flatMap(Sandbox, (s) => s.runDetached(opts)),
   waitForExit: (opts: { handle: DetachedHandle; pollEvery?: Duration.Duration }) =>
     Effect.flatMap(Sandbox, (s) => s.waitForExit(opts)),
-  waitForPort: (opts: {
-    handle: DetachedHandle;
-    port: number;
-    timeoutSec?: number;
-  }) => Effect.flatMap(Sandbox, (s) => s.waitForPort(opts)),
+  waitForPort: (opts: { handle: DetachedHandle; port: number; timeoutSec?: number }) =>
+    Effect.flatMap(Sandbox, (s) => s.waitForPort(opts)),
   exposePort: (opts: { container?: Container; port: number; name?: string }) =>
     Effect.flatMap(Sandbox, (s) => s.exposePort(opts)),
 } as const;

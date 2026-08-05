@@ -15,10 +15,7 @@ export type SignalOutcome =
       /** `platform_not_supported` — old Workflow binding without `sendEvent`;
        *  `wf_not_found` — no running instance for this id (terminal/unknown);
        *  `send_event_failed` — any other delivery failure. */
-      readonly reason:
-        | "platform_not_supported"
-        | "wf_not_found"
-        | "send_event_failed";
+      readonly reason: "platform_not_supported" | "wf_not_found" | "send_event_failed";
       readonly message: string;
     };
 

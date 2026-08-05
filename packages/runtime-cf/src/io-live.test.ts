@@ -41,13 +41,7 @@ const seedExecution = async (
           input_json, summary_json)
        VALUES (?, 'pr-review', 'owner/name', 'refs/heads/main', ?, ?, 1, ?, '{}', ?)`,
     )
-    .bind(
-      opts.id,
-      opts.sha,
-      status,
-      opts.completedAt ?? 100,
-      opts.summaryJson ?? null,
-    )
+    .bind(opts.id, opts.sha, status, opts.completedAt ?? 100, opts.summaryJson ?? null)
     .run();
 };
 

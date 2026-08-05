@@ -66,9 +66,7 @@ const BEARER_PREFIX = "Bearer ";
 
 /** Extract the bearer token from an `Authorization` header (`null` if absent). */
 const bearerToken = (header: string | null): string | null =>
-  header !== null && header.startsWith(BEARER_PREFIX)
-    ? header.slice(BEARER_PREFIX.length)
-    : null;
+  header !== null && header.startsWith(BEARER_PREFIX) ? header.slice(BEARER_PREFIX.length) : null;
 
 // --- Dot-path resolution -----------------------------------------------------
 
@@ -103,10 +101,7 @@ const PATH_PREFIX = "$.";
  * `detail`); a primitive is stringified directly. A missing path → `undefined`
  * (field omitted by the caller).
  */
-const resolveTemplateValue = (
-  template: unknown,
-  payload: unknown,
-): string | number | undefined => {
+const resolveTemplateValue = (template: unknown, payload: unknown): string | number | undefined => {
   if (typeof template !== "string") return undefined;
   if (!template.startsWith(PATH_PREFIX)) return template; // literal
   const resolved = resolvePath(payload, template.slice(PATH_PREFIX.length));
@@ -193,8 +188,7 @@ const applyTemplate = (
 };
 
 /** Truncate to a cap — clamp, never reject (spec: signals/v1 caps). */
-const clamp = (s: string, max: number): string =>
-  s.length > max ? s.slice(0, max) : s;
+const clamp = (s: string, max: number): string => (s.length > max ? s.slice(0, max) : s);
 
 /**
  * Build a validated `signals/v1` signal from a payload + source label. Returns
@@ -206,8 +200,7 @@ const buildSignal = (
   template: Record<string, unknown> | undefined,
   payload: unknown,
 ): SignalT | undefined => {
-  const mapped =
-    template !== undefined ? applyTemplate(template, payload) : mapDefault(payload);
+  const mapped = template !== undefined ? applyTemplate(template, payload) : mapDefault(payload);
 
   // Unmappable: a custom template that resolved no title AND no detail. (The
   // default mapping always produces a detail floor, so this only bites a
@@ -223,9 +216,7 @@ const buildSignal = (
     source: clamp(`webhook:${source}`, MAX_SIGNAL_SOURCE_CHARS),
     title: clamp(title, MAX_SIGNAL_TITLE_CHARS),
     detail: clamp(detail, MAX_SIGNAL_DETAIL_CHARS),
-    ...(mapped.url !== undefined
-      ? { url: clamp(mapped.url, MAX_SIGNAL_URL_CHARS) }
-      : {}),
+    ...(mapped.url !== undefined ? { url: clamp(mapped.url, MAX_SIGNAL_URL_CHARS) } : {}),
     ...(mapped.count !== undefined ? { count: mapped.count } : {}),
   };
 
@@ -273,10 +264,7 @@ export const handleSignalsWebhook = async (
   // 1. Validate the `:source` label BEFORE anything else — a malformed label
   //    is a 404 (the route shape is wrong), not an auth failure.
   if (!SOURCE_RE.test(source)) {
-    return json(
-      { error: "not_found", message: "source must match ^[a-z0-9-]{1,32}$" },
-      404,
-    );
+    return json({ error: "not_found", message: "source must match ^[a-z0-9-]{1,32}$" }, 404);
   }
 
   // 2. Fail closed if the ingress is not configured. No CONFIG_KV, or no
@@ -354,8 +342,7 @@ export const handleSignalsWebhook = async (
       {
         error: "unmappable_payload",
         message:
-          "payload yielded neither a title nor a derivable detail; check signals.map." +
-          source,
+          "payload yielded neither a title nor a derivable detail; check signals.map." + source,
       },
       422,
     );
@@ -383,8 +370,5 @@ export const handleSignalsWebhook = async (
     origin: env.PUBLIC_ORIGIN ?? new URL(request.url).origin,
   });
 
-  return json(
-    { executionId, ...(detailsUrl !== undefined ? { detailsUrl } : {}) },
-    202,
-  );
+  return json({ executionId, ...(detailsUrl !== undefined ? { detailsUrl } : {}) }, 202);
 };

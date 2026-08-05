@@ -49,9 +49,7 @@ export const ADMISSION_CAP_DEFAULT = 16;
 export const resolveAdmissionCap = (raw: string | undefined): number => {
   if (raw === undefined) return ADMISSION_CAP_DEFAULT;
   const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0
-    ? parsed
-    : ADMISSION_CAP_DEFAULT;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : ADMISSION_CAP_DEFAULT;
 };
 
 /**
@@ -95,13 +93,8 @@ export const ADMISSION_WAITER_TTL_MS = 100_000;
 const d1 = <A>(thunk: () => Promise<A>): Effect.Effect<A, Error> =>
   Effect.tryPromise({
     try: thunk,
-    catch: (cause) =>
-      cause instanceof Error ? cause : new Error(String(cause)),
-  }).pipe(
-    Effect.retry(
-      Schedule.recurs(2).pipe(Schedule.addDelay(() => "200 millis")),
-    ),
-  );
+    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+  }).pipe(Effect.retry(Schedule.recurs(2).pipe(Schedule.addDelay(() => "200 millis"))));
 
 export interface RunAdmissionStore {
   /**
@@ -181,13 +174,7 @@ export const makeRunAdmissionD1 = (
                             ?5),
                    ?5)`,
         )
-        .bind(
-          executionId,
-          pool,
-          enqueuedAt ?? null,
-          parentExecutionId ?? null,
-          ts,
-        )
+        .bind(executionId, pool, enqueuedAt ?? null, parentExecutionId ?? null, ts)
         .run(),
     ).pipe(Effect.asVoid);
 
@@ -203,9 +190,7 @@ export const makeRunAdmissionD1 = (
       // `enqueued_at` wins, keeping the key stable across checkpoint resumes.
       const row = yield* d1(() =>
         db
-          .prepare(
-            `SELECT enqueued_at FROM run_admissions WHERE execution_id = ?`,
-          )
+          .prepare(`SELECT enqueued_at FROM run_admissions WHERE execution_id = ?`)
           .bind(executionId)
           .first<{ enqueued_at: number }>(),
       );
@@ -305,13 +290,7 @@ export const makeRunAdmissionD1 = (
                  WHERE pool = ?1 AND state = 'admitted'
                    AND heartbeat_at > ?5) AS busy`,
           )
-          .bind(
-            pool,
-            ts - ADMISSION_WAITER_TTL_MS,
-            enqueuedAt,
-            executionId,
-            ts - ADMISSION_TTL_MS,
-          )
+          .bind(pool, ts - ADMISSION_WAITER_TTL_MS, enqueuedAt, executionId, ts - ADMISSION_TTL_MS)
           .first<{ position: number; busy: number }>(),
       );
       return {
@@ -325,9 +304,7 @@ export const makeRunAdmissionD1 = (
   const heartbeat = (executionId: string): Effect.Effect<void, Error> =>
     d1(() =>
       db
-        .prepare(
-          `UPDATE run_admissions SET heartbeat_at = ? WHERE execution_id = ?`,
-        )
+        .prepare(`UPDATE run_admissions SET heartbeat_at = ? WHERE execution_id = ?`)
         .bind(now(), executionId)
         .run(),
     ).pipe(Effect.asVoid);
@@ -335,9 +312,7 @@ export const makeRunAdmissionD1 = (
   const release = (executionId: string): Effect.Effect<void, Error> =>
     d1(() =>
       db.batch([
-        db
-          .prepare(`DELETE FROM run_admissions WHERE execution_id = ?`)
-          .bind(executionId),
+        db.prepare(`DELETE FROM run_admissions WHERE execution_id = ?`).bind(executionId),
         // Opportunistic GC: purge rows (any state) whose heartbeat staled
         // past the admitted TTL. Stale rows already stopped counting; this
         // just keeps the table from accumulating corpses.

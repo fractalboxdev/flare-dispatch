@@ -72,9 +72,8 @@ describe("createPullReview", () => {
 
   it("surfaces a non-2xx as a GithubApiError", async () => {
     server.use(
-      http.post(
-        "https://api.github.com/repos/:owner/:repo/pulls/:pr/reviews",
-        () => HttpResponse.json({ message: "not found" }, { status: 404 }),
+      http.post("https://api.github.com/repos/:owner/:repo/pulls/:pr/reviews", () =>
+        HttpResponse.json({ message: "not found" }, { status: 404 }),
       ),
     );
     await expect(

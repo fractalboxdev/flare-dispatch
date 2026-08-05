@@ -68,9 +68,7 @@ describe("demo-reel", () => {
       expect(output.videoSkipped).toBeUndefined();
       const uploads = handles.artifact.uploads;
       expect(uploads.map((u) => u.name)).toContain("demo-reel.mp4");
-      expect(uploads.find((u) => u.name === "demo-reel.mp4")?.contentType).toBe(
-        "video/mp4",
-      );
+      expect(uploads.find((u) => u.name === "demo-reel.mp4")?.contentType).toBe("video/mp4");
     }).pipe(Effect.provide(layer));
   });
 
@@ -101,9 +99,7 @@ describe("demo-reel", () => {
       const output = yield* run({ ...baseInput });
       expect(output.scenes).toBe(0);
       expect(output.deckUri).toBeTruthy();
-      expect(handles.artifact.uploads.map((u) => u.name)).toContain(
-        "demo-deck.html",
-      );
+      expect(handles.artifact.uploads.map((u) => u.name)).toContain("demo-deck.html");
     }).pipe(Effect.provide(layer));
   });
 
@@ -120,9 +116,7 @@ describe("demo-reel", () => {
       expect(output.deckUri).toBeTruthy();
       expect(output.videoUri).toBeUndefined();
       expect(output.videoSkipped).toBeTruthy();
-      expect(handles.artifact.uploads.map((u) => u.name)).not.toContain(
-        "demo-reel.mp4",
-      );
+      expect(handles.artifact.uploads.map((u) => u.name)).not.toContain("demo-reel.mp4");
     }).pipe(Effect.provide(layer));
   });
 

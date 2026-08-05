@@ -71,8 +71,7 @@ export const makeCloudflareFake = (
         const allow = projects === undefined ? undefined : new Set(projects);
         return state.deployments.filter((d) => {
           if (allow !== undefined && !allow.has(d.project)) return false;
-          if (environment !== undefined && d.environment !== environment)
-            return false;
+          if (environment !== undefined && d.environment !== environment) return false;
           if (status !== undefined && d.status !== status) return false;
           if (createdWithinHours !== undefined) {
             const cutoff = now - createdWithinHours * 3_600_000;

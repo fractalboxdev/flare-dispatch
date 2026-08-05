@@ -5,12 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { renderDashboard, type DashboardRow } from "./dashboard";
 import { handleRequest } from "./router";
-import {
-  makeFakeD1,
-  makeFakeEnv,
-  makeFakeR2,
-  makeFakeWorkflow,
-} from "./test-helpers";
+import { makeFakeD1, makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "./test-helpers";
 
 const baseRow = (over: Partial<DashboardRow>): DashboardRow => ({
   id: "offload-test:owner_repo:abc123",
@@ -91,7 +86,9 @@ describe("renderDashboard", () => {
     );
     expect(html).toContain("🩹 self-heal");
     expect(html).toContain('class="badge selfheal"');
-    expect(html).toContain('href="https://github.com/owner/repo/pulls?q=is%3Apr%20label%3Aself-heal"');
+    expect(html).toContain(
+      'href="https://github.com/owner/repo/pulls?q=is%3Apr%20label%3Aself-heal"',
+    );
   });
 
   it("omits the self-heal tag when no fix PR was opened", () => {
@@ -147,13 +144,8 @@ describe("GET / — dashboard route", () => {
   });
 
   it("returns 200 text/html listing executions with tokened log links", async () => {
-    const { env } = fixture([
-      execRow({ id: "a:b:c", run: "offload-test", status: "success" }),
-    ]);
-    const res = await handleRequest(
-      new Request("https://flare-dispatch-app.fractalbox.dev/"),
-      env,
-    );
+    const { env } = fixture([execRow({ id: "a:b:c", run: "offload-test", status: "success" })]);
+    const res = await handleRequest(new Request("https://flare-dispatch-app.fractalbox.dev/"), env);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     const body = await res.text();
@@ -162,13 +154,8 @@ describe("GET / — dashboard route", () => {
   });
 
   it("links the product-demo viewer for product-demo runs", async () => {
-    const { env } = fixture([
-      execRow({ id: "demo1", run: "product-demo", status: "success" }),
-    ]);
-    const res = await handleRequest(
-      new Request("https://flare-dispatch-app.fractalbox.dev/"),
-      env,
-    );
+    const { env } = fixture([execRow({ id: "demo1", run: "product-demo", status: "success" })]);
+    const res = await handleRequest(new Request("https://flare-dispatch-app.fractalbox.dev/"), env);
     const body = await res.text();
     expect(body).toContain("/demos/demo1?t=");
   });
@@ -194,10 +181,7 @@ describe("GET / — dashboard route", () => {
       viewerAccessMode: "required",
     });
     // ACCESS_AUD / ACCESS_TEAM_DOMAIN unset under "required" → 503, default-deny.
-    const res = await handleRequest(
-      new Request("https://flare-dispatch-app.fractalbox.dev/"),
-      env,
-    );
+    const res = await handleRequest(new Request("https://flare-dispatch-app.fractalbox.dev/"), env);
     expect(res.status).toBe(503);
   });
 });
@@ -331,11 +315,11 @@ describe("app shell routing — gated SPA shell with SSR fallback", () => {
   };
 
   it("serves the SPA shell from the asset binding for / when ASSETS is present", async () => {
-    const env = makeFakeEnv({ ...base, assets: fakeAssets("<!doctype html><div id=\"root\"></div>") });
-    const res = await handleRequest(
-      new Request("https://flare-dispatch-app.fractalbox.dev/"),
-      env,
-    );
+    const env = makeFakeEnv({
+      ...base,
+      assets: fakeAssets('<!doctype html><div id="root"></div>'),
+    });
+    const res = await handleRequest(new Request("https://flare-dispatch-app.fractalbox.dev/"), env);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('id="root"');
   });
@@ -388,10 +372,7 @@ describe("app shell routing — gated SPA shell with SSR fallback", () => {
         ],
       }),
     });
-    const res = await handleRequest(
-      new Request("https://flare-dispatch-app.fractalbox.dev/"),
-      env,
-    );
+    const res = await handleRequest(new Request("https://flare-dispatch-app.fractalbox.dev/"), env);
     expect(res.status).toBe(200);
     const body = await res.text();
     // The SSR marker the SPA shell never contains.

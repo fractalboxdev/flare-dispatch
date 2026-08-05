@@ -32,14 +32,20 @@ const config = {
 const program = (opts: { verifyExit: number; outcome: string }) => ({
   writeFileSync: { exitCode: 0, stdout: "staged" },
   "flare-agent": { exitCode: 0, stdout: "" },
-  "agent-result.json": { exitCode: 0, stdout: JSON.stringify({ outcome: opts.outcome, changedFiles: ["src/handler.ts"] }) },
+  "agent-result.json": {
+    exitCode: 0,
+    stdout: JSON.stringify({ outcome: opts.outcome, changedFiles: ["src/handler.ts"] }),
+  },
   "pnpm test": { exitCode: opts.verifyExit, stdout: "" },
   "git status --porcelain": { exitCode: 0, stdout: "src/handler.ts" },
 });
 
 describe("self-heal-pr", () => {
   it.effect("verified fix stages a writeback (⇒ draft PR)", () => {
-    const { layer } = makeCFRuntimeTest({ config, sandboxProgram: program({ verifyExit: 0, outcome: "patched" }) });
+    const { layer } = makeCFRuntimeTest({
+      config,
+      sandboxProgram: program({ verifyExit: 0, outcome: "patched" }),
+    });
     return Effect.gen(function* () {
       const out = yield* selfHealPr.run({ incident: baseIncident, signals: [] });
       expect(out.outcome).toBe("patched");
@@ -50,7 +56,10 @@ describe("self-heal-pr", () => {
   });
 
   it.effect("unverified fix is silent — no writeback", () => {
-    const { layer } = makeCFRuntimeTest({ config, sandboxProgram: program({ verifyExit: 1, outcome: "patched" }) });
+    const { layer } = makeCFRuntimeTest({
+      config,
+      sandboxProgram: program({ verifyExit: 1, outcome: "patched" }),
+    });
     return Effect.gen(function* () {
       const out = yield* selfHealPr.run({ incident: baseIncident, signals: [] });
       expect(out.verified).toBe(false);
@@ -60,7 +69,10 @@ describe("self-heal-pr", () => {
   });
 
   it.effect("agent no-fix → no PR", () => {
-    const { layer } = makeCFRuntimeTest({ config, sandboxProgram: program({ verifyExit: 0, outcome: "no-fix" }) });
+    const { layer } = makeCFRuntimeTest({
+      config,
+      sandboxProgram: program({ verifyExit: 0, outcome: "no-fix" }),
+    });
     return Effect.gen(function* () {
       const out = yield* selfHealPr.run({ incident: baseIncident, signals: [] });
       expect(out.outcome).toBe("no-fix");
@@ -79,7 +91,10 @@ describe("self-heal-pr", () => {
       ciFailures: [],
       repro: { kind: "command", command: "pnpm test", note: "write a regression test" },
     };
-    const { layer } = makeCFRuntimeTest({ config, sandboxProgram: program({ verifyExit: 0, outcome: "patched" }) });
+    const { layer } = makeCFRuntimeTest({
+      config,
+      sandboxProgram: program({ verifyExit: 0, outcome: "patched" }),
+    });
     return Effect.gen(function* () {
       const out = yield* selfHealPr.run({ incident, signals: [] });
       expect(out.outcome).toBe("patched");
@@ -96,7 +111,10 @@ describe("self-heal-pr", () => {
       ciFailures: [],
       repro: { kind: "derived", note: "write a regression test" },
     };
-    const { layer } = makeCFRuntimeTest({ config, sandboxProgram: program({ verifyExit: 0, outcome: "patched" }) });
+    const { layer } = makeCFRuntimeTest({
+      config,
+      sandboxProgram: program({ verifyExit: 0, outcome: "patched" }),
+    });
     return Effect.gen(function* () {
       const out = yield* selfHealPr.run({ incident, signals: [] });
       expect(out.outcome).toBe("skipped");
@@ -110,7 +128,10 @@ describe("self-heal-pr", () => {
       class: "application",
       repro: { kind: "derived", note: "write a failing test first" },
     };
-    const { layer } = makeCFRuntimeTest({ config, sandboxProgram: program({ verifyExit: 0, outcome: "patched" }) });
+    const { layer } = makeCFRuntimeTest({
+      config,
+      sandboxProgram: program({ verifyExit: 0, outcome: "patched" }),
+    });
     return Effect.gen(function* () {
       const out = yield* selfHealPr.run({ incident, signals: [] });
       expect(out.outcome).toBe("skipped");
@@ -119,7 +140,10 @@ describe("self-heal-pr", () => {
   });
 
   it.effect("fails when the proxy/token isn't injected", () => {
-    const { layer } = makeCFRuntimeTest({ config: {}, sandboxProgram: program({ verifyExit: 0, outcome: "patched" }) });
+    const { layer } = makeCFRuntimeTest({
+      config: {},
+      sandboxProgram: program({ verifyExit: 0, outcome: "patched" }),
+    });
     return Effect.gen(function* () {
       const r = yield* Effect.either(selfHealPr.run({ incident: baseIncident, signals: [] }));
       expect(r._tag).toBe("Left");

@@ -40,24 +40,19 @@ export type CreatePullReviewOptions = {
  *
  * @throws {GithubApiError} when the API returns non-2xx.
  */
-export const createPullReview = async (
-  opts: CreatePullReviewOptions,
-): Promise<void> => {
+export const createPullReview = async (opts: CreatePullReviewOptions): Promise<void> => {
   const { owner, name: repoName } = splitRepo(opts.repo);
   const { apiBase, doFetch } = resolveClient(opts);
 
-  const res = await doFetch(
-    `${apiBase}/repos/${owner}/${repoName}/pulls/${opts.pr}/reviews`,
-    {
-      method: "POST",
-      headers: ghHeaders(opts.token, { json: true }),
-      body: JSON.stringify({
-        commit_id: opts.sha,
-        body: opts.body,
-        event: opts.event ?? "COMMENT",
-      }),
-    },
-  );
+  const res = await doFetch(`${apiBase}/repos/${owner}/${repoName}/pulls/${opts.pr}/reviews`, {
+    method: "POST",
+    headers: ghHeaders(opts.token, { json: true }),
+    body: JSON.stringify({
+      commit_id: opts.sha,
+      body: opts.body,
+      event: opts.event ?? "COMMENT",
+    }),
+  });
 
   await assertOk(res, "pull review create failed");
 };

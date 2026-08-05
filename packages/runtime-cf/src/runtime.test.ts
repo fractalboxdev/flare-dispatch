@@ -30,7 +30,11 @@
 import { Effect, Exit, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Executions, type RunContext } from "@fractalboxdev/flare-dispatch-core";
-import { CacheFake, sandboxFakeProgram, SecretsFake } from "@fractalboxdev/flare-dispatch-core/testing";
+import {
+  CacheFake,
+  sandboxFakeProgram,
+  SecretsFake,
+} from "@fractalboxdev/flare-dispatch-core/testing";
 import { offloadTest } from "@fractalboxdev/flare-dispatch-runs";
 import { makeR2ArtifactLive } from "./artifact-r2";
 import { makeChecksGithubLive } from "./checks-github";
@@ -203,11 +207,7 @@ describe("CFRuntimeLive — offload-test end-to-end", () => {
       .prepare(`SELECT name, status FROM steps WHERE execution_id = ?`)
       .bind(executionId)
       .all<{ name: string; status: string }>();
-    expect(stepRows.results.map((r) => r.name).sort()).toEqual([
-      "checkout",
-      "exec",
-      "upload-log",
-    ]);
+    expect(stepRows.results.map((r) => r.name).sort()).toEqual(["checkout", "exec", "upload-log"]);
     expect(stepRows.results.every((r) => r.status === "success")).toBe(true);
   });
 
@@ -283,9 +283,7 @@ describe("CFRuntimeLive — offload-test end-to-end", () => {
     const exit = await driveRun(layer, executionId);
     expect(Exit.isSuccess(exit)).toBe(true);
 
-    const artifactObj = await bindings.bucket.get(
-      `artifacts/${executionId}/step.log`,
-    );
+    const artifactObj = await bindings.bucket.get(`artifacts/${executionId}/step.log`);
     expect(artifactObj).not.toBeNull();
     expect(await artifactObj?.text()).toBe("fake log\n");
   });

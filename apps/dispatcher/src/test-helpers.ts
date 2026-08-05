@@ -104,10 +104,7 @@ export const makeFakeR2 = (): FakeR2 => {
           headers.set("content-type", obj.contentType);
         },
         arrayBuffer: async () =>
-          obj.body.buffer.slice(
-            obj.body.byteOffset,
-            obj.body.byteOffset + obj.body.byteLength,
-          ),
+          obj.body.buffer.slice(obj.body.byteOffset, obj.body.byteOffset + obj.body.byteLength),
       };
     },
     // Prefix listing — what the artifacts route's directory index uses.
@@ -173,13 +170,9 @@ export const makeFakeD1 = (seed?: {
       conditions.every((c, i) => matches(row, c.col, c.op, binds[i])),
     );
     if (/FROM\s+executions/.test(sql)) {
-      rows = [...rows].sort(
-        (a, b) => Number(b["started_at"] ?? 0) - Number(a["started_at"] ?? 0),
-      );
+      rows = [...rows].sort((a, b) => Number(b["started_at"] ?? 0) - Number(a["started_at"] ?? 0));
     } else {
-      rows = [...rows].sort(
-        (a, b) => Number(a["started_at"] ?? 0) - Number(b["started_at"] ?? 0),
-      );
+      rows = [...rows].sort((a, b) => Number(a["started_at"] ?? 0) - Number(b["started_at"] ?? 0));
     }
     return Number.isFinite(limit) ? rows.slice(0, limit) : rows;
   };
@@ -251,20 +244,14 @@ export const makeFakeEnv = (opts: {
     VIEWER_ACCESS_MODE: opts.viewerAccessMode ?? "token-only",
     RUNS_WORKFLOW: opts.workflow.binding,
     RUNS_STORAGE: opts.storage.binding,
-    ...(opts.idempotencyKv !== undefined
-      ? { IDEMPOTENCY_KV: opts.idempotencyKv }
-      : {}),
+    ...(opts.idempotencyKv !== undefined ? { IDEMPOTENCY_KV: opts.idempotencyKv } : {}),
     ...(opts.configKv !== undefined ? { CONFIG_KV: opts.configKv } : {}),
     ...(opts.githubWebhookSecret !== undefined
       ? { GITHUB_WEBHOOK_SECRET: opts.githubWebhookSecret }
       : {}),
     ...(opts.adminToken !== undefined ? { ADMIN_TOKEN: opts.adminToken } : {}),
-    ...(opts.logLinkSecret !== undefined
-      ? { LOG_LINK_SECRET: opts.logLinkSecret }
-      : {}),
-    ...(opts.publicOrigin !== undefined
-      ? { PUBLIC_ORIGIN: opts.publicOrigin }
-      : {}),
+    ...(opts.logLinkSecret !== undefined ? { LOG_LINK_SECRET: opts.logLinkSecret } : {}),
+    ...(opts.publicOrigin !== undefined ? { PUBLIC_ORIGIN: opts.publicOrigin } : {}),
     ...(opts.cloudflareAccountId !== undefined
       ? { CLOUDFLARE_ACCOUNT_ID: opts.cloudflareAccountId }
       : {}),

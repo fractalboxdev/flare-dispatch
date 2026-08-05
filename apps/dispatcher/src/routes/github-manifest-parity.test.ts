@@ -15,10 +15,7 @@ import { describe, expect, it } from "vitest";
 import { MANIFEST_TEMPLATE } from "./github";
 
 const manifestJson = JSON.parse(
-  readFileSync(
-    new URL("../../../../infra/github-app-manifest.json", import.meta.url),
-    "utf8",
-  ),
+  readFileSync(new URL("../../../../infra/github-app-manifest.json", import.meta.url), "utf8"),
 ) as unknown;
 
 describe("GitHub App manifest parity", () => {

@@ -54,15 +54,11 @@ const toChapter = (raw: unknown): Chapter | null => {
     name,
     status: o["status"] === "passed" ? "passed" : "failed",
     narrative: str(o["narrative"]) ?? "",
-    ...(str(o["chapterGifUri"]) !== undefined
-      ? { chapterGifUri: str(o["chapterGifUri"])! }
-      : {}),
+    ...(str(o["chapterGifUri"]) !== undefined ? { chapterGifUri: str(o["chapterGifUri"])! } : {}),
     ...(str(o["keyScreenshotUri"]) !== undefined
       ? { keyScreenshotUri: str(o["keyScreenshotUri"])! }
       : {}),
-    ...(str(o["replayUri"]) !== undefined
-      ? { replayUri: str(o["replayUri"])! }
-      : {}),
+    ...(str(o["replayUri"]) !== undefined ? { replayUri: str(o["replayUri"])! } : {}),
   };
 };
 
@@ -124,10 +120,7 @@ const STYLE = `
   .empty{padding:48px 20px;text-align:center;color:#8b949e}
 `;
 
-const heroSection = (
-  replayUri: string | undefined,
-  activeName: string | undefined,
-): string => {
+const heroSection = (replayUri: string | undefined, activeName: string | undefined): string => {
   if (replayUri === undefined || replayUri === "") {
     return `<figure class="hero"><div class="stage"><div class="placeholder">No replay was recorded for this demo. Browse the chapters below.</div></div></figure>`;
   }
@@ -145,11 +138,7 @@ const heroSection = (
 </figure>`;
 };
 
-const chapterCard = (
-  c: Chapter,
-  i: number,
-  activeReplay: string | undefined,
-): string => {
+const chapterCard = (c: Chapter, i: number, activeReplay: string | undefined): string => {
   const media =
     c.chapterGifUri !== undefined
       ? `<img src="${escapeHtml(c.chapterGifUri)}" alt="${escapeHtml(
@@ -164,19 +153,14 @@ const chapterCard = (
     c.status === "passed"
       ? `<span class="badge pass">✔ pass</span>`
       : `<span class="badge fail">✕ fail</span>`;
-  const desc =
-    c.narrative !== ""
-      ? `<p class="desc">${escapeHtml(c.narrative)}</p>`
-      : "";
+  const desc = c.narrative !== "" ? `<p class="desc">${escapeHtml(c.narrative)}</p>` : "";
   // A chapter with a replay is clickable — clicking loads it into the single
   // hero player (the page script reads `data-replay` / `data-name`). The
   // secondary link opens the same replay full-screen in a new tab.
   const hasReplay = c.replayUri !== undefined;
   const isActive = hasReplay && c.replayUri === activeReplay;
   const dataAttrs = hasReplay
-    ? ` data-replay="${escapeHtml(c.replayUri!)}" data-name="${escapeHtml(
-        c.name,
-      )}"`
+    ? ` data-replay="${escapeHtml(c.replayUri!)}" data-name="${escapeHtml(c.name)}"`
     : "";
   const link = hasReplay
     ? `<div class="links"><a href="${escapeHtml(
@@ -197,11 +181,7 @@ const chapterCard = (
   </article>`;
 };
 
-const page = (
-  heading: string,
-  meta: string,
-  demo: DemoSummary,
-): string => {
+const page = (heading: string, meta: string, demo: DemoSummary): string => {
   const passed = demo.stories.filter((s) => s.status === "passed").length;
   // The hero opens on the run's primary replay; mark the matching chapter
   // active so the gallery and the player agree on first paint.
@@ -221,9 +201,7 @@ const page = (
 <title>${escapeHtml(heading)} — product demo</title>
 <style>${STYLE}</style></head>
 <body>
-<header><b>FlareDispatch</b> product demo <span class="meta">${escapeHtml(
-    meta,
-  )}</span></header>
+<header><b>FlareDispatch</b> product demo <span class="meta">${escapeHtml(meta)}</span></header>
 <main>
   <h2>Walkthrough</h2>
   ${heroSection(demo.replayUri, activeName)}
@@ -297,17 +275,14 @@ export const handleProductDemo = async (
   // The verdict-bearing `summary_json` is only persisted on a SUCCESSFUL exit
   // (the dispatcher discards it on failure), so a red demo has none — point the
   // viewer at the diagnostics instead of a blank gallery.
-  const demo =
-    row.summary_json !== null ? parseDemoSummary(row.summary_json) : null;
+  const demo = row.summary_json !== null ? parseDemoSummary(row.summary_json) : null;
   if (demo === null) {
     return htmlResponse(
       `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>product demo — ${escapeHtml(executionId)}</title>
 <style>${STYLE}</style></head><body>
-<header><b>FlareDispatch</b> product demo <span class="meta">${escapeHtml(
-        meta,
-      )}</span></header>
+<header><b>FlareDispatch</b> product demo <span class="meta">${escapeHtml(meta)}</span></header>
 <main><div class="empty">No demo result is available for this execution — it may have failed, or it isn't a <code>product-demo</code> run. Check the run logs for details.</div></main>
 </body></html>`,
       404,

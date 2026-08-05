@@ -19,29 +19,14 @@ import { type Sandbox } from "@cloudflare/sandbox";
 import { Layer } from "effect";
 import type { RunContext } from "@fractalboxdev/flare-dispatch-core";
 import { makeR2ArtifactLive } from "./artifact-r2";
-import {
-  type BrowserRenderingConfig,
-  makeBrowserRenderingLive,
-} from "./browser-cf";
+import { type BrowserRenderingConfig, makeBrowserRenderingLive } from "./browser-cf";
 import { makeCacheR2Live } from "./cache-r2";
-import {
-  type ChecksGithubConfig,
-  makeChecksGithubLive,
-} from "./checks-github";
-import {
-  type WorkflowBindingLike,
-  makeChildRunsLive,
-} from "./child-runs-cf";
+import { type ChecksGithubConfig, makeChecksGithubLive } from "./checks-github";
+import { type WorkflowBindingLike, makeChildRunsLive } from "./child-runs-cf";
 import { makeConfigKvLive } from "./config-kv";
 import { makeSecretsLive } from "./secrets-live";
-import {
-  type EmailCloudflareConfig,
-  makeEmailCloudflareLive,
-} from "./email-cf";
-import {
-  type MailboxCloudflareConfig,
-  makeMailboxCloudflareLive,
-} from "./mailbox-cf";
+import { type EmailCloudflareConfig, makeEmailCloudflareLive } from "./email-cf";
+import { type MailboxCloudflareConfig, makeMailboxCloudflareLive } from "./mailbox-cf";
 import {
   BrowserDeferred,
   ChildRunsDeferred,
@@ -50,10 +35,7 @@ import {
   ModelGatewayDeferred,
   OidcDeferred,
 } from "./deferred";
-import {
-  type CloudflareLiveConfig,
-  makeCloudflareLive,
-} from "./cloudflare-live";
+import { type CloudflareLiveConfig, makeCloudflareLive } from "./cloudflare-live";
 import { type GithubLiveConfig, makeGithubLive } from "./github-live";
 import { type AiBinding, makeModelGatewayLive } from "./model-gateway-cf";
 import { makeOidcLive, type OidcLiveConfig } from "./oidc-live";
@@ -246,15 +228,11 @@ export type CFRuntimeLiveOptions = {
  * services are merged; `StepRunnerCloudflare` is provided its `Executions` +
  * `IO` dependencies from the same merge.
  */
-export const makeCFRuntimeLive = (
-  opts: CFRuntimeLiveOptions,
-): Layer.Layer<RunContext> => {
+export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunContext> => {
   const io = makeIOLive({
     db: opts.db,
     currentExecutionId: opts.executionId,
-    ...(opts.logsViewerBase !== undefined
-      ? { logsViewerBase: opts.logsViewerBase }
-      : {}),
+    ...(opts.logsViewerBase !== undefined ? { logsViewerBase: opts.logsViewerBase } : {}),
   });
   const executions = makeD1ExecutionsLive(opts.db, opts.execution);
   const artifact = makeR2ArtifactLive(
@@ -271,18 +249,11 @@ export const makeCFRuntimeLive = (
     opts.sandboxPreviewHostname,
     opts.logsViewerBase,
   );
-  const stepRunner = makeStepRunnerCloudflare(
-    opts.workflowStep,
-    opts.executionId,
-  );
+  const stepRunner = makeStepRunnerCloudflare(opts.workflowStep, opts.executionId);
   const checks = makeChecksGithubLive(opts.checks);
   // The cache archive key is scoped by repo so two repos with an identical
   // lockfile hash cannot collide (cross-repo cache poisoning).
-  const cache = makeCacheR2Live(
-    opts.bucket,
-    opts.sandboxNs,
-    opts.execution.repo,
-  );
+  const cache = makeCacheR2Live(opts.bucket, opts.sandboxNs, opts.execution.repo);
   // `Config` is live when the `CONFIG_KV` binding is present; absent, the
   // dying stub keeps a config-reading run from silently mis-behaving.
   const config =
@@ -293,13 +264,10 @@ export const makeCFRuntimeLive = (
   // `Browser` is live when Browser Rendering is configured; absent, the dying
   // stub keeps a browser run from silently mis-behaving.
   const browser =
-    opts.browser === undefined
-      ? BrowserDeferred
-      : makeBrowserRenderingLive(opts.browser);
+    opts.browser === undefined ? BrowserDeferred : makeBrowserRenderingLive(opts.browser);
   // `Oidc` is live when the signing JWK + issuer are configured; absent, a
   // call to `oidc.sign` fails with `OidcSigningFailed`.
-  const oidcLayer =
-    opts.oidc === undefined ? OidcDeferred : makeOidcLive(opts.oidc);
+  const oidcLayer = opts.oidc === undefined ? OidcDeferred : makeOidcLive(opts.oidc);
   // `Email` is live when the Email Routing `send_email` binding + sender are
   // configured; absent, the no-op Layer logs and skips (notification must never
   // fail a run).
@@ -319,12 +287,10 @@ export const makeCFRuntimeLive = (
           opts.aiGatewayId !== undefined && opts.aiGatewayId.length > 0
             ? opts.aiGatewayId
             : undefined,
-          opts.cloudflareAccountId !== undefined &&
-            opts.cloudflareAccountId.length > 0
+          opts.cloudflareAccountId !== undefined && opts.cloudflareAccountId.length > 0
             ? opts.cloudflareAccountId
             : undefined,
-          opts.aiGatewayAuthToken !== undefined &&
-            opts.aiGatewayAuthToken.length > 0
+          opts.aiGatewayAuthToken !== undefined && opts.aiGatewayAuthToken.length > 0
             ? opts.aiGatewayAuthToken
             : undefined,
           // Per-execution token metering → `execution_model_usage` (cost
@@ -351,9 +317,7 @@ export const makeCFRuntimeLive = (
   // absent, the deferred Layer returns empty (a read-only capability degrades
   // to "found nothing", never a die).
   const cloudflare =
-    opts.cloudflare === undefined
-      ? CloudflareDeferred
-      : makeCloudflareLive(opts.cloudflare);
+    opts.cloudflare === undefined ? CloudflareDeferred : makeCloudflareLive(opts.cloudflare);
   // `ChildRuns` is live when the `RUNS_WORKFLOW` binding is threaded in;
   // children inherit this execution's github context (so they post their own
   // check-runs) and record this execution's id as their `parent_execution_id`.
@@ -368,9 +332,7 @@ export const makeCFRuntimeLive = (
           parentExecutionId: opts.executionId,
           // Children inherit the parent's public origin so their artifact
           // links are absolute too (a child posts its own check-run).
-          ...(opts.publicOrigin !== undefined
-            ? { origin: opts.publicOrigin }
-            : {}),
+          ...(opts.publicOrigin !== undefined ? { origin: opts.publicOrigin } : {}),
           github: {
             repo: opts.execution.repo,
             ref: opts.execution.ref,

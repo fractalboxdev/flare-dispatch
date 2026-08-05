@@ -48,7 +48,13 @@ describe("Incident schema (incident/v1)", () => {
       suspectRef: { base: "a".repeat(40), head: "b".repeat(40), confidence: 0.9 },
       diagnosis: { title: "t", area: "github-actions", diagnosis: "d", suggestedFix: "f" },
       ciFailures: [
-        { kind: "run-step", name: "test", conclusion: "failure", command: "pnpm test", logTail: "boom" },
+        {
+          kind: "run-step",
+          name: "test",
+          conclusion: "failure",
+          command: "pnpm test",
+          logTail: "boom",
+        },
       ],
       suspectFiles: ["src/handler.ts"],
       repro: { kind: "command", command: "pnpm test -- handler.test.ts" },
@@ -75,7 +81,11 @@ describe("Incident schema (incident/v1)", () => {
 
   it("rejects more than MAX_INCIDENT_DEMO_CHAPTERS chapters", () => {
     const one = { name: "c" } as const;
-    const inc = { ...minimal, class: "demo", demoChapters: Array.from({ length: MAX_INCIDENT_DEMO_CHAPTERS + 1 }, () => one) };
+    const inc = {
+      ...minimal,
+      class: "demo",
+      demoChapters: Array.from({ length: MAX_INCIDENT_DEMO_CHAPTERS + 1 }, () => one),
+    };
     expect(Either.isLeft(decode(inc))).toBe(true);
   });
 
@@ -98,19 +108,32 @@ describe("Incident schema (incident/v1)", () => {
   it("rejects an over-long ciFailures logTail", () => {
     const inc = {
       ...minimal,
-      ciFailures: [{ kind: "run-step", name: "t", conclusion: "failure", logTail: "x".repeat(MAX_INCIDENT_LOGTAIL_CHARS + 1) }],
+      ciFailures: [
+        {
+          kind: "run-step",
+          name: "t",
+          conclusion: "failure",
+          logTail: "x".repeat(MAX_INCIDENT_LOGTAIL_CHARS + 1),
+        },
+      ],
     };
     expect(Either.isLeft(decode(inc))).toBe(true);
   });
 
   it("rejects more than MAX_INCIDENT_CI_FAILURES failures", () => {
     const one = { kind: "actions", name: "n", conclusion: "failure" } as const;
-    const inc = { ...minimal, ciFailures: Array.from({ length: MAX_INCIDENT_CI_FAILURES + 1 }, () => one) };
+    const inc = {
+      ...minimal,
+      ciFailures: Array.from({ length: MAX_INCIDENT_CI_FAILURES + 1 }, () => one),
+    };
     expect(Either.isLeft(decode(inc))).toBe(true);
   });
 
   it("rejects more than MAX_INCIDENT_SUSPECT_FILES suspect files", () => {
-    const inc = { ...minimal, suspectFiles: Array.from({ length: MAX_INCIDENT_SUSPECT_FILES + 1 }, () => "x") };
+    const inc = {
+      ...minimal,
+      suspectFiles: Array.from({ length: MAX_INCIDENT_SUSPECT_FILES + 1 }, () => "x"),
+    };
     expect(Either.isLeft(decode(inc))).toBe(true);
   });
 });
@@ -147,7 +170,9 @@ describe("schemas/incident.v1.schema.json mirrors the TS caps", () => {
     expect(props.ciFailures.items.properties.url.maxLength).toBe(MAX_INCIDENT_URL_CHARS);
     expect(props.diagnosis.properties.title.maxLength).toBe(MAX_INCIDENT_TEXT_CHARS);
     expect(props.demoChapters.items.properties.name.maxLength).toBe(MAX_INCIDENT_SHORT_CHARS);
-    expect(props.demoChapters.items.properties.narrative.maxLength).toBe(MAX_INCIDENT_LOGTAIL_CHARS);
+    expect(props.demoChapters.items.properties.narrative.maxLength).toBe(
+      MAX_INCIDENT_LOGTAIL_CHARS,
+    );
   });
 
   it("the class enum matches", () => {

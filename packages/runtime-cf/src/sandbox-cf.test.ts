@@ -14,20 +14,9 @@
 // Spec: specs/03-dsl.md § sandbox.
 
 import { it } from "@effect/vitest";
-import {
-  Cause,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Option,
-  TestClock,
-} from "effect";
+import { Cause, Duration, Effect, Exit, Fiber, Option, TestClock } from "effect";
 import { describe, expect, vi } from "vitest";
-import {
-  type PortNeverOpened,
-  Sandbox as SandboxTag,
-} from "@fractalboxdev/flare-dispatch-core";
+import { type PortNeverOpened, Sandbox as SandboxTag } from "@fractalboxdev/flare-dispatch-core";
 
 // --- The fake `box` the mocked `getSandbox` hands back -----------------------
 
@@ -102,9 +91,7 @@ vi.mock("@cloudflare/sandbox", () => ({
 }));
 
 // Imported AFTER the mock is registered so the Layer binds the mocked SDK.
-const { makeSandboxCloudflareLive, isWorkingDirFailure } = await import(
-  "./sandbox-cf"
-);
+const { makeSandboxCloudflareLive, isWorkingDirFailure } = await import("./sandbox-cf");
 
 /** A minimal R2 stub that records `put` calls. */
 const makeBucket = () => {
@@ -125,115 +112,104 @@ const handle = { id: "proc-1", container: { id: "exec-1" } };
 
 /** Pull the typed failure value off an Exit, or `undefined` on success. */
 const failureOf = <E>(exit: Exit.Exit<unknown, E>): E | undefined =>
-  Exit.isFailure(exit)
-    ? Option.getOrUndefined(Cause.failureOption(exit.cause))
-    : undefined;
+  Exit.isFailure(exit) ? Option.getOrUndefined(Cause.failureOption(exit.cause)) : undefined;
 
 describe("makeSandboxCloudflareLive — waitForPort timeout (A)", () => {
-  it.effect(
-    "fails with PortNeverOpened at the ceiling when the SDK wait never resolves",
-    () => {
-      // The SDK `waitForPort` never resolves — modelling the ~17-min hang. The
-      // Effect-layer ceiling must fail it fast at `timeoutSec`.
-      currentBox = makeFakeBox({
-        proc: { waitForPort: () => new Promise<void>(() => {}) },
-      });
-      const { bucket, puts } = makeBucket();
-      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+  it.effect("fails with PortNeverOpened at the ceiling when the SDK wait never resolves", () => {
+    // The SDK `waitForPort` never resolves — modelling the ~17-min hang. The
+    // Effect-layer ceiling must fail it fast at `timeoutSec`.
+    currentBox = makeFakeBox({
+      proc: { waitForPort: () => new Promise<void>(() => {}) },
+    });
+    const { bucket, puts } = makeBucket();
+    const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
 
-      return Effect.gen(function* () {
-        const fiber = yield* Effect.flatMap(SandboxTag, (s) =>
-          s.waitForPort({ handle, port: 4173, timeoutSec: 120 }),
-        ).pipe(Effect.provide(layer), Effect.exit, Effect.fork);
+    return Effect.gen(function* () {
+      const fiber = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.waitForPort({ handle, port: 4173, timeoutSec: 120 }),
+      ).pipe(Effect.provide(layer), Effect.exit, Effect.fork);
 
-        // Advance virtual time past the 120s ceiling; the wait fails instantly.
-        yield* TestClock.adjust(Duration.seconds(121));
-        const exit = yield* Fiber.join(fiber);
+      // Advance virtual time past the 120s ceiling; the wait fails instantly.
+      yield* TestClock.adjust(Duration.seconds(121));
+      const exit = yield* Fiber.join(fiber);
 
-        const err = failureOf<PortNeverOpened>(exit);
-        expect(err?._tag).toBe("PortNeverOpened");
-        expect(err?.port).toBe(4173);
-        expect(err?.timeoutSec).toBe(120);
+      const err = failureOf<PortNeverOpened>(exit);
+      expect(err?._tag).toBe("PortNeverOpened");
+      expect(err?.port).toBe(4173);
+      expect(err?.timeoutSec).toBe(120);
 
-        // (B) the detached process's logs were captured to R2 on the failure
-        // path, and the logPath is surfaced on the error for diagnosis.
-        expect(puts.length).toBe(1);
-        expect(err?.logPath).toBe(puts[0]?.key);
-      });
-    },
-  );
+      // (B) the detached process's logs were captured to R2 on the failure
+      // path, and the logPath is surfaced on the error for diagnosis.
+      expect(puts.length).toBe(1);
+      expect(err?.logPath).toBe(puts[0]?.key);
+    });
+  });
 });
 
 describe("makeSandboxCloudflareLive — log capture on boot failure (B)", () => {
-  it.effect(
-    "captures logs and surfaces logPath when the SDK wait rejects",
-    () => {
-      // The SDK rejects immediately (not a hang) — still a failed boot; logs
-      // must be captured and the logPath surfaced.
-      currentBox = makeFakeBox({
-        proc: {
-          waitForPort: () => Promise.reject(new Error("port closed")),
-          logs: { stdout: "starting…", stderr: "EADDRINUSE" },
-        },
-      });
-      const { bucket, puts } = makeBucket();
-      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+  it.effect("captures logs and surfaces logPath when the SDK wait rejects", () => {
+    // The SDK rejects immediately (not a hang) — still a failed boot; logs
+    // must be captured and the logPath surfaced.
+    currentBox = makeFakeBox({
+      proc: {
+        waitForPort: () => Promise.reject(new Error("port closed")),
+        logs: { stdout: "starting…", stderr: "EADDRINUSE" },
+      },
+    });
+    const { bucket, puts } = makeBucket();
+    const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
 
-      return Effect.gen(function* () {
-        const exit = yield* Effect.flatMap(SandboxTag, (s) =>
-          s.waitForPort({ handle, port: 4173, timeoutSec: 120 }),
-        ).pipe(Effect.provide(layer), Effect.exit);
+    return Effect.gen(function* () {
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.waitForPort({ handle, port: 4173, timeoutSec: 120 }),
+      ).pipe(Effect.provide(layer), Effect.exit);
 
-        const err = failureOf<PortNeverOpened>(exit);
-        expect(err?._tag).toBe("PortNeverOpened");
-        expect(puts.length).toBe(1);
-        expect(err?.logPath).toBe(puts[0]?.key);
-        // The NDJSON body carries the detached process's captured stderr.
-        expect(String(puts[0]?.body)).toContain("EADDRINUSE");
-      });
-    },
-  );
+      const err = failureOf<PortNeverOpened>(exit);
+      expect(err?._tag).toBe("PortNeverOpened");
+      expect(puts.length).toBe(1);
+      expect(err?.logPath).toBe(puts[0]?.key);
+      // The NDJSON body carries the detached process's captured stderr.
+      expect(String(puts[0]?.body)).toContain("EADDRINUSE");
+    });
+  });
 
-  it.effect(
-    "a log-capture failure does not mask the original PortNeverOpened",
-    () => {
-      // The process has vanished by the time we try to capture logs
-      // (`getProcess` → null on the second call). The original timeout must
-      // still surface — just without a logPath.
-      let call = 0;
-      currentBox = makeFakeBox({
-        proc: {
-          waitForPort: () => Promise.reject(new Error("port closed")),
-        },
-      });
-      currentBox.getProcess = vi.fn(async () => {
-        call += 1;
-        // First call (inside the wait) sees the proc; the capture pass sees
-        // none — the process is gone.
-        return call === 1
-          ? ({
-              id: "proc-1",
-              command: "pnpm dev",
-              waitForPort: () => Promise.reject(new Error("port closed")),
-              getLogs: async () => ({ stdout: "", stderr: "" }),
-            } as never)
-          : null;
-      });
-      const { bucket, puts } = makeBucket();
-      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+  it.effect("a log-capture failure does not mask the original PortNeverOpened", () => {
+    // The process has vanished by the time we try to capture logs
+    // (`getProcess` → null on the second call). The original timeout must
+    // still surface — just without a logPath.
+    let call = 0;
+    currentBox = makeFakeBox({
+      proc: {
+        waitForPort: () => Promise.reject(new Error("port closed")),
+      },
+    });
+    currentBox.getProcess = vi.fn(async () => {
+      call += 1;
+      // First call (inside the wait) sees the proc; the capture pass sees
+      // none — the process is gone.
+      return call === 1
+        ? ({
+            id: "proc-1",
+            command: "pnpm dev",
+            waitForPort: () => Promise.reject(new Error("port closed")),
+            getLogs: async () => ({ stdout: "", stderr: "" }),
+          } as never)
+        : null;
+    });
+    const { bucket, puts } = makeBucket();
+    const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
 
-      return Effect.gen(function* () {
-        const exit = yield* Effect.flatMap(SandboxTag, (s) =>
-          s.waitForPort({ handle, port: 4173, timeoutSec: 120 }),
-        ).pipe(Effect.provide(layer), Effect.exit);
+    return Effect.gen(function* () {
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.waitForPort({ handle, port: 4173, timeoutSec: 120 }),
+      ).pipe(Effect.provide(layer), Effect.exit);
 
-        const err = failureOf<PortNeverOpened>(exit);
-        expect(err?._tag).toBe("PortNeverOpened");
-        expect(err?.logPath).toBeUndefined();
-        expect(puts.length).toBe(0);
-      });
-    },
-  );
+      const err = failureOf<PortNeverOpened>(exit);
+      expect(err?._tag).toBe("PortNeverOpened");
+      expect(err?.logPath).toBeUndefined();
+      expect(puts.length).toBe(0);
+    });
+  });
 });
 
 describe("makeSandboxCloudflareLive — exposePort (C)", () => {
@@ -255,9 +231,9 @@ describe("makeSandboxCloudflareLive — exposePort (C)", () => {
     );
 
     return Effect.gen(function* () {
-      const result = yield* Effect.flatMap(SandboxTag, (s) =>
-        s.exposePort({ port: 4173 }),
-      ).pipe(Effect.provide(layer));
+      const result = yield* Effect.flatMap(SandboxTag, (s) => s.exposePort({ port: 4173 })).pipe(
+        Effect.provide(layer),
+      );
 
       expect(result.url).toBe("https://4173-fd.example.workers.dev/");
       expect(currentBox.exposePort).toHaveBeenCalledWith(4173, {
@@ -267,26 +243,24 @@ describe("makeSandboxCloudflareLive — exposePort (C)", () => {
     });
   });
 
-  it.effect(
-    "fails with ExposePortFailed when no preview hostname is configured",
-    () => {
-      currentBox = makeFakeBox({});
-      const { bucket } = makeBucket();
-      // No `previewHostname` — the SDK cannot build a URL, so the run fails
-      // loudly rather than handing the suite an unreachable localhost.
-      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+  it.effect("fails with ExposePortFailed when no preview hostname is configured", () => {
+    currentBox = makeFakeBox({});
+    const { bucket } = makeBucket();
+    // No `previewHostname` — the SDK cannot build a URL, so the run fails
+    // loudly rather than handing the suite an unreachable localhost.
+    const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
 
-      return Effect.gen(function* () {
-        const exit = yield* Effect.flatMap(SandboxTag, (s) =>
-          s.exposePort({ port: 4173 }),
-        ).pipe(Effect.provide(layer), Effect.exit);
+    return Effect.gen(function* () {
+      const exit = yield* Effect.flatMap(SandboxTag, (s) => s.exposePort({ port: 4173 })).pipe(
+        Effect.provide(layer),
+        Effect.exit,
+      );
 
-        const err = failureOf<{ _tag: string }>(exit);
-        expect(err?._tag).toBe("ExposePortFailed");
-        expect(currentBox.exposePort).not.toHaveBeenCalled();
-      });
-    },
-  );
+      const err = failureOf<{ _tag: string }>(exit);
+      expect(err?._tag).toBe("ExposePortFailed");
+      expect(currentBox.exposePort).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // (D) exec result folding — a command that RAN (any exit code, even one whose
@@ -294,8 +268,7 @@ describe("makeSandboxCloudflareLive — exposePort (C)", () => {
 // only a could-not-launch error is an Effect failure. This is what lets a
 // failing `playwright-demo` still surface its videoUri/logUri.
 describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
-  const execLayer = () =>
-    makeSandboxCloudflareLive(ns, makeBucket().bucket, "exec-1");
+  const execLayer = () => makeSandboxCloudflareLive(ns, makeBucket().bucket, "exec-1");
 
   it.effect("a non-zero exit is a result, not a failure", () =>
     Effect.gen(function* () {
@@ -363,36 +336,32 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       const exit = yield* Effect.flatMap(SandboxTag, (s) =>
         s.exec({ command: "anything", cwd: "/w", env: {} }),
       ).pipe(Effect.provide(execLayer()), Effect.exit);
-      const err = failureOf<{ _tag: string; stderrTail?: string; message?: string }>(
-        exit,
-      );
+      const err = failureOf<{ _tag: string; stderrTail?: string; message?: string }>(exit);
       expect(err?._tag).toBe("ExecFailed");
       expect(err?.stderrTail).toBe("container vanished");
       expect(err?.message).toBe("exec failed (exit -1): container vanished");
     }),
   );
 
-  it.effect(
-    "ExecFailed.stderrTail prefers stdout/stderr attached to the thrown error",
-    () =>
-      Effect.gen(function* () {
-        currentBox = makeFakeBox({ proc: null });
-        currentBox.exec = vi.fn(async () => {
-          const e = new Error("rpc reset") as Error & {
-            stdout: string;
-            stderr: string;
-          };
-          e.stdout = "partial out";
-          e.stderr = "partial err";
-          throw e;
-        });
-        const exit = yield* Effect.flatMap(SandboxTag, (s) =>
-          s.exec({ command: "deploy", cwd: "/w", env: {} }),
-        ).pipe(Effect.provide(execLayer()), Effect.exit);
-        const err = failureOf<{ _tag: string; stderrTail?: string }>(exit);
-        expect(err?._tag).toBe("ExecFailed");
-        expect(err?.stderrTail).toBe("partial err\npartial out");
-      }),
+  it.effect("ExecFailed.stderrTail prefers stdout/stderr attached to the thrown error", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => {
+        const e = new Error("rpc reset") as Error & {
+          stdout: string;
+          stderr: string;
+        };
+        e.stdout = "partial out";
+        e.stderr = "partial err";
+        throw e;
+      });
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({ command: "deploy", cwd: "/w", env: {} }),
+      ).pipe(Effect.provide(execLayer()), Effect.exit);
+      const err = failureOf<{ _tag: string; stderrTail?: string }>(exit);
+      expect(err?._tag).toBe("ExecFailed");
+      expect(err?.stderrTail).toBe("partial err\npartial out");
+    }),
   );
 
   it.effect("timeout throws surface as ExecTimeout with a self-diagnosing message", () =>
@@ -418,9 +387,7 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       expect(err?._tag).toBe("ExecTimeout");
       expect(err?.timeoutSec).toBe(900);
       expect(err?.command).toBe("pnpm build && wrangler deploy");
-      expect(err?.message).toBe(
-        "exec timed out after 900s: pnpm build && wrangler deploy",
-      );
+      expect(err?.message).toBe("exec timed out after 900s: pnpm build && wrangler deploy");
     }),
   );
 
@@ -466,9 +433,7 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
     // no cwd requested → not applicable
     expect(isWorkingDirFailure(cd(), undefined)).toBe(false);
     // unrelated stderr (a genuine lint finding) is left alone
-    expect(
-      isWorkingDirFailure({ exitCode: 1, stdout: "", stderr: "1 error" }, "/w"),
-    ).toBe(false);
+    expect(isWorkingDirFailure({ exitCode: 1, stdout: "", stderr: "1 error" }, "/w")).toBe(false);
   });
 
   it.effect("inlines only a bounded stdout tail; full log streams to R2", () =>
@@ -498,35 +463,33 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
     }),
   );
 
-  it.effect(
-    "redactValues scrubs secret values from both the R2 log and the inline tail",
-    () =>
-      Effect.gen(function* () {
-        currentBox = makeFakeBox({ proc: null });
-        currentBox.exec = vi.fn(async () => ({
-          exitCode: 0,
-          duration: 1,
-          stdout: "using token super-secret for install",
-          stderr: "auth failed: super-secret",
-        }));
-        const { bucket, puts } = makeBucket();
-        const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
-        const exit = yield* Effect.flatMap(SandboxTag, (s) =>
-          s.exec({
-            command: "pnpm install",
-            cwd: "/w",
-            env: {},
-            redactValues: ["super-secret"],
-          }),
-        ).pipe(Effect.provide(layer), Effect.exit);
-        expect(Exit.isSuccess(exit)).toBe(true);
-        if (Exit.isSuccess(exit)) {
-          expect(exit.value.stdout).not.toContain("super-secret");
-          expect(exit.value.stderr).not.toContain("super-secret");
-          expect(exit.value.stdout).toContain("***");
-        }
-        const logBody = puts.map((p) => String(p.body)).join("");
-        expect(logBody).not.toContain("super-secret");
-      }),
+  it.effect("redactValues scrubs secret values from both the R2 log and the inline tail", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => ({
+        exitCode: 0,
+        duration: 1,
+        stdout: "using token super-secret for install",
+        stderr: "auth failed: super-secret",
+      }));
+      const { bucket, puts } = makeBucket();
+      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({
+          command: "pnpm install",
+          cwd: "/w",
+          env: {},
+          redactValues: ["super-secret"],
+        }),
+      ).pipe(Effect.provide(layer), Effect.exit);
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.stdout).not.toContain("super-secret");
+        expect(exit.value.stderr).not.toContain("super-secret");
+        expect(exit.value.stdout).toContain("***");
+      }
+      const logBody = puts.map((p) => String(p.body)).join("");
+      expect(logBody).not.toContain("super-secret");
+    }),
   );
 });

@@ -56,10 +56,7 @@ export const makeChildRunsFake = (opts?: {
    * test exercise `waitForChildren`'s loop (e.g. pending on call 0, terminal on
    * call 1).
    */
-  pollFn?: (
-    ids: readonly string[],
-    call: number,
-  ) => readonly ChildStatusRecord[];
+  pollFn?: (ids: readonly string[], call: number) => readonly ChildStatusRecord[];
 }): { layer: Layer.Layer<ChildRuns>; state: ChildRunsFakeState } => {
   const state: ChildRunsFakeState = { spawned: [], polls: 0 };
   const seen = new Set<string>(opts?.existing ?? []);
@@ -89,9 +86,7 @@ export const makeChildRunsFake = (opts?: {
       Effect.sync(() => {
         const call = state.polls;
         state.polls += 1;
-        return opts?.pollFn !== undefined
-          ? opts.pollFn(ids, call)
-          : ids.map(seedToRecord);
+        return opts?.pollFn !== undefined ? opts.pollFn(ids, call) : ids.map(seedToRecord);
       }),
   };
 

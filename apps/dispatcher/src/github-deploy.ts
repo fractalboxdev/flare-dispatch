@@ -27,8 +27,7 @@ const ghHeaders = (token: string): Record<string, string> => ({
 
 /** Strip a `refs/heads/` or `refs/tags/` prefix to the bare name GitHub's
  *  `?sha=` / branch APIs expect. A bare name passes through unchanged. */
-export const shortRef = (ref: string): string =>
-  ref.replace(/^refs\/(heads|tags)\//, "");
+export const shortRef = (ref: string): string => ref.replace(/^refs\/(heads|tags)\//, "");
 
 /** A short, single-line label for a commit option (`<sha7> <subject>`). */
 export const commitLabel = (sha: string, message: string): string => {
@@ -65,15 +64,12 @@ export const listBranches = async (
   const token = await installationToken(env, repo);
   if (token === null) return null;
   try {
-    const res = await fetch(
-      `${API_BASE}/repos/${repo}/branches?per_page=${limit}`,
-      { headers: ghHeaders(token) },
-    );
+    const res = await fetch(`${API_BASE}/repos/${repo}/branches?per_page=${limit}`, {
+      headers: ghHeaders(token),
+    });
     if (!res.ok) return null;
     const body = (await res.json()) as ReadonlyArray<{ name?: unknown }>;
-    return body
-      .map((b) => (typeof b.name === "string" ? b.name : ""))
-      .filter((n) => n.length > 0);
+    return body.map((b) => (typeof b.name === "string" ? b.name : "")).filter((n) => n.length > 0);
   } catch {
     return null;
   }
@@ -99,7 +95,9 @@ export const listRecentCommits = async (
       commit?: { message?: unknown };
     }>;
     return body
-      .filter((c): c is { sha: string; commit?: { message?: unknown } } => typeof c.sha === "string")
+      .filter(
+        (c): c is { sha: string; commit?: { message?: unknown } } => typeof c.sha === "string",
+      )
       .map((c) => ({
         sha: c.sha,
         label: commitLabel(c.sha, typeof c.commit?.message === "string" ? c.commit.message : ""),

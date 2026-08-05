@@ -60,9 +60,7 @@ export type CommitFilesOptions = {
    */
   readonly updateExisting?: boolean;
   /** Open a PR. `false` ⇒ push the branch only, open no PR. */
-  readonly pr:
-    | { readonly title: string; readonly body: string; readonly draft?: boolean }
-    | false;
+  readonly pr: { readonly title: string; readonly body: string; readonly draft?: boolean } | false;
   /** API base override (tests / GHE). */
   readonly apiBase?: string;
   /** `fetch` override — defaults to the global `fetch`. */
@@ -135,8 +133,7 @@ export const commitFilesAndOpenPr = async (
 
   // 1. Base branch + its tip commit.
   const baseBranch =
-    opts.baseBranch ??
-    (await api<{ default_branch: string }>("")).json.default_branch;
+    opts.baseBranch ?? (await api<{ default_branch: string }>("")).json.default_branch;
 
   // If the head ref already exists and we won't update it, this is a no-op.
   // A 404 on the head ref means "fresh branch" → proceed to create it.
@@ -152,14 +149,11 @@ export const commitFilesAndOpenPr = async (
   }
 
   const baseRef = (
-    await api<{ object: { sha: string } }>(
-      `/git/ref/heads/${encodeURIComponent(baseBranch)}`,
-    )
+    await api<{ object: { sha: string } }>(`/git/ref/heads/${encodeURIComponent(baseBranch)}`)
   ).json.object.sha;
 
-  const baseTreeSha = (
-    await api<{ tree: { sha: string } }>(`/git/commits/${baseRef}`)
-  ).json.tree.sha;
+  const baseTreeSha = (await api<{ tree: { sha: string } }>(`/git/commits/${baseRef}`)).json.tree
+    .sha;
 
   // 2. A blob per written file → tree entries; deletions are `sha: null` entries.
   const writeEntries = await Promise.all(

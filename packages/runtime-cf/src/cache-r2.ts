@@ -40,15 +40,10 @@ import { Effect, Layer } from "effect";
 import { Cache, CacheError, type CacheService } from "@fractalboxdev/flare-dispatch-core";
 import { readContainerFile } from "./container-file-stream";
 import { putStream } from "./r2-put-stream";
-import {
-  composeRestoreOr,
-  type RestoreFn,
-  type SaveFn,
-} from "./cache-restore-or";
+import { composeRestoreOr, type RestoreFn, type SaveFn } from "./cache-restore-or";
 
 /** Per-repo, content-addressed R2 key for a cache entry. */
-const archiveKey = (repo: string, key: string): string =>
-  `cache/${repo}/${key}.tar.gz`;
+const archiveKey = (repo: string, key: string): string => `cache/${repo}/${key}.tar.gz`;
 
 /** In-container scratch path the tarball is packed to / extracted from. */
 const TARBALL_PATH = "/tmp/fd-cache.tar.gz";
@@ -70,10 +65,9 @@ export const makeCacheR2Live = (
     Effect.tryPromise({
       try: async () => {
         const box = getSandbox(ns, opts.container.id);
-        const tar = await box.exec(
-          `tar czf ${TARBALL_PATH} ${opts.paths.join(" ")}`,
-          { cwd: opts.dir },
-        );
+        const tar = await box.exec(`tar czf ${TARBALL_PATH} ${opts.paths.join(" ")}`, {
+          cwd: opts.dir,
+        });
         if (tar.exitCode !== 0) {
           throw new Error(`tar czf exited ${tar.exitCode}: ${tar.stderr}`);
         }
@@ -88,8 +82,7 @@ export const makeCacheR2Live = (
           contentType: "application/gzip",
         });
       },
-      catch: (cause) =>
-        new CacheError({ phase: "save", key: opts.key, cause }),
+      catch: (cause) => new CacheError({ phase: "save", key: opts.key, cause }),
     });
 
   const restore: RestoreFn = (opts) =>
@@ -107,8 +100,7 @@ export const makeCacheR2Live = (
         }
         return true;
       },
-      catch: (cause) =>
-        new CacheError({ phase: "restore", key: opts.key, cause }),
+      catch: (cause) => new CacheError({ phase: "restore", key: opts.key, cause }),
     });
 
   const service: CacheService = {

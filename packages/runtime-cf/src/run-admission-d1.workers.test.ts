@@ -80,7 +80,13 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
   /** Fill a pool to the cap with live admitted peers. */
   const fillPool = async (pool: AdmissionPool, heartbeatAt: number) => {
     for (let i = 0; i < ADMISSION_CAP_DEFAULT; i++) {
-      await seed(`peer-${pool}-${String(i).padStart(2, "0")}`, pool, "admitted", T0 - 1_000, heartbeatAt);
+      await seed(
+        `peer-${pool}-${String(i).padStart(2, "0")}`,
+        pool,
+        "admitted",
+        T0 - 1_000,
+        heartbeatAt,
+      );
     }
   };
 
@@ -110,17 +116,13 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     await seed("parent", "lean", "admitted", T0 - 500_000, T0);
     const store = makeRunAdmissionD1(bindings.db, () => T0);
 
-    const child = await Effect.runPromise(
-      store.enqueue("child", "lean", "parent"),
-    );
+    const child = await Effect.runPromise(store.enqueue("child", "lean", "parent"));
     expect(child.enqueuedAt).toBe(T0 - 500_000);
   });
 
   it("a missing parent row degrades to the child's own clock", async () => {
     const store = makeRunAdmissionD1(bindings.db, () => T0);
-    const child = await Effect.runPromise(
-      store.enqueue("orphan", "lean", "long-gone-parent"),
-    );
+    const child = await Effect.runPromise(store.enqueue("orphan", "lean", "long-gone-parent"));
     expect(child.enqueuedAt).toBe(T0);
   });
 
@@ -128,9 +130,7 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     const store = makeRunAdmissionD1(bindings.db, () => T0);
     const { enqueuedAt } = await Effect.runPromise(store.enqueue(A, "lean"));
 
-    const observed = await Effect.runPromise(
-      store.attempt(A, "lean", enqueuedAt),
-    );
+    const observed = await Effect.runPromise(store.attempt(A, "lean", enqueuedAt));
     expect(observed.admitted).toBe(true);
     expect(await row(A)).toMatchObject({
       state: "admitted",
@@ -148,9 +148,7 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     await Effect.runPromise(store.attempt(A, "lean", enqueuedAt));
 
     clock = T0 + 20_000;
-    const replayed = await Effect.runPromise(
-      store.attempt(A, "lean", enqueuedAt),
-    );
+    const replayed = await Effect.runPromise(store.attempt(A, "lean", enqueuedAt));
     expect(replayed.admitted).toBe(true);
     // The short-circuit refreshed the holder heartbeat.
     expect((await row(A))?.heartbeat_at).toBe(T0 + 20_000);
@@ -161,9 +159,7 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     const store = makeRunAdmissionD1(bindings.db, () => T0);
     const { enqueuedAt } = await Effect.runPromise(store.enqueue(A, "lean"));
 
-    const observed = await Effect.runPromise(
-      store.attempt(A, "lean", enqueuedAt),
-    );
+    const observed = await Effect.runPromise(store.attempt(A, "lean", enqueuedAt));
     expect(observed).toMatchObject({
       admitted: false,
       position: 0,
@@ -184,15 +180,11 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     const b = await Effect.runPromise(store.enqueue(B, "lean"));
 
     // B polls first (claim races are arrival-order-free) — must NOT barge.
-    const bObserved = await Effect.runPromise(
-      store.attempt(B, "lean", b.enqueuedAt),
-    );
+    const bObserved = await Effect.runPromise(store.attempt(B, "lean", b.enqueuedAt));
     expect(bObserved.admitted).toBe(false);
     expect(bObserved.position).toBe(1); // A is ahead
     // A takes the slot; only then can B (pool now full again) keep waiting.
-    const aObserved = await Effect.runPromise(
-      store.attempt(A, "lean", a.enqueuedAt),
-    );
+    const aObserved = await Effect.runPromise(store.attempt(A, "lean", a.enqueuedAt));
     expect(aObserved.admitted).toBe(true);
   });
 
@@ -217,9 +209,7 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     const store = makeRunAdmissionD1(bindings.db, () => T0);
     const b = await Effect.runPromise(store.enqueue(B, "lean"));
 
-    const observed = await Effect.runPromise(
-      store.attempt(B, "lean", b.enqueuedAt),
-    );
+    const observed = await Effect.runPromise(store.attempt(B, "lean", b.enqueuedAt));
     expect(observed.admitted).toBe(true);
   });
 
@@ -229,9 +219,7 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     const store = makeRunAdmissionD1(bindings.db, () => T0);
     const { enqueuedAt } = await Effect.runPromise(store.enqueue(A, "lean"));
 
-    const observed = await Effect.runPromise(
-      store.attempt(A, "lean", enqueuedAt),
-    );
+    const observed = await Effect.runPromise(store.attempt(A, "lean", enqueuedAt));
     expect(observed.admitted).toBe(true);
   });
 
@@ -240,9 +228,7 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     const store = makeRunAdmissionD1(bindings.db, () => T0);
     const { enqueuedAt } = await Effect.runPromise(store.enqueue(A, "browser"));
 
-    const observed = await Effect.runPromise(
-      store.attempt(A, "browser", enqueuedAt),
-    );
+    const observed = await Effect.runPromise(store.attempt(A, "browser", enqueuedAt));
     expect(observed.admitted).toBe(true);
   });
 
@@ -288,16 +274,12 @@ describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
     const store = makeRunAdmissionD1(bindings.db, () => T0, 2);
     const { enqueuedAt } = await Effect.runPromise(store.enqueue(A, "lean"));
 
-    const observed = await Effect.runPromise(
-      store.attempt(A, "lean", enqueuedAt),
-    );
+    const observed = await Effect.runPromise(store.attempt(A, "lean", enqueuedAt));
     expect(observed).toMatchObject({ admitted: false, poolBusy: 2 });
 
     // The same state under the DEFAULT cap admits — only the cap differs.
     const storeDefault = makeRunAdmissionD1(bindings.db, () => T0);
-    const admitted = await Effect.runPromise(
-      storeDefault.attempt(A, "lean", enqueuedAt),
-    );
+    const admitted = await Effect.runPromise(storeDefault.attempt(A, "lean", enqueuedAt));
     expect(admitted.admitted).toBe(true);
   });
 });

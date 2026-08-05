@@ -16,9 +16,7 @@
   // GitHub App install flow substitutes the request origin into the manifest,
   // so hitting the install page on this host wires the App's webhook/callback
   // URLs to it.
-  "routes": [
-    { "pattern": "flare-dispatch.fractalbox.dev", "custom_domain": true }
-  ],
+  "routes": [{ "pattern": "flare-dispatch.fractalbox.dev", "custom_domain": true }],
 
   // Workers AI — backs the modelGateway capability the pr-review engine calls.
   // The binding IS the auth (account-billed), so no model API key is needed.
@@ -52,15 +50,15 @@
     // Deploy console (/deploy) Access application AUD. Distinct from the viewer
     // ACCESS_AUD. The app's policy allows the GitHub `fractalboxdev/devs` team;
     // per-env authorization is CONFIG_KV `deploy.env-authz`. See deploy-access.ts.
-    "DEPLOY_ACCESS_AUD": "44c3a07df1b0a4e454b28da9f55e7dbf3e279d1d09274667467a4d41ba79cafe"
+    "DEPLOY_ACCESS_AUD": "44c3a07df1b0a4e454b28da9f55e7dbf3e279d1d09274667467a4d41ba79cafe",
   },
 
   "workflows": [
     {
       "name": "runs-workflow",
       "binding": "RUNS_WORKFLOW",
-      "class_name": "RunWorkflow"
-    }
+      "class_name": "RunWorkflow",
+    },
   ],
 
   // One Dockerfile (Dockerfile.sandbox = cloudflare/sandbox base: Node+git+curl)
@@ -78,20 +76,20 @@
       "image": "./infra/Dockerfile.sandbox",
       "image_vars": { "WITH_BUILD_TOOLS": "true", "WITH_RUST": "true" },
       "instance_type": "standard-4",
-      "max_instances": 16
+      "max_instances": 16,
     },
     {
       "class_name": "RunSandboxBrowser",
       "image": "./infra/Dockerfile.sandbox",
       "instance_type": "standard-2",
-      "max_instances": 16
+      "max_instances": 16,
     },
     {
       "class_name": "RunSandboxAgent",
       "image": "./infra/Dockerfile.sandbox",
       "instance_type": "standard-3",
-      "max_instances": 8
-    }
+      "max_instances": 8,
+    },
   ],
 
   "durable_objects": {
@@ -99,38 +97,36 @@
       { "name": "RUNS_SANDBOX", "class_name": "RunSandbox" },
       { "name": "RUNS_SANDBOX_BROWSER", "class_name": "RunSandboxBrowser" },
       { "name": "AGENT_BUDGET", "class_name": "AgentBudget" },
-      { "name": "RUNS_SANDBOX_AGENT", "class_name": "RunSandboxAgent" }
-    ]
+      { "name": "RUNS_SANDBOX_AGENT", "class_name": "RunSandboxAgent" },
+    ],
   },
 
   "migrations": [
     { "tag": "v0", "new_sqlite_classes": ["RunSandbox"] },
     { "tag": "v1", "new_sqlite_classes": ["RunSandboxBrowser"] },
     { "tag": "v2", "new_sqlite_classes": ["AgentBudget"] },
-    { "tag": "v3", "new_sqlite_classes": ["RunSandboxAgent"] }
+    { "tag": "v3", "new_sqlite_classes": ["RunSandboxAgent"] },
   ],
 
-  "r2_buckets": [
-    { "binding": "RUNS_STORAGE", "bucket_name": "flare-dispatch" }
-  ],
+  "r2_buckets": [{ "binding": "RUNS_STORAGE", "bucket_name": "flare-dispatch" }],
 
   "d1_databases": [
     {
       "binding": "RUNS_METADATA",
       "database_name": "flare-dispatch",
       "database_id": "3a365bf1-fae3-4a29-bef7-5b020f8cb283",
-      "migrations_dir": "infra/migrations"
-    }
+      "migrations_dir": "infra/migrations",
+    },
   ],
 
   "kv_namespaces": [
     {
       "binding": "CONFIG_KV",
-      "id": "dff3e9657cf34c94955c31a333084f1c"
+      "id": "dff3e9657cf34c94955c31a333084f1c",
     },
     {
       "binding": "IDEMPOTENCY_KV",
-      "id": "3002db8dac904fc794cf2686fb5dfe57"
-    }
-  ]
+      "id": "3002db8dac904fc794cf2686fb5dfe57",
+    },
+  ],
 }

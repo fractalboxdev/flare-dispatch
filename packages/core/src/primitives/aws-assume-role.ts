@@ -104,11 +104,12 @@ export const awsAssumeRole = (opts: {
       // wraps the cause in `<Code>...</Code>`.
       const text = yield* Effect.tryPromise({
         try: () => res.text(),
-        catch: () => new StsAssumeRoleFailed({
-          provider: "aws",
-          status: res.status,
-          reason: "other",
-        }),
+        catch: () =>
+          new StsAssumeRoleFailed({
+            provider: "aws",
+            status: res.status,
+            reason: "other",
+          }),
       });
       const code = xmlText(text, "Code") ?? "";
       const reason: "mistrusted-issuer" | "role-mismatch" | "audience-mismatch" | "other" =
@@ -128,11 +129,12 @@ export const awsAssumeRole = (opts: {
     //    `AssumeRoleWithWebIdentityResponse > AssumeRoleWithWebIdentityResult > Credentials`.
     const xml = yield* Effect.tryPromise({
       try: () => res.text(),
-      catch: () => new StsAssumeRoleFailed({
-        provider: "aws",
-        status: res.status,
-        reason: "other",
-      }),
+      catch: () =>
+        new StsAssumeRoleFailed({
+          provider: "aws",
+          status: res.status,
+          reason: "other",
+        }),
     });
     const accessKeyId = xmlText(xml, "AccessKeyId") ?? "";
     const secretAccessKey = xmlText(xml, "SecretAccessKey") ?? "";

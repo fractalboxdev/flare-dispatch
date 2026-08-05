@@ -6,11 +6,7 @@
 // material is configured — the log surfaces are never silently open.
 
 import type { Env } from "./env";
-import {
-  isValidExecutionId,
-  resolveLogLinkSecret,
-  verifyLogToken,
-} from "./log-token";
+import { isValidExecutionId, resolveLogLinkSecret, verifyLogToken } from "./log-token";
 
 const json = (body: unknown, status: number): Response =>
   new Response(JSON.stringify(body), {
@@ -36,18 +32,14 @@ export const gateLogAccess = async (
   url: URL,
 ): Promise<Response | null> => {
   if (!isValidExecutionId(executionId)) {
-    return json(
-      { error: "invalid_execution_id", message: "malformed execution id" },
-      400,
-    );
+    return json({ error: "invalid_execution_id", message: "malformed execution id" }, 400);
   }
   const secret = resolveLogLinkSecret(env);
   if (secret === undefined) {
     return json(
       {
         error: "logs_not_configured",
-        message:
-          "log viewing is off on this deploy (set LOG_LINK_SECRET, or HMAC_SECRET)",
+        message: "log viewing is off on this deploy (set LOG_LINK_SECRET, or HMAC_SECRET)",
       },
       503,
     );

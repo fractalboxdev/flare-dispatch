@@ -66,9 +66,7 @@ describe("extractCode", () => {
       subject: "Your activation code",
       text: "Confirm with code WXYZ-4821 to activate your workspace.",
     };
-    expect(
-      extractCode(msg, { codePattern: /code\s+([A-Z]{4}-\d{4})/ }),
-    ).toBe("WXYZ-4821");
+    expect(extractCode(msg, { codePattern: /code\s+([A-Z]{4}-\d{4})/ })).toBe("WXYZ-4821");
   });
 
   it("returns undefined when no code qualifies", () => {
@@ -87,9 +85,7 @@ describe("extractLink", () => {
       "https://auth.acme.com/u/verify?ticket=AbC123XyZ&state=hQ9\n\n" +
       "[logo] https://cdn.acme.com/assets/logo.png\n" +
       "Don't want these? https://email.acme.com/unsubscribe?u=42&id=99\n";
-    expect(extractLink(text)).toBe(
-      "https://auth.acme.com/u/verify?ticket=AbC123XyZ&state=hQ9",
-    );
+    expect(extractLink(text)).toBe("https://auth.acme.com/u/verify?ticket=AbC123XyZ&state=hQ9");
   });
 
   it("prefers a URL on the requested linkHost (incl. subdomains)", () => {
@@ -105,9 +101,7 @@ describe("extractLink", () => {
     const text =
       "Visit https://acme.com\n" +
       "Or open https://acme.com/r/9f8a7b6c5d4e3f2a1b0c?ref=email-12345\n";
-    expect(extractLink(text)).toBe(
-      "https://acme.com/r/9f8a7b6c5d4e3f2a1b0c?ref=email-12345",
-    );
+    expect(extractLink(text)).toBe("https://acme.com/r/9f8a7b6c5d4e3f2a1b0c?ref=email-12345");
   });
 
   it("returns undefined when linkHost is asked for but nothing matches", () => {

@@ -24,11 +24,7 @@
 
 import { Effect } from "effect";
 import type { ChildSpawnFailed } from "../errors";
-import {
-  type ChildRunHandle,
-  ChildRuns,
-  spawnChildRun,
-} from "../services/child-runs";
+import { type ChildRunHandle, ChildRuns, spawnChildRun } from "../services/child-runs";
 import type { Shard } from "./sharded";
 
 /** A fan-out target paired with its 1-based shard coordinates. */
@@ -72,19 +68,15 @@ export const fanOut = <T>(opts: {
 }): Effect.Effect<readonly ChildRunHandle[], ChildSpawnFailed, ChildRuns> => {
   const total = opts.items.length;
   return Effect.forEach(
-    opts.items.map(
-      (item, i): FanOutShard<T> => ({
-        item,
-        shard: { index: i + 1, total },
-      }),
-    ),
+    opts.items.map((item, i): FanOutShard<T> => ({
+      item,
+      shard: { index: i + 1, total },
+    })),
     ({ item, shard }) =>
       spawnChildRun({
         run: opts.run,
         input: opts.toInput(item, shard),
-        ...(opts.toInstanceId !== undefined
-          ? { instanceId: opts.toInstanceId(item, shard) }
-          : {}),
+        ...(opts.toInstanceId !== undefined ? { instanceId: opts.toInstanceId(item, shard) } : {}),
       }),
     { concurrency: opts.concurrency ?? (total === 0 ? 1 : total) },
   );

@@ -168,8 +168,7 @@ export async function* iterateTarFiles(
 
       const prefix = field(header, 345, 155);
       const shortName = field(header, 0, 100);
-      const name =
-        pendingLongName ?? (prefix !== "" ? `${prefix}/${shortName}` : shortName);
+      const name = pendingLongName ?? (prefix !== "" ? `${prefix}/${shortName}` : shortName);
       pendingLongName = undefined;
 
       // Only regular files ('0' or NUL) are served; directories, links, and
@@ -269,9 +268,7 @@ export const expandTarGzToR2 = async (
   let written = 0;
   let totalBytes = 0;
   for await (const file of iterateTarFiles(tarStream, caps)) {
-    const rel = file.path.startsWith(stripPrefix)
-      ? file.path.slice(stripPrefix.length)
-      : file.path;
+    const rel = file.path.startsWith(stripPrefix) ? file.path.slice(stripPrefix.length) : file.path;
     // Defence: never let an archive write outside its own prefix.
     if (rel === "" || rel.split("/").some((s) => s === "" || s === "..")) {
       continue;

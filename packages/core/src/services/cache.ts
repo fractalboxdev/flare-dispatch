@@ -51,10 +51,6 @@ export const cache = {
     dir?: string;
     onMiss: () => Effect.Effect<A, E, R>;
   }) => Effect.flatMap(Cache, (c) => c.restoreOr(opts)),
-  save: (opts: {
-    key: string;
-    paths: readonly string[];
-    container: Container;
-    dir?: string;
-  }) => Effect.flatMap(Cache, (c) => c.save(opts)),
+  save: (opts: { key: string; paths: readonly string[]; container: Container; dir?: string }) =>
+    Effect.flatMap(Cache, (c) => c.save(opts)),
 } as const;

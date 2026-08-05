@@ -46,25 +46,17 @@ export const makeOidcFake = (
 
   const base64url = (str: string): string => {
     // btoa is in the Worker runtime + Node 18+; use it directly.
-    return btoa(str)
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/g, "");
+    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
   };
 
   const service: OidcService = {
     sign: ({ audience, subject, ttlSec, claims }) =>
       Effect.sync((): OidcToken => {
         state.signCalls.push({ audience, subject, ttlSec, claims });
-        const effectiveTtl = Math.min(
-          ttlSec ?? OIDC_TOKEN_TTL_SEC_DEFAULT,
-          OIDC_TOKEN_MAX_TTL_SEC,
-        );
+        const effectiveTtl = Math.min(ttlSec ?? OIDC_TOKEN_TTL_SEC_DEFAULT, OIDC_TOKEN_MAX_TTL_SEC);
         const iat = Math.floor((now ?? Date.now()) / 1000);
         const exp = iat + effectiveTtl;
-        const header = base64url(
-          JSON.stringify({ alg: "ES256", typ: "JWT", kid: "fake-kid" }),
-        );
+        const header = base64url(JSON.stringify({ alg: "ES256", typ: "JWT", kid: "fake-kid" }));
         const payload = base64url(
           JSON.stringify({
             iss: issuer,

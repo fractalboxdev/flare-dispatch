@@ -11,8 +11,7 @@
 // Pure — no capability needed (like `sharded`). Layer: 03-dsl § Primitives.
 
 /** The UTC calendar date (`YYYY-MM-DD`) for an epoch-ms instant. */
-export const isoDate = (ms: number): string =>
-  new Date(ms).toISOString().slice(0, 10);
+export const isoDate = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
 /**
  * Split a comma / whitespace / newline-separated list (e.g. a CONFIG_KV repo or

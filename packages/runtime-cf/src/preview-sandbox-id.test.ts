@@ -9,9 +9,7 @@ const DNS_LABEL = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 describe("previewSafeSandboxId", () => {
   it("lowercases uppercase org names (the numu cdp-acceptance regression)", () => {
     // The exact id shape that made `expose-app` throw `ExposePortFailed`.
-    const out = previewSafeSandboxId(
-      "cdp-acceptance:Numu-AI_numu-monorepo:6758041bc1ee",
-    );
+    const out = previewSafeSandboxId("cdp-acceptance:Numu-AI_numu-monorepo:6758041bc1ee");
     expect(out).toMatch(DNS_LABEL);
     expect(out).not.toMatch(/[A-Z]/);
     // The unique sha suffix survives so executions stay distinct.
@@ -19,9 +17,7 @@ describe("previewSafeSandboxId", () => {
   });
 
   it("replaces `:` and `_` separators with `-`", () => {
-    expect(previewSafeSandboxId("run:owner_repo:abc123")).toBe(
-      "run-owner-repo-abc123",
-    );
+    expect(previewSafeSandboxId("run:owner_repo:abc123")).toBe("run-owner-repo-abc123");
   });
 
   it("keeps the preview-URL label within the 63-char DNS limit", () => {

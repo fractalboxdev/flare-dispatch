@@ -59,10 +59,7 @@ const bytesToHex = (bytes: ArrayBuffer): string =>
     .join("");
 
 /** Import the shared secret as an HMAC-SHA256 CryptoKey. */
-const importKey = (
-  secret: string,
-  usages: ("sign" | "verify")[],
-): Promise<CryptoKey> =>
+const importKey = (secret: string, usages: ("sign" | "verify")[]): Promise<CryptoKey> =>
   crypto.subtle.importKey(
     "raw",
     encoder.encode(secret),
@@ -75,10 +72,7 @@ const importKey = (
  * Sign raw body bytes — returns the `sha256=<hex>` header value. Used by tests
  * (and any in-process caller) to produce a signature the verifier accepts.
  */
-export const sign = async (
-  secret: string,
-  body: ArrayBuffer | Uint8Array,
-): Promise<string> => {
+export const sign = async (secret: string, body: ArrayBuffer | Uint8Array): Promise<string> => {
   const key = await importKey(secret, ["sign"]);
   const data = body instanceof Uint8Array ? body : new Uint8Array(body);
   const mac = await crypto.subtle.sign("HMAC", key, data as BufferSource);
@@ -125,17 +119,8 @@ export const constantTimeEqual = async (
     false,
     ["sign", "verify"],
   );
-  const macA = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    encoder.encode(a) as BufferSource,
-  );
-  return crypto.subtle.verify(
-    "HMAC",
-    key,
-    macA as BufferSource,
-    encoder.encode(b) as BufferSource,
-  );
+  const macA = await crypto.subtle.sign("HMAC", key, encoder.encode(a) as BufferSource);
+  return crypto.subtle.verify("HMAC", key, macA as BufferSource, encoder.encode(b) as BufferSource);
 };
 
 /**
@@ -163,10 +148,5 @@ export const verify = async (
 
   const key = await importKey(secret, ["verify"]);
   const data = body instanceof Uint8Array ? body : new Uint8Array(body);
-  return crypto.subtle.verify(
-    "HMAC",
-    key,
-    sigBytes as BufferSource,
-    data as BufferSource,
-  );
+  return crypto.subtle.verify("HMAC", key, sigBytes as BufferSource, data as BufferSource);
 };

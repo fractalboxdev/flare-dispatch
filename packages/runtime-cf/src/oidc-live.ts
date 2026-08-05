@@ -93,9 +93,7 @@ const parseJwk = (json: string): SigningJwk => {
   }
   const j = parsed as JsonWebKey;
   if (j.kty !== "EC" || j.crv !== "P-256") {
-    throw new Error(
-      "OIDC_SIGNING_JWK must be a P-256 EC key (kty=EC, crv=P-256)",
-    );
+    throw new Error("OIDC_SIGNING_JWK must be a P-256 EC key (kty=EC, crv=P-256)");
   }
   if (typeof (j as { d?: unknown }).d !== "string") {
     throw new Error("OIDC_SIGNING_JWK is missing the private `d` component");
@@ -105,13 +103,7 @@ const parseJwk = (json: string): SigningJwk => {
 
 /** Import the JWK as a sign-capable WebCrypto key. */
 const importSigningKey = (jwk: SigningJwk): Promise<CryptoKey> =>
-  crypto.subtle.importKey(
-    "jwk",
-    jwk,
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign"],
-  );
+  crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
 
 /**
  * Build the live `Oidc` Layer from the deploy's signing config.
@@ -135,10 +127,7 @@ export const makeOidcLive = (config: OidcLiveConfig): Layer.Layer<Oidc> => {
       Effect.tryPromise({
         try: async () => {
           const { jwk, key } = await resolveKey();
-          const ttl = Math.min(
-            ttlSec ?? OIDC_TOKEN_TTL_SEC_DEFAULT,
-            OIDC_TOKEN_MAX_TTL_SEC,
-          );
+          const ttl = Math.min(ttlSec ?? OIDC_TOKEN_TTL_SEC_DEFAULT, OIDC_TOKEN_MAX_TTL_SEC);
           const iat = Math.floor(Date.now() / 1000);
           const exp = iat + ttl;
           const headerSegment = base64url(
@@ -175,9 +164,7 @@ export const makeOidcLive = (config: OidcLiveConfig): Layer.Layer<Oidc> => {
           const message = cause instanceof Error ? cause.message : String(cause);
           // Heuristic: key-import / JSON-parse failures are key-load; anything
           // else (almost certainly a SubtleCrypto sign reject) is subtle-sign.
-          const reason: "key-load" | "subtle-sign" = /JWK|JSON|import|component/i.test(
-            message,
-          )
+          const reason: "key-load" | "subtle-sign" = /JWK|JSON|import|component/i.test(message)
             ? "key-load"
             : "subtle-sign";
           return new OidcSigningFailed({ reason, cause });

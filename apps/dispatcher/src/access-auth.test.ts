@@ -27,8 +27,7 @@ const b64url = (bytes: Uint8Array | ArrayBuffer): string => {
   for (let i = 0; i < view.length; i++) binary += String.fromCharCode(view[i]!);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 };
-const b64urlJson = (obj: unknown): string =>
-  b64url(new TextEncoder().encode(JSON.stringify(obj)));
+const b64urlJson = (obj: unknown): string => b64url(new TextEncoder().encode(JSON.stringify(obj)));
 
 let keyPair: CryptoKeyPair;
 let publicJwk: AccessJwk;
@@ -36,7 +35,12 @@ let publicJwk: AccessJwk;
 beforeEach(async () => {
   clearAccessCertsCache();
   keyPair = (await crypto.subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
     true,
     ["sign", "verify"],
   )) as CryptoKeyPair;
@@ -96,14 +100,10 @@ describe("resolveViewerAccessMode", () => {
     expect(resolveViewerAccessMode({} as Env)).toBe("required");
   });
   it("honours the explicit token-only opt-out", () => {
-    expect(resolveViewerAccessMode({ VIEWER_ACCESS_MODE: "token-only" } as Env)).toBe(
-      "token-only",
-    );
+    expect(resolveViewerAccessMode({ VIEWER_ACCESS_MODE: "token-only" } as Env)).toBe("token-only");
   });
   it("treats any other value as the secure default", () => {
-    expect(resolveViewerAccessMode({ VIEWER_ACCESS_MODE: "off" } as Env)).toBe(
-      "required",
-    );
+    expect(resolveViewerAccessMode({ VIEWER_ACCESS_MODE: "off" } as Env)).toBe("required");
   });
 });
 
@@ -182,17 +182,15 @@ describe("gateViewerAccess", () => {
     ({ ACCESS_AUD: AUD, ACCESS_TEAM_DOMAIN: "team.cloudflareaccess.com" }) as Env;
 
   const stubCerts = (keys: readonly AccessJwk[]): void => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(
-      async (input: RequestInfo | URL) => {
-        const u = String(input);
-        if (u === `${ISSUER}/cdn-cgi/access/certs`) {
-          return new Response(JSON.stringify({ keys }), {
-            headers: { "content-type": "application/json" },
-          });
-        }
-        return new Response("not found", { status: 404 });
-      },
-    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u === `${ISSUER}/cdn-cgi/access/certs`) {
+        return new Response(JSON.stringify({ keys }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
   };
 
   it("token-only mode proceeds without any Access check", async () => {
@@ -290,28 +288,22 @@ describe("gateViewerAccess", () => {
     // pick up the rotated key — not 403 every viewer until the cache lapses.
     const rotatedJwk = { ...publicJwk, kid: "rotated-kid" };
     let call = 0;
-    vi.spyOn(globalThis, "fetch").mockImplementation(
-      async (input: RequestInfo | URL) => {
-        if (String(input) === `${ISSUER}/cdn-cgi/access/certs`) {
-          call += 1;
-          return new Response(
-            JSON.stringify({ keys: call === 1 ? [publicJwk] : [rotatedJwk] }),
-            { headers: { "content-type": "application/json" } },
-          );
-        }
-        return new Response("not found", { status: 404 });
-      },
-    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === `${ISSUER}/cdn-cgi/access/certs`) {
+        call += 1;
+        return new Response(JSON.stringify({ keys: call === 1 ? [publicJwk] : [rotatedJwk] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
 
     const jwt = await makeJwt(validClaims(), {
       alg: "RS256",
       kid: "rotated-kid",
       typ: "JWT",
     });
-    const denied = await gateViewerAccess(
-      configured(),
-      req({ "Cf-Access-Jwt-Assertion": jwt }),
-    );
+    const denied = await gateViewerAccess(configured(), req({ "Cf-Access-Jwt-Assertion": jwt }));
     expect(denied).toBeNull(); // proceeded after revalidation
     expect(call).toBe(2); // one edge-cached read + one revalidate
   });

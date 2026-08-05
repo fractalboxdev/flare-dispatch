@@ -60,10 +60,7 @@ const KV_MAX_SECONDS = 86_400;
  * `parse<X>(getConfig(<x>Key), default<X>)`. The KV read stays at the call
  * site, keeping this unit-testable without a KV binding.
  */
-export const parseCooldownSeconds = (
-  raw: string | undefined,
-  fallback: number,
-): number => {
+export const parseCooldownSeconds = (raw: string | undefined, fallback: number): number => {
   if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) return fallback;
@@ -71,11 +68,8 @@ export const parseCooldownSeconds = (
 };
 
 /** The cooldown bucket key: `{run}:{repo_}:{scope}`, one path segment. */
-export const cooldownKey = (
-  runName: string,
-  repo: string,
-  scope: string,
-): string => `cooldown:${runName}:${repo.replace(/\//g, "_")}:${scope}`;
+export const cooldownKey = (runName: string, repo: string, scope: string): string =>
+  `cooldown:${runName}:${repo.replace(/\//g, "_")}:${scope}`;
 
 /**
  * Check a run's cooldown and arm it when open.

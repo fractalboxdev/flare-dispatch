@@ -79,14 +79,10 @@ export const makeD1ExecutionsLive = (
   // contract is `Effect.Effect<void>` (no typed error), so a write failure
   // surfaces as a defect: a D1 outage mid-run is genuinely exceptional and
   // should fail the execution loudly, not be silently swallowed.
-  const run = (
-    label: string,
-    stmt: () => Promise<D1Result | D1Response>,
-  ): Effect.Effect<void> =>
+  const run = (label: string, stmt: () => Promise<D1Result | D1Response>): Effect.Effect<void> =>
     Effect.tryPromise({
       try: () => stmt().then(() => undefined),
-      catch: (cause) =>
-        new Error(`D1ExecutionsLive: ${label} failed`, { cause }),
+      catch: (cause) => new Error(`D1ExecutionsLive: ${label} failed`, { cause }),
     }).pipe(Effect.orDie);
 
   const service: ExecutionsService = {

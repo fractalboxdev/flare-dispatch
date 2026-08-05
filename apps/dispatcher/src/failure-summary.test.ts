@@ -33,15 +33,11 @@ describe("failureSummaryMd", () => {
         summaryMd: "# product-demo — 0/2 chapters passed",
       }),
     );
-    expect(failureSummaryMd(exit)).toBe(
-      "# product-demo — 0/2 chapters passed",
-    );
+    expect(failureSummaryMd(exit)).toBe("# product-demo — 0/2 chapters passed");
   });
 
   it("is undefined for an AcceptanceFailed without summaryMd", () => {
-    expect(
-      failureSummaryMd(Exit.fail(new AcceptanceFailed({ exitCode: 1 }))),
-    ).toBeUndefined();
+    expect(failureSummaryMd(Exit.fail(new AcceptanceFailed({ exitCode: 1 })))).toBeUndefined();
   });
 
   it("renders an AdmissionTimedOut as an infra-wait explanation (issue #109)", () => {
@@ -71,9 +67,7 @@ describe("failureSummaryMd", () => {
   });
 
   it("renders ExecFailed with exit code + stderr tail", () => {
-    const md = failureSummaryMd(
-      Exit.fail(new ExecFailed({ exitCode: 7, stderrTail: "boom" })),
-    );
+    const md = failureSummaryMd(Exit.fail(new ExecFailed({ exitCode: 7, stderrTail: "boom" })));
     expect(md).toContain("Exec failed");
     expect(md).toContain("exit `7`");
     expect(md).toContain("boom");
@@ -81,9 +75,7 @@ describe("failureSummaryMd", () => {
 
   it("renders ExecTimeout with the command", () => {
     const md = failureSummaryMd(
-      Exit.fail(
-        new ExecTimeout({ timeoutSec: 30, command: "pnpm test --watch" }),
-      ),
+      Exit.fail(new ExecTimeout({ timeoutSec: 30, command: "pnpm test --watch" })),
     );
     expect(md).toContain("Exec timed out");
     expect(md).toContain("30s");
@@ -104,9 +96,7 @@ describe("failureSummaryMd", () => {
   });
 
   it("renders SecretsMissing with the absent keys", () => {
-    const md = failureSummaryMd(
-      Exit.fail(new SecretsMissing({ keys: ["NPM_TOKEN", "FOO"] })),
-    );
+    const md = failureSummaryMd(Exit.fail(new SecretsMissing({ keys: ["NPM_TOKEN", "FOO"] })));
     expect(md).toContain("Missing Worker secrets");
     expect(md).toContain("`NPM_TOKEN`");
     expect(md).toContain("`FOO`");
@@ -117,15 +107,11 @@ describe("failureSummaryMd", () => {
   });
 
   it("is undefined for a defect (Cause.die — failureOption is none)", () => {
-    expect(
-      failureSummaryMd(Exit.failCause(Cause.die("unexpected"))),
-    ).toBeUndefined();
+    expect(failureSummaryMd(Exit.failCause(Cause.die("unexpected")))).toBeUndefined();
   });
 
   it("is undefined for an interrupt", () => {
-    expect(
-      failureSummaryMd(Exit.failCause(Cause.interrupt(FiberId.none))),
-    ).toBeUndefined();
+    expect(failureSummaryMd(Exit.failCause(Cause.interrupt(FiberId.none)))).toBeUndefined();
   });
 });
 
@@ -144,9 +130,7 @@ describe("runSkippedReason", () => {
 
   it("is undefined for other typed run errors (they stay red)", () => {
     expect(
-      runSkippedReason(
-        Exit.fail(new ExecFailed({ exitCode: 7, stderrTail: "boom" })),
-      ),
+      runSkippedReason(Exit.fail(new ExecFailed({ exitCode: 7, stderrTail: "boom" }))),
     ).toBeUndefined();
   });
 
@@ -155,15 +139,11 @@ describe("runSkippedReason", () => {
   });
 
   it("is undefined for a defect (Cause.die — failureOption is none)", () => {
-    expect(
-      runSkippedReason(Exit.failCause(Cause.die("unexpected"))),
-    ).toBeUndefined();
+    expect(runSkippedReason(Exit.failCause(Cause.die("unexpected")))).toBeUndefined();
   });
 
   it("is undefined for an interrupt", () => {
-    expect(
-      runSkippedReason(Exit.failCause(Cause.interrupt(FiberId.none))),
-    ).toBeUndefined();
+    expect(runSkippedReason(Exit.failCause(Cause.interrupt(FiberId.none)))).toBeUndefined();
   });
 });
 
@@ -196,10 +176,7 @@ describe("appendFailureSummary", () => {
     // Position an astral (two-UTF-16-unit) char so the truncation boundary
     // falls between its surrogate halves.
     const budget =
-      CHECK_SUMMARY_MAX_CHARS -
-      generic.length -
-      "\n\n".length -
-      TRUNCATION_NOTE.length;
+      CHECK_SUMMARY_MAX_CHARS - generic.length - "\n\n".length - TRUNCATION_NOTE.length;
     const md = "x".repeat(budget - 1) + "😀".repeat(2000);
     const combined = appendFailureSummary(generic, md);
 

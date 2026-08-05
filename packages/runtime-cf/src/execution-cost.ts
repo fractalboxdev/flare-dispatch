@@ -29,9 +29,8 @@ import {
  * Object classes in wrangler.jsonc bind `lean`/`browser` → `standard-2` and
  * `agent` → `standard-3`; an un-set image defaults to `lean`.
  */
-export const instanceForSandboxImage = (
-  sandboxImage: SandboxImage | undefined,
-): InstanceType => (sandboxImage === "agent" ? "standard-3" : "standard-2");
+export const instanceForSandboxImage = (sandboxImage: SandboxImage | undefined): InstanceType =>
+  sandboxImage === "agent" ? "standard-3" : "standard-2";
 
 type UsageRow = {
   readonly model: string;

@@ -9,13 +9,7 @@
 // plain `async`; the Effect Layer (`makeGithubLive` in @fractalboxdev/flare-dispatch-runtime-cf)
 // wraps it.
 
-import {
-  assertOk,
-  API_BASE_DEFAULT,
-  ghHeaders,
-  resolveClient,
-  splitRepo,
-} from "./http";
+import { assertOk, API_BASE_DEFAULT, ghHeaders, resolveClient, splitRepo } from "./http";
 
 /** One workflow run, normalized from GitHub's `actions/runs` payload. */
 export type ActionRun = {

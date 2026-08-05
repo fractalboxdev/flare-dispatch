@@ -22,10 +22,7 @@ const makeFakeBucket = () => {
     createMultipartUpload: async (key: string) => {
       state.mpKey = key;
       return {
-        uploadPart: async (
-          partNumber: number,
-          value: ArrayBuffer | ArrayBufferView,
-        ) => {
+        uploadPart: async (partNumber: number, value: ArrayBuffer | ArrayBufferView) => {
           const bytes = new Uint8Array(
             value instanceof ArrayBuffer
               ? value
@@ -59,8 +56,7 @@ const streamOf = (chunks: Uint8Array[]): ReadableStream<Uint8Array> =>
     },
   });
 
-const fill = (n: number, byte: number): Uint8Array =>
-  new Uint8Array(n).fill(byte);
+const fill = (n: number, byte: number): Uint8Array => new Uint8Array(n).fill(byte);
 
 describe("putStream", () => {
   it("small body (≤16 MiB) → one buffered PUT, no multipart", async () => {
@@ -97,12 +93,8 @@ describe("putStream", () => {
     // Every non-final part is ≥5 MiB (R2's hard rule); parts are 1-indexed and
     // contiguous; `complete` saw them all.
     expect(parts.length).toBeGreaterThan(1);
-    parts.slice(0, -1).forEach((p) =>
-      expect(p.bytes.byteLength).toBeGreaterThanOrEqual(5 * MiB),
-    );
-    expect(parts.map((p) => p.partNumber)).toEqual(
-      parts.map((_, i) => i + 1),
-    );
+    parts.slice(0, -1).forEach((p) => expect(p.bytes.byteLength).toBeGreaterThanOrEqual(5 * MiB));
+    expect(parts.map((p) => p.partNumber)).toEqual(parts.map((_, i) => i + 1));
     expect(state.completedParts).toBe(parts.length);
     expect(state.aborted).toBe(false);
   });

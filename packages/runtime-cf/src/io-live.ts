@@ -94,17 +94,19 @@ export const makeIOLive = (opts: IOLiveOptions = {}): Layer.Layer<IO> =>
       outputSchema: Schema.Schema<O, I>;
     }) =>
       opts.db === undefined
-        ? Effect.succeed(Option.none<{
-            executionId: string;
-            sha: string;
-            output: O;
-            finishedAt: number;
-          }>())
+        ? Effect.succeed(
+            Option.none<{
+              executionId: string;
+              sha: string;
+              output: O;
+              finishedAt: number;
+            }>(),
+          )
         : Effect.tryPromise(async () => {
             // `LIKE` with a `family:%` prefix; SQLite treats `:` as a literal
             // char (it is not a parameter marker in `prepare` bind position).
-            const row = await opts.db!
-              .prepare(
+            const row = await opts
+              .db!.prepare(
                 `SELECT id, sha, summary_json, completed_at
                    FROM executions
                   WHERE id LIKE ?

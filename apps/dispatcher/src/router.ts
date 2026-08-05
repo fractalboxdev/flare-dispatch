@@ -27,10 +27,7 @@ const json = (body: unknown, status: number): Response =>
   });
 
 /** Route an inbound request to its handler. */
-export const handleRequest = async (
-  request: Request,
-  env: Env,
-): Promise<Response> => {
+export const handleRequest = async (request: Request, env: Env): Promise<Response> => {
   const url = new URL(request.url);
   const segments = url.pathname.split("/").filter((s) => s.length > 0);
 

@@ -69,9 +69,7 @@ describe("schemas/signals.v1.schema.json mirrors the TS caps", () => {
   );
 
   it("carries the contract version", () => {
-    expect(artifact["x-flare-dispatch-contract-version"]).toBe(
-      SIGNALS_CONTRACT_VERSION,
-    );
+    expect(artifact["x-flare-dispatch-contract-version"]).toBe(SIGNALS_CONTRACT_VERSION);
   });
 
   it("array cap equals MAX_SIGNALS", () => {
@@ -87,8 +85,6 @@ describe("schemas/signals.v1.schema.json mirrors the TS caps", () => {
   });
 
   it("requires exactly source/title/detail", () => {
-    expect([...artifact.items.required].sort()).toEqual(
-      ["detail", "source", "title"].sort(),
-    );
+    expect([...artifact.items.required].sort()).toEqual(["detail", "source", "title"].sort());
   });
 });

@@ -89,13 +89,8 @@ const toRecord = (row: LeaseRow): LeaseRecord => ({
 const d1 = <A>(thunk: () => Promise<A>): Effect.Effect<A, Error> =>
   Effect.tryPromise({
     try: thunk,
-    catch: (cause) =>
-      cause instanceof Error ? cause : new Error(String(cause)),
-  }).pipe(
-    Effect.retry(
-      Schedule.recurs(2).pipe(Schedule.addDelay(() => "200 millis")),
-    ),
-  );
+    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+  }).pipe(Effect.retry(Schedule.recurs(2).pipe(Schedule.addDelay(() => "200 millis"))));
 
 /** A handle the caller uses to heartbeat / release the lease it acquired. */
 export interface LeaseHandle {
@@ -128,9 +123,7 @@ export const makeContainerLeaseD1 = (
   db: D1Database,
   now: () => number = Date.now,
 ): ContainerLeaseStore => {
-  const readLease = (
-    containerId: string,
-  ): Effect.Effect<LeaseRecord | undefined, Error> =>
+  const readLease = (containerId: string): Effect.Effect<LeaseRecord | undefined, Error> =>
     d1(() =>
       db
         .prepare(
@@ -177,10 +170,7 @@ export const makeContainerLeaseD1 = (
       Effect.map((lease) => lease !== undefined && lease.holder === holder),
     );
 
-  const heartbeat = (
-    containerId: string,
-    holder: string,
-  ): Effect.Effect<void, Error> =>
+  const heartbeat = (containerId: string, holder: string): Effect.Effect<void, Error> =>
     d1(() =>
       db
         .prepare(
@@ -191,15 +181,10 @@ export const makeContainerLeaseD1 = (
         .run(),
     ).pipe(Effect.asVoid);
 
-  const release = (
-    containerId: string,
-    holder: string,
-  ): Effect.Effect<void, Error> =>
+  const release = (containerId: string, holder: string): Effect.Effect<void, Error> =>
     d1(() =>
       db
-        .prepare(
-          `DELETE FROM container_leases WHERE container_id = ? AND holder = ?`,
-        )
+        .prepare(`DELETE FROM container_leases WHERE container_id = ? AND holder = ?`)
         .bind(containerId, holder)
         .run(),
     ).pipe(Effect.asVoid);
@@ -217,10 +202,7 @@ export const makeContainerLeaseD1 = (
   ): Effect.Effect<LeaseHandle, ContainerBusy> =>
     Effect.gen(function* () {
       const startedAt = now();
-      const maxAttempts = leaseAcquireAttempts(
-        LEASE_WAIT_TIMEOUT_MS,
-        LEASE_POLL_EVERY_MS,
-      );
+      const maxAttempts = leaseAcquireAttempts(LEASE_WAIT_TIMEOUT_MS, LEASE_POLL_EVERY_MS);
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const ts = now();
@@ -243,8 +225,7 @@ export const makeContainerLeaseD1 = (
         if (attempt < maxAttempts - 1) {
           yield* Effect.sleep(Duration.millis(LEASE_POLL_EVERY_MS));
         } else {
-          const holderNow =
-            (yield* readLease(containerId))?.holder ?? "unknown";
+          const holderNow = (yield* readLease(containerId))?.holder ?? "unknown";
           return yield* Effect.fail(
             new ContainerBusy({
               containerId,
@@ -267,9 +248,7 @@ export const makeContainerLeaseD1 = (
       // infra breakage, not a run-level outcome — die so it surfaces as a
       // defect, leaving the public error channel a clean `ContainerBusy`. A
       // `ContainerBusy` (the wait ceiling elapsed) stays in the error channel.
-      Effect.catchAll((e) =>
-        e instanceof ContainerBusy ? Effect.fail(e) : Effect.die(e),
-      ),
+      Effect.catchAll((e) => (e instanceof ContainerBusy ? Effect.fail(e) : Effect.die(e))),
     );
 
   return { acquire };

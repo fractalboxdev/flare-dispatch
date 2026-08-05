@@ -3,8 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "description": "FlareDispatch starter runs — defineRun programs riding on @fractalboxdev/flare-dispatch-core.",
-  "type": "module",
   "license": "MIT",
+  "type": "module",
   "exports": {
     ".": "./index.ts",
     "./offload-test": "./offload-test.ts",

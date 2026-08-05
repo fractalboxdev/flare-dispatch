@@ -92,9 +92,7 @@ export const instantiateRun = async (
       ...(args.github.installation_id !== undefined
         ? { installation_id: args.github.installation_id }
         : {}),
-      ...(args.github.pr_number !== undefined
-        ? { pr_number: args.github.pr_number }
-        : {}),
+      ...(args.github.pr_number !== undefined ? { pr_number: args.github.pr_number } : {}),
     },
     inputs: args.inputs,
     ...(args.notify !== undefined && args.notify.emails.length > 0

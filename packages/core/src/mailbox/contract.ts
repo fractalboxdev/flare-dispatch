@@ -145,8 +145,7 @@ export const mintLocalPart = (random: string): string => {
 };
 
 /** True iff `localPart` is a syntactically-valid minted inbox local-part. */
-export const isInboxLocalPart = (localPart: string): boolean =>
-  INBOX_LOCAL_PART_RE.test(localPart);
+export const isInboxLocalPart = (localPart: string): boolean => INBOX_LOCAL_PART_RE.test(localPart);
 
 /**
  * Extract + validate the minted local-part from an *envelope* recipient

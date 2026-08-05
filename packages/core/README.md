@@ -30,24 +30,24 @@ The split keeps the layer boundary visible at the top of every recipe file. The 
 
 ## Layout
 
-| Path | Holds |
-|---|---|
-| [`src/define-run.ts`](src/define-run.ts) | `defineRun` constructor + `Run` / `RunLimits` / `TriggerSpec` types |
-| [`src/step.ts`](src/step.ts) | `step` checkpoint + the `runEffect` Workflow-boundary shim |
-| [`src/errors.ts`](src/errors.ts) | tagged `RunError` classes |
-| [`src/context.ts`](src/context.ts) | `RunContext` — the capability-service union |
-| [`src/services/`](src/services/) | one capability per file — `Context.Tag` + interface + accessor namespace |
-| [`src/primitives/`](src/primitives/) | the reusable compositions (catalogue below) |
+| Path                                     | Holds                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------ |
+| [`src/define-run.ts`](src/define-run.ts) | `defineRun` constructor + `Run` / `RunLimits` / `TriggerSpec` types      |
+| [`src/step.ts`](src/step.ts)             | `step` checkpoint + the `runEffect` Workflow-boundary shim               |
+| [`src/errors.ts`](src/errors.ts)         | tagged `RunError` classes                                                |
+| [`src/context.ts`](src/context.ts)       | `RunContext` — the capability-service union                              |
+| [`src/services/`](src/services/)         | one capability per file — `Context.Tag` + interface + accessor namespace |
+| [`src/primitives/`](src/primitives/)     | the reusable compositions (catalogue below)                              |
 
 ### Primitive catalogue
 
-| Primitive | Does | Built from | Used by |
-|---|---|---|---|
-| [`workspace`](src/primitives/workspace.ts) | Acquire a container + clone a repo (+ optional cached install) | `sandbox`, `installCached` | every recipe |
-| [`installCached`](src/primitives/install-cached.ts) | R2-backed dependency install, keyed on the lockfile hash | `cache`, `sandbox` | `workspace`, browser-tests |
-| [`sharded`](src/primitives/sharded.ts) | Count-and-index parallel fan-out | `Effect.forEach` | test-matrix, browser-tests |
-| [`bootApp`](src/primitives/boot-app.ts) | Start a detached process and wait for its port | `sandbox` | cdp-acceptance |
-| [`probeHttp`](src/primitives/probe-http.ts) | Hit a set of URLs and classify each healthy / failed | `sandbox` | deploy-smoke |
+| Primitive                                           | Does                                                           | Built from                 | Used by                    |
+| --------------------------------------------------- | -------------------------------------------------------------- | -------------------------- | -------------------------- |
+| [`workspace`](src/primitives/workspace.ts)          | Acquire a container + clone a repo (+ optional cached install) | `sandbox`, `installCached` | every recipe               |
+| [`installCached`](src/primitives/install-cached.ts) | R2-backed dependency install, keyed on the lockfile hash       | `cache`, `sandbox`         | `workspace`, browser-tests |
+| [`sharded`](src/primitives/sharded.ts)              | Count-and-index parallel fan-out                               | `Effect.forEach`           | test-matrix, browser-tests |
+| [`bootApp`](src/primitives/boot-app.ts)             | Start a detached process and wait for its port                 | `sandbox`                  | cdp-acceptance             |
+| [`probeHttp`](src/primitives/probe-http.ts)         | Hit a set of URLs and classify each healthy / failed           | `sandbox`                  | deploy-smoke               |
 
 A new primitive earns its place when a shape recurs across **two or more** recipes — full rule in [03-dsl § Adding a primitive](../../specs/03-dsl.md#adding-a-primitive).
 

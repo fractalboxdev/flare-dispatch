@@ -84,9 +84,7 @@ const WorkerDeployInput = Schema.Struct({
   /** Run the R2-cached dependency install after the clone. */
   install: Schema.optionalWith(Schema.Boolean, { default: () => false }),
   /** Non-sensitive env only — dispatch inputs are persisted. */
-  env: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
+  env: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
   /**
    * Env-var names resolved from the config store into the command's env.
    * Empty on webhook dispatches — the run body falls back to
@@ -125,8 +123,7 @@ const TIMEOUT_SEC_DEFAULT = 900;
 /** CONFIG_KV keys — all strictly per-repo (see header: no global fallback). */
 const commandKey = (repo: string): string => `worker-deploy.command:${repo}`;
 const secretsKey = (repo: string): string => `worker-deploy.secrets:${repo}`;
-const secretPrefixKey = (repo: string): string =>
-  `worker-deploy.secret-prefix:${repo}`;
+const secretPrefixKey = (repo: string): string => `worker-deploy.secret-prefix:${repo}`;
 
 export const workerDeploy = defineRun({
   name: "worker-deploy",
@@ -141,11 +138,10 @@ export const workerDeploy = defineRun({
       // Semantic instanceId (`{run}:{repo_}:{sha12}`) — a webhook- and an
       // Action-mode dispatch of the same push collapse to one execution.
       idempotencyKey: ({ payload }) =>
-        `worker-deploy:${String(
-          payload.repository?.full_name ?? "unknown/unknown",
-        ).replace(/\//g, "_")}:${String(
-          payload.check_suite?.head_sha ?? "",
-        ).slice(0, 12)}`,
+        `worker-deploy:${String(payload.repository?.full_name ?? "unknown/unknown").replace(
+          /\//g,
+          "_",
+        )}:${String(payload.check_suite?.head_sha ?? "").slice(0, 12)}`,
       gate: ({ payload }) =>
         typeof payload.check_suite?.head_branch === "string" &&
         payload.check_suite.head_branch === payload.repository?.default_branch,
@@ -186,8 +182,7 @@ export const workerDeploy = defineRun({
                   .map((s) => s.trim())
                   .filter((s) => s.length > 0);
           const secretPrefix =
-            input.secretPrefix ??
-            (yield* config.get(secretPrefixKey(input.repo)));
+            input.secretPrefix ?? (yield* config.get(secretPrefixKey(input.repo)));
           return { command, secretNames, secretPrefix };
         }),
       );

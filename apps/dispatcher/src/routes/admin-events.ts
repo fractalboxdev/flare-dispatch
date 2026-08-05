@@ -61,8 +61,7 @@ export const handleAdminEvent = async (
     return json(
       {
         error: "admin_not_configured",
-        message:
-          "ADMIN_TOKEN is unset; the admin events surface is off on this deploy",
+        message: "ADMIN_TOKEN is unset; the admin events surface is off on this deploy",
       },
       503,
     );
@@ -100,12 +99,7 @@ export const handleAdminEvent = async (
 
   // 4. Forward to the Workflow via the shared signalling helper (also used by
   //    the GitHub-native release-PR approval path in webhook.ts).
-  const outcome = await signalWorkflow(
-    env.RUNS_WORKFLOW,
-    wfId,
-    body.type,
-    body.payload,
-  );
+  const outcome = await signalWorkflow(env.RUNS_WORKFLOW, wfId, body.type, body.payload);
   if (outcome.ok) {
     return json({ delivered: true, wfId, type: body.type }, 202);
   }
@@ -115,8 +109,5 @@ export const handleAdminEvent = async (
       : outcome.reason === "wf_not_found"
         ? 404
         : 502;
-  return json(
-    { error: outcome.reason, wfId, message: outcome.message },
-    status,
-  );
+  return json({ error: outcome.reason, wfId, message: outcome.message }, status);
 };

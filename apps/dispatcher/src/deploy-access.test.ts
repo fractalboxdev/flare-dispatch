@@ -32,10 +32,7 @@ describe("normalizeIdentity", () => {
     const id = normalizeIdentity({
       email: "dev@example.com",
       idp: { type: "github", id: "abc" },
-      groups: [
-        { id: "81954718", name: "fractalboxdev/devs", email: "" },
-        { name: "friends" },
-      ],
+      groups: [{ id: "81954718", name: "fractalboxdev/devs", email: "" }, { name: "friends" }],
     });
     expect(id.email).toBe("dev@example.com");
     expect(id.idp).toBe("github");
@@ -45,9 +42,7 @@ describe("normalizeIdentity", () => {
   });
 
   it("accepts a bare-string idp", () => {
-    expect(normalizeIdentity({ email: "a@b.com", idp: "onetimepin" }).idp).toBe(
-      "onetimepin",
-    );
+    expect(normalizeIdentity({ email: "a@b.com", idp: "onetimepin" }).idp).toBe("onetimepin");
   });
 
   it("degrades missing fields to empty, never throws", () => {
@@ -108,7 +103,10 @@ describe("githubTeamsFromIdentity", () => {
 
   it("drops teams whose org isn't in orgs[] rather than guessing", () => {
     expect(
-      githubTeamsFromIdentity({ orgs: [{ id: 1, name: "acme" }], teams: [{ name: "ghost", org_id: 999 }] }),
+      githubTeamsFromIdentity({
+        orgs: [{ id: 1, name: "acme" }],
+        teams: [{ name: "ghost", org_id: 999 }],
+      }),
     ).toEqual([]);
   });
 
@@ -126,9 +124,7 @@ describe("githubTeamsFromIdentity", () => {
 
 describe("githubLoginFromIdentity", () => {
   it("prefers an explicit login field", () => {
-    expect(githubLoginFromIdentity({ login: "octocat", name: "The Octocat" })).toBe(
-      "octocat",
-    );
+    expect(githubLoginFromIdentity({ login: "octocat", name: "The Octocat" })).toBe("octocat");
   });
 
   it("falls back through nickname / preferred_username", () => {

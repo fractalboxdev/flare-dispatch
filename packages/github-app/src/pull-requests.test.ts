@@ -9,12 +9,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  commitFilesAndOpenPr,
-  deletionEntry,
-  openDraftPullRequest,
-  treeEntry,
-} from "./index";
+import { commitFilesAndOpenPr, deletionEntry, openDraftPullRequest, treeEntry } from "./index";
 
 let calls: string[] = [];
 let createdRef = false;

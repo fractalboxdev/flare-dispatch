@@ -19,13 +19,8 @@ const stubFetch =
   };
 
 const sha256Hex = async (data: string): Promise<string> => {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(data),
-  );
-  return [...new Uint8Array(buf)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 };
 
 describe("invokeBedrockSigned", () => {
@@ -89,9 +84,7 @@ describe("invokeBedrockSigned", () => {
   });
 
   it("throws with the response body inlined on a non-2xx", async () => {
-    const fetchImpl = stubFetch(
-      () => new Response("access denied", { status: 403 }),
-    );
+    const fetchImpl = stubFetch(() => new Response("access denied", { status: 403 }));
 
     await expect(
       invokeBedrockSigned({
@@ -103,8 +96,6 @@ describe("invokeBedrockSigned", () => {
         gatewayId: "gw1",
         fetchImpl,
       }),
-    ).rejects.toThrow(
-      "Bedrock InvokeModel via AI Gateway failed: HTTP 403 — access denied",
-    );
+    ).rejects.toThrow("Bedrock InvokeModel via AI Gateway failed: HTTP 403 — access denied");
   });
 });

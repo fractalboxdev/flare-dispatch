@@ -90,10 +90,7 @@ const ruleAllows = (identity: DeployIdentity, rule: EnvRule): boolean => {
  * A fail-CLOSED function: an env whose rule the identity does not satisfy is
  * simply absent from the result (never surfaced with a deploy button).
  */
-export const allowedEnvs = (
-  identity: DeployIdentity,
-  policy: EnvAuthzPolicy,
-): readonly string[] =>
+export const allowedEnvs = (identity: DeployIdentity, policy: EnvAuthzPolicy): readonly string[] =>
   Object.entries(policy)
     .filter(([, rule]) => ruleAllows(identity, rule))
     .map(([name]) => name)

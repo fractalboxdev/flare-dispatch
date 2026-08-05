@@ -150,9 +150,7 @@ export const finopsAudit = defineRun({
       };
 
       // 1. Scope from config.
-      const reportRepo = yield* step("resolve-report-repo", () =>
-        config.get(REPORT_REPO_KEY),
-      );
+      const reportRepo = yield* step("resolve-report-repo", () => config.get(REPORT_REPO_KEY));
       if (reportRepo === undefined || reportRepo.length === 0) {
         yield* step("log-no-repo", () =>
           io.log(
@@ -162,21 +160,14 @@ export const finopsAudit = defineRun({
         );
         return empty;
       }
-      const baseBranch =
-        (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
+      const baseBranch = (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
       const windowHours =
-        Number.parseInt(
-          (yield* step("resolve-window", () => config.get(WINDOW_KEY))) ?? "",
-          10,
-        ) || WINDOW_HOURS_DEFAULT;
-      const projects = parseList(
-        yield* step("resolve-projects", () => config.get(PROJECTS_KEY)),
-      );
+        Number.parseInt((yield* step("resolve-window", () => config.get(WINDOW_KEY))) ?? "", 10) ||
+        WINDOW_HOURS_DEFAULT;
+      const projects = parseList(yield* step("resolve-projects", () => config.get(PROJECTS_KEY)));
 
       // 2. Read usage (read capabilities; degrade to empty when uncredentialed).
-      const usage = yield* step("read-usage", () =>
-        cloudflare.usage({ windowHours }),
-      ).pipe(
+      const usage = yield* step("read-usage", () => cloudflare.usage({ windowHours })).pipe(
         Effect.catchTag("CloudflareApiError", (e) =>
           Effect.fail(
             new StepFailed({
@@ -195,14 +186,13 @@ export const finopsAudit = defineRun({
                 status: "failure",
                 createdWithinHours: windowHours,
               }),
-            ).pipe(Effect.catchTag("CloudflareApiError", () => Effect.succeed([] as DeploymentRef[])));
+            ).pipe(
+              Effect.catchTag("CloudflareApiError", () => Effect.succeed([] as DeploymentRef[])),
+            );
 
       if (usage.workers.length === 0 && usage.ai.length === 0) {
         yield* step("log-empty", () =>
-          io.log(
-            "info",
-            "finops-audit: no Worker or AI usage in window — nothing to analyse",
-          ),
+          io.log("info", "finops-audit: no Worker or AI usage in window — nothing to analyse"),
         );
         return { ...empty, deployFailures: deployFailures.length };
       }
@@ -221,8 +211,7 @@ export const finopsAudit = defineRun({
         ),
       );
       const systemPrompt =
-        (yield* step("resolve-prompt", () => config.get(promptKey(NAMESPACE)))) ??
-        PROMPT_DEFAULT;
+        (yield* step("resolve-prompt", () => config.get(promptKey(NAMESPACE)))) ?? PROMPT_DEFAULT;
 
       // 4. Analyse via the reusable structured-output engine. A model failure is
       //    a real failure for an audit run (its whole job is the write-up).
@@ -299,8 +288,7 @@ const cacheRate = (a: AiModelUsage): string =>
 
 const usageLines = (usage: CloudflareUsage): string => {
   const w = usage.workers.map(
-    (x: WorkerUsage) =>
-      `- [worker] ${x.script}: ${x.requests} requests, ${x.errors} errors`,
+    (x: WorkerUsage) => `- [worker] ${x.script}: ${x.requests} requests, ${x.errors} errors`,
   );
   const a = usage.ai.map(
     (x) =>
@@ -315,16 +303,18 @@ const deployLines = (deploys: readonly DeploymentRef[]): string =>
     .join("\n");
 
 /** The domain body of the user message (the engine appends the per-mode framing). */
-const renderUserBody = (
-  usage: CloudflareUsage,
-  deployFailures: readonly DeploymentRef[],
-): string =>
+const renderUserBody = (usage: CloudflareUsage, deployFailures: readonly DeploymentRef[]): string =>
   [
     `Cloudflare usage over the last ${usage.windowHours} hours:`,
     "",
     usageLines(usage),
     ...(deployFailures.length > 0
-      ? ["", "Failed deployments in the window (wasted build minutes):", "", deployLines(deployFailures)]
+      ? [
+          "",
+          "Failed deployments in the window (wasted build minutes):",
+          "",
+          deployLines(deployFailures),
+        ]
       : []),
   ].join("\n");
 

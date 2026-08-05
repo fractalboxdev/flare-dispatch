@@ -9,25 +9,26 @@
 
 import { Schema } from "effect";
 
-export class CheckoutFailed extends Schema.TaggedError<CheckoutFailed>()(
-  "CheckoutFailed",
-  { repo: Schema.String, sha: Schema.String, cause: Schema.Unknown },
-) {}
+export class CheckoutFailed extends Schema.TaggedError<CheckoutFailed>()("CheckoutFailed", {
+  repo: Schema.String,
+  sha: Schema.String,
+  cause: Schema.Unknown,
+}) {}
 
-export class ExecFailed extends Schema.TaggedError<ExecFailed>()(
-  "ExecFailed",
-  { exitCode: Schema.Number, stderrTail: Schema.String },
-) {
+export class ExecFailed extends Schema.TaggedError<ExecFailed>()("ExecFailed", {
+  exitCode: Schema.Number,
+  stderrTail: Schema.String,
+}) {
   // Workflows attempt record persists only error.name + error.message (#88).
   override get message(): string {
     return `exec failed (exit ${this.exitCode}): ${this.stderrTail}`;
   }
 }
 
-export class ExecTimeout extends Schema.TaggedError<ExecTimeout>()(
-  "ExecTimeout",
-  { timeoutSec: Schema.Number, command: Schema.String },
-) {
+export class ExecTimeout extends Schema.TaggedError<ExecTimeout>()("ExecTimeout", {
+  timeoutSec: Schema.Number,
+  command: Schema.String,
+}) {
   // Workflows attempt record persists only error.name + error.message (#88).
   override get message(): string {
     return `exec timed out after ${this.timeoutSec}s: ${this.command}`;
@@ -39,10 +40,10 @@ export class ExecTimeout extends Schema.TaggedError<ExecTimeout>()(
  * error). Raised by `sandbox.readFile` — the path runs use to move command
  * output larger than the inlined `ExecResult.stdout` tail out of a container.
  */
-export class ReadFileFailed extends Schema.TaggedError<ReadFileFailed>()(
-  "ReadFileFailed",
-  { path: Schema.String, message: Schema.String },
-) {}
+export class ReadFileFailed extends Schema.TaggedError<ReadFileFailed>()("ReadFileFailed", {
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 
 /**
  * A run's command/suite ran to completion but exited non-zero (a real test
@@ -50,21 +51,18 @@ export class ReadFileFailed extends Schema.TaggedError<ReadFileFailed>()(
  * `failure` check-run — distinct from `ExecFailed` (the process could not run
  * at all).
  */
-export class AcceptanceFailed extends Schema.TaggedError<AcceptanceFailed>()(
-  "AcceptanceFailed",
-  {
-    exitCode: Schema.Number,
-    /**
-     * Optional run-authored failure presentation — markdown the dispatcher
-     * embeds beneath the generic "execution failed" line in the check-run
-     * summary (and the notify email), so a red check explains itself instead
-     * of pointing at R2. A run that already builds a human-readable verdict
-     * (e.g. `product-demo`'s per-chapter table) attaches it here; absent ⇒
-     * the generic line renders alone, exactly as before.
-     */
-    summaryMd: Schema.optional(Schema.String),
-  },
-) {}
+export class AcceptanceFailed extends Schema.TaggedError<AcceptanceFailed>()("AcceptanceFailed", {
+  exitCode: Schema.Number,
+  /**
+   * Optional run-authored failure presentation — markdown the dispatcher
+   * embeds beneath the generic "execution failed" line in the check-run
+   * summary (and the notify email), so a red check explains itself instead
+   * of pointing at R2. A run that already builds a human-readable verdict
+   * (e.g. `product-demo`'s per-chapter table) attaches it here; absent ⇒
+   * the generic line renders alone, exactly as before.
+   */
+  summaryMd: Schema.optional(Schema.String),
+}) {}
 
 export class ContainerLaunchFailed extends Schema.TaggedError<ContainerLaunchFailed>()(
   "ContainerLaunchFailed",
@@ -82,17 +80,14 @@ export class ContainerLaunchFailed extends Schema.TaggedError<ContainerLaunchFai
  * still held — a genuinely wedged peer, not normal back-pressure — so the queued
  * run fails fast and loud instead of hanging until the Workflow's wall-clock cap.
  */
-export class ContainerBusy extends Schema.TaggedError<ContainerBusy>()(
-  "ContainerBusy",
-  {
-    /** The shared container id the lease serializes. */
-    containerId: Schema.String,
-    /** The execution id still holding the lease when the wait gave up. */
-    holder: Schema.String,
-    /** Total time waited before giving up, ms. */
-    waitedMs: Schema.Number,
-  },
-) {}
+export class ContainerBusy extends Schema.TaggedError<ContainerBusy>()("ContainerBusy", {
+  /** The shared container id the lease serializes. */
+  containerId: Schema.String,
+  /** The execution id still holding the lease when the wait gave up. */
+  holder: Schema.String,
+  /** Total time waited before giving up, ms. */
+  waitedMs: Schema.Number,
+}) {}
 
 /**
  * A run timed out waiting for a global admission slot — the container pool
@@ -125,27 +120,24 @@ export class AdmissionTimedOut extends Schema.TaggedError<AdmissionTimedOut>()(
   }
 }
 
-export class PortNeverOpened extends Schema.TaggedError<PortNeverOpened>()(
-  "PortNeverOpened",
-  {
-    port: Schema.Number,
-    timeoutSec: Schema.Number,
-    /**
-     * R2 key of the detached process's captured stdout/stderr at the moment
-     * the wait timed out, when log capture succeeded. A detached boot fails
-     * with no other diagnostic — this is the only window into *why* the port
-     * never opened. `undefined` when the runtime could not capture logs (e.g.
-     * the process had already vanished), so a capture failure never masks the
-     * original timeout.
-     */
-    logPath: Schema.optional(Schema.String),
-  },
-) {}
+export class PortNeverOpened extends Schema.TaggedError<PortNeverOpened>()("PortNeverOpened", {
+  port: Schema.Number,
+  timeoutSec: Schema.Number,
+  /**
+   * R2 key of the detached process's captured stdout/stderr at the moment
+   * the wait timed out, when log capture succeeded. A detached boot fails
+   * with no other diagnostic — this is the only window into *why* the port
+   * never opened. `undefined` when the runtime could not capture logs (e.g.
+   * the process had already vanished), so a capture failure never masks the
+   * original timeout.
+   */
+  logPath: Schema.optional(Schema.String),
+}) {}
 
-export class ExposePortFailed extends Schema.TaggedError<ExposePortFailed>()(
-  "ExposePortFailed",
-  { port: Schema.Number, cause: Schema.Unknown },
-) {}
+export class ExposePortFailed extends Schema.TaggedError<ExposePortFailed>()("ExposePortFailed", {
+  port: Schema.Number,
+  cause: Schema.Unknown,
+}) {}
 
 export class BrowserUnavailable extends Schema.TaggedError<BrowserUnavailable>()(
   "BrowserUnavailable",
@@ -165,14 +157,11 @@ export class BrowserUnavailable extends Schema.TaggedError<BrowserUnavailable>()
 const renderCause = (cause: unknown): string =>
   cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
 
-export class CacheError extends Schema.TaggedError<CacheError>()(
-  "CacheError",
-  {
-    phase: Schema.Literal("restore", "save"),
-    key: Schema.String,
-    cause: Schema.Unknown,
-  },
-) {
+export class CacheError extends Schema.TaggedError<CacheError>()("CacheError", {
+  phase: Schema.Literal("restore", "save"),
+  key: Schema.String,
+  cause: Schema.Unknown,
+}) {
   override get message(): string {
     return `cache ${this.phase} "${this.key}" failed: ${renderCause(this.cause)}`;
   }
@@ -190,10 +179,10 @@ export class ArtifactUploadFailed extends Schema.TaggedError<ArtifactUploadFaile
   }
 }
 
-export class StepFailed extends Schema.TaggedError<StepFailed>()(
-  "StepFailed",
-  { step: Schema.String, cause: Schema.Unknown },
-) {}
+export class StepFailed extends Schema.TaggedError<StepFailed>()("StepFailed", {
+  step: Schema.String,
+  cause: Schema.Unknown,
+}) {}
 
 /**
  * The run could not do its job for a CAPACITY reason and is bowing out — the
@@ -203,58 +192,41 @@ export class StepFailed extends Schema.TaggedError<StepFailed>()(
  * summary instead of `failure`: a review that didn't happen is not a failed
  * review, and a red that isn't actionable trains people to ignore the check.
  */
-export class RunSkipped extends Schema.TaggedError<RunSkipped>()(
-  "RunSkipped",
-  {
-    /** Operator/reader-facing one-liner: why the run was skipped. */
-    reason: Schema.String,
-  },
-) {
+export class RunSkipped extends Schema.TaggedError<RunSkipped>()("RunSkipped", {
+  /** Operator/reader-facing one-liner: why the run was skipped. */
+  reason: Schema.String,
+}) {
   // Workflows attempt record persists only error.name + error.message (#88).
   override get message(): string {
     return `run skipped: ${this.reason}`;
   }
 }
 
-export class ApprovalTimedOut extends Schema.TaggedError<ApprovalTimedOut>()(
-  "ApprovalTimedOut",
-  { eventName: Schema.String, timeoutMs: Schema.Number },
-) {}
+export class ApprovalTimedOut extends Schema.TaggedError<ApprovalTimedOut>()("ApprovalTimedOut", {
+  eventName: Schema.String,
+  timeoutMs: Schema.Number,
+}) {}
 
 export class EventPayloadInvalid extends Schema.TaggedError<EventPayloadInvalid>()(
   "EventPayloadInvalid",
   { eventName: Schema.String, reason: Schema.String },
 ) {}
 
-export class SecretsMissing extends Schema.TaggedError<SecretsMissing>()(
-  "SecretsMissing",
-  { keys: Schema.Array(Schema.String) },
-) {}
+export class SecretsMissing extends Schema.TaggedError<SecretsMissing>()("SecretsMissing", {
+  keys: Schema.Array(Schema.String),
+}) {}
 
-export class GitHubApiError extends Schema.TaggedError<GitHubApiError>()(
-  "GitHubApiError",
-  {
-    status: Schema.Number,
-    reason: Schema.Literal(
-      "rate-limited",
-      "unauthorized",
-      "transient",
-      "other",
-    ),
-    retryAfterMs: Schema.optional(Schema.Number),
-  },
-) {}
+export class GitHubApiError extends Schema.TaggedError<GitHubApiError>()("GitHubApiError", {
+  status: Schema.Number,
+  reason: Schema.Literal("rate-limited", "unauthorized", "transient", "other"),
+  retryAfterMs: Schema.optional(Schema.Number),
+}) {}
 
 export class CloudflareApiError extends Schema.TaggedError<CloudflareApiError>()(
   "CloudflareApiError",
   {
     status: Schema.Number,
-    reason: Schema.Literal(
-      "rate-limited",
-      "unauthorized",
-      "transient",
-      "other",
-    ),
+    reason: Schema.Literal("rate-limited", "unauthorized", "transient", "other"),
     retryAfterMs: Schema.optional(Schema.Number),
   },
 ) {}
@@ -274,12 +246,7 @@ export class StsAssumeRoleFailed extends Schema.TaggedError<StsAssumeRoleFailed>
   {
     provider: Schema.Literal("aws", "gcp", "azure", "other"),
     status: Schema.Number,
-    reason: Schema.Literal(
-      "mistrusted-issuer",
-      "role-mismatch",
-      "audience-mismatch",
-      "other",
-    ),
+    reason: Schema.Literal("mistrusted-issuer", "role-mismatch", "audience-mismatch", "other"),
   },
 ) {}
 
@@ -291,14 +258,11 @@ export class StsAssumeRoleFailed extends Schema.TaggedError<StsAssumeRoleFailed>
  * only when the platform `create({id})` call itself rejected for another
  * reason (binding missing, rate limit, transport).
  */
-export class ChildSpawnFailed extends Schema.TaggedError<ChildSpawnFailed>()(
-  "ChildSpawnFailed",
-  {
-    run: Schema.String,
-    instanceId: Schema.String,
-    cause: Schema.Unknown,
-  },
-) {}
+export class ChildSpawnFailed extends Schema.TaggedError<ChildSpawnFailed>()("ChildSpawnFailed", {
+  run: Schema.String,
+  instanceId: Schema.String,
+  cause: Schema.Unknown,
+}) {}
 
 /**
  * A `waitForChildren` join exceeded its overall wait ceiling with children
@@ -307,13 +271,10 @@ export class ChildSpawnFailed extends Schema.TaggedError<ChildSpawnFailed>()(
  * hung. Distinct from a child that finished `failure` — that is a terminal
  * status the join returns normally; this fires only when children never settle.
  */
-export class ChildWaitTimeout extends Schema.TaggedError<ChildWaitTimeout>()(
-  "ChildWaitTimeout",
-  {
-    pending: Schema.Array(Schema.String),
-    waitedMs: Schema.Number,
-  },
-) {}
+export class ChildWaitTimeout extends Schema.TaggedError<ChildWaitTimeout>()("ChildWaitTimeout", {
+  pending: Schema.Array(Schema.String),
+  waitedMs: Schema.Number,
+}) {}
 
 /** The closed union of every error a run can fail with. */
 export type RunError =

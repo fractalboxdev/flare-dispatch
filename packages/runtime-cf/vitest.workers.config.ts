@@ -1,8 +1,5 @@
 import { fileURLToPath } from "node:url";
-import {
-  defineWorkersConfig,
-  readD1Migrations,
-} from "@cloudflare/vitest-pool-workers/config";
+import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-workers/config";
 
 // runtime-cf Workers-pool project — the `*.workers.test.ts` suites run INSIDE
 // workerd via `@cloudflare/vitest-pool-workers` (Vitest 3 unblocked the pool;

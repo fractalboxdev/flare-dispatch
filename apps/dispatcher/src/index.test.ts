@@ -15,12 +15,7 @@
 import { describe, expect, it } from "vitest";
 import { handleRequest } from "./router";
 import { fingerprint, sign } from "./hmac";
-import {
-  makeFakeEnv,
-  makeFakeKv,
-  makeFakeR2,
-  makeFakeWorkflow,
-} from "./test-helpers";
+import { makeFakeEnv, makeFakeKv, makeFakeR2, makeFakeWorkflow } from "./test-helpers";
 
 const HMAC_SECRET = "acceptance-test-secret-please-rotate";
 
@@ -104,10 +99,7 @@ const fixture = (
 describe("GET /health", () => {
   it("returns 200 with status ok and the registered run names", async () => {
     const { env } = fixture();
-    const res = await handleRequest(
-      new Request("https://dispatcher.example/health"),
-      env,
-    );
+    const res = await handleRequest(new Request("https://dispatcher.example/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       status: "ok",
@@ -187,9 +179,7 @@ describe("POST /v1/dispatch/:run — HMAC", () => {
       dispatcher_secret_fingerprint: string;
     };
     expect(payload.error).toBe("unauthorized");
-    expect(payload.dispatcher_secret_fingerprint).toBe(
-      await fingerprint(HMAC_SECRET),
-    );
+    expect(payload.dispatcher_secret_fingerprint).toBe(await fingerprint(HMAC_SECRET));
     expect(payload.dispatcher_secret_fingerprint).toMatch(/^[0-9a-f]{8}$/);
   });
 });
@@ -287,9 +277,7 @@ describe("POST /v1/dispatch/:run — success", () => {
     // Semantic instanceId per spec 04-gha § Receiver dedup —
     // `{run}:{repo}:{sha[:12]}`, sanitized to a valid CF Workflows id by
     // `toInstanceId` (disallowed chars — `:` and `/` — become `_`).
-    expect(payload.executionId).toBe(
-      "offload-test_owner_test-repo_abc123def456",
-    );
+    expect(payload.executionId).toBe("offload-test_owner_test-repo_abc123def456");
 
     expect(workflow.calls).toHaveLength(1);
     const call = workflow.calls[0]!;
@@ -443,16 +431,10 @@ describe("GET /v1/artifacts/:execution/:name", () => {
     const { env, storage } = fixture();
     const execution = "01JABCDEF0123456789ABCDEFG";
     const ndjson = '{"line":1}\n{"line":2}\n';
-    storage.put(
-      `artifacts/${execution}/step.log`,
-      ndjson,
-      "application/x-ndjson",
-    );
+    storage.put(`artifacts/${execution}/step.log`, ndjson, "application/x-ndjson");
 
     const res = await handleRequest(
-      new Request(
-        `https://dispatcher.example/v1/artifacts/${execution}/step.log`,
-      ),
+      new Request(`https://dispatcher.example/v1/artifacts/${execution}/step.log`),
       env,
     );
     expect(res.status).toBe(200);
@@ -463,9 +445,7 @@ describe("GET /v1/artifacts/:execution/:name", () => {
   it("404s when the artifact does not exist", async () => {
     const { env } = fixture();
     const res = await handleRequest(
-      new Request(
-        "https://dispatcher.example/v1/artifacts/01MISSING/step.log",
-      ),
+      new Request("https://dispatcher.example/v1/artifacts/01MISSING/step.log"),
       env,
     );
     expect(res.status).toBe(404);
@@ -490,21 +470,13 @@ describe("GET /v1/artifacts/:execution/:name/... — browse expansion", () => {
 
   const seeded = () => {
     const f = fixture();
-    f.storage.put(
-      `artifacts/${execution}/acceptance-report`,
-      "tarball-bytes",
-      "application/gzip",
-    );
+    f.storage.put(`artifacts/${execution}/acceptance-report`, "tarball-bytes", "application/gzip");
     f.storage.put(
       `artifacts/${execution}/acceptance-report/index.html`,
       "<html>report</html>",
       "text/html; charset=utf-8",
     );
-    f.storage.put(
-      `artifacts/${execution}/acceptance-report/data/shot.png`,
-      "PNG",
-      "image/png",
-    );
+    f.storage.put(`artifacts/${execution}/acceptance-report/data/shot.png`, "PNG", "image/png");
     return f;
   };
 
@@ -540,9 +512,7 @@ describe("GET /v1/artifacts/:execution/:name/... — browse expansion", () => {
       "text/plain; charset=utf-8",
     );
     const res = await handleRequest(
-      new Request(
-        `https://dispatcher.example/v1/artifacts/${execution}/screenshots/`,
-      ),
+      new Request(`https://dispatcher.example/v1/artifacts/${execution}/screenshots/`),
       env,
     );
     expect(res.status).toBe(200);
@@ -597,12 +567,12 @@ describe("POST /v1/dispatch/:run — dedup", () => {
     const req1 = await dispatchRequest("offload-test", bodyText);
     const res1 = await handleRequest(req1, env);
     expect(res1.status).toBe(202);
-    const id1 = (await res1.json() as { executionId: string }).executionId;
+    const id1 = ((await res1.json()) as { executionId: string }).executionId;
 
     const req2 = await dispatchRequest("offload-test", bodyText);
     const res2 = await handleRequest(req2, env);
     expect(res2.status).toBe(202);
-    const id2 = (await res2.json() as { executionId: string }).executionId;
+    const id2 = ((await res2.json()) as { executionId: string }).executionId;
 
     expect(id1).toBe(id2);
     // Workflow.create is short-circuited on the second call.
@@ -627,19 +597,13 @@ describe("POST /v1/dispatch/:run — dedup", () => {
         inputs: { repo: "owner/test-repo", sha: "abc123def456", checkLabel },
       });
 
-    const res1 = await handleRequest(
-      await dispatchRequest("check", labelled("codegen")),
-      env,
-    );
-    const res2 = await handleRequest(
-      await dispatchRequest("check", labelled("lint-shell")),
-      env,
-    );
+    const res1 = await handleRequest(await dispatchRequest("check", labelled("codegen")), env);
+    const res2 = await handleRequest(await dispatchRequest("check", labelled("lint-shell")), env);
     expect(res1.status).toBe(202);
     expect(res2.status).toBe(202);
 
-    const id1 = (await res1.json() as { executionId: string }).executionId;
-    const id2 = (await res2.json() as { executionId: string }).executionId;
+    const id1 = ((await res1.json()) as { executionId: string }).executionId;
+    const id2 = ((await res2.json()) as { executionId: string }).executionId;
     expect(id1).not.toBe(id2);
     expect(workflow.calls).toHaveLength(2);
   });
@@ -660,16 +624,10 @@ describe("POST /v1/dispatch/:run — dedup", () => {
       },
     });
 
-    const res1 = await handleRequest(
-      await dispatchRequest("check", bodyText),
-      env,
-    );
-    const res2 = await handleRequest(
-      await dispatchRequest("check", bodyText),
-      env,
-    );
-    const id1 = (await res1.json() as { executionId: string }).executionId;
-    const id2 = (await res2.json() as { executionId: string }).executionId;
+    const res1 = await handleRequest(await dispatchRequest("check", bodyText), env);
+    const res2 = await handleRequest(await dispatchRequest("check", bodyText), env);
+    const id1 = ((await res1.json()) as { executionId: string }).executionId;
+    const id2 = ((await res2.json()) as { executionId: string }).executionId;
 
     expect(id1).toBe(id2);
     expect(workflow.calls).toHaveLength(1);
@@ -708,10 +666,7 @@ describe("POST /v1/dispatch/:run — dedup", () => {
       throwAlreadyExistsFor: new Set([semanticId]),
     });
     const bodyText = JSON.stringify(validBody);
-    const res = await handleRequest(
-      await dispatchRequest("offload-test", bodyText),
-      env,
-    );
+    const res = await handleRequest(await dispatchRequest("offload-test", bodyText), env);
 
     expect(res.status).toBe(202);
     const payload = (await res.json()) as { executionId: string };
@@ -761,10 +716,7 @@ describe("POST /v1/dispatch/:run — cooldown", () => {
     const { env, workflow } = fixture({ withIdempotencyKv: true });
 
     const res1 = await handleRequest(
-      await dispatchRequest(
-        "pr-review",
-        JSON.stringify(prReviewBody("aaaa111122223333")),
-      ),
+      await dispatchRequest("pr-review", JSON.stringify(prReviewBody("aaaa111122223333"))),
       env,
     );
     expect(res1.status).toBe(202);
@@ -773,10 +725,7 @@ describe("POST /v1/dispatch/:run — cooldown", () => {
 
     // A new push (different sha) on the SAME PR, inside the cooldown window.
     const res2 = await handleRequest(
-      await dispatchRequest(
-        "pr-review",
-        JSON.stringify(prReviewBody("bbbb444455556666")),
-      ),
+      await dispatchRequest("pr-review", JSON.stringify(prReviewBody("bbbb444455556666"))),
       env,
     );
     expect(res2.status).toBe(202);
@@ -795,17 +744,11 @@ describe("POST /v1/dispatch/:run — cooldown", () => {
   it("a different PR dispatches normally inside another PR's window", async () => {
     const { env, workflow } = fixture({ withIdempotencyKv: true });
     await handleRequest(
-      await dispatchRequest(
-        "pr-review",
-        JSON.stringify(prReviewBody("aaaa111122223333", 7)),
-      ),
+      await dispatchRequest("pr-review", JSON.stringify(prReviewBody("aaaa111122223333", 7))),
       env,
     );
     const res = await handleRequest(
-      await dispatchRequest(
-        "pr-review",
-        JSON.stringify(prReviewBody("cccc777788889999", 8)),
-      ),
+      await dispatchRequest("pr-review", JSON.stringify(prReviewBody("cccc777788889999", 8))),
       env,
     );
     expect(res.status).toBe(202);
@@ -816,17 +759,11 @@ describe("POST /v1/dispatch/:run — cooldown", () => {
   it("without IDEMPOTENCY_KV the cooldown is not enforced (best-effort)", async () => {
     const { env, workflow } = fixture();
     await handleRequest(
-      await dispatchRequest(
-        "pr-review",
-        JSON.stringify(prReviewBody("aaaa111122223333")),
-      ),
+      await dispatchRequest("pr-review", JSON.stringify(prReviewBody("aaaa111122223333"))),
       env,
     );
     await handleRequest(
-      await dispatchRequest(
-        "pr-review",
-        JSON.stringify(prReviewBody("bbbb444455556666")),
-      ),
+      await dispatchRequest("pr-review", JSON.stringify(prReviewBody("bbbb444455556666"))),
       env,
     );
     expect(workflow.calls).toHaveLength(2);
@@ -836,10 +773,7 @@ describe("POST /v1/dispatch/:run — cooldown", () => {
 describe("unmatched routes", () => {
   it("404s an unknown path", async () => {
     const { env } = fixture();
-    const res = await handleRequest(
-      new Request("https://dispatcher.example/nope"),
-      env,
-    );
+    const res = await handleRequest(new Request("https://dispatcher.example/nope"), env);
     expect(res.status).toBe(404);
   });
 });

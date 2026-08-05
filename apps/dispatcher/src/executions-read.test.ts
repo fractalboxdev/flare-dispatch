@@ -62,11 +62,7 @@ describe("summarizeRuns", () => {
   });
 
   it("orders busiest recipes first", () => {
-    const out = summarizeRuns([
-      row({ run: "a" }),
-      row({ run: "b" }),
-      row({ run: "b" }),
-    ]);
+    const out = summarizeRuns([row({ run: "a" }), row({ run: "b" }), row({ run: "b" })]);
     expect(out.map((r) => r.run)).toEqual(["b", "a"]);
   });
 

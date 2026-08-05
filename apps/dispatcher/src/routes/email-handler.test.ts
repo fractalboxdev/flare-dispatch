@@ -84,9 +84,7 @@ const makeEnv = (opts: {
     RUNS_METADATA: opts.metadata,
     RUNS_SANDBOX: {} as Env["RUNS_SANDBOX"],
     RUNS_STORAGE: {} as Env["RUNS_STORAGE"],
-    ...(opts.allowedSenders !== undefined
-      ? { INBOX_ALLOWED_SENDERS: opts.allowedSenders }
-      : {}),
+    ...(opts.allowedSenders !== undefined ? { INBOX_ALLOWED_SENDERS: opts.allowedSenders } : {}),
   }) as unknown as Env;
 
 /** A `raw` stream that records whether it was ever read, and (when `poison`)
@@ -167,10 +165,7 @@ describe("handleInboundEmail — RCPT guard (reject before parse)", () => {
       mime: OTP_MIME,
       poisonRaw: true, // reading it would throw → proves we never did
     });
-    await handleInboundEmail(
-      message,
-      makeEnv({ metadata: d1.binding, workflow: wf.binding }),
-    );
+    await handleInboundEmail(message, makeEnv({ metadata: d1.binding, workflow: wf.binding }));
     expect(setReject).toHaveBeenCalledOnce();
     expect(setReject).toHaveBeenCalledWith("no such mailbox");
     expect(rawTouched.value).toBe(false);
@@ -189,10 +184,7 @@ describe("handleInboundEmail — allocation lookup", () => {
       mime: OTP_MIME,
       poisonRaw: true,
     });
-    await handleInboundEmail(
-      message,
-      makeEnv({ metadata: d1.binding, workflow: wf.binding }),
-    );
+    await handleInboundEmail(message, makeEnv({ metadata: d1.binding, workflow: wf.binding }));
     expect(setReject).toHaveBeenCalledWith("no such mailbox");
     expect(rawTouched.value).toBe(false);
     expect(d1.inserts).toHaveLength(0);
@@ -207,10 +199,7 @@ describe("handleInboundEmail — allocation lookup", () => {
       mime: OTP_MIME,
       poisonRaw: true,
     });
-    await handleInboundEmail(
-      message,
-      makeEnv({ metadata: d1.binding, workflow: wf.binding }),
-    );
+    await handleInboundEmail(message, makeEnv({ metadata: d1.binding, workflow: wf.binding }));
     expect(setReject).toHaveBeenCalledWith("mailbox expired");
     expect(rawTouched.value).toBe(false);
     expect(d1.inserts).toHaveLength(0);
@@ -274,10 +263,7 @@ describe("handleInboundEmail — happy path", () => {
       subject: "Your verification code",
       mime: OTP_MIME,
     });
-    await handleInboundEmail(
-      message,
-      makeEnv({ metadata: d1.binding, workflow: wf.binding }),
-    );
+    await handleInboundEmail(message, makeEnv({ metadata: d1.binding, workflow: wf.binding }));
 
     expect(setReject).not.toHaveBeenCalled();
     expect(rawTouched.value).toBe(true); // body WAS read on the accept path
@@ -327,10 +313,7 @@ describe("handleInboundEmail — happy path", () => {
       mime: OTP_MIME,
     });
     await expect(
-      handleInboundEmail(
-        message,
-        makeEnv({ metadata: d1.binding, workflow: wf.binding }),
-      ),
+      handleInboundEmail(message, makeEnv({ metadata: d1.binding, workflow: wf.binding })),
     ).resolves.toBeUndefined();
     expect(setReject).not.toHaveBeenCalled();
     expect(d1.inserts).toHaveLength(1); // row stored despite no running instance
@@ -350,10 +333,7 @@ describe("handleInboundEmail — never throws", () => {
       mime: OTP_MIME,
     });
     await expect(
-      handleInboundEmail(
-        message,
-        makeEnv({ metadata: d1.binding, workflow: wf.binding }),
-      ),
+      handleInboundEmail(message, makeEnv({ metadata: d1.binding, workflow: wf.binding })),
     ).resolves.toBeUndefined();
     // No setReject — the message was already accepted past the guards.
     expect(setReject).not.toHaveBeenCalled();
@@ -370,10 +350,7 @@ describe("handleInboundEmail — never throws", () => {
       poisonRaw: true,
     });
     await expect(
-      handleInboundEmail(
-        message,
-        makeEnv({ metadata: d1.binding, workflow: wf.binding }),
-      ),
+      handleInboundEmail(message, makeEnv({ metadata: d1.binding, workflow: wf.binding })),
     ).resolves.toBeUndefined();
     expect(setReject).toHaveBeenCalledWith("temporary failure");
     expect(d1.inserts).toHaveLength(0);

@@ -122,20 +122,18 @@ export const demoReel = defineRun({
       // Resolve the docs base once — it absolutizes the relative `bundleUrl`
       // a parent product-demo passes, and the artifact links in the comment.
       const docsBase = yield* step("resolve-docs-base", () =>
-        config.get("product-demo.docsBase").pipe(
-          Effect.map(
-            (override) => override ?? "https://flare-dispatch.fractalbox.com",
-          ),
-        ),
+        config
+          .get("product-demo.docsBase")
+          .pipe(Effect.map((override) => override ?? "https://flare-dispatch.fractalbox.com")),
       );
       const absolute = (uri: string): string =>
         uri.startsWith("http") ? uri : `${docsBase}${uri}`;
       const bundleUrl = absolute(input.bundleUrl);
 
       const apRef = yield* step("resolve-autopresenter-ref", () =>
-        config.get("demo-reel.autopresenter-ref").pipe(
-          Effect.map((v) => (v !== undefined && v !== "" ? v : "main")),
-        ),
+        config
+          .get("demo-reel.autopresenter-ref")
+          .pipe(Effect.map((v) => (v !== undefined && v !== "" ? v : "main"))),
       );
 
       // Optional TTS credentials for autopresenter's narration (Workers AI
@@ -143,9 +141,7 @@ export const demoReel = defineRun({
       // that owns the gateway/browser. Absent ⇒ autopresenter renders the
       // video without narration credentials and falls back per its own CLI
       // semantics; the deck is unaffected either way.
-      const ttsEnv = yield* loadSecrets(
-        ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
-      );
+      const ttsEnv = yield* loadSecrets(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
 
       const container = yield* step("acquire", () => sandbox.acquire({}));
 
@@ -170,8 +166,7 @@ export const demoReel = defineRun({
             Effect.filterOrFail(
               (r) =>
                 r.exitCode === 0 &&
-                (opts.sentinel === undefined ||
-                  r.stdout.includes(opts.sentinel)),
+                (opts.sentinel === undefined || r.stdout.includes(opts.sentinel)),
               (r) =>
                 new ExecFailed({
                   exitCode: r.exitCode,
@@ -256,10 +251,7 @@ export const demoReel = defineRun({
             Effect.timeout("90 seconds"),
             Effect.catchAllCause((cause) =>
               io
-                .log(
-                  "warn",
-                  `demo-reel: deck upload failed — ${Cause.pretty(cause).slice(0, 400)}`,
-                )
+                .log("warn", `demo-reel: deck upload failed — ${Cause.pretty(cause).slice(0, 400)}`)
                 .pipe(Effect.as("")),
             ),
           ),
@@ -336,7 +328,8 @@ export const demoReel = defineRun({
           );
         }
         if (videoUri === "") {
-          videoSkipped = videoSkipped !== "" ? videoSkipped : "video render/upload failed — see run logs";
+          videoSkipped =
+            videoSkipped !== "" ? videoSkipped : "video render/upload failed — see run logs";
         }
       }
 

@@ -4,11 +4,7 @@
 // `vitest-pool-workers` environment — same split as `sandbox-clone-url.ts`.
 
 import { describe, expect, it } from "vitest";
-import {
-  containerTarballPath,
-  isRegularFileStat,
-  splitTarPath,
-} from "./artifact-tar-path";
+import { containerTarballPath, isRegularFileStat, splitTarPath } from "./artifact-tar-path";
 
 describe("splitTarPath", () => {
   it("splits an absolute directory path into parent + basename", () => {
@@ -85,14 +81,10 @@ describe("containerTarballPath", () => {
   });
 
   it("falls back to `artifact` when the sanitised name is empty", () => {
-    expect(containerTarballPath("///", "z")).toBe(
-      "/tmp/fd-artifact-artifact-z.tar.gz",
-    );
+    expect(containerTarballPath("///", "z")).toBe("/tmp/fd-artifact-artifact-z.tar.gz");
   });
 
   it("strips leading + trailing dashes from the sanitised stem", () => {
-    expect(containerTarballPath("--weird--", "q")).toBe(
-      "/tmp/fd-artifact-weird-q.tar.gz",
-    );
+    expect(containerTarballPath("--weird--", "q")).toBe("/tmp/fd-artifact-weird-q.tar.gz");
   });
 });

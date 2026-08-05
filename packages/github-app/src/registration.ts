@@ -41,10 +41,13 @@ export type AppRegistration = {
  * The settings URL where an App's registration is edited by hand (GitHub has no
  * API for it). Org-owned and user-owned Apps live at different paths.
  */
-export const appSettingsUrl = (reg: {
-  ownerLogin: string;
-  ownerType: string;
-}, slug: string): string =>
+export const appSettingsUrl = (
+  reg: {
+    ownerLogin: string;
+    ownerType: string;
+  },
+  slug: string,
+): string =>
   reg.ownerType === "Organization"
     ? `https://github.com/organizations/${reg.ownerLogin}/settings/apps/${slug}`
     : `https://github.com/settings/apps/${slug}`;
@@ -114,11 +117,7 @@ export const fetchPublicAppRegistration = async (
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new GithubApiError(
-      `GET /apps/${slug} failed`,
-      res.status,
-      body,
-    );
+    throw new GithubApiError(`GET /apps/${slug} failed`, res.status, body);
   }
   const json = (await res.json()) as {
     permissions?: Record<string, string>;
@@ -162,12 +161,8 @@ export const diffRegistration = (
 
   const liveEvents = new Set(live.events);
   const desiredEvents = new Set(desired.default_events);
-  const missingEvents = [...desiredEvents]
-    .filter((e) => !liveEvents.has(e))
-    .sort();
-  const extraEvents = [...liveEvents]
-    .filter((e) => !desiredEvents.has(e))
-    .sort();
+  const missingEvents = [...desiredEvents].filter((e) => !liveEvents.has(e)).sort();
+  const extraEvents = [...liveEvents].filter((e) => !desiredEvents.has(e)).sort();
 
   return { permissionDrift, missingEvents, extraEvents };
 };

@@ -16,12 +16,12 @@ Runs are **typed Effect-TS programs**, not YAML — composable steps, tagged err
 
 ### Cloudflare component mapping
 
-| Concern | Cloudflare service |
-| --- | --- |
-| Orchestration | Workflows |
-| Job execution | Containers |
-| Browser / e2e | Browser Rendering |
-| Cache + artifacts | R2 |
+| Concern           | Cloudflare service |
+| ----------------- | ------------------ |
+| Orchestration     | Workflows          |
+| Job execution     | Containers         |
+| Browser / e2e     | Browser Rendering  |
+| Cache + artifacts | R2                 |
 
 ### Triggers
 

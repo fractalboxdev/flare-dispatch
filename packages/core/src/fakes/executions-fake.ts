@@ -20,11 +20,8 @@ export type ExecutionsFakeState = {
   readonly steps: StepRecord[];
 };
 
-const findStep = (
-  steps: StepRecord[],
-  executionId: string,
-  name: string,
-): number => steps.findIndex((s) => s.executionId === executionId && s.name === name);
+const findStep = (steps: StepRecord[], executionId: string, name: string): number =>
+  steps.findIndex((s) => s.executionId === executionId && s.name === name);
 
 /** Build an Executions fake plus an inspectable handle over its tables. */
 export const makeExecutionsFake = (): {

@@ -49,9 +49,7 @@ describe("handleScheduled", () => {
     expect(params.executionId).toBe("product-demo-2026-05-20");
     // GitHub block synthesized from the run's input.
     expect(params.github.repo).toBe("OWNER/REPO");
-    expect(params.inputs.deployedUrl).toBe(
-      "https://staging.example.com",
-    );
+    expect(params.inputs.deployedUrl).toBe("https://staging.example.com");
   });
 
   it("makes no Workflow calls when the cron matches no registered run", async () => {

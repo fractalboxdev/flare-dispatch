@@ -16,8 +16,7 @@ const NOISE_PATTERNS: ReadonlyArray<RegExp> = [
 ];
 
 /** A `+++ b/<path>` line opens a new file section in a unified diff. */
-const isNoisyPath = (path: string): boolean =>
-  NOISE_PATTERNS.some((re) => re.test(path));
+const isNoisyPath = (path: string): boolean => NOISE_PATTERNS.some((re) => re.test(path));
 
 /**
  * Drop every per-file section whose target path matches a noise pattern.
@@ -70,10 +69,7 @@ export const MAX_DIFF_CHARS = 120_000;
  * Truncate a diff to `maxChars`, appending a visible marker when it was cut so
  * the review (and the reader of its comment) knows it was based on a prefix.
  */
-export const capDiff = (
-  diff: string,
-  maxChars: number = MAX_DIFF_CHARS,
-): string =>
+export const capDiff = (diff: string, maxChars: number = MAX_DIFF_CHARS): string =>
   diff.length <= maxChars
     ? diff
     : `${diff.slice(0, maxChars)}\n\n…(diff truncated at ${maxChars} chars — review covers the first portion only)…`;

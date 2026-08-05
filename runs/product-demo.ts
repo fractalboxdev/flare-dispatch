@@ -64,8 +64,7 @@ import { awsAssumeRole, loadSecrets } from "@fractalboxdev/flare-dispatch-core/p
 
 // Shell single-quote a value so arbitrary story prose (quotes, URLs, `!`, `$`)
 // survives being embedded in the detached `sh -c` command below.
-const shellQuote = (value: string): string =>
-  `'${value.replace(/'/g, "'\\''")}'`;
+const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
 /**
  * Poll a `DONE:<exit>` sentinel file written by a detached process, with the
@@ -297,9 +296,7 @@ export const buildDemoBundleManifest = (opts: {
     chapterEndMs: c.chapterEndMs,
     framesPrefix: `${c.name}-`,
     ...(c.keyScreenshotUri !== "" ? { keyScreenshot: `${c.name}.png` } : {}),
-    ...(c.chapterGifUri !== undefined && c.chapterGifUri !== ""
-      ? { gif: `chapter-${i}.gif` }
-      : {}),
+    ...(c.chapterGifUri !== undefined && c.chapterGifUri !== "" ? { gif: `chapter-${i}.gif` } : {}),
     ...(c.replayJsonUri !== "" ? { replayJson: `replay-${i}.json` } : {}),
   })),
 });
@@ -394,7 +391,7 @@ const Output = Schema.Struct({
   // escape hatch — drop into an rrweb-player iframe to self-host the
   // replay. The dispatcher mirrors Browser Run's 30-day retention.
   replayJsonUri: Schema.String,
-  summaryMd: Schema.String,       // the holistic LLM-written summary
+  summaryMd: Schema.String, // the holistic LLM-written summary
   stories: Schema.Array(StoryResult),
   // `signals/v1` derived from the assertion-failed chapters — the first-party
   // adapter output a consumer folds into `ci-triage-pr` (and, later, a heal).
@@ -499,11 +496,7 @@ export const productDemo = defineRun({
         );
       }
       const duplicateNames = [
-        ...new Set(
-          resolvedStories
-            .map((s) => s.name)
-            .filter((n, i, a) => a.indexOf(n) !== i),
-        ),
+        ...new Set(resolvedStories.map((s) => s.name).filter((n, i, a) => a.indexOf(n) !== i)),
       ];
       if (duplicateNames.length > 0) {
         // Names become rrweb chapter markers — duplicates would collide on the
@@ -543,17 +536,13 @@ export const productDemo = defineRun({
         ["CF_AI_GATEWAY_ID", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
         { required: true },
       );
-      const optionalAgentEnv = yield* loadSecrets(
-        ["MODEL_API_KEY", "CF_AI_GATEWAY_TOKEN"],
-      );
+      const optionalAgentEnv = yield* loadSecrets(["MODEL_API_KEY", "CF_AI_GATEWAY_TOKEN"]);
       // Optional CF Access service token — when the `deployedUrl` sits behind
       // Cloudflare Access (the numu staging Pages site 302s to the Access login
       // otherwise), demo-agent sets these as extra HTTP headers so the browser
       // gets past the wall. Same bare Worker secret names as
       // cdp-acceptance/playwright-demo. Absent ⇒ a public target.
-      const cfAccessEnv = yield* loadSecrets(
-        ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"],
-      );
+      const cfAccessEnv = yield* loadSecrets(["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"]);
 
       // Optional BYOC Bedrock trust path — when the caller hands in
       // `bedrockRoleArn`, mint short-lived STS creds and pass them to
@@ -607,22 +596,22 @@ export const productDemo = defineRun({
       //    summary is now built deterministically in-run as markdown below, so
       //    there is no second LLM round-trip and no fragile stories.json file.)
       const playModel = yield* step("resolve-play-model", () =>
-        config.get("product-demo.model.play").pipe(
-          Effect.flatMap((v) =>
-            v !== undefined && v !== ""
-              ? Effect.succeed(v)
-              : Effect.die(
-                  "CONFIG_KV missing required key: product-demo.model.play (e.g. `gpt-4o`, `claude-opus-4-7`, `@cf/meta/llama-3.1-70b-instruct`)",
-                ),
+        config
+          .get("product-demo.model.play")
+          .pipe(
+            Effect.flatMap((v) =>
+              v !== undefined && v !== ""
+                ? Effect.succeed(v)
+                : Effect.die(
+                    "CONFIG_KV missing required key: product-demo.model.play (e.g. `gpt-4o`, `claude-opus-4-7`, `@cf/meta/llama-3.1-70b-instruct`)",
+                  ),
+            ),
           ),
-        ),
       );
       const docsBase = yield* step("resolve-docs-base", () =>
-        config.get("product-demo.docsBase").pipe(
-          Effect.map(
-            (override) => override ?? "https://flare-dispatch.fractalbox.com",
-          ),
-        ),
+        config
+          .get("product-demo.docsBase")
+          .pipe(Effect.map((override) => override ?? "https://flare-dispatch.fractalbox.com")),
       );
 
       const screenshotsDir = "/tmp/demo/screenshots";
@@ -680,40 +669,37 @@ export const productDemo = defineRun({
           const detachedCmd =
             `( timeout -s KILL ${killAfterSec} ${argv.map(shellQuote).join(" ")} ` +
             `> ${outPath} 2> ${errPath} ); echo "DONE:$?" > ${sentinelPath}`;
-          yield* sandbox
-            .runDetached({ container, command: detachedCmd, env: agentEnv })
-            .pipe(
-              Effect.timeoutFail({
-                duration: "30 seconds",
-                onTimeout: () =>
-                  new ExecTimeout({
-                    timeoutSec: 30,
-                    command: `${tag}: runDetached hung`,
-                  }),
-              }),
-              // The CF Sandbox intermittently rejects a detached process launch
-              // with a transient `ContainerLaunchFailed` — the box is alive
-              // (every story shares the one acquired container), `startProcess`
-              // itself flaked. Un-retried, a single flaked launch propagates out
-              // of `runAgent`, fails the `play-${i}` / `record-start-${i}` step
-              // (both `retries: 0`), and the outer `catchAll` records the chapter
-              // as an exit -3 "infra" failure. That is the dominant reason
-              // product-demo chapters fail nondeterministically run-to-run (a
-              // different subset every run). Retry the launch up to 3× with
-              // exponential backoff; `outPath`/`errPath`/`sentinelPath` are
-              // tag-scoped, so a re-launch starts from a clean slate. Only the
-              // launch is retried — once the agent is running, the bounded
-              // sentinel poll owns the outcome.
-              Effect.retry(
-                Schedule.exponential("1 second").pipe(
-                  Schedule.intersect(Schedule.recurs(3)),
-                  Schedule.whileInput(
-                    (e: ContainerLaunchFailed | ExecTimeout) =>
-                      e._tag === "ContainerLaunchFailed",
-                  ),
+          yield* sandbox.runDetached({ container, command: detachedCmd, env: agentEnv }).pipe(
+            Effect.timeoutFail({
+              duration: "30 seconds",
+              onTimeout: () =>
+                new ExecTimeout({
+                  timeoutSec: 30,
+                  command: `${tag}: runDetached hung`,
+                }),
+            }),
+            // The CF Sandbox intermittently rejects a detached process launch
+            // with a transient `ContainerLaunchFailed` — the box is alive
+            // (every story shares the one acquired container), `startProcess`
+            // itself flaked. Un-retried, a single flaked launch propagates out
+            // of `runAgent`, fails the `play-${i}` / `record-start-${i}` step
+            // (both `retries: 0`), and the outer `catchAll` records the chapter
+            // as an exit -3 "infra" failure. That is the dominant reason
+            // product-demo chapters fail nondeterministically run-to-run (a
+            // different subset every run). Retry the launch up to 3× with
+            // exponential backoff; `outPath`/`errPath`/`sentinelPath` are
+            // tag-scoped, so a re-launch starts from a clean slate. Only the
+            // launch is retried — once the agent is running, the bounded
+            // sentinel poll owns the outcome.
+            Effect.retry(
+              Schedule.exponential("1 second").pipe(
+                Schedule.intersect(Schedule.recurs(3)),
+                Schedule.whileInput(
+                  (e: ContainerLaunchFailed | ExecTimeout) => e._tag === "ContainerLaunchFailed",
                 ),
               ),
-            );
+            ),
+          );
           const exitCode = yield* pollSentinel({
             container,
             sentinel: sentinelPath,
@@ -727,13 +713,11 @@ export const productDemo = defineRun({
             Effect.catchAll(() => Effect.succeed(-3)),
           );
           const readBounded = (path: string) =>
-            sandbox
-              .exec({ container, command: `cat ${path} 2>/dev/null || true` })
-              .pipe(
-                Effect.timeout("45 seconds"),
-                Effect.map((r) => r.stdout),
-                Effect.catchAll(() => Effect.succeed("")),
-              );
+            sandbox.exec({ container, command: `cat ${path} 2>/dev/null || true` }).pipe(
+              Effect.timeout("45 seconds"),
+              Effect.map((r) => r.stdout),
+              Effect.catchAll(() => Effect.succeed("")),
+            );
           const stdout = yield* readBounded(outPath);
           const stderr = yield* readBounded(errPath);
           return { stdout, stderr, exitCode };
@@ -829,14 +813,12 @@ export const productDemo = defineRun({
           // + a `?browser_session=<id>` re-attach endpoint every demo-agent
           // exec below dials.
           const attached = yield* step(`attach-cdp-${i}`, () =>
-            browser
-              .newCDPSession({ targetUrl: input.deployedUrl, recording: true })
-              .pipe(
-                Effect.map((session) => ({
-                  wsEndpoint: session.wsEndpoint,
-                  sessionId: session.sessionId ?? "",
-                })),
-              ),
+            browser.newCDPSession({ targetUrl: input.deployedUrl, recording: true }).pipe(
+              Effect.map((session) => ({
+                wsEndpoint: session.wsEndpoint,
+                sessionId: session.sessionId ?? "",
+              })),
+            ),
           );
           // The session the rest of the chapter dials — replaced by a fresh
           // one if record-start finds it dead (see recovery below).
@@ -851,11 +833,17 @@ export const productDemo = defineRun({
           // the step to the Workflows step cap, killing the session and the
           // chapter with it.
           const recordStartArgv = (ws: string, sid: string) => [
-            "demo-agent", "record", "start",
-            "--cdp-ws", ws,
-            "--viewport", viewport,
-            "--session-id-out", sessionIdPath,
-            "--url", input.deployedUrl,
+            "demo-agent",
+            "record",
+            "start",
+            "--cdp-ws",
+            ws,
+            "--viewport",
+            viewport,
+            "--session-id-out",
+            sessionIdPath,
+            "--url",
+            input.deployedUrl,
             ...(sid !== "" ? ["--session-id", sid] : []),
           ];
           const startResult = yield* step(
@@ -889,19 +877,15 @@ export const productDemo = defineRun({
               `story '${story.name}': record-start failed (exit ${startResult.exitCode}) — re-acquiring session. stderr tail: ${startResult.stderr.slice(-200)}`,
             );
             const fresh = yield* step(`reattach-cdp-${i}`, () =>
-              browser
-                .newCDPSession({ targetUrl: input.deployedUrl, recording: true })
-                .pipe(
-                  Effect.map((session) => ({
-                    wsEndpoint: session.wsEndpoint,
-                    sessionId: session.sessionId ?? "",
-                  })),
-                ),
+              browser.newCDPSession({ targetUrl: input.deployedUrl, recording: true }).pipe(
+                Effect.map((session) => ({
+                  wsEndpoint: session.wsEndpoint,
+                  sessionId: session.sessionId ?? "",
+                })),
+              ),
             ).pipe(
               Effect.catchAll(() =>
-                Effect.succeed<{ wsEndpoint: string; sessionId: string } | null>(
-                  null,
-                ),
+                Effect.succeed<{ wsEndpoint: string; sessionId: string } | null>(null),
               ),
             );
             if (fresh !== null) {
@@ -932,23 +916,31 @@ export const productDemo = defineRun({
               runAgent({
                 tag: `play-${i}`,
                 argv: [
-                  "demo-agent", "play",
-                  "--cdp-ws", activeWs,
-                  "--name", story.name,
-                  "--prose", story.prose,
-                  "--screenshots", screenshotsDir,
-                  "--frames-dir", framesDir,
-                  "--max-sec", String(perStorySec),
-                  "--model", playModel,
-                  "--url", input.deployedUrl,
+                  "demo-agent",
+                  "play",
+                  "--cdp-ws",
+                  activeWs,
+                  "--name",
+                  story.name,
+                  "--prose",
+                  story.prose,
+                  "--screenshots",
+                  screenshotsDir,
+                  "--frames-dir",
+                  framesDir,
+                  "--max-sec",
+                  String(perStorySec),
+                  "--model",
+                  playModel,
+                  "--url",
+                  input.deployedUrl,
                 ],
                 killAfterSec: perStorySec + 60,
                 pollBudgetSec: perStorySec + 90,
               }).pipe(
                 Effect.map((r) => ({
                   ...r,
-                  exitCode:
-                    r.exitCode < 0 && r.stdout.trim() !== "" ? 0 : r.exitCode,
+                  exitCode: r.exitCode < 0 && r.stdout.trim() !== "" ? 0 : r.exitCode,
                 })),
               ),
             { timeoutSec: perStorySec + 330, retries: 0 },
@@ -972,20 +964,21 @@ export const productDemo = defineRun({
               runAgent({
                 tag: `record-stop-${i}`,
                 argv: [
-                  "demo-agent", "record", "stop",
-                  "--cdp-ws", activeWs,
-                  "--session-id-in", sessionIdPath,
-                  "--out", replayJsonPath,
+                  "demo-agent",
+                  "record",
+                  "stop",
+                  "--cdp-ws",
+                  activeWs,
+                  "--session-id-in",
+                  sessionIdPath,
+                  "--out",
+                  replayJsonPath,
                 ],
                 killAfterSec: 120,
                 pollBudgetSec: 150,
               }),
             { timeoutSec: 360, retries: 0 },
-          ).pipe(
-            Effect.catchAll(() =>
-              Effect.succeed({ stdout: "", stderr: "", exitCode: 1 }),
-            ),
-          );
+          ).pipe(Effect.catchAll(() => Effect.succeed({ stdout: "", stderr: "", exitCode: 1 })));
 
           const playParsed = tryParseLastJson<PlayJson>(playResult.stdout);
           const pj: PlayJson = playParsed ?? {
@@ -1074,8 +1067,7 @@ export const productDemo = defineRun({
                     ),
                 );
 
-          const replayUri =
-            rs.sessionId !== "" ? `${docsBase}/replay/${rs.sessionId}` : "";
+          const replayUri = rs.sessionId !== "" ? `${docsBase}/replay/${rs.sessionId}` : "";
 
           yield* io.log(
             "info",
@@ -1139,15 +1131,11 @@ export const productDemo = defineRun({
         }),
       ].join("\n");
 
-      yield* io.log(
-        "info",
-        `product-demo: ${stories.length} stories, ${passedCount} passed`,
-      );
+      yield* io.log("info", `product-demo: ${stories.length} stories, ${passedCount} passed`);
 
       // The top-level replay points at the first story that produced one (the
       // structured per-story replays live in `stories[]`).
-      const primary =
-        stories.find((s) => s.replayUri !== "") ?? stories[0];
+      const primary = stories.find((s) => s.replayUri !== "") ?? stories[0];
 
       // 3.5. Persist the markdown summary (with per-story narratives) as an
       //      artifact on BOTH the pass AND fail paths — so a FAILED run (whose
@@ -1165,9 +1153,12 @@ export const productDemo = defineRun({
             // silently produced no summary.md). write-prior writes `--data`
             // verbatim to `--out`.
             command: [
-              "demo-agent", "write-prior",
-              "--out", "/tmp/demo/summary.md",
-              "--data", summaryMd,
+              "demo-agent",
+              "write-prior",
+              "--out",
+              "/tmp/demo/summary.md",
+              "--data",
+              summaryMd,
             ]
               .map(shellQuote)
               .join(" "),
@@ -1208,11 +1199,16 @@ export const productDemo = defineRun({
             // <=800px, drops frames evenly to stay under GitHub camo's ~10MB
             // limit, and emits `{gifPath,frameCount,bytes,...}` on its last line.
             command: [
-              "demo-agent", "gif",
-              "--frames", framesDir,
-              "--out", "/tmp/demo/demo.gif",
-              "--max-width", "800",
-              "--max-bytes", "10000000",
+              "demo-agent",
+              "gif",
+              "--frames",
+              framesDir,
+              "--out",
+              "/tmp/demo/demo.gif",
+              "--max-width",
+              "800",
+              "--max-bytes",
+              "10000000",
             ]
               .map(shellQuote)
               .join(" "),
@@ -1275,12 +1271,18 @@ export const productDemo = defineRun({
               .exec({
                 container,
                 command: [
-                  "demo-agent", "gif",
-                  "--frames", framesDir,
-                  "--match", `${s.name}-`,
-                  "--out", `/tmp/demo/chapter-${i}.gif`,
-                  "--max-width", "800",
-                  "--max-bytes", "10000000",
+                  "demo-agent",
+                  "gif",
+                  "--frames",
+                  framesDir,
+                  "--match",
+                  `${s.name}-`,
+                  "--out",
+                  `/tmp/demo/chapter-${i}.gif`,
+                  "--max-width",
+                  "800",
+                  "--max-bytes",
+                  "10000000",
                 ]
                   .map(shellQuote)
                   .join(" "),
@@ -1345,10 +1347,7 @@ export const productDemo = defineRun({
         repo: input.repo,
         deployedUrl: input.deployedUrl,
       });
-      yield* io.log(
-        "info",
-        `product-demo: ${signals.length} signal(s) from assertion failures`,
-      );
+      yield* io.log("info", `product-demo: ${signals.length} signal(s) from assertion failures`);
 
       // 3.9. Persist the STRUCTURED chapter results + derived signals as R2
       //      artifacts on BOTH paths. The dispatcher discards `summary_json`
@@ -1365,9 +1364,12 @@ export const productDemo = defineRun({
             .exec({
               container,
               command: [
-                "demo-agent", "write-prior",
-                "--out", `/tmp/demo/${name}`,
-                "--data", JSON.stringify(value),
+                "demo-agent",
+                "write-prior",
+                "--out",
+                `/tmp/demo/${name}`,
+                "--data",
+                JSON.stringify(value),
               ]
                 .map(shellQuote)
                 .join(" "),
@@ -1475,8 +1477,7 @@ export const productDemo = defineRun({
       //       bundle URL so a Workflow replay never double-renders.
       //       Best-effort — a reel dispatch failure never flips the demo
       //       verdict. See runs/demo-reel.ts + specs/10-demo-bundle.md.
-      const reelEnabled =
-        (yield* config.get("demo-reel.enabled")) === "true";
+      const reelEnabled = (yield* config.get("demo-reel.enabled")) === "true";
       if (reelEnabled && bundleUri !== "") {
         yield* step("dispatch-demo-reel", () =>
           spawnChildRun({
@@ -1523,8 +1524,7 @@ export const productDemo = defineRun({
       //       run; per-heal model spend is bounded by the AgentBudget DO; child
       //       dedup is the deterministic instanceId (incidentId + sha). Best-
       //       effort throughout — never flips the demo verdict.
-      const demoHealEnabled =
-        (yield* config.get("self-heal.demo.enabled")) === "true";
+      const demoHealEnabled = (yield* config.get("self-heal.demo.enabled")) === "true";
       if (demoHealEnabled) {
         const clampInt = (raw: string | undefined, def: number, lo: number, hi: number) => {
           const n = Number.parseInt(raw ?? "", 10);
@@ -1552,24 +1552,30 @@ export const productDemo = defineRun({
             const res = yield* runAgent({
               tag,
               argv: [
-                "demo-agent", "play",
-                "--cdp-ws", attached.wsEndpoint,
-                "--name", name,
-                "--prose", prose,
-                "--screenshots", "/tmp/demo/confirm",
-                "--frames-dir", "/tmp/demo/confirm",
-                "--max-sec", String(perStorySec),
-                "--model", playModel,
-                "--url", input.deployedUrl,
+                "demo-agent",
+                "play",
+                "--cdp-ws",
+                attached.wsEndpoint,
+                "--name",
+                name,
+                "--prose",
+                prose,
+                "--screenshots",
+                "/tmp/demo/confirm",
+                "--frames-dir",
+                "/tmp/demo/confirm",
+                "--max-sec",
+                String(perStorySec),
+                "--model",
+                playModel,
+                "--url",
+                input.deployedUrl,
               ],
               killAfterSec: perStorySec + 60,
               pollBudgetSec: perStorySec + 90,
             });
             const parsed = tryParseLastJson<PlayJson>(res.stdout);
-            return (parsed?.status ?? "inconclusive") as
-              | "passed"
-              | "failed"
-              | "inconclusive";
+            return (parsed?.status ?? "inconclusive") as "passed" | "failed" | "inconclusive";
           }).pipe(Effect.catchAll(() => Effect.succeed("inconclusive" as const)));
 
         const toConfirm = storiesWithGifs
@@ -1583,11 +1589,11 @@ export const productDemo = defineRun({
           let failures = 1; // the original assertion failure
           let conclusive = 1;
           for (let r = 1; r < confirmRuns; r++) {
-            const verdict = yield* step(`confirm-${ci}-${r}`, () =>
-              confirmPlay(s.name, prose, `confirm-${ci}-${r}`),
-            { timeoutSec: perStorySec + 330, retries: 0 }).pipe(
-              Effect.catchAll(() => Effect.succeed("inconclusive" as const)),
-            );
+            const verdict = yield* step(
+              `confirm-${ci}-${r}`,
+              () => confirmPlay(s.name, prose, `confirm-${ci}-${r}`),
+              { timeoutSec: perStorySec + 330, retries: 0 },
+            ).pipe(Effect.catchAll(() => Effect.succeed("inconclusive" as const)));
             if (verdict !== "inconclusive") conclusive += 1;
             if (verdict === "failed") failures += 1;
           }
@@ -1613,7 +1619,10 @@ export const productDemo = defineRun({
         }
 
         if (confirmed.length === 0) {
-          yield* io.log("info", "product-demo: no chapters confirmed deterministically — no self-heal");
+          yield* io.log(
+            "info",
+            "product-demo: no chapters confirmed deterministically — no self-heal",
+          );
         } else if ((testCommand ?? "") === "") {
           yield* io.log(
             "warn",
@@ -1658,9 +1667,7 @@ export const productDemo = defineRun({
         const commentBody = [
           summaryMd,
           "",
-          ...(gifUri !== ""
-            ? [`![product-demo walkthrough](${gifUri})`, ""]
-            : []),
+          ...(gifUri !== "" ? [`![product-demo walkthrough](${gifUri})`, ""] : []),
           ...(primary?.replayUri !== undefined && primary.replayUri !== ""
             ? [`▶ [Scrub the full rrweb replay](${primary.replayUri})`]
             : []),
@@ -1700,9 +1707,7 @@ export const productDemo = defineRun({
         // dispatcher embeds `summaryMd` beneath the generic line in the red
         // check-run summary + the notify email, so the failure narrative is
         // visible on the PR itself, not only in the R2 `summary.md`.
-        return yield* Effect.fail(
-          new AcceptanceFailed({ exitCode: 1, summaryMd }),
-        );
+        return yield* Effect.fail(new AcceptanceFailed({ exitCode: 1, summaryMd }));
       }
 
       // The check-run summary the Dispatcher posts EMBEDS `summaryMd` verbatim.

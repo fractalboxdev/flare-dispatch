@@ -5,10 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { Effect, Exit } from "effect";
 import { mailbox } from "@fractalboxdev/flare-dispatch-core";
-import {
-  makeMailboxCloudflareLive,
-  type MailboxCloudflareConfig,
-} from "./mailbox-cf";
+import { makeMailboxCloudflareLive, type MailboxCloudflareConfig } from "./mailbox-cf";
 
 /** A fake D1 that records the INSERT binds. */
 const fakeDb = () => {
@@ -54,9 +51,7 @@ describe("makeMailboxCloudflareLive", () => {
 
   it("the dying stub fails loudly when no INBOX_DOMAIN is configured", async () => {
     const layer = makeMailboxCloudflareLive(undefined);
-    const exit = await Effect.runPromiseExit(
-      mailbox.allocate().pipe(Effect.provide(layer)),
-    );
+    const exit = await Effect.runPromiseExit(mailbox.allocate().pipe(Effect.provide(layer)));
     expect(Exit.isFailure(exit)).toBe(true);
   });
 });

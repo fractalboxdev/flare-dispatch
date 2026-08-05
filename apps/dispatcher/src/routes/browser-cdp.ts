@@ -66,8 +66,7 @@ export const handleBrowserCdp = async (
   requestId: string,
 ): Promise<Response> => {
   const url = new URL(request.url);
-  const isUpgrade =
-    request.headers.get("upgrade")?.toLowerCase() === "websocket";
+  const isUpgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
   // ACQUIRE-ONLY MODE — `GET …?acquire=1` with no upgrade: mint a session and
   // return its id as JSON (see below). Everything else that isn't a WS upgrade
   // keeps the existing 426 contract.
@@ -123,8 +122,7 @@ export const handleBrowserCdp = async (
         }),
       };
     }
-    const sessionId = ((await acquireRes.json()) as { sessionId: string })
-      .sessionId;
+    const sessionId = ((await acquireRes.json()) as { sessionId: string }).sessionId;
     log("cdp.acquired", {
       request_id: requestId,
       session_id: sessionId,
@@ -161,9 +159,7 @@ export const handleBrowserCdp = async (
 
   // 2) Open the upstream CDP WebSocket for that session. `persistent` is left
   // unset — the BROWSER binding 400s it for both fresh + re-attach.
-  const upstreamUrl = new URL(
-    `http://fake.host/v1/devtools/browser/${sessionId}`,
-  );
+  const upstreamUrl = new URL(`http://fake.host/v1/devtools/browser/${sessionId}`);
   // NOTE: recording=true must NOT ride on the devtools connect — the binding
   // 400s it there ("upstream did not return webSocket; status=400", verified
   // live). Recording is armed at ACQUIRE time only (see acquireSession above);
@@ -178,10 +174,9 @@ export const handleBrowserCdp = async (
       session_id: sessionId,
       upstream_status: upstreamRes.status,
     });
-    return new Response(
-      `upstream did not return webSocket; status=${upstreamRes.status}`,
-      { status: 502 },
-    );
+    return new Response(`upstream did not return webSocket; status=${upstreamRes.status}`, {
+      status: 502,
+    });
   }
   upstream.accept();
 
@@ -234,18 +229,14 @@ export const handleBrowserCdp = async (
   // 4) Pipe frames bidirectionally (opaque JSON/binary).
   server.addEventListener("message", (e: MessageEvent) => {
     try {
-      upstream.send(
-        typeof e.data === "string" ? e.data : new Uint8Array(e.data as ArrayBuffer),
-      );
+      upstream.send(typeof e.data === "string" ? e.data : new Uint8Array(e.data as ArrayBuffer));
     } catch (err) {
       safeClose(1011, `upstream send failed: ${(err as Error).message}`);
     }
   });
   upstream.addEventListener("message", (e: MessageEvent) => {
     try {
-      server.send(
-        typeof e.data === "string" ? e.data : new Uint8Array(e.data as ArrayBuffer),
-      );
+      server.send(typeof e.data === "string" ? e.data : new Uint8Array(e.data as ArrayBuffer));
     } catch (err) {
       safeClose(1011, `client send failed: ${(err as Error).message}`);
     }

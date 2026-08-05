@@ -70,16 +70,11 @@ export type ReserveDecision =
  * `estTokens` is clamped to ≥ 1 so a zero-estimate call still consumes a request
  * slot and can't be used to bypass the request cap.
  */
-export const decideReserve = (
-  s: AgentBudgetState,
-  estTokens: number,
-): ReserveDecision => {
+export const decideReserve = (s: AgentBudgetState, estTokens: number): ReserveDecision => {
   if (!s.live) return { ok: false, reason: "not-live", state: s };
-  if (s.requests >= s.maxRequests)
-    return { ok: false, reason: "too-many-requests", state: s };
+  if (s.requests >= s.maxRequests) return { ok: false, reason: "too-many-requests", state: s };
   const held = Math.max(1, Math.floor(estTokens));
-  if (held > remaining(s))
-    return { ok: false, reason: "budget-exhausted", state: s };
+  if (held > remaining(s)) return { ok: false, reason: "budget-exhausted", state: s };
   return {
     ok: true,
     held,

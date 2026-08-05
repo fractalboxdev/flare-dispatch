@@ -14,9 +14,10 @@ export interface SecretsService {
   readonly get: (name: string) => Effect.Effect<string | undefined>;
 }
 
-export class Secrets extends Context.Tag(
-  "@fractalboxdev/flare-dispatch-core/Secrets",
-)<Secrets, SecretsService>() {}
+export class Secrets extends Context.Tag("@fractalboxdev/flare-dispatch-core/Secrets")<
+  Secrets,
+  SecretsService
+>() {}
 
 export const secrets = {
   get: (name: string) => Effect.flatMap(Secrets, (s) => s.get(name)),

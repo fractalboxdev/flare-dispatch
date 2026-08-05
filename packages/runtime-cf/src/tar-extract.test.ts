@@ -27,12 +27,7 @@ const byteStream = (bytes: Uint8Array): ReadableStream<Uint8Array> =>
   });
 
 /** Build one 512-byte ustar header block. */
-const header = (
-  name: string,
-  size: number,
-  typeflag: string,
-  prefix = "",
-): Uint8Array => {
+const header = (name: string, size: number, typeflag: string, prefix = ""): Uint8Array => {
   const block = new Uint8Array(512);
   block.set(encoder.encode(name).subarray(0, 100), 0);
   block.set(encoder.encode("0000644\0"), 100); // mode
@@ -84,11 +79,7 @@ const buildTar = (entries: Entry[]): Uint8Array => {
     }
     const bodyBytes = encoder.encode(e.body ?? "");
     parts.push(
-      header(
-        e.longName ? e.name.slice(0, 100) : e.name,
-        bodyBytes.length,
-        e.typeflag ?? "0",
-      ),
+      header(e.longName ? e.name.slice(0, 100) : e.name, bodyBytes.length, e.typeflag ?? "0"),
     );
     if (bodyBytes.length > 0) parts.push(padTo512(bodyBytes));
   }
@@ -110,10 +101,7 @@ const gzip = async (bytes: Uint8Array): Promise<Uint8Array> => {
 
 const collect = async (tar: Uint8Array) => {
   const files: Array<{ path: string; text: string }> = [];
-  for await (const f of iterateTarFiles(
-    byteStream(tar),
-    EXPAND_CAPS_DEFAULT,
-  )) {
+  for await (const f of iterateTarFiles(byteStream(tar), EXPAND_CAPS_DEFAULT)) {
     files.push({ path: f.path, text: new TextDecoder().decode(f.bytes) });
   }
   return files;
@@ -136,9 +124,7 @@ describe("iterateTarFiles", () => {
 
   it("resolves GNU 'L' long names", async () => {
     const long = `report/data/${"x".repeat(120)}.png`;
-    const files = await collect(
-      buildTar([{ name: long, body: "PNG", longName: true }]),
-    );
+    const files = await collect(buildTar([{ name: long, body: "PNG", longName: true }]));
     expect(files).toEqual([{ path: long, text: "PNG" }]);
   });
 
@@ -205,15 +191,11 @@ describe("expandTarGzToR2", () => {
     );
     expect(written).toBe(2);
 
-    const index = await bindings.bucket.get(
-      "artifacts/exec1/acceptance-report/index.html",
-    );
+    const index = await bindings.bucket.get("artifacts/exec1/acceptance-report/index.html");
     expect(await index?.text()).toBe("<html>report</html>");
     expect(index?.httpMetadata?.contentType).toContain("text/html");
 
-    const png = await bindings.bucket.get(
-      "artifacts/exec1/acceptance-report/data/shot.png",
-    );
+    const png = await bindings.bucket.get("artifacts/exec1/acceptance-report/data/shot.png");
     expect(png?.httpMetadata?.contentType).toBe("image/png");
 
     const evil = await bindings.bucket.list({ prefix: "artifacts/exec1/" });
@@ -221,8 +203,8 @@ describe("expandTarGzToR2", () => {
   });
 
   it("throws when the source object is missing", async () => {
-    await expect(
-      expandTarGzToR2(bindings.bucket, "artifacts/none/x", "p/", "x/"),
-    ).rejects.toThrow(/no object/);
+    await expect(expandTarGzToR2(bindings.bucket, "artifacts/none/x", "p/", "x/")).rejects.toThrow(
+      /no object/,
+    );
   });
 });

@@ -4,10 +4,10 @@ Reusable GitHub Actions for consuming [FlareDispatch](../README.md) from your ow
 repositories. Both are self-contained composite actions — no bundled runtime, no
 `npm install`, nothing to keep in sync.
 
-| Action | What it does |
-|---|---|
-| [`flare-dispatch-action`](./flare-dispatch-action/) | **Dispatch a run.** HMAC-signs a dispatch body and POSTs it to your Dispatcher Worker from a CI workflow. The run executes on Cloudflare and reports back via a `flare-dispatch/<run>` check-run. |
-| [`deploy-dispatcher-action`](./deploy-dispatcher-action/) | **Ship the Worker.** Deploys the dispatcher into your Cloudflare account via an operator-overlay `wrangler.jsonc` + a pinned upstream SHA. |
+| Action                                                    | What it does                                                                                                                                                                                      |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`flare-dispatch-action`](./flare-dispatch-action/)       | **Dispatch a run.** HMAC-signs a dispatch body and POSTs it to your Dispatcher Worker from a CI workflow. The run executes on Cloudflare and reports back via a `flare-dispatch/<run>` check-run. |
+| [`deploy-dispatcher-action`](./deploy-dispatcher-action/) | **Ship the Worker.** Deploys the dispatcher into your Cloudflare account via an operator-overlay `wrangler.jsonc` + a pinned upstream SHA.                                                        |
 
 The two are complementary: `deploy-dispatcher-action` stands up the Dispatcher in
 your account once; `flare-dispatch-action` runs in each consumer repo's CI to

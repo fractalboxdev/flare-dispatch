@@ -12,14 +12,7 @@
 
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { handleRequest } from "../router";
 import { makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 import { handleInstallLlms, handleInstallNew, htmlEscape } from "./github";
@@ -62,9 +55,7 @@ describe("htmlEscape", () => {
 // Helper: parse the hidden `manifest` input from a rendered form page back
 // into its JSON object, reversing the HTML-entity escapes we know we produce.
 const extractManifest = (body: string) => {
-  const match = body.match(
-    /<input type="hidden" name="manifest" value="([^"]+)"/,
-  );
+  const match = body.match(/<input type="hidden" name="manifest" value="([^"]+)"/);
   expect(match).not.toBeNull();
   const escaped = match![1]!;
   const json = escaped
@@ -86,9 +77,7 @@ describe("GET /v1/github/install/new (owner chooser)", () => {
     const res = await handleRequest(new Request(INSTALL_NEW_URL), env);
 
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe(
-      "text/html; charset=utf-8",
-    );
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
     // Two GET forms — one for personal (hidden empty `owner`), one for org
     // (text input for the org login). Both target /install/new itself.
@@ -96,7 +85,9 @@ describe("GET /v1/github/install/new (owner chooser)", () => {
     expect(body).toContain('name="owner" value=""');
     // Text input for the org login (attribute order isn't load-bearing — assert
     // both attrs appear on the same `<input>` tag without pinning their order).
-    expect(body).toMatch(/<input\b[^>]*\btype="text"[^>]*\bname="owner"|<input\b[^>]*\bname="owner"[^>]*\btype="text"/);
+    expect(body).toMatch(
+      /<input\b[^>]*\btype="text"[^>]*\bname="owner"|<input\b[^>]*\bname="owner"[^>]*\btype="text"/,
+    );
     // No auto-submit + no github.com action on the chooser — those are the
     // next step, after a choice is made.
     expect(body).not.toContain("document.getElementById('manifest-form')");
@@ -109,10 +100,7 @@ describe("GET /v1/github/install/new (owner chooser)", () => {
 
   it("405s a non-GET method", async () => {
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(INSTALL_NEW_URL, { method: "POST" }),
-      env,
-    );
+    const res = await handleRequest(new Request(INSTALL_NEW_URL, { method: "POST" }), env);
     expect(res.status).toBe(405);
   });
 });
@@ -129,9 +117,7 @@ describe("GET /v1/github/install/llms.txt", () => {
     const res = await handleRequest(new Request(LLMS_URL), env);
 
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe(
-      "text/markdown; charset=utf-8",
-    );
+    expect(res.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
     const body = await res.text();
     // Origin-aware commands point back at THIS Dispatcher.
     expect(body).toContain(`${ORIGIN}/v1/github/install/new`);
@@ -144,20 +130,13 @@ describe("GET /v1/github/install/llms.txt", () => {
 
   it("405s a non-GET method", async () => {
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(LLMS_URL, { method: "POST" }),
-      env,
-    );
+    const res = await handleRequest(new Request(LLMS_URL, { method: "POST" }), env);
     expect(res.status).toBe(405);
   });
 
   it("substitutes a localhost origin (wrangler dev)", () => {
-    const res = handleInstallLlms(
-      new Request("http://localhost:8787/v1/github/install/llms.txt"),
-    );
-    expect(res.headers.get("content-type")).toBe(
-      "text/markdown; charset=utf-8",
-    );
+    const res = handleInstallLlms(new Request("http://localhost:8787/v1/github/install/llms.txt"));
+    expect(res.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
     // Synchronous body read is fine — `handleInstallLlms` returns a Response
     // built from a string, no streaming.
     return res.text().then((body) => {
@@ -169,15 +148,10 @@ describe("GET /v1/github/install/llms.txt", () => {
 describe("GET /v1/github/install/new?owner= (personal account)", () => {
   it("returns 200 text/html with auto-submitting form pointed at github.com/settings/apps/new", async () => {
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(`${INSTALL_NEW_URL}?owner=`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALL_NEW_URL}?owner=`), env);
 
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe(
-      "text/html; charset=utf-8",
-    );
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
     expect(body).toMatch(
       /<form[^>]+method="post"[^>]+action="https:\/\/github\.com\/settings\/apps\/new\?state=[^"]+"/,
@@ -188,10 +162,7 @@ describe("GET /v1/github/install/new?owner= (personal account)", () => {
 
   it("substitutes the request origin into manifest url, hook_attributes.url, and redirect_url", async () => {
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(`${INSTALL_NEW_URL}?owner=`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALL_NEW_URL}?owner=`), env);
     const manifest = extractManifest(await res.text());
 
     expect(manifest.url).toBe(ORIGIN);
@@ -203,9 +174,7 @@ describe("GET /v1/github/install/new?owner= (personal account)", () => {
   it("works against a localhost origin (wrangler dev)", async () => {
     // `handleInstallNew` is exported directly so we can unit-test the origin
     // logic without the router's text-only assertions.
-    const res = handleInstallNew(
-      new Request("http://localhost:8787/v1/github/install/new?owner="),
-    );
+    const res = handleInstallNew(new Request("http://localhost:8787/v1/github/install/new?owner="));
     const body = await res.text();
     expect(body).toContain("http://localhost:8787/v1/github/installed");
     expect(body).toContain("http://localhost:8787/v1/webhooks/github");
@@ -215,10 +184,7 @@ describe("GET /v1/github/install/new?owner= (personal account)", () => {
 describe("GET /v1/github/install/new?owner=<org> (org-owned)", () => {
   it("renders an auto-submitting form pointed at /organizations/<org>/settings/apps/new", async () => {
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(`${INSTALL_NEW_URL}?owner=acme-corp`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALL_NEW_URL}?owner=acme-corp`), env);
 
     expect(res.status).toBe(200);
     const body = await res.text();
@@ -237,19 +203,14 @@ describe("GET /v1/github/install/new?owner=<org> (org-owned)", () => {
     // The validator excludes most URL-unsafe characters, but defense in depth:
     // a hyphen-prefixed login is rejected upstream (LOGIN_RE requires a
     // leading alphanumeric), so we test a digit-heavy login that's valid.
-    const res = handleInstallNew(
-      new Request(`${INSTALL_NEW_URL}?owner=A1-B2-C3`),
-    );
+    const res = handleInstallNew(new Request(`${INSTALL_NEW_URL}?owner=A1-B2-C3`));
     expect(res.status).toBe(200);
   });
 
   it("400 JSON when `owner` fails the login grammar", async () => {
     const env = makeEnv();
     // Leading dash — invalid GitHub login.
-    const res = await handleRequest(
-      new Request(`${INSTALL_NEW_URL}?owner=-bad`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALL_NEW_URL}?owner=-bad`), env);
     expect(res.status).toBe(400);
     expect(res.headers.get("content-type")).toBe("application/json");
     const payload = (await res.json()) as { error: string };
@@ -258,10 +219,7 @@ describe("GET /v1/github/install/new?owner=<org> (org-owned)", () => {
 
   it("400 JSON when `owner` exceeds the 39-char cap", async () => {
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(`${INSTALL_NEW_URL}?owner=${"a".repeat(40)}`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALL_NEW_URL}?owner=${"a".repeat(40)}`), env);
     expect(res.status).toBe(400);
   });
 
@@ -302,9 +260,8 @@ afterAll(() => server.close());
 describe("GET /v1/github/installed", () => {
   it("exchanges code, renders success page with slug + wrangler commands + install URL", async () => {
     server.use(
-      http.post(
-        "https://api.github.com/app-manifests/:code/conversions",
-        () => HttpResponse.json(validConversion()),
+      http.post("https://api.github.com/app-manifests/:code/conversions", () =>
+        HttpResponse.json(validConversion()),
       ),
     );
 
@@ -315,9 +272,7 @@ describe("GET /v1/github/installed", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe(
-      "text/html; charset=utf-8",
-    );
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
     expect(body).toContain("flaredispatch-test"); // slug
     expect(body).toContain("FlareDispatch (test)"); // name
@@ -334,9 +289,7 @@ describe("GET /v1/github/installed", () => {
     // PEM rendered inside the page so the operator can copy it.
     expect(body).toContain("-----BEGIN RSA PRIVATE KEY-----");
     // Install URL is `<html_url>/installations/new`.
-    expect(body).toContain(
-      "https://github.com/apps/flaredispatch-test/installations/new",
-    );
+    expect(body).toContain("https://github.com/apps/flaredispatch-test/installations/new");
     // The "shown once" warning is present.
     expect(body.toLowerCase()).toContain("once");
   });
@@ -345,24 +298,19 @@ describe("GET /v1/github/installed", () => {
     // A hostile or buggy upstream returning fields containing `<script>` or
     // `"` MUST render escaped — not as live markup.
     server.use(
-      http.post(
-        "https://api.github.com/app-manifests/:code/conversions",
-        () =>
-          HttpResponse.json(
-            validConversion({
-              name: '<script>alert("x")</script>',
-              slug: 'bad"slug',
-              webhook_secret: "<img src=x onerror=alert(1)>",
-            }),
-          ),
+      http.post("https://api.github.com/app-manifests/:code/conversions", () =>
+        HttpResponse.json(
+          validConversion({
+            name: '<script>alert("x")</script>',
+            slug: 'bad"slug',
+            webhook_secret: "<img src=x onerror=alert(1)>",
+          }),
+        ),
       ),
     );
 
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(`${INSTALLED_URL}?code=somecode`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALLED_URL}?code=somecode`), env);
     expect(res.status).toBe(200);
     const body = await res.text();
 
@@ -383,8 +331,7 @@ describe("GET /v1/github/installed", () => {
 
   it("502s with an error page when GitHub returns 422", async () => {
     // Hostile-looking body — must NOT survive verbatim into the page.
-    const hostileBody =
-      '{"message":"code expired","details":"<script>alert(1)</script>"}';
+    const hostileBody = '{"message":"code expired","details":"<script>alert(1)</script>"}';
     server.use(
       http.post(
         "https://api.github.com/app-manifests/:code/conversions",
@@ -397,15 +344,10 @@ describe("GET /v1/github/installed", () => {
     );
 
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(`${INSTALLED_URL}?code=expired`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALLED_URL}?code=expired`), env);
 
     expect(res.status).toBe(502);
-    expect(res.headers.get("content-type")).toBe(
-      "text/html; charset=utf-8",
-    );
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
     expect(body).toContain("App creation failed");
     // Status mentioned for the operator.
@@ -426,25 +368,18 @@ describe("GET /v1/github/installed", () => {
 
   it("400 JSON when code query param is empty", async () => {
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(`${INSTALLED_URL}?code=`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALLED_URL}?code=`), env);
     expect(res.status).toBe(400);
   });
 
   it("502 when GitHub returns 200 with an unexpected body shape", async () => {
     server.use(
-      http.post(
-        "https://api.github.com/app-manifests/:code/conversions",
-        () => HttpResponse.json({ unexpected: "shape" }),
+      http.post("https://api.github.com/app-manifests/:code/conversions", () =>
+        HttpResponse.json({ unexpected: "shape" }),
       ),
     );
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(`${INSTALLED_URL}?code=somecode`),
-      env,
-    );
+    const res = await handleRequest(new Request(`${INSTALLED_URL}?code=somecode`), env);
     expect(res.status).toBe(502);
     const body = await res.text();
     expect(body).toContain("App creation failed");
@@ -452,10 +387,7 @@ describe("GET /v1/github/installed", () => {
 
   it("405s a non-GET method", async () => {
     const env = makeEnv();
-    const res = await handleRequest(
-      new Request(INSTALLED_URL, { method: "POST" }),
-      env,
-    );
+    const res = await handleRequest(new Request(INSTALLED_URL, { method: "POST" }), env);
     expect(res.status).toBe(405);
   });
 });

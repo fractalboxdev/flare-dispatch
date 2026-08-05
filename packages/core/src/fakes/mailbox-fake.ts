@@ -12,15 +12,8 @@
 // Spec: specs/pm/plan.md § 3 (fakes/), specs/03-dsl.md § Layers.
 
 import { Effect, Layer } from "effect";
-import {
-  INBOX_TTL_SEC_DEFAULT,
-  type InboxAddress,
-} from "../mailbox/contract";
-import {
-  type AllocateOpts,
-  Mailbox,
-  type MailboxService,
-} from "../services/mailbox";
+import { INBOX_TTL_SEC_DEFAULT, type InboxAddress } from "../mailbox/contract";
+import { type AllocateOpts, Mailbox, type MailboxService } from "../services/mailbox";
 
 /** Inspectable record of every Mailbox fake allocation. */
 export type MailboxFakeState = {

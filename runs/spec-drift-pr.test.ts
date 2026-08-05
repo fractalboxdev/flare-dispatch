@@ -42,9 +42,7 @@ describe("spec-drift-pr", () => {
       sandboxProgram,
       modelGateway: {
         responses: [
-          proposal([
-            { path: "specs/01.md", newContent: "new spec text", rationale: "stale" },
-          ]),
+          proposal([{ path: "specs/01.md", newContent: "new spec text", rationale: "stale" }]),
         ],
       },
     });
@@ -58,9 +56,7 @@ describe("spec-drift-pr", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]!.repo).toBe("owner/name");
       expect(calls[0]!.headBranch).toBe("flare-dispatch/spec-drift-2026-06-03");
-      expect(calls[0]!.files).toEqual([
-        { path: "specs/01.md", content: "new spec text" },
-      ]);
+      expect(calls[0]!.files).toEqual([{ path: "specs/01.md", content: "new spec text" }]);
     }).pipe(Effect.provide(layer));
   });
 

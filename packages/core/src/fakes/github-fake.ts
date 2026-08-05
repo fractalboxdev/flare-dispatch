@@ -97,11 +97,7 @@ export const makeGithubFake = (
         });
       }),
 
-    openPullRequests: ({
-      updatedWithinHours,
-      includeDrafts = false,
-      repos,
-    } = {}) =>
+    openPullRequests: ({ updatedWithinHours, includeDrafts = false, repos } = {}) =>
       Effect.sync(() => {
         state.openPullRequestsCalls.push({
           updatedWithinHours,
@@ -132,8 +128,7 @@ export const makeGithubFake = (
         return state.workflowRuns.filter((r) => {
           if (allow !== undefined && !allow.has(r.repo)) return false;
           if (status !== undefined && r.status !== status) return false;
-          if (conclusion !== undefined && r.conclusion !== conclusion)
-            return false;
+          if (conclusion !== undefined && r.conclusion !== conclusion) return false;
           if (createdWithinHours !== undefined) {
             const cutoff = now - createdWithinHours * 3_600_000;
             if (r.createdAt < cutoff) return false;

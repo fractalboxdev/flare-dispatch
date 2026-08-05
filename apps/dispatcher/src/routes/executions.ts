@@ -44,10 +44,7 @@ const LIMIT_DEFAULT = 50;
 const MAX_LIMIT = 200;
 
 /** Public-facing camelCase view of an execution row (no `input_json`). */
-const executionView = (
-  row: ExecutionRow,
-  links: { logsUrl?: string; dashboardUrl?: string },
-) => ({
+const executionView = (row: ExecutionRow, links: { logsUrl?: string; dashboardUrl?: string }) => ({
   id: row.id,
   run: row.run,
   repo: row.repo,
@@ -56,14 +53,10 @@ const executionView = (
   status: row.status,
   startedAt: row.started_at,
   completedAt: row.completed_at,
-  ...(row.parent_execution_id !== null
-    ? { parentExecutionId: row.parent_execution_id }
-    : {}),
+  ...(row.parent_execution_id !== null ? { parentExecutionId: row.parent_execution_id } : {}),
   ...(row.check_run_id !== null ? { checkRunId: row.check_run_id } : {}),
   ...(links.logsUrl !== undefined ? { logsUrl: links.logsUrl } : {}),
-  ...(links.dashboardUrl !== undefined
-    ? { dashboardUrl: links.dashboardUrl }
-    : {}),
+  ...(links.dashboardUrl !== undefined ? { dashboardUrl: links.dashboardUrl } : {}),
 });
 
 const stepView = (row: StepRow) => ({
@@ -124,9 +117,7 @@ export const handleExecutionsList = (
     const executions = yield* Effect.forEach(rows, (row) =>
       Effect.gen(function* () {
         const dashboardUrl = workflowDashboardUrl(env.CLOUDFLARE_ACCOUNT_ID, row.id);
-        const logsUrl = Option.getOrUndefined(
-          yield* logTokens.logsUrl(origin, row.id),
-        );
+        const logsUrl = Option.getOrUndefined(yield* logTokens.logsUrl(origin, row.id));
         return executionView(row, {
           ...(logsUrl !== undefined ? { logsUrl } : {}),
           ...(dashboardUrl !== undefined ? { dashboardUrl } : {}),
@@ -136,8 +127,7 @@ export const handleExecutionsList = (
 
     // Keyset cursor for the next page: the oldest `started_at` returned.
     const last = rows[rows.length - 1];
-    const nextBefore =
-      rows.length === limit && last?.started_at != null ? last.started_at : null;
+    const nextBefore = rows.length === limit && last?.started_at != null ? last.started_at : null;
 
     return json({ executions, nextBefore }, 200);
   });
@@ -152,35 +142,25 @@ export const handleExecutionDetail = (
 ): Effect.Effect<Response, never, CurrentEnv | ExecutionsRead | LogToken> =>
   Effect.gen(function* () {
     const env = yield* CurrentEnv;
-    const denied = yield* Effect.promise(() =>
-      gateLogAccess(env, executionId, url),
-    );
+    const denied = yield* Effect.promise(() => gateLogAccess(env, executionId, url));
     if (denied !== null) return denied;
 
     const reads = yield* ExecutionsRead;
     const logTokens = yield* LogToken;
     const rowOpt = yield* reads.get(executionId);
     if (Option.isNone(rowOpt)) {
-      return json(
-        { error: "execution_not_found", message: `no execution "${executionId}"` },
-        404,
-      );
+      return json({ error: "execution_not_found", message: `no execution "${executionId}"` }, 404);
     }
     const row = rowOpt.value;
 
     const origin = env.PUBLIC_ORIGIN ?? url.origin;
     // Re-derive THIS execution's token to self-link the log files (the caller
     // already proved possession of it via the gate).
-    const token = Option.getOrElse(
-      yield* logTokens.token(executionId),
-      () => "",
-    );
+    const token = Option.getOrElse(yield* logTokens.token(executionId), () => "");
 
     const [steps, logList, artifactList] = yield* Effect.all([
       reads.steps(executionId),
-      Effect.promise(() =>
-        env.RUNS_STORAGE.list({ prefix: `logs/${executionId}/`, limit: 1000 }),
-      ),
+      Effect.promise(() => env.RUNS_STORAGE.list({ prefix: `logs/${executionId}/`, limit: 1000 })),
       Effect.promise(() =>
         env.RUNS_STORAGE.list({
           prefix: `artifacts/${executionId}/`,
@@ -213,9 +193,7 @@ export const handleExecutionDetail = (
       }));
 
     const dashboardUrl = workflowDashboardUrl(env.CLOUDFLARE_ACCOUNT_ID, row.id);
-    const logsUrl = Option.getOrUndefined(
-      yield* logTokens.logsUrl(origin, row.id),
-    );
+    const logsUrl = Option.getOrUndefined(yield* logTokens.logsUrl(origin, row.id));
 
     return json(
       {
@@ -223,9 +201,7 @@ export const handleExecutionDetail = (
           ...(logsUrl !== undefined ? { logsUrl } : {}),
           ...(dashboardUrl !== undefined ? { dashboardUrl } : {}),
         }),
-        ...(row.summary_json !== null
-          ? { summary: safeParse(row.summary_json) }
-          : {}),
+        ...(row.summary_json !== null ? { summary: safeParse(row.summary_json) } : {}),
         steps: steps.map(stepView),
         logs,
         artifacts,

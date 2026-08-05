@@ -82,9 +82,7 @@ const acquireRecordingSession = (
       httpUrl.searchParams.set("recording", "true");
       const res = await fetch(httpUrl, {
         headers:
-          config.apiToken !== undefined
-            ? { authorization: `Bearer ${config.apiToken}` }
-            : {},
+          config.apiToken !== undefined ? { authorization: `Bearer ${config.apiToken}` } : {},
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
@@ -113,9 +111,7 @@ const acquireRecordingSession = (
  *
  * @param config  the `/connect` URL + API token (`BROWSER_CDP_*` secrets).
  */
-export const makeBrowserRenderingLive = (
-  config: BrowserRenderingConfig,
-): Layer.Layer<Browser> => {
+export const makeBrowserRenderingLive = (config: BrowserRenderingConfig): Layer.Layer<Browser> => {
   const service: BrowserService = {
     newCDPSession: ({ targetUrl: _targetUrl, recording }) =>
       // `targetUrl` is the app the *suite* navigates to once connected; it is
@@ -145,9 +141,7 @@ export const makeBrowserRenderingLive = (
     // and would need the `BROWSER` binding + `@cloudflare/puppeteer`; it lands
     // with the first run that needs it.
     newPage: () =>
-      Effect.die(
-        "browser.newPage: REST mode not implemented — cdp-acceptance uses newCDPSession",
-      ),
+      Effect.die("browser.newPage: REST mode not implemented — cdp-acceptance uses newCDPSession"),
   };
 
   return Layer.succeed(Browser, service);

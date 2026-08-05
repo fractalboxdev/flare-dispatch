@@ -33,11 +33,7 @@ export {
   type ProgressCheckRunOptions,
   type UpdateCheckRunOptions,
 } from "./check-runs";
-export {
-  createPullReview,
-  type PullReviewEvent,
-  type CreatePullReviewOptions,
-} from "./reviews";
+export { createPullReview, type PullReviewEvent, type CreatePullReviewOptions } from "./reviews";
 export {
   listActionRuns,
   actionRunsUrl,
@@ -58,11 +54,7 @@ export {
   type OpenDraftPullRequestOptions,
   type OpenDraftPullRequestResult,
 } from "./pull-requests";
-export {
-  createRelease,
-  type CreateReleaseOptions,
-  type CreateReleaseResult,
-} from "./releases";
+export { createRelease, type CreateReleaseOptions, type CreateReleaseResult } from "./releases";
 export {
   fetchPublicAppRegistration,
   diffRegistration,

@@ -33,11 +33,10 @@ const freshSigningJwk = async (): Promise<{
   privateJwk: string;
   publicKey: CryptoKey;
 }> => {
-  const pair = (await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
+  const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
   const privateJwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
   // Attach a stable `kid` so the spec's `kid` rotation story works.
   (privateJwk as JsonWebKey & { kid?: string }).kid = "test-key-2026";
@@ -154,9 +153,7 @@ describe("publicJwkFromSigning", () => {
 
   it("throws on a JWK missing the d component (not a private key)", () => {
     expect(() =>
-      publicJwkFromSigning(
-        JSON.stringify({ kty: "EC", crv: "P-256", x: "x", y: "y" }),
-      ),
+      publicJwkFromSigning(JSON.stringify({ kty: "EC", crv: "P-256", x: "x", y: "y" })),
     ).toThrow();
   });
 });

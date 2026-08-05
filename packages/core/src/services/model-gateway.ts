@@ -142,9 +142,10 @@ export interface ModelGatewayService {
 }
 
 /** Context.Tag — the model-gateway dependency a model-calling run/engine carries. */
-export class ModelGateway extends Context.Tag(
-  "@fractalboxdev/flare-dispatch-core/ModelGateway",
-)<ModelGateway, ModelGatewayService>() {}
+export class ModelGateway extends Context.Tag("@fractalboxdev/flare-dispatch-core/ModelGateway")<
+  ModelGateway,
+  ModelGatewayService
+>() {}
 
 /**
  * The `modelGateway` accessor namespace — reads the service from context and
@@ -152,6 +153,5 @@ export class ModelGateway extends Context.Tag(
  * explicit `Effect.flatMap(ModelGateway, ...)`.
  */
 export const modelGateway = {
-  complete: (req: ModelCompletionRequest) =>
-    Effect.flatMap(ModelGateway, (s) => s.complete(req)),
+  complete: (req: ModelCompletionRequest) => Effect.flatMap(ModelGateway, (s) => s.complete(req)),
 } as const;

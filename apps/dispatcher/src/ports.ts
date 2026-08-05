@@ -33,20 +33,13 @@ import {
   type RunAnalytics,
   type StepRow,
 } from "./executions-read";
-import {
-  buildLogsUrl,
-  resolveLogLinkSecret,
-  signLogToken,
-} from "./log-token";
+import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "./log-token";
 
 // ---------------------------------------------------------------------------
 // CurrentEnv — the raw binding environment, provided per request.
 // ---------------------------------------------------------------------------
 
-export class CurrentEnv extends Context.Tag("dispatcher/CurrentEnv")<
-  CurrentEnv,
-  Env
->() {}
+export class CurrentEnv extends Context.Tag("dispatcher/CurrentEnv")<CurrentEnv, Env>() {}
 
 // ---------------------------------------------------------------------------
 // Access — Cloudflare Access enforcement for viewer surfaces.
@@ -62,10 +55,7 @@ export interface AccessService {
   readonly gate: (request: Request) => Effect.Effect<Option.Option<Response>>;
 }
 
-export class Access extends Context.Tag("dispatcher/Access")<
-  Access,
-  AccessService
->() {}
+export class Access extends Context.Tag("dispatcher/Access")<Access, AccessService>() {}
 
 export const AccessLive = Layer.effect(
   Access,
@@ -106,16 +96,12 @@ export const AccessLive = Layer.effect(
 // ---------------------------------------------------------------------------
 
 export interface ExecutionsReadService {
-  readonly list: (
-    filters: ListFilters,
-  ) => Effect.Effect<ReadonlyArray<ExecutionRow>>;
+  readonly list: (filters: ListFilters) => Effect.Effect<ReadonlyArray<ExecutionRow>>;
   readonly get: (id: string) => Effect.Effect<Option.Option<ExecutionRow>>;
   readonly steps: (id: string) => Effect.Effect<ReadonlyArray<StepRow>>;
   /** MEASURED per-recipe speed+cost aggregate over the last `limit` finished
    *  executions (the `/v1/analytics.json` feed). */
-  readonly aggregate: (
-    limit: number,
-  ) => Effect.Effect<ReadonlyArray<RunAnalytics>>;
+  readonly aggregate: (limit: number) => Effect.Effect<ReadonlyArray<RunAnalytics>>;
 }
 
 export class ExecutionsRead extends Context.Tag("dispatcher/ExecutionsRead")<
@@ -130,10 +116,7 @@ export const ExecutionsReadLive = Layer.effect(
     const db = env.RUNS_METADATA;
     return ExecutionsRead.of({
       list: (filters) => Effect.promise(() => listExecutions(db, filters)),
-      get: (id) =>
-        Effect.promise(() => getExecution(db, id)).pipe(
-          Effect.map(Option.fromNullable),
-        ),
+      get: (id) => Effect.promise(() => getExecution(db, id)).pipe(Effect.map(Option.fromNullable)),
       steps: (id) => Effect.promise(() => getSteps(db, id)),
       aggregate: (limit) => Effect.promise(() => aggregateByRun(db, limit)),
     });
@@ -155,21 +138,12 @@ export interface LogTokenService {
    */
   readonly token: (executionId: string) => Effect.Effect<Option.Option<string>>;
   /** Tokened `/logs/:id?t=…` URL, or `None` when no key material is configured. */
-  readonly logsUrl: (
-    origin: string,
-    executionId: string,
-  ) => Effect.Effect<Option.Option<string>>;
+  readonly logsUrl: (origin: string, executionId: string) => Effect.Effect<Option.Option<string>>;
   /** Tokened `/demos/:id?t=…` URL (same capability token as the log viewer). */
-  readonly demosUrl: (
-    origin: string,
-    executionId: string,
-  ) => Effect.Effect<Option.Option<string>>;
+  readonly demosUrl: (origin: string, executionId: string) => Effect.Effect<Option.Option<string>>;
 }
 
-export class LogToken extends Context.Tag("dispatcher/LogToken")<
-  LogToken,
-  LogTokenService
->() {}
+export class LogToken extends Context.Tag("dispatcher/LogToken")<LogToken, LogTokenService>() {}
 
 export const LogTokenLive = Layer.effect(
   LogToken,
@@ -190,21 +164,14 @@ export const LogTokenLive = Layer.effect(
       token: (executionId) =>
         secret === undefined
           ? Effect.succeed(Option.none())
-          : Effect.promise(() => signLogToken(secret, executionId)).pipe(
-              Effect.map(Option.some),
-            ),
+          : Effect.promise(() => signLogToken(secret, executionId)).pipe(Effect.map(Option.some)),
       logsUrl: (origin, executionId) =>
-        sign(origin, executionId, (token) =>
-          buildLogsUrl(origin, executionId, token),
-        ),
+        sign(origin, executionId, (token) => buildLogsUrl(origin, executionId, token)),
       demosUrl: (origin, executionId) =>
         sign(
           origin,
           executionId,
-          (token) =>
-            `${trimOrigin(origin)}/demos/${encodeURIComponent(
-              executionId,
-            )}?t=${token}`,
+          (token) => `${trimOrigin(origin)}/demos/${encodeURIComponent(executionId)}?t=${token}`,
         ),
     });
   }),

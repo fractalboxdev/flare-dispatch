@@ -9,9 +9,7 @@ const runFanOut = async <T>(
   fakeOpts?: Parameters<typeof makeChildRunsFake>[0],
 ) => {
   const child = makeChildRunsFake(fakeOpts);
-  const handles = await Effect.runPromise(
-    fanOut(opts).pipe(Effect.provide(child.layer)),
-  );
+  const handles = await Effect.runPromise(fanOut(opts).pipe(Effect.provide(child.layer)));
   return { handles, spawned: child.state.spawned };
 };
 

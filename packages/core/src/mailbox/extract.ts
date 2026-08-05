@@ -102,16 +102,11 @@ export const extractCode = (
   }
 
   const width = opts?.codeWidth;
-  const digits = width
-    ? `\\d{${width}}`
-    : `\\d{${MIN_WIDTH_DEFAULT},${MAX_WIDTH_DEFAULT}}`;
+  const digits = width ? `\\d{${width}}` : `\\d{${MIN_WIDTH_DEFAULT},${MAX_WIDTH_DEFAULT}}`;
 
   // (2) Keyword-anchored. Subject first, then text. Within each, prefer a
   //     6-digit hit (when no explicit width was pinned) over other widths.
-  const anchored = new RegExp(
-    `(?:${OTP_KEYWORD_SOURCE})[^0-9\\n]{0,40}(${digits})`,
-    "gi",
-  );
+  const anchored = new RegExp(`(?:${OTP_KEYWORD_SOURCE})[^0-9\\n]{0,40}(${digits})`, "gi");
   for (const haystack of [msg.subject, msg.text]) {
     const hits = collectGroups(anchored, haystack).filter((h) =>
       isStandaloneAt(haystack, h.index, h.value),
@@ -209,9 +204,7 @@ export const extractLink = (
   if (verification) return verification;
 
   // Longest path+query wins — the token-bearing link beats a bare host.
-  return pool.reduce((best, u) =>
-    pathQueryLength(u) > pathQueryLength(best) ? u : best,
-  );
+  return pool.reduce((best, u) => (pathQueryLength(u) > pathQueryLength(best) ? u : best));
 };
 
 /**

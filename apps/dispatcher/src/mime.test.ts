@@ -130,15 +130,11 @@ describe("parseEmail — defensive", () => {
 
   it("handles raw bytes (Uint8Array / ArrayBuffer) without throwing", () => {
     const raw = crlf(
-      ["Subject: Bytes", "Content-Type: text/plain", "", "byte body 555000", ""].join(
-        "\n",
-      ),
+      ["Subject: Bytes", "Content-Type: text/plain", "", "byte body 555000", ""].join("\n"),
     );
     const bytes = new TextEncoder().encode(raw);
     expect(parseEmail(bytes).text).toContain("555000");
-    expect(
-      parseEmail(bytes.buffer.slice(0) as ArrayBuffer).text,
-    ).toContain("555000");
+    expect(parseEmail(bytes.buffer.slice(0) as ArrayBuffer).text).toContain("555000");
   });
 
   it("empty input yields empty text, no throw", () => {

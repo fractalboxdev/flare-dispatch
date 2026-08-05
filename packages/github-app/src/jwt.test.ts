@@ -68,10 +68,7 @@ describe("signAppJwt", () => {
     // Derive the public key from the private key to verify the RS256 signature.
     const der = new Uint8Array(
       Buffer.from(
-        TEST_APP_PRIVATE_KEY.replace(/-----[A-Z ]+-----/g, "").replace(
-          /\s+/g,
-          "",
-        ),
+        TEST_APP_PRIVATE_KEY.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, ""),
         "base64",
       ),
     );

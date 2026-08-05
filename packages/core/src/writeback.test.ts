@@ -44,25 +44,15 @@ describe("validateManifest — empty / no-op", () => {
 
 describe("validateManifest — path safety", () => {
   it("accepts a plain repo-relative write", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: "fixtures/api.json" }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: "fixtures/api.json" }]), sizeOf());
     expect(r._kind).toBe("ok");
     if (r._kind === "ok") {
-      expect(r.entries).toEqual([
-        { path: "fixtures/api.json", mode: "100644", deleted: false },
-      ]);
+      expect(r.entries).toEqual([{ path: "fixtures/api.json", mode: "100644", deleted: false }]);
     }
   });
 
   it("rejects a path traversal (..)", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: "../etc/passwd" }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: "../etc/passwd" }]), sizeOf());
     expect(r._kind).toBe("rejected");
     if (r._kind === "rejected") {
       expect(r.reasons.some((x) => x.kind === "path-traversal")).toBe(true);
@@ -78,11 +68,7 @@ describe("validateManifest — path safety", () => {
   });
 
   it("rejects a Windows-drive absolute path", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: "C:/x" }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: "C:/x" }]), sizeOf());
     expect(r._kind).toBe("rejected");
     if (r._kind === "rejected") {
       expect(r.reasons[0]?.kind).toBe("absolute-path");
@@ -90,11 +76,7 @@ describe("validateManifest — path safety", () => {
   });
 
   it("rejects empty/'.' segments (a//b, ./a)", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: "a//b" }, { path: "./c" }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: "a//b" }, { path: "./c" }]), sizeOf());
     expect(r._kind).toBe("rejected");
     if (r._kind === "rejected") {
       expect(r.reasons.every((x) => x.kind === "dot-segment")).toBe(true);
@@ -102,11 +84,7 @@ describe("validateManifest — path safety", () => {
   });
 
   it("rejects a duplicate path", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: "a.txt" }, { path: "a.txt" }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: "a.txt" }, { path: "a.txt" }]), sizeOf());
     expect(r._kind).toBe("rejected");
     if (r._kind === "rejected") {
       expect(r.reasons.some((x) => x.kind === "duplicate-path")).toBe(true);
@@ -114,11 +92,7 @@ describe("validateManifest — path safety", () => {
   });
 
   it("collects ALL reasons at once, not just the first", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: "/abs" }, { path: "../up" }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: "/abs" }, { path: "../up" }]), sizeOf());
     expect(r._kind).toBe("rejected");
     if (r._kind === "rejected") expect(r.reasons).toHaveLength(2);
   });
@@ -126,11 +100,7 @@ describe("validateManifest — path safety", () => {
 
 describe("validateManifest — deletions", () => {
   it("accepts a deletion entry and carries the flag through", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: "stale.json", deleted: true }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: "stale.json", deleted: true }]), sizeOf());
     expect(r._kind).toBe("ok");
     if (r._kind === "ok") {
       expect(r.entries[0]).toEqual({
@@ -211,11 +181,7 @@ describe("validateManifest — size + count caps", () => {
 
 describe("validateManifest — .github/workflows gate", () => {
   it("rejects a workflow file without the opt-in", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: ".github/workflows/ci.yml" }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: ".github/workflows/ci.yml" }]), sizeOf());
     expect(r._kind).toBe("rejected");
     if (r._kind === "rejected") {
       expect(r.reasons[0]?.kind).toBe("workflows-not-opted-in");
@@ -232,11 +198,7 @@ describe("validateManifest — .github/workflows gate", () => {
   });
 
   it("a non-workflow .github path is unaffected by the gate", () => {
-    const r = validateManifest(
-      spec(),
-      manifest([{ path: ".github/dependabot.yml" }]),
-      sizeOf(),
-    );
+    const r = validateManifest(spec(), manifest([{ path: ".github/dependabot.yml" }]), sizeOf());
     expect(r._kind).toBe("ok");
   });
 });
@@ -262,15 +224,11 @@ describe("matchGlob (pure)", () => {
 
 describe("resolveHeadBranch", () => {
   it("returns a fixed branch as-is (the stable bot branch)", () => {
-    expect(resolveHeadBranch("flare-dispatch/refresh", "exec123")).toBe(
-      "flare-dispatch/refresh",
-    );
+    expect(resolveHeadBranch("flare-dispatch/refresh", "exec123")).toBe("flare-dispatch/refresh");
   });
 
   it("suffixes a { prefix } with the execution id (fresh per run)", () => {
-    expect(resolveHeadBranch({ prefix: "fd/wb" }, "exec123")).toBe(
-      "fd/wb-exec123",
-    );
+    expect(resolveHeadBranch({ prefix: "fd/wb" }, "exec123")).toBe("fd/wb-exec123");
   });
 });
 
@@ -350,7 +308,10 @@ describe("resolvePrMeta — runtime PR body/labels override", () => {
   });
 
   it("overrides body and unions+dedupes labels", () => {
-    const r = resolvePrMeta(basePr, { body: "✅ verified", labels: ["self-heal", "self-heal:verified"] });
+    const r = resolvePrMeta(basePr, {
+      body: "✅ verified",
+      labels: ["self-heal", "self-heal:verified"],
+    });
     expect(r).not.toBe(false);
     if (r !== false) {
       expect(r.body).toBe("✅ verified");

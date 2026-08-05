@@ -29,10 +29,7 @@ describe("GET /v1/browser/cdp", () => {
   });
 
   it("426s when the request is not a websocket upgrade", async () => {
-    const res = await handleRequest(
-      new Request("https://d/v1/browser/cdp"),
-      baseEnv(),
-    );
+    const res = await handleRequest(new Request("https://d/v1/browser/cdp"), baseEnv());
     expect(res.status).toBe(426);
   });
 
@@ -58,10 +55,7 @@ describe("GET /v1/browser/cdp", () => {
   });
 
   it("401s on a wrong ?token query param", async () => {
-    const res = await handleRequest(
-      wsReq("https://d/v1/browser/cdp?token=nope"),
-      baseEnv(),
-    );
+    const res = await handleRequest(wsReq("https://d/v1/browser/cdp?token=nope"), baseEnv());
     expect(res.status).toBe(401);
   });
 });

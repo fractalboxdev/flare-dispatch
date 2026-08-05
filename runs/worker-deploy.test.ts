@@ -89,9 +89,7 @@ describe("worker-deploy", () => {
       return Effect.gen(function* () {
         const result = yield* workerDeploy.run(input);
         expect(result.deployed).toBe(true);
-        expect(handles.sandbox.execs.map((e) => e.command)).toContain(
-          DEPLOY_CMD,
-        );
+        expect(handles.sandbox.execs.map((e) => e.command)).toContain(DEPLOY_CMD);
       }).pipe(Effect.provide(layer));
     },
   );
@@ -132,8 +130,7 @@ describe("worker-deploy", () => {
         sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
         config: {
           "worker-deploy.command:owner/name": DEPLOY_CMD,
-          "worker-deploy.secrets:owner/name":
-            "CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID",
+          "worker-deploy.secrets:owner/name": "CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID",
         },
         secrets: {
           CLOUDFLARE_API_TOKEN: "cf_token_from_worker",
@@ -152,9 +149,7 @@ describe("worker-deploy", () => {
         const result = yield* workerDeploy.run(input);
         expect(result.deployed).toBe(true);
 
-        const exec = handles.sandbox.execs.find(
-          (e) => e.command === DEPLOY_CMD,
-        );
+        const exec = handles.sandbox.execs.find((e) => e.command === DEPLOY_CMD);
         expect(exec?.env).toEqual({
           CLOUDFLARE_API_TOKEN: "cf_token_from_worker",
           CLOUDFLARE_ACCOUNT_ID: "cf_account_from_worker",
@@ -163,82 +158,76 @@ describe("worker-deploy", () => {
     },
   );
 
-  it.effect(
-    "secrets — a named-but-unset key fails with SecretsMissing before the exec",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
-        config: {
-          "worker-deploy.command:owner/name": DEPLOY_CMD,
-          "worker-deploy.secrets:owner/name": "CLOUDFLARE_API_TOKEN",
-          // the Worker secret itself is NOT seeded
+  it.effect("secrets — a named-but-unset key fails with SecretsMissing before the exec", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
+      config: {
+        "worker-deploy.command:owner/name": DEPLOY_CMD,
+        "worker-deploy.secrets:owner/name": "CLOUDFLARE_API_TOKEN",
+        // the Worker secret itself is NOT seeded
+      },
+    });
+    const input = {
+      repo: "owner/name",
+      sha: "abc123",
+      secrets: [] as readonly string[],
+      install: false,
+      failOnNonZeroExit: true,
+    };
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(workerDeploy.run(input));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      const tag = Exit.isFailure(exit)
+        ? Option.match(Cause.failureOption(exit.cause), {
+            onSome: (f) => (f as { _tag?: string })._tag,
+            onNone: () => undefined,
+          })
+        : undefined;
+      expect(tag).toBe("SecretsMissing");
+      // Fail-fast: the deploy command never ran.
+      expect(handles.sandbox.execs).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("log redaction — secret values are scrubbed from captured stdout/stderr", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [DEPLOY_CMD]: {
+          exitCode: 0,
+          stdout: "wrangler: authenticating with cf_token_from_worker",
+          stderr: "auth failed for cf_token_from_worker",
         },
-      });
-      const input = {
-        repo: "owner/name",
-        sha: "abc123",
-        secrets: [] as readonly string[],
-        install: false,
-        failOnNonZeroExit: true,
-      };
+      },
+      config: {
+        "worker-deploy.command:owner/name": DEPLOY_CMD,
+        "worker-deploy.secrets:owner/name": "CLOUDFLARE_API_TOKEN",
+      },
+      secrets: { CLOUDFLARE_API_TOKEN: "cf_token_from_worker" },
+    });
+    const input = {
+      repo: "owner/name",
+      sha: "abc123",
+      secrets: [] as readonly string[],
+      install: false,
+      failOnNonZeroExit: true,
+    };
 
-      return Effect.gen(function* () {
-        const exit = yield* Effect.exit(workerDeploy.run(input));
+    return Effect.gen(function* () {
+      const result = yield* workerDeploy.run(input);
+      expect(result.deployed).toBe(true);
 
-        expect(Exit.isFailure(exit)).toBe(true);
-        const tag = Exit.isFailure(exit)
-          ? Option.match(Cause.failureOption(exit.cause), {
-              onSome: (f) => (f as { _tag?: string })._tag,
-              onNone: () => undefined,
-            })
-          : undefined;
-        expect(tag).toBe("SecretsMissing");
-        // Fail-fast: the deploy command never ran.
-        expect(handles.sandbox.execs).toHaveLength(0);
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "log redaction — secret values are scrubbed from captured stdout/stderr",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: {
-          [DEPLOY_CMD]: {
-            exitCode: 0,
-            stdout: "wrangler: authenticating with cf_token_from_worker",
-            stderr: "auth failed for cf_token_from_worker",
-          },
-        },
-        config: {
-          "worker-deploy.command:owner/name": DEPLOY_CMD,
-          "worker-deploy.secrets:owner/name": "CLOUDFLARE_API_TOKEN",
-        },
-        secrets: { CLOUDFLARE_API_TOKEN: "cf_token_from_worker" },
-      });
-      const input = {
-        repo: "owner/name",
-        sha: "abc123",
-        secrets: [] as readonly string[],
-        install: false,
-        failOnNonZeroExit: true,
-      };
-
-      return Effect.gen(function* () {
-        const result = yield* workerDeploy.run(input);
-        expect(result.deployed).toBe(true);
-
-        // The deploy log is uploaded to R2 on a stable path, so an echoed
-        // token there is durable — this is the run that carries a
-        // write-scoped cloud credential.
-        const exec = handles.sandbox.execs.find((e) => e.command === DEPLOY_CMD);
-        expect(exec?.stdout).not.toContain("cf_token_from_worker");
-        expect(exec?.stderr).not.toContain("cf_token_from_worker");
-        expect(exec?.stdout).toContain("***");
-        expect(exec?.stderr).toContain("***");
-      }).pipe(Effect.provide(layer));
-    },
-  );
+      // The deploy log is uploaded to R2 on a stable path, so an echoed
+      // token there is durable — this is the run that carries a
+      // write-scoped cloud credential.
+      const exec = handles.sandbox.execs.find((e) => e.command === DEPLOY_CMD);
+      expect(exec?.stdout).not.toContain("cf_token_from_worker");
+      expect(exec?.stderr).not.toContain("cf_token_from_worker");
+      expect(exec?.stdout).toContain("***");
+      expect(exec?.stderr).toContain("***");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect(
     "failOnNonZeroExit — a failed deploy turns into AcceptanceFailed (red check) carrying the exit code",
@@ -291,9 +280,7 @@ describe("worker-deploy", () => {
 
   // --- Webhook trigger — check_suite as the default-branch push signal --------
 
-  const checkSuitePayload = (
-    overrides: Record<string, unknown> = {},
-  ): Record<string, unknown> => ({
+  const checkSuitePayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     action: "requested",
     repository: { full_name: "owner/name", default_branch: "main" },
     check_suite: {
@@ -317,9 +304,7 @@ describe("worker-deploy", () => {
       install: false,
       secrets: [],
     });
-    expect(trigger?.idempotencyKey(ctx)).toBe(
-      "worker-deploy:owner_name:abcdef012345",
-    );
+    expect(trigger?.idempotencyKey(ctx)).toBe("worker-deploy:owner_name:abcdef012345");
   });
 
   it("webhook trigger — gate admits only the repo's default branch", () => {

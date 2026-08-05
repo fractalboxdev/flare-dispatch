@@ -33,24 +33,24 @@ signal. The step itself succeeds the moment the dispatch is accepted (`202`).
 
 ## Inputs
 
-| Input | Required | Default | Notes |
-|---|---|---|---|
-| `run` | yes | — | Run slug. Must exist on the target Dispatcher deploy. |
-| `endpoint` | yes | — | Dispatcher base URL, e.g. `https://flare-dispatch.<account>.workers.dev`. |
-| `hmac-secret` | yes | — | Shared HMAC secret. Same value as the Worker's `HMAC_SECRET`. |
-| `inputs` | no | `{}` | JSON object of run inputs. Validated against the run's Schema on the Worker side. |
-| `collect-command` | no | `""` | Optional consumer-side observability collector — see [Collecting signals](#collecting-signals-collect-command). |
-| `mode` | no | `fire-and-forget` | **V0 supports `fire-and-forget` only.** Any other value fails the step before the network is touched. |
-| `installation-id` | no | `0` | GitHub App installation id for the target repo. Optional — a Dispatcher that has seen this repo resolves it server-side. `0` is treated as unset. |
-| `notify-emails` | no | `""` | Optional recipients emailed the run's result on completion. Comma/whitespace separated or a JSON array. Each must be a verified Cloudflare Email Routing destination on the Dispatcher's zone. |
+| Input             | Required | Default           | Notes                                                                                                                                                                                          |
+| ----------------- | -------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`             | yes      | —                 | Run slug. Must exist on the target Dispatcher deploy.                                                                                                                                          |
+| `endpoint`        | yes      | —                 | Dispatcher base URL, e.g. `https://flare-dispatch.<account>.workers.dev`.                                                                                                                      |
+| `hmac-secret`     | yes      | —                 | Shared HMAC secret. Same value as the Worker's `HMAC_SECRET`.                                                                                                                                  |
+| `inputs`          | no       | `{}`              | JSON object of run inputs. Validated against the run's Schema on the Worker side.                                                                                                              |
+| `collect-command` | no       | `""`              | Optional consumer-side observability collector — see [Collecting signals](#collecting-signals-collect-command).                                                                                |
+| `mode`            | no       | `fire-and-forget` | **V0 supports `fire-and-forget` only.** Any other value fails the step before the network is touched.                                                                                          |
+| `installation-id` | no       | `0`               | GitHub App installation id for the target repo. Optional — a Dispatcher that has seen this repo resolves it server-side. `0` is treated as unset.                                              |
+| `notify-emails`   | no       | `""`              | Optional recipients emailed the run's result on completion. Comma/whitespace separated or a JSON array. Each must be a verified Cloudflare Email Routing destination on the Dispatcher's zone. |
 
 ## Outputs
 
-| Output | Notes |
-|---|---|
-| `execution-id` | ULID of the execution on Cloudflare. Always set — the Dispatcher returns it in the `202`. |
-| `details-url` | Cloudflare Workflows instance URL for the execution (steps/logs). Empty under BYOC or on older Dispatchers. |
-| `logs-url` | Tokened, live-refreshing log-viewer URL on the Dispatcher's own origin. Empty when the Dispatcher has no log-link key material. |
+| Output         | Notes                                                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `execution-id` | ULID of the execution on Cloudflare. Always set — the Dispatcher returns it in the `202`.                                       |
+| `details-url`  | Cloudflare Workflows instance URL for the execution (steps/logs). Empty under BYOC or on older Dispatchers.                     |
+| `logs-url`     | Tokened, live-refreshing log-viewer URL on the Dispatcher's own origin. Empty when the Dispatcher has no log-link key material. |
 
 ## How the PR head SHA is resolved
 
@@ -116,6 +116,7 @@ Per [`specs/04-gha-integration.md` § Failure handling](../../specs/04-gha-integ
   Compare them — if they differ, re-sync the secret on the mismatching side
   (`gh secret set FLAREDISPATCH_HMAC` or `wrangler secret put HMAC_SECRET`). A
   trailing newline pasted into one side and not the other is the dominant cause.
+
 - **`400`** (inputs fail the run Schema) / **`404`** (unknown run) — the step
   fails immediately with the Dispatcher's error inlined.
 - **`collect-command`** non-zero exit or invalid output — the step fails

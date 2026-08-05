@@ -39,13 +39,9 @@ const safeEqual = (a: string, b: string): boolean => {
  * execution id is the signed message, so a fixed (empty) salt is correct here.
  */
 const deriveKey = async (ikm: string, info: string): Promise<CryptoKey> => {
-  const base = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(ikm),
-    "HKDF",
-    false,
-    ["deriveKey"],
-  );
+  const base = await crypto.subtle.importKey("raw", encoder.encode(ikm), "HKDF", false, [
+    "deriveKey",
+  ]);
   return crypto.subtle.deriveKey(
     {
       name: "HKDF",
@@ -83,11 +79,7 @@ export interface CapabilityToken {
 export const makeCapabilityToken = (hkdfInfo: string): CapabilityToken => {
   const sign = async (ikm: string, executionId: string): Promise<string> => {
     const key = await deriveKey(ikm, hkdfInfo);
-    const mac = await crypto.subtle.sign(
-      "HMAC",
-      key,
-      encoder.encode(executionId) as BufferSource,
-    );
+    const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(executionId) as BufferSource);
     return base64url(mac).slice(0, TOKEN_CHARS);
   };
   const verify = async (

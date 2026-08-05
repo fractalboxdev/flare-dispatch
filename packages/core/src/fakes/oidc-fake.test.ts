@@ -31,9 +31,9 @@ describe("makeOidcFake — sign()", () => {
   it("returns a JWT-shaped string with header+payload+signature segments", async () => {
     const { layer } = makeOidcFake({ now: 1_700_000_000_000 });
     const token = await Effect.runPromise(
-      Effect.flatMap(Oidc, (o) =>
-        o.sign({ audience: "sts.amazonaws.com" }),
-      ).pipe(Effect.provide(layer)),
+      Effect.flatMap(Oidc, (o) => o.sign({ audience: "sts.amazonaws.com" })).pipe(
+        Effect.provide(layer),
+      ),
     );
     expect(token.jwt.split(".").length).toBe(3);
     expect(token.expiresAt).toBeGreaterThan(1_700_000_000_000);
@@ -71,14 +71,12 @@ describe("makeOidcFake — sign()", () => {
   it("caps the TTL at OIDC_TOKEN_MAX_TTL_SEC (3600)", async () => {
     const { layer } = makeOidcFake({ now: 1_700_000_000_000 });
     const token = await Effect.runPromise(
-      Effect.flatMap(Oidc, (o) =>
-        o.sign({ audience: "sts.amazonaws.com", ttlSec: 100_000 }),
-      ).pipe(Effect.provide(layer)),
+      Effect.flatMap(Oidc, (o) => o.sign({ audience: "sts.amazonaws.com", ttlSec: 100_000 })).pipe(
+        Effect.provide(layer),
+      ),
     );
     const { payload } = decodeJwt(token.jwt);
-    expect((payload.exp as number) - (payload.iat as number)).toBe(
-      OIDC_TOKEN_MAX_TTL_SEC,
-    );
+    expect((payload.exp as number) - (payload.iat as number)).toBe(OIDC_TOKEN_MAX_TTL_SEC);
   });
 
   it("records every sign call for assertions", async () => {
@@ -90,10 +88,7 @@ describe("makeOidcFake — sign()", () => {
         yield* o.sign({ audience: "vault.example", subject: "x" });
       }).pipe(Effect.provide(layer)),
     );
-    expect(state.signCalls.map((c) => c.audience)).toEqual([
-      "sts.amazonaws.com",
-      "vault.example",
-    ]);
+    expect(state.signCalls.map((c) => c.audience)).toEqual(["sts.amazonaws.com", "vault.example"]);
   });
 });
 

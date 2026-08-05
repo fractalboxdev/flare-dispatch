@@ -208,7 +208,12 @@ export const isSensitivePath = (path: string): boolean => {
     return true;
   }
   // Registry / package-manager config (postinstall + registry pivots).
-  if (base === ".npmrc" || base === ".yarnrc" || base === ".yarnrc.yml" || base === ".pnpmfile.cjs") {
+  if (
+    base === ".npmrc" ||
+    base === ".yarnrc" ||
+    base === ".yarnrc.yml" ||
+    base === ".pnpmfile.cjs"
+  ) {
     return true;
   }
   // Dockerfiles (any `Dockerfile` or `*.Dockerfile` / `Dockerfile.*`). Compared
@@ -236,10 +241,7 @@ export const isSensitivePath = (path: string): boolean => {
  * just computes the merged `{ title, body, draft, labels }`. Labels from both
  * sides are unioned + deduped. A `false` (push-only) spec ignores meta.
  */
-export const resolvePrMeta = (
-  pr: WritebackPr,
-  meta: WritebackPrMeta | undefined,
-): WritebackPr => {
+export const resolvePrMeta = (pr: WritebackPr, meta: WritebackPrMeta | undefined): WritebackPr => {
   if (pr === false) return false;
   if (meta === undefined) return pr;
   const labels = [...new Set([...(pr.labels ?? []), ...(meta.labels ?? [])])];
@@ -420,10 +422,7 @@ export const validateManifest = (
 
   // Total size cap — only the entries that survived the per-entry checks count
   // (a rejected manifest is never applied, so its bytes are moot).
-  const totalBytes = validated.reduce(
-    (sum, e) => sum + (e.deleted ? 0 : sizeOf(e)),
-    0,
-  );
+  const totalBytes = validated.reduce((sum, e) => sum + (e.deleted ? 0 : sizeOf(e)), 0);
   if (totalBytes > maxBytes) {
     reasons.push({ kind: "too-large", bytes: totalBytes, cap: maxBytes });
   }
@@ -466,8 +465,5 @@ export const describeRejection = (r: WritebackRejection): string => {
  * `{ prefix }` is suffixed with the execution id so each run gets a fresh,
  * unique branch (`<prefix>-<exec>`).
  */
-export const resolveHeadBranch = (
-  branch: WritebackBranch,
-  executionId: string,
-): string =>
+export const resolveHeadBranch = (branch: WritebackBranch, executionId: string): string =>
   typeof branch === "string" ? branch : `${branch.prefix}-${executionId}`;

@@ -3,8 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "description": "FlareDispatch GitHub App auth — RS256 App JWT signing, installation-token exchange + in-memory cache, and check-runs create/update.",
-  "type": "module",
   "license": "MIT",
+  "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing.ts",

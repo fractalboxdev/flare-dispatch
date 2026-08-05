@@ -16,17 +16,14 @@ import { __clearTokenCache, getInstallationToken } from "./installation-token";
 let exchangeCount = 0;
 
 const server = setupServer(
-  http.post(
-    "https://api.github.com/app/installations/:id/access_tokens",
-    () => {
-      exchangeCount += 1;
-      return HttpResponse.json({
-        token: `ghs_token_${exchangeCount}`,
-        // ~1h out — comfortably inside the cache's freshness margin.
-        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-      });
-    },
-  ),
+  http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
+    exchangeCount += 1;
+    return HttpResponse.json({
+      token: `ghs_token_${exchangeCount}`,
+      // ~1h out — comfortably inside the cache's freshness margin.
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+  }),
 );
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -79,13 +76,10 @@ describe("getInstallationToken", () => {
 
   it("surfaces a GithubApiError on a non-2xx response", async () => {
     server.use(
-      http.post(
-        "https://api.github.com/app/installations/:id/access_tokens",
-        () => HttpResponse.json({ message: "Bad credentials" }, { status: 401 }),
+      http.post("https://api.github.com/app/installations/:id/access_tokens", () =>
+        HttpResponse.json({ message: "Bad credentials" }, { status: 401 }),
       ),
     );
-    await expect(getInstallationToken(baseOpts)).rejects.toBeInstanceOf(
-      GithubApiError,
-    );
+    await expect(getInstallationToken(baseOpts)).rejects.toBeInstanceOf(GithubApiError);
   });
 });

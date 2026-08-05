@@ -7,11 +7,7 @@
   "x-flare-dispatch-source": "packages/core/src/incident.ts",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "incidentId",
-    "class",
-    "repo"
-  ],
+  "required": ["incidentId", "class", "repo"],
   "properties": {
     "contractVersion": {
       "const": "v1"
@@ -23,11 +19,7 @@
     },
     "class": {
       "type": "string",
-      "enum": [
-        "ci",
-        "application",
-        "demo"
-      ]
+      "enum": ["ci", "application", "demo"]
     },
     "repo": {
       "type": "string",
@@ -37,10 +29,7 @@
     "suspectRef": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "base",
-        "head"
-      ],
+      "required": ["base", "head"],
       "properties": {
         "base": {
           "type": "string",
@@ -65,12 +54,7 @@
     "diagnosis": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "title",
-        "area",
-        "diagnosis",
-        "suggestedFix"
-      ],
+      "required": ["title", "area", "diagnosis", "suggestedFix"],
       "properties": {
         "title": {
           "type": "string",
@@ -101,11 +85,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "source",
-          "title",
-          "detail"
-        ],
+        "required": ["source", "title", "detail"],
         "properties": {
           "source": {
             "type": "string",
@@ -141,19 +121,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "kind",
-          "name",
-          "conclusion"
-        ],
+        "required": ["kind", "name", "conclusion"],
         "properties": {
           "kind": {
             "type": "string",
-            "enum": [
-              "actions",
-              "pages",
-              "run-step"
-            ]
+            "enum": ["actions", "pages", "run-step"]
           },
           "name": {
             "type": "string",
@@ -190,9 +162,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "properties": {
           "name": {
             "type": "string",
@@ -246,17 +216,11 @@
     "repro": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "kind"
-      ],
+      "required": ["kind"],
       "properties": {
         "kind": {
           "type": "string",
-          "enum": [
-            "command",
-            "derived",
-            "none"
-          ]
+          "enum": ["command", "derived", "none"]
         },
         "command": {
           "type": "string",

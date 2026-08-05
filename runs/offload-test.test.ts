@@ -63,9 +63,7 @@ describe("offload-test", () => {
         "exec",
         "upload-log",
       ]);
-      expect(
-        handles.executions.steps.every((s) => s.status === "success"),
-      ).toBe(true);
+      expect(handles.executions.steps.every((s) => s.status === "success")).toBe(true);
       expect(handles.sandbox.clones).toHaveLength(1);
       expect(handles.sandbox.clones[0]).toEqual({
         repo: "owner/name",
@@ -74,77 +72,66 @@ describe("offload-test", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect(
-    "red path — exec exits 1, output reports exitCode 1 and the Effect succeeds",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: {
-          "pnpm test": { exitCode: 1, stderr: "1 failing" },
-        },
-      });
+  it.effect("red path — exec exits 1, output reports exitCode 1 and the Effect succeeds", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "pnpm test": { exitCode: 1, stderr: "1 failing" },
+      },
+    });
 
-      return Effect.gen(function* () {
-        // The run Effect must *succeed* — a failing test is a normal result,
-        // surfaced as `exitCode`, not an Effect failure.
-        const exit = yield* Effect.exit(offloadTest.run(baseInput));
+    return Effect.gen(function* () {
+      // The run Effect must *succeed* — a failing test is a normal result,
+      // surfaced as `exitCode`, not an Effect failure.
+      const exit = yield* Effect.exit(offloadTest.run(baseInput));
 
-        expect(Exit.isSuccess(exit)).toBe(true);
-        if (Exit.isSuccess(exit)) {
-          expect(exit.value.exitCode).toBe(1);
-        }
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.exitCode).toBe(1);
+      }
 
-        // All three steps still recorded as successful — a non-zero exit does
-        // not fail the `exec` step.
-        expect(
-          handles.executions.steps.every((s) => s.status === "success"),
-        ).toBe(true);
-      }).pipe(Effect.provide(layer));
-    },
-  );
+      // All three steps still recorded as successful — a non-zero exit does
+      // not fail the `exec` step.
+      expect(handles.executions.steps.every((s) => s.status === "success")).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
 
-  it.effect(
-    "timeout — exec raises ExecTimeout, the run re-fails with the same tag",
-    () => {
-      const { layer } = makeCFRuntimeTest({
-        sandboxProgram: {
-          "pnpm test": { fail: "ExecTimeout", timeoutSec: 600 },
-        },
-      });
+  it.effect("timeout — exec raises ExecTimeout, the run re-fails with the same tag", () => {
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "pnpm test": { fail: "ExecTimeout", timeoutSec: 600 },
+      },
+    });
 
-      return Effect.gen(function* () {
-        const exit = yield* Effect.exit(offloadTest.run(baseInput));
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(offloadTest.run(baseInput));
 
-        expect(Exit.isFailure(exit)).toBe(true);
-        // The failure is the `ExecTimeout` tag, not swallowed, not remapped.
-        const tag = Exit.isFailure(exit)
-          ? Option.match(Cause.failureOption(exit.cause), {
-              onSome: (f) => (f as { _tag?: string })._tag,
-              onNone: () => undefined,
-            })
-          : undefined;
-        expect(tag).toBe("ExecTimeout");
-      }).pipe(Effect.provide(layer));
-    },
-  );
+      expect(Exit.isFailure(exit)).toBe(true);
+      // The failure is the `ExecTimeout` tag, not swallowed, not remapped.
+      const tag = Exit.isFailure(exit)
+        ? Option.match(Cause.failureOption(exit.cause), {
+            onSome: (f) => (f as { _tag?: string })._tag,
+            onNone: () => undefined,
+          })
+        : undefined;
+      expect(tag).toBe("ExecTimeout");
+    }).pipe(Effect.provide(layer));
+  });
 
-  it.effect(
-    "durationMs is the checkpointed exec ExecResult's durationMs",
-    () => {
-      // The run reports `result.durationMs` straight from the `exec` step's
-      // `ExecResult` — the replay-safe source, since only step results are
-      // memoized across Workflow replays. The run must not recompute it from
-      // wall-clock reads. Pin a distinctive `durationMs` on the canned exec
-      // result and assert the run output carries exactly that value.
-      const { layer } = makeCFRuntimeTest({
-        sandboxProgram: { "pnpm test": { exitCode: 0, durationMs: 4242 } },
-      });
+  it.effect("durationMs is the checkpointed exec ExecResult's durationMs", () => {
+    // The run reports `result.durationMs` straight from the `exec` step's
+    // `ExecResult` — the replay-safe source, since only step results are
+    // memoized across Workflow replays. The run must not recompute it from
+    // wall-clock reads. Pin a distinctive `durationMs` on the canned exec
+    // result and assert the run output carries exactly that value.
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: { "pnpm test": { exitCode: 0, durationMs: 4242 } },
+    });
 
-      return Effect.gen(function* () {
-        const result = yield* offloadTest.run(baseInput);
-        expect(result.durationMs).toBe(4242);
-      }).pipe(Effect.provide(layer));
-    },
-  );
+    return Effect.gen(function* () {
+      const result = yield* offloadTest.run(baseInput);
+      expect(result.durationMs).toBe(4242);
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect(
     "install — runs the cached dependency install in the checkout, image override reaches acquire",
@@ -211,9 +198,7 @@ describe("offload-test", () => {
 
         // timeoutSec:1800 came from config, not the 600s default — the other
         // half of the pair, since a suite that needs an install outruns 600s.
-        const testExec = handles.sandbox.execs.find(
-          (e) => e.command === "pnpm test",
-        );
+        const testExec = handles.sandbox.execs.find((e) => e.command === "pnpm test");
         expect(testExec?.timeoutSec).toBe(1800);
 
         // ...and the STEP wrapping that exec carries the same ceiling.
@@ -230,35 +215,29 @@ describe("offload-test", () => {
     },
   );
 
-  it.effect(
-    "webhook exec options — an explicit dispatch value beats CONFIG_KV",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: { "pnpm test": { exitCode: 0 } },
-        config: {
-          "offload-test.install:owner/name": "true",
-          "offload-test.timeoutSec:owner/name": "1800",
-        },
-      });
+  it.effect("webhook exec options — an explicit dispatch value beats CONFIG_KV", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "pnpm test": { exitCode: 0 } },
+      config: {
+        "offload-test.install:owner/name": "true",
+        "offload-test.timeoutSec:owner/name": "1800",
+      },
+    });
 
-      return Effect.gen(function* () {
-        yield* offloadTest.run({
-          ...baseInput,
-          install: false,
-          timeoutSec: 120,
-        });
-        // `install: false` is now distinguishable from "unset" — the whole
-        // reason the schema default was removed — so config must NOT win.
-        expect(
-          handles.sandbox.execs.map((e) => e.command),
-        ).not.toContain("pnpm install --frozen-lockfile");
-        expect(
-          handles.sandbox.execs.find((e) => e.command === "pnpm test")
-            ?.timeoutSec,
-        ).toBe(120);
-      }).pipe(Effect.provide(layer));
-    },
-  );
+    return Effect.gen(function* () {
+      yield* offloadTest.run({
+        ...baseInput,
+        install: false,
+        timeoutSec: 120,
+      });
+      // `install: false` is now distinguishable from "unset" — the whole
+      // reason the schema default was removed — so config must NOT win.
+      expect(handles.sandbox.execs.map((e) => e.command)).not.toContain(
+        "pnpm install --frozen-lockfile",
+      );
+      expect(handles.sandbox.execs.find((e) => e.command === "pnpm test")?.timeoutSec).toBe(120);
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect(
     "webhook exec options — no config and no dispatch value keeps the historical defaults",
@@ -276,13 +255,10 @@ describe("offload-test", () => {
           failOnNonZeroExit: true,
         });
         // Unchanged from before this feature: no install, 600s.
-        expect(
-          handles.sandbox.execs.map((e) => e.command),
-        ).not.toContain("pnpm install --frozen-lockfile");
-        expect(
-          handles.sandbox.execs.find((e) => e.command === "pnpm test")
-            ?.timeoutSec,
-        ).toBe(600);
+        expect(handles.sandbox.execs.map((e) => e.command)).not.toContain(
+          "pnpm install --frozen-lockfile",
+        );
+        expect(handles.sandbox.execs.find((e) => e.command === "pnpm test")?.timeoutSec).toBe(600);
       }).pipe(Effect.provide(layer));
     },
   );
@@ -308,13 +284,10 @@ describe("offload-test", () => {
         });
         // A typo'd timeout must not reach sandbox.exec as NaN — that is a
         // timeout that never fires, i.e. a hung run holding a container.
-        expect(
-          handles.sandbox.execs.find((e) => e.command === "pnpm test")
-            ?.timeoutSec,
-        ).toBe(600);
-        expect(
-          handles.sandbox.execs.map((e) => e.command),
-        ).not.toContain("pnpm install --frozen-lockfile");
+        expect(handles.sandbox.execs.find((e) => e.command === "pnpm test")?.timeoutSec).toBe(600);
+        expect(handles.sandbox.execs.map((e) => e.command)).not.toContain(
+          "pnpm install --frozen-lockfile",
+        );
       }).pipe(Effect.provide(layer));
     },
   );
@@ -361,9 +334,7 @@ describe("offload-test", () => {
         const result = yield* offloadTest.run(input);
         expect(result.exitCode).toBe(0);
 
-        const exec = handles.sandbox.execs.find(
-          (e) => e.command === "pnpm test",
-        );
+        const exec = handles.sandbox.execs.find((e) => e.command === "pnpm test");
         expect(exec?.env).toEqual({
           SOME_API_KEY: "key_from_worker",
           SOME_BASE_URL: "https://dispatch.example.com",
@@ -405,9 +376,7 @@ describe("offload-test", () => {
 
   // A minimal `pull_request` webhook payload — the standard fields the trigger
   // reads (`repository.full_name`, `pull_request.head.sha`, draft/user gates).
-  const prPayload = (
-    overrides: Record<string, unknown> = {},
-  ): Record<string, unknown> => ({
+  const prPayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     action: "synchronize",
     repository: { full_name: "owner/name" },
     pull_request: {
@@ -436,9 +405,7 @@ describe("offload-test", () => {
       secrets: [],
     });
     // instanceId mirrors Action mode's `{run}:{repo_}:{sha12}`.
-    expect(trigger?.idempotencyKey(ctx)).toBe(
-      "offload-test:owner_name:abcdef012345",
-    );
+    expect(trigger?.idempotencyKey(ctx)).toBe("offload-test:owner_name:abcdef012345");
   });
 
   it("webhook trigger — gate skips drafts and dependabot, admits real PRs", () => {
@@ -499,9 +466,7 @@ describe("offload-test", () => {
           "exec",
           "upload-log",
         ]);
-        expect(handles.sandbox.execs.map((e) => e.command)).toContain(
-          "cargo test --workspace",
-        );
+        expect(handles.sandbox.execs.map((e) => e.command)).toContain("cargo test --workspace");
       }).pipe(Effect.provide(layer));
     },
   );
@@ -524,9 +489,7 @@ describe("offload-test", () => {
       return Effect.gen(function* () {
         const result = yield* offloadTest.run(input);
         expect(result.exitCode).toBe(0);
-        expect(handles.sandbox.execs.map((e) => e.command)).toContain(
-          "pnpm test",
-        );
+        expect(handles.sandbox.execs.map((e) => e.command)).toContain("pnpm test");
       }).pipe(Effect.provide(layer));
     },
   );

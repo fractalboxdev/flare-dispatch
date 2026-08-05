@@ -85,9 +85,7 @@ const PlaywrightDemoInput = Schema.Struct({
    * config store, not this field, so they don't end up in the
    * dispatch payload.
    */
-  env: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
+  env: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
   /**
    * Config-store keys whose values are injected — as env vars of the
    * same name — into the test command. Empty when the spec needs no
@@ -198,10 +196,7 @@ export const playwrightDemo = defineRun({
       // report that once — not be re-run five times over an hour (which is
       // exactly what the bare default produced).
       const execTimeoutSec = input.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
-      const stepTimeoutSec = Math.min(
-        execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
-        MAX_DURATION_SEC,
-      );
+      const stepTimeoutSec = Math.min(execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC, MAX_DURATION_SEC);
       const exec = yield* step(
         "run-playwright",
         () =>
@@ -230,8 +225,7 @@ export const playwrightDemo = defineRun({
           timeoutSec: 60,
         }),
       );
-      const videoRelPath =
-        locate.exitCode === 0 ? locate.stdout.trim() : "";
+      const videoRelPath = locate.exitCode === 0 ? locate.stdout.trim() : "";
 
       // upload-bundle — promote the whole artifact directory (video.webm +
       // report.json + any screenshots) to a signed R2 URL. The `artifact`
@@ -275,10 +269,7 @@ export const playwrightDemo = defineRun({
         }),
       );
 
-      yield* io.log(
-        "info",
-        `playwright-demo exited ${exec.exitCode} (${exec.durationMs}ms)`,
-      );
+      yield* io.log("info", `playwright-demo exited ${exec.exitCode} (${exec.durationMs}ms)`);
 
       return {
         exitCode: exec.exitCode,

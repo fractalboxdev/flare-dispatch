@@ -76,22 +76,14 @@ const page = (sessionId: string, eventsJson: string): string => `<!doctype html>
 </script>
 </body></html>`;
 
-export const handleReplay = async (
-  env: Env,
-  sessionId: string,
-): Promise<Response> => {
+export const handleReplay = async (env: Env, sessionId: string): Promise<Response> => {
   // Defend the path segment — it goes into a Cloudflare API URL.
   if (!/^[A-Za-z0-9-]{8,64}$/.test(sessionId)) {
     return new Response("bad session id", { status: 400 });
   }
   const accountId = env.CLOUDFLARE_ACCOUNT_ID;
   const token = env.CLOUDFLARE_API_TOKEN;
-  if (
-    accountId === undefined ||
-    accountId === "" ||
-    token === undefined ||
-    token === ""
-  ) {
+  if (accountId === undefined || accountId === "" || token === undefined || token === "") {
     return new Response("replay not configured (account id / api token)", {
       status: 503,
     });

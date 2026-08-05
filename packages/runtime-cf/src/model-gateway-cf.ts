@@ -256,12 +256,8 @@ export type AiBinding = {
  * authenticate against a gateway with authentication turned on. An empty object
  * keeps the unauthenticated-gateway path byte-identical.
  */
-const aigAuthHeader = (
-  gatewayAuthToken: string | undefined,
-): Record<string, string> =>
-  gatewayAuthToken !== undefined
-    ? { "cf-aig-authorization": `Bearer ${gatewayAuthToken}` }
-    : {};
+const aigAuthHeader = (gatewayAuthToken: string | undefined): Record<string, string> =>
+  gatewayAuthToken !== undefined ? { "cf-aig-authorization": `Bearer ${gatewayAuthToken}` } : {};
 
 /**
  * True when a provider error text describes a context-window overflow. Each
@@ -283,14 +279,11 @@ const isContextOverflow = (text: string): boolean =>
   );
 
 /** Map a thrown binding error to a `ModelGatewayError.reason`. */
-const reasonFor = (
-  message: string,
-): ModelGatewayError["reason"] => {
+const reasonFor = (message: string): ModelGatewayError["reason"] => {
   const m = message.toLowerCase();
   if (isContextOverflow(m)) return "context-overflow";
   if (m.includes("429") || m.includes("rate")) return "rate-limited";
-  if (m.includes("401") || m.includes("403") || m.includes("unauthor"))
-    return "auth-failed";
+  if (m.includes("401") || m.includes("403") || m.includes("unauthor")) return "auth-failed";
   if (m.includes("timeout")) return "timeout";
   return "unknown";
 };
@@ -300,10 +293,7 @@ const reasonFor = (
  * a `ModelGatewayError.reason`. A context overflow arrives as a 400 whose only
  * distinguishing mark is the body text — status alone can't classify it.
  */
-const reasonForStatus = (
-  status: number,
-  bodyText = "",
-): ModelGatewayError["reason"] => {
+const reasonForStatus = (status: number, bodyText = ""): ModelGatewayError["reason"] => {
   if (isContextOverflow(bodyText)) return "context-overflow";
   if (status === 429) return "rate-limited";
   if (status === 401 || status === 403) return "auth-failed";
@@ -335,10 +325,7 @@ type AnthropicContentBlock = {
 };
 
 /** Build the Anthropic Messages API request body from a completion request. */
-const anthropicBody = (
-  req: ModelCompletionRequest,
-  model: string,
-): unknown => ({
+const anthropicBody = (req: ModelCompletionRequest, model: string): unknown => ({
   model,
   max_tokens: req.maxTokens ?? ANTHROPIC_MAX_TOKENS_DEFAULT,
   system: req.system,
@@ -404,9 +391,7 @@ const completeWorkersAi = (
           }
         : {}),
       ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
-      ...(req.temperature !== undefined
-        ? { temperature: req.temperature }
-        : {}),
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...jsonResponseFormat(req.jsonSchema),
     };
 
@@ -621,17 +606,14 @@ const openAiChatBody = (
   // Constrained decoding (json mode): OpenAI-compatible `json_object` is the
   // widely-supported form — the schema itself rides in the prompt contract. Only
   // set when no tools are sent (the two are mutually exclusive on this route).
-  ...(req.jsonSchema !== undefined &&
-  !(req.tools !== undefined && req.tools.length > 0)
+  ...(req.jsonSchema !== undefined && !(req.tools !== undefined && req.tools.length > 0)
     ? { response_format: { type: "json_object" } }
     : {}),
   ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
 });
 
 /** Map an OpenAI Chat Completions response onto the capability's `{toolCalls, text}`. */
-const fromOpenAiChat = (
-  parsed: OpenAiChatResponse,
-): ModelCompletionResult => {
+const fromOpenAiChat = (parsed: OpenAiChatResponse): ModelCompletionResult => {
   const message = parsed.choices?.[0]?.message;
   const toolCalls: ReadonlyArray<ModelToolCall> = (message?.tool_calls ?? [])
     .filter((c) => typeof c.function?.name === "string")
@@ -861,12 +843,8 @@ const completeBedrock = (
     return {
       toolCalls: [],
       text: result.response,
-      ...(result.inputTokens !== undefined
-        ? { inputTokens: result.inputTokens }
-        : {}),
-      ...(result.outputTokens !== undefined
-        ? { outputTokens: result.outputTokens }
-        : {}),
+      ...(result.inputTokens !== undefined ? { inputTokens: result.inputTokens } : {}),
+      ...(result.outputTokens !== undefined ? { outputTokens: result.outputTokens } : {}),
     } satisfies ModelCompletionResult;
   });
 
@@ -923,8 +901,7 @@ const recordModelUsage = (
   Effect.tryPromise(() => {
     const inTok = result.inputTokens ?? 0;
     const outTok = result.outputTokens ?? 0;
-    const metered =
-      result.inputTokens !== undefined || result.outputTokens !== undefined ? 1 : 0;
+    const metered = result.inputTokens !== undefined || result.outputTokens !== undefined ? 1 : 0;
     return sink.db
       .prepare(
         `INSERT INTO execution_model_usage
@@ -937,7 +914,15 @@ const recordModelUsage = (
            metered       = MAX(metered, excluded.metered),
            updated_at    = excluded.updated_at`,
       )
-      .bind(`${sink.executionId}:${model}`, sink.executionId, model, inTok, outTok, metered, Date.now())
+      .bind(
+        `${sink.executionId}:${model}`,
+        sink.executionId,
+        model,
+        inTok,
+        outTok,
+        metered,
+        Date.now(),
+      )
       .run();
   }).pipe(Effect.ignore);
 

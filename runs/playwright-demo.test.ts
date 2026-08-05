@@ -68,9 +68,7 @@ describe("playwright-demo", () => {
           "upload-bundle",
           "upload-log",
         ]);
-        expect(
-          handles.executions.steps.every((s) => s.status === "success"),
-        ).toBe(true);
+        expect(handles.executions.steps.every((s) => s.status === "success")).toBe(true);
 
         // Two artifact uploads — the bundle directory and the captured log.
         expect(handles.artifact.uploads).toHaveLength(2);
@@ -78,137 +76,112 @@ describe("playwright-demo", () => {
     },
   );
 
-  it.effect(
-    "video found — uploaded as its own artifact, videoUri diverges from bundleUri",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: {
-          [PLAYWRIGHT_COMMAND]: { exitCode: 0 },
-          // The locate-video `find` resolves the spec's recording.
-          "find .tmp/demo-runs": {
-            exitCode: 0,
-            stdout:
-              ".tmp/demo-runs/ci-123/demo-spec-chromium/video.webm\n",
-          },
+  it.effect("video found — uploaded as its own artifact, videoUri diverges from bundleUri", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [PLAYWRIGHT_COMMAND]: { exitCode: 0 },
+        // The locate-video `find` resolves the spec's recording.
+        "find .tmp/demo-runs": {
+          exitCode: 0,
+          stdout: ".tmp/demo-runs/ci-123/demo-spec-chromium/video.webm\n",
         },
+      },
+    });
+
+    return Effect.gen(function* () {
+      const result = yield* playwrightDemo.run(baseInput);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.videoUri.length).toBeGreaterThan(0);
+      expect(result.videoUri).not.toBe(result.bundleUri);
+
+      expect(handles.executions.steps.map((s) => s.name)).toEqual([
+        "checkout",
+        "run-playwright",
+        "locate-video",
+        "upload-bundle",
+        "upload-video",
+        "upload-log",
+      ]);
+
+      // Three uploads — bundle, the video file, and the captured log. The
+      // video upload carries the streamable content type and the located
+      // container path.
+      expect(handles.artifact.uploads).toHaveLength(3);
+      const video = handles.artifact.uploads.find((u) => u.name === "video.webm");
+      expect(video?.contentType).toBe("video/webm");
+      expect(video?.path).toContain(".tmp/demo-runs/ci-123/demo-spec-chromium/video.webm");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("red path — spec exits 1, output reports exitCode 1, Effect succeeds", () => {
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [PLAYWRIGHT_COMMAND]: { exitCode: 1, stderr: "1 failing spec" },
+      },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(playwrightDemo.run(baseInput));
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.exitCode).toBe(1);
+      }
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("timeout — spec raises ExecTimeout, the run re-fails with the same tag", () => {
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [PLAYWRIGHT_COMMAND]: { fail: "ExecTimeout", timeoutSec: 1200 },
+      },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(playwrightDemo.run(baseInput));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      const tag = Exit.isFailure(exit)
+        ? Option.match(Cause.failureOption(exit.cause), {
+            onSome: (f) => (f as { _tag?: string })._tag,
+            onNone: () => undefined,
+          })
+        : undefined;
+      expect(tag).toBe("ExecTimeout");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("secrets — loadSecrets resolves Worker secrets into the exec env", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [PLAYWRIGHT_COMMAND]: { exitCode: 0 } },
+      secrets: {
+        CF_ACCESS_CLIENT_ID: "id-123",
+        CF_ACCESS_CLIENT_SECRET: "sk-456",
+        STAGING_WEB_BASE: "https://example.pages.dev",
+      },
+    });
+
+    return Effect.gen(function* () {
+      const result = yield* playwrightDemo.run({
+        ...baseInput,
+        env: { DEMO_RUN_ID: "ci-2026-05-22" },
+        secrets: ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET", "STAGING_WEB_BASE"],
       });
 
-      return Effect.gen(function* () {
-        const result = yield* playwrightDemo.run(baseInput);
+      expect(result.exitCode).toBe(0);
 
-        expect(result.exitCode).toBe(0);
-        expect(result.videoUri.length).toBeGreaterThan(0);
-        expect(result.videoUri).not.toBe(result.bundleUri);
-
-        expect(handles.executions.steps.map((s) => s.name)).toEqual([
-          "checkout",
-          "run-playwright",
-          "locate-video",
-          "upload-bundle",
-          "upload-video",
-          "upload-log",
-        ]);
-
-        // Three uploads — bundle, the video file, and the captured log. The
-        // video upload carries the streamable content type and the located
-        // container path.
-        expect(handles.artifact.uploads).toHaveLength(3);
-        const video = handles.artifact.uploads.find(
-          (u) => u.name === "video.webm",
-        );
-        expect(video?.contentType).toBe("video/webm");
-        expect(video?.path).toContain(
-          ".tmp/demo-runs/ci-123/demo-spec-chromium/video.webm",
-        );
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "red path — spec exits 1, output reports exitCode 1, Effect succeeds",
-    () => {
-      const { layer } = makeCFRuntimeTest({
-        sandboxProgram: {
-          [PLAYWRIGHT_COMMAND]: { exitCode: 1, stderr: "1 failing spec" },
-        },
-      });
-
-      return Effect.gen(function* () {
-        const exit = yield* Effect.exit(playwrightDemo.run(baseInput));
-
-        expect(Exit.isSuccess(exit)).toBe(true);
-        if (Exit.isSuccess(exit)) {
-          expect(exit.value.exitCode).toBe(1);
-        }
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "timeout — spec raises ExecTimeout, the run re-fails with the same tag",
-    () => {
-      const { layer } = makeCFRuntimeTest({
-        sandboxProgram: {
-          [PLAYWRIGHT_COMMAND]: { fail: "ExecTimeout", timeoutSec: 1200 },
-        },
-      });
-
-      return Effect.gen(function* () {
-        const exit = yield* Effect.exit(playwrightDemo.run(baseInput));
-
-        expect(Exit.isFailure(exit)).toBe(true);
-        const tag = Exit.isFailure(exit)
-          ? Option.match(Cause.failureOption(exit.cause), {
-              onSome: (f) => (f as { _tag?: string })._tag,
-              onNone: () => undefined,
-            })
-          : undefined;
-        expect(tag).toBe("ExecTimeout");
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "secrets — loadSecrets resolves Worker secrets into the exec env",
-    () => {
-      const { layer, handles } = makeCFRuntimeTest({
-        sandboxProgram: { [PLAYWRIGHT_COMMAND]: { exitCode: 0 } },
-        secrets: {
-          CF_ACCESS_CLIENT_ID: "id-123",
-          CF_ACCESS_CLIENT_SECRET: "sk-456",
-          STAGING_WEB_BASE: "https://example.pages.dev",
-        },
-      });
-
-      return Effect.gen(function* () {
-        const result = yield* playwrightDemo.run({
-          ...baseInput,
-          env: { DEMO_RUN_ID: "ci-2026-05-22" },
-          secrets: [
-            "CF_ACCESS_CLIENT_ID",
-            "CF_ACCESS_CLIENT_SECRET",
-            "STAGING_WEB_BASE",
-          ],
-        });
-
-        expect(result.exitCode).toBe(0);
-
-        // The exec recorded the merged env — resolved secrets surfaced
-        // as bare env-var names, plus the caller's non-credential knob.
-        // Target the playwright exec by command: the run also execs a
-        // locate-video `find` (no env injected).
-        const execCall = handles.sandbox.execs.find((e) =>
-          e.command.includes("playwright test"),
-        );
-        expect(execCall?.env?.CF_ACCESS_CLIENT_ID).toBe("id-123");
-        expect(execCall?.env?.CF_ACCESS_CLIENT_SECRET).toBe("sk-456");
-        expect(execCall?.env?.STAGING_WEB_BASE).toBe(
-          "https://example.pages.dev",
-        );
-        expect(execCall?.env?.DEMO_RUN_ID).toBe("ci-2026-05-22");
-      }).pipe(Effect.provide(layer));
-    },
-  );
+      // The exec recorded the merged env — resolved secrets surfaced
+      // as bare env-var names, plus the caller's non-credential knob.
+      // Target the playwright exec by command: the run also execs a
+      // locate-video `find` (no env injected).
+      const execCall = handles.sandbox.execs.find((e) => e.command.includes("playwright test"));
+      expect(execCall?.env?.CF_ACCESS_CLIENT_ID).toBe("id-123");
+      expect(execCall?.env?.CF_ACCESS_CLIENT_SECRET).toBe("sk-456");
+      expect(execCall?.env?.STAGING_WEB_BASE).toBe("https://example.pages.dev");
+      expect(execCall?.env?.DEMO_RUN_ID).toBe("ci-2026-05-22");
+    }).pipe(Effect.provide(layer));
+  });
 });
 
 // --- Source guard: no direct Date.now() / crypto.randomUUID() in the run -----
@@ -252,9 +225,7 @@ describe("playwright-demo step timeout", () => {
       // timeout and `retries: 0` — `retries` appears nowhere else in the run,
       // so this uniquely pins the long step's config.
       expect(src).toContain('step(\n        "run-playwright",');
-      expect(src).toMatch(
-        /\{\s*timeoutSec:\s*stepTimeoutSec,\s*retries:\s*0\s*\}/,
-      );
+      expect(src).toMatch(/\{\s*timeoutSec:\s*stepTimeoutSec,\s*retries:\s*0\s*\}/);
     }),
   );
 

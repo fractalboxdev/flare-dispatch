@@ -57,6 +57,5 @@ export class Mailbox extends Context.Tag("@fractalboxdev/flare-dispatch-core/Mai
  * `Effect.flatMap(Mailbox, ...)`.
  */
 export const mailbox = {
-  allocate: (opts?: AllocateOpts) =>
-    Effect.flatMap(Mailbox, (s) => s.allocate(opts)),
+  allocate: (opts?: AllocateOpts) => Effect.flatMap(Mailbox, (s) => s.allocate(opts)),
 } as const;

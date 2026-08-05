@@ -8,16 +8,13 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { Browser } from "@fractalboxdev/flare-dispatch-core";
-import {
-  composeCdpEndpoint,
-  makeBrowserRenderingLive,
-} from "./browser-cf";
+import { composeCdpEndpoint, makeBrowserRenderingLive } from "./browser-cf";
 
 describe("composeCdpEndpoint", () => {
   it("returns connectUrl unchanged when apiToken is omitted", () => {
-    expect(
-      composeCdpEndpoint({ connectUrl: "wss://browser.cf/connect" }),
-    ).toBe("wss://browser.cf/connect");
+    expect(composeCdpEndpoint({ connectUrl: "wss://browser.cf/connect" })).toBe(
+      "wss://browser.cf/connect",
+    );
   });
 
   it("appends `?token=` to a URL with no query string", () => {

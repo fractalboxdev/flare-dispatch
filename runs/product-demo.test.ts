@@ -17,11 +17,7 @@ import { it } from "@effect/vitest";
 import { Cause, Effect, Exit, Match, Option } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import {
-  buildDemoBundleManifest,
-  parseStoriesMarkdown,
-  productDemo,
-} from "./product-demo";
+import { buildDemoBundleManifest, parseStoriesMarkdown, productDemo } from "./product-demo";
 
 const baseInput = {
   repo: "owner/app",
@@ -86,18 +82,12 @@ describe("parseStoriesMarkdown", () => {
   });
 
   it("trims heading whitespace, trailing `#`, and surrounding blank lines", () => {
-    const md = ["##   spaced heading  ##  ", "", "  body text  ", ""].join(
-      "\n",
-    );
-    expect(parseStoriesMarkdown(md)).toEqual([
-      { name: "spaced heading", prose: "body text" },
-    ]);
+    const md = ["##   spaced heading  ##  ", "", "  body text  ", ""].join("\n");
+    expect(parseStoriesMarkdown(md)).toEqual([{ name: "spaced heading", prose: "body text" }]);
   });
 
   it("returns [] for a doc with no `## ` headings", () => {
-    expect(parseStoriesMarkdown("# Title only\n\njust prose, no stories")).toEqual(
-      [],
-    );
+    expect(parseStoriesMarkdown("# Title only\n\njust prose, no stories")).toEqual([]);
     expect(parseStoriesMarkdown("")).toEqual([]);
   });
 
@@ -259,7 +249,9 @@ describe("product-demo self-heal auto-dispatch (gated)", () => {
       const spawn = handles.childRuns.spawned[0]!;
       expect(spawn.run).toBe("self-heal-pr");
       expect(spawn.instanceId).toContain("self-heal:demo:");
-      const incident = (spawn.input as { incident: { class: string; repo: string; repro?: { command?: string } } }).incident;
+      const incident = (
+        spawn.input as { incident: { class: string; repo: string; repro?: { command?: string } } }
+      ).incident;
       expect(incident.class).toBe("demo");
       expect(incident.repro?.command).toBe("pnpm test");
     }).pipe(Effect.provide(layer));
@@ -454,12 +446,10 @@ describe("product-demo bundle persistence (demo-bundle/v1)", () => {
         const names = uploads.map((u) => u.name);
         expect(names).toContain("manifest.json");
         expect(names).toContain("frames.tar");
-        expect(
-          uploads.find((u) => u.name === "manifest.json")?.contentType,
-        ).toBe("application/json");
-        expect(uploads.find((u) => u.name === "frames.tar")?.contentType).toBe(
-          "application/x-tar",
+        expect(uploads.find((u) => u.name === "manifest.json")?.contentType).toBe(
+          "application/json",
         );
+        expect(uploads.find((u) => u.name === "frames.tar")?.contentType).toBe("application/x-tar");
       }).pipe(Effect.provide(layer));
     },
   );
@@ -482,9 +472,7 @@ describe("product-demo bundle persistence (demo-bundle/v1)", () => {
             stories: [{ name: "landing", prose: "Visit the homepage." }],
           } as Parameters<typeof productDemo.run>[0]),
         );
-        const reelSpawns = handles.childRuns.spawned.filter(
-          (s) => s.run === "demo-reel",
-        );
+        const reelSpawns = handles.childRuns.spawned.filter((s) => s.run === "demo-reel");
         expect(reelSpawns).toHaveLength(1);
         const spawn = reelSpawns[0]!;
         expect(spawn.instanceId).toContain("demo-reel:");
@@ -555,31 +543,28 @@ describe("product-demo launch-retry resilience", () => {
   // `it.live` (real clock) because the launch-retry's exponential backoff sleeps
   // — a TestClock would freeze those `Effect.sleep`s. Two flaked launches add
   // ~3s of real backoff, which is acceptable for one regression test.
-  it.live(
-    "retries a transient ContainerLaunchFailed launch so the chapter still passes",
-    () => {
-      const { layer } = makeCFRuntimeTest({
-        secrets: workerSecrets,
-        config: baseConfig,
-        sandboxProgram: passProgram,
-        // The `play-0` detached launch is rejected with ContainerLaunchFailed
-        // twice before it sticks. Pre-fix (`play` step `retries: 0`, no launch
-        // retry) the first flake propagated out of `runAgent`, recorded the
-        // chapter as an exit -3 "infra" failure → 0/1 passed → the run failed
-        // the honest check. With the launch-retry the third attempt succeeds.
-        sandboxLaunchFailures: { "play-0": 2 },
-      });
-      return Effect.gen(function* () {
-        const exit = yield* Effect.exit(
-          productDemo.run({
-            ...baseInput,
-            stories: [{ name: "checkout", prose: "Buy an item." }],
-          } as Parameters<typeof productDemo.run>[0]),
-        );
-        // 1/1 chapters passed ⇒ the run completes (does not fail the honest
-        // check). Without the retry this Exit would be a failure.
-        expect(Exit.isSuccess(exit)).toBe(true);
-      }).pipe(Effect.provide(layer));
-    },
-  );
+  it.live("retries a transient ContainerLaunchFailed launch so the chapter still passes", () => {
+    const { layer } = makeCFRuntimeTest({
+      secrets: workerSecrets,
+      config: baseConfig,
+      sandboxProgram: passProgram,
+      // The `play-0` detached launch is rejected with ContainerLaunchFailed
+      // twice before it sticks. Pre-fix (`play` step `retries: 0`, no launch
+      // retry) the first flake propagated out of `runAgent`, recorded the
+      // chapter as an exit -3 "infra" failure → 0/1 passed → the run failed
+      // the honest check. With the launch-retry the third attempt succeeds.
+      sandboxLaunchFailures: { "play-0": 2 },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        productDemo.run({
+          ...baseInput,
+          stories: [{ name: "checkout", prose: "Buy an item." }],
+        } as Parameters<typeof productDemo.run>[0]),
+      );
+      // 1/1 chapters passed ⇒ the run completes (does not fail the honest
+      // check). Without the retry this Exit would be a failure.
+      expect(Exit.isSuccess(exit)).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
 });

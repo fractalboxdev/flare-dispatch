@@ -24,11 +24,7 @@ import { modelGateway, type ModelCompletionRequest } from "@fractalboxdev/flare-
 // vitest and out of the non-sandbox bundle. Mirrors @fractalboxdev/flare-dispatch-core/signals.
 import { makeModelGatewayLive } from "@fractalboxdev/flare-dispatch-runtime-cf/model-gateway";
 import type { Env } from "../env";
-import {
-  callerAgentToken,
-  resolveAgentProxySecret,
-  verifyAgentToken,
-} from "../agent-token";
+import { callerAgentToken, resolveAgentProxySecret, verifyAgentToken } from "../agent-token";
 import { isValidExecutionId } from "../log-token";
 
 /** Hard ceiling on a single call's output, regardless of what the agent asks. */
@@ -144,20 +140,16 @@ export const handleAgentInference = async (
     model,
     system: parsed.system,
     user: parsed.user,
-    ...(parsed.tools !== undefined ? { tools: parsed.tools as ModelCompletionRequest["tools"] } : {}),
+    ...(parsed.tools !== undefined
+      ? { tools: parsed.tools as ModelCompletionRequest["tools"] }
+      : {}),
     maxTokens: maxOut,
     ...(parsed.temperature !== undefined ? { temperature: parsed.temperature } : {}),
   };
-  const layer = makeModelGatewayLive(
-    env.AI,
-    env.AI_GATEWAY_ID,
-    env.CLOUDFLARE_ACCOUNT_ID,
-  );
+  const layer = makeModelGatewayLive(env.AI, env.AI_GATEWAY_ID, env.CLOUDFLARE_ACCOUNT_ID);
 
   try {
-    const result = await Effect.runPromise(
-      modelGateway.complete(req).pipe(Effect.provide(layer)),
-    );
+    const result = await Effect.runPromise(modelGateway.complete(req).pipe(Effect.provide(layer)));
     const actual = (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
     // Settle: reconcile the held estimate with real usage (fall back to the
     // estimate when the backend reports no usage, so the cap never under-counts).

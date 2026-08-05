@@ -28,8 +28,7 @@ import type {
 export const CHECK_SUMMARY_MAX_CHARS = 65_535;
 
 /** Appended when the run's markdown is cut — exported for the boundary test. */
-export const TRUNCATION_NOTE =
-  "\n\n_… summary truncated to fit the check-run limit._";
+export const TRUNCATION_NOTE = "\n\n_… summary truncated to fit the check-run limit._";
 
 /** Cap stderr / cause tails so one noisy step cannot dominate the summary. */
 const TAIL_MAX_CHARS = 4_000;
@@ -78,9 +77,7 @@ const secretsMissingMd = (e: SecretsMissing): string =>
  * attempted-and-failed) — the workflow maps it to a `neutral` check-run
  * conclusion + a `skipped` executions row instead of a red `failure`.
  */
-export const runSkippedReason = (
-  exit: Exit.Exit<unknown, RunError>,
-): string | undefined =>
+export const runSkippedReason = (exit: Exit.Exit<unknown, RunError>): string | undefined =>
   Exit.match(exit, {
     onSuccess: () => undefined,
     onFailure: (cause) =>
@@ -108,9 +105,7 @@ export const runSkippedReason = (
  * degrades to the generic line when that leftmost failure carries none. By
  * design: a run fails with one typed error in practice.
  */
-export const failureSummaryMd = (
-  exit: Exit.Exit<unknown, RunError>,
-): string | undefined =>
+export const failureSummaryMd = (exit: Exit.Exit<unknown, RunError>): string | undefined =>
   Exit.match(exit, {
     onSuccess: () => undefined,
     onFailure: (cause) =>
@@ -143,18 +138,13 @@ export const appendFailureSummary = (
   const combined = `${genericLine}\n\n${summaryMd}`;
   if (combined.length <= CHECK_SUMMARY_MAX_CHARS) return combined;
   const budget =
-    CHECK_SUMMARY_MAX_CHARS -
-    genericLine.length -
-    "\n\n".length -
-    TRUNCATION_NOTE.length;
+    CHECK_SUMMARY_MAX_CHARS - genericLine.length - "\n\n".length - TRUNCATION_NOTE.length;
   // A generic line that alone exhausts the limit cannot happen today (it is a
   // single sentence), but guard anyway: drop the summary rather than the line.
   if (budget <= 0) return genericLine.slice(0, CHECK_SUMMARY_MAX_CHARS);
   // `slice` counts UTF-16 units, so the cut can land inside a surrogate pair —
   // strip a trailing lone high surrogate so the checks payload stays
   // well-formed (a mangled pair can 422 the whole update).
-  const truncated = summaryMd
-    .slice(0, budget)
-    .replace(/[\uD800-\uDBFF]$/, "");
+  const truncated = summaryMd.slice(0, budget).replace(/[\uD800-\uDBFF]$/, "");
   return `${genericLine}\n\n${truncated}${TRUNCATION_NOTE}`;
 };

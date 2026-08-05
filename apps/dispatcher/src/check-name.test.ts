@@ -21,23 +21,21 @@ describe("checkRunNameFor", () => {
     // `RunWorkflow` names the check BEFORE decoding inputs against the run's
     // schema, so anything can arrive here.
     for (const inputs of [undefined, null, "a string", 42, []]) {
-      expect(checkRunNameFor("offload-test", inputs)).toBe(
-        "flare-dispatch/offload-test",
-      );
+      expect(checkRunNameFor("offload-test", inputs)).toBe("flare-dispatch/offload-test");
     }
   });
 
   it("appends a valid label so each gate is its own required check", () => {
-    expect(
-      checkRunNameFor("check", { checkLabel: "codegen" }),
-    ).toBe("flare-dispatch/check:codegen");
-    expect(
-      checkRunNameFor("check", { checkLabel: "lint-shell" }),
-    ).toBe("flare-dispatch/check:lint-shell");
+    expect(checkRunNameFor("check", { checkLabel: "codegen" })).toBe(
+      "flare-dispatch/check:codegen",
+    );
+    expect(checkRunNameFor("check", { checkLabel: "lint-shell" })).toBe(
+      "flare-dispatch/check:lint-shell",
+    );
     // Dots and underscores are in the allowed set.
-    expect(
-      checkRunNameFor("check", { checkLabel: "tf.fmt_check" }),
-    ).toBe("flare-dispatch/check:tf.fmt_check");
+    expect(checkRunNameFor("check", { checkLabel: "tf.fmt_check" })).toBe(
+      "flare-dispatch/check:tf.fmt_check",
+    );
   });
 
   it("ignores a malformed label rather than composing a broken check name", () => {
@@ -56,9 +54,7 @@ describe("checkRunNameFor", () => {
       null,
     ];
     for (const checkLabel of bad) {
-      expect(checkRunNameFor("check", { checkLabel })).toBe(
-        "flare-dispatch/check",
-      );
+      expect(checkRunNameFor("check", { checkLabel })).toBe("flare-dispatch/check");
     }
   });
 
@@ -68,22 +64,13 @@ describe("checkRunNameFor", () => {
     // explicitly so adding an `m` flag to CHECK_LABEL_PATTERN breaks a test
     // rather than silently admitting `flare-dispatch/check:codegen\n`, a name
     // that would never match what an operator typed into branch protection.
-    for (const checkLabel of [
-      "codegen\n",
-      "codegen\r",
-      "codegen\r\n",
-      "code\ngen",
-    ]) {
-      expect(checkRunNameFor("check", { checkLabel })).toBe(
-        "flare-dispatch/check",
-      );
+    for (const checkLabel of ["codegen\n", "codegen\r", "codegen\r\n", "code\ngen"]) {
+      expect(checkRunNameFor("check", { checkLabel })).toBe("flare-dispatch/check");
     }
   });
 
   it("accepts a label exactly at the 32-char ceiling", () => {
     const label = "a".repeat(32);
-    expect(checkRunNameFor("check", { checkLabel: label })).toBe(
-      `flare-dispatch/check:${label}`,
-    );
+    expect(checkRunNameFor("check", { checkLabel: label })).toBe(`flare-dispatch/check:${label}`);
   });
 });

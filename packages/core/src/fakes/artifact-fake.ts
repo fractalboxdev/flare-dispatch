@@ -7,11 +7,7 @@
 // Spec: specs/pm/plan.md § 3 (fakes/), specs/03-dsl.md § artifact.
 
 import { Effect, Layer } from "effect";
-import {
-  Artifact,
-  type ArtifactInfo,
-  type ArtifactService,
-} from "../services/artifact";
+import { Artifact, type ArtifactInfo, type ArtifactService } from "../services/artifact";
 
 /** Inspectable in-memory artifact store. */
 export type ArtifactFakeState = {
@@ -44,14 +40,12 @@ export const makeArtifactFake = (): {
 
     list: () =>
       Effect.sync(() =>
-        Array.from(state.urls.entries()).map(
-          ([name, url]): ArtifactInfo => ({
-            name,
-            url,
-            size: 0,
-            contentType: "application/octet-stream",
-          }),
-        ),
+        Array.from(state.urls.entries()).map(([name, url]): ArtifactInfo => ({
+          name,
+          url,
+          size: 0,
+          contentType: "application/octet-stream",
+        })),
       ),
   };
 

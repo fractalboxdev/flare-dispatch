@@ -59,9 +59,7 @@ export type BedrockSignedRequest = {
  * the body shape is dialect-specific). Throws on non-2xx with the response body
  * inlined (truncated) so the caller's error boundary can name the cause.
  */
-export const invokeBedrockSigned = async (
-  req: BedrockSignedRequest,
-): Promise<Response> => {
+export const invokeBedrockSigned = async (req: BedrockSignedRequest): Promise<Response> => {
   const awsHost = `bedrock-runtime.${req.region}.amazonaws.com`;
   // SigV4 canonical URI requires path segments URL-encoded TWICE for canonical
   // signing. For an inference-profile id like `us.anthropic.claude-opus-4-6-v1`
@@ -87,13 +85,10 @@ export const invokeBedrockSigned = async (
     `x-amz-content-sha256:${payloadHash}\n` +
     `x-amz-date:${amzDate}\n` +
     `x-amz-security-token:${req.creds.sessionToken}\n`;
-  const signedHeaders =
-    "host;x-amz-content-sha256;x-amz-date;x-amz-security-token";
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date;x-amz-security-token";
 
-  const canonicalRequest =
-    `POST\n${canonicalPath}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-  const stringToSign =
-    `${algorithm}\n${amzDate}\n${credentialScope}\n${await sha256Hex(canonicalRequest)}`;
+  const canonicalRequest = `POST\n${canonicalPath}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+  const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${await sha256Hex(canonicalRequest)}`;
 
   const signingKey = await deriveSigningKey(
     req.creds.secretAccessKey,
@@ -144,19 +139,11 @@ export const invokeBedrockSigned = async (
 // --- SubtleCrypto helpers (no AWS SDK) ---------------------------------------
 
 const sha256Hex = async (data: string): Promise<string> => {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(data),
-  );
-  return [...new Uint8Array(buf)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 };
 
-const hmac = async (
-  key: ArrayBuffer | Uint8Array,
-  msg: string,
-): Promise<ArrayBuffer> => {
+const hmac = async (key: ArrayBuffer | Uint8Array, msg: string): Promise<ArrayBuffer> => {
   const k = await crypto.subtle.importKey(
     "raw",
     key as ArrayBuffer,
@@ -169,9 +156,7 @@ const hmac = async (
 
 const hmacHex = async (key: ArrayBuffer, msg: string): Promise<string> => {
   const buf = await hmac(key, msg);
-  return [...new Uint8Array(buf)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 };
 
 const deriveSigningKey = async (

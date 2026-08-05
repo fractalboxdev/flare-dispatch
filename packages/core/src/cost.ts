@@ -225,8 +225,7 @@ export const containerCostMicroUsd = (opts: {
   const vcpuSeconds = spec.vcpu * opts.activeSeconds;
   const gibSeconds = spec.gib * opts.activeSeconds;
   return Math.round(
-    vcpuSeconds * CONTAINER_VCPU_MICRO_USD_PER_SEC +
-      gibSeconds * CONTAINER_GIB_MICRO_USD_PER_SEC,
+    vcpuSeconds * CONTAINER_VCPU_MICRO_USD_PER_SEC + gibSeconds * CONTAINER_GIB_MICRO_USD_PER_SEC,
   );
 };
 
@@ -311,10 +310,7 @@ export const microUsdToUsd = (microUsd: number): number => microUsd / MICRO_USD_
  * that keeps sub-cent execution costs legible: 4 decimals under $1, 2 at/above.
  * `null` (unmetered) renders as the supplied placeholder.
  */
-export const formatMicroUsd = (
-  microUsd: number | null,
-  placeholder = "—",
-): string => {
+export const formatMicroUsd = (microUsd: number | null, placeholder = "—"): string => {
   if (microUsd === null) return placeholder;
   const usd = microUsdToUsd(microUsd);
   if (usd === 0) return "$0";

@@ -61,8 +61,7 @@ const token = makeCapabilityToken(HKDF_INFO);
 export const EXECUTION_ID_RE = /^[A-Za-z0-9:_-]{3,128}$/;
 
 /** True iff `id` is a syntactically-valid execution id (see `EXECUTION_ID_RE`). */
-export const isValidExecutionId = (id: string): boolean =>
-  EXECUTION_ID_RE.test(id);
+export const isValidExecutionId = (id: string): boolean => EXECUTION_ID_RE.test(id);
 
 /**
  * The keying material for log tokens: a dedicated `LOG_LINK_SECRET` if set,
@@ -98,9 +97,7 @@ export const buildLogsUrl = (
   token: string,
   fragment?: string,
 ): string => {
-  const base = `${origin.replace(/\/$/, "")}/logs/${encodeURIComponent(
-    executionId,
-  )}?t=${token}`;
+  const base = `${origin.replace(/\/$/, "")}/logs/${encodeURIComponent(executionId)}?t=${token}`;
   return fragment !== undefined && fragment.length > 0
     ? `${base}#${encodeURIComponent(fragment)}`
     : base;

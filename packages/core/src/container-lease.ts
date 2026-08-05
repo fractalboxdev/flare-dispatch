@@ -56,11 +56,8 @@ export type LeaseDecision =
   | { readonly _kind: "wait"; readonly holder: string; readonly heldForMs: number };
 
 /** A lease is stale when its last heartbeat predates `now - ttlMs`. */
-export const isLeaseStale = (
-  lease: LeaseRecord,
-  now: number,
-  ttlMs: number,
-): boolean => now - lease.heartbeatAt > ttlMs;
+export const isLeaseStale = (lease: LeaseRecord, now: number, ttlMs: number): boolean =>
+  now - lease.heartbeatAt > ttlMs;
 
 /**
  * Decide what a run should do when it finds `lease` on record for the container
@@ -97,8 +94,5 @@ export const decideLease = (
  * the loop stays replay-deterministic across a Workflow checkpoint resume —
  * exactly the bound `waitForChildren` uses for its child-poll loop.
  */
-export const leaseAcquireAttempts = (
-  waitTimeoutMs: number,
-  pollEveryMs: number,
-): number =>
+export const leaseAcquireAttempts = (waitTimeoutMs: number, pollEveryMs: number): number =>
   Math.max(1, Math.ceil(waitTimeoutMs / Math.max(1, pollEveryMs)));

@@ -80,9 +80,7 @@ describe("email-otp-login run", () => {
     });
 
     return Effect.gen(function* () {
-      const out = yield* emailOtpLogin.run(
-        mkInput({ linkHost: "app.example.com" }),
-      );
+      const out = yield* emailOtpLogin.run(mkInput({ linkHost: "app.example.com" }));
       expect(out.loggedIn).toBe(true);
       expect(out.mode).toBe("link");
     }).pipe(Effect.provide(layer));

@@ -97,9 +97,7 @@ const refToBranch = (ref: string): string =>
  * absent/empty/rejected manifest (those are reported, not failures); a genuine
  * GitHub API failure propagates from `commitFilesAndOpenPr`.
  */
-export const runWriteback = async (
-  opts: RunWritebackOptions,
-): Promise<WritebackOutcome> => {
+export const runWriteback = async (opts: RunWritebackOptions): Promise<WritebackOutcome> => {
   const prefix = writebackPrefix(opts.executionId, opts.artifactName);
 
   // 1. Read the manifest. Absent ⇒ the run produced no writeback — a clean skip.
@@ -123,15 +121,11 @@ export const runWriteback = async (
   const sizes = new Map<string, number>();
   for (const entry of manifest.entries) {
     if (entry.deleted === true) continue;
-    const head = await opts.bucket.head(
-      `${prefix}${WRITEBACK_FILES_DIR}/${entry.path}`,
-    );
+    const head = await opts.bucket.head(`${prefix}${WRITEBACK_FILES_DIR}/${entry.path}`);
     sizes.set(entry.path, head?.size ?? 0);
   }
 
-  const validation = validateManifest(opts.spec, manifest, (e) =>
-    sizes.get(e.path) ?? 0,
-  );
+  const validation = validateManifest(opts.spec, manifest, (e) => sizes.get(e.path) ?? 0);
   if (validation._kind === "empty") {
     return { kind: "skipped", reason: "writeback manifest has no entries" };
   }
@@ -143,17 +137,14 @@ export const runWriteback = async (
   }
 
   // 3. Read each non-deleted blob's content from R2.
-  const files: { path: string; content: string; mode: "100644" | "100755" }[] =
-    [];
+  const files: { path: string; content: string; mode: "100644" | "100755" }[] = [];
   const deletions: { path: string }[] = [];
   for (const entry of validation.entries) {
     if (entry.deleted) {
       deletions.push({ path: entry.path });
       continue;
     }
-    const blob = await opts.bucket.get(
-      `${prefix}${WRITEBACK_FILES_DIR}/${entry.path}`,
-    );
+    const blob = await opts.bucket.get(`${prefix}${WRITEBACK_FILES_DIR}/${entry.path}`);
     if (blob === null) {
       // The manifest named a write but no blob landed — reject rather than
       // silently commit an empty file.
@@ -251,9 +242,7 @@ export const describeOutcome = (outcome: WritebackOutcome): string => {
       return `writeback rejected — ${outcome.reasons.join("; ")}`;
     case "committed": {
       const where =
-        outcome.url !== undefined
-          ? `PR [#${outcome.number}](${outcome.url})`
-          : "branch";
+        outcome.url !== undefined ? `PR [#${outcome.number}](${outcome.url})` : "branch";
       const verb = outcome.created ? "opened" : "updated";
       return `writeback ${verb} ${where} (${outcome.files} file(s), ${outcome.deletions} deletion(s))`;
     }

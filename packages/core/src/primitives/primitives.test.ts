@@ -20,17 +20,13 @@ describe("workspace", () => {
     const { layer, handles } = makeCFRuntimeTest();
 
     const out = await Effect.runPromise(
-      workspace({ repo: "owner/myrepo", sha: "abc123" }).pipe(
-        Effect.provide(layer),
-      ),
+      workspace({ repo: "owner/myrepo", sha: "abc123" }).pipe(Effect.provide(layer)),
     );
 
     expect(out.container.id).toMatch(/^fake-container-/);
     expect(out.dir).toBe("/workspace/myrepo");
     expect(handles.sandbox.acquired).toHaveLength(1);
-    expect(handles.sandbox.clones).toEqual([
-      { repo: "owner/myrepo", sha: "abc123" },
-    ]);
+    expect(handles.sandbox.clones).toEqual([{ repo: "owner/myrepo", sha: "abc123" }]);
   });
 
   it("threads the optional image to sandbox.acquire", async () => {
@@ -44,9 +40,7 @@ describe("workspace", () => {
       }).pipe(Effect.provide(layer)),
     );
 
-    expect(handles.sandbox.acquired[0]!.image).toBe(
-      "registry.example/playwright:1",
-    );
+    expect(handles.sandbox.acquired[0]!.image).toBe("registry.example/playwright:1");
   });
 
   it("install: true runs installCached after the clone", async () => {
@@ -146,7 +140,7 @@ describe("installCached", () => {
     expect(cmds.every((c) => !c.includes("cargo fetch"))).toBe(true);
   });
 
-  it("explicit tool: \"npm\" skips detection and runs npm ci", async () => {
+  it('explicit tool: "npm" skips detection and runs npm ci', async () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: {
         "sha256sum package-lock.json": { exitCode: 0, stdout: "abc\n" },
@@ -206,8 +200,7 @@ describe("sharded", () => {
     const exit = await Effect.runPromiseExit(
       sharded({
         count: 3,
-        body: (shard) =>
-          shard.index === 2 ? Effect.fail("boom" as const) : Effect.succeed(0),
+        body: (shard) => (shard.index === 2 ? Effect.fail("boom" as const) : Effect.succeed(0)),
       }),
     );
     expect(exit._tag).toBe("Failure");

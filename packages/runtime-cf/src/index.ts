@@ -10,17 +10,11 @@
 // Spec: specs/03-dsl.md § Layers, specs/pm/plan.md § PR4.
 
 // --- The composed runtime ----------------------------------------------------
-export {
-  makeCFRuntimeLive,
-  type CFRuntimeLiveOptions,
-} from "./runtime";
+export { makeCFRuntimeLive, type CFRuntimeLiveOptions } from "./runtime";
 
 // --- Individual capability Layers (also exported for targeted tests) ---------
 export { IOLive, makeIOLive } from "./io-live";
-export {
-  makeD1ExecutionsLive,
-  type ExecutionContext,
-} from "./executions-d1";
+export { makeD1ExecutionsLive, type ExecutionContext } from "./executions-d1";
 export { makeR2ArtifactLive } from "./artifact-r2";
 export {
   type BrowserRenderingConfig,
@@ -57,11 +51,7 @@ export {
   type RunAdmissionStore,
 } from "./run-admission-d1";
 export { makeStepRunnerCloudflare } from "./step-runner-cf";
-export {
-  makeChecksGithubLive,
-  NOOP_CHECK_RUN_ID,
-  type ChecksGithubConfig,
-} from "./checks-github";
+export { makeChecksGithubLive, NOOP_CHECK_RUN_ID, type ChecksGithubConfig } from "./checks-github";
 export { makeGithubLive, type GithubLiveConfig } from "./github-live";
 export {
   makeCloudflareLive,
@@ -78,15 +68,8 @@ export {
   type ChildGithubContext,
   type WorkflowBindingLike,
 } from "./child-runs-cf";
-export {
-  makeModelGatewayLive,
-  type AiBinding,
-  type ModelUsageSink,
-} from "./model-gateway-cf";
-export {
-  recordExecutionCost,
-  instanceForSandboxImage,
-} from "./execution-cost";
+export { makeModelGatewayLive, type AiBinding, type ModelUsageSink } from "./model-gateway-cf";
+export { recordExecutionCost, instanceForSandboxImage } from "./execution-cost";
 export {
   BrowserDeferred,
   ChildRunsDeferred,
@@ -96,11 +79,7 @@ export {
   ModelGatewayDeferred,
   OidcDeferred,
 } from "./deferred";
-export {
-  makeOidcLive,
-  publicJwkFromSigning,
-  type OidcLiveConfig,
-} from "./oidc-live";
+export { makeOidcLive, publicJwkFromSigning, type OidcLiveConfig } from "./oidc-live";
 export {
   runWriteback,
   describeOutcome,

@@ -63,10 +63,7 @@ describe("composeRestoreOr", () => {
   it("a restore error is treated as a miss — onMiss runs", async () => {
     let onMissRan = false;
     const restoreOr = composeRestoreOr(
-      () =>
-        Effect.fail(
-          new CacheError({ phase: "restore", key: "k", cause: "boom" }),
-        ),
+      () => Effect.fail(new CacheError({ phase: "restore", key: "k", cause: "boom" })),
       () => Effect.void,
     );
     await Effect.runPromise(
@@ -84,8 +81,7 @@ describe("composeRestoreOr", () => {
   it("a save failure is swallowed — the run still succeeds", async () => {
     const restoreOr = composeRestoreOr(
       () => Effect.succeed(false),
-      () =>
-        Effect.fail(new CacheError({ phase: "save", key: "k", cause: "boom" })),
+      () => Effect.fail(new CacheError({ phase: "save", key: "k", cause: "boom" })),
     );
     const exit = await Effect.runPromiseExit(
       restoreOr({ ...baseOpts, onMiss: () => Effect.succeed(42) }),

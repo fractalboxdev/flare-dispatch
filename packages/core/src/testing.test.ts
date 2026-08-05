@@ -99,35 +99,25 @@ it.effect("checks fake records create then update calls", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect(
-  "a multi-step run threads sandbox + artifact through the test runtime",
-  () => {
-    const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { "pnpm test": { exitCode: 0 } },
-    });
+it.effect("a multi-step run threads sandbox + artifact through the test runtime", () => {
+  const { layer, handles } = makeCFRuntimeTest({
+    sandboxProgram: { "pnpm test": { exitCode: 0 } },
+  });
 
-    return Effect.gen(function* () {
-      const result = yield* step("exec", () =>
-        sandbox.exec({ command: "pnpm test" }),
-      );
-      const url = yield* step("upload-log", () =>
-        artifact.upload({ name: "step.log", path: result.logPath }),
-      );
+  return Effect.gen(function* () {
+    const result = yield* step("exec", () => sandbox.exec({ command: "pnpm test" }));
+    const url = yield* step("upload-log", () =>
+      artifact.upload({ name: "step.log", path: result.logPath }),
+    );
 
-      expect(result.exitCode).toBe(0);
-      expect(url).toBe("https://fake-r2.local/step.log");
+    expect(result.exitCode).toBe(0);
+    expect(url).toBe("https://fake-r2.local/step.log");
 
-      // Two steps, each recorded once.
-      expect(handles.executions.steps.map((s) => s.name)).toEqual([
-        "exec",
-        "upload-log",
-      ]);
-      expect(
-        handles.executions.steps.every((s) => s.status === "success"),
-      ).toBe(true);
-    }).pipe(Effect.provide(layer));
-  },
-);
+    // Two steps, each recorded once.
+    expect(handles.executions.steps.map((s) => s.name)).toEqual(["exec", "upload-log"]);
+    expect(handles.executions.steps.every((s) => s.status === "success")).toBe(true);
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("sandboxFakeProgram is the standalone Layer helper", () => {
   // The shape from specs/03-dsl.md § Unit-testing runs: a sandbox-only Layer.

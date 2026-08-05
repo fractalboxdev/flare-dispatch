@@ -94,9 +94,7 @@ type WorkflowStepConfigLike = {
  * bare `do(name, callback)` call (and CF's defaults). A `timeoutSec` becomes
  * a CF duration string; `retries` becomes a bounded exponential-backoff policy.
  */
-export const buildStepConfig = (
-  opts?: StepOpts,
-): WorkflowStepConfigLike | undefined => {
+export const buildStepConfig = (opts?: StepOpts): WorkflowStepConfigLike | undefined => {
   if (opts === undefined) return undefined;
   const config: {
     timeout?: string;
@@ -112,9 +110,7 @@ export const buildStepConfig = (
       backoff: "exponential",
     };
   }
-  return config.timeout === undefined && config.retries === undefined
-    ? undefined
-    : config;
+  return config.timeout === undefined && config.retries === undefined ? undefined : config;
 };
 
 /** A thrown error carrying an Effect `Cause` — produced by `runEffect`. */
@@ -127,9 +123,7 @@ const causeOf = (error: unknown): Cause.Cause<unknown> | undefined => {
 };
 
 /** A tagged error's `_tag` from a Cause, via `Option.match` — no raw `._tag`. */
-const errorTagOf = (
-  cause: Cause.Cause<unknown> | undefined,
-): string | undefined =>
+const errorTagOf = (cause: Cause.Cause<unknown> | undefined): string | undefined =>
   cause === undefined
     ? "StepFailed"
     : Option.match(Cause.failureOption(cause), {
@@ -217,14 +211,10 @@ export const makeStepRunnerCloudflare = (
               onFailure: (failCause) => {
                 // `tryPromise`'s `catch` wrapped the rejection as `{ error }`
                 // in the failure channel — recover the real thrown error.
-                const thrown = Option.match(
-                  Cause.failureOption(failCause),
-                  {
-                    onSome: (wrapped) =>
-                      (wrapped as { error: unknown }).error,
-                    onNone: () => undefined,
-                  },
-                );
+                const thrown = Option.match(Cause.failureOption(failCause), {
+                  onSome: (wrapped) => (wrapped as { error: unknown }).error,
+                  onNone: () => undefined,
+                });
 
                 // The Effect Cause `runEffect` preserved on the thrown error:
                 // re-failing with it keeps the typed `E` channel intact across
@@ -270,13 +260,9 @@ export const makeStepRunnerCloudflare = (
               const timeoutMs = Duration.toMillis(
                 Duration.decode(timeout as Duration.DurationInput),
               );
-              return Effect.fail(
-                new ApprovalTimedOut({ eventName: type, timeoutMs }),
-              );
+              return Effect.fail(new ApprovalTimedOut({ eventName: type, timeoutMs }));
             }
-            const timeoutMs = Duration.toMillis(
-              Duration.decode(timeout as Duration.DurationInput),
-            );
+            const timeoutMs = Duration.toMillis(Duration.decode(timeout as Duration.DurationInput));
             // CF Workflows `waitForEvent` accepts either an ISO-8601 duration
             // string or a number-of-seconds. Pass ms-converted-to-seconds for
             // unambiguous behaviour across runtime versions.
@@ -287,8 +273,7 @@ export const makeStepRunnerCloudflare = (
                   timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
                 }),
               catch: (cause) => {
-                const message =
-                  cause instanceof Error ? cause.message : String(cause);
+                const message = cause instanceof Error ? cause.message : String(cause);
                 if (/timeout|timed[- ]?out/i.test(message)) {
                   return new ApprovalTimedOut({
                     eventName: type,
@@ -302,9 +287,7 @@ export const makeStepRunnerCloudflare = (
               },
             }).pipe(
               Effect.flatMap((event) => {
-                const decoded = Schema.decodeUnknownEither(payloadSchema)(
-                  event.payload,
-                );
+                const decoded = Schema.decodeUnknownEither(payloadSchema)(event.payload);
                 if (decoded._tag === "Left") {
                   return Effect.fail(
                     new EventPayloadInvalid({

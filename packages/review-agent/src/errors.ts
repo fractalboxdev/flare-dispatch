@@ -11,28 +11,25 @@ import { Schema } from "effect";
  * Provider-agnostic — the engine maps the `modelGateway` capability's
  * `ModelGatewayError` (Workers AI / any model backend) onto this.
  */
-export class ModelCallFailed extends Schema.TaggedError<ModelCallFailed>()(
-  "ModelCallFailed",
-  {
-    /** The configured backend name, for the operator-facing reason string. */
-    backend: Schema.String,
-    /** The model id passed through to the provider. */
-    model: Schema.String,
-    reason: Schema.Literal(
-      "missing-api-key",
-      "auth-failed",
-      "rate-limited",
-      "bad-response",
-      "timeout",
-      // Input + output budget exceeded the model's context window. A capacity
-      // failure, not a broken call: the engine shrink-retries the diff, and a
-      // run that still can't fit should skip soft (neutral check), not go red.
-      "context-overflow",
-      "unknown",
-    ),
-    message: Schema.String,
-  },
-) {}
+export class ModelCallFailed extends Schema.TaggedError<ModelCallFailed>()("ModelCallFailed", {
+  /** The configured backend name, for the operator-facing reason string. */
+  backend: Schema.String,
+  /** The model id passed through to the provider. */
+  model: Schema.String,
+  reason: Schema.Literal(
+    "missing-api-key",
+    "auth-failed",
+    "rate-limited",
+    "bad-response",
+    "timeout",
+    // Input + output budget exceeded the model's context window. A capacity
+    // failure, not a broken call: the engine shrink-retries the diff, and a
+    // run that still can't fit should skip soft (neutral check), not go red.
+    "context-overflow",
+    "unknown",
+  ),
+  message: Schema.String,
+}) {}
 
 /**
  * The configured backend could not be resolved from CONFIG_KV + secrets —
@@ -72,7 +69,4 @@ export class StructuredOutputInvalid extends Schema.TaggedError<StructuredOutput
   },
 ) {}
 
-export type ReviewEngineError =
-  | ModelCallFailed
-  | BackendUnconfigured
-  | StructuredOutputInvalid;
+export type ReviewEngineError = ModelCallFailed | BackendUnconfigured | StructuredOutputInvalid;

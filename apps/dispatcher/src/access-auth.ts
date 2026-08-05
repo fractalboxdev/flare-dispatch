@@ -264,17 +264,11 @@ export const clearAccessCertsCache = (): void => {
  *  uses). Used to tell a genuine bad-signature from a possible key rotation.
  *  Exported so the deploy-console gate (deploy-access.ts) reuses the same
  *  rotation-detection heuristic rather than duplicating it. */
-export const jwtHasKnownKid = (
-  keys: readonly AccessJwk[],
-  jwt: string,
-): boolean => {
+export const jwtHasKnownKid = (keys: readonly AccessJwk[], jwt: string): boolean => {
   const parts = jwt.split(".");
   if (parts.length !== 3) return false;
   const header = decodeJson(parts[0] as string);
-  const kid =
-    header !== null && typeof header["kid"] === "string"
-      ? header["kid"]
-      : undefined;
+  const kid = header !== null && typeof header["kid"] === "string" ? header["kid"] : undefined;
   if (kid === undefined) return keys.length >= 1;
   return keys.some((k) => k.kid === kid);
 };
@@ -285,9 +279,7 @@ export const jwtHasKnownKid = (
  * scheme+host with no trailing slash (`https://myteam.cloudflareaccess.com`).
  */
 export const accessIssuer = (teamDomain: string): string => {
-  const withScheme = /^https?:\/\//.test(teamDomain)
-    ? teamDomain
-    : `https://${teamDomain}`;
+  const withScheme = /^https?:\/\//.test(teamDomain) ? teamDomain : `https://${teamDomain}`;
   return new URL(withScheme).origin;
 };
 
@@ -334,11 +326,7 @@ export const isBrowserNavigation = (request: Request): boolean => {
  * redirect_url=<path>` (the optional signed `meta` hint Access adds is not
  * required — the flow works without it).
  */
-export const accessLoginUrl = (
-  teamDomain: string,
-  aud: string,
-  request: Request,
-): string => {
+export const accessLoginUrl = (teamDomain: string, aud: string, request: Request): string => {
   const reqUrl = new URL(request.url);
   const params = new URLSearchParams({
     kid: aud,
@@ -375,20 +363,12 @@ export const readAccessJwt = (request: Request): string | null => {
  * The capability-token gate (log-auth.ts) still runs AFTER this for the routes
  * that have one — Access is an additional first factor, not a replacement.
  */
-export const gateViewerAccess = async (
-  env: Env,
-  request: Request,
-): Promise<Response | null> => {
+export const gateViewerAccess = async (env: Env, request: Request): Promise<Response | null> => {
   if (resolveViewerAccessMode(env) === "token-only") return null;
 
   const aud = env.ACCESS_AUD;
   const teamDomain = env.ACCESS_TEAM_DOMAIN;
-  if (
-    aud === undefined ||
-    aud === "" ||
-    teamDomain === undefined ||
-    teamDomain === ""
-  ) {
+  if (aud === undefined || aud === "" || teamDomain === undefined || teamDomain === "") {
     return json(
       {
         error: "access_not_configured",
@@ -438,11 +418,7 @@ export const gateViewerAccess = async (
   // signature of a key rotation: Access started signing with a key minted after
   // our last fetch. Revalidate once against origin (cooldown-guarded) and retry
   // before denying — otherwise every viewer 403s until the cache TTL lapses.
-  if (
-    !ok &&
-    !jwtHasKnownKid(keys, jwt) &&
-    nowMs - lastRevalidateMs > REVALIDATE_COOLDOWN_MS
-  ) {
+  if (!ok && !jwtHasKnownKid(keys, jwt) && nowMs - lastRevalidateMs > REVALIDATE_COOLDOWN_MS) {
     lastRevalidateMs = nowMs;
     const fresh = await fetchAccessCerts(issuer, { revalidate: true });
     if (fresh !== null && fresh.length > 0) {
@@ -452,10 +428,7 @@ export const gateViewerAccess = async (
   }
 
   if (!ok) {
-    return json(
-      { error: "access_denied", message: "invalid Cloudflare Access token" },
-      403,
-    );
+    return json({ error: "access_denied", message: "invalid Cloudflare Access token" }, 403);
   }
   return null;
 };

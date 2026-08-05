@@ -129,9 +129,7 @@ export const specDriftPr = defineRun({
 
       // 1. Scope: the operator's repo list. No enumeration — an empty list is a
       //    no-op (the run is a backstop, not an installation-wide crawler).
-      const repos = parseList(
-        yield* step("resolve-repos", () => config.get(REPOS_KEY)),
-      );
+      const repos = parseList(yield* step("resolve-repos", () => config.get(REPOS_KEY)));
       if (repos.length === 0) {
         yield* step("log-empty", () =>
           io.log("warn", `spec-drift-pr: ${REPOS_KEY} is unset — nothing to scan`),
@@ -139,8 +137,7 @@ export const specDriftPr = defineRun({
         return { reposScanned: 0, prsOpened: 0, prsUpdated: 0, reposClean: 0 };
       }
 
-      const baseBranch =
-        (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
+      const baseBranch = (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
 
       // 2. Resolve the configurable backend (the ai-code-review machinery,
       //    under THIS run's `spec-drift.*` namespace). A misconfigured backend
@@ -158,9 +155,7 @@ export const specDriftPr = defineRun({
         ),
       );
 
-      const promptOverride = yield* step("resolve-prompt", () =>
-        config.get(promptKey(NAMESPACE)),
-      );
+      const promptOverride = yield* step("resolve-prompt", () => config.get(promptKey(NAMESPACE)));
       const systemPrompt = promptOverride ?? SPEC_DRIFT_PROMPT_DEFAULT;
 
       // 3. Scan each repo. One repo's failure (model, git, GitHub) is logged and
@@ -171,10 +166,7 @@ export const specDriftPr = defineRun({
           scanRepo({ repo, baseBranch, day, resolved, systemPrompt }).pipe(
             Effect.catchAll((err) =>
               io
-                .log(
-                  "warn",
-                  `spec-drift-pr: skipped ${repo} — ${describe(err)}`,
-                )
+                .log("warn", `spec-drift-pr: skipped ${repo} — ${describe(err)}`)
                 .pipe(Effect.as({ opened: false, updated: false, clean: false })),
             ),
           ),
@@ -215,18 +207,14 @@ const scanRepo = (args: ScanArgs) =>
 
     // Gather the drift inputs with plain `git` (no extra CLI in the image).
     const specsText = yield* step(`gather-specs-${args.repo}`, () =>
-      shOut(container, dir, SPECS_SCRIPT).pipe(
-        Effect.map((s) => s.slice(0, MAX_SPECS_CHARS)),
-      ),
+      shOut(container, dir, SPECS_SCRIPT).pipe(Effect.map((s) => s.slice(0, MAX_SPECS_CHARS))),
     );
     if (specsText.trim().length === 0) {
       // No specs/ dir → nothing to drift from.
       return { opened: false, updated: false, clean: true } satisfies RepoOutcome;
     }
     const tree = yield* step(`gather-tree-${args.repo}`, () =>
-      shOut(container, dir, TREE_SCRIPT).pipe(
-        Effect.map((s) => s.slice(0, MAX_TREE_CHARS)),
-      ),
+      shOut(container, dir, TREE_SCRIPT).pipe(Effect.map((s) => s.slice(0, MAX_TREE_CHARS))),
     );
     const recentLog = yield* step(`gather-log-${args.repo}`, () =>
       shOut(container, dir, LOG_SCRIPT),
@@ -243,8 +231,7 @@ const scanRepo = (args: ScanArgs) =>
         jsonContract: DRIFT_JSON_CONTRACT,
         schema: DriftProposal,
         toolName: "propose_spec_edits",
-        toolDescription:
-          "Propose the spec-file edits that reconcile drift (possibly none).",
+        toolDescription: "Propose the spec-file edits that reconcile drift (possibly none).",
         surface: "spec-drift",
         maxTokens: PROPOSAL_MAX_TOKENS,
       }),
@@ -323,15 +310,15 @@ const renderUserBody = (ctx: {
 
 const MARKER = "<!-- flare-dispatch: spec-drift-pr -->";
 
-const renderPrBody = (
-  proposal: typeof DriftProposal.Type,
-): string =>
+const renderPrBody = (proposal: typeof DriftProposal.Type): string =>
   [
     "### Spec drift — proposed reconciliation",
     "",
     "> 🤖 Draft opened by `flare-dispatch/spec-drift-pr`. The implementation is the source of truth; these edits bring the specs back in line. Review before merging.",
     "",
-    proposal.summary.trim().length > 0 ? proposal.summary.trim() : "_See per-file rationale below._",
+    proposal.summary.trim().length > 0
+      ? proposal.summary.trim()
+      : "_See per-file rationale below._",
     "",
     "#### Edits",
     ...proposal.edits.map((e) => `- \`${e.path}\` — ${e.rationale}`),
@@ -340,11 +327,7 @@ const renderPrBody = (
   ].join("\n");
 
 /** The errors `scanRepo`'s `catchAll` knows how to describe precisely. */
-type CaughtError =
-  | BackendUnconfigured
-  | ModelCallFailed
-  | StructuredOutputInvalid
-  | GitHubApiError;
+type CaughtError = BackendUnconfigured | ModelCallFailed | StructuredOutputInvalid | GitHubApiError;
 
 /** Human-readable one-liner for any caught error (model / git / GitHub). */
 const describe = (err: unknown): string =>
@@ -353,18 +336,10 @@ const describe = (err: unknown): string =>
       "BackendUnconfigured",
       (e) => `backend "${e.backend}" misconfigured — set ${e.missing}`,
     ),
-    Match.tag(
-      "ModelCallFailed",
-      (e) => `model call failed (${e.reason}): ${e.message}`,
-    ),
-    Match.tag(
-      "StructuredOutputInvalid",
-      (e) => `unparseable model output (${e.reason})`,
-    ),
+    Match.tag("ModelCallFailed", (e) => `model call failed (${e.reason}): ${e.message}`),
+    Match.tag("StructuredOutputInvalid", (e) => `unparseable model output (${e.reason})`),
     Match.tag("GitHubApiError", (e) => `GitHub API ${e.status} (${e.reason})`),
     // Sandbox/git errors and anything else fall here — every tagged error
     // extends `Error`, so its `message` is a faithful one-liner.
-    Match.orElse(() =>
-      err instanceof Error ? err.message : JSON.stringify(err),
-    ),
+    Match.orElse(() => (err instanceof Error ? err.message : JSON.stringify(err))),
   );

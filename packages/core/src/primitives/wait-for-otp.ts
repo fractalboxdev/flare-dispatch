@@ -40,9 +40,8 @@ import { step } from "../step";
  * provider plus the read token the container-side path needs.
  */
 export const provisionInbox = (opts?: AllocateOpts) =>
-  step(
-    `provision-inbox${opts?.label !== undefined ? `-${opts.label}` : ""}`,
-    () => mailbox.allocate(opts),
+  step(`provision-inbox${opts?.label !== undefined ? `-${opts.label}` : ""}`, () =>
+    mailbox.allocate(opts),
   );
 
 /** What a verification email yielded: a numeric/alphanumeric OTP code, a magic

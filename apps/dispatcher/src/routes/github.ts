@@ -94,12 +94,7 @@ export const MANIFEST_TEMPLATE = {
     // already carry `write`; this literal had drifted to `read`.
     pull_requests: "write",
   },
-  default_events: [
-    "check_run",
-    "check_suite",
-    "deployment_status",
-    "pull_request",
-  ],
+  default_events: ["check_run", "check_suite", "deployment_status", "pull_request"],
 } as const;
 
 /** The placeholder origin every URL in the template starts with. */
@@ -121,10 +116,7 @@ const resolveManifest = (origin: string): Record<string, unknown> => {
     [k: string]: unknown;
   };
   m.url = m.url.replace(TEMPLATE_PLACEHOLDER, origin);
-  m.hook_attributes.url = m.hook_attributes.url.replace(
-    TEMPLATE_PLACEHOLDER,
-    origin,
-  );
+  m.hook_attributes.url = m.hook_attributes.url.replace(TEMPLATE_PLACEHOLDER, origin);
   m.redirect_url = m.redirect_url.replace(TEMPLATE_PLACEHOLDER, origin);
   return m;
 };
@@ -151,11 +143,7 @@ const htmlResponse = (body: string, status = 200): Response =>
   });
 
 /** A `application/json` error response — used for trivial 4xx paths. */
-const jsonError = (
-  error: string,
-  message: string,
-  status: number,
-): Response =>
+const jsonError = (error: string, message: string, status: number): Response =>
   new Response(JSON.stringify({ error, message }), {
     status,
     headers: { "content-type": "application/json" },
@@ -388,10 +376,7 @@ const renderInstallForm = (
   // boundary. Belt-and-braces — the regex validator already excludes any HTML
   // metacharacter.
   const actionUrl = htmlEscape(formActionForOwner(owner, state));
-  const ownerLabel =
-    owner === ""
-      ? "your personal account"
-      : `<code>${htmlEscape(owner)}</code>`;
+  const ownerLabel = owner === "" ? "your personal account" : `<code>${htmlEscape(owner)}</code>`;
   return brandPage({
     title: "FlareDispatch — Create GitHub App",
     marker: "§ GitHub App / 02 — redirect",
@@ -479,17 +464,14 @@ const ConversionResponse = Schema.Struct({
 type ConversionResponse = Schema.Schema.Type<typeof ConversionResponse>;
 
 /** A tagged error covering every way the conversion call can go wrong. */
-class ConversionFailed extends Schema.TaggedError<ConversionFailed>()(
-  "ConversionFailed",
-  {
-    /** Best-effort status; 0 when the fetch itself threw (network error). */
-    status: Schema.Number,
-    /** Whatever GitHub returned (already string-coerced). */
-    body: Schema.String,
-    /** Short tag describing the failure mode for the error page. */
-    reason: Schema.Literal("network", "non_2xx", "bad_shape"),
-  },
-) {}
+class ConversionFailed extends Schema.TaggedError<ConversionFailed>()("ConversionFailed", {
+  /** Best-effort status; 0 when the fetch itself threw (network error). */
+  status: Schema.Number,
+  /** Whatever GitHub returned (already string-coerced). */
+  body: Schema.String,
+  /** Short tag describing the failure mode for the error page. */
+  reason: Schema.Literal("network", "non_2xx", "bad_shape"),
+}) {}
 
 /** A `fetch` shape the route can be tested against without touching the network. */
 export type FetchLike = typeof fetch;
@@ -510,17 +492,14 @@ const exchangeCode = (
   Effect.gen(function* () {
     const res = yield* Effect.tryPromise({
       try: () =>
-        fetchImpl(
-          `https://api.github.com/app-manifests/${encodeURIComponent(code)}/conversions`,
-          {
-            method: "POST",
-            headers: {
-              Accept: "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "FlareDispatch-Dispatcher",
-            },
+        fetchImpl(`https://api.github.com/app-manifests/${encodeURIComponent(code)}/conversions`, {
+          method: "POST",
+          headers: {
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "FlareDispatch-Dispatcher",
           },
-        ),
+        }),
       catch: (cause) =>
         new ConversionFailed({
           status: 0,
@@ -646,8 +625,7 @@ const renderError = (e: ConversionFailed): string => {
     ),
     Match.when(
       "bad_shape",
-      () =>
-        "GitHub returned a 2xx but the response body did not match the expected shape.",
+      () => "GitHub returned a 2xx but the response body did not match the expected shape.",
     ),
     Match.exhaustive,
   );
@@ -692,9 +670,7 @@ export const handleInstalled = async (
 
   // Run as an `Either` so the typed failure surfaces as a value we can
   // pattern-match on — no `Cause` traversal, no defect handling.
-  const result = await Effect.runPromise(
-    Effect.either(exchangeCode(code, fetchImpl)),
-  );
+  const result = await Effect.runPromise(Effect.either(exchangeCode(code, fetchImpl)));
 
   return Either.match(result, {
     onLeft: (e) => htmlResponse(renderError(e), 502),

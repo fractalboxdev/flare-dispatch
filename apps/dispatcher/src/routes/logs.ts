@@ -86,10 +86,7 @@ export const recordToText = (rec: LogRecord): string | null => {
  * tests, and inlined verbatim into the viewer script via `.toString()` so the
  * classifier has exactly one definition.
  */
-export const isHousekeeping = (
-  command: string,
-  outputs: readonly string[],
-): boolean => {
+export const isHousekeeping = (command: string, outputs: readonly string[]): boolean => {
   const hasSignal = outputs.some((l) => {
     const t = l.trim();
     return t !== "" && !/^DONE:\d+$/.test(t);
@@ -108,10 +105,7 @@ export const isHousekeeping = (
  * A `TransformStream` that turns an NDJSON byte stream into plain-text bytes,
  * line-buffered so a chunk boundary mid-line is handled. Used for `?format=text`.
  */
-export const makeNdjsonTextTransform = (): TransformStream<
-  Uint8Array,
-  Uint8Array
-> => {
+export const makeNdjsonTextTransform = (): TransformStream<Uint8Array, Uint8Array> => {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
@@ -160,16 +154,11 @@ export const handleLogFile = (
 ): Effect.Effect<Response, never, CurrentEnv | ExecutionsRead> =>
   Effect.gen(function* () {
     const env = yield* CurrentEnv;
-    const denied = yield* Effect.promise(() =>
-      gateLogAccess(env, executionId, url),
-    );
+    const denied = yield* Effect.promise(() => gateLogAccess(env, executionId, url));
     if (denied !== null) return denied;
 
     if (!LOG_FILE_RE.test(file)) {
-      return json(
-        { error: "invalid_log_file", message: `not a log file name: "${file}"` },
-        400,
-      );
+      return json({ error: "invalid_log_file", message: `not a log file name: "${file}"` }, 400);
     }
 
     const reads = yield* ExecutionsRead;
@@ -182,9 +171,7 @@ export const handleLogFile = (
     const format = url.searchParams.get("format") ?? "ndjson";
 
     if (format === "text") {
-      const object = yield* Effect.promise(() =>
-        env.RUNS_STORAGE.get(logKey(executionId, file)),
-      );
+      const object = yield* Effect.promise(() => env.RUNS_STORAGE.get(logKey(executionId, file)));
       if (object === null) {
         return json({ error: "log_not_found", message: file }, 404);
       }
@@ -219,9 +206,7 @@ export const handleLogsAggregate = (
 ): Effect.Effect<Response, never, CurrentEnv | ExecutionsRead> =>
   Effect.gen(function* () {
     const env = yield* CurrentEnv;
-    const denied = yield* Effect.promise(() =>
-      gateLogAccess(env, executionId, url),
-    );
+    const denied = yield* Effect.promise(() => gateLogAccess(env, executionId, url));
     if (denied !== null) return denied;
 
     const listed = yield* Effect.promise(() =>
@@ -236,10 +221,7 @@ export const handleLogsAggregate = (
       .sort(compareLogFiles);
 
     if (files.length === 0) {
-      return json(
-        { error: "no_logs", message: `no logs for execution "${executionId}"` },
-        404,
-      );
+      return json({ error: "no_logs", message: `no logs for execution "${executionId}"` }, 404);
     }
 
     const reads = yield* ExecutionsRead;
@@ -259,9 +241,7 @@ export const handleLogsAggregate = (
           controller.enqueue(encoder.encode(`\n===== ${file} =====\n`));
           const object = await env.RUNS_STORAGE.get(logKey(executionId, file));
           if (object === null) continue;
-          const reader = object.body
-            .pipeThrough(makeNdjsonTextTransform())
-            .getReader();
+          const reader = object.body.pipeThrough(makeNdjsonTextTransform()).getReader();
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;

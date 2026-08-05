@@ -9,9 +9,7 @@ const isValidInstanceId = (id: string): boolean =>
 
 describe("toInstanceId", () => {
   it("passes a short, already-valid key through unchanged", () => {
-    expect(toInstanceId("pr-review_owner_repo_abcdef")).toBe(
-      "pr-review_owner_repo_abcdef",
-    );
+    expect(toInstanceId("pr-review_owner_repo_abcdef")).toBe("pr-review_owner_repo_abcdef");
   });
 
   it("replaces `:` and `/` (the webhook idempotency-key separators)", () => {

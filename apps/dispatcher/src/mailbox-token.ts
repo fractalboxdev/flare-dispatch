@@ -53,8 +53,7 @@ const token = makeCapabilityToken(HKDF_INFO);
  * MAC covers the deadline and a holder cannot extend the window without
  * invalidating the token. `expEpochS` is whole seconds since the Unix epoch.
  */
-const message = (localPart: string, expEpochS: number): string =>
-  `${localPart}|${expEpochS}`;
+const message = (localPart: string, expEpochS: number): string => `${localPart}|${expEpochS}`;
 
 /**
  * Mint an expiring mailbox-read token for `localPart`, valid until `expEpochS`

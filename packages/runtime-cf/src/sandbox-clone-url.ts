@@ -20,8 +20,5 @@ export const repoUrl = (repo: string): string =>
  */
 export const authenticateCloneUrl = (url: string, token: string): string =>
   url.startsWith("https://github.com/")
-    ? url.replace(
-        "https://github.com/",
-        `https://x-access-token:${token}@github.com/`,
-      )
+    ? url.replace("https://github.com/", `https://x-access-token:${token}@github.com/`)
     : url;

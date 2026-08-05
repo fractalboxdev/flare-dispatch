@@ -6,11 +6,7 @@
 
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import {
-  Github,
-  type PullRequestRef,
-  type RepoRef,
-} from "../services/github";
+import { Github, type PullRequestRef, type RepoRef } from "../services/github";
 import { makeGithubFake } from "./github-fake";
 
 const NOW = 1_700_000_000_000;
@@ -50,9 +46,7 @@ describe("makeGithubFake — repositories()", () => {
       ],
     });
     const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.repositories()).pipe(
-        Effect.provide(layer),
-      ),
+      Effect.flatMap(Github, (g) => g.repositories()).pipe(Effect.provide(layer)),
     );
     expect(result.map((r) => r.repo)).toEqual(["owner/active"]);
     expect(state.repositoriesCalls).toHaveLength(1);
@@ -71,14 +65,11 @@ describe("makeGithubFake — repositories()", () => {
       ],
     });
     const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) =>
-        g.repositories({ includeArchived: true }),
-      ).pipe(Effect.provide(layer)),
+      Effect.flatMap(Github, (g) => g.repositories({ includeArchived: true })).pipe(
+        Effect.provide(layer),
+      ),
     );
-    expect(result.map((r) => r.repo).sort()).toEqual([
-      "owner/active",
-      "owner/archived",
-    ]);
+    expect(result.map((r) => r.repo).sort()).toEqual(["owner/active", "owner/archived"]);
   });
 
   it("pushedWithinDays cutoff filters idle repos", async () => {
@@ -90,9 +81,9 @@ describe("makeGithubFake — repositories()", () => {
       ],
     });
     const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) =>
-        g.repositories({ pushedWithinDays: 7 }),
-      ).pipe(Effect.provide(layer)),
+      Effect.flatMap(Github, (g) => g.repositories({ pushedWithinDays: 7 })).pipe(
+        Effect.provide(layer),
+      ),
     );
     expect(result.map((r) => r.repo)).toEqual(["owner/fresh"]);
   });
@@ -102,15 +93,10 @@ describe("makeGithubFake — openPullRequests()", () => {
   it("skips drafts by default", async () => {
     const { layer, state } = makeGithubFake({
       now: NOW,
-      pullRequests: [
-        pr({ number: 1, draft: false }),
-        pr({ number: 2, draft: true }),
-      ],
+      pullRequests: [pr({ number: 1, draft: false }), pr({ number: 2, draft: true })],
     });
     const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.openPullRequests()).pipe(
-        Effect.provide(layer),
-      ),
+      Effect.flatMap(Github, (g) => g.openPullRequests()).pipe(Effect.provide(layer)),
     );
     expect(result.map((p) => p.number)).toEqual([1]);
     expect(state.openPullRequestsCalls[0]).toEqual({
@@ -126,9 +112,9 @@ describe("makeGithubFake — openPullRequests()", () => {
       pullRequests: [pr({ number: 1, draft: true })],
     });
     const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) =>
-        g.openPullRequests({ includeDrafts: true }),
-      ).pipe(Effect.provide(layer)),
+      Effect.flatMap(Github, (g) => g.openPullRequests({ includeDrafts: true })).pipe(
+        Effect.provide(layer),
+      ),
     );
     expect(result.map((p) => p.number)).toEqual([1]);
   });
@@ -143,14 +129,11 @@ describe("makeGithubFake — openPullRequests()", () => {
       ],
     });
     const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) =>
-        g.openPullRequests({ repos: ["owner/a", "owner/c"] }),
-      ).pipe(Effect.provide(layer)),
+      Effect.flatMap(Github, (g) => g.openPullRequests({ repos: ["owner/a", "owner/c"] })).pipe(
+        Effect.provide(layer),
+      ),
     );
-    expect(result.map((p) => `${p.repo}#${p.number}`).sort()).toEqual([
-      "owner/a#1",
-      "owner/c#3",
-    ]);
+    expect(result.map((p) => `${p.repo}#${p.number}`).sort()).toEqual(["owner/a#1", "owner/c#3"]);
   });
 
   it("updatedWithinHours cutoff filters stale PRs", async () => {
@@ -162,9 +145,9 @@ describe("makeGithubFake — openPullRequests()", () => {
       ],
     });
     const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) =>
-        g.openPullRequests({ updatedWithinHours: 24 }),
-      ).pipe(Effect.provide(layer)),
+      Effect.flatMap(Github, (g) => g.openPullRequests({ updatedWithinHours: 24 })).pipe(
+        Effect.provide(layer),
+      ),
     );
     expect(result.map((p) => p.number)).toEqual([1]);
   });

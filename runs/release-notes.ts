@@ -70,10 +70,7 @@ const isoYearWeek = (ms: number): string => {
   const week =
     1 +
     Math.round(
-      ((thu.getTime() - week1.getTime()) / 86_400_000 -
-        3 +
-        ((week1.getUTCDay() + 6) % 7)) /
-        7,
+      ((thu.getTime() - week1.getTime()) / 86_400_000 - 3 + ((week1.getUTCDay() + 6) % 7)) / 7,
     );
   return `${thu.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 };
@@ -137,8 +134,7 @@ export const parseGitState = (stdout: string): GitState => {
   const commits: RawCommit[] = [];
   for (const line of stdout.split("\n")) {
     if (line.startsWith("HEAD ")) headSha = line.slice("HEAD ".length).trim();
-    else if (line.startsWith("LASTTAG"))
-      lastTag = line.slice("LASTTAG".length).trim();
+    else if (line.startsWith("LASTTAG")) lastTag = line.slice("LASTTAG".length).trim();
     else if (line.startsWith(`COMMIT${US}`)) {
       const [, sha, subject, author] = line.split(US);
       if (sha !== undefined && subject !== undefined)
@@ -196,14 +192,9 @@ const SEMVER = /^v?(\d+)\.(\d+)\.(\d+)$/;
  * tag (or an unparseable one) starts from `v0.0.0`, so the first release with a
  * `feat` becomes `v0.1.0`.
  */
-export const nextVersion = (
-  lastTag: string,
-  commits: readonly ConvCommit[],
-): string => {
+export const nextVersion = (lastTag: string, commits: readonly ConvCommit[]): string => {
   const m = SEMVER.exec(lastTag);
-  const [major, minor, patch] = m
-    ? [Number(m[1]), Number(m[2]), Number(m[3])]
-    : [0, 0, 0];
+  const [major, minor, patch] = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 0];
   switch (bumpFor(commits)) {
     case "major":
       return `v${major + 1}.0.0`;
@@ -271,9 +262,7 @@ export const renderReleaseNotes = (args: {
   }
 
   for (const section of SECTIONS) {
-    const rows = parsed.filter(
-      (p) => !p.conv.breaking && section.types.includes(p.conv.type),
-    );
+    const rows = parsed.filter((p) => !p.conv.breaking && section.types.includes(p.conv.type));
     if (rows.length === 0) continue;
     out.push(section.heading);
     for (const p of rows) out.push(line(repo, p.conv, p.sha));
@@ -282,10 +271,7 @@ export const renderReleaseNotes = (args: {
 
   const contributors = [...new Set(raw.map((c) => c.author).filter(Boolean))];
   if (contributors.length > 0) {
-    out.push(
-      `**Contributors:** ${contributors.map((a) => `@${a}`).join(", ")}`,
-      "",
-    );
+    out.push(`**Contributors:** ${contributors.map((a) => `@${a}`).join(", ")}`, "");
   }
 
   return out.join("\n").trimEnd() + "\n";
@@ -452,9 +438,7 @@ export const releaseNotes = defineRun({
             );
             return {
               published: release.published,
-              reason: release.published
-                ? ("published" as const)
-                : ("not-configured" as const),
+              reason: release.published ? ("published" as const) : ("not-configured" as const),
               tag,
               prNumber: pr.number,
               prUrl: pr.url,

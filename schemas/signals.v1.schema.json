@@ -10,11 +10,7 @@
   "items": {
     "type": "object",
     "additionalProperties": false,
-    "required": [
-      "source",
-      "title",
-      "detail"
-    ],
+    "required": ["source", "title", "detail"],
     "properties": {
       "source": {
         "type": "string",

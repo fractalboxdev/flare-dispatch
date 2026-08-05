@@ -64,7 +64,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # only if you pull CF creds via OIDC / Pulumi ESC
+  id-token: write # only if you pull CF creds via OIDC / Pulumi ESC
 
 jobs:
   deploy:
@@ -93,16 +93,16 @@ Pin the action itself by SHA (not `@main`) — same reason as the upstream pin.
 The action does NOT touch Worker secrets. Set them once via `wrangler secret put`
 (or rotate via your secret-rotation workflow):
 
-| Secret | Purpose |
-|---|---|
-| `HMAC_SECRET` | Action-mode dispatch HMAC (matches `secrets.FLAREDISPATCH_HMAC` in consumer repos) |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | App auth — check-run callback + manifest install flow |
-| `GITHUB_WEBHOOK_SECRET` | `POST /v1/webhooks/github` HMAC verify |
-| `ADMIN_TOKEN` | `POST /v1/admin/events/:wf_id` bearer |
-| `LOG_LINK_SECRET` | Signs the tokened log-viewer URLs (falls back to `HMAC_SECRET` when unset) |
-| `OIDC_SIGNING_JWK`, `OIDC_ISSUER_URL` | OIDC issuer (AWS STS federation, bedrock backend) |
-| `BROWSER_CDP_CONNECT_URL`, `BROWSER_CDP_API_TOKEN` | Browser Rendering connect (`cdp-acceptance` only) |
-| `AI_GATEWAY_AUTH_TOKEN` | Forwarded as `cf-aig-authorization: Bearer` on the bedrock route — required only when the AI Gateway has Authenticated Gateway turned on |
+| Secret                                             | Purpose                                                                                                                                  |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `HMAC_SECRET`                                      | Action-mode dispatch HMAC (matches `secrets.FLAREDISPATCH_HMAC` in consumer repos)                                                       |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`          | App auth — check-run callback + manifest install flow                                                                                    |
+| `GITHUB_WEBHOOK_SECRET`                            | `POST /v1/webhooks/github` HMAC verify                                                                                                   |
+| `ADMIN_TOKEN`                                      | `POST /v1/admin/events/:wf_id` bearer                                                                                                    |
+| `LOG_LINK_SECRET`                                  | Signs the tokened log-viewer URLs (falls back to `HMAC_SECRET` when unset)                                                               |
+| `OIDC_SIGNING_JWK`, `OIDC_ISSUER_URL`              | OIDC issuer (AWS STS federation, bedrock backend)                                                                                        |
+| `BROWSER_CDP_CONNECT_URL`, `BROWSER_CDP_API_TOKEN` | Browser Rendering connect (`cdp-acceptance` only)                                                                                        |
+| `AI_GATEWAY_AUTH_TOKEN`                            | Forwarded as `cf-aig-authorization: Bearer` on the bedrock route — required only when the AI Gateway has Authenticated Gateway turned on |
 
 ---
 
@@ -110,21 +110,21 @@ The action does NOT touch Worker secrets. Set them once via `wrangler secret put
 
 See [`action.yml`](./action.yml). The required ones:
 
-| Input | What |
-|---|---|
-| `upstream-ref` | A commit SHA on upstream main. Almost always `$(cat infra/flare-dispatch/UPSTREAM_SHA)`. |
-| `wrangler-config` | Path to your overlay (relative to the consumer repo root). |
-| `cloudflare-api-token` | CF API token with the scopes `wrangler deploy` needs. |
-| `cloudflare-account-id` | 32-hex account id. |
+| Input                   | What                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------- |
+| `upstream-ref`          | A commit SHA on upstream main. Almost always `$(cat infra/flare-dispatch/UPSTREAM_SHA)`. |
+| `wrangler-config`       | Path to your overlay (relative to the consumer repo root).                               |
+| `cloudflare-api-token`  | CF API token with the scopes `wrangler deploy` needs.                                    |
+| `cloudflare-account-id` | 32-hex account id.                                                                       |
 
 ---
 
 ## Outputs
 
-| Output | What |
-|---|---|
+| Output         | What                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
 | `upstream-sha` | The SHA the upstream was checked out at (echo it into your step summary if `upstream-ref` was a branch). |
-| `worker-url` | The URL from `health-check-url` after a successful 200 (empty when the check was skipped). |
+| `worker-url`   | The URL from `health-check-url` after a successful 200 (empty when the check was skipped).               |
 
 ---
 

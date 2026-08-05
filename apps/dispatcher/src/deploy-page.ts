@@ -127,9 +127,7 @@ export const renderDeployPage = (data: DeployPageData): string => {
   const option = (value: string, label: string): string =>
     `<option value="${esc(value)}">${esc(label)}</option>`;
 
-  const repoSelect = `<select name="repo">${data.repos
-    .map((r) => option(r, r))
-    .join("")}</select>`;
+  const repoSelect = `<select name="repo">${data.repos.map((r) => option(r, r)).join("")}</select>`;
   const refSelect = `<select name="ref">${data.refs
     .map((r) => option(r.value, r.label))
     .join("")}</select>`;

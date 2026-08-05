@@ -15,9 +15,7 @@ const secretsLayer = (store: Record<string, string>): Layer.Layer<Secrets> =>
   Layer.succeed(Secrets, {
     get: (name) => {
       const value = store[name];
-      return Effect.succeed(
-        value !== undefined && value !== "" ? value : undefined,
-      );
+      return Effect.succeed(value !== undefined && value !== "" ? value : undefined);
     },
   } satisfies SecretsService);
 
@@ -29,9 +27,7 @@ const runLoad = async (
 ) => {
   const io = makeIOFake();
   const env = await Effect.runPromise(
-    loadSecrets(keys, opts).pipe(
-      Effect.provide(Layer.merge(secretsLayer(store), io.layer)),
-    ),
+    loadSecrets(keys, opts).pipe(Effect.provide(Layer.merge(secretsLayer(store), io.layer))),
   );
   return { env, logs: io.state.logs };
 };
@@ -92,18 +88,14 @@ describe("loadSecrets", () => {
       ? Option.getOrUndefined(Cause.failureOption(exit.cause))
       : undefined;
     expect((err as { _tag?: string } | undefined)?._tag).toBe("SecretsMissing");
-    expect((err as { keys?: readonly string[] } | undefined)?.keys).toEqual([
-      "ABSENT",
-    ]);
+    expect((err as { keys?: readonly string[] } | undefined)?.keys).toEqual(["ABSENT"]);
   });
 
   it("required: true succeeds when every key is present", async () => {
     const io = makeIOFake();
     const env = await Effect.runPromise(
       loadSecrets(["A", "B"], { required: true }).pipe(
-        Effect.provide(
-          Layer.merge(secretsLayer({ A: "1", B: "2" }), io.layer),
-        ),
+        Effect.provide(Layer.merge(secretsLayer({ A: "1", B: "2" }), io.layer)),
       ),
     );
     expect(env).toEqual({ A: "1", B: "2" });

@@ -77,10 +77,7 @@ export const handleMailboxRead = async (
   const nowS = Math.floor(Date.now() / 1000);
   const ok = await verifyMailboxToken(secret, localPart, expEpochS, presented, nowS);
   if (!ok) {
-    return json(
-      { error: "forbidden", message: "mailbox token missing, invalid, or expired" },
-      403,
-    );
+    return json({ error: "forbidden", message: "mailbox token missing, invalid, or expired" }, 403);
   }
 
   const db = env.RUNS_METADATA;

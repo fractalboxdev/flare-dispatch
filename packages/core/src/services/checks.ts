@@ -12,12 +12,7 @@
 import { Context, Effect } from "effect";
 
 /** A check-run conclusion — the terminal verdict GitHub renders. */
-export type CheckConclusion =
-  | "success"
-  | "failure"
-  | "neutral"
-  | "cancelled"
-  | "timed_out";
+export type CheckConclusion = "success" | "failure" | "neutral" | "cancelled" | "timed_out";
 
 /** The output block GitHub renders under the check-run. */
 export type CheckOutput = {

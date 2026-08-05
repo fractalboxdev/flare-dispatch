@@ -46,9 +46,7 @@ describe("makeCloudflareFake", () => {
       ],
     });
     const got = await Effect.runPromise(
-      cloudflare
-        .deployments({ createdWithinHours: 24 })
-        .pipe(Effect.provide(layer)),
+      cloudflare.deployments({ createdWithinHours: 24 }).pipe(Effect.provide(layer)),
     );
     expect(got.map((d) => d.id)).toEqual(["fresh"]);
   });

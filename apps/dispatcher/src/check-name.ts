@@ -53,9 +53,7 @@ const CHECK_LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 export const readCheckLabel = (inputs: unknown): string | undefined => {
   if (typeof inputs !== "object" || inputs === null) return undefined;
   const label = (inputs as { readonly checkLabel?: unknown }).checkLabel;
-  return typeof label === "string" && CHECK_LABEL_PATTERN.test(label)
-    ? label
-    : undefined;
+  return typeof label === "string" && CHECK_LABEL_PATTERN.test(label) ? label : undefined;
 };
 
 /**
@@ -68,7 +66,5 @@ export const readCheckLabel = (inputs: unknown): string | undefined => {
  */
 export const checkRunNameFor = (run: string, inputs: unknown): string => {
   const label = readCheckLabel(inputs);
-  return label === undefined
-    ? `flare-dispatch/${run}`
-    : `flare-dispatch/${run}:${label}`;
+  return label === undefined ? `flare-dispatch/${run}` : `flare-dispatch/${run}:${label}`;
 };

@@ -63,6 +63,7 @@ export interface StepRunnerService {
 }
 
 /** Context.Tag — the step-execution strategy a run carries until a Layer binds it. */
-export class StepRunner extends Context.Tag(
-  "@fractalboxdev/flare-dispatch-core/StepRunner",
-)<StepRunner, StepRunnerService>() {}
+export class StepRunner extends Context.Tag("@fractalboxdev/flare-dispatch-core/StepRunner")<
+  StepRunner,
+  StepRunnerService
+>() {}

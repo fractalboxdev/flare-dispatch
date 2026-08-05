@@ -9,12 +9,7 @@ import { describe, expect, it } from "vitest";
 import { handleRequest } from "../router";
 import { signLogToken } from "../log-token";
 import { isHousekeeping, makeNdjsonTextTransform, recordToText } from "./logs";
-import {
-  makeFakeD1,
-  makeFakeEnv,
-  makeFakeR2,
-  makeFakeWorkflow,
-} from "../test-helpers";
+import { makeFakeD1, makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 
 const SECRET = "log-secret-please-rotate";
 const ORIGIN = "https://dispatcher.example";
@@ -87,8 +82,11 @@ const fixture = (opts: { adminToken?: string } = {}) => {
   return { env };
 };
 
-const get = (env: ReturnType<typeof fixture>["env"], path: string, headers?: Record<string, string>) =>
-  handleRequest(new Request(`${ORIGIN}${path}`, { headers }), env);
+const get = (
+  env: ReturnType<typeof fixture>["env"],
+  path: string,
+  headers?: Record<string, string>,
+) => handleRequest(new Request(`${ORIGIN}${path}`, { headers }), env);
 
 describe("NDJSON → text", () => {
   it("maps records to lines", () => {
@@ -110,9 +108,7 @@ describe("NDJSON → text", () => {
         c.close();
       },
     });
-    const out = await new Response(
-      stream.pipeThrough(makeNdjsonTextTransform()),
-    ).text();
+    const out = await new Response(stream.pipeThrough(makeNdjsonTextTransform())).text();
     expect(out).toBe("$ echo\none\ntwo\n[stderr] err\n");
   });
 });
@@ -128,15 +124,33 @@ describe("isHousekeeping — section noise classifier", () => {
   });
 
   it("treats pure setup/teardown commands as housekeeping", () => {
-    expect(isHousekeeping("pkill -9 -f 'demo-agent (play|record)' 2>/dev/null; mkdir -p /tmp/demo/screenshots; true", [])).toBe(true);
-    expect(isHousekeeping("mkdir -p /tmp/demo/screenshots; demo-agent --help >/dev/null 2>&1 || true", [])).toBe(true);
+    expect(
+      isHousekeeping(
+        "pkill -9 -f 'demo-agent (play|record)' 2>/dev/null; mkdir -p /tmp/demo/screenshots; true",
+        [],
+      ),
+    ).toBe(true);
+    expect(
+      isHousekeeping(
+        "mkdir -p /tmp/demo/screenshots; demo-agent --help >/dev/null 2>&1 || true",
+        [],
+      ),
+    ).toBe(true);
   });
 
   it("keeps any section that produced real output", () => {
     // The chapter narrative — the whole point of the run.
-    expect(isHousekeeping("cat /tmp/demo/play-0.out 2>/dev/null || true", ['{"status":"failed","narrative":"…"}'])).toBe(false);
+    expect(
+      isHousekeeping("cat /tmp/demo/play-0.out 2>/dev/null || true", [
+        '{"status":"failed","narrative":"…"}',
+      ]),
+    ).toBe(false);
     // A gif/write command that reports a result.
-    expect(isHousekeeping("demo-agent gif --out /tmp/demo/demo.gif", ['{"gifPath":"/tmp/demo/demo.gif","bytes":85029}'])).toBe(false);
+    expect(
+      isHousekeeping("demo-agent gif --out /tmp/demo/demo.gif", [
+        '{"gifPath":"/tmp/demo/demo.gif","bytes":85029}',
+      ]),
+    ).toBe(false);
     // A real test command with normal output is never housekeeping.
     expect(isHousekeeping("pnpm test", ["building…", "ok"])).toBe(false);
   });
@@ -144,7 +158,12 @@ describe("isHousekeeping — section noise classifier", () => {
   it("does not over-match: a non-probe command with no output is kept", () => {
     // e.g. `demo-agent write-prior --data '<summary table>'` produces no stdout
     // but is the only place the summary text appears — keep it.
-    expect(isHousekeeping("demo-agent write-prior --out /tmp/demo/summary.md --data '# product-demo'", [])).toBe(false);
+    expect(
+      isHousekeeping(
+        "demo-agent write-prior --out /tmp/demo/summary.md --data '# product-demo'",
+        [],
+      ),
+    ).toBe(false);
   });
 });
 
@@ -173,7 +192,10 @@ describe("log routes — token gate", () => {
   it("serves the raw NDJSON with a valid token + nosniff", async () => {
     const { env } = fixture();
     const t = await signLogToken(SECRET, EXEC);
-    const res = await get(env, `/v1/executions/${encodeURIComponent(EXEC)}/logs/exec.ndjson?t=${t}`);
+    const res = await get(
+      env,
+      `/v1/executions/${encodeURIComponent(EXEC)}/logs/exec.ndjson?t=${t}`,
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/x-ndjson");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
@@ -194,14 +216,20 @@ describe("log routes — token gate", () => {
   it("404s a non-existent but well-formed log file", async () => {
     const { env } = fixture();
     const t = await signLogToken(SECRET, EXEC);
-    const res = await get(env, `/v1/executions/${encodeURIComponent(EXEC)}/logs/exec-9.ndjson?t=${t}`);
+    const res = await get(
+      env,
+      `/v1/executions/${encodeURIComponent(EXEC)}/logs/exec-9.ndjson?t=${t}`,
+    );
     expect(res.status).toBe(404);
   });
 
   it("rejects a log file name that is not an exec log", async () => {
     const { env } = fixture();
     const t = await signLogToken(SECRET, EXEC);
-    const res = await get(env, `/v1/executions/${encodeURIComponent(EXEC)}/logs/secrets.env?t=${t}`);
+    const res = await get(
+      env,
+      `/v1/executions/${encodeURIComponent(EXEC)}/logs/secrets.env?t=${t}`,
+    );
     expect(res.status).toBe(400);
   });
 
@@ -225,9 +253,7 @@ describe("GET /v1/executions/:id", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(JSON.stringify(body)).not.toContain("should-not-leak");
     expect((body.steps as unknown[]).length).toBe(1);
-    expect((body.logs as { file: string }[]).map((l) => l.file)).toContain(
-      "exec.ndjson",
-    );
+    expect((body.logs as { file: string }[]).map((l) => l.file)).toContain("exec.ndjson");
     expect(body.summary).toEqual({ ok: true });
     const arts = body.artifacts as { name: string; url: string; size: number }[];
     expect(arts.map((a) => a.name)).toContain("pr-review.diff");
@@ -337,7 +363,10 @@ describe("router viewer-Access gate (default-secure)", () => {
     ["/replay", async () => `/replay/${"a".repeat(16)}`],
     ["/v1/executions", async () => `/v1/executions`],
     ["/v1/executions/:id", async () => `/v1/executions/${encodeURIComponent(EXEC)}?t=${await t()}`],
-    ["/v1/executions/:id/logs", async () => `/v1/executions/${encodeURIComponent(EXEC)}/logs?t=${await t()}`],
+    [
+      "/v1/executions/:id/logs",
+      async () => `/v1/executions/${encodeURIComponent(EXEC)}/logs?t=${await t()}`,
+    ],
   ])("503 access_not_configured on the viewer surface %s", async (_label, path) => {
     const res = await get(requiredEnv(), await path());
     expect(res.status).toBe(503);
@@ -347,7 +376,10 @@ describe("router viewer-Access gate (default-secure)", () => {
   it("does NOT gate /v1/artifacts (curated media, embedded in GitHub check-runs)", async () => {
     // Even in required mode the artifact surface is reachable — it streams the
     // stored object directly, never the Access 503.
-    const res = await get(requiredEnv(), `/v1/artifacts/${encodeURIComponent(EXEC)}/pr-review.diff`);
+    const res = await get(
+      requiredEnv(),
+      `/v1/artifacts/${encodeURIComponent(EXEC)}/pr-review.diff`,
+    );
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("diff --git");
   });

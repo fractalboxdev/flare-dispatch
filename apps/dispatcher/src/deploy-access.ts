@@ -169,7 +169,7 @@ export const normalizeIdentity = (raw: RawIdentity): DeployIdentity => {
       : idpValue !== null &&
           typeof idpValue === "object" &&
           typeof (idpValue as { type?: unknown }).type === "string"
-        ? ((idpValue as { type: string }).type)
+        ? (idpValue as { type: string }).type
         : "";
   const groups: string[] = [];
   for (const g of raw.groups ?? []) {
@@ -231,10 +231,7 @@ export type DeployGateResult =
  * unconfigured (503), browser-navigation bounce to SSO login vs. 403 JSON for
  * programmatic callers, and a one-shot JWKS revalidation on a rotated-key miss.
  */
-export const gateDeploy = async (
-  env: Env,
-  request: Request,
-): Promise<DeployGateResult> => {
+export const gateDeploy = async (env: Env, request: Request): Promise<DeployGateResult> => {
   const aud = env.DEPLOY_ACCESS_AUD;
   const teamDomain = env.ACCESS_TEAM_DOMAIN;
   if (aud === undefined || aud === "" || teamDomain === undefined || teamDomain === "") {

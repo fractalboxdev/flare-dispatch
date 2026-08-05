@@ -17,22 +17,10 @@ import { __clearTokenCache } from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect, Exit } from "effect";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { checks } from "@fractalboxdev/flare-dispatch-core";
 import { TEST_APP_PRIVATE_KEY } from "@fractalboxdev/flare-dispatch-github-app/testing";
-import {
-  type ChecksGithubConfig,
-  makeChecksGithubLive,
-  NOOP_CHECK_RUN_ID,
-} from "./checks-github";
+import { type ChecksGithubConfig, makeChecksGithubLive, NOOP_CHECK_RUN_ID } from "./checks-github";
 
 /** Records the GitHub API calls MSW intercepted, for per-test assertions. */
 type Recorded = {
@@ -45,24 +33,18 @@ let recorded: Recorded;
 const GH_CHECK_RUN_ID = 909_001;
 
 const server = setupServer(
-  http.post(
-    "https://api.github.com/app/installations/:id/access_tokens",
-    () => {
-      recorded.tokenExchanges += 1;
-      return HttpResponse.json({
-        token: "ghs_install_token",
-        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-      });
-    },
-  ),
-  http.post(
-    "https://api.github.com/repos/:owner/:repo/check-runs",
-    async ({ request }) => {
-      const body = (await request.json()) as Record<string, unknown>;
-      recorded.posts.push({ status: body.status });
-      return HttpResponse.json({ id: GH_CHECK_RUN_ID }, { status: 201 });
-    },
-  ),
+  http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
+    recorded.tokenExchanges += 1;
+    return HttpResponse.json({
+      token: "ghs_install_token",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+  }),
+  http.post("https://api.github.com/repos/:owner/:repo/check-runs", async ({ request }) => {
+    const body = (await request.json()) as Record<string, unknown>;
+    recorded.posts.push({ status: body.status });
+    return HttpResponse.json({ id: GH_CHECK_RUN_ID }, { status: 201 });
+  }),
   http.patch(
     "https://api.github.com/repos/:owner/:repo/check-runs/:id",
     async ({ request, params }) => {
@@ -164,15 +146,12 @@ describe("ChecksGithubLive — live GitHub App binding", () => {
   it("retries a transient 5xx on create, then succeeds on the next attempt", async () => {
     let attempts = 0;
     server.use(
-      http.post(
-        "https://api.github.com/repos/:owner/:repo/check-runs",
-        () => {
-          attempts += 1;
-          return attempts === 1
-            ? HttpResponse.json({ message: "upstream" }, { status: 502 })
-            : HttpResponse.json({ id: GH_CHECK_RUN_ID }, { status: 201 });
-        },
-      ),
+      http.post("https://api.github.com/repos/:owner/:repo/check-runs", () => {
+        attempts += 1;
+        return attempts === 1
+          ? HttpResponse.json({ message: "upstream" }, { status: 502 })
+          : HttpResponse.json({ id: GH_CHECK_RUN_ID }, { status: 201 });
+      }),
     );
 
     const checkRunId = await Effect.runPromise(createOnly(makeChecksGithubLive(CONFIG)));
@@ -184,9 +163,8 @@ describe("ChecksGithubLive — live GitHub App binding", () => {
 
   it("degrades a PERSISTENT 5xx to the no-op sentinel — a transient outage never kills a green run", async () => {
     server.use(
-      http.post(
-        "https://api.github.com/repos/:owner/:repo/check-runs",
-        () => HttpResponse.json({ message: "down" }, { status: 503 }),
+      http.post("https://api.github.com/repos/:owner/:repo/check-runs", () =>
+        HttpResponse.json({ message: "down" }, { status: 503 }),
       ),
     );
 
@@ -198,9 +176,8 @@ describe("ChecksGithubLive — live GitHub App binding", () => {
 
   it("a non-retryable client error (404) still fails loudly (orDie), not silently degraded", async () => {
     server.use(
-      http.post(
-        "https://api.github.com/repos/:owner/:repo/check-runs",
-        () => HttpResponse.json({ message: "not found" }, { status: 404 }),
+      http.post("https://api.github.com/repos/:owner/:repo/check-runs", () =>
+        HttpResponse.json({ message: "not found" }, { status: 404 }),
       ),
     );
 

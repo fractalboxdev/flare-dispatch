@@ -26,10 +26,8 @@ import { AcceptanceFailed, defineRun, io, sandbox, step } from "@fractalboxdev/f
 import { provisionInbox, waitForOtp } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Substitute `{{email}}` / `{{code}}` placeholders in a JSON body template. */
-export const fillTemplate = (
-  template: string,
-  vars: Readonly<Record<string, string>>,
-): string => template.replace(/\{\{(\w+)\}\}/g, (_, k: string) => vars[k] ?? "");
+export const fillTemplate = (template: string, vars: Readonly<Record<string, string>>): string =>
+  template.replace(/\{\{(\w+)\}\}/g, (_, k: string) => vars[k] ?? "");
 
 const Provider = Schema.Literal("generic", "auth0", "clerk", "stytch", "supabase");
 
@@ -110,9 +108,12 @@ export const emailOtpLogin = defineRun({
       // 1. Begin the OTP flow — POST the disposable address.
       const start = yield* step("otp-start", () =>
         curl([
-          "-X", "POST",
-          "-H", "content-type: application/json",
-          "-d", fillTemplate(input.startBody, { email: inbox.address }),
+          "-X",
+          "POST",
+          "-H",
+          "content-type: application/json",
+          "-d",
+          fillTemplate(input.startBody, { email: inbox.address }),
           `${base}${input.startPath}`,
         ]),
       );
@@ -131,9 +132,7 @@ export const emailOtpLogin = defineRun({
       const otp = yield* waitForOtp({
         inbox,
         timeout: `${input.waitSeconds} seconds`,
-        ...(input.codePattern !== undefined
-          ? { codePattern: new RegExp(input.codePattern) }
-          : {}),
+        ...(input.codePattern !== undefined ? { codePattern: new RegExp(input.codePattern) } : {}),
         ...(input.linkHost !== undefined ? { linkHost: input.linkHost } : {}),
       });
 
@@ -141,9 +140,12 @@ export const emailOtpLogin = defineRun({
       if (otp.code !== undefined) {
         const verify = yield* step("otp-verify", () =>
           curl([
-            "-X", "POST",
-            "-H", "content-type: application/json",
-            "-d", fillTemplate(input.verifyBody, { email: inbox.address, code: otp.code! }),
+            "-X",
+            "POST",
+            "-H",
+            "content-type: application/json",
+            "-d",
+            fillTemplate(input.verifyBody, { email: inbox.address, code: otp.code! }),
             `${base}${input.verifyPath}`,
           ]),
         );

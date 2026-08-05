@@ -22,28 +22,25 @@ let posts: Captured[] = [];
 let status = 201;
 
 const server = setupServer(
-  http.post(
-    "https://api.github.com/repos/:owner/:repo/releases",
-    async ({ request, params }) => {
-      posts.push({
-        authorization: request.headers.get("authorization"),
-        owner: String(params.owner),
-        repo: String(params.repo),
-        body: (await request.json()) as Record<string, unknown>,
-      });
-      if (status >= 400) {
-        return HttpResponse.json({ message: "nope" }, { status });
-      }
-      return HttpResponse.json(
-        {
-          id: 555_001,
-          html_url: "https://github.com/owner/name/releases/tag/v0.1.0",
-          tag_name: "v0.1.0",
-        },
-        { status },
-      );
-    },
-  ),
+  http.post("https://api.github.com/repos/:owner/:repo/releases", async ({ request, params }) => {
+    posts.push({
+      authorization: request.headers.get("authorization"),
+      owner: String(params.owner),
+      repo: String(params.repo),
+      body: (await request.json()) as Record<string, unknown>,
+    });
+    if (status >= 400) {
+      return HttpResponse.json({ message: "nope" }, { status });
+    }
+    return HttpResponse.json(
+      {
+        id: 555_001,
+        html_url: "https://github.com/owner/name/releases/tag/v0.1.0",
+        tag_name: "v0.1.0",
+      },
+      { status },
+    );
+  }),
 );
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));

@@ -18,16 +18,28 @@ describe("normalizeUsage", () => {
         accounts: [
           {
             workersInvocationsAdaptive: [
-              { sum: { requests: 1828, errors: 46 }, dimensions: { scriptName: "flare-dispatch-v0" } },
+              {
+                sum: { requests: 1828, errors: 46 },
+                dimensions: { scriptName: "flare-dispatch-v0" },
+              },
               { sum: { requests: 12, errors: 0 }, dimensions: { scriptName: "otp-demo" } },
               // No scriptName → dropped.
               { sum: { requests: 5, errors: 0 }, dimensions: {} },
             ],
             aiGatewayRequestsAdaptiveGroups: [
               // Same model split across cacheStatus → aggregated, hits counted.
-              { count: 200, dimensions: { model: "glm-4.7-flash", provider: "deepseek", cacheStatus: "miss" } },
-              { count: 10, dimensions: { model: "glm-4.7-flash", provider: "deepseek", cacheStatus: "hit" } },
-              { count: 30, dimensions: { model: "@cf/llama", provider: "workers-ai", cacheStatus: "miss" } },
+              {
+                count: 200,
+                dimensions: { model: "glm-4.7-flash", provider: "deepseek", cacheStatus: "miss" },
+              },
+              {
+                count: 10,
+                dimensions: { model: "glm-4.7-flash", provider: "deepseek", cacheStatus: "hit" },
+              },
+              {
+                count: 30,
+                dimensions: { model: "@cf/llama", provider: "workers-ai", cacheStatus: "miss" },
+              },
             ],
           },
         ],
@@ -46,7 +58,12 @@ describe("normalizeUsage", () => {
     const u = normalizeUsage(resp, 168);
     expect(u.ai).toHaveLength(2);
     const glm = u.ai.find((a) => a.model === "glm-4.7-flash")!;
-    expect(glm).toEqual({ model: "glm-4.7-flash", provider: "deepseek", requests: 210, cached: 10 });
+    expect(glm).toEqual({
+      model: "glm-4.7-flash",
+      provider: "deepseek",
+      requests: 210,
+      cached: 10,
+    });
     // Sorted by requests descending → glm (210) before @cf/llama (30).
     expect(u.ai[0]!.model).toBe("glm-4.7-flash");
   });

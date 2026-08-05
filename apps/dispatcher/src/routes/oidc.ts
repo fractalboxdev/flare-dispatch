@@ -100,8 +100,7 @@ export const handleOidcJwks = (env: Env): Response => {
     return json(
       {
         error: "oidc_not_configured",
-        message:
-          "OIDC_SIGNING_JWK is unset; JWKS endpoint is off on this deploy",
+        message: "OIDC_SIGNING_JWK is unset; JWKS endpoint is off on this deploy",
       },
       503,
     );

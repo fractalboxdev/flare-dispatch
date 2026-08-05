@@ -38,10 +38,7 @@ const decode = Schema.decodeUnknownEither(SignalArray);
 describe("storyResultsToSignals", () => {
   it("emits exactly one signal per assertion failure", () => {
     const out = storyResultsToSignals(
-      [
-        chapter({ name: "Sign in" }),
-        chapter({ name: "Create project" }),
-      ],
+      [chapter({ name: "Sign in" }), chapter({ name: "Create project" })],
       ctx,
     );
     expect(out).toHaveLength(2);
@@ -87,10 +84,8 @@ describe("storyResultsToSignals", () => {
       )[0]!.url,
     ).toBe("https://r/1");
     expect(
-      storyResultsToSignals(
-        [chapter({ replayUri: "", replayJsonUri: "https://j/1" })],
-        ctx,
-      )[0]!.url,
+      storyResultsToSignals([chapter({ replayUri: "", replayJsonUri: "https://j/1" })], ctx)[0]!
+        .url,
     ).toBe("https://j/1");
     expect(
       storyResultsToSignals(

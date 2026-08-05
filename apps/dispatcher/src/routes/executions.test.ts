@@ -8,12 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { handleRequest } from "../router";
 import { signLogToken } from "../log-token";
-import {
-  makeFakeD1,
-  makeFakeEnv,
-  makeFakeR2,
-  makeFakeWorkflow,
-} from "../test-helpers";
+import { makeFakeD1, makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 
 const SECRET = "exec-secret-please-rotate";
 const ORIGIN = "https://dispatcher.example";
@@ -79,9 +74,7 @@ describe("GET /v1/executions — listing", () => {
     const { env } = fixture();
     const res = await get(env, "/v1/executions");
     expect(res.status).toBe(503);
-    expect(((await res.json()) as { error: string }).error).toBe(
-      "admin_not_configured",
-    );
+    expect(((await res.json()) as { error: string }).error).toBe("admin_not_configured");
   });
 
   it("401s a missing / wrong bearer", async () => {
@@ -120,10 +113,7 @@ describe("GET /v1/executions/:id — detail", () => {
   it("returns execution + steps + logs + artifacts with a valid token", async () => {
     const { env } = fixture();
     const token = await signLogToken(SECRET, EXEC);
-    const res = await get(
-      env,
-      `/v1/executions/${encodeURIComponent(EXEC)}?t=${token}`,
-    );
+    const res = await get(env, `/v1/executions/${encodeURIComponent(EXEC)}?t=${token}`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       execution: { id: string; logsUrl?: string };
@@ -145,13 +135,8 @@ describe("GET /v1/executions/:id — detail", () => {
     const { env } = fixture();
     const missing = "offload-test:owner_repo:missing000000";
     const token = await signLogToken(SECRET, missing);
-    const res = await get(
-      env,
-      `/v1/executions/${encodeURIComponent(missing)}?t=${token}`,
-    );
+    const res = await get(env, `/v1/executions/${encodeURIComponent(missing)}?t=${token}`);
     expect(res.status).toBe(404);
-    expect(((await res.json()) as { error: string }).error).toBe(
-      "execution_not_found",
-    );
+    expect(((await res.json()) as { error: string }).error).toBe("execution_not_found");
   });
 });

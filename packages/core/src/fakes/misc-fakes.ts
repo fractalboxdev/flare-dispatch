@@ -66,9 +66,7 @@ export const CacheFake: Layer.Layer<Cache> = Layer.succeed(
  * store; `getJSON` is always `none` (a run that needs JSON config builds its
  * own fake). With no store every key is unset — a run falls back to defaults.
  */
-export const makeConfigFake = (
-  store: Record<string, string> = {},
-): Layer.Layer<Config> =>
+export const makeConfigFake = (store: Record<string, string> = {}): Layer.Layer<Config> =>
   Layer.succeed(Config, {
     get: (key) => Effect.succeed(store[key]),
     getJSON: () => Effect.succeed(Option.none()),
@@ -81,15 +79,11 @@ export const ConfigFake: Layer.Layer<Config> = makeConfigFake();
  * Build a Secrets fake from an in-memory bare-name→value store. Mirrors Worker
  * secrets/vars for `loadSecrets` in unit tests.
  */
-export const makeSecretsFake = (
-  store: Record<string, string> = {},
-): Layer.Layer<Secrets> =>
+export const makeSecretsFake = (store: Record<string, string> = {}): Layer.Layer<Secrets> =>
   Layer.succeed(Secrets, {
     get: (name) => {
       const value = store[name];
-      return Effect.succeed(
-        value !== undefined && value !== "" ? value : undefined,
-      );
+      return Effect.succeed(value !== undefined && value !== "" ? value : undefined);
     },
   } satisfies SecretsService);
 

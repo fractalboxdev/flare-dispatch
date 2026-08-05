@@ -73,15 +73,11 @@ describe("decideLease", () => {
 
 describe("isLeaseStale", () => {
   it("is false within the TTL window", () => {
-    expect(isLeaseStale(lease({ heartbeatAt: 1_000 }), 1_000 + TTL, TTL)).toBe(
-      false,
-    );
+    expect(isLeaseStale(lease({ heartbeatAt: 1_000 }), 1_000 + TTL, TTL)).toBe(false);
   });
 
   it("is true once the heartbeat predates now - ttl", () => {
-    expect(
-      isLeaseStale(lease({ heartbeatAt: 1_000 }), 1_000 + TTL + 1, TTL),
-    ).toBe(true);
+    expect(isLeaseStale(lease({ heartbeatAt: 1_000 }), 1_000 + TTL + 1, TTL)).toBe(true);
   });
 });
 

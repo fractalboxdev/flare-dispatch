@@ -119,7 +119,10 @@ export const selfHealPr = defineRun({
 
   run: (input) =>
     Effect.gen(function* () {
-      const pack = { ...input.incident, signals: [...(input.incident.signals ?? []), ...input.signals] };
+      const pack = {
+        ...input.incident,
+        signals: [...(input.incident.signals ?? []), ...input.signals],
+      };
       const empty = (outcome: string, verified: boolean) => ({
         incidentId: pack.incidentId,
         outcome,
@@ -140,7 +143,10 @@ export const selfHealPr = defineRun({
       const eligibleClass = pack.class === "ci" || pack.class === "demo";
       if (!eligibleClass || pack.repro?.kind !== "command" || pack.repro.command === undefined) {
         yield* step("log-skip", () =>
-          io.log("info", `self-heal-pr: incident ${pack.incidentId} has no command repro (class=${pack.class}) — skipping`),
+          io.log(
+            "info",
+            `self-heal-pr: incident ${pack.incidentId} has no command repro (class=${pack.class}) — skipping`,
+          ),
         );
         return empty("skipped", false);
       }
@@ -153,7 +159,10 @@ export const selfHealPr = defineRun({
       const agentToken = yield* step("resolve-token", () => config.get("self-heal.agent-token"));
       if (proxyUrl === undefined || agentToken === undefined) {
         return yield* Effect.fail(
-          new StepFailed({ step: "resolve-proxy", cause: "self-heal.proxy-url / self-heal.agent-token not injected" }),
+          new StepFailed({
+            step: "resolve-proxy",
+            cause: "self-heal.proxy-url / self-heal.agent-token not injected",
+          }),
         );
       }
 
@@ -183,14 +192,22 @@ export const selfHealPr = defineRun({
           container,
           cwd: dir,
           command: ["flare-agent", "heal", "--pack", PACK_PATH],
-          env: { INCIDENT_PACK: PACK_PATH, FLARE_MODEL_PROXY: proxyUrl, FLARE_AGENT_TOKEN: agentToken },
+          env: {
+            INCIDENT_PACK: PACK_PATH,
+            FLARE_MODEL_PROXY: proxyUrl,
+            FLARE_AGENT_TOKEN: agentToken,
+          },
         }),
       );
       yield* step("agent-wait", () => sandbox.waitForExit({ handle: agentHandle }));
 
       // Read the agent's result (agent/v1).
       const resultRead = yield* step("read-result", () =>
-        sandbox.exec({ container, cwd: dir, command: ["sh", "-lc", `cat ${RESULT_PATH} 2>/dev/null || echo '{}'`] }),
+        sandbox.exec({
+          container,
+          cwd: dir,
+          command: ["sh", "-lc", `cat ${RESULT_PATH} 2>/dev/null || echo '{}'`],
+        }),
       );
       const outcome = ((): string => {
         try {
@@ -200,20 +217,30 @@ export const selfHealPr = defineRun({
         }
       })();
       if (outcome !== "patched") {
-        yield* step("log-no-fix", () => io.log("info", `self-heal-pr: agent outcome ${outcome} — no PR`));
+        yield* step("log-no-fix", () =>
+          io.log("info", `self-heal-pr: agent outcome ${outcome} — no PR`),
+        );
         return empty(outcome, false);
       }
 
       // VERIFY in the sandbox — re-run the repro on the patched tree. This is the
       // trusted gate, NOT the consumer's secret-bearing CI (§ 10.1).
       const verify = yield* step("verify", () =>
-        sandbox.exec({ container, cwd: dir, command: ["sh", "-lc", reproCommand], timeoutSec: 600 }),
+        sandbox.exec({
+          container,
+          cwd: dir,
+          command: ["sh", "-lc", reproCommand],
+          timeoutSec: 600,
+        }),
       );
       const verified = verify.exitCode === 0;
       if (!verified) {
         // Silent by default: annotate, open no PR (unless self-heal.open-unverified).
         yield* step("log-unverified", () =>
-          io.log("warn", `self-heal-pr: fix did not pass the repro (exit ${verify.exitCode}) — silent, no PR`),
+          io.log(
+            "warn",
+            `self-heal-pr: fix did not pass the repro (exit ${verify.exitCode}) — silent, no PR`,
+          ),
         );
         return empty("patched", false);
       }
@@ -222,13 +249,29 @@ export const selfHealPr = defineRun({
       const staged = yield* step("stage-writeback", () =>
         sandbox.exec({ container, cwd: dir, command: ["sh", "-lc", STAGE_WRITEBACK_SCRIPT] }),
       );
-      const changedPaths = staged.stdout.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+      const changedPaths = staged.stdout
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
 
       yield* step("upload-writeback", () =>
-        artifact.upload({ name: WRITEBACK_ARTIFACT, path: `${dir}/artifacts/writeback`, container }),
+        artifact.upload({
+          name: WRITEBACK_ARTIFACT,
+          path: `${dir}/artifacts/writeback`,
+          container,
+        }),
       );
 
-      yield* io.log("info", `self-heal-pr: verified fix for ${pack.incidentId} (${changedPaths.length} files) — staging PR`);
-      return { incidentId: pack.incidentId, outcome: "patched", verified: true, changedPaths, prStaged: true };
+      yield* io.log(
+        "info",
+        `self-heal-pr: verified fix for ${pack.incidentId} (${changedPaths.length} files) — staging PR`,
+      );
+      return {
+        incidentId: pack.incidentId,
+        outcome: "patched",
+        verified: true,
+        changedPaths,
+        prStaged: true,
+      };
     }),
 });

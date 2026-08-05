@@ -106,19 +106,8 @@ export {
   type CDPSession,
 } from "./services/browser";
 export { cache, Cache, type CacheService } from "./services/cache";
-export {
-  artifact,
-  Artifact,
-  type ArtifactService,
-  type ArtifactInfo,
-} from "./services/artifact";
-export {
-  io,
-  IO,
-  type IOService,
-  type LogLevel,
-  type PriorExecution,
-} from "./services/io";
+export { artifact, Artifact, type ArtifactService, type ArtifactInfo } from "./services/artifact";
+export { io, IO, type IOService, type LogLevel, type PriorExecution } from "./services/io";
 export { config, Config, type ConfigService } from "./services/config";
 export { secrets, Secrets, type SecretsService } from "./services/secrets";
 export {
@@ -139,12 +128,7 @@ export {
   type EmailSendResult,
   type EmailRejection,
 } from "./services/email";
-export {
-  mailbox,
-  Mailbox,
-  type MailboxService,
-  type AllocateOpts,
-} from "./services/mailbox";
+export { mailbox, Mailbox, type MailboxService, type AllocateOpts } from "./services/mailbox";
 export {
   INBOX_EVENT_TYPE,
   INBOX_LOCAL_PREFIX,
@@ -214,10 +198,7 @@ export {
   type StepRecord,
   type StepStatus,
 } from "./services/executions";
-export {
-  StepRunner,
-  type StepRunnerService,
-} from "./services/step-runner";
+export { StepRunner, type StepRunnerService } from "./services/step-runner";
 
 // --- Signals (the vendor-blind `signals/v1` contract) -------------------------
 export {
@@ -267,10 +248,7 @@ export {
 } from "./incident";
 
 // --- CI→incident adapter (offload-test command failure as `incident/v1`) ------
-export {
-  commandFailureToIncident,
-  type CiIncidentContext,
-} from "./ci-incident";
+export { commandFailureToIncident, type CiIncidentContext } from "./ci-incident";
 
 // --- Cost engine -------------------------------------------------------------
 export {

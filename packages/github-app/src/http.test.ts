@@ -8,9 +8,7 @@ import { assertOk, retryAfterMsFromHeaders } from "./http";
 
 describe("retryAfterMsFromHeaders", () => {
   it("reads Retry-After (whole seconds) as milliseconds", () => {
-    expect(retryAfterMsFromHeaders(new Headers({ "retry-after": "30" }))).toBe(
-      30_000,
-    );
+    expect(retryAfterMsFromHeaders(new Headers({ "retry-after": "30" }))).toBe(30_000);
   });
 
   it("prefers Retry-After over the reset window when both are present", () => {
@@ -45,9 +43,7 @@ describe("retryAfterMsFromHeaders", () => {
 
   it("ignores a non-numeric Retry-After (HTTP-date form is not emitted here)", () => {
     expect(
-      retryAfterMsFromHeaders(
-        new Headers({ "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" }),
-      ),
+      retryAfterMsFromHeaders(new Headers({ "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" })),
     ).toBeUndefined();
   });
 });

@@ -12,12 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { sign } from "../hmac";
 import { handleRequest } from "../router";
-import {
-  makeFakeEnv,
-  makeFakeKv,
-  makeFakeR2,
-  makeFakeWorkflow,
-} from "../test-helpers";
+import { makeFakeEnv, makeFakeKv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 
 const WEBHOOK_SECRET = "github-webhook-secret-please-rotate";
 const HMAC_SECRET = "unused-but-required-by-env-shape";
@@ -81,8 +76,7 @@ const fixture = (opts: { withWebhookSecret?: boolean; withKv?: boolean } = {}) =
     workflow,
     storage,
     idempotencyKv: idempotencyKv?.binding,
-    githubWebhookSecret:
-      opts.withWebhookSecret === false ? undefined : WEBHOOK_SECRET,
+    githubWebhookSecret: opts.withWebhookSecret === false ? undefined : WEBHOOK_SECRET,
   });
   return { workflow, storage, env, idempotencyKv };
 };
@@ -119,10 +113,7 @@ describe("POST /v1/webhooks/github — headers", () => {
   it("missing X-GitHub-Delivery → 400", async () => {
     const { env } = fixture();
     const bodyText = JSON.stringify(deploymentStatusPayload);
-    const sig = await sign(
-      WEBHOOK_SECRET,
-      new TextEncoder().encode(bodyText),
-    );
+    const sig = await sign(WEBHOOK_SECRET, new TextEncoder().encode(bodyText));
     const req = new Request("https://dispatcher.example/v1/webhooks/github", {
       method: "POST",
       headers: {
@@ -139,10 +130,7 @@ describe("POST /v1/webhooks/github — headers", () => {
   it("missing X-GitHub-Event → 400", async () => {
     const { env } = fixture();
     const bodyText = JSON.stringify(deploymentStatusPayload);
-    const sig = await sign(
-      WEBHOOK_SECRET,
-      new TextEncoder().encode(bodyText),
-    );
+    const sig = await sign(WEBHOOK_SECRET, new TextEncoder().encode(bodyText));
     const req = new Request("https://dispatcher.example/v1/webhooks/github", {
       method: "POST",
       headers: {
@@ -306,9 +294,7 @@ describe("POST /v1/webhooks/github — run cooldown", () => {
     // (offload-test also fires on pull_request and has no cooldown, so it is not
     // part of this count.)
     expect(
-      workflow.calls.filter(
-        (c) => (c.params as { run: string }).run === "pr-review",
-      ),
+      workflow.calls.filter((c) => (c.params as { run: string }).run === "pr-review"),
     ).toHaveLength(1);
   });
 
@@ -341,16 +327,13 @@ describe("POST /v1/webhooks/github — run cooldown", () => {
     // Both PRs dispatch pr-review (no cross-PR cooldown); count it specifically
     // since offload-test co-fires on each.
     expect(
-      workflow.calls.filter(
-        (c) => (c.params as { run: string }).run === "pr-review",
-      ),
+      workflow.calls.filter((c) => (c.params as { run: string }).run === "pr-review"),
     ).toHaveLength(2);
   });
 });
 
 describe("POST /v1/webhooks/github — release-PR approval", () => {
-  const MARKER =
-    "<!-- flare-dispatch:release-approval wf=release-notes-2026-W26 tag=v0.1.0 -->";
+  const MARKER = "<!-- flare-dispatch:release-approval wf=release-notes-2026-W26 tag=v0.1.0 -->";
 
   const releasePr = (over: Record<string, unknown>) => ({
     action: "closed",
@@ -393,10 +376,9 @@ describe("POST /v1/webhooks/github — release-PR approval", () => {
   it("release:reject label → signals reject", async () => {
     const { env, workflow } = fixture();
     const res = await handleRequest(
-      await webhookRequest(
-        releasePr({ action: "labeled", label: { name: "release:reject" } }),
-        { event: "pull_request" },
-      ),
+      await webhookRequest(releasePr({ action: "labeled", label: { name: "release:reject" } }), {
+        event: "pull_request",
+      }),
       env,
     );
     expect(res.status).toBe(202);

@@ -35,8 +35,12 @@ export const probeHttp = (opts: {
           const r = yield* sandbox.exec({
             container: opts.container,
             command: [
-              "curl", "-sS", "-o", "/dev/null",
-              "-w", "%{http_code}",
+              "curl",
+              "-sS",
+              "-o",
+              "/dev/null",
+              "-w",
+              "%{http_code}",
               `${opts.baseURL}${path}`,
             ],
           });

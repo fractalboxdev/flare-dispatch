@@ -13,9 +13,7 @@ const run = (
   return {
     child,
     exit: Effect.runPromiseExit(
-      waitForChildren(opts).pipe(
-        Effect.provide(Layer.merge(child.layer, IOFake)),
-      ),
+      waitForChildren(opts).pipe(Effect.provide(Layer.merge(child.layer, IOFake))),
     ),
   };
 };

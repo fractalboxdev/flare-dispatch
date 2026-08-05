@@ -9,12 +9,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  createCheckRun,
-  GithubApiError,
-  progressCheckRun,
-  updateCheckRun,
-} from "./index";
+import { createCheckRun, GithubApiError, progressCheckRun, updateCheckRun } from "./index";
 
 /** Records the requests MSW intercepted, for per-test assertions. */
 type CapturedPost = {
@@ -27,16 +22,13 @@ let posts: CapturedPost[] = [];
 let patches: CapturedPatch[] = [];
 
 const server = setupServer(
-  http.post(
-    "https://api.github.com/repos/:owner/:repo/check-runs",
-    async ({ request }) => {
-      posts.push({
-        authorization: request.headers.get("authorization"),
-        body: (await request.json()) as Record<string, unknown>,
-      });
-      return HttpResponse.json({ id: 555_001 }, { status: 201 });
-    },
-  ),
+  http.post("https://api.github.com/repos/:owner/:repo/check-runs", async ({ request }) => {
+    posts.push({
+      authorization: request.headers.get("authorization"),
+      body: (await request.json()) as Record<string, unknown>,
+    });
+    return HttpResponse.json({ id: 555_001 }, { status: 201 });
+  }),
   http.patch(
     "https://api.github.com/repos/:owner/:repo/check-runs/:id",
     async ({ request, params }) => {
@@ -103,9 +95,8 @@ describe("createCheckRun", () => {
 
   it("surfaces a GithubApiError on a non-2xx response", async () => {
     server.use(
-      http.post(
-        "https://api.github.com/repos/:owner/:repo/check-runs",
-        () => HttpResponse.json({ message: "Not Found" }, { status: 404 }),
+      http.post("https://api.github.com/repos/:owner/:repo/check-runs", () =>
+        HttpResponse.json({ message: "Not Found" }, { status: 404 }),
       ),
     );
     await expect(
@@ -127,7 +118,8 @@ describe("progressCheckRun", () => {
       checkRunId: "555001",
       output: {
         title: "flare-dispatch/offload-test",
-        summary: "Queued — waiting for a sandbox slot behind 3 runs (16/16 in use); times out 12:34 UTC",
+        summary:
+          "Queued — waiting for a sandbox slot behind 3 runs (16/16 in use); times out 12:34 UTC",
       },
     });
 
@@ -141,9 +133,8 @@ describe("progressCheckRun", () => {
 
   it("surfaces a GithubApiError on a non-2xx response", async () => {
     server.use(
-      http.patch(
-        "https://api.github.com/repos/:owner/:repo/check-runs/:id",
-        () => HttpResponse.json({ message: "Gone" }, { status: 410 }),
+      http.patch("https://api.github.com/repos/:owner/:repo/check-runs/:id", () =>
+        HttpResponse.json({ message: "Gone" }, { status: 410 }),
       ),
     );
     await expect(
@@ -205,9 +196,8 @@ describe("updateCheckRun", () => {
 
   it("surfaces a GithubApiError on a non-2xx response", async () => {
     server.use(
-      http.patch(
-        "https://api.github.com/repos/:owner/:repo/check-runs/:id",
-        () => HttpResponse.json({ message: "Gone" }, { status: 410 }),
+      http.patch("https://api.github.com/repos/:owner/:repo/check-runs/:id", () =>
+        HttpResponse.json({ message: "Gone" }, { status: 410 }),
       ),
     );
     await expect(

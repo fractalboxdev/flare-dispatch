@@ -148,9 +148,7 @@ describe("D1ExecutionsLive", () => {
       .bind(EXECUTION_ID)
       .all<{ name: string; status: string }>();
 
-    expect(rows.results.map((r) => r.name).sort()).toEqual(
-      [...stepNames].sort(),
-    );
+    expect(rows.results.map((r) => r.name).sort()).toEqual([...stepNames].sort());
     expect(rows.results.every((r) => r.status === "success")).toBe(true);
   });
 

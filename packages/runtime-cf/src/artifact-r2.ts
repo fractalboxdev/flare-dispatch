@@ -58,11 +58,7 @@ import {
   ArtifactUploadFailed,
   type ArtifactService,
 } from "@fractalboxdev/flare-dispatch-core";
-import {
-  containerTarballPath,
-  isRegularFileStat,
-  splitTarPath,
-} from "./artifact-tar-path";
+import { containerTarballPath, isRegularFileStat, splitTarPath } from "./artifact-tar-path";
 import { readContainerFile } from "./container-file-stream";
 import { putStream } from "./r2-put-stream";
 import { expandTarGzToR2 } from "./tar-extract";
@@ -82,11 +78,7 @@ const artifactKey = (executionId: string, name: string): string =>
  * that has no request to infer it from) the path stays relative — correct for
  * same-origin API consumers, still broken on GitHub until the var is set.
  */
-const artifactUrl = (
-  executionId: string,
-  name: string,
-  publicOrigin?: string,
-): string =>
+const artifactUrl = (executionId: string, name: string, publicOrigin?: string): string =>
   `${publicOrigin === undefined ? "" : publicOrigin.replace(/\/+$/, "")}/v1/artifacts/${encodeURIComponent(executionId)}/${encodeURIComponent(name)}`;
 
 /**
@@ -144,21 +136,12 @@ export const makeR2ArtifactLive = (
 
             const { parent, basename } = splitTarPath(path);
             if (basename === "") {
-              throw new Error(
-                `artifact.upload: path "${path}" has no basename to tar`,
-              );
+              throw new Error(`artifact.upload: path "${path}" has no basename to tar`);
             }
-            const tarballPath = containerTarballPath(
-              name,
-              crypto.randomUUID().slice(0, 8),
-            );
-            const tar = await box.exec(
-              `tar czf ${tarballPath} -C ${parent} ${basename}`,
-            );
+            const tarballPath = containerTarballPath(name, crypto.randomUUID().slice(0, 8));
+            const tar = await box.exec(`tar czf ${tarballPath} -C ${parent} ${basename}`);
             if (tar.exitCode !== 0) {
-              throw new Error(
-                `tar czf exited ${tar.exitCode}: ${tar.stderr.trim()}`,
-              );
+              throw new Error(`tar czf exited ${tar.exitCode}: ${tar.stderr.trim()}`);
             }
             // `stat` + `readFileStream` — NOT `readFile({encoding:'none'})`:
             // that variant is rpc-transport-only and broke every container-tar
@@ -178,9 +161,7 @@ export const makeR2ArtifactLive = (
             try {
               await expandTarGzToR2(bucket, key, `${key}/`, `${basename}/`);
             } catch (cause) {
-              console.warn(
-                `artifact "${name}": browse expansion skipped — ${String(cause)}`,
-              );
+              console.warn(`artifact "${name}": browse expansion skipped — ${String(cause)}`);
             }
             return artifactUrl(executionId, name, publicOrigin);
           }
@@ -212,8 +193,7 @@ export const makeR2ArtifactLive = (
           return {
             name,
             size: obj.size,
-            contentType:
-              obj.httpMetadata?.contentType ?? "application/octet-stream",
+            contentType: obj.httpMetadata?.contentType ?? "application/octet-stream",
             url: artifactUrl(forExecution, name, publicOrigin),
           };
         });

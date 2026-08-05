@@ -67,12 +67,10 @@ const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
 };
 
 /** Resolve a run by name; `undefined` for an unknown run (→ 404). */
-export const lookupRun = (name: string): Run<unknown, unknown> | undefined =>
-  RUN_REGISTRY[name];
+export const lookupRun = (name: string): Run<unknown, unknown> | undefined => RUN_REGISTRY[name];
 
 /** The registered run names — sorted for a stable `/health` response. */
-export const runNames = (): readonly string[] =>
-  Object.keys(RUN_REGISTRY).sort();
+export const runNames = (): readonly string[] => Object.keys(RUN_REGISTRY).sort();
 
 /**
  * Find every (run, schedule-spec) pair in the registry whose `cron` matches

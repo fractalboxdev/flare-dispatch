@@ -16,33 +16,29 @@ import {
 import { type AiBinding, makeModelGatewayLive } from "./model-gateway-cf";
 
 /** The typed `ModelGatewayError` an exit failed with, or `undefined`. */
-const failureOf = (
-  exit: Exit.Exit<unknown, ModelGatewayError>,
-): ModelGatewayError | undefined =>
+const failureOf = (exit: Exit.Exit<unknown, ModelGatewayError>): ModelGatewayError | undefined =>
   Exit.match(exit, {
     onSuccess: () => undefined,
     onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
   });
 
 /** A recording `Ai` stub returning a fixed output. */
-const stubAi = (
-  output: {
-    response?: string;
-    tool_calls?: Array<{ name: string; arguments: unknown }>;
-    // The chat-completion shape some catalog models (glm-*) return INSTEAD of a
-    // top-level `response` — `choices[0].message.{content, tool_calls}`.
-    choices?: Array<{
-      message?: {
-        content?: string | null;
-        tool_calls?: Array<{
-          name?: string;
-          arguments?: unknown;
-          function?: { name?: string; arguments?: unknown };
-        }>;
-      };
-    }>;
-  },
-): {
+const stubAi = (output: {
+  response?: string;
+  tool_calls?: Array<{ name: string; arguments: unknown }>;
+  // The chat-completion shape some catalog models (glm-*) return INSTEAD of a
+  // top-level `response` — `choices[0].message.{content, tool_calls}`.
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        name?: string;
+        arguments?: unknown;
+        function?: { name?: string; arguments?: unknown };
+      }>;
+    };
+  }>;
+}): {
   ai: AiBinding;
   seen: { model?: string; inputs?: unknown; options?: unknown };
 } => {
@@ -58,15 +54,9 @@ const stubAi = (
   return { ai, seen };
 };
 
-const run = (
-  ai: AiBinding,
-  gatewayId: string | undefined,
-  req: ModelCompletionRequest,
-) =>
+const run = (ai: AiBinding, gatewayId: string | undefined, req: ModelCompletionRequest) =>
   Effect.runPromise(
-    modelGateway
-      .complete(req)
-      .pipe(Effect.provide(makeModelGatewayLive(ai, gatewayId))),
+    modelGateway.complete(req).pipe(Effect.provide(makeModelGatewayLive(ai, gatewayId))),
   );
 
 describe("makeModelGatewayLive", () => {
@@ -79,14 +69,10 @@ describe("makeModelGatewayLive", () => {
       system: "you are a reviewer",
       user: "review this",
       maxTokens: 2048,
-      tools: [
-        { name: "report", description: "d", parameters: { type: "object" } },
-      ],
+      tools: [{ name: "report", description: "d", parameters: { type: "object" } }],
     });
 
-    expect(result.toolCalls).toEqual([
-      { name: "report", arguments: { findings: [] } },
-    ]);
+    expect(result.toolCalls).toEqual([{ name: "report", arguments: { findings: [] } }]);
     expect(result.text).toBe("");
 
     // The model id passes through verbatim (bare @cf/...).
@@ -152,9 +138,7 @@ describe("makeModelGatewayLive", () => {
   it("omits response_format when no jsonSchema is set", async () => {
     const { ai, seen } = stubAi({ response: "ok" });
     await run(ai, "g", { model: "m", system: "s", user: "u" });
-    expect(
-      "response_format" in (seen.inputs as Record<string, unknown>),
-    ).toBe(false);
+    expect("response_format" in (seen.inputs as Record<string, unknown>)).toBe(false);
   });
 
   it("fails ModelGatewayError when the binding throws", async () => {
@@ -264,9 +248,7 @@ describe("makeModelGatewayLive", () => {
         {
           message: {
             content: null,
-            tool_calls: [
-              { function: { name: "report", arguments: '{"findings":[]}' } },
-            ],
+            tool_calls: [{ function: { name: "report", arguments: '{"findings":[]}' } }],
           },
         },
       ],
@@ -277,9 +259,7 @@ describe("makeModelGatewayLive", () => {
       user: "u",
       tools: [{ name: "report", description: "d", parameters: { type: "object" } }],
     });
-    expect(result.toolCalls).toEqual([
-      { name: "report", arguments: '{"findings":[]}' },
-    ]);
+    expect(result.toolCalls).toEqual([{ name: "report", arguments: '{"findings":[]}' }]);
   });
 
   it("prefers the legacy top-level `response` when both shapes are present (llama)", async () => {
@@ -317,9 +297,7 @@ const stubGatewayAi = (
       return {
         run: (data) => {
           seen.request = data as unknown as Record<string, unknown>;
-          return Promise.resolve(
-            new Response(JSON.stringify(body), { status }),
-          );
+          return Promise.resolve(new Response(JSON.stringify(body), { status }));
         },
       };
     },
@@ -340,23 +318,19 @@ describe("makeModelGatewayLive — anthropic universal route", () => {
       system: "you are a reviewer",
       user: "review this",
       maxTokens: 1024,
-      tools: [
-        { name: "report", description: "d", parameters: { type: "object" } },
-      ],
+      tools: [{ name: "report", description: "d", parameters: { type: "object" } }],
     });
 
-    expect(result.toolCalls).toEqual([
-      { name: "report", arguments: { findings: [] } },
-    ]);
+    expect(result.toolCalls).toEqual([{ name: "report", arguments: { findings: [] } }]);
     expect(result.text).toBe("thinking…");
 
     expect(seen.gatewayId).toBe("my-gateway");
     expect(seen.request?.provider).toBe("anthropic");
     expect(seen.request?.endpoint).toBe("v1/messages");
     // Anthropic rejects a Messages call without its API version pin.
-    expect(
-      (seen.request!.headers as Record<string, string>)["anthropic-version"],
-    ).toBe("2023-06-01");
+    expect((seen.request!.headers as Record<string, string>)["anthropic-version"]).toBe(
+      "2023-06-01",
+    );
     const query = seen.request?.query as Record<string, unknown>;
     // The `anthropic/` prefix is stripped — the provider gets its own naming.
     expect(query.model).toBe("claude-sonnet-4-6");
@@ -431,13 +405,11 @@ describe("makeModelGatewayLive — anthropic universal route", () => {
     await Effect.runPromise(
       modelGateway
         .complete({ model: "anthropic/claude-sonnet-4-6", system: "s", user: "u" })
-        .pipe(
-          Effect.provide(makeModelGatewayLive(ai, "g", undefined, "tok_abc")),
-        ),
+        .pipe(Effect.provide(makeModelGatewayLive(ai, "g", undefined, "tok_abc"))),
     );
-    expect(
-      (seen.request!.headers as Record<string, string>)["cf-aig-authorization"],
-    ).toBe("Bearer tok_abc");
+    expect((seen.request!.headers as Record<string, string>)["cf-aig-authorization"]).toBe(
+      "Bearer tok_abc",
+    );
   });
 
   it("omits cf-aig-authorization when no auth token is configured", async () => {
@@ -447,9 +419,7 @@ describe("makeModelGatewayLive — anthropic universal route", () => {
       system: "s",
       user: "u",
     });
-    expect(
-      "cf-aig-authorization" in (seen.request!.headers as Record<string, string>),
-    ).toBe(false);
+    expect("cf-aig-authorization" in (seen.request!.headers as Record<string, string>)).toBe(false);
   });
 });
 
@@ -530,15 +500,11 @@ describe("makeModelGatewayLive — deepseek universal route", () => {
       model: "deepseek/deepseek-chat",
       system: "s",
       user: "u",
-      tools: [
-        { name: "report", description: "d", parameters: { type: "object" } },
-      ],
+      tools: [{ name: "report", description: "d", parameters: { type: "object" } }],
     });
 
     // Arguments pass through verbatim as a JSON string — the engine parses it.
-    expect(result.toolCalls).toEqual([
-      { name: "report", arguments: '{"findings":[]}' },
-    ]);
+    expect(result.toolCalls).toEqual([{ name: "report", arguments: '{"findings":[]}' }]);
     // content === null → empty text (not the literal "null").
     expect(result.text).toBe("");
     const query = seen.request?.query as Record<string, unknown>;
@@ -585,13 +551,11 @@ describe("makeModelGatewayLive — deepseek universal route", () => {
     await Effect.runPromise(
       modelGateway
         .complete({ model: "deepseek/deepseek-reasoner", system: "s", user: "u" })
-        .pipe(
-          Effect.provide(makeModelGatewayLive(ai, "g", undefined, "tok_xyz")),
-        ),
+        .pipe(Effect.provide(makeModelGatewayLive(ai, "g", undefined, "tok_xyz"))),
     );
-    expect(
-      (seen.request!.headers as Record<string, string>)["cf-aig-authorization"],
-    ).toBe("Bearer tok_xyz");
+    expect((seen.request!.headers as Record<string, string>)["cf-aig-authorization"]).toBe(
+      "Bearer tok_xyz",
+    );
   });
 });
 
@@ -654,14 +618,10 @@ describe("makeModelGatewayLive — openai universal route", () => {
       model: "openai/gpt-5.6-luna",
       system: "s",
       user: "u",
-      tools: [
-        { name: "report", description: "d", parameters: { type: "object" } },
-      ],
+      tools: [{ name: "report", description: "d", parameters: { type: "object" } }],
     });
 
-    expect(result.toolCalls).toEqual([
-      { name: "report", arguments: '{"findings":[]}' },
-    ]);
+    expect(result.toolCalls).toEqual([{ name: "report", arguments: '{"findings":[]}' }]);
     const query = seen.request?.query as Record<string, unknown>;
     expect(query.tool_choice).toBe("required");
     expect(query.max_completion_tokens).toBe(2048);
@@ -694,7 +654,10 @@ describe("makeModelGatewayLive — openai universal route", () => {
 describe("makeModelGatewayLive — bedrock-via-AI-Gateway route", () => {
   /** A `fetch` stub that records the URL + headers + body and returns canned JSON. */
   const stubFetch = (
-    payload: { content?: Array<{ type: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } } = {
+    payload: {
+      content?: Array<{ type: string; text?: string }>;
+      usage?: { input_tokens?: number; output_tokens?: number };
+    } = {
       content: [{ type: "text", text: "review body" }],
       usage: { input_tokens: 100, output_tokens: 50 },
     },
@@ -731,7 +694,7 @@ describe("makeModelGatewayLive — bedrock-via-AI-Gateway route", () => {
 
   // Cast through unknown — the AiBinding stub doesn't matter on the bedrock route
   // (it's bypassed entirely), but the Layer factory still needs a value.
-  const inertAi = ({} as unknown) as AiBinding;
+  const inertAi = {} as unknown as AiBinding;
 
   const awsCreds = {
     accessKeyId: "AKIA-TEST",
@@ -792,11 +755,7 @@ describe("makeModelGatewayLive — bedrock-via-AI-Gateway route", () => {
             user: "u",
             aws: awsCreds,
           })
-          .pipe(
-            Effect.provide(
-              makeModelGatewayLive(inertAi, "g", "acct123", "secret-bearer"),
-            ),
-          ),
+          .pipe(Effect.provide(makeModelGatewayLive(inertAi, "g", "acct123", "secret-bearer"))),
       ),
     );
     expect(seen.headers!["cf-aig-authorization"]).toBe("Bearer secret-bearer");

@@ -17,8 +17,7 @@ const streamOf = (chunks: Uint8Array[]): ReadableStream<Uint8Array> =>
 const drain = async (stream: ReadableStream<Uint8Array>): Promise<Uint8Array> =>
   new Uint8Array(await new Response(stream).arrayBuffer());
 
-const b64 = (bytes: Uint8Array): string =>
-  btoa(String.fromCharCode(...bytes));
+const b64 = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes));
 
 /** Frame `payload` the way the SDK's readFileStream SSE body does. */
 const sseFrames = (payload: Uint8Array, chunkSize: number): string => {
@@ -26,9 +25,7 @@ const sseFrames = (payload: Uint8Array, chunkSize: number): string => {
     `data: {"type":"metadata","mimeType":"application/gzip","size":${payload.length},"isBinary":true}`,
   ];
   for (let i = 0; i < payload.length; i += chunkSize) {
-    lines.push(
-      `data: {"type":"chunk","data":"${b64(payload.subarray(i, i + chunkSize))}"}`,
-    );
+    lines.push(`data: {"type":"chunk","data":"${b64(payload.subarray(i, i + chunkSize))}"}`);
   }
   lines.push(`data: {"type":"end"}`);
   return `${lines.join("\n\n")}\n`;

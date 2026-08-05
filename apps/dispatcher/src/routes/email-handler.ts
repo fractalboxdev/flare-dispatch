@@ -41,7 +41,10 @@ let warnedNoAllowlist = false;
 const fromDomain = (from: string): string | null => {
   const at = from.lastIndexOf("@");
   if (at === -1) return null;
-  const domain = from.slice(at + 1).trim().toLowerCase();
+  const domain = from
+    .slice(at + 1)
+    .trim()
+    .toLowerCase();
   return domain.length > 0 ? domain : null;
 };
 
@@ -157,15 +160,7 @@ export const handleInboundEmail = async (
           "(id, local_part, sender, subject, text_body, received_at, expires_at, consumed_at) " +
           "VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
       )
-        .bind(
-          id,
-          localPart,
-          message.from,
-          subject,
-          textBody,
-          receivedAt,
-          expiresAt,
-        )
+        .bind(id, localPart, message.from, subject, textBody, receivedAt, expiresAt)
         .run();
     } catch (cause) {
       // The message is already accepted; a failed insert is logged, not thrown.
@@ -194,9 +189,7 @@ export const handleInboundEmail = async (
       if (!outcome.ok && outcome.reason !== "wf_not_found") {
         // A genuine delivery failure (not just "no running instance") — log it;
         // the row is stored, so the read route can still serve the message.
-        console.warn(
-          `[email-handler] signal failed (${outcome.reason}): ${outcome.message}`,
-        );
+        console.warn(`[email-handler] signal failed (${outcome.reason}): ${outcome.message}`);
       }
     } catch (cause) {
       // signalWorkflow already swallows its own errors, but belt-and-braces.

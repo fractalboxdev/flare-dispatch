@@ -53,11 +53,13 @@ const DEPLOY_REFS_KEY = "deploy.refs";
 const csv = (raw: string | null): readonly string[] =>
   raw === null
     ? []
-    : raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+    : raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
 
 /** Normalize a configured ref (bare name or full ref) to `refs/heads/<name>`. */
-const toFullRef = (ref: string): string =>
-  ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+const toFullRef = (ref: string): string => (ref.startsWith("refs/") ? ref : `refs/heads/${ref}`);
 
 /**
  * Build the repo / ref / commit dropdown option sets. Repos come from
@@ -74,7 +76,8 @@ const buildFormOptions = async (
   refs: readonly RefOption[];
   commits: readonly CommitOption[];
 }> => {
-  const configRepos = env.CONFIG_KV !== undefined ? csv(await env.CONFIG_KV.get(DEPLOY_REPOS_KEY)) : [];
+  const configRepos =
+    env.CONFIG_KV !== undefined ? csv(await env.CONFIG_KV.get(DEPLOY_REPOS_KEY)) : [];
   const repos = configRepos.length > 0 ? configRepos : [REPO_DEFAULT];
   const activeRepo = repos[0]!;
 
@@ -82,7 +85,9 @@ const buildFormOptions = async (
   const refValues =
     branches !== null && branches.length > 0
       ? branches.map((b) => `refs/heads/${b}`)
-      : (env.CONFIG_KV !== undefined ? csv(await env.CONFIG_KV.get(DEPLOY_REFS_KEY)) : []).map(toFullRef);
+      : (env.CONFIG_KV !== undefined ? csv(await env.CONFIG_KV.get(DEPLOY_REFS_KEY)) : []).map(
+          toFullRef,
+        );
   const refList = refValues.length > 0 ? refValues : REFS_DEFAULT;
   const refs: readonly RefOption[] = refList.map((value) => ({ value, label: shortRef(value) }));
 
@@ -104,9 +109,7 @@ const html = (body: string, status: number): Response =>
 
 /** Load + parse the `deploy.env-authz` policy from CONFIG_KV (fail-closed). */
 const loadPolicy = async (env: Env) =>
-  parseEnvAuthzPolicy(
-    env.CONFIG_KV !== undefined ? await env.CONFIG_KV.get(ENV_AUTHZ_KEY) : null,
-  );
+  parseEnvAuthzPolicy(env.CONFIG_KV !== undefined ? await env.CONFIG_KV.get(ENV_AUTHZ_KEY) : null);
 
 /**
  * `GET/POST /deploy`. Gates behind the deploy Access app, resolves the caller's

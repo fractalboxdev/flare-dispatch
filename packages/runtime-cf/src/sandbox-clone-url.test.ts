@@ -11,17 +11,13 @@ describe("authenticateCloneUrl", () => {
   it("embeds the token in a github.com HTTPS URL using x-access-token basic auth", () => {
     const url = "https://github.com/owner/repo.git";
     const out = authenticateCloneUrl(url, "ghs_abc123");
-    expect(out).toBe(
-      "https://x-access-token:ghs_abc123@github.com/owner/repo.git",
-    );
+    expect(out).toBe("https://x-access-token:ghs_abc123@github.com/owner/repo.git");
   });
 
   it("preserves the path + .git suffix exactly", () => {
     const url = "https://github.com/org-with-dashes/repo.name.git";
     const out = authenticateCloneUrl(url, "ghs_xyz");
-    expect(out).toBe(
-      "https://x-access-token:ghs_xyz@github.com/org-with-dashes/repo.name.git",
-    );
+    expect(out).toBe("https://x-access-token:ghs_xyz@github.com/org-with-dashes/repo.name.git");
   });
 
   it("leaves a non-github.com URL alone — never rewrites operator-supplied custom URLs", () => {

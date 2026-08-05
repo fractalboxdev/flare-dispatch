@@ -34,12 +34,7 @@ export const makeTestBindings = async (): Promise<TestBindings> => ({
 });
 
 /** Count rows in a table — the D1-write-rate assertion helper (plan § 6). */
-export const countRows = async (
-  db: D1Database,
-  table: string,
-): Promise<number> => {
-  const row = await db
-    .prepare(`SELECT COUNT(*) AS n FROM ${table}`)
-    .first<{ n: number }>();
+export const countRows = async (db: D1Database, table: string): Promise<number> => {
+  const row = await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
   return row?.n ?? 0;
 };

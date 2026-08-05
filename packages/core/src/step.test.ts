@@ -61,41 +61,34 @@ it.effect("forwards step metadata to the ExecutionsService record", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect(
-  "records a failed step and keeps the failure in the typed E channel",
-  () => {
-    const { layer, handles } = makeCFRuntimeTest();
+it.effect("records a failed step and keeps the failure in the typed E channel", () => {
+  const { layer, handles } = makeCFRuntimeTest();
 
-    return Effect.gen(function* () {
-      const failure = new ExecFailed({ exitCode: 1, stderrTail: "1 failing" });
+  return Effect.gen(function* () {
+    const failure = new ExecFailed({ exitCode: 1, stderrTail: "1 failing" });
 
-      // The step body fails with a tagged error. `step` must NOT throw — the
-      // failure flows through the `E` channel and is observable via `exit`.
-      const exit = yield* Effect.exit(
-        step("doomed", () => Effect.fail(failure)),
-      );
+    // The step body fails with a tagged error. `step` must NOT throw — the
+    // failure flows through the `E` channel and is observable via `exit`.
+    const exit = yield* Effect.exit(step("doomed", () => Effect.fail(failure)));
 
-      expect(exit._tag).toBe("Failure");
+    expect(exit._tag).toBe("Failure");
 
-      // The step row is recorded as failed, tagged with the error's `_tag`.
-      const { steps } = handles.executions;
-      expect(steps).toHaveLength(1);
-      expect(steps[0]!.name).toBe("doomed");
-      expect(steps[0]!.status).toBe("failure");
-      expect(steps[0]!.errorTag).toBe("ExecFailed");
-      expect(steps[0]!.completedAt).toBeDefined();
-    }).pipe(Effect.provide(layer));
-  },
-);
+    // The step row is recorded as failed, tagged with the error's `_tag`.
+    const { steps } = handles.executions;
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.name).toBe("doomed");
+    expect(steps[0]!.status).toBe("failure");
+    expect(steps[0]!.errorTag).toBe("ExecFailed");
+    expect(steps[0]!.completedAt).toBeDefined();
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("a failed step short-circuits subsequent steps", () => {
   const { layer, handles } = makeCFRuntimeTest();
 
   return Effect.gen(function* () {
     const program = Effect.gen(function* () {
-      yield* step("first", () =>
-        Effect.fail(new ExecFailed({ exitCode: 2, stderrTail: "boom" })),
-      );
+      yield* step("first", () => Effect.fail(new ExecFailed({ exitCode: 2, stderrTail: "boom" })));
       // Should never run — the failed step aborts the gen.
       yield* step("second", () => Effect.succeed("unreachable"));
     });
@@ -176,28 +169,25 @@ it.effect("step.waitForEvent fails with ApprovalTimedOut on empty queue", () => 
   }).pipe(Effect.provide(layer));
 });
 
-it.effect(
-  "step.waitForEvent fails with EventPayloadInvalid on schema mismatch",
-  () => {
-    const { layer, handles } = makeCFRuntimeTest();
-    // Queue a malformed payload — missing `deciderEmail`.
-    enqueueInlineEvent(handles.eventQueue, "release-approval", {
-      decision: "approve",
-    });
+it.effect("step.waitForEvent fails with EventPayloadInvalid on schema mismatch", () => {
+  const { layer, handles } = makeCFRuntimeTest();
+  // Queue a malformed payload — missing `deciderEmail`.
+  enqueueInlineEvent(handles.eventQueue, "release-approval", {
+    decision: "approve",
+  });
 
-    return Effect.gen(function* () {
-      const recovered = yield* step
-        .waitForEvent("release-approval", {
-          type: "release-approval",
-          timeout: "1 hour",
-          payloadSchema: Approval,
-        })
-        .pipe(
-          Effect.catchTag("EventPayloadInvalid", (e: EventPayloadInvalid) =>
-            Effect.succeed(`bad:${e.eventName}`),
-          ),
-        );
-      expect(recovered).toBe("bad:release-approval");
-    }).pipe(Effect.provide(layer));
-  },
-);
+  return Effect.gen(function* () {
+    const recovered = yield* step
+      .waitForEvent("release-approval", {
+        type: "release-approval",
+        timeout: "1 hour",
+        payloadSchema: Approval,
+      })
+      .pipe(
+        Effect.catchTag("EventPayloadInvalid", (e: EventPayloadInvalid) =>
+          Effect.succeed(`bad:${e.eventName}`),
+        ),
+      );
+    expect(recovered).toBe("bad:release-approval");
+  }).pipe(Effect.provide(layer));
+});

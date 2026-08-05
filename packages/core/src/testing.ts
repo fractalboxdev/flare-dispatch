@@ -14,37 +14,17 @@
 // Spec: specs/pm/plan.md § PR2, specs/03-dsl.md § Layers + § Unit-testing runs.
 
 import { Layer } from "effect";
-import {
-  ArtifactFake,
-  type ArtifactFakeState,
-  makeArtifactFake,
-} from "./fakes/artifact-fake";
-import {
-  ChecksFake,
-  type ChecksFakeState,
-  makeChecksFake,
-} from "./fakes/checks-fake";
-import {
-  ChildRunsFake,
-  type ChildRunsFakeState,
-  makeChildRunsFake,
-} from "./fakes/child-runs-fake";
-import {
-  EmailFake,
-  type EmailFakeState,
-  makeEmailFake,
-} from "./fakes/email-fake";
+import { ArtifactFake, type ArtifactFakeState, makeArtifactFake } from "./fakes/artifact-fake";
+import { ChecksFake, type ChecksFakeState, makeChecksFake } from "./fakes/checks-fake";
+import { ChildRunsFake, type ChildRunsFakeState, makeChildRunsFake } from "./fakes/child-runs-fake";
+import { EmailFake, type EmailFakeState, makeEmailFake } from "./fakes/email-fake";
 import {
   ExecutionsFake,
   type ExecutionsFakeState,
   makeExecutionsFake,
 } from "./fakes/executions-fake";
 import { IOFake, type IOFakeState, makeIOFake } from "./fakes/io-fake";
-import {
-  MailboxFake,
-  type MailboxFakeState,
-  makeMailboxFake,
-} from "./fakes/mailbox-fake";
+import { MailboxFake, type MailboxFakeState, makeMailboxFake } from "./fakes/mailbox-fake";
 import {
   BrowserFake,
   type BrowserFakeState,
@@ -55,11 +35,7 @@ import {
   makeSecretsFake,
   SecretsFake,
 } from "./fakes/misc-fakes";
-import {
-  GithubFake,
-  type GithubFakeState,
-  makeGithubFake,
-} from "./fakes/github-fake";
+import { GithubFake, type GithubFakeState, makeGithubFake } from "./fakes/github-fake";
 import {
   CloudflareFake,
   type CloudflareFakeState,
@@ -70,16 +46,8 @@ import {
   ModelGatewayFake,
   type ModelGatewayFakeState,
 } from "./fakes/model-gateway-fake";
-import {
-  OidcFake,
-  type OidcFakeState,
-  makeOidcFake,
-} from "./fakes/oidc-fake";
-import {
-  makeSandboxFake,
-  SandboxFake,
-  type SandboxFakeState,
-} from "./fakes/sandbox-fake";
+import { OidcFake, type OidcFakeState, makeOidcFake } from "./fakes/oidc-fake";
+import { makeSandboxFake, SandboxFake, type SandboxFakeState } from "./fakes/sandbox-fake";
 import {
   TEST_EXECUTION_ID_DEFAULT,
   makeStepRunnerInline,
@@ -88,11 +56,7 @@ import {
 import type { RunContext } from "./context";
 
 // --- Re-export the fakes + their builders ------------------------------------
-export {
-  ArtifactFake,
-  makeArtifactFake,
-  type ArtifactFakeState,
-} from "./fakes/artifact-fake";
+export { ArtifactFake, makeArtifactFake, type ArtifactFakeState } from "./fakes/artifact-fake";
 export {
   ChecksFake,
   makeChecksFake,
@@ -107,11 +71,7 @@ export {
   type ChildRunsFakeState,
   type SpawnRecord,
 } from "./fakes/child-runs-fake";
-export {
-  EmailFake,
-  makeEmailFake,
-  type EmailFakeState,
-} from "./fakes/email-fake";
+export { EmailFake, makeEmailFake, type EmailFakeState } from "./fakes/email-fake";
 export {
   MailboxFake,
   makeMailboxFake,
@@ -140,11 +100,7 @@ export {
   makeSecretsFake,
   SecretsFake,
 } from "./fakes/misc-fakes";
-export {
-  GithubFake,
-  makeGithubFake,
-  type GithubFakeState,
-} from "./fakes/github-fake";
+export { GithubFake, makeGithubFake, type GithubFakeState } from "./fakes/github-fake";
 export {
   CloudflareFake,
   makeCloudflareFake,
@@ -157,11 +113,7 @@ export {
   type ModelGatewayFakeOptions,
   type ModelGatewayFakeResponse,
 } from "./fakes/model-gateway-fake";
-export {
-  OidcFake,
-  makeOidcFake,
-  type OidcFakeState,
-} from "./fakes/oidc-fake";
+export { OidcFake, makeOidcFake, type OidcFakeState } from "./fakes/oidc-fake";
 export {
   SandboxFake,
   makeSandboxFake,

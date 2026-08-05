@@ -38,10 +38,7 @@ import {
   sandbox,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
-import {
-  isNothingToLint,
-  workspace,
-} from "@fractalboxdev/flare-dispatch-core/primitives";
+import { isNothingToLint, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — repo/sha plus oxlint knobs. */
 const OxlintInput = Schema.Struct({
@@ -107,11 +104,10 @@ export const oxlint = defineRun({
       event: "pull_request",
       actions: ["opened", "synchronize", "reopened", "ready_for_review"],
       idempotencyKey: ({ payload }) =>
-        `oxlint:${String(
-          payload.repository?.full_name ?? "unknown/unknown",
-        ).replace(/\//g, "_")}:${String(
-          payload.pull_request?.head?.sha ?? "",
-        ).slice(0, 12)}`,
+        `oxlint:${String(payload.repository?.full_name ?? "unknown/unknown").replace(
+          /\//g,
+          "_",
+        )}:${String(payload.pull_request?.head?.sha ?? "").slice(0, 12)}`,
       gate: ({ payload }) =>
         payload.pull_request?.draft !== true &&
         payload.pull_request?.user?.login !== "dependabot[bot]",

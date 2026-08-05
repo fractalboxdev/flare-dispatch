@@ -106,9 +106,7 @@ const OffloadTestInput = Schema.Struct({
    */
   install: Schema.optional(Schema.Boolean),
   /** Non-sensitive env only — dispatch inputs are persisted (header note 3). */
-  env: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
+  env: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
   /**
    * Config-store keys whose values are injected — as env vars of the same
    * name — into the command's env. Empty when the command needs no
@@ -172,8 +170,7 @@ const repoCommandKey = (repo: string): string => `offload-test.command:${repo}`;
  * leaves. `timeoutSec` is still clamped by the run's `maxDurationSec`.
  */
 const repoInstallKey = (repo: string): string => `offload-test.install:${repo}`;
-const repoTimeoutKey = (repo: string): string =>
-  `offload-test.timeoutSec:${repo}`;
+const repoTimeoutKey = (repo: string): string => `offload-test.timeoutSec:${repo}`;
 
 /** `"true"`/`"1"` → true, `"false"`/`"0"` → false, anything else → undefined. */
 const parseBoolConfig = (raw: string | undefined): boolean | undefined => {
@@ -211,11 +208,10 @@ export const offloadTest = defineRun({
       // webhook- and an Action-mode dispatch of the same commit collapse to one
       // execution at `create({id})` — same convention as pr-review.
       idempotencyKey: ({ payload }) =>
-        `offload-test:${String(
-          payload.repository?.full_name ?? "unknown/unknown",
-        ).replace(/\//g, "_")}:${String(
-          payload.pull_request?.head?.sha ?? "",
-        ).slice(0, 12)}`,
+        `offload-test:${String(payload.repository?.full_name ?? "unknown/unknown").replace(
+          /\//g,
+          "_",
+        )}:${String(payload.pull_request?.head?.sha ?? "").slice(0, 12)}`,
       // Skip drafts (not ready to gate) and dependabot (shouldn't burn container
       // minutes) — mirrors pr-review's gate.
       gate: ({ payload }) =>
@@ -273,12 +269,8 @@ export const offloadTest = defineRun({
                     : yield* config.get(COMMAND_KEY);
                 return {
                   command,
-                  install: parseBoolConfig(
-                    yield* config.get(repoInstallKey(input.repo)),
-                  ),
-                  timeoutSec: parseIntConfig(
-                    yield* config.get(repoTimeoutKey(input.repo)),
-                  ),
+                  install: parseBoolConfig(yield* config.get(repoInstallKey(input.repo))),
+                  timeoutSec: parseIntConfig(yield* config.get(repoTimeoutKey(input.repo))),
                 };
               }),
             )
@@ -303,8 +295,7 @@ export const offloadTest = defineRun({
       // schema default that used to live on the input (see its doc comment), so
       // a caller that passes nothing anywhere lands exactly where it always did.
       const install = input.install ?? resolved.install ?? false;
-      const timeoutSec =
-        input.timeoutSec ?? resolved.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
+      const timeoutSec = input.timeoutSec ?? resolved.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
 
       // checkout — acquire a container (honouring the `image` override), clone
       // the repo at the requested SHA, and optionally run the R2-cached
@@ -382,10 +373,7 @@ export const offloadTest = defineRun({
       // new push re-heals). Per-heal model spend is bounded by the AgentBudget DO.
       // Best-effort throughout — a dispatch fault never changes this run's check
       // outcome. specs/08-self-healing.md § 4 (ci class) + § 9 (dedup).
-      if (
-        result.exitCode !== 0 &&
-        (yield* config.get("self-heal.ci.enabled")) === "true"
-      ) {
+      if (result.exitCode !== 0 && (yield* config.get("self-heal.ci.enabled")) === "true") {
         const incident = commandFailureToIncident({
           repo: input.repo,
           sha: input.sha,
@@ -399,10 +387,7 @@ export const offloadTest = defineRun({
             spawnChildRun({
               run: "self-heal-pr",
               input: { incident },
-              instanceId: `self-heal:${incident.incidentId}:${input.sha}`.slice(
-                0,
-                200,
-              ),
+              instanceId: `self-heal:${incident.incidentId}:${input.sha}`.slice(0, 200),
             }),
           ).pipe(
             Effect.flatMap((handle) =>

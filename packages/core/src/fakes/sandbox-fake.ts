@@ -8,12 +8,7 @@
 // Spec: specs/pm/plan.md § 3 (fakes/), specs/03-dsl.md § sandbox.
 
 import { Effect, Layer } from "effect";
-import {
-  ContainerLaunchFailed,
-  ExecFailed,
-  ExecTimeout,
-  ReadFileFailed,
-} from "../errors";
+import { ContainerLaunchFailed, ExecFailed, ExecTimeout, ReadFileFailed } from "../errors";
 import {
   type Container,
   type DetachedHandle,
@@ -118,9 +113,7 @@ export const makeSandboxFake = (
   let containerSeq = 0;
   const detachedCommands = new Map<string, string>();
   // Mutable per-key countdown of remaining transient launch failures.
-  const remainingLaunchFailures = new Map<string, number>(
-    Object.entries(launchFailures),
-  );
+  const remainingLaunchFailures = new Map<string, number>(Object.entries(launchFailures));
 
   const resolve = (command: string): CannedExec | undefined => {
     const key = Object.keys(program).find((k) => command.includes(k));
@@ -181,9 +174,7 @@ export const makeSandboxFake = (
       state.reads.push({ path });
       const content = files[path];
       return content === undefined
-        ? Effect.fail(
-            new ReadFileFailed({ path, message: "no such file in fake" }),
-          )
+        ? Effect.fail(new ReadFileFailed({ path, message: "no such file in fake" }))
         : Effect.succeed(content);
     },
 
@@ -194,9 +185,7 @@ export const makeSandboxFake = (
         // minting a handle — the process never started, exactly as a real
         // `ContainerLaunchFailed` leaves no detached process behind. The
         // caller's retry then re-invokes `runDetached`, counting this key down.
-        const failKey = Object.keys(launchFailures).find((k) =>
-          command.includes(k),
-        );
+        const failKey = Object.keys(launchFailures).find((k) => command.includes(k));
         if (failKey !== undefined) {
           const remaining = remainingLaunchFailures.get(failKey) ?? 0;
           if (remaining > 0) {
@@ -261,9 +250,8 @@ export const makeSandboxFake = (
  * test": { exitCode: 1 } })`. The inspectable state is dropped; tests that need
  * it call `makeSandboxFake` directly.
  */
-export const sandboxFakeProgram = (
-  program: CannedProgram,
-): Layer.Layer<Sandbox> => makeSandboxFake(program).layer;
+export const sandboxFakeProgram = (program: CannedProgram): Layer.Layer<Sandbox> =>
+  makeSandboxFake(program).layer;
 
 /** A ready-to-use Sandbox fake Layer with an empty program (all execs exit 0). */
 export const SandboxFake: Layer.Layer<Sandbox> = makeSandboxFake().layer;

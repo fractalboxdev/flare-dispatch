@@ -72,11 +72,7 @@ describe("GET /v1/mailbox/:localPart", () => {
     const exp = Math.floor(Date.now() / 1000) + 300;
     const token = await signMailboxToken(SECRET, LOCAL, exp);
     const { db } = fakeDb(messageRow);
-    const res = await handleMailboxRead(
-      envWith(db),
-      LOCAL,
-      url(LOCAL, exp, `${token}x`),
-    );
+    const res = await handleMailboxRead(envWith(db), LOCAL, url(LOCAL, exp, `${token}x`));
     expect(res.status).toBe(403);
   });
 
@@ -90,11 +86,7 @@ describe("GET /v1/mailbox/:localPart", () => {
 
   it("404s an invalid local-part shape", async () => {
     const { db } = fakeDb(messageRow);
-    const res = await handleMailboxRead(
-      envWith(db),
-      "not-a-mailbox",
-      url("not-a-mailbox", 0, "x"),
-    );
+    const res = await handleMailboxRead(envWith(db), "not-a-mailbox", url("not-a-mailbox", 0, "x"));
     expect(res.status).toBe(404);
   });
 

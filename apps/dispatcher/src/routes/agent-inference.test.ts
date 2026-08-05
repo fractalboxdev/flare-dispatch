@@ -18,13 +18,18 @@ import type { Env } from "../env";
 const HMAC = "agent-proxy-secret-please-rotate-aaaaaa";
 const EXEC = "self-heal:owner_repo:abc123def456";
 
-const url = (exec: string) =>
-  `https://dispatcher.example/v1/agent/${exec}/inference`;
+const url = (exec: string) => `https://dispatcher.example/v1/agent/${exec}/inference`;
 
 /** A fake AgentBudget DO namespace whose stub records reserve/settle. */
 const fakeBudget = (reserve: unknown) => {
   const settle = vi.fn(async () => {});
-  const stub = { reserve: vi.fn(async () => reserve), settle, kill: vi.fn(), init: vi.fn(), status: vi.fn() };
+  const stub = {
+    reserve: vi.fn(async () => reserve),
+    settle,
+    kill: vi.fn(),
+    init: vi.fn(),
+    status: vi.fn(),
+  };
   const ns = {
     idFromName: (n: string) => ({ name: n }),
     get: () => stub,

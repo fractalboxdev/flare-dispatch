@@ -48,8 +48,7 @@ describe("pure helpers", () => {
 
 describe("makeCloudflareLive.deployments", () => {
   const stubFetch = (body: unknown, status = 200): typeof fetch =>
-    (async () =>
-      new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+    (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
 
   it("reads a configured project's deployments and filters by status", async () => {
     const layer = makeCloudflareLive({
@@ -77,9 +76,7 @@ describe("makeCloudflareLive.deployments", () => {
       fetchImpl: stubFetch({}, 403),
     });
     const exit = await Effect.runPromiseExit(
-      cloudflare
-        .deployments({ projects: ["site-a"] })
-        .pipe(Effect.provide(layer)),
+      cloudflare.deployments({ projects: ["site-a"] }).pipe(Effect.provide(layer)),
     );
     expect(exit._tag).toBe("Failure");
   });

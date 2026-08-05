@@ -45,11 +45,7 @@ import { artifactKey, jsonError, streamObject } from "../r2-object";
 const ARTIFACT_CACHE = "private, max-age=31536000, immutable";
 
 const escapeHtml = (s: string): string =>
-  s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
  * Render a minimal HTML listing of the expanded files under an artifact —
@@ -126,13 +122,9 @@ export const handleArtifact = async (
   }
 
   const key =
-    subPath === ""
-      ? artifactKey(execution, name)
-      : `${artifactKey(execution, name)}/${subPath}`;
+    subPath === "" ? artifactKey(execution, name) : `${artifactKey(execution, name)}/${subPath}`;
   const response = await streamObject(env.RUNS_STORAGE, key, {
     cacheControl: ARTIFACT_CACHE,
   });
-  return (
-    response ?? jsonError("artifact_not_found", `no artifact at "${key}"`, 404)
-  );
+  return response ?? jsonError("artifact_not_found", `no artifact at "${key}"`, 404);
 };

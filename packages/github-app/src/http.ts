@@ -84,10 +84,7 @@ export const retryAfterMsFromHeaders = (
  * decode after this guard, so decode semantics (strict vs tolerant) stay
  * per-call.
  */
-export const assertOk = async (
-  res: Response,
-  message: string,
-): Promise<void> => {
+export const assertOk = async (res: Response, message: string): Promise<void> => {
   if (!res.ok) {
     throw new GithubApiError(
       message,

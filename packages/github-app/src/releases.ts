@@ -57,30 +57,25 @@ export type CreateReleaseResult = {
  * release already exists for `tag` (the caller's idempotency key should prevent
  * re-firing the same release, so a 422 here is a genuine conflict to surface).
  */
-export const createRelease = async (
-  opts: CreateReleaseOptions,
-): Promise<CreateReleaseResult> => {
+export const createRelease = async (opts: CreateReleaseOptions): Promise<CreateReleaseResult> => {
   const { owner, name: repoName } = splitRepo(opts.repo);
   const { apiBase, doFetch } = resolveClient(opts);
 
-  const res = await doFetch(
-    `${apiBase}/repos/${owner}/${repoName}/releases`,
-    {
-      method: "POST",
-      headers: ghHeaders(opts.token, { json: true }),
-      body: JSON.stringify({
-        tag_name: opts.tag,
-        ...(opts.target !== undefined ? { target_commitish: opts.target } : {}),
-        name: opts.name ?? opts.tag,
-        body: opts.body,
-        draft: opts.draft ?? false,
-        prerelease: opts.prerelease ?? false,
-        // We render our own categorized notes; never ask GitHub to overwrite
-        // `body` with its auto-generated list.
-        generate_release_notes: false,
-      }),
-    },
-  );
+  const res = await doFetch(`${apiBase}/repos/${owner}/${repoName}/releases`, {
+    method: "POST",
+    headers: ghHeaders(opts.token, { json: true }),
+    body: JSON.stringify({
+      tag_name: opts.tag,
+      ...(opts.target !== undefined ? { target_commitish: opts.target } : {}),
+      name: opts.name ?? opts.tag,
+      body: opts.body,
+      draft: opts.draft ?? false,
+      prerelease: opts.prerelease ?? false,
+      // We render our own categorized notes; never ask GitHub to overwrite
+      // `body` with its auto-generated list.
+      generate_release_notes: false,
+    }),
+  });
 
   await assertOk(res, "release create failed");
 

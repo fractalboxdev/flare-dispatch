@@ -27,9 +27,7 @@ describe("defineRun", () => {
   });
 
   it("accepts a semver pre-release version", () => {
-    expect(() =>
-      defineRun({ ...validSpec, version: "2.0.0-rc.1" }),
-    ).not.toThrow();
+    expect(() => defineRun({ ...validSpec, version: "2.0.0-rc.1" })).not.toThrow();
   });
 
   it.each([
@@ -59,9 +57,7 @@ describe("defineRun", () => {
     [Number.NaN, "NaN"],
     [Number.POSITIVE_INFINITY, "Infinity"],
   ])("rejects non-positive maxDurationSec %j (%s)", (maxDurationSec) => {
-    expect(() =>
-      defineRun({ ...validSpec, limits: { maxDurationSec } }),
-    ).toThrow(/maxDurationSec/);
+    expect(() => defineRun({ ...validSpec, limits: { maxDurationSec } })).toThrow(/maxDurationSec/);
   });
 
   describe("sandboxImage", () => {

@@ -71,27 +71,20 @@ const synthesizeGithubBlock = (
   sha: string;
   installation_id?: number;
 } => {
-  const repo = (payload as { repository?: { full_name?: string } }).repository
-    ?.full_name ?? "unknown/unknown";
+  const repo =
+    (payload as { repository?: { full_name?: string } }).repository?.full_name ?? "unknown/unknown";
   // Best-effort SHA — `deployment.sha`, `pull_request.head.sha`,
   // `head_commit.id`, `check_run.head_sha`, `check_suite.head_sha`. A truly
   // SHA-less event falls back to "main" so the `executions` row still
   // satisfies its NOT NULL columns.
-  const deploymentSha = (payload as { deployment?: { sha?: string } }).deployment
-    ?.sha;
-  const prSha = (payload as { pull_request?: { head?: { sha?: string } } })
-    .pull_request?.head?.sha;
-  const commitSha = (payload as { head_commit?: { id?: string } }).head_commit
-    ?.id;
-  const checkRunSha = (payload as { check_run?: { head_sha?: string } })
-    .check_run?.head_sha;
-  const checkSuiteSha = (payload as { check_suite?: { head_sha?: string } })
-    .check_suite?.head_sha;
-  const sha =
-    deploymentSha ?? prSha ?? commitSha ?? checkRunSha ?? checkSuiteSha ?? "main";
+  const deploymentSha = (payload as { deployment?: { sha?: string } }).deployment?.sha;
+  const prSha = (payload as { pull_request?: { head?: { sha?: string } } }).pull_request?.head?.sha;
+  const commitSha = (payload as { head_commit?: { id?: string } }).head_commit?.id;
+  const checkRunSha = (payload as { check_run?: { head_sha?: string } }).check_run?.head_sha;
+  const checkSuiteSha = (payload as { check_suite?: { head_sha?: string } }).check_suite?.head_sha;
+  const sha = deploymentSha ?? prSha ?? commitSha ?? checkRunSha ?? checkSuiteSha ?? "main";
 
-  const installation_id = (payload as { installation?: { id?: number } })
-    .installation?.id;
+  const installation_id = (payload as { installation?: { id?: number } }).installation?.id;
 
   return installation_id !== undefined
     ? { repo, ref: "refs/heads/main", sha, installation_id }
@@ -99,18 +92,14 @@ const synthesizeGithubBlock = (
 };
 
 /** Handle `POST /v1/webhooks/github`. */
-export const handleGithubWebhook = async (
-  request: Request,
-  env: Env,
-): Promise<Response> => {
+export const handleGithubWebhook = async (request: Request, env: Env): Promise<Response> => {
   // 1. Opt-in: refuse if no webhook secret is provisioned. Better than
   //    silently accepting unsigned deliveries.
   if (env.GITHUB_WEBHOOK_SECRET === undefined) {
     return json(
       {
         error: "webhook_not_configured",
-        message:
-          "GITHUB_WEBHOOK_SECRET is unset; Webhook mode is off on this deploy",
+        message: "GITHUB_WEBHOOK_SECRET is unset; Webhook mode is off on this deploy",
       },
       503,
     );
@@ -136,16 +125,10 @@ export const handleGithubWebhook = async (
   const deliveryId = request.headers.get("X-GitHub-Delivery");
   const event = request.headers.get("X-GitHub-Event");
   if (deliveryId === null || deliveryId.length === 0) {
-    return json(
-      { error: "missing_delivery_id", message: "X-GitHub-Delivery is required" },
-      400,
-    );
+    return json({ error: "missing_delivery_id", message: "X-GitHub-Delivery is required" }, 400);
   }
   if (event === null || event.length === 0) {
-    return json(
-      { error: "missing_event", message: "X-GitHub-Event is required" },
-      400,
-    );
+    return json({ error: "missing_event", message: "X-GitHub-Event is required" }, 400);
   }
 
   // 5. Receiver-level dedup short-circuit on X-GitHub-Delivery.
@@ -179,12 +162,10 @@ export const handleGithubWebhook = async (
   //     that's already terminal (run timed out / published) is not retryable.
   const approval = resolveReleaseApproval(event, payload);
   if (approval !== undefined) {
-    const outcome = await signalWorkflow(
-      env.RUNS_WORKFLOW,
-      approval.wfId,
-      "release-approval",
-      { decision: approval.decision, decider: approval.decider },
-    );
+    const outcome = await signalWorkflow(env.RUNS_WORKFLOW, approval.wfId, "release-approval", {
+      decision: approval.decision,
+      decider: approval.decider,
+    });
     if (env.IDEMPOTENCY_KV !== undefined) {
       await env.IDEMPOTENCY_KV.put(deliveryKey, "1", {
         expirationTtl: DEDUP_TTL_SEC,
@@ -212,16 +193,13 @@ export const handleGithubWebhook = async (
   const matches = triggersByEvent(event);
   const payloadAction =
     typeof (payload as { action?: unknown }).action === "string"
-      ? ((payload as { action: string }).action)
+      ? (payload as { action: string }).action
       : undefined;
 
   // GitHub's `action` field is always a string when present, but a
   // non-string value (beta API, unexpected event shape) would silently
   // fail to match any trigger. Surface it so the operator can diagnose.
-  if (
-    (payload as { action?: unknown }).action !== undefined &&
-    payloadAction === undefined
-  ) {
+  if ((payload as { action?: unknown }).action !== undefined && payloadAction === undefined) {
     console.warn(
       `[webhook] event "${event}" has a non-string action field — no trigger actions[] filter will match`,
     );
@@ -289,9 +267,7 @@ export const handleGithubWebhook = async (
         continue;
       }
       // A non-dedup failure on one trigger must not poison sibling triggers.
-      console.error(
-        `[webhook] create failed run="${run.name}" id="${id}": ${message}`,
-      );
+      console.error(`[webhook] create failed run="${run.name}" id="${id}": ${message}`);
     }
   }
 

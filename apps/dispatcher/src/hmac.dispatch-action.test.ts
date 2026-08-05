@@ -34,11 +34,9 @@ const SAMPLE_BODY = JSON.stringify({
  * the sandbox image the suite runs in ships openssl but not xxd.
  */
 const opensslHmacHex = (secret: string, body: string): string => {
-  const digest = execFileSync(
-    "openssl",
-    ["dgst", "-sha256", "-hmac", secret, "-binary"],
-    { input: body },
-  );
+  const digest = execFileSync("openssl", ["dgst", "-sha256", "-hmac", secret, "-binary"], {
+    input: body,
+  });
   return Buffer.from(digest).toString("hex");
 };
 
@@ -52,11 +50,7 @@ describe("dispatch.sh ↔ hmac.ts HMAC cross-check", () => {
 
   it("verify() accepts the sha256=<hex> header openssl produced", async () => {
     const header = `sha256=${opensslHmacHex(SECRET, SAMPLE_BODY)}`;
-    const ok = await verify(
-      SECRET,
-      header,
-      new TextEncoder().encode(SAMPLE_BODY),
-    );
+    const ok = await verify(SECRET, header, new TextEncoder().encode(SAMPLE_BODY));
 
     expect(ok).toBe(true);
   });
@@ -67,11 +61,9 @@ describe("dispatch.sh ↔ hmac.ts HMAC cross-check", () => {
     // (`openssl dgst -sha256 -binary | xxd -p -c 256 | cut -c1-8`), one
     // returned by the Dispatcher from its own secret (`fingerprint()`). If
     // those pipelines ever diverge, the diagnostic lies. Lock them.
-    const opensslDigest = execFileSync(
-      "openssl",
-      ["dgst", "-sha256", "-binary"],
-      { input: SECRET },
-    );
+    const opensslDigest = execFileSync("openssl", ["dgst", "-sha256", "-binary"], {
+      input: SECRET,
+    });
     // Hex-encode in Node (== `xxd -p -c 256`), then `cut -c1-8`.
     const opensslFp = Buffer.from(opensslDigest).toString("hex").slice(0, 8);
 
@@ -80,11 +72,7 @@ describe("dispatch.sh ↔ hmac.ts HMAC cross-check", () => {
 
   it("verify() rejects a MAC computed over a different body", async () => {
     const header = `sha256=${opensslHmacHex(SECRET, SAMPLE_BODY)}`;
-    const ok = await verify(
-      SECRET,
-      header,
-      new TextEncoder().encode(`${SAMPLE_BODY} `),
-    );
+    const ok = await verify(SECRET, header, new TextEncoder().encode(`${SAMPLE_BODY} `));
 
     expect(ok).toBe(false);
   });

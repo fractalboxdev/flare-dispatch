@@ -15,9 +15,7 @@ import {
 const MAX_QUEUE_AGE = 1_200_000; // 20 min dispatch-age ceiling
 const ENQUEUED_AT = 10_000;
 
-const observed = (
-  over: Partial<AdmissionObservation> = {},
-): AdmissionObservation => ({
+const observed = (over: Partial<AdmissionObservation> = {}): AdmissionObservation => ({
   admitted: false,
   position: 0,
   poolBusy: 16,
@@ -87,12 +85,7 @@ describe("decideAdmission", () => {
   it("clamps queuedForMs to zero when the clock appears to move backwards", () => {
     // A backwards clock must never produce a negative age (nor a spurious
     // timeout with a tiny ceiling) — clamp to 0 and keep waiting.
-    const decision = decideAdmission(
-      observed(),
-      ENQUEUED_AT,
-      ENQUEUED_AT - 5_000,
-      MAX_QUEUE_AGE,
-    );
+    const decision = decideAdmission(observed(), ENQUEUED_AT, ENQUEUED_AT - 5_000, MAX_QUEUE_AGE);
     expect(decision._kind).toBe("wait");
   });
 });

@@ -22,10 +22,7 @@ const THINK_TAGS = "think|thinking|reasoning";
  */
 export const stripThinkBlocks = (text: string): string =>
   text
-    .replace(
-      new RegExp(`<(?:${THINK_TAGS})>[\\s\\S]*?</(?:${THINK_TAGS})>`, "gi"),
-      "",
-    )
+    .replace(new RegExp(`<(?:${THINK_TAGS})>[\\s\\S]*?</(?:${THINK_TAGS})>`, "gi"), "")
     .replace(/◁think▷[\s\S]*?◁\/think▷/gi, "")
     // Unterminated openers — drop the trailing reasoning.
     .replace(new RegExp(`<(?:${THINK_TAGS})>[\\s\\S]*$`, "i"), "")

@@ -23,12 +23,7 @@
 // — the body `ReadableStream` is passed straight through, so R2 artifact/log
 // streaming is preserved.
 
-import {
-  HttpApp,
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform";
+import { HttpApp, HttpRouter, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { Context, Effect, Option } from "effect";
 
 import { CurrentEnv, ExecutionsRead, LogToken, portsLayer, Access } from "./ports";
@@ -40,16 +35,9 @@ import { handleAgentInference } from "./routes/agent-inference";
 import { handleArtifact } from "./routes/artifacts";
 import { handleDeploy } from "./routes/deploy";
 import { handleDispatch } from "./routes/dispatch";
-import {
-  handleExecutionDetail,
-  handleExecutionsList,
-} from "./routes/executions";
+import { handleExecutionDetail, handleExecutionsList } from "./routes/executions";
 import { handleHealth } from "./routes/health";
-import {
-  handleInstallLlms,
-  handleInstallNew,
-  handleInstalled,
-} from "./routes/github";
+import { handleInstallLlms, handleInstallNew, handleInstalled } from "./routes/github";
 import { handleLogFile, handleLogsAggregate, handleLogViewer } from "./routes/logs";
 import { handleMailboxRead } from "./routes/mailbox";
 import { handleOidcDiscovery, handleOidcJwks } from "./routes/oidc";
@@ -66,10 +54,7 @@ const REPO_SLUG = "fractalbox/flare-dispatch";
 // ---------------------------------------------------------------------------
 
 /** A JSON error response, byte-compatible with the old `json()` helper. */
-const jsonResponse = (
-  body: unknown,
-  status: number,
-): HttpServerResponse.HttpServerResponse =>
+const jsonResponse = (body: unknown, status: number): HttpServerResponse.HttpServerResponse =>
   HttpServerResponse.raw(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
@@ -151,11 +136,7 @@ type Produce = (args: RouteArgs) => Promise<Response> | Response;
  *   * a method mismatch on a known path → `405 method_not_allowed`,
  *   * otherwise the legacy handler's `Response` is streamed back.
  */
-const route = (
-  method: "GET" | "POST",
-  produce: Produce,
-  opts?: { readonly viewer?: boolean },
-) =>
+const route = (method: "GET" | "POST", produce: Produce, opts?: { readonly viewer?: boolean }) =>
   Effect.gen(function* () {
     const request = yield* currentRequest;
     if (opts?.viewer === true) {
@@ -169,8 +150,7 @@ const route = (
     return yield* runLegacy(() => produce({ request, url, env, params }));
   });
 
-const decode = (params: Params, key: string): string =>
-  decodeURIComponent(params[key] ?? "");
+const decode = (params: Params, key: string): string => decodeURIComponent(params[key] ?? "");
 
 /**
  * A GET viewer route whose handler is itself an Effect over the ports (the
@@ -273,9 +253,7 @@ const dashboardData = Effect.gen(function* () {
         startedAt: row.started_at,
         completedAt: row.completed_at,
         durationMs:
-          row.started_at !== null &&
-          row.completed_at !== null &&
-          row.completed_at > row.started_at
+          row.started_at !== null && row.completed_at !== null && row.completed_at > row.started_at
             ? row.completed_at - row.started_at
             : null,
         costMicroUsd: row.cost_micro_usd,
@@ -345,10 +323,10 @@ const dashboardJsonRoute = Effect.gen(function* () {
   if (request.method !== "GET") return methodNotAllowed;
 
   const { origin, rows } = yield* dashboardData;
-  return HttpServerResponse.raw(
-    JSON.stringify({ origin, repoSlug: REPO_SLUG, rows }),
-    { status: 200, headers: { "content-type": "application/json; charset=utf-8" } },
-  );
+  return HttpServerResponse.raw(JSON.stringify({ origin, repoSlug: REPO_SLUG, rows }), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 });
 
 /** How many recent finished executions the analytics aggregate samples. */
@@ -371,8 +349,7 @@ const analyticsJsonRoute = Effect.gen(function* () {
   // Deep-link to this deploy's AI Gateway analytics — the detailed per-request
   // token/cost/latency view that backs our coarse per-recipe aggregate.
   const env = yield* CurrentEnv;
-  const aiGatewayUrl =
-    aiGatewayAnalyticsUrl(env.CLOUDFLARE_ACCOUNT_ID, env.AI_GATEWAY_ID) ?? null;
+  const aiGatewayUrl = aiGatewayAnalyticsUrl(env.CLOUDFLARE_ACCOUNT_ID, env.AI_GATEWAY_ID) ?? null;
   return HttpServerResponse.raw(
     JSON.stringify({ repoSlug: REPO_SLUG, sampled: ANALYTICS_SAMPLE, runs, aiGatewayUrl }),
     { status: 200, headers: { "content-type": "application/json; charset=utf-8" } },
@@ -439,7 +416,10 @@ const baseRouter = HttpRouter.empty.pipe(
   // ungated; hashed `/assets/*` are deliberately NOT, so they stay public.
   HttpRouter.all("/executions/*", appShellRoute),
   HttpRouter.all("/analytics", appShellRoute),
-  HttpRouter.all("/health", route("GET", () => handleHealth())),
+  HttpRouter.all(
+    "/health",
+    route("GET", () => handleHealth()),
+  ),
   HttpRouter.all("/deploy", deployRoute),
   HttpRouter.all(
     "/replay/:sessionId",
@@ -457,11 +437,9 @@ const baseRouter = HttpRouter.empty.pipe(
   ),
   HttpRouter.all(
     "/logs/:execution",
-    route(
-      "GET",
-      ({ env, params, url }) => handleLogViewer(env, decode(params, "execution"), url),
-      { viewer: true },
-    ),
+    route("GET", ({ env, params, url }) => handleLogViewer(env, decode(params, "execution"), url), {
+      viewer: true,
+    }),
   ),
   HttpRouter.all(
     "/.well-known/openid-configuration",
@@ -549,10 +527,7 @@ const router = baseRouter.pipe(
  * Route a request through the typed router with this request's bindings. Builds
  * the web handler per request so the `CurrentEnv` Layer carries the right `Env`.
  */
-export const handleViaApp = async (
-  request: Request,
-  env: Env,
-): Promise<Response> => {
+export const handleViaApp = async (request: Request, env: Env): Promise<Response> => {
   let escaped: { readonly value: unknown } | null = null;
   const sink: { record: (error: unknown) => void } = {
     record: (value) => {
@@ -560,10 +535,7 @@ export const handleViaApp = async (
     },
   };
   const handler = HttpApp.toWebHandler(
-    router.pipe(
-      Effect.provide(portsLayer(env)),
-      Effect.provideService(DefectSink, sink),
-    ),
+    router.pipe(Effect.provide(portsLayer(env)), Effect.provideService(DefectSink, sink)),
   );
   const response = await handler(request);
   // A legacy handler THREW — propagate it as a rejection, matching the old

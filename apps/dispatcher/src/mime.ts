@@ -104,21 +104,18 @@ const mimeType = (contentType: string | undefined): string =>
  * decode untouched. Many providers send a plain ASCII subject, so this is a
  * nicety, not load-bearing. */
 const decodeEncodedWords = (value: string): string =>
-  value.replace(
-    /=\?[^?]+\?([bBqQ])\?([^?]*)\?=/g,
-    (_match, enc: string, data: string) => {
-      try {
-        if (enc.toLowerCase() === "b") {
-          return decodeBase64(data);
-        }
-        // Q-encoding: `_` is space; `=XX` is a hex byte.
-        const qp = data.replace(/_/g, " ");
-        return decodeQuotedPrintable(qp);
-      } catch {
-        return _match;
+  value.replace(/=\?[^?]+\?([bBqQ])\?([^?]*)\?=/g, (_match, enc: string, data: string) => {
+    try {
+      if (enc.toLowerCase() === "b") {
+        return decodeBase64(data);
       }
-    },
-  );
+      // Q-encoding: `_` is space; `=XX` is a hex byte.
+      const qp = data.replace(/_/g, " ");
+      return decodeQuotedPrintable(qp);
+    } catch {
+      return _match;
+    }
+  });
 
 /** Decode a base64 string (whitespace-tolerant) to a JS string. UTF-8 aware:
  * `atob` yields a latin1 byte string, which we re-decode as UTF-8 so multibyte
@@ -224,11 +221,7 @@ const htmlToText = (html: string): string =>
  * the first `text/plain` for `text` and first `text/html` for `html`. For
  * `multipart/alternative` we still prefer text/plain (handled implicitly: we
  * fill `text` from the plain part regardless of order). */
-const walkPart = (
-  raw: string,
-  acc: { text?: string; html?: string },
-  depth: number,
-): void => {
+const walkPart = (raw: string, acc: { text?: string; html?: string }, depth: number): void => {
   if (depth > 20) return; // pathological nesting guard
   const [headerBlock, body] = splitHeadersBody(raw);
   const headers = parseHeaders(headerBlock);
@@ -265,9 +258,7 @@ const walkPart = (
  * body. Dependency-free, defensive: any internal failure degrades to a
  * best-effort `{ text }` rather than throwing.
  */
-export const parseEmail = (
-  raw: ArrayBuffer | Uint8Array | string,
-): ParsedEmail => {
+export const parseEmail = (raw: ArrayBuffer | Uint8Array | string): ParsedEmail => {
   let decoded: string;
   try {
     decoded = decodeBytes(raw);

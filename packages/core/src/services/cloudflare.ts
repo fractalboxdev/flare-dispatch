@@ -118,6 +118,5 @@ export const cloudflare = {
       createdWithinHours?: number;
     } = {},
   ) => Effect.flatMap(Cloudflare, (c) => c.deployments(opts)),
-  usage: (opts: { windowHours?: number } = {}) =>
-    Effect.flatMap(Cloudflare, (c) => c.usage(opts)),
+  usage: (opts: { windowHours?: number } = {}) => Effect.flatMap(Cloudflare, (c) => c.usage(opts)),
 } as const;

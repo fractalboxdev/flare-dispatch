@@ -19,18 +19,12 @@ import {
   MAX_SIGNAL_TITLE_CHARS,
 } from "@fractalboxdev/flare-dispatch-core";
 import { handleRequest } from "../router";
-import {
-  makeFakeEnv,
-  makeFakeKv,
-  makeFakeR2,
-  makeFakeWorkflow,
-} from "../test-helpers";
+import { makeFakeEnv, makeFakeKv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 
 const HMAC_SECRET = "unused-but-required-by-env-shape";
 const TOKEN = "ingress-token-please-rotate-aaaaaaaa";
 
-const url = (source: string) =>
-  `https://dispatcher.example/v1/webhooks/signals/${source}`;
+const url = (source: string) => `https://dispatcher.example/v1/webhooks/signals/${source}`;
 
 const signalsRequest = (
   source: string,
@@ -85,30 +79,21 @@ const fixture = (
 describe("POST /v1/webhooks/signals/:source — guards", () => {
   it("bad source label → 404", async () => {
     const { env, workflow } = fixture();
-    const res = await handleRequest(
-      signalsRequest("Bad_Source!", { title: "x" }),
-      env,
-    );
+    const res = await handleRequest(signalsRequest("Bad_Source!", { title: "x" }), env);
     expect(res.status).toBe(404);
     expect(workflow.calls).toHaveLength(0);
   });
 
   it("CONFIG_KV unbound → 503", async () => {
     const { env, workflow } = fixture({ withConfig: false });
-    const res = await handleRequest(
-      signalsRequest("vendor-a", { title: "x" }),
-      env,
-    );
+    const res = await handleRequest(signalsRequest("vendor-a", { title: "x" }), env);
     expect(res.status).toBe(503);
     expect(workflow.calls).toHaveLength(0);
   });
 
   it("token unset in CONFIG_KV → 503", async () => {
     const { env, workflow } = fixture({ withToken: false });
-    const res = await handleRequest(
-      signalsRequest("vendor-a", { title: "x" }),
-      env,
-    );
+    const res = await handleRequest(signalsRequest("vendor-a", { title: "x" }), env);
     expect(res.status).toBe(503);
     expect(workflow.calls).toHaveLength(0);
   });
@@ -145,10 +130,7 @@ describe("POST /v1/webhooks/signals/:source — guards", () => {
 
   it("wrong method → 405", async () => {
     const { env } = fixture();
-    const res = await handleRequest(
-      new Request(url("vendor-a"), { method: "GET" }),
-      env,
-    );
+    const res = await handleRequest(new Request(url("vendor-a"), { method: "GET" }), env);
     expect(res.status).toBe(405);
   });
 });
@@ -213,10 +195,7 @@ describe("POST /v1/webhooks/signals/:source — mapping", () => {
         }),
       },
     });
-    const res = await handleRequest(
-      signalsRequest("vendor-b", { msg: "the detail" }),
-      env,
-    );
+    const res = await handleRequest(signalsRequest("vendor-b", { msg: "the detail" }), env);
     expect(res.status).toBe(202);
     const params = workflow.calls[0]!.params as {
       inputs: { signals: Array<{ title: string; detail: string }> };
@@ -284,10 +263,7 @@ describe("POST /v1/webhooks/signals/:source — mapping", () => {
         "vendor-a": JSON.stringify({ title: "$.nope", detail: "$.also_nope" }),
       },
     });
-    const res = await handleRequest(
-      signalsRequest("vendor-a", { something: "else" }),
-      env,
-    );
+    const res = await handleRequest(signalsRequest("vendor-a", { something: "else" }), env);
     expect(res.status).toBe(422);
     expect(workflow.calls).toHaveLength(0);
   });
@@ -311,25 +287,18 @@ describe("POST /v1/webhooks/signals/:source — dedup", () => {
     expect(res2.status).toBe(202);
 
     expect(workflow.calls).toHaveLength(1);
-    const id1 = ((await (
-      await handleRequest(
-        signalsRequest("vendor-a", payload, { deliveryId: "delivery-1" }),
-        env,
-      )
-    ).json()) as { executionId: string }).executionId;
+    const id1 = (
+      (await (
+        await handleRequest(signalsRequest("vendor-a", payload, { deliveryId: "delivery-1" }), env)
+      ).json()) as { executionId: string }
+    ).executionId;
     expect(id1).toBe("signals:vendor-a:delivery-1");
   });
 
   it("distinct alerts (no delivery header) → two Workflow.creates", async () => {
     const { env, workflow } = fixture({ withKv: true });
-    await handleRequest(
-      signalsRequest("vendor-a", { title: "alert one", body: "a" }),
-      env,
-    );
-    await handleRequest(
-      signalsRequest("vendor-a", { title: "alert two", body: "b" }),
-      env,
-    );
+    await handleRequest(signalsRequest("vendor-a", { title: "alert one", body: "a" }), env);
+    await handleRequest(signalsRequest("vendor-a", { title: "alert two", body: "b" }), env);
     expect(workflow.calls).toHaveLength(2);
     expect(workflow.calls[0]!.id).not.toBe(workflow.calls[1]!.id);
   });

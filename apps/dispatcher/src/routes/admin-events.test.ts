@@ -10,39 +10,26 @@
 
 import { describe, expect, it } from "vitest";
 import { handleRequest } from "../router";
-import {
-  makeFakeEnv,
-  makeFakeR2,
-  makeFakeWorkflow,
-} from "../test-helpers";
+import { makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 
 const ADMIN_TOKEN = "admin-bearer-please-rotate";
 const HMAC_SECRET = "unused-but-required";
 
-const adminRequest = (
-  wfId: string,
-  body: unknown,
-  opts: { token?: string } = {},
-): Request => {
+const adminRequest = (wfId: string, body: unknown, opts: { token?: string } = {}): Request => {
   const headers: Record<string, string> = {
     "content-type": "application/json",
   };
   if (opts.token !== undefined) {
     headers["Authorization"] = `Bearer ${opts.token}`;
   }
-  return new Request(
-    `https://dispatcher.example/v1/admin/events/${encodeURIComponent(wfId)}`,
-    {
-      method: "POST",
-      headers,
-      body: typeof body === "string" ? body : JSON.stringify(body),
-    },
-  );
+  return new Request(`https://dispatcher.example/v1/admin/events/${encodeURIComponent(wfId)}`, {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
 };
 
-const fixture = (
-  opts: { withAdminToken?: boolean; rejectIds?: ReadonlySet<string> } = {},
-) => {
+const fixture = (opts: { withAdminToken?: boolean; rejectIds?: ReadonlySet<string> } = {}) => {
   const workflow = makeFakeWorkflow({ rejectSendEventFor: opts.rejectIds });
   const storage = makeFakeR2();
   const env = makeFakeEnv({
@@ -123,11 +110,7 @@ describe("POST /v1/admin/events/:wf_id — delivery", () => {
 
   it("workflow not found (sendEvent rejects with 'unknown_instance') → 404", async () => {
     const { env } = fixture({ rejectIds: new Set(["missing-wf"]) });
-    const req = adminRequest(
-      "missing-wf",
-      { type: "x", payload: {} },
-      { token: ADMIN_TOKEN },
-    );
+    const req = adminRequest("missing-wf", { type: "x", payload: {} }, { token: ADMIN_TOKEN });
     const res = await handleRequest(req, env);
     expect(res.status).toBe(404);
   });

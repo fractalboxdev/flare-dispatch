@@ -104,9 +104,7 @@ describe("release-notes run", () => {
       sandboxProgram: {
         "git log": {
           exitCode: 0,
-          stdout: gitOut("v1.2.3", "headshaXYZ", [
-            ["sha1", "fix: patch a thing (#20)", "carol"],
-          ]),
+          stdout: gitOut("v1.2.3", "headshaXYZ", [["sha1", "fix: patch a thing (#20)", "carol"]]),
         },
       },
       eventQueue: q,
@@ -162,9 +160,7 @@ describe("release-notes pure helpers", () => {
   it("nextVersion bumps per Conventional Commits", () => {
     const feat = [parseConventional({ sha: "a", subject: "feat: x", author: "" })];
     const fix = [parseConventional({ sha: "a", subject: "fix: x", author: "" })];
-    const breaking = [
-      parseConventional({ sha: "a", subject: "feat!: x", author: "" }),
-    ];
+    const breaking = [parseConventional({ sha: "a", subject: "feat!: x", author: "" })];
 
     expect(nextVersion("", feat)).toBe("v0.1.0"); // first release
     expect(nextVersion("v1.2.3", fix)).toBe("v1.2.4");
@@ -176,8 +172,7 @@ describe("release-notes pure helpers", () => {
   });
 
   it("bumpFor prefers the strongest signal present", () => {
-    const conv = (s: string) =>
-      parseConventional({ sha: "a", subject: s, author: "" });
+    const conv = (s: string) => parseConventional({ sha: "a", subject: s, author: "" });
     expect(bumpFor([conv("fix: a"), conv("chore: b")])).toBe("patch");
     expect(bumpFor([conv("fix: a"), conv("feat: b")])).toBe("minor");
     expect(bumpFor([conv("feat: a"), conv("fix!: b")])).toBe("major");
@@ -196,8 +191,7 @@ describe("release-notes pure helpers", () => {
 
     // BREAKING CHANGE in the subject also flags breaking.
     expect(
-      parseConventional({ sha: "a", subject: "refactor: x BREAKING CHANGE", author: "" })
-        .breaking,
+      parseConventional({ sha: "a", subject: "refactor: x BREAKING CHANGE", author: "" }).breaking,
     ).toBe(true);
 
     // A non-conventional subject falls back to type "other".
@@ -207,14 +201,10 @@ describe("release-notes pure helpers", () => {
   });
 
   it("parseGitState splits HEAD / LASTTAG / COMMIT lines", () => {
-    const state = parseGitState(
-      gitOut("v1.0.0", "abc123", [["s1", "feat: a (#1)", "alice"]]),
-    );
+    const state = parseGitState(gitOut("v1.0.0", "abc123", [["s1", "feat: a (#1)", "alice"]]));
     expect(state.headSha).toBe("abc123");
     expect(state.lastTag).toBe("v1.0.0");
-    expect(state.commits).toEqual([
-      { sha: "s1", subject: "feat: a (#1)", author: "alice" },
-    ]);
+    expect(state.commits).toEqual([{ sha: "s1", subject: "feat: a (#1)", author: "alice" }]);
   });
 
   it("renderReleaseNotes categorizes, links PRs, and lists contributors", () => {
@@ -237,9 +227,7 @@ describe("release-notes pure helpers", () => {
     expect(notes).toContain("### 🐛 Fixes");
     expect(notes).toContain("### 🧹 Other changes");
     // PR link + author attribution.
-    expect(notes).toContain(
-      "[#10](https://github.com/fractalbox/flare-dispatch/pull/10)",
-    );
+    expect(notes).toContain("[#10](https://github.com/fractalbox/flare-dispatch/pull/10)");
     expect(notes).toContain("— @alice");
     // Compare link between the tags.
     expect(notes).toContain("/compare/v0.1.0...v0.2.0");

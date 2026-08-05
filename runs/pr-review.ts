@@ -158,9 +158,7 @@ const COMMENT_MARKER = "<!-- flare-dispatch: pr-review -->";
  * it needs no sanitization.
  */
 const viewerFooter = (viewerUrl: string | undefined): readonly string[] =>
-  viewerUrl === undefined
-    ? []
-    : ["", `📋 [View full logs & reviewed diff ↗](${viewerUrl})`];
+  viewerUrl === undefined ? [] : ["", `📋 [View full logs & reviewed diff ↗](${viewerUrl})`];
 
 /**
  * Where `prepare-diff` writes the unified diff inside the container. Read back
@@ -347,11 +345,7 @@ export const prReview = defineRun({
 });
 
 /** The boundary's red arm: post "could not complete", re-fail as `StepFailed`. */
-const failReview = (
-  input: RunInput,
-  viewerUrl: string | undefined,
-  err: unknown,
-) =>
+const failReview = (input: RunInput, viewerUrl: string | undefined, err: unknown) =>
   Effect.gen(function* () {
     const reason = describeError(err);
     // Post inside a step so a CF Workflow instance retry replays from
@@ -367,16 +361,11 @@ const failReview = (
         ].join("\n"),
       ).pipe(
         Effect.catchAll((postErr) =>
-          io.log(
-            "warn",
-            `pr-review: failure-comment post failed — ${describeError(postErr)}`,
-          ),
+          io.log("warn", `pr-review: failure-comment post failed — ${describeError(postErr)}`),
         ),
       ),
     );
-    return yield* Effect.fail(
-      new StepFailed({ step: "pr-review", cause: reason }),
-    );
+    return yield* Effect.fail(new StepFailed({ step: "pr-review", cause: reason }));
   });
 
 /** Reader-facing line for a capacity skip — the check-run summary AND the
@@ -387,11 +376,7 @@ const CONTEXT_SKIP_REASON =
 /** The boundary's neutral arm: the review was IMPOSSIBLE for capacity reasons
  *  (context overflow after shrink-retries) — post a "skipped" comment and fail
  *  `RunSkipped` so the dispatcher concludes the check `neutral`, not red. */
-const skipReview = (
-  input: RunInput,
-  viewerUrl: string | undefined,
-  err: ModelCallFailed,
-) =>
+const skipReview = (input: RunInput, viewerUrl: string | undefined, err: ModelCallFailed) =>
   Effect.gen(function* () {
     yield* step("post-skip-comment", () =>
       postComment(
@@ -409,10 +394,7 @@ const skipReview = (
         ].join("\n"),
       ).pipe(
         Effect.catchAll((postErr) =>
-          io.log(
-            "warn",
-            `pr-review: skip-comment post failed — ${describeError(postErr)}`,
-          ),
+          io.log("warn", `pr-review: skip-comment post failed — ${describeError(postErr)}`),
         ),
       ),
     );
@@ -431,9 +413,7 @@ const reviewBody = (input: RunInput, viewerUrl?: string) =>
     //    API key — the model is called through the `modelGateway` capability
     //    (Workers AI binding via an AI Gateway), which the runtime provides
     //    ambiently.
-    const resolved = yield* step("resolve-backend", () =>
-      resolveEffectiveBackend(input),
-    );
+    const resolved = yield* step("resolve-backend", () => resolveEffectiveBackend(input));
 
     // 2. Check out the PR head. `git` is in the image; no dependency install.
     const { container, dir: repoDir } = yield* step("checkout", () =>
@@ -511,9 +491,7 @@ const reviewBody = (input: RunInput, viewerUrl?: string) =>
     //     default. The plan's agent set follows from the mode.
     const agentMode: AgentMode =
       input.agents ??
-      parseAgentMode(
-        yield* step("resolve-agents", () => config.get("pr-review.agents")),
-      );
+      parseAgentMode(yield* step("resolve-agents", () => config.get("pr-review.agents")));
     const plan = planForMode(agentMode, tier);
 
     // 5. The reviewer system prompt — layered base → guidelines → focus,
@@ -526,12 +504,8 @@ const reviewBody = (input: RunInput, viewerUrl?: string) =>
     //        house rules (a suppression rubric, project conventions, severity
     //        calibration), so an operator can shape the review without forking
     //        the maintained default prompt.
-    const promptOverride = yield* step("resolve-prompt", () =>
-      config.get("pr-review.prompt"),
-    );
-    const guidelines = yield* step("resolve-guidelines", () =>
-      config.get(guidelinesKey(NS)),
-    );
+    const promptOverride = yield* step("resolve-prompt", () => config.get("pr-review.prompt"));
+    const guidelines = yield* step("resolve-guidelines", () => config.get(guidelinesKey(NS)));
     const systemPrompt = composeSystemPrompt({
       base: promptOverride ?? REVIEW_SYSTEM_PROMPT_DEFAULT,
       ...(guidelines !== undefined ? { guidelines } : {}),
@@ -541,9 +515,7 @@ const reviewBody = (input: RunInput, viewerUrl?: string) =>
     // 5b. Comment style preset — operator picks the comment layout. Both
     //     presets are hard-coded server-side (so model-authored text can't
     //     inject layout). See `parseStyle` + `renderReviewComment`.
-    const style = parseStyle(
-      yield* step("resolve-style", () => config.get("pr-review.style")),
-    );
+    const style = parseStyle(yield* step("resolve-style", () => config.get("pr-review.style")));
 
     // 5b-ii. How many findings the `compact` layout lists inline before the
     //        "…and N more" overflow line. Operator-tunable so the leaderboard
@@ -604,8 +576,7 @@ const reviewBody = (input: RunInput, viewerUrl?: string) =>
         return groundingBlock(out);
       }),
     ).pipe(Effect.catchAllCause(() => Effect.succeed("")));
-    const groundedDiff =
-      oxlintBlock.length > 0 ? `${oxlintBlock}\n\n${diff}` : diff;
+    const groundedDiff = oxlintBlock.length > 0 ? `${oxlintBlock}\n\n${diff}` : diff;
 
     // 6. Fan out one reviewer per domain, IN-WORKER, in parallel — only the
     //    agents this tier calls for. Each calls the model via the `modelGateway`
@@ -623,62 +594,62 @@ const reviewBody = (input: RunInput, viewerUrl?: string) =>
     //    do we re-raise (the typed cause), so the boundary posts an honest "could
     //    not complete" for a systemic fault (misconfigured backend, wrong
     //    model/mode, gateway down) instead of masking it as an empty review.
-    const reviewed = yield* step("review", () =>
-      Effect.gen(function* () {
-        const results = yield* Effect.forEach(
-          plan.agents,
-          (agent) =>
-            reviewDomain({
-              agent,
-              diff: groundedDiff,
-              tier: plan.tier,
-              model: resolved.model,
-              backend: resolved.backend,
-              mode: resolved.mode,
-              maxTokens: resolved.maxTokens,
-              systemPrompt,
-              ...(awsCreds !== undefined ? { aws: awsCreds } : {}),
-            }).pipe(Effect.either),
-          { concurrency: plan.agents.length },
-        );
+    const reviewed = yield* step(
+      "review",
+      () =>
+        Effect.gen(function* () {
+          const results = yield* Effect.forEach(
+            plan.agents,
+            (agent) =>
+              reviewDomain({
+                agent,
+                diff: groundedDiff,
+                tier: plan.tier,
+                model: resolved.model,
+                backend: resolved.backend,
+                mode: resolved.mode,
+                maxTokens: resolved.maxTokens,
+                systemPrompt,
+                ...(awsCreds !== undefined ? { aws: awsCreds } : {}),
+              }).pipe(Effect.either),
+            { concurrency: plan.agents.length },
+          );
 
-        // Log each failed domain's cause (the per-reviewer error is otherwise
-        // swallowed by the tolerance below) for operator diagnosis in the logs.
-        for (let i = 0; i < plan.agents.length; i++) {
-          const r = results[i];
-          if (r !== undefined && Either.isLeft(r)) {
-            yield* io.log(
-              "warn",
-              `pr-review: reviewer "${plan.agents[i]}" failed — ${describeError(r.left)}`,
-            );
+          // Log each failed domain's cause (the per-reviewer error is otherwise
+          // swallowed by the tolerance below) for operator diagnosis in the logs.
+          for (let i = 0; i < plan.agents.length; i++) {
+            const r = results[i];
+            if (r !== undefined && Either.isLeft(r)) {
+              yield* io.log(
+                "warn",
+                `pr-review: reviewer "${plan.agents[i]}" failed — ${describeError(r.left)}`,
+              );
+            }
           }
-        }
 
-        // Every reviewer failed → no partial review to salvage; re-raise the
-        // first cause (typed) so the error boundary names it precisely.
-        const firstLeft = results.find(Either.isLeft);
-        if (firstLeft !== undefined && results.every(Either.isLeft)) {
-          return yield* Effect.fail(firstLeft.left);
-        }
+          // Every reviewer failed → no partial review to salvage; re-raise the
+          // first cause (typed) so the error boundary names it precisely.
+          const firstLeft = results.find(Either.isLeft);
+          if (firstLeft !== undefined && results.every(Either.isLeft)) {
+            return yield* Effect.fail(firstLeft.left);
+          }
 
-        // Findings from the domains that succeeded; failed domains contribute
-        // none. Per-domain counts (or an `errored` flag) render in the comment so
-        // an all-empty review is visibly "N reviewers each reported 0", and a
-        // degraded review is visibly "this domain errored" — never silently
-        // indistinguishable from "found nothing".
-        const findings: ReadonlyArray<Finding> = results.flatMap((r) =>
-          Either.isRight(r) ? r.right : [],
-        );
-        const domainCounts: ReadonlyArray<DomainCount> = plan.agents.map(
-          (agent, i) => {
+          // Findings from the domains that succeeded; failed domains contribute
+          // none. Per-domain counts (or an `errored` flag) render in the comment so
+          // an all-empty review is visibly "N reviewers each reported 0", and a
+          // degraded review is visibly "this domain errored" — never silently
+          // indistinguishable from "found nothing".
+          const findings: ReadonlyArray<Finding> = results.flatMap((r) =>
+            Either.isRight(r) ? r.right : [],
+          );
+          const domainCounts: ReadonlyArray<DomainCount> = plan.agents.map((agent, i) => {
             const r = results[i];
             return r !== undefined && Either.isRight(r)
               ? { agent, count: r.right.length }
               : { agent, count: 0, errored: true };
-          },
-        );
-        return { findings, domainCounts };
-      }),
+          });
+          return { findings, domainCounts };
+        }),
       // Cap the per-step retry. CF Workflows' default is `limit: 5` (up to 6
       // attempts), and a step retry REPLAYS the whole fan-out. This step throws
       // ONLY when EVERY reviewer failed — an all-fail is systemic: a 429 storm
@@ -770,13 +741,10 @@ const planForMode = (mode: AgentMode, tier: Tier): Plan =>
 const resolveEffectiveBackend = (input: RunInput) =>
   Effect.gen(function* () {
     // The effective backend names which `<backend>.*` keys an override targets.
-    const backend = parseBackend(
-      input.backend ?? (yield* config.get(backendConfigKey(NS))),
-    );
+    const backend = parseBackend(input.backend ?? (yield* config.get(backendConfigKey(NS))));
     const keys = namespacedKeys(NS)[backend];
     const overrides = new Map<string, string>();
-    if (input.backend !== undefined)
-      overrides.set(backendConfigKey(NS), input.backend);
+    if (input.backend !== undefined) overrides.set(backendConfigKey(NS), input.backend);
     if (input.modelId !== undefined) overrides.set(keys.modelKey, input.modelId);
     if (input.region !== undefined && keys.regionKey !== undefined)
       overrides.set(keys.regionKey, input.region);
@@ -833,9 +801,7 @@ const postComment = (input: RunInput, body: string) =>
     pr: input.pr,
     sha: input.sha,
     body,
-    ...(input.installationId !== undefined
-      ? { installationId: input.installationId }
-      : {}),
+    ...(input.installationId !== undefined ? { installationId: input.installationId } : {}),
   });
 
 /** The tagged errors the review boundary knows how to describe precisely;
@@ -855,10 +821,7 @@ const describeError = (err: unknown): string =>
       "BackendUnconfigured",
       (e) => `backend "${e.backend}" is misconfigured — set ${e.missing}`,
     ),
-    Match.tag(
-      "ModelCallFailed",
-      (e) => `model call failed (${e.reason}): ${e.message}`,
-    ),
+    Match.tag("ModelCallFailed", (e) => `model call failed (${e.reason}): ${e.message}`),
     Match.tag(
       "StructuredOutputInvalid",
       (e) =>
@@ -869,21 +832,11 @@ const describeError = (err: unknown): string =>
         // step logs — which is exactly why an `empty` (the model's answer
         // silently dropped at the binding boundary) took so long to diagnose.
         // `sanitizeModelText` defangs it; the verdict never derives from it.
-        (e.excerpt.trim() !== ""
-          ? ` — model returned: "${sanitizeModelText(e.excerpt)}"`
-          : ""),
+        (e.excerpt.trim() !== "" ? ` — model returned: "${sanitizeModelText(e.excerpt)}"` : ""),
     ),
-    Match.tag(
-      "ExecNonZero",
-      (e) => `\`${e.command}\` exited ${e.exitCode}`,
-    ),
-    Match.tag(
-      "ReadFileFailed",
-      (e) => `reading the diff file \`${e.path}\` failed: ${e.message}`,
-    ),
-    Match.orElse(() =>
-      err instanceof Error ? err.message : JSON.stringify(err),
-    ),
+    Match.tag("ExecNonZero", (e) => `\`${e.command}\` exited ${e.exitCode}`),
+    Match.tag("ReadFileFailed", (e) => `reading the diff file \`${e.path}\` failed: ${e.message}`),
+    Match.orElse(() => (err instanceof Error ? err.message : JSON.stringify(err))),
   );
 
 /**
@@ -1043,9 +996,7 @@ const renderReviewComment = (
 ): string =>
   Match.value(style).pipe(
     Match.when("compact", () => renderCompact(input, output, viewerUrl, compactMax)),
-    Match.when("default", () =>
-      renderDefault(input, output, domainCounts, viewerUrl),
-    ),
+    Match.when("default", () => renderDefault(input, output, domainCounts, viewerUrl)),
     Match.exhaustive,
   );
 
@@ -1106,13 +1057,7 @@ const renderDefault = (
             : []),
         ];
 
-  return [
-    ...header,
-    ...findingsBlock,
-    ...viewerFooter(viewerUrl),
-    "",
-    COMMENT_MARKER,
-  ].join("\n");
+  return [...header, ...findingsBlock, ...viewerFooter(viewerUrl), "", COMMENT_MARKER].join("\n");
 };
 
 /** Compact "leaderboard-bot" layout — verdict header (`## ✅ LGTM` /
@@ -1163,9 +1108,7 @@ const renderCompact = (
       (f) =>
         `| ${compactSeverity(f.level)} | [${tableCell(findingLoc(f))}](${findingUrl(input.repo, input.sha, f)}) | ${tableCell(f.message)} |`,
     ),
-    ...(overflow > 0
-      ? ["", `_…and ${overflow} more (see check annotations)._`]
-      : []),
+    ...(overflow > 0 ? ["", `_…and ${overflow} more (see check annotations)._`] : []),
     ...viewerFooter(viewerUrl),
     "",
     COMMENT_MARKER,

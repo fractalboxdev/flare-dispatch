@@ -62,9 +62,7 @@ const spawn = (
   opts: { run: string; input: unknown; instanceId?: string },
 ) =>
   Effect.runPromiseExit(
-    Effect.flatMap(ChildRuns, (c) => c.spawn(opts)).pipe(
-      Effect.provide(makeChildRunsLive(cfg)),
-    ),
+    Effect.flatMap(ChildRuns, (c) => c.spawn(opts)).pipe(Effect.provide(makeChildRunsLive(cfg))),
   );
 
 describe("makeChildRunsLive", () => {
@@ -217,12 +215,7 @@ describe("makeChildRunsLive.poll (live D1 via Miniflare)", () => {
            (id, run, repo, ref, sha, status, started_at, input_json, summary_json, parent_execution_id)
          VALUES (?, 'shard', 'o/n', 'refs/heads/main', 'sha', ?, 0, '{}', ?, ?)`,
       )
-      .bind(
-        row.id,
-        row.status,
-        row.summaryJson ?? null,
-        row.parentExecutionId ?? null,
-      )
+      .bind(row.id, row.status, row.summaryJson ?? null, row.parentExecutionId ?? null)
       .run();
 
   const poll = (ids: readonly string[]) =>
@@ -248,12 +241,7 @@ describe("makeChildRunsLive.poll (live D1 via Miniflare)", () => {
     });
     await insertRow({ id: "c-failure", status: "failure" });
 
-    const records = await poll([
-      "c-success",
-      "c-missing",
-      "c-running",
-      "c-failure",
-    ]);
+    const records = await poll(["c-success", "c-missing", "c-running", "c-failure"]);
 
     expect(records).toEqual([
       { executionId: "c-success", status: "success", summaryJson: '{"exitCode":0}' },

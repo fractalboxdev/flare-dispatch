@@ -40,11 +40,7 @@
 //
 // Spec: specs/01-architecture.md § Sandbox, specs/03-dsl.md § sandbox.
 
-import {
-  getSandbox,
-  type Sandbox,
-  SessionTerminatedError,
-} from "@cloudflare/sandbox";
+import { getSandbox, type Sandbox, SessionTerminatedError } from "@cloudflare/sandbox";
 import { Duration, Effect, Layer } from "effect";
 import {
   CheckoutFailed,
@@ -124,9 +120,7 @@ const diagnosticTail = (cause: unknown): string => {
   }
   return raw.length <= STDERR_TAIL_MAX
     ? raw
-    : `…[${raw.length - STDERR_TAIL_MAX} chars truncated]…\n${raw.slice(
-        -STDERR_TAIL_MAX,
-      )}`;
+    : `…[${raw.length - STDERR_TAIL_MAX} chars truncated]…\n${raw.slice(-STDERR_TAIL_MAX)}`;
 };
 
 /** The subset of the SDK's `ExecResult` this layer consumes. */
@@ -238,7 +232,6 @@ const execToResult = async (
   }
 };
 
-
 /**
  * Build the live `Sandbox` Layer bound to the Containers binding.
  *
@@ -313,12 +306,14 @@ export const makeSandboxCloudflareLive = (
   ): Promise<void> => {
     const lines = [
       JSON.stringify({ stream: "meta", command }),
-      ...stdout.split("\n").filter(Boolean).map((line) =>
-        JSON.stringify({ stream: "stdout", line }),
-      ),
-      ...stderr.split("\n").filter(Boolean).map((line) =>
-        JSON.stringify({ stream: "stderr", line }),
-      ),
+      ...stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.stringify({ stream: "stdout", line })),
+      ...stderr
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.stringify({ stream: "stderr", line })),
     ];
     await bucket.put(key, `${lines.join("\n")}\n`, {
       httpMetadata: { contentType: "application/x-ndjson" },
@@ -334,9 +329,7 @@ export const makeSandboxCloudflareLive = (
    * already vanished) — a capture failure must never mask the original error,
    * so every step is swallowed.
    */
-  const captureDetachedLog = (
-    handleId: string,
-  ): Effect.Effect<string | undefined> =>
+  const captureDetachedLog = (handleId: string): Effect.Effect<string | undefined> =>
     Effect.promise(async () => {
       try {
         const proc = await box.getProcess(handleId);
@@ -396,9 +389,7 @@ export const makeSandboxCloudflareLive = (
           // checkout instead of running.
           const clear = await box.exec(`rm -rf ${targetDir}`);
           if (clear.exitCode !== 0) {
-            throw new Error(
-              `rm -rf ${targetDir} exited ${clear.exitCode}: ${clear.stderr}`,
-            );
+            throw new Error(`rm -rf ${targetDir} exited ${clear.exitCode}: ${clear.stderr}`);
           }
           await box.gitCheckout(cloneUrl, { targetDir });
           // `gitCheckout` clones a branch tip; pin the exact SHA so the run is
@@ -407,9 +398,7 @@ export const makeSandboxCloudflareLive = (
             cwd: targetDir,
           });
           if (checkout.exitCode !== 0) {
-            throw new Error(
-              `git checkout ${sha} exited ${checkout.exitCode}: ${checkout.stderr}`,
-            );
+            throw new Error(`git checkout ${sha} exited ${checkout.exitCode}: ${checkout.stderr}`);
           }
           return targetDir;
         },
@@ -452,10 +441,7 @@ export const makeSandboxCloudflareLive = (
           // base is configured, the truncation breadcrumb deep-links to this
           // exec's log file in the readable viewer.
           const file = logPath.slice(logPath.lastIndexOf("/") + 1);
-          const viewerUrl =
-            logsViewerBase !== undefined
-              ? `${logsViewerBase}#${file}`
-              : undefined;
+          const viewerUrl = logsViewerBase !== undefined ? `${logsViewerBase}#${file}` : undefined;
           return {
             exitCode: result.exitCode,
             durationMs: result.durationMs,
@@ -576,12 +562,10 @@ export const makeSandboxCloudflareLive = (
           // need not yet answer 2xx at `/`.
           await proc.waitForPort(port, {
             mode: "tcp",
-            timeout:
-              timeoutSec === undefined ? undefined : timeoutSec * 1000,
+            timeout: timeoutSec === undefined ? undefined : timeoutSec * 1000,
           });
         },
-        catch: (): PortNeverOpened =>
-          new PortNeverOpened({ port, timeoutSec: timeoutSec ?? 0 }),
+        catch: (): PortNeverOpened => new PortNeverOpened({ port, timeoutSec: timeoutSec ?? 0 }),
       });
 
       const bounded =
@@ -590,8 +574,7 @@ export const makeSandboxCloudflareLive = (
           : sdkWait.pipe(
               Effect.timeoutFail({
                 duration: Duration.seconds(timeoutSec),
-                onTimeout: () =>
-                  new PortNeverOpened({ port, timeoutSec }),
+                onTimeout: () => new PortNeverOpened({ port, timeoutSec }),
               }),
             );
 
@@ -620,8 +603,7 @@ export const makeSandboxCloudflareLive = (
         ? Effect.fail(
             new ExposePortFailed({
               port,
-              cause:
-                "no preview hostname configured — cannot construct a public URL",
+              cause: "no preview hostname configured — cannot construct a public URL",
             }),
           )
         : Effect.tryPromise({

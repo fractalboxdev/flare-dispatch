@@ -18,9 +18,7 @@
  *   - An empty path normalises to `{ parent: ".", basename: "" }` — the
  *     caller should treat that as a misconfig.
  */
-export const splitTarPath = (
-  path: string,
-): { parent: string; basename: string } => {
+export const splitTarPath = (path: string): { parent: string; basename: string } => {
   const norm = path.replace(/\/+$/, "");
   if (norm === "") return { parent: ".", basename: "" };
   const slash = norm.lastIndexOf("/");
@@ -47,10 +45,7 @@ export const isRegularFileStat = (stdout: string): boolean => {
  * a per-invocation suffix avoids collisions between concurrent uploads of
  * different artifacts from the same execution.
  */
-export const containerTarballPath = (
-  name: string,
-  randomSuffix: string,
-): string => {
+export const containerTarballPath = (name: string, randomSuffix: string): string => {
   const safe = name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   const stem = safe === "" ? "artifact" : safe;
   return `/tmp/fd-artifact-${stem}-${randomSuffix}.tar.gz`;

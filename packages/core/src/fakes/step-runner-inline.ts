@@ -61,10 +61,7 @@ export const enqueueInlineEvent = (
  * serializer. Rejecting any non-plain-prototype object is the contract that
  * actually matches production.
  */
-const findNonSerializable = (
-  value: unknown,
-  path: string,
-): string | undefined => {
+const findNonSerializable = (value: unknown, path: string): string | undefined => {
   if (value === null || value === undefined) return undefined;
   const t = typeof value;
   if (t === "string" || t === "number" || t === "boolean") return undefined;
@@ -80,9 +77,7 @@ const findNonSerializable = (
   }
   const proto: unknown = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) {
-    const ctor =
-      (value as { constructor?: { name?: string } }).constructor?.name ??
-      "unknown";
+    const ctor = (value as { constructor?: { name?: string } }).constructor?.name ?? "unknown";
     return `${path} is a non-plain object (${ctor}) — CF Workflows checkpoints only plain data`;
   }
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
@@ -97,10 +92,7 @@ const findNonSerializable = (
  * contract `WorkflowStep.do` enforces when it checkpoints each result in
  * production. Turns a runtime-only serialization failure into a unit-test one.
  */
-const assertStructuredCloneable = (
-  name: string,
-  value: unknown,
-): Effect.Effect<void> =>
+const assertStructuredCloneable = (name: string, value: unknown): Effect.Effect<void> =>
   Effect.suspend(() => {
     const problem = findNonSerializable(value, "<return>");
     return problem === undefined
@@ -161,8 +153,7 @@ export const makeStepRunnerInline = (
               // whatever the run put there. The real runner carries these to
               // `WorkflowStep.do`'s config instead (step-runner-cf.ts).
               metadata:
-                stepOpts?.timeoutSec !== undefined ||
-                stepOpts?.retries !== undefined
+                stepOpts?.timeoutSec !== undefined || stepOpts?.retries !== undefined
                   ? {
                       ...stepOpts?.metadata,
                       "stepOpts.timeoutSec": stepOpts?.timeoutSec,
@@ -233,9 +224,7 @@ export const makeStepRunnerInline = (
               const timeoutMs = Duration.toMillis(
                 Duration.decode(timeout as Duration.DurationInput),
               );
-              return Effect.fail(
-                new ApprovalTimedOut({ eventName: type, timeoutMs }),
-              );
+              return Effect.fail(new ApprovalTimedOut({ eventName: type, timeoutMs }));
             }
             const raw = queue.shift()!;
             events.set(type, queue);
@@ -258,8 +247,5 @@ export const makeStepRunnerInline = (
 };
 
 /** A ready-to-use inline `StepRunner` Layer with the default execution id. */
-export const StepRunnerInline: Layer.Layer<
-  StepRunner,
-  never,
-  Executions | IO
-> = makeStepRunnerInline();
+export const StepRunnerInline: Layer.Layer<StepRunner, never, Executions | IO> =
+  makeStepRunnerInline();
