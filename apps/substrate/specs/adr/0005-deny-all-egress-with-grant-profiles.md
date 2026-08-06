@@ -36,6 +36,12 @@ bodyless 520s before any handler runs.
 
 - One audited egress surface; flare-dispatch's secrets-in-env posture ends (ADR-0006 carries the
   credential half).
+- **The grant-authoring loop only widens.** Denials are recorded; allowed requests are not, so
+  `report` mode answers "what does this run still need?" and nothing answers "what does this profile
+  admit that no run has ever used?" A profile can only be observed to be too narrow, never too
+  broad — so profiles drift permissive, and narrowing one is a manual re-read of its definition
+  rather than a decision from evidence. Closing this means recording allowed requests too, at a
+  privacy and volume cost the denial log does not pay; it is deferred, not overlooked.
 - Accepted residuals, inherited and documented: DNS exfiltration uncovered; double-forked children
   survive `killAllProcesses`; `git-upload-pack` is a bounded exfiltration sink.
 - Whether BYOC operators may author custom profiles, and behind what review gate, is deliberately

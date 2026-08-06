@@ -32,6 +32,14 @@ The **one sanctioned in-container credential** is the per-execution model-proxy 
 execution-scoped, budget-capped, header-only transport (query-param rejected), revoked by a DO alarm
 at the run's max wall-clock — revocation does not depend on finalize running — and never logged.
 
+It is a **bearer** token, and the boundary should be honest about what that means: anything that
+reads it can spend the execution's model budget from anywhere until the alarm fires. Every property
+above bounds the blast radius — one execution, one budget, one wall-clock — but none of them binds
+the token to its holder. Sender-constraining it (DPoP, RFC 9449: a proof-of-possession key the
+container never holds) is the known hardening and is deliberately not built: it needs a key the
+container cannot reach, which is the same problem this ADR solves for every other credential by
+keeping it Worker-side. Revisit if the token's reach ever widens past the metered proxy.
+
 ## Consequences
 
 - The rule takes effect per credential class as its shape lands; a migration table (GitHub App
