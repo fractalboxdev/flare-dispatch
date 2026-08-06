@@ -2,8 +2,7 @@
   // FlareDispatch Dispatcher Worker (new-repo deploy).
   // Non-destructive: distinct name + fresh D1/R2/KV so it never collides with
   // any prior deployment in the same account. Dashboard SPA assets are omitted
-  // (the SSR fallback in dashboard.ts serves the routes); cron triggers are
-  // omitted for the initial dogfood (the pr-review path is webhook-driven).
+  // (the SSR fallback in dashboard.ts serves the routes).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "flare-dispatch",
   "main": "apps/dispatcher/src/index.ts",
@@ -12,6 +11,36 @@
 
   "observability": { "enabled": true },
   "keep_vars": true,
+
+  // Wall-clock dispatch. Each expression must match a registered run's
+  // `schedules[].cron` EXACTLY — `schedulesByCron` (apps/dispatcher/src/registry.ts)
+  // matches on the literal string, so a cosmetic difference silently fires
+  // nothing. `handleScheduled` logs a warning when a cron matches no run,
+  // which is the only symptom drift produces.
+  //
+  // Nothing here fired before this block existed: the runs declared schedules,
+  // the `scheduled()` handler was wired and unit-tested, and the Worker was
+  // simply never asked to wake up. Three built runs had been producing no
+  // signal since they landed.
+  "triggers": {
+    "crons": [
+      "0 5 * * *", // spec-drift-pr  — daily
+      "0 6 * * *", // ci-triage-pr   — daily
+      "0 7 * * 1", // finops-audit   — Mondays
+    ],
+  },
+
+  // Two further runs declare schedules and are deliberately NOT armed here,
+  // because arming them is a product decision rather than a config omission:
+  //
+  //   "0 9 * * 1"  release-notes — opens a NON-draft PR and holds a 72h human
+  //                approval gate. First firing puts a release PR in front of
+  //                people who have not agreed to review one weekly.
+  //   "0 14 * * *" product-demo  — daily browser-rendering run; its confirmed
+  //                failures escalate into self-heal-pr. Recurring spend plus an
+  //                auto-PR path, both worth switching on deliberately.
+  //
+  // Add the expression here when that decision is made; the runs need no change.
 
   // Custom domain (requires the fractalbox.dev zone in this account). The
   // GitHub App install flow substitutes the request origin into the manifest,
