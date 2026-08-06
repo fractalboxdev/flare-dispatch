@@ -10,8 +10,16 @@ conversation-scoped and provider-window-aware (per-task dollar cap, "unmeasured 
 per-minute token pacing); flare-dispatch's AgentBudget DO meters per execution behind its model
 proxy, with typed stop reasons. They meter different loops and neither survives the other's failure:
 a buggy or compromised consumer — or a leaked fleet of per-execution tokens — can drain the org's
-model budget through a proxy that meters but never refuses. The substrate is the only place a spend
-cap holds without consumer cooperation.
+model budget through a proxy that meters but never refuses. Within the components we own, the
+substrate is the only place a spend cap holds without consumer cooperation.
+
+One platform-side cap now sits below it: AI Gateway's identity-aware mode (open beta, 2026-08-05)
+carries per-user spend limits that block or downgrade to a cheaper model when a bucket is spent.
+It does not replace either tier here. Identity comes from SAML SSO, and the announcement describes
+no mechanism by which a headless caller — a service binding, or a container holding a per-execution
+proxy token — obtains one, so a substrate execution has no user to bill against. Re-evaluate a
+third, gateway-held tier when non-human identity or IdP-group limits ship; until then the metered
+proxy is the enforcement floor.
 
 ## Decision
 
