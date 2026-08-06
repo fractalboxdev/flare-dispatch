@@ -98,6 +98,84 @@ ticket gate every other call crosses.
 
 `Promise`\<[`ReadFileOutcome`](#readfileoutcome)\>
 
+##### startDetached()
+
+```ts
+startDetached(key, input): Promise<StartDetachedOutcome>;
+```
+
+Start a process that outlives this call, under no grant at all (ADR-0012).
+The substrate's fence spares it when a later `execUnderGrant` tears down,
+so a dev server started here is still listening when the next command
+dials `localhost` — and still cannot reach the network between fences.
+
+###### Parameters
+
+###### key
+
+`string`
+
+###### input
+
+[`StartDetachedInput`](#startdetachedinput)
+
+###### Returns
+
+`Promise`\<[`StartDetachedOutcome`](#startdetachedoutcome)\>
+
+##### detachedStatus()
+
+```ts
+detachedStatus(key, processId): Promise<DetachedStatusOutcome>;
+```
+
+Poll one detached process. There is deliberately no `waitForExit`: a
+consumer waits in its own durable steps, the shape admission already uses,
+because a Worker call that blocks for a twenty-minute agent turn is not a
+call.
+
+###### Parameters
+
+###### key
+
+`string`
+
+###### processId
+
+`string`
+
+###### Returns
+
+`Promise`\<[`DetachedStatusOutcome`](#detachedstatusoutcome)\>
+
+##### stopDetached()
+
+```ts
+stopDetached(key, processId): Promise<{
+  ok: true;
+  stopped: boolean;
+}>;
+```
+
+Kill one detached process and forget it. Idempotent.
+
+###### Parameters
+
+###### key
+
+`string`
+
+###### processId
+
+`string`
+
+###### Returns
+
+`Promise`\<\{
+  `ok`: `true`;
+  `stopped`: `boolean`;
+\}\>
+
 ##### checkpoint()
 
 ```ts
@@ -1056,6 +1134,188 @@ optional approval?: ApprovalAttestation;
 ```
 
 Required when the command matches the irreversible floor (ADR-0007).
+
+***
+
+### DetachedProcess
+
+```ts
+type DetachedProcess = {
+  id: string;
+  startedAt: number;
+};
+```
+
+A process the substrate is not synchronously awaiting (ADR-0012).
+
+The id is substrate-assigned and opaque — never a container pid, which is not
+a stable name across a restart and would let a consumer address a process it
+did not start.
+
+#### Properties
+
+##### id
+
+```ts
+id: string;
+```
+
+##### startedAt
+
+```ts
+startedAt: number;
+```
+
+***
+
+### DetachedStatus
+
+```ts
+type DetachedStatus = 
+  | {
+  state: "running";
+}
+  | {
+  state: "exited";
+  exitCode: number;
+}
+  | {
+  state: "gone";
+  reason: string;
+};
+```
+
+What a detached process is doing. `unknown` is its own state rather than an
+error: a container that slept, restarted or was checkpointed no longer has
+the process, and a consumer polling from a durable step needs to tell that
+apart from "still running" without catching a throw.
+
+#### Union Members
+
+##### Type Literal
+
+```ts
+{
+  state: "running";
+}
+```
+
+***
+
+##### Type Literal
+
+```ts
+{
+  state: "exited";
+  exitCode: number;
+}
+```
+
+`exitCode` is `-1` when the container reported the process as finished
+without one — a signal death is the usual case. Treat it as "ended, code
+unknown" rather than as a real status, and never as success.
+
+***
+
+##### Type Literal
+
+```ts
+{
+  state: "gone";
+  reason: string;
+}
+```
+
+***
+
+### StartDetachedInput
+
+```ts
+type StartDetachedInput = {
+  recipe: SubstrateRecipe;
+  command: string;
+  idempotencyKey: string;
+  logPath: string;
+  approval?: ApprovalAttestation;
+};
+```
+
+Start a process that outlives the call. **No grant is applied** — a detached
+process runs under the container's deny-all floor (ADR-0012), so anything it
+needs from the network has to happen inside a fenced exec instead.
+
+`command` still crosses the ADR-0007 approval floor: starting a floor command
+detached must not be a way around the floor.
+
+#### Properties
+
+##### recipe
+
+```ts
+recipe: SubstrateRecipe;
+```
+
+##### command
+
+```ts
+command: string;
+```
+
+##### idempotencyKey
+
+```ts
+idempotencyKey: string;
+```
+
+Stable across retries of one durable step. A retry returns the same process.
+
+##### logPath
+
+```ts
+logPath: string;
+```
+
+Path under the execution's artifact prefix that the process's output streams to.
+
+##### approval?
+
+```ts
+optional approval?: ApprovalAttestation;
+```
+
+Required when the command matches the irreversible floor (ADR-0007).
+
+***
+
+### StartDetachedOutcome
+
+```ts
+type StartDetachedOutcome = 
+  | {
+  ok: true;
+  process: DetachedProcess;
+}
+  | {
+  ok: false;
+  refusal: SubstrateRefusal;
+};
+```
+
+***
+
+### DetachedStatusOutcome
+
+```ts
+type DetachedStatusOutcome = 
+  | {
+  ok: true;
+  status: DetachedStatus;
+}
+  | {
+  ok: false;
+  refusal: SubstrateRefusal;
+};
+```
 
 ***
 

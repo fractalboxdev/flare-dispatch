@@ -31,11 +31,27 @@ import type {
  * its rollout position — it is not a weaker grant, it is a missing method.
  */
 export type FacadeGap =
-  /** `runDetached` / `waitForPort` / `waitForExit` — a process that outlives the exec fence's grant window, which is a design question, not an omission. */
+  /**
+   * `runDetached` / `waitForExit` — a process that outlives the exec fence's
+   * grant window. Answered by the substrate's ADR-0012 (it holds no grant) and
+   * served by `startDetached` / `detachedStatus` / `stopDetached`; this gap
+   * clears per run once the run body moves off `sandbox.runDetached`, and
+   * `waitForPort` becomes a fenced exec polling `localhost`.
+   */
   | "detached-process"
-  /** `exposePort` — a public preview URL for a container port. */
+  /**
+   * `exposePort` — a public preview URL for a container port. Deliberately NOT
+   * on the facade (ADR-0012): the substrate worker would have to own a proxy
+   * route of its own, and until it does these runs stay on this fleet.
+   */
   | "expose-port"
-  /** `artifact.upload({ container })` — tar a container directory out to R2. */
+  /**
+   * `artifact.upload({ container })` — tar a container directory out to R2.
+   * ADR-0012 answers this without a new method: the substrate mounts R2 at
+   * `/artifacts` per container, so a run writes its own archive there. What is
+   * still missing is retrieval — a consumer holds a sandbox key and never the
+   * container id, so it cannot address what the run wrote.
+   */
   | "container-artifact";
 
 /**

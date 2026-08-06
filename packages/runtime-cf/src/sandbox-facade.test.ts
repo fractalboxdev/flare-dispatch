@@ -57,6 +57,12 @@ function facade(over: Partial<SubstrateFacade> = {}): {
     },
     readFile: async () => ({ ok: true, content: "diff --git a/x b/x" }),
     denials: async () => [],
+    // The layer does not drive detached processes yet (ADR-0012 landed the
+    // facade surface; the `sandbox` capability's `runDetached` still runs on
+    // the dispatcher's own fleet), so these only exist to satisfy the contract.
+    startDetached: async () => ({ ok: true, process: { id: "sub-detached-1", startedAt: 0 } }),
+    detachedStatus: async () => ({ ok: true, status: { state: "running" } }),
+    stopDetached: async () => ({ ok: true, stopped: true }),
     checkpoint: async () => ({ ok: true }),
     abort: async (key) => {
       calls.abort.push(key);

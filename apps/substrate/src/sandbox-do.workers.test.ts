@@ -235,3 +235,44 @@ describe("the outbound posture (ADR-0005) - read off a constructed instance", ()
     });
   });
 });
+
+describe("detached processes (ADR-0012) - the paths that answer before a container", () => {
+  // No container engine runs in this pool, so `startProcess` / `listProcesses`
+  // are unreachable. What is covered here is every answer the DO gives BEFORE
+  // it touches one - which is where the gate and the "gone" semantics live. The
+  // sparing rule itself is a pure function, unit-tested in engine/detached.ts.
+
+  it("refuses to start one on an object admission never admitted", async () => {
+    // Same gate as `ensure()`: a detached process is still a container, and a
+    // path that started one without a ticket would be a boot around ADR-0004.
+    const outcome = await runInDurableObject(freshSandbox(), (instance) =>
+      instance.startDetached({
+        recipe: RECIPE,
+        command: "pnpm dev",
+        idempotencyKey: "step-1",
+        logPath: "dev.log",
+      }),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: { kind: "ticket-rejected", reason: "no admission ticket" },
+    });
+  });
+
+  it("calls an id this execution never declared `gone`, not an error", async () => {
+    // A consumer polling from a durable step has to tell "not running" apart
+    // from "the call failed" without catching a throw.
+    const status = await runInDurableObject(freshSandbox(), (instance) =>
+      instance.detachedStatus("sub-detached-nothing"),
+    );
+    expect(status).toMatchObject({ state: "gone" });
+  });
+
+  it("stops an unknown process idempotently rather than throwing", async () => {
+    expect(
+      await runInDurableObject(freshSandbox(), (instance) =>
+        instance.stopDetached("sub-detached-nothing"),
+      ),
+    ).toEqual({ stopped: false });
+  });
+});

@@ -27,15 +27,23 @@ import type {
   ApprovalAttestation,
   AttestationRejected,
   DenialEvent,
+  DetachedStatus,
   EnsureOutcome,
   ExecReceipt,
   SubstrateRecipe,
+  SubstrateRefusal,
   SubstrateRepoRef,
 } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { repoSlug } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { denialsFor, recordDenialD1 } from "./admission/denials-d1";
 import { verifyTicket } from "./admission/ticket";
 import { attestationUseKey, decideAttestationUse, type AttestationUse } from "./engine/approval";
+import {
+  fencedKillSet,
+  fenceKillMode,
+  survivingDeclarations,
+  type TrackedProcess,
+} from "./engine/detached";
 import {
   applyGrant,
   buildGrant,
@@ -68,6 +76,13 @@ const HANDLES_KEY = "sub:handles";
 const EXEC_KEY_PREFIX = "sub:exec:";
 /** One record per spent approval, keyed by its (ordinal, taskId) — `attestationUseKey`. */
 const ATTESTATION_KEY_PREFIX = "sub:att:";
+/**
+ * The detached processes this execution declared (ADR-0012) — the set the
+ * fence's teardown spares. Stored as one record rather than a key per process:
+ * the fence reads it on every exec, and a prefix scan on the hot path to spare
+ * a set that is almost always empty is the wrong trade.
+ */
+const DETACHED_KEY = "sub:detached";
 
 /** Reading a bounded tail is a local file read; it must not inherit a build's budget. */
 const TAIL_READ_TIMEOUT_MS = 15_000;
@@ -98,6 +113,17 @@ type SandboxHandles = {
 };
 
 type StoredIdentity = { consumer: string; key: string };
+
+/**
+ * One declared detached process. `idempotencyKey` is what makes a retried
+ * durable step return the process it already started instead of starting a
+ * second dev server on a port the first one holds.
+ */
+type DetachedRecord = {
+  id: string;
+  idempotencyKey: string;
+  startedAt: number;
+};
 
 export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox {
   /**
@@ -220,6 +246,12 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
   override async onStop(): Promise<void> {
     await super.onStop();
     await this.setLifecycle("stopped");
+    // The container stopping falsifies every detached declaration at once
+    // (ADR-0012). `checkpoint` and `abortExec` clear explicitly because both
+    // swallow a failing `stop()`; this hook is what covers the third way a
+    // container goes away — idle expiry, which reaches `super.onActivityExpired()`
+    // and never touches either of them.
+    this.clearDetached();
   }
 
   // -------------------------------------------------------------------------
@@ -601,6 +633,11 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
     try {
       await this.snapshot(reason);
     } finally {
+      // A detached process does not survive a checkpoint (ADR-0012) — the
+      // container is stopping and the process goes with it. Forgetting the
+      // record here is what stops a resumed execution from sparing an id that
+      // no longer names anything.
+      this.clearDetached();
       try {
         await this.stop();
       } catch (err) {
@@ -635,14 +672,193 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Detached processes (ADR-0012)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Start a process that outlives this call, under **no grant** — the whole
+   * decision in ADR-0012. Nothing here applies one, and the fence's own
+   * revoke-first backstop means whatever a previous exec left is already gone,
+   * so the process runs against the class's deny-all floor.
+   *
+   * Behind the ticket gate and behind `ensure()`, like every other path that
+   * reaches a container. The approval floor is checked by the caller
+   * (`startDetachedProcess` in the facade) before this runs, for the same
+   * reason the fence checks it before touching the container: a refusal must
+   * cost nothing.
+   *
+   * Idempotent on the key: a retried durable step gets the process it already
+   * started, not a second dev server contending for the same port.
+   */
+  async startDetached(input: {
+    recipe: SubstrateRecipe;
+    command: string;
+    idempotencyKey: string;
+    logPath: string;
+  }): Promise<{ ok: true; process: DetachedRecord } | { ok: false; refusal: SubstrateRefusal }> {
+    const existing = this.detachedRecords().find(
+      (record) => record.idempotencyKey === input.idempotencyKey,
+    );
+    if (existing) return { ok: true, process: existing };
+
+    const ensured = await this.ensure(input.recipe);
+    if (!ensured.ok) return { ok: false, refusal: ensured.refusal };
+
+    const id = `sub-detached-${crypto.randomUUID()}`;
+    const logFile = `${ARTIFACTS_DIR}/${nonceLogPath(input.logPath, id)}`;
+    const scriptFile = `/tmp/detached-${id}.sh`;
+    try {
+      // The same shape `executeCommand` uses, and for the same reason: the
+      // command goes into a file rather than onto the outer line, so nothing it
+      // contains can restructure that line, and its own pipelines and heredocs
+      // keep working. Output is redirected inside the container because a
+      // long-running process's stream is not something to buffer into this
+      // isolate — and a detached process has no receipt to carry a tail on.
+      await this.writeFile(scriptFile, input.command);
+      await this.startProcess(
+        `sh ${shellQuote(scriptFile)} > ${shellQuote(logFile)} 2>&1`,
+        { processId: id, cwd: WORKSPACE_DIR },
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        refusal: {
+          kind: "sandbox-unavailable",
+          reason: err instanceof Error ? err.message : "could not start a detached process",
+        },
+      };
+    }
+
+    const record: DetachedRecord = {
+      id,
+      idempotencyKey: input.idempotencyKey,
+      startedAt: Date.now(),
+    };
+    this.ctx.storage.kv.put(DETACHED_KEY, [...this.detachedRecords(), record]);
+    return { ok: true, process: record };
+  }
+
+  /**
+   * What one detached process is doing. `gone` rather than a throw for a
+   * process the container no longer knows: a checkpoint, a restart or an idle
+   * stop all take it with them, and a consumer polling from a durable step has
+   * to tell that apart from "still running" without catching an exception.
+   */
+  async detachedStatus(processId: string): Promise<DetachedStatus> {
+    if (!this.detachedRecords().some((record) => record.id === processId))
+      return { state: "gone", reason: "no detached process with that id in this execution" };
+    try {
+      const processes = await this.listProcesses();
+      const found = processes.find((process) => process.id === processId);
+      if (!found) return { state: "gone", reason: "the container no longer tracks this process" };
+      if (found.status === "running" || found.status === "starting") return { state: "running" };
+      return { state: "exited", exitCode: found.exitCode ?? -1 };
+    } catch (err) {
+      return {
+        state: "gone",
+        reason: err instanceof Error ? err.message : "the container could not be reached",
+      };
+    }
+  }
+
+  /** Kill one detached process and forget it. Idempotent on an unknown id. */
+  async stopDetached(processId: string): Promise<{ stopped: boolean }> {
+    const records = this.detachedRecords();
+    if (!records.some((record) => record.id === processId)) return { stopped: false };
+    this.ctx.storage.kv.put(
+      DETACHED_KEY,
+      records.filter((record) => record.id !== processId),
+    );
+    try {
+      await this.killProcess(processId);
+      return { stopped: true };
+    } catch (err) {
+      // The record is gone either way: it exists to spare the process from the
+      // fence's kill, and a process that cannot be killed is one the container
+      // has already lost.
+      console.debug("stopDetached on a process the container no longer has", err);
+      return { stopped: false };
+    }
+  }
+
+  /**
+   * The fence's teardown (ADR-0005 step 3, amended by ADR-0012): kill every
+   * process in the container's registry that this execution did **not** declare
+   * detached, and reap declarations the registry has forgotten.
+   *
+   * With nothing declared — the overwhelming majority of executions — this is
+   * `killAllProcesses()` unchanged, so the hot path grows no new call and no
+   * new failure mode. The selective walk engages only when a run has actually
+   * asked for a process to survive, and what it is protecting against is
+   * precise: without it, `killAllProcesses()` would kill the declared process
+   * the moment any later command ran.
+   *
+   * `listProcesses` failing falls back to killing everything. Killing a
+   * declared process is a wrong answer; leaving a process alive past the revoke
+   * is a worse one, and this is the direction the fence has to fail in.
+   */
+  async killFencedProcesses(): Promise<number> {
+    const records = this.detachedRecords();
+    const spared = records.map((record) => record.id);
+    if (fenceKillMode(spared) === "kill-all") return this.killAllProcesses();
+
+    let tracked: TrackedProcess[];
+    try {
+      tracked = await this.listProcesses();
+    } catch (err) {
+      console.error("listProcesses failed; killing every process rather than sparing one", err);
+      return this.killAllProcesses();
+    }
+
+    // Reap here rather than on a timer: this is the one place `listProcesses`
+    // has already been paid for, and a record naming a process the registry has
+    // forgotten spares nothing while pinning every later teardown to the
+    // selective path.
+    const surviving = new Set(survivingDeclarations(spared, tracked));
+    if (surviving.size !== records.length)
+      this.ctx.storage.kv.put(
+        DETACHED_KEY,
+        records.filter((record) => surviving.has(record.id)),
+      );
+
+    let killed = 0;
+    for (const id of fencedKillSet(spared, tracked)) {
+      try {
+        await this.killProcess(id);
+        killed += 1;
+      } catch (err) {
+        // One process that will not die must not leave the rest running: the
+        // revoke follows this call regardless, and the loop keeps going.
+        console.error("killProcess failed inside the fence teardown", id, err);
+      }
+    }
+    return killed;
+  }
+
+  private detachedRecords(): DetachedRecord[] {
+    return this.ctx.storage.kv.get<DetachedRecord[]>(DETACHED_KEY) ?? [];
+  }
+
+  /**
+   * Forget every declared process. Called where the container stops: the
+   * processes are gone with it, and a stale record would spare nothing while
+   * pushing the next fence onto the selective path for no reason.
+   */
+  private clearDetached(): void {
+    if (this.detachedRecords().length > 0) this.ctx.storage.kv.put(DETACHED_KEY, []);
+  }
+
   /** Kill + stop, skipping the snapshot — the off-switch half (ADR-0003). */
   async abortExec(): Promise<{ killed: number }> {
     let killed = 0;
     try {
+      // `killAllProcesses`, not the fenced kill: the off-switch spares nothing.
       killed = await this.killAllProcesses();
     } catch (err) {
       console.debug("abort kill on a container that is already gone", err);
     }
+    this.clearDetached();
     try {
       await this.stop();
     } catch (err) {
