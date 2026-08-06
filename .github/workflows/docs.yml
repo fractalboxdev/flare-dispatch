@@ -1,0 +1,46 @@
+name: docs
+
+# The facade API reference under apps/docs/reference is generated from
+# packages/substrate-contract and committed. Committing generated output is what
+# makes it readable on GitHub and diffable in review — a contract change shows up
+# as a reference diff in the same PR — but committed generated output goes stale
+# the moment someone edits the source and forgets the regenerate. This job is the
+# thing that stops it: regenerate, and fail if the result differs from what is in
+# the tree.
+#
+# It runs on pull_request as well as main because deploy.yml only runs on push to
+# main, so a PR-time signal needs its own workflow. It is cheap: no Docker, no
+# Cloudflare credentials, no deploy — typedoc over one entry point.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm docs:reference
+      # Staged, not `git diff` on the worktree: typedoc cleans its output
+      # directory and rewrites it, so a regenerate can add or drop a file as
+      # well as change one, and an untracked addition is invisible to a plain
+      # `git diff`.
+      - name: Fail if the committed reference is stale
+        run: |
+          git add -A -- apps/docs/reference
+          if ! git diff --cached --quiet -- apps/docs/reference; then
+            echo "::error file=apps/docs/reference/substrate-contract/README.md::The committed facade API reference does not match packages/substrate-contract. Run 'pnpm docs:reference' and commit the result."
+            git diff --cached -- apps/docs/reference
+            exit 1
+          fi
