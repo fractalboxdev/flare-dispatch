@@ -131,11 +131,7 @@ const MAX_TARGET_BYTES = 1024 * 1024;
  * Wildcards here are deliberate: these hold even if the admitted set is later
  * widened to `*.github.com`.
  */
-export const WRITE_SINKS = [
-  "gist.github.com",
-  "uploads.github.com",
-  "api.github.com",
-] as const;
+export const WRITE_SINKS = ["gist.github.com", "uploads.github.com", "api.github.com"] as const;
 
 /**
  * `git-upload-pack` takes a workload-authored body on an allowed host, so it is
@@ -157,7 +153,10 @@ function underRepo(slug: string, url: URL, suffix: string): boolean {
 }
 
 const anyPath = (): boolean => true;
-const under = (prefix: string) => (url: URL): boolean => url.pathname.startsWith(prefix);
+const under =
+  (prefix: string) =>
+  (url: URL): boolean =>
+    url.pathname.startsWith(prefix);
 
 /**
  * A Cloudflare account id as it appears in an API path: 32 lowercase hex.
@@ -252,8 +251,7 @@ const publicRepoRead: GrantProfile = {
             // LFS batch. Download and upload are the same URL and the same
             // method; only the body separates them, so the body is asserted.
             method: "POST",
-            match: (url) =>
-              params.lfs === true && underRepo(slug, url, "/info/lfs/objects/batch"),
+            match: (url) => params.lfs === true && underRepo(slug, url, "/info/lfs/objects/batch"),
             maxBodyBytes: MAX_LFS_BATCH_BYTES,
             assertBody: (raw) => {
               let parsed: unknown;
@@ -271,7 +269,8 @@ const publicRepoRead: GrantProfile = {
           {
             // Archive download, which 302s to codeload.
             method: "GET",
-            match: (url) => repoPrefixes(slug).some((p) => url.pathname.startsWith(`${p}/archive/`)),
+            match: (url) =>
+              repoPrefixes(slug).some((p) => url.pathname.startsWith(`${p}/archive/`)),
           },
         ],
       },

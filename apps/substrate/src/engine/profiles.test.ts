@@ -197,7 +197,11 @@ describe("cf-api", () => {
     // attestation, one layer up; this profile only decides where it may send.
     const account = "c91d52c288c452ab734ede1518b00e11";
     expect(
-      allows(p, "PUT", `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/w`),
+      allows(
+        p,
+        "PUT",
+        `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/w`,
+      ),
     ).toBe(true);
     // The pre-flight wrangler runs before it uploads anything.
     expect(allows(p, "GET", "https://api.cloudflare.com/client/v4/user/tokens/verify")).toBe(true);
@@ -210,7 +214,11 @@ describe("cf-api", () => {
     expect(allows(p, "GET", "https://api.cloudflare.com/oauth/token")).toBe(false);
     expect(allows(p, "GET", "https://dash.cloudflare.com/client/v4/user")).toBe(false);
     expect(
-      allows(p, "GET", "https://api.cloudflare.com/client/v4/accounts/c91d52c288c452ab734ede1518b00e11/pages/projects"),
+      allows(
+        p,
+        "GET",
+        "https://api.cloudflare.com/client/v4/accounts/c91d52c288c452ab734ede1518b00e11/pages/projects",
+      ),
     ).toBe(false);
   });
 });

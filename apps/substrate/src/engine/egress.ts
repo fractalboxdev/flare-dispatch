@@ -102,9 +102,7 @@ export type OutboundContext<P> = {
 
 const MAX_REDIRECTS = 5;
 
-export type Decision =
-  | { ok: true }
-  | { ok: false; reason: string };
+export type Decision = { ok: true } | { ok: false; reason: string };
 
 export function normalizeHost(host: string): string {
   let h = host.trim().toLowerCase();
@@ -338,7 +336,7 @@ export async function revokeGrant(target: GrantTarget, grant: Grant): Promise<vo
 export function decide(
   policy: EgressPolicy,
   method: string,
-  url: URL
+  url: URL,
 ): Decision & { rule?: PathRule; credential?: CredentialDescriptor } {
   // A redirect to `http:` would strip TLS on the outbound leg, which the
   // container's own gate never sees.
@@ -450,7 +448,7 @@ export type ServeDeps = {
 export async function serveGrantedRequest(
   req: Request,
   ctx: OutboundContext<GrantParams>,
-  deps: ServeDeps
+  deps: ServeDeps,
 ): Promise<Response> {
   const record = (reason: string, at?: URL): void => {
     try {
@@ -620,16 +618,22 @@ export async function serveGrantedRequest(
 
 /**
  * The named handlers a Sandbox class exposes as `static outboundHandlers`.
- * `setOutboundByHost(host, "publicRepo", params)` is what binds one to a grant;
- * nothing is mapped at class level, so an unbound call has no params and is
- * refused above. The DO layer (sandbox-do.ts) re-wraps these with the denial
- * recorder and the secret resolver wired to the Worker's environment.
+ * `setOutboundByHost(host, "granted", params)` binds the per-host handler an
+ * `enforce` grant maps, and `setOutboundHandler("reportOnly", params)` binds the
+ * catch-all an open posture uses; nothing is mapped at class level, so an
+ * unbound call has no params and is refused above. The DO layer (sandbox-do.ts)
+ * re-wraps these with the denial recorder and the secret resolver wired to the
+ * Worker's environment.
  *
- * The name `publicRepo` is historical — one handler serves every profile, and
- * which hosts and credentials a call may reach is decided by the grant params
- * it was bound with, not by which handler name it resolved through. This bare
- * export has no secret resolver, so a credentialed host refuses here: only the
- * DO layer's wrapper can inject.
+ * `granted` and `reportOnly` are the SAME engine — one handler serves every
+ * profile, and which hosts and credentials a call may reach is decided by the
+ * grant params it was bound with, not by which name it resolved through. The
+ * two names exist because the SDK addresses per-host and catch-all mappings
+ * through different calls, not because they behave differently.
+ *
+ * `denyAll` is what a revoked catch-all is re-pointed at; the SDK has no removal
+ * call for one. These bare exports have no secret resolver, so a credentialed
+ * host refuses here: only the DO layer's wrapper can inject.
  */
 export const egressHandlers = {
   granted: (req: Request, _env: unknown, ctx: OutboundContext<GrantParams>): Promise<Response> =>
