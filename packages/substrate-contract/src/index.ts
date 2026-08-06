@@ -380,6 +380,11 @@ export type DetachedProcess = {
  */
 export type DetachedStatus =
   | { state: "running" }
+  /**
+   * `exitCode` is `-1` when the container reported the process as finished
+   * without one — a signal death is the usual case. Treat it as "ended, code
+   * unknown" rather than as a real status, and never as success.
+   */
   | { state: "exited"; exitCode: number }
   | { state: "gone"; reason: string };
 

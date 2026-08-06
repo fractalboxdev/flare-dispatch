@@ -10,7 +10,18 @@
 //
 // Pure: no Cloudflare imports, no I/O.
 
-/** The shape the SDK's `listProcesses()` returns, narrowed to what matters here. */
+/**
+ * The shape the SDK's `listProcesses()` returns, narrowed to what matters here.
+ *
+ * **What that registry contains is the whole reason this module is small.**
+ * `listProcesses`, `killProcess` and `killAllProcesses` all address
+ * `/api/process/*` in the container server, and only `startProcess` puts
+ * anything there — `exec` posts to `/api/execute`, a different endpoint with a
+ * different lifecycle (`@cloudflare/sandbox@0.12.4`,
+ * `dist/sandbox-CyqG4jca.js:1754, 2187-2211`). So the registry holds exactly the
+ * processes the substrate declared detached, and nothing an `exec`'d command
+ * spawns ever appears in it.
+ */
 export type TrackedProcess = { id: string };
 
 /**
@@ -54,4 +65,24 @@ export function fencedKillSet(
 ): string[] {
   const declared = new Set(spared);
   return tracked.filter((process) => !declared.has(process.id)).map((process) => process.id);
+}
+
+/**
+ * Which declarations still name something the container knows about.
+ *
+ * A record exists for one purpose — to spare its process from the fence's kill —
+ * so a record for a process the registry has forgotten spares nothing and only
+ * keeps the teardown on the selective path forever. The fence reaps with this,
+ * at the one point where `listProcesses()` has already been paid for.
+ *
+ * An *exited* process is still in the registry (status `completed` / `failed` /
+ * `killed`), so it survives the reap and `detachedStatus` can keep reporting its
+ * exit code. Only a forgotten id is dropped.
+ */
+export function survivingDeclarations(
+  declared: readonly string[],
+  tracked: readonly TrackedProcess[],
+): string[] {
+  const known = new Set(tracked.map((process) => process.id));
+  return declared.filter((id) => known.has(id));
 }

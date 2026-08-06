@@ -72,38 +72,41 @@ export interface GuardedSandbox extends GrantTarget {
     idempotencyKey: string,
   ): Promise<AttestationRejected | undefined>;
   /**
-   * Returns the number of processes killed. Kills the SDK's *tracked*
-   * processes; a double-forked grandchild that detached from the session is
-   * not guaranteed to be among them, so this narrows the window rather than
-   * closing it — see `KILL_COVERAGE_NOTE`.
-   *
-   * The fence does not call this — `killFencedProcesses` is its teardown. It
-   * stays on the interface because `abort` is the off-switch and spares
-   * nothing, and because a rename in the SDK has to fail here.
+   * Empties the container's process registry and returns how many it killed.
+   * The off-switch's kill — `abort` spares nothing. The fence does not call it;
+   * `killFencedProcesses` is the fence's teardown. It stays on the interface
+   * because `abort` needs it, and because a rename in the SDK has to fail here.
    */
   killAllProcesses(): Promise<number>;
   /**
-   * The fence's teardown (ADR-0012): kill every tracked process this execution
-   * did not declare detached, and return how many died. Identical to
+   * The fence's teardown (ADR-0012): kill every process in that registry this
+   * execution did not declare detached, and return how many died. Identical to
    * `killAllProcesses` when nothing is declared, which is almost always.
    */
   killFencedProcesses(): Promise<number>;
 }
 
 /**
- * The residual the kill does not cover, recorded rather than papered over
- * (an accepted residual in specs/platform.md). Between the kill and the revoke
- * completing, a detached child still holds the grant; what bounds it is the
- * container's own lifetime and the fact that a revoked grant leaves deny-all.
+ * What the kill does and does not reach, recorded rather than papered over (an
+ * accepted residual in specs/platform.md).
  *
- * ADR-0012 adds a *declared* case alongside that accidental one: a process
- * started through `startDetached` is spared on purpose. It holds no grant of
- * its own — nothing applies one for it — but it lives in the container, so
- * while a later fence is open it shares that fence's grant, bounded by the same
- * host, method and path rules the fenced command is bounded by.
+ * The bound is narrower than "tracked processes" suggests, and worth stating
+ * exactly. `killAllProcesses`, `killProcess` and `listProcesses` all address the
+ * container server's `/api/process/*` registry, which only `startProcess`
+ * populates; `exec` posts to `/api/execute`, a different endpoint with a
+ * different lifecycle (`@cloudflare/sandbox@0.12.4`). So **nothing a fenced
+ * command backgrounds is in that registry at all** — the kill has never reached
+ * it, and what bounds such a child is the revoke that follows (it lands in
+ * deny-all) plus the container's own lifetime.
+ *
+ * ADR-0012 makes the registry meaningful for the first time: a process started
+ * through `startDetached` is the only thing in it, and it is spared on purpose.
+ * It holds no grant of its own — nothing applies one for it — but it lives in
+ * the container, so while a later fence is open it shares that fence's grant,
+ * bounded by the same host, method and path rules the fenced command is.
  */
 export const KILL_COVERAGE_NOTE =
-  "the fenced kill covers tracked processes this execution started; a detached grandchild can outlive it, and a declared detached process is spared by design";
+  "the kill empties the container's startProcess registry minus what this execution declared detached; a child an exec'd command backgrounds was never in that registry, and is bounded by the revoke and the container's lifetime";
 
 /** A repo task that clones, installs and runs a suite is minutes, not seconds. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60_000;

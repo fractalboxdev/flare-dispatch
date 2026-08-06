@@ -1190,6 +1190,42 @@ error: a container that slept, restarted or was checkpointed no longer has
 the process, and a consumer polling from a durable step needs to tell that
 apart from "still running" without catching a throw.
 
+#### Union Members
+
+##### Type Literal
+
+```ts
+{
+  state: "running";
+}
+```
+
+***
+
+##### Type Literal
+
+```ts
+{
+  state: "exited";
+  exitCode: number;
+}
+```
+
+`exitCode` is `-1` when the container reported the process as finished
+without one — a signal death is the usual case. Treat it as "ended, code
+unknown" rather than as a real status, and never as success.
+
+***
+
+##### Type Literal
+
+```ts
+{
+  state: "gone";
+  reason: string;
+}
+```
+
 ***
 
 ### StartDetachedInput

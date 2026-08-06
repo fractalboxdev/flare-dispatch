@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fencedKillSet, fenceKillMode } from "./detached";
+import { fencedKillSet, fenceKillMode, survivingDeclarations } from "./detached";
 
 const tracked = (...ids: string[]) => ids.map((id) => ({ id }));
 
@@ -55,5 +55,29 @@ describe("fencedKillSet — what survives a grant revoke", () => {
     // ever built; asserted anyway, so the two answers can never disagree about
     // what an empty declaration means.
     expect(fencedKillSet([], tracked("a", "b"))).toEqual(["a", "b"]);
+  });
+});
+
+describe("survivingDeclarations — the reap that keeps the record honest", () => {
+  it("drops a declaration the registry has forgotten", () => {
+    // The container restarted, or the process was reaped by the server. The
+    // record now spares nothing and would pin every later teardown to the
+    // selective path.
+    expect(survivingDeclarations(["gone", "alive"], tracked("alive"))).toEqual(["alive"]);
+  });
+
+  it("keeps a process the registry still lists, whatever its status", () => {
+    // An exited process stays in the registry with a status and an exit code,
+    // and `detachedStatus` has to keep answering `exited` for it. Only a
+    // forgotten id is dropped.
+    expect(survivingDeclarations(["done"], tracked("done"))).toEqual(["done"]);
+  });
+
+  it("ignores processes nobody declared", () => {
+    expect(survivingDeclarations(["mine"], tracked("mine", "someone-elses"))).toEqual(["mine"]);
+  });
+
+  it("empties the record when the registry is empty", () => {
+    expect(survivingDeclarations(["a", "b"], [])).toEqual([]);
   });
 });

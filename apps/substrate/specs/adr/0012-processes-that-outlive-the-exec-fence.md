@@ -74,13 +74,23 @@ what the run wrote. That is a retrieval surface, and it follows `denials()` exac
 - **A detached process is unfenced, and while a later fence is open it shares that fence's grant.**
   It holds none of its own, but it lives in the container, so during an exec the open grant admits
   its requests too — bounded by that grant's own host, method and path rules, which is the same
-  bound the fenced command has. Stated rather than papered over: it is the existing
-  backgrounded-child residual (`KILL_COVERAGE_NOTE`), now sanctioned and named instead of accidental.
-  The improvement is that between fences it has no grant at all, where a backgrounded child today
-  survives into a window nobody reasoned about.
-- The `killed` count in `ExecOutcome` now means "processes this fence killed", not "every process in
-  the container". It was the only signal a `killAllProcesses` contract change would surface, and it
-  still is — for the fenced set.
+  bound the fenced command has. Between fences it has no grant at all.
+- **The kill's real coverage is narrower than the fence's prose claimed, and this ADR is where that
+  gets corrected.** `killAllProcesses`, `killProcess` and `listProcesses` all address the container
+  server's `/api/process/*` registry, which only `startProcess` populates; `exec` posts to
+  `/api/execute`, a different endpoint with a different lifecycle. So a child a fenced command
+  backgrounds has never been in that registry and the kill has never reached it — what bounds it is
+  the revoke that follows and the container's lifetime, not the kill. Since the substrate called
+  `startProcess` nowhere before this, the fence's `killAllProcesses()` returned 0 on every execution
+  to date, and the change here is behaviour-preserving for every run that declares nothing.
+- What the selective walk actually buys is the inverse of how it reads: it is not that more gets
+  killed, it is that `killAllProcesses()` would otherwise kill the declared process the moment any
+  later command ran.
+- The `killed` count in `ExecOutcome` means "processes this fence killed from that registry". It was
+  the only signal a `killAllProcesses` contract change would surface, and it still is.
+- Declarations are reaped where `listProcesses()` is already paid for — in the teardown — and cleared
+  wholesale in `onStop`, because a container that stopped falsifies all of them at once. A record
+  that outlived its process spares nothing and would pin every later teardown to the selective path.
 - Process ids are substrate-assigned UUIDs, never container pids. A consumer cannot name a process it
   did not start, and a pid is not a stable name across a container restart anyway.
 - A detached process does not survive a checkpoint. `/workspace` is snapshotted and the container

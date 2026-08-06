@@ -38,7 +38,12 @@ import { repoSlug } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { denialsFor, recordDenialD1 } from "./admission/denials-d1";
 import { verifyTicket } from "./admission/ticket";
 import { attestationUseKey, decideAttestationUse, type AttestationUse } from "./engine/approval";
-import { fencedKillSet, fenceKillMode, type TrackedProcess } from "./engine/detached";
+import {
+  fencedKillSet,
+  fenceKillMode,
+  survivingDeclarations,
+  type TrackedProcess,
+} from "./engine/detached";
 import {
   applyGrant,
   buildGrant,
@@ -241,6 +246,12 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
   override async onStop(): Promise<void> {
     await super.onStop();
     await this.setLifecycle("stopped");
+    // The container stopping falsifies every detached declaration at once
+    // (ADR-0012). `checkpoint` and `abortExec` clear explicitly because both
+    // swallow a failing `stop()`; this hook is what covers the third way a
+    // container goes away — idle expiry, which reaches `super.onActivityExpired()`
+    // and never touches either of them.
+    this.clearDetached();
   }
 
   // -------------------------------------------------------------------------
@@ -696,13 +707,17 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
 
     const id = `sub-detached-${crypto.randomUUID()}`;
     const logFile = `${ARTIFACTS_DIR}/${nonceLogPath(input.logPath, id)}`;
+    const scriptFile = `/tmp/detached-${id}.sh`;
     try {
-      // Redirected in the container for the same reason `executeCommand` does
-      // it: a long-running process's output is a stream nobody wants buffered
-      // into this isolate, and a detached process has no receipt to carry a
-      // tail on anyway.
+      // The same shape `executeCommand` uses, and for the same reason: the
+      // command goes into a file rather than onto the outer line, so nothing it
+      // contains can restructure that line, and its own pipelines and heredocs
+      // keep working. Output is redirected inside the container because a
+      // long-running process's stream is not something to buffer into this
+      // isolate — and a detached process has no receipt to carry a tail on.
+      await this.writeFile(scriptFile, input.command);
       await this.startProcess(
-        `sh -c ${shellQuote(`${input.command} > ${shellQuote(logFile)} 2>&1`)}`,
+        `sh ${shellQuote(scriptFile)} > ${shellQuote(logFile)} 2>&1`,
         { processId: id, cwd: WORKSPACE_DIR },
       );
     } catch (err) {
@@ -769,19 +784,23 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
 
   /**
    * The fence's teardown (ADR-0005 step 3, amended by ADR-0012): kill every
-   * tracked process this execution did **not** declare detached.
+   * process in the container's registry that this execution did **not** declare
+   * detached, and reap declarations the registry has forgotten.
    *
    * With nothing declared — the overwhelming majority of executions — this is
    * `killAllProcesses()` unchanged, so the hot path grows no new call and no
    * new failure mode. The selective walk engages only when a run has actually
-   * asked for a process to survive.
+   * asked for a process to survive, and what it is protecting against is
+   * precise: without it, `killAllProcesses()` would kill the declared process
+   * the moment any later command ran.
    *
    * `listProcesses` failing falls back to killing everything. Killing a
-   * declared process is a wrong answer; leaving a grant-holder alive past the
-   * revoke is a worse one, and this is the direction the fence has to fail in.
+   * declared process is a wrong answer; leaving a process alive past the revoke
+   * is a worse one, and this is the direction the fence has to fail in.
    */
   async killFencedProcesses(): Promise<number> {
-    const spared = this.detachedRecords().map((record) => record.id);
+    const records = this.detachedRecords();
+    const spared = records.map((record) => record.id);
     if (fenceKillMode(spared) === "kill-all") return this.killAllProcesses();
 
     let tracked: TrackedProcess[];
@@ -791,6 +810,17 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
       console.error("listProcesses failed; killing every process rather than sparing one", err);
       return this.killAllProcesses();
     }
+
+    // Reap here rather than on a timer: this is the one place `listProcesses`
+    // has already been paid for, and a record naming a process the registry has
+    // forgotten spares nothing while pinning every later teardown to the
+    // selective path.
+    const surviving = new Set(survivingDeclarations(spared, tracked));
+    if (surviving.size !== records.length)
+      this.ctx.storage.kv.put(
+        DETACHED_KEY,
+        records.filter((record) => surviving.has(record.id)),
+      );
 
     let killed = 0;
     for (const id of fencedKillSet(spared, tracked)) {
