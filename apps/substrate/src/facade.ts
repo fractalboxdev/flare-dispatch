@@ -320,3 +320,17 @@ export class DispatcherFacade extends SubstrateFacadeBase {
 export class FractalbotFacade extends SubstrateFacadeBase {
   protected readonly consumer = "fractalbot" as const;
 }
+
+/**
+ * The substrate's own scratch consumer — what the deploy probes ride
+ * (verify/run.ts). It is a real entrypoint rather than a private code path so
+ * the probes exercise the same admission, ticket and fence sequence a consumer
+ * does; a canary that took a shortcut around the facade could pass on a build
+ * whose facade was broken.
+ *
+ * Its work is one repo-less container for the canary and one clone for the
+ * dogfood, both aborted at the end of the probe.
+ */
+export class SelfCheckFacade extends SubstrateFacadeBase {
+  protected readonly consumer = "self-check" as const;
+}

@@ -1,9 +1,20 @@
 name: deploy
 
-# Redeploy the FlareDispatch dispatcher Worker when upstream (main) updates.
-# Container images (infra/Dockerfile.sandbox) are (re)built by `wrangler deploy`
-# on the runner, so this needs Docker — ubuntu-latest provides it. The path
-# filter keeps doc-only commits from triggering an image rebuild.
+# Redeploy the FlareDispatch workers when upstream (main) updates.
+# Container images (infra/Dockerfile.sandbox for the dispatcher,
+# infra/Dockerfile.substrate for the substrate) are (re)built by
+# `wrangler deploy` on the runner, so this needs Docker — ubuntu-latest
+# provides it. The path filter keeps doc-only commits from triggering an image
+# rebuild.
+#
+# ORDER. substrate → canary → dispatcher. The substrate goes first because
+# consumers' service bindings resolve against a Worker that must already exist;
+# the canary sits between them because ADR-0011 requires the egress floor to be
+# proven on the running build *before* consumer traffic is admitted, and the
+# dispatcher is a consumer.
+#
+# `workflow_dispatch` with `target: substrate` stops after the canary, so a
+# security patch to the substrate never queues behind a product release.
 #
 # CREDENTIALS. `CLOUDFLARE_API_TOKEN` — account-scoped to FractalBox
 # (c91d52c2…), no zone resources: Workers Scripts:Edit, Workers KV:Edit,
@@ -36,7 +47,15 @@ on:
       - "wrangler.jsonc"
       - "pnpm-lock.yaml"
       - ".github/workflows/deploy.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "What to deploy"
+        type: choice
+        default: all
+        options:
+          - all
+          - substrate
 
 # Never let two deploys race onto the same Worker.
 concurrency:
@@ -70,6 +89,8 @@ jobs:
   substrate:
     needs: ci
     runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -78,13 +99,78 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec wrangler deploy -c apps/substrate/wrangler.jsonc
+
+      # Schema before code: the deployed worker reads tables this applies, and
+      # a hand-run migration is one that the next org's deploy cannot reproduce.
+      # Already-applied migrations are a no-op.
+      - name: Apply D1 migrations
+        run: pnpm exec wrangler d1 migrations apply flare-dispatch-substrate --remote -c apps/substrate/wrangler.jsonc
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-  deploy:
+      # The deployed hostname is read back out of wrangler's own output rather
+      # than configured: the workers.dev subdomain is per-account, and a BYOC
+      # org forking this workflow should not have to edit it. `SUBSTRATE_URL`
+      # overrides for an org serving the substrate on a custom domain.
+      - name: Deploy the substrate
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy -c apps/substrate/wrangler.jsonc | tee deploy.log
+          url="${SUBSTRATE_URL:-}"
+          if [ -z "$url" ]; then
+            url="$(grep -oE 'https://flare-dispatch-substrate\.[A-Za-z0-9-]+\.workers\.dev' deploy.log | head -1)"
+          fi
+          if [ -z "$url" ]; then
+            echo "could not determine the substrate URL — set the SUBSTRATE_URL repo variable" >&2
+            exit 1
+          fi
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUBSTRATE_URL: ${{ vars.SUBSTRATE_URL }}
+
+  # The gate ADR-0011 asks for: a container fetch to an unlisted host must die
+  # 520 on THIS build before any consumer talks to it. A red canary means the
+  # deny-all posture did not survive the deploy — most likely an SDK bump moving
+  # the interception semantics the class configuration depends on — and the
+  # dispatcher below never deploys against it.
+  canary:
     needs: substrate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: SDK-pin canary
+        run: ./apps/substrate/scripts/verify-deploy.sh "$SUBSTRATE_URL" canary
+        env:
+          SUBSTRATE_URL: ${{ needs.substrate.outputs.url }}
+      # /health only answers `ok` once the canary above has passed for this
+      # deployment, so this asserts the health surface agrees with the verdict.
+      - name: Health
+        run: ./apps/substrate/scripts/verify-deploy.sh "$SUBSTRATE_URL" health
+        env:
+          SUBSTRATE_URL: ${{ needs.substrate.outputs.url }}
+
+  # The scratch-consumer round trip against a real container and a real clone.
+  # Parallel with the dispatcher deploy rather than ahead of it: it exercises
+  # the substrate's own facade, and a GitHub outage during the clone should show
+  # up as a red smoke test, not as a blocked release.
+  dogfood:
+    needs: [substrate, canary]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Facade round trip
+        run: ./apps/substrate/scripts/verify-deploy.sh "$SUBSTRATE_URL" dogfood
+        env:
+          SUBSTRATE_URL: ${{ needs.substrate.outputs.url }}
+
+  deploy:
+    needs: [substrate, canary]
+    if: github.event.inputs.target != 'substrate'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -10,12 +10,16 @@
   //   services: [{ binding: "SUBSTRATE", service: "flare-dispatch-substrate",
   //                entrypoint: "FractalbotFacade" }]
   //
-  // Pre-deploy provisioning (once per account; ids below are placeholders
-  // until then — `wrangler deploy` fails loudly on them, by design):
-  //   wrangler d1 create flare-dispatch-substrate
-  //   wrangler d1 migrations apply flare-dispatch-substrate --remote
+  // Provisioning, once per account (done for FractalBox; the ids below are
+  // this account's real ones). A new org adopting the substrate runs:
+  //   wrangler d1 create flare-dispatch-substrate   # id → operator overlay
   //   wrangler r2 bucket create flare-dispatch-substrate
-  //   wrangler secret put TICKET_SECRET
+  //   wrangler secret put TICKET_SECRET -c apps/substrate/wrangler.jsonc
+  // Migrations are applied by the deploy workflow, not by hand.
+  //
+  // A deploy is not finished until the canary passes: `POST /canary` proves a
+  // container fetch to an unlisted host still dies 520 (ADR-0011), and
+  // `/health` answers 503 `unverified` until it does.
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "flare-dispatch-substrate",
   "main": "src/index.ts",
@@ -33,36 +37,42 @@
     "CONTAINERS_CEILING": "16",
   },
 
-  // One Dockerfile (the dispatcher's sandbox base: Node + git + curl) builds
-  // every class; per-class `image_vars` gate the optional layers
-  // (ADR-0010: named image classes). The `task` class runs fractalbot's
+  // Identifies the deployed build. A canary verdict is keyed to it, so
+  // "verified" means verified for the code actually running rather than for
+  // whatever last carried this semver (src/verify/store-d1.ts).
+  "version_metadata": { "binding": "VERSION_METADATA" },
+
+  // The substrate's OWN Dockerfile, not the dispatcher's: the base image tag
+  // must match the `@cloudflare/sandbox` version this worker imports (0.12.4),
+  // and the dispatcher pins 0.10.1. Per-class `image_vars` gate the optional
+  // layers (ADR-0010: named image classes). The `task` class runs fractalbot's
   // workloads — its dedicated image (OpenCode harness, git-lfs, python,
   // CA bundle) replaces the build-tools variant in a follow-up; until then the
   // class exists so the facade contract and pool partition are real.
   "containers": [
     {
       "class_name": "SubstrateSandboxLean",
-      "image": "../../infra/Dockerfile.sandbox",
+      "image": "../../infra/Dockerfile.substrate",
       "instance_type": "standard-2",
       "max_instances": 6,
     },
     {
       "class_name": "SubstrateSandboxBrowser",
-      "image": "../../infra/Dockerfile.sandbox",
+      "image": "../../infra/Dockerfile.substrate",
       "image_vars": { "WITH_BROWSER": "true" },
       "instance_type": "standard-2",
       "max_instances": 3,
     },
     {
       "class_name": "SubstrateSandboxAgent",
-      "image": "../../infra/Dockerfile.sandbox",
+      "image": "../../infra/Dockerfile.substrate",
       "image_vars": { "WITH_BUILD_TOOLS": "true" },
       "instance_type": "standard-3",
       "max_instances": 3,
     },
     {
       "class_name": "SubstrateSandboxTask",
-      "image": "../../infra/Dockerfile.sandbox",
+      "image": "../../infra/Dockerfile.substrate",
       "image_vars": { "WITH_BUILD_TOOLS": "true" },
       "instance_type": "standard-3",
       "max_instances": 4,

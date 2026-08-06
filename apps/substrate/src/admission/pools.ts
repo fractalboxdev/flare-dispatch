@@ -11,8 +11,13 @@ import type { PoolName, SubstrateRecipe } from "@fractalboxdev/flare-dispatch-su
  * Consumer identity, carried by which named facade entrypoint the consumer's
  * service binding targets — a deploy-time, config-reviewed choice, never a
  * runtime field (ADR-0009).
+ *
+ * `self-check` is the substrate's own scratch consumer — the identity the
+ * deploy probes (verify/) admit under, so a canary container is counted against
+ * the same ceiling as consumer work and shows up in `poolStatus()` as itself
+ * rather than borrowing a real consumer's name.
  */
-export type ConsumerId = "dispatcher" | "fractalbot";
+export type ConsumerId = "dispatcher" | "fractalbot" | "self-check";
 
 export const POOLS: readonly PoolName[] = ["lean", "browser", "agent", "task"];
 
