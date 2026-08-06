@@ -146,12 +146,32 @@ RUN set -eux; \
 # ordinary path: node-gyp addons need make + g++, and a Python dependency with
 # no wheel for 3.11 builds from an sdist. Without `cc` those fail at link,
 # deterministically, after the install has already spent the turn.
+#
+# Pinned to a dated Ubuntu archive snapshot rather than to package versions.
+# `build-essential=12.9ubuntu3` would look like a pin and not be one — the
+# metapackage's version says nothing about the gcc, g++, libc6-dev and make it
+# pulls — while also breaking the build outright the day `jammy-updates`
+# rotates that version out. A snapshot pins the whole transitive set to one
+# archive state and keeps resolving after the rotation, which matters because
+# this image is rebuilt on every substrate deploy.
+#
+# `Dir::Etc::SourceList` scopes the snapshot to this command instead of
+# rewriting `/etc/apt`: the runtime image keeps the sources the base shipped.
+# `Check-Valid-Until=false` is required — a snapshot serves a Release file
+# whose validity window has passed by definition.
+ARG APT_SNAPSHOT=20260801T000000Z
 RUN set -eux; \
     export DEBIAN_FRONTEND=noninteractive; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends build-essential pkg-config; \
-    rm -rf /var/lib/apt/lists/*; \
-    cc --version
+    for suite in jammy jammy-updates jammy-security; do \
+      echo "deb http://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT} ${suite} main universe"; \
+    done > /tmp/snapshot.list; \
+    apt_opts="-o Dir::Etc::SourceList=/tmp/snapshot.list -o Dir::Etc::SourceParts=/dev/null -o Acquire::Check-Valid-Until=false"; \
+    apt-get $apt_opts update; \
+    apt-get $apt_opts install -y --no-install-recommends build-essential pkg-config; \
+    rm -rf /var/lib/apt/lists/* /tmp/snapshot.list; \
+    cc --version; \
+    make --version | head -1; \
+    pkg-config --version
 
 # ── the CA bundle, baked as env ─────────────────────────────────────────────
 #

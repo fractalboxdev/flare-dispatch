@@ -137,6 +137,22 @@ describe("the task image's contents", () => {
     for (const spec of specs) expect(spec, spec).toContain("@");
   });
 
+  it("takes apt packages from a dated archive snapshot, not from whatever is current", () => {
+    // A `build-essential=<version>` pin would be theatre — the metapackage's
+    // version says nothing about the gcc/g++/libc6-dev/make it pulls. The
+    // snapshot pins the whole transitive set, so assert on that instead.
+    expect(taskInstructions).toMatch(/^ARG APT_SNAPSHOT=\d{8}T\d{6}Z$/m);
+    expect(taskInstructions).toMatch(/snapshot\.ubuntu\.com\/ubuntu\/\$\{APT_SNAPSHOT\}/);
+    // The options that redirect apt at the snapshot, and every apt-get that
+    // must carry them. A new `apt-get install` without them would resolve
+    // against the base's live archive — the drift this pin exists to stop.
+    expect(taskInstructions).toMatch(
+      /apt_opts="-o Dir::Etc::SourceList=\S+ -o Dir::Etc::SourceParts=\S+/,
+    );
+    for (const line of taskInstructions.split("\n").filter((l) => /\bapt-get\b/.test(l)))
+      expect(line, line).toContain("$apt_opts");
+  });
+
   it("points every toolchain's TLS at the system trust store", () => {
     // The outbound handler re-issues each request (ADR-0005), so the cert a
     // tool sees is not the origin's. Node, requests, curl, pip and git each
