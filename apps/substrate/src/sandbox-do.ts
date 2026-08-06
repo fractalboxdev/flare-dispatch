@@ -24,14 +24,22 @@
 // can catch an SDK rename breaking the fence.
 import { Sandbox, getSandbox, type DirectoryBackup } from "@cloudflare/sandbox";
 import type {
+  ApprovalAttestation,
+  AttestationRejected,
+  DenialEvent,
   EnsureOutcome,
   ExecReceipt,
   SubstrateRecipe,
   SubstrateRepoRef,
 } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { repoSlug } from "@fractalboxdev/flare-dispatch-substrate-contract";
-import { recordDenialD1 } from "./admission/denials-d1";
+import { denialsFor, recordDenialD1 } from "./admission/denials-d1";
 import { verifyTicket } from "./admission/ticket";
+import {
+  attestationUseKey,
+  decideAttestationUse,
+  type AttestationUse,
+} from "./engine/approval";
 import {
   applyGrant,
   buildGrant,
@@ -56,6 +64,8 @@ const GENERATION_KEY = "sub:generation";
 const HANDLES_KEY = "sub:handles";
 /** One record per completed command, keyed by its idempotency key. */
 const EXEC_KEY_PREFIX = "sub:exec:";
+/** One record per spent approval, keyed by its (ordinal, taskId) — `attestationUseKey`. */
+const ATTESTATION_KEY_PREFIX = "sub:att:";
 
 /** Reading a bounded tail is a local file read; it must not inherit a build's budget. */
 const TAIL_READ_TIMEOUT_MS = 15_000;
@@ -398,6 +408,43 @@ export class SubstrateSandboxBase
    */
   async guardedExec(input: Omit<FenceInput, "containerId">): Promise<FenceOutcome> {
     return runFence(this, { ...input, containerId: this.ctx.id.toString() });
+  }
+
+  /**
+   * Spend an approval's (taskId, ordinal) once (ADR-0007).
+   *
+   * The command hash binds an approval to one command *text*, which is not the
+   * same as one *step*: `git push origin main` hashes identically every time it
+   * is asked for, so a consumer bug — or a replayed facade call — could carry
+   * one human decision into a second push under a fresh idempotency key. The
+   * record here is what makes the ordinal the unit of authority.
+   *
+   * It lives in this object's storage for the same reason the ticket does: the
+   * gate belongs at the thing that runs the command. The read and the write
+   * straddle no await — `ctx.storage.kv` is synchronous — so unlike
+   * `runTaskCommand` this needs no in-flight map to close a check-then-act
+   * window; a DO's single-threaded execution is the whole guard.
+   */
+  async claimAttestation(
+    attestation: ApprovalAttestation,
+    idempotencyKey: string,
+  ): Promise<AttestationRejected | undefined> {
+    const key = `${ATTESTATION_KEY_PREFIX}${attestationUseKey(attestation)}`;
+    const recorded = this.ctx.storage.kv.get<AttestationUse>(key);
+    const decision = decideAttestationUse(attestation, idempotencyKey, recorded, Date.now());
+    if (!decision.ok) return decision.refusal;
+    this.ctx.storage.kv.put(key, decision.claim);
+    return undefined;
+  }
+
+  /**
+   * The execution's egress denials (ADR-0005), served with its artifacts and
+   * never into the container. Keyed by this object's own id — the same id the
+   * egress handler and the outbound proxy record against — so a consumer
+   * retrieves them with its sandbox key and never learns the id itself.
+   */
+  async denials(): Promise<DenialEvent[]> {
+    return denialsFor(this.env.ADMISSION_DB, this.ctx.id.toString());
   }
 
   /**

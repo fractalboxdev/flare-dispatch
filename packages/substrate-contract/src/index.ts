@@ -387,6 +387,15 @@ export interface SubstrateFacade {
   /** Release the slot or leave the line. Idempotent. */
   admissionRelease(key: SandboxKey): Promise<void>;
 
+  /**
+   * The execution's egress denials, aggregated (ADR-0005). Retrieved alongside
+   * its artifacts — a consumer renders them into a run's diagnostics or a
+   * thread; the container is never told any of it. Empty when nothing was
+   * refused, which is also what a `report`-mode run wants to see before it
+   * graduates to `enforce`.
+   */
+  denials(key: SandboxKey): Promise<readonly DenialEvent[]>;
+
   /** Per-pool, per-consumer occupancy. */
   poolStatus(): Promise<PoolStatus>;
 }

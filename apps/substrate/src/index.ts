@@ -3,6 +3,12 @@
 // The default export serves only /health; everything real crosses the facade
 // entrypoints (facade.ts) or lives in the container DO classes (sandbox-do.ts),
 // both re-exported here so wrangler registers them.
+//
+// `ContainerProxy` is re-exported under exactly that name because the SDK
+// resolves the outbound interceptor as `ctx.exports.ContainerProxy` — the
+// worker's own export. Without it `allowHost` throws "ctx.exports.ContainerProxy
+// is undefined" and no grant can be applied at all; with it, the substrate's
+// subclass also records the platform's own denials (outbound-proxy.ts).
 import { CONTRACT_VERSION } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { resolvePoolCaps, validatePoolCaps, CONTAINERS_CEILING_DEFAULT } from "./admission/pools";
 import { deploymentIdOf, handleVerifyRequest, readCanaryHealth } from "./verify/routes";
@@ -10,6 +16,7 @@ import { SUBSTRATE_VERSION } from "./version";
 import type { Env } from "./env";
 
 export { DispatcherFacade, FractalbotFacade, SelfCheckFacade } from "./facade";
+export { SubstrateContainerProxy as ContainerProxy } from "./outbound-proxy";
 export {
   SubstrateSandboxAgent,
   SubstrateSandboxBrowser,

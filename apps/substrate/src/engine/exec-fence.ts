@@ -21,6 +21,7 @@
 // has to hold without its cooperation (`postinstall`, `build.rs`,
 // `conftest.py`).
 import type {
+  AttestationRejected,
   EnsureOutcome,
   EnsureResult,
   ExecReceipt,
@@ -28,7 +29,7 @@ import type {
   SubstrateRefusal,
 } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { repoSlug } from "@fractalboxdev/flare-dispatch-substrate-contract";
-import { checkApprovalFloor } from "./approval";
+import { checkApprovalFloor, commandRequiresApproval } from "./approval";
 import {
   applyGrant,
   buildGrant,
@@ -59,6 +60,17 @@ export interface GuardedSandbox extends GrantTarget {
     timeoutMs: number;
     tailBytes: number;
   }): Promise<ExecReceipt>;
+  /**
+   * Spend an approval's (taskId, ordinal) exactly once (ADR-0007). Returns a
+   * typed refusal when the pair was already spent by different work, and
+   * undefined when the spend is this step's own — its first, or a retry of it.
+   * Persisted where the ticket lives, for the same reason: enforcement belongs
+   * at the object that runs the command, not in the caller.
+   */
+  claimAttestation(
+    attestation: ApprovalAttestation,
+    idempotencyKey: string,
+  ): Promise<AttestationRejected | undefined>;
   /**
    * Returns the number of processes killed. Kills the SDK's *tracked*
    * processes; a double-forked grandchild that detached from the session is
@@ -138,7 +150,9 @@ function grantFor(input: FenceInput): Grant | undefined {
  *
  * 0. **The approval floor** (ADR-0007), before anything touches the container —
  *    a floor-matching command without a valid attestation is refused with a
- *    typed reason and no side effect.
+ *    typed reason and no side effect. An attestation that passes the floor is
+ *    then *spent*: its (taskId, ordinal) is claimed in the DO, so the same
+ *    approval cannot authorise a second run under a fresh idempotency key.
  * 1. **Revoke first.** A caller that died mid-flight — isolate evicted,
  *    durable step timed out — leaves its grant applied on a container that
  *    outlives it. `ensure()` also does this as a backstop; doing it here too
@@ -161,6 +175,14 @@ export async function runFence(
 
   const floorRefusal = await checkApprovalFloor(command, input.approval);
   if (floorRefusal) return { ok: false, refusal: floorRefusal };
+
+  // The floor is re-tested rather than threaded out of `checkApprovalFloor`
+  // because only a *floor* command spends an approval: an attestation carried
+  // alongside `pnpm test` authorises nothing and must not burn an ordinal.
+  if (input.approval && commandRequiresApproval(command) !== undefined) {
+    const spent = await sandbox.claimAttestation(input.approval, input.idempotencyKey);
+    if (spent) return { ok: false, refusal: spent };
+  }
 
   let grant: Grant | undefined;
   try {

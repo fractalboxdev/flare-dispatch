@@ -88,6 +88,7 @@ const facadeFake: SubstrateFacade = {
   admissionEnqueue: async () => ({ pool: "lean", position: 0, poolBusy: 0, cap: 6 }),
   admissionAttempt: async (_key, _recipe) => ({ admitted: true, expiresAt: 0 }),
   admissionRelease: async () => {},
+  denials: async () => [],
   poolStatus: async () => ({ pools: [] }),
 };
 

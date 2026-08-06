@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  AttestationRejected,
   EnsureOutcome,
   ExecReceipt,
   SubstrateRecipe,
@@ -35,6 +36,7 @@ type FakeOpts = {
   killThrows?: Error;
   revokeThrowsFor?: string;
   ensureOutcome?: EnsureOutcome;
+  claimRefusal?: AttestationRejected;
 };
 
 /**
@@ -57,6 +59,10 @@ function fakeSandbox(opts: FakeOpts = {}) {
       execInputs.push(input);
       if (opts.execThrows) throw opts.execThrows;
       return opts.execReceipt ?? OK;
+    },
+    claimAttestation: async (attestation, idempotencyKey) => {
+      calls.push(`claim:${attestation.taskId}:${attestation.ordinal}:${idempotencyKey}`);
+      return opts.claimRefusal;
     },
     killAllProcesses: async () => {
       calls.push("kill");
@@ -261,6 +267,74 @@ describe("runFence — the approval floor at the exec surface (ADR-0007)", () =>
     });
     expect(outcome.ok).toBe(true);
     expect(calls).toContain("exec");
+  });
+
+  it("spends the attestation's ordinal before it ensures or applies", async () => {
+    const command = "git push origin main";
+    const { sandbox, calls } = fakeSandbox();
+    await runFence(sandbox, {
+      ...base,
+      command,
+      approval: {
+        taskId: "7",
+        ordinal: 3,
+        commandSha256: await sha256Hex(command),
+        approvedBy: "U0HUMAN",
+        approvedAt: 1_700_000_000_000,
+      },
+    });
+    // Recorded at the object that runs the command, and recorded first — a
+    // replay must be refused before any container state moves.
+    expect(calls[0]).toBe("claim:7:3:k1");
+  });
+
+  it("refuses when the ordinal was already spent by other work", async () => {
+    const command = "git push origin main";
+    const { sandbox, calls } = fakeSandbox({
+      claimRefusal: {
+        kind: "attestation-rejected",
+        reason: "approval for this step was already used",
+      },
+    });
+    const outcome = await runFence(sandbox, {
+      ...base,
+      command,
+      idempotencyKey: "k2",
+      approval: {
+        taskId: "7",
+        ordinal: 3,
+        commandSha256: await sha256Hex(command),
+        approvedBy: "U0HUMAN",
+        approvedAt: 1_700_000_000_000,
+      },
+    });
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: {
+        kind: "attestation-rejected",
+        reason: "approval for this step was already used",
+      },
+    });
+    // The claim is the only call: nothing ensured, nothing granted, nothing ran.
+    expect(calls).toEqual(["claim:7:3:k2"]);
+  });
+
+  it("spends nothing when the command is not on the floor", async () => {
+    // An attestation carried alongside ordinary work authorises nothing, so
+    // burning its ordinal would lose the approval the next real step needs.
+    const { sandbox, calls } = fakeSandbox();
+    await runFence(sandbox, {
+      ...base,
+      command: "pnpm test",
+      approval: {
+        taskId: "7",
+        ordinal: 3,
+        commandSha256: await sha256Hex("pnpm test"),
+        approvedBy: "U0HUMAN",
+        approvedAt: 1_700_000_000_000,
+      },
+    });
+    expect(calls.some((c) => c.startsWith("claim:"))).toBe(false);
   });
 
   it("refuses an attestation for a different command, before touching the container", async () => {

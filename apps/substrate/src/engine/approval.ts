@@ -15,6 +15,12 @@
 // false positives fail toward asking, which is the safe direction.
 //
 // The list is versioned with the substrate, never configurable per consumer.
+//
+// The floor check binds an approval to one command *text*; single-use
+// bookkeeping (`decideAttestationUse` below) binds it to one *step*. Both are
+// needed: the hash stops an approval clicked for `pnpm test` being replayed onto
+// `git push`, and the (taskId, ordinal) record stops the approval for step 3's
+// `git push` being replayed as step 3 again under a fresh idempotency key.
 import type {
   ApprovalAttestation,
   ApprovalRequired,
@@ -76,4 +82,89 @@ export async function checkApprovalFloor(
     };
 
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Single-use bookkeeping (ADR-0007)
+// ---------------------------------------------------------------------------
+
+/** One recorded consumption of an approval, keyed by its (taskId, ordinal). */
+export type AttestationUse = {
+  /** Lowercase hex SHA-256 of the command the approval was spent on. */
+  commandSha256: string;
+  /** The durable step that spent it. A retry of THAT step may spend it again. */
+  idempotencyKey: string;
+  usedAt: number;
+};
+
+/**
+ * Unambiguous identifier for one (taskId, ordinal) pair — the caller namespaces
+ * it into its own storage.
+ *
+ * The ordinal comes first and is a validated non-negative integer, so the
+ * segment after it is the whole taskId however many colons a consumer's task id
+ * happens to contain (fractalbot's keys are colon-joined). Ordering the pair the
+ * other way round would let `{taskId: "a:1", ordinal: 2}` and
+ * `{taskId: "a", ordinal: 12}` collide on one key.
+ */
+export function attestationUseKey(
+  attestation: Pick<ApprovalAttestation, "taskId" | "ordinal">,
+): string {
+  return `${attestation.ordinal}:${attestation.taskId}`;
+}
+
+export type AttestationUseDecision =
+  | { ok: true; claim: AttestationUse }
+  | { ok: false; refusal: AttestationRejected };
+
+/**
+ * Decide whether an approval may be spent, given what this execution
+ * environment has already recorded against its (taskId, ordinal).
+ *
+ * An approval authorises one irreversible step, not a command string that may
+ * be run again — so the first use claims the pair, and a second use is refused
+ * even though the command hash still matches. The one exception is the retry
+ * that ADR-0003 requires to work: a durable step is at-least-once, so the same
+ * `idempotencyKey` spending the same command is the *same* use arriving twice
+ * and is allowed through to the receipt dedupe below it. Anything else — a new
+ * idempotency key, or the same key carrying a mutated command — is a replay.
+ *
+ * Scope is the DO that holds the record, i.e. one (consumer, sandbox key)
+ * execution environment. That is the scope an approval is issued for; a
+ * consumer that re-keys its sandbox mints a new approval flow with it, and the
+ * container never reaches this path at all (ADR-0003).
+ *
+ * Pure — the caller supplies the recorded row and persists the claim.
+ */
+export function decideAttestationUse(
+  attestation: ApprovalAttestation,
+  idempotencyKey: string,
+  recorded: AttestationUse | undefined,
+  now: number,
+): AttestationUseDecision {
+  const commandSha256 = attestation.commandSha256.toLowerCase();
+  if (recorded === undefined)
+    return { ok: true, claim: { commandSha256, idempotencyKey, usedAt: now } };
+
+  if (recorded.idempotencyKey !== idempotencyKey)
+    return {
+      ok: false,
+      refusal: {
+        kind: "attestation-rejected",
+        reason: "approval for this step was already used",
+      },
+    };
+
+  if (recorded.commandSha256 !== commandSha256)
+    return {
+      ok: false,
+      refusal: {
+        kind: "attestation-rejected",
+        reason: "approval for this step was used for a different command",
+      },
+    };
+
+  // The same step arriving again. Re-record nothing: `usedAt` marks the first
+  // spend, and a retry must not extend the life of an approval.
+  return { ok: true, claim: recorded };
 }
