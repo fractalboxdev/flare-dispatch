@@ -1,0 +1,47 @@
+# The substrate's sandbox image.
+#
+# Separate from Dockerfile.sandbox (the dispatcher's) for one reason: the base
+# tag MUST match the `@cloudflare/sandbox` version the Durable Object class
+# imports, and the two workers pin different versions — the dispatcher 0.10.1,
+# the substrate 0.12.4 (ADR-0011 reconciles the pair on the substrate side).
+# The DO is the client and this image is the server for the same HTTP/RPC
+# protocol; a mismatched pair fails at exec, not at deploy, so it is invisible
+# until real work runs.
+#
+# ADR-0011 makes bumping either half a security-reviewed change, never a routine
+# dependency update: bump `apps/substrate/package.json` and this `FROM` tag in
+# the same commit, re-run the invariant checklist, and let the deploy canary
+# (`POST /canary`) prove interception still engages before consumer traffic is
+# admitted.
+FROM docker.io/cloudflare/sandbox:0.12.4
+
+# Corepack is the standard bootstrap for repos that pin `"packageManager"`.
+# The sandbox base ships Node 22 without Corepack on PATH.
+RUN npm install -g corepack@0.35.0 && corepack enable
+
+# ── Optional native build toolchain (WITH_BUILD_TOOLS) ──────────────────────
+#
+# The lean base has NO C compiler, so any workload that compiles native code
+# dies at link with `error: linker 'cc' not found`. Default off so the lean
+# image stays lean; the agent and task classes flip it in wrangler.jsonc.
+ARG WITH_BUILD_TOOLS=false
+RUN if [ "$WITH_BUILD_TOOLS" = "true" ]; then \
+      set -eux; \
+      export DEBIAN_FRONTEND=noninteractive; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends build-essential pkg-config; \
+      rm -rf /var/lib/apt/lists/*; \
+      cc --version; \
+    else \
+      echo "WITH_BUILD_TOOLS=false — no native toolchain baked. Lean image."; \
+    fi
+
+# ── Browser layer (WITH_BROWSER) — declared, not yet baked ──────────────────
+#
+# The `browser` class passes this today. The arg is declared so the flag is
+# recorded in the image build rather than silently dropped by Docker, and so
+# the class's build is distinguishable from the lean one; Chromium itself
+# lands with the browser class's real image (ADR-0010's follow-up), and until
+# then a browser-class container is a lean container that says so.
+ARG WITH_BROWSER=false
+RUN echo "WITH_BROWSER=$WITH_BROWSER — chromium layer not baked in this build."

@@ -28,3 +28,8 @@ fractalbot's egress engine cites the library by line. The consumer repos current
 - Renovate-style auto-bumps are disabled for these two packages.
 - The canary doubles as the BYOC health check that an org's deployed the substrate actually enforces the
   floor its version claims (see patch distribution in `specs/platform.md`).
+- The container image is part of the pin, not a separate concern: the DO is the client and the image
+  is the server for one protocol, so `infra/Dockerfile.substrate` carries its own `FROM` tag tracking
+  this worker's `@cloudflare/sandbox` — the dispatcher's image stays on its own version.
+- Implemented as `POST /canary` (`src/verify/`), gating the dispatcher's deploy job and reported on
+  `/health`, which answers 503 `unverified` until the running build has passed.

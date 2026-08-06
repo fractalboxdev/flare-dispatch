@@ -87,7 +87,35 @@ iteration on the dispatcher or fractalbot must never kill long-lived work mid-ru
 
 Patch distribution — the floor is only as good as the version an org runs: the substrate reports its version
 on the health surface; security releases declare a minimum supported version on an advisory channel;
-a substrate-only bump path exists so a security patch never queues behind a product release.
+a substrate-only bump path exists so a security patch never queues behind a product release
+(`deploy.yml`, `workflow_dispatch` with `target: substrate` — it stops after the canary).
+
+### Deploy and verify
+
+`deploy.yml` runs **migrations → substrate → canary → dispatcher**, and the canary is a gate rather
+than a report: the dispatcher is a consumer, and ADR-0011 requires the floor to be proven on the
+running build before consumer traffic reaches it.
+
+| Surface | What it answers |
+| --- | --- |
+| `POST /canary` | A container fetch to an unlisted host dies **520** — interception is engaged on this build (ADR-0011). |
+| `POST /dogfood` | The facade round trip: ensure → exec → replay the same idempotency key → checkpoint → abort, against a real container and a real public clone. |
+| `GET /health` | Version, deployment id, pool caps against the ceiling, and the canary verdict. **503 `unverified`** until a fresh passing canary exists for the running build. |
+
+Verdicts are keyed by **deployment id** (`version_metadata`), not by the semver: the SDK internals the
+deny-all posture rests on can move without the semver moving. The record doubles as the rate limit
+that lets the probe endpoints stay credential-free — a fresh verdict is served from D1 instead of
+re-probing, so an anonymous caller costs at most one container boot per deployment per re-verify
+window.
+
+`apps/substrate/scripts/verify-deploy.sh <base-url> <canary|dogfood|health>` is the same check by
+hand — the BYOC health check an operator runs against their own deployment. A `deferred` answer
+(pool full, nothing ran) is retried; a `failed` canary is decided on the first answer.
+
+The container image is pinned per worker: `infra/Dockerfile.substrate` tracks the substrate's
+`@cloudflare/sandbox` version, separately from the dispatcher's `infra/Dockerfile.sandbox`. The DO is
+the client and the image is the server for one protocol, so a mismatched pair fails at exec rather
+than at deploy — invisible until real work runs.
 
 ## Adoption plan
 

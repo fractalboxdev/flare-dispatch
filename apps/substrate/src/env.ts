@@ -37,4 +37,21 @@ export interface Env {
 
   /** Account Containers headroom the cap-sum must fit (see pools.ts). */
   readonly CONTAINERS_CEILING?: string;
+
+  /**
+   * `version_metadata` binding — identifies the deployed build, which is what a
+   * canary verdict is keyed to (verify/store-d1.ts). Optional so an operator
+   * overlay that omits it degrades to the semver rather than failing.
+   */
+  readonly VERSION_METADATA?: WorkerVersionMetadata;
+
+  /**
+   * Host the SDK-pin canary tries to reach from inside a container. Must be a
+   * host that *would* answer if egress were open. Optional; defaults to
+   * `example.com` (verify/probe.ts).
+   */
+  readonly CANARY_PROBE_HOST?: string;
+
+  /** `owner/name` the dogfood round trip clones. Optional; defaults to a tiny public repo. */
+  readonly DOGFOOD_REPO?: string;
 }
