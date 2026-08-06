@@ -55,6 +55,11 @@ export type GrantProfileName =
  * - `report` — the same reachability, but every request is decided against the
  *   grant the run *would* get and each refusal is recorded as a would-be denial
  *   (`would-deny: …`). This is the grant-authoring loop; it blocks nothing.
+ *   It records the missing-host case as well as the wrong-path one, because the
+ *   position admits every host precisely so each request reaches the engine.
+ *   It is still bounded by what the container runtime routes through that
+ *   engine — so a clean window is evidence about observed traffic, not a proof
+ *   that a profile is complete.
  * - `enforce` — deny-all with the composed grant: unadmitted hosts never leave
  *   the container, admitted ones are method/path-asserted, refusals are 403s.
  *

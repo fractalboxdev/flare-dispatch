@@ -187,11 +187,16 @@ export const OPEN_HOST = "*";
  *   (`@cloudflare/containers@0.3.7`, `container.js:209`) and answers a bodyless
  *   520 for a host that misses — so a report grant that kept the enforce host
  *   set would be blind to exactly the finding it exists to produce: the host no
- *   profile names. Note the matcher asymmetry this depends on — the platform's
- *   `simpleGlobMatch` treats `*` as any substring, while `hostMatches` above
- *   treats it as exactly one label and would NOT match `registry.npmjs.org`.
- *   That divergence is deliberate (ours only ever re-checks the deny list,
- *   where narrower is safe), so neither should be "fixed" to agree.
+ *   profile names. `OPEN_HOST` admits everything so that every request reaches
+ *   the engine and gets decided.
+ *
+ *   Note the matcher asymmetry this depends on. The platform's `simpleGlobMatch`
+ *   treats `*` as any substring, so `"*"` matches `registry.npmjs.org`; this
+ *   module's own `hostMatches` treats `*` as exactly one label and would NOT.
+ *   That divergence is deliberate — ours only ever re-checks the deny list,
+ *   where narrower is the safe direction — but it means `OPEN_HOST` is a claim
+ *   about the platform matcher, not about this file's. Neither should be
+ *   "fixed" to agree with the other.
  * - `legacy` — every host admitted, nothing mapped, nothing recorded. The
  *   pre-adoption posture, kept only so a run can move onto the substrate
  *   without its egress changing on the same day.
@@ -203,10 +208,11 @@ export const OPEN_HOST = "*";
  *
  * What a report window still cannot see: traffic the container runtime does not
  * route through the proxy at all. `interceptHttps` is `false` by default in
- * `@cloudflare/containers` and the substrate's DO does not set it — and it cuts
- * both ways, because unrouted traffic is equally invisible to `enforce`. A clean
- * report window is evidence about the traffic the engine observed, never a proof
- * about all of it.
+ * `@cloudflare/containers` and the substrate's DO does not set it, so HTTPS
+ * interception is an open question about platform behaviour rather than a
+ * setting this module controls — and it cuts both ways, because unrouted
+ * traffic is equally invisible to `enforce`. A clean report window is evidence
+ * about the traffic the engine observed, never a proof about all of it.
  *
  * @throws if the admitted set and the handled set differ under `enforce`, if a
  * selection cannot be served, or if the repo slug is not `owner/name`.

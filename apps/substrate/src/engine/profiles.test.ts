@@ -8,6 +8,7 @@ import {
   buildGrant,
   decide,
   egressHandlers,
+  hostMatches,
   OPEN_HOST,
   serveGrantedRequest,
   revokeGrant,
@@ -301,6 +302,22 @@ describe("the rollout-position gate", () => {
     // A deny in an open posture is a bodyless 520 the engine never sees — the
     // exact undiagnosable failure the report window exists to replace.
     expect(grant.deny).toEqual([]);
+  });
+
+  it("report's wildcard is what makes a missing HOST recordable, not just a bad path", () => {
+    // The proxy gates on `allowedHosts` strictly before it consults a handler,
+    // so a report grant carrying the enforce host set would 520 on the one
+    // finding the window exists to produce. This asserts the shape that avoids
+    // it, against the PLATFORM's glob semantics (`*` = any substring), which
+    // are deliberately wider than this module's own `hostMatches` (`*` = one
+    // label) — the divergence is safe because ours only re-checks denies.
+    const sdkGlobMatchesEverything = (host: string) => {
+      const parts = OPEN_HOST.split("*");
+      return host.startsWith(parts[0]!) && host.endsWith(parts[parts.length - 1]!);
+    };
+    for (const host of ["registry.npmjs.org", "telemetry.example.com", "a.b.c.evil.tld"])
+      expect(sdkGlobMatchesEverything(host)).toBe(true);
+    expect(hostMatches(OPEN_HOST, "registry.npmjs.org")).toBe(false);
   });
 
   it("legacy admits every host and records nothing", () => {

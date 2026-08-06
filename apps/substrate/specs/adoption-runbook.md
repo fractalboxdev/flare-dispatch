@@ -78,6 +78,28 @@ Each row is a grant the run needs and does not have. Two outcomes, and the diffe
 A window is clean when a full cycle of the run's real traffic — a working day for a webhook run, a
 week for a Monday cron — produces no new `would-deny` rows.
 
+**What "clean" is and is not evidence of.** The position admits every host (`allow: ["*"]`) so that
+a request to a host no profile names still reaches the engine and is recorded — the missing-host
+case, not only the wrong-path one. That shape is deliberate: `ContainerProxy` gates on
+`allowedHosts` strictly before it consults any handler, so a report grant that kept the enforce host
+set would 520 on precisely the finding the window exists to produce.
+
+What the window still cannot see is traffic the container runtime does not route through the engine
+at all. `interceptHttps` is `false` by default in `@cloudflare/containers` and the substrate's DO
+does not set it, so whether HTTPS reaches the handler is an open question about platform behaviour
+rather than a setting this code controls. It cuts both ways — unrouted traffic is equally
+unenforced under `enforce` — which is why it is a graduation caveat and not a report-mode bug.
+
+So the gate has two halves, and the second is not automatable today:
+
+1. No new `would-deny` rows across a full traffic cycle.
+2. A human confirms the run's *known* egress is accounted for — read the run's commands and its
+   dependency manifests and check each host it must reach appears in the profiles it selects. A
+   window that recorded nothing because nothing was observed looks identical to one that recorded
+   nothing because everything was already granted.
+
+Until interception coverage is settled, treat step 2 as the binding half.
+
 ## 4. Graduate to enforce
 
 Move `rollout` to `enforce` and deploy. From then on the run's container carries deny-all: only the
@@ -129,9 +151,9 @@ Stated rather than deferred, because each one bounds what this runbook can finis
   replacement is a run writing its own archive there rather than the Worker pulling one out — a
   per-run change, not a mechanical one.
 - **A report window sees what the engine sees.** Requests reach the catch-all handler only for
-  traffic the container runtime intercepts; a protocol it does not intercept is neither recorded
-  nor, later, enforced. Treat a clean window as evidence about the traffic that was observed, not
-  a proof about all of it.
+  traffic the container runtime intercepts, and `interceptHttps` is off by default. A protocol it
+  does not intercept is neither recorded nor, later, enforced — see § 3 for how the graduation gate
+  accounts for it.
 - **A target resolved inside a run body is invisible to the recipe.** `playwright-e2e` falls back
   to `playwright-e2e.base-url` in `CONFIG_KV` when a webhook dispatch carries no `baseURL`; that
   value never reaches the grant, so the run stays at `report` until its target is a dispatch input.
