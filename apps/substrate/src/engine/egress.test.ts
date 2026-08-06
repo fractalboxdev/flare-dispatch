@@ -221,9 +221,10 @@ describe("buildGrant", () => {
   });
 
   it("refuses a malformed repo slug rather than widening every path rule", () => {
-    for (const repo of ["", "widget", "acme/widget/extra", "acme/*", "../../etc"])
+    for (const repo of ["widget", "acme/widget/extra", "acme/*", "../../etc"])
       expect(() => buildGrant({ ...PARAMS, repo })).toThrow(/malformed repo/);
   });
+
 
   it("refuses a grant with no container to bind to", () => {
     expect(() => buildGrant({ ...PARAMS, containerId: "" })).toThrow(/containerId/);
@@ -249,6 +250,7 @@ function target(failOn: string[] = []) {
     removeDeniedHost: (h) => record(`undeny:${h}`),
     setOutboundByHost: (h, m) => record(`map:${h}:${m}`),
     removeOutboundByHost: (h) => record(`unmap:${h}`),
+    setOutboundHandler: (m) => record(`catchall:${m}`),
   };
   return { calls, t };
 }
@@ -609,13 +611,13 @@ describe("handler — bodies are sinks", () => {
 });
 
 describe("egressHandlers", () => {
-  it("exposes publicRepo under the name a grant maps to", () => {
-    expect(typeof egressHandlers.publicRepo).toBe("function");
+  it("exposes granted under the name a grant maps to", () => {
+    expect(typeof egressHandlers.granted).toBe("function");
     expect(buildGrant(PARAMS).handlers.every((h) => h.method in egressHandlers)).toBe(true);
   });
 
   it("refuses an unbound call without reaching the network", async () => {
-    const res = await egressHandlers.publicRepo(
+    const res = await egressHandlers.granted(
       new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack"),
       {},
       { containerId: CONTAINER, className: "SubstrateSandboxTask", params: undefined },

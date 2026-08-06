@@ -38,6 +38,29 @@ export const POOL_CAPS_DEFAULT: PoolCaps = { lean: 6, browser: 3, agent: 3, task
  */
 export const CONTAINERS_CEILING_DEFAULT = 16;
 
+/**
+ * What the ceiling becomes once the dispatcher's classes are drained and
+ * deleted: the 16 the substrate has plus the 40 its three classes held
+ * (`RunSandbox` 16 + `RunSandboxBrowser` 16 + `RunSandboxAgent` 8).
+ *
+ * This is the freed headroom, not a guess at the account's hard limit — the
+ * substrate never held more than the sum below, so a partition that fits it
+ * cannot ask the platform for more than two fleets already had.
+ */
+export const CONTAINERS_CEILING_POST_ADOPTION = 56;
+
+/**
+ * The partition to run once the dispatcher's fleet is gone — the operator flips
+ * `CONTAINERS_CEILING` and `POOL_CAPS` to these in one step (see the adoption
+ * runbook), which is a vars change rather than a code deploy.
+ *
+ * The shape follows the load: `lean` carries every CI run in the dispatcher's
+ * catalog, `browser` the e2e/demo runs, `agent` the review and self-heal tier,
+ * `task` fractalbot's interactive work — which keeps its own cap precisely so a
+ * CI burst cannot starve a human waiting in a thread (ADR-0004).
+ */
+export const POOL_CAPS_POST_ADOPTION: PoolCaps = { lean: 24, browser: 10, agent: 8, task: 12 };
+
 /** Parse the optional `POOL_CAPS` var (JSON object). A typo degrades to the default. */
 export function resolvePoolCaps(raw: string | undefined): PoolCaps {
   if (raw === undefined) return POOL_CAPS_DEFAULT;

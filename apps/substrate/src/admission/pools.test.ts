@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONTAINERS_CEILING_DEFAULT,
+  CONTAINERS_CEILING_POST_ADOPTION,
   POOL_CAPS_DEFAULT,
+  POOL_CAPS_POST_ADOPTION,
   POOLS,
   resolvePoolCaps,
   selectPool,
@@ -48,5 +51,22 @@ describe("validatePoolCaps — the cap-sum guard (ADR-0004)", () => {
 
   it("throws on a non-positive pool cap", () => {
     expect(() => validatePoolCaps({ ...POOL_CAPS_DEFAULT, lean: 0 }, 100)).toThrow(/non-positive/);
+  });
+
+  it("the post-adoption partition fits the headroom the drain frees", () => {
+    // The freed headroom is what the dispatcher's three classes held, not a
+    // guess at the account limit — so a partition that fits it can never ask
+    // the platform for more than the two fleets already had.
+    const sum = POOLS.reduce((a, p) => a + POOL_CAPS_POST_ADOPTION[p], 0);
+    expect(sum).toBeLessThanOrEqual(CONTAINERS_CEILING_POST_ADOPTION);
+    expect(() =>
+      validatePoolCaps(POOL_CAPS_POST_ADOPTION, CONTAINERS_CEILING_POST_ADOPTION),
+    ).not.toThrow();
+  });
+
+  it("the post-adoption partition does NOT fit today's ceiling — the drain comes first", () => {
+    expect(() => validatePoolCaps(POOL_CAPS_POST_ADOPTION, CONTAINERS_CEILING_DEFAULT)).toThrow(
+      /over the Containers ceiling/,
+    );
   });
 });

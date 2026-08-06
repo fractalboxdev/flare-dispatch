@@ -24,6 +24,7 @@
 import { Either, ParseResult, Schema } from "effect";
 import type { ParseError } from "effect/ParseResult";
 import { checkAndArmCooldown } from "../cooldown";
+import { resolveTargets } from "../grant-catalog";
 import { workflowDashboardUrl } from "../dashboard-url";
 import type { Env } from "../env";
 import { fingerprint, SIGNATURE_HEADER, verify } from "../hmac";
@@ -320,6 +321,20 @@ export const handleDispatch = async (
       );
     }
     inputs = inputsVerdict.inputs;
+  }
+
+  // 5b. Gate any dynamic egress target the inputs name against the host pattern
+  //     the run's reviewed definition declares (ADR-0005). A host outside it
+  //     fails the DISPATCH — a 400 the caller can read — rather than the
+  //     policy, which would surface much later as a container that mysteriously
+  //     cannot reach its own test target.
+  //
+  //     Deliberately AFTER the slack-origin normalization: the grant must be
+  //     derived from what actually executes, not from what the caller sent, or
+  //     a refused-and-rewritten input could still steer the allowlist.
+  const targets = resolveTargets(runName, inputs);
+  if (!targets.ok) {
+    return json({ error: "invalid_target", message: targets.reason }, 400);
   }
 
   // 6. Compute the dedup key + Workflow instanceId.

@@ -50,6 +50,12 @@ export type ProxyProps = {
   allowedHosts?: string[];
   deniedHosts?: string[];
   outboundByHostOverrides?: Record<string, { method: string; params?: unknown }>;
+  /**
+   * The catch-all handler a `report` grant maps (container.js:1190). When one is
+   * set, EVERY host reaches a handler, so no 520 can be the container gate —
+   * see the `outboundHandlerOverride` check in `classifyPlatformDenial`.
+   */
+  outboundHandlerOverride?: { method: string; params?: unknown };
 };
 
 /** What the container runtime answers with when a gate refuses a host. */
@@ -71,12 +77,18 @@ export type PlatformDenial = Omit<DenialEvent, "count">;
  * was handed. That is description, not a second decision: nothing here can admit
  * or refuse anything.
  *
+ * The same discriminator covers the CATCH-ALL a `report` grant maps: with one
+ * set, every host reaches a handler, so a 520 can only have come from upstream.
+ * Without this check a report window would record `host X is not admitted` for a
+ * host that was admitted and simply answered 520 — and a report window is
+ * precisely the thing someone reads to decide which hosts to grant.
+ *
  * Residual: matching uses `hostMatches`, which is anchored and consumes one
- * label per `*`, while the SDK's glob is looser. Grants only ever admit concrete
- * hostnames (`buildGrant` refuses anything else) and the write-sink deny list
- * holds none, so the two agree on every set the substrate issues today; a future
- * glob could make this over-report an upstream 520 as a platform denial, which
- * costs an audit row and no enforcement.
+ * label per `*`, while the SDK's glob is looser. An `enforce` grant only ever
+ * admits concrete hostnames (`buildGrant` refuses anything else) and the
+ * write-sink deny list holds none, so the two agree on every enforcing set the
+ * substrate issues; the open postures admit the SDK wildcard, which this never
+ * reads — their catch-all short-circuits above.
  */
 export function classifyPlatformDenial(
   props: ProxyProps,
@@ -84,6 +96,10 @@ export function classifyPlatformDenial(
   status: number,
 ): PlatformDenial | undefined {
   if (status !== PLATFORM_DENIAL_STATUS) return undefined;
+
+  // A catch-all handler means every request was handled, so nothing the
+  // container gate refused could have got this far.
+  if (props.outboundHandlerOverride) return undefined;
 
   let url: URL;
   try {

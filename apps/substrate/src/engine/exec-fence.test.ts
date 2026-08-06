@@ -89,6 +89,10 @@ function fakeSandbox(opts: FakeOpts = {}) {
     removeOutboundByHost: async (h) => {
       calls.push(`unmap:${h}`);
     },
+    setOutboundHandler: async (m, p) => {
+      calls.push(`catchall:${m}`);
+      grantParams.push(p);
+    },
   };
 
   return { sandbox, calls, execInputs, grantParams };
@@ -402,7 +406,7 @@ describe("runFence — what reaches the container", () => {
     const viaInput = fakeSandbox();
     await runFence(viaInput.sandbox, { ...base, lfs: true });
     expect(viaInput.calls).toContain("allow:objects.githubusercontent.com");
-    expect(viaInput.calls).toContain("map:objects.githubusercontent.com:publicRepo");
+    expect(viaInput.calls).toContain("map:objects.githubusercontent.com:granted");
 
     const viaRecipe = fakeSandbox();
     await runFence(viaRecipe.sandbox, { ...base, recipe: { ...RECIPE, lfs: true } });

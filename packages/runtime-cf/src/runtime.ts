@@ -42,7 +42,19 @@ import { makeOidcLive, type OidcLiveConfig } from "./oidc-live";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
 import { makeIOLive } from "./io-live";
 import { makeSandboxCloudflareLive } from "./sandbox-cf";
+import { CacheOnFacade, makeSandboxFacadeLive, type SandboxFacadeOptions } from "./sandbox-facade";
 import { makeStepRunnerCloudflare } from "./step-runner-cf";
+
+/**
+ * What `makeCFRuntimeLive` needs to run this execution on the substrate rather
+ * than on a container binding — everything `makeSandboxFacadeLive` takes except
+ * the values the runtime already holds (bucket, executionId, repo, sha, viewer
+ * base).
+ */
+export type SubstrateExecution = Omit<
+  SandboxFacadeOptions,
+  "bucket" | "executionId" | "repo" | "sha" | "logsViewerBase"
+>;
 
 /** The minimal `WorkflowStep` surface `StepRunnerCloudflare` needs. */
 type WorkflowStepLike = {
@@ -55,8 +67,21 @@ export type CFRuntimeLiveOptions = {
   readonly db: D1Database;
   /** R2 binding — `env.RUNS_STORAGE`. */
   readonly bucket: R2Bucket;
-  /** Containers binding — `env.RUNS_SANDBOX`. */
-  readonly sandboxNs: DurableObjectNamespace<Sandbox>;
+  /**
+   * Containers binding — `env.RUNS_SANDBOX`. `undefined` on the substrate path,
+   * where the dispatcher holds no container class at all (ADR-0003): the
+   * `sandbox` capability rides the facade, and the two layers that reach a
+   * container directly degrade rather than address the wrong one — `artifact`
+   * fails loudly in container-tar mode, `cache` becomes a pass-through.
+   */
+  readonly sandboxNs?: DurableObjectNamespace<Sandbox>;
+  /**
+   * The substrate facade to execute on, instead of a container binding. When
+   * set, `sandbox` is `SandboxFacadeLive` and every command crosses the exec
+   * fence inside the substrate. Built by `RunWorkflow` from the `SUBSTRATE`
+   * service binding plus the run's grant-catalog entry.
+   */
+  readonly substrate?: SubstrateExecution;
   /** The `step` argument from `WorkflowEntrypoint.run`. */
   readonly workflowStep: WorkflowStepLike;
   /**
@@ -241,19 +266,40 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
     opts.sandboxNs,
     opts.publicOrigin,
   );
-  const sandbox = makeSandboxCloudflareLive(
-    opts.sandboxNs,
-    opts.bucket,
-    opts.executionId,
-    opts.checks,
-    opts.sandboxPreviewHostname,
-    opts.logsViewerBase,
-  );
+  // The substrate path and the container path are mutually exclusive by
+  // construction: one execution runs entirely on one of them, so there is never
+  // a call that reaches a container the rest of the runtime does not know about.
+  const sandbox =
+    opts.substrate !== undefined
+      ? makeSandboxFacadeLive({
+          ...opts.substrate,
+          bucket: opts.bucket,
+          executionId: opts.executionId,
+          repo: opts.execution.repo,
+          sha: opts.execution.sha,
+          ...(opts.logsViewerBase !== undefined ? { logsViewerBase: opts.logsViewerBase } : {}),
+        })
+      : makeSandboxCloudflareLive(
+          opts.sandboxNs as DurableObjectNamespace<Sandbox>,
+          opts.bucket,
+          opts.executionId,
+          opts.checks,
+          opts.sandboxPreviewHostname,
+          opts.logsViewerBase,
+        );
   const stepRunner = makeStepRunnerCloudflare(opts.workflowStep, opts.executionId);
   const checks = makeChecksGithubLive(opts.checks);
   // The cache archive key is scoped by repo so two repos with an identical
-  // lockfile hash cannot collide (cross-repo cache poisoning).
-  const cache = makeCacheR2Live(opts.bucket, opts.sandboxNs, opts.execution.repo);
+  // lockfile hash cannot collide (cross-repo cache poisoning). On the substrate
+  // path there is no container to pack an archive out of — see `CacheOnFacade`.
+  const cache =
+    opts.substrate !== undefined
+      ? CacheOnFacade
+      : makeCacheR2Live(
+          opts.bucket,
+          opts.sandboxNs as DurableObjectNamespace<Sandbox>,
+          opts.execution.repo,
+        );
   // `Config` is live when the `CONFIG_KV` binding is present; absent, the
   // dying stub keeps a config-reading run from silently mis-behaving.
   const config =

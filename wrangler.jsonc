@@ -81,7 +81,29 @@
     // ACCESS_AUD. The app's policy allows the GitHub `fractalboxdev/devs` team;
     // per-env authorization is CONFIG_KV `deploy.env-authz`. See deploy-access.ts.
     "DEPLOY_ACCESS_AUD": "44c3a07df1b0a4e454b28da9f55e7dbf3e279d1d09274667467a4d41ba79cafe",
+    // Execution backend. "on" routes every facade-capable run through the
+    // SUBSTRATE binding below; anything else keeps the container path in this
+    // config. Flipping it is the cutover — see apps/substrate/specs/adoption-runbook.md.
+    // Per-run egress rollout position is a SEPARATE decision, in
+    // apps/dispatcher/src/grant-catalog.ts.
+    "SUBSTRATE_BACKEND": "off",
   },
+
+  // The substrate facade (apps/substrate/specs/adr/0003-facade-only-consumption.md).
+  // `entrypoint` is the consumer identity: the substrate reads no runtime field
+  // to decide who is calling, so binding to `DispatcherFacade` here — in
+  // reviewed config — is what makes this Worker "the dispatcher" for admission
+  // pools, budgets and grant derivation.
+  //
+  // The substrate worker deploys FIRST; a `wrangler deploy` of this Worker
+  // against a missing service fails at bind time rather than at 2am.
+  "services": [
+    {
+      "binding": "SUBSTRATE",
+      "service": "flare-dispatch-substrate",
+      "entrypoint": "DispatcherFacade",
+    },
+  ],
 
   "workflows": [
     {
@@ -91,6 +113,18 @@
     },
   ],
 
+  // ===========================================================================
+  // DRAIN TARGET — this block and the three DO classes below it are what the
+  // stage-2 exit deletes (apps/substrate/specs/platform.md § Adoption plan:
+  // "no `containers` stanza exists in any wrangler config except the
+  // substrate's"). It is still here because three runs — `cdp-acceptance`,
+  // `product-demo`, `self-heal-pr` — call a detached-process / preview-URL
+  // surface the facade does not serve, so deleting it today would strand them
+  // rather than move them. `apps/dispatcher/src/grant-catalog.ts` names that
+  // per run (`facadeGaps`), and apps/substrate/specs/adoption-runbook.md is
+  // the sequence that removes it.
+  // ===========================================================================
+  //
   // One Dockerfile (Dockerfile.sandbox = cloudflare/sandbox base: Node+git+curl)
   // builds every class; per-class `image_vars` gate the optional layers. The
   // browser/agent classes stay lean; the chromium/agent variants return when

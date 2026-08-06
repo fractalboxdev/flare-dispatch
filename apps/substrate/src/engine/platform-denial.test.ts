@@ -12,8 +12,8 @@ const GRANTED: ProxyProps = {
   allowedHosts: ["github.com", "codeload.github.com"],
   deniedHosts: [...WRITE_SINKS],
   outboundByHostOverrides: {
-    "github.com": { method: "publicRepo" },
-    "codeload.github.com": { method: "publicRepo" },
+    "github.com": { method: "granted" },
+    "codeload.github.com": { method: "granted" },
   },
 };
 

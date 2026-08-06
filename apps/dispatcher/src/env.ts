@@ -5,8 +5,38 @@
 // bindings are deferred to V1+ and intentionally absent here.
 
 import type { Sandbox } from "@cloudflare/sandbox";
+import type { SubstrateFacade } from "@fractalboxdev/flare-dispatch-substrate-contract";
 
 export interface Env {
+  /**
+   * The substrate's `DispatcherFacade` over a service binding — the ONLY way
+   * this Worker reaches an execution container once a run is on the facade
+   * path (ADR-0003). Which named entrypoint the binding targets IS the consumer
+   * identity: the substrate reads no runtime field to decide who is calling, so
+   * the choice is made once, in reviewed wrangler config.
+   *
+   * Typed as the contract interface rather than the entrypoint class so the
+   * dispatcher compiles with zero knowledge of the substrate's internals; the
+   * shapes are plain structural types precisely so they survive Workers RPC.
+   *
+   * Optional: a deploy without the binding (or before the substrate worker is
+   * deployed — it deploys FIRST, see its wrangler.jsonc) keeps every run on the
+   * container path.
+   */
+  readonly SUBSTRATE?: SubstrateFacade;
+
+  /**
+   * Which execution backend a run uses. `"on"` routes every facade-capable run
+   * through `SUBSTRATE`; anything else (the default) keeps the container path.
+   * A var, not a secret — it is a rollout switch, and flipping it is the
+   * cutover the adoption runbook describes.
+   *
+   * Orthogonal to the per-run rollout POSITION in `grant-catalog.ts`: this
+   * decides *where* a run executes, the position decides *how much of the
+   * egress floor is enforced* once it is there.
+   */
+  readonly SUBSTRATE_BACKEND?: string;
+
   /**
    * Shared HMAC-SHA256 secret — verifies inbound `POST /v1/dispatch/:run`
    * request bodies (specs/05-byoc.md § Secrets). A Worker secret, set via

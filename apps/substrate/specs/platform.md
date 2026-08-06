@@ -128,6 +128,13 @@ than at deploy — invisible until real work runs.
 Engineering ships at 10x; stages are risk-ordered, not effort-ordered — 1 and 2 run concurrently,
 and 3 starts when the facade contract review lands.
 
+Stage 2's operator sequence is [adoption-runbook.md](adoption-runbook.md): deploy with the binding,
+flip `SUBSTRATE_BACKEND`, open a report window per run, graduate to `enforce`, then drain, delete
+the dispatcher's classes and raise the caps. It also names what still blocks the drain — the facade
+serves no detached-process, preview-URL or container-artifact surface, so the three runs that need
+one stay on the dispatcher's fleet until the boundary answers for a process that outlives the exec
+fence.
+
 ## Success criteria
 
 - A container boot without an admitted ticket fails closed (tested by calling `ensure()` directly);
