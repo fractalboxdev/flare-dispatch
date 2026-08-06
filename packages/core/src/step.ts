@@ -31,12 +31,53 @@ import type { StepOpts } from "./step-opts";
 export type { StepOpts };
 
 /**
+ * Render a typed failure into a string, for the OWN `message` of the plain
+ * Error thrown at the Workflow boundary below.
+ *
+ * Both halves of a tagged error are prototype-level: `name` comes from the tag
+ * and `message` from either a subclass `get message()` (ExecFailed, ExecTimeout)
+ * or Effect's default props rendering. Neither is an own data property, and the
+ * boundary serializes own data properties — so a tagged error thrown as-is
+ * reaches the Workflows attempt record as `{"name":"Error","message":""}` or
+ * worse, naming nothing. `ExecFailed` cost a real investigation this way: the
+ * attempt record said `ExecFailed` and no more, and the actual reason (the
+ * workspace was gone) survived only in the R2 exec log, which exists only
+ * because `sandbox.exec` happens to write one before it raises.
+ *
+ * Reading both halves HERE, while the error is still live, and folding them
+ * into one own-property message is what makes the reason durable — and it does
+ * it once for every tagged error rather than per class. `name` still degrades
+ * to `Error` in the record (the clone algorithm keeps only the built-in error
+ * names), which is exactly why the tag is prefixed onto the message.
+ */
+const describeFailure = (failure: unknown): string => {
+  if (!(failure instanceof Error)) return String(failure);
+  // `_tag` read as DATA, not branched on — the same read `errorTagOf` in
+  // step-runner-cf.ts makes, and for the same reason: the label has to be
+  // derived from an error whose type is not known here. It is preferred over
+  // `Error.name` because a payload field named `name` shadows it on the
+  // instance (`ArtifactUploadFailed`), which would otherwise label the record
+  // with the artifact's name instead of the failure's.
+  const tag = (failure as { _tag?: unknown })._tag;
+  const label = typeof tag === "string" ? tag : failure.name;
+  const detail = failure.message;
+  return detail.length > 0 && detail !== label ? `${label}: ${detail}` : label;
+};
+
+/**
  * Execute an Effect at the Workflow step boundary, rethrowing typed failures.
  *
  * The Effect must already have its `RunContext` provided by the runtime Layer
  * (`R = never`) before it reaches the boundary — `runEffect` is the imperative
  * shim, not the place capabilities are supplied. PR4's `StepRunnerCloudflare`
  * calls this inside the `WorkflowStep.do(...)` Promise callback.
+ *
+ * The thrown value is always a plain `Error` carrying the Effect `Cause`. The
+ * typed `E` channel rides on that `cause` — `StepRunnerCloudflare` re-fails with
+ * it via `Effect.failCause`, and reads the `_tag` off it for the `steps` row —
+ * so nothing downstream depends on the identity of the throw. It is the
+ * Workflows telemetry carrier and nothing else, which is what frees it to be
+ * shaped for a record that survives serialization (see `describeFailure`).
  */
 export const runEffect = <A, E>(eff: Effect.Effect<A, E, never>) =>
   Effect.runPromiseExit(eff).then((exit) =>
@@ -46,7 +87,7 @@ export const runEffect = <A, E>(eff: Effect.Effect<A, E, never>) =>
         // Some => a typed run failure; None => a defect, rendered from the
         // pretty Cause. Branch the Option — never read `._tag` raw.
         const err = Option.match(Cause.failureOption(cause), {
-          onSome: (failure) => (failure instanceof Error ? failure : new Error(String(failure))),
+          onSome: (failure) => new Error(describeFailure(failure)),
           onNone: () => new Error(Cause.pretty(cause)),
         });
         (err as { cause?: unknown }).cause = cause;

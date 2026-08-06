@@ -220,14 +220,57 @@ describe("D1ExecutionsLive", () => {
           name: "exec",
           completedAt: 20,
           status: "failure",
+          errorTag: "ExecFailed",
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // This assertion is the point of the test and it did not exist: the test
+    // passed no `errorTag` and checked only `status`, so it went green through
+    // the entire period in which the tag was computed on every failure and
+    // dropped — there was no column and the store never read the field (#80).
+    const step = await bindings.db
+      .prepare(`SELECT status, error_tag FROM steps WHERE execution_id = ? AND name = ?`)
+      .bind(EXECUTION_ID, "exec")
+      .first<{ status: string; error_tag: string | null }>();
+    expect(step?.status).toBe("failure");
+    expect(step?.error_tag).toBe("ExecFailed");
+  });
+
+  it("keeps a recorded error tag when the step is finished again on replay", async () => {
+    const layer = makeD1ExecutionsLive(bindings.db, CTX);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const executions = yield* Executions;
+        yield* executions.startExecution({
+          id: EXECUTION_ID,
+          run: "offload-test",
+          startedAt: 0,
+        });
+        yield* executions.startStep({ executionId: EXECUTION_ID, name: "exec", startedAt: 10 });
+        yield* executions.finishStep({
+          executionId: EXECUTION_ID,
+          name: "exec",
+          completedAt: 20,
+          status: "failure",
+          errorTag: "ExecFailed",
+        });
+        // A Workflow replay re-runs the surrounding Effect, and the success
+        // path carries no tag. A plain assignment would blank the reason.
+        yield* executions.finishStep({
+          executionId: EXECUTION_ID,
+          name: "exec",
+          completedAt: 20,
+          status: "failure",
         });
       }).pipe(Effect.provide(layer)),
     );
 
     const step = await bindings.db
-      .prepare(`SELECT status FROM steps WHERE execution_id = ? AND name = ?`)
+      .prepare(`SELECT error_tag FROM steps WHERE execution_id = ? AND name = ?`)
       .bind(EXECUTION_ID, "exec")
-      .first<{ status: string }>();
-    expect(step?.status).toBe("failure");
+      .first<{ error_tag: string | null }>();
+    expect(step?.error_tag).toBe("ExecFailed");
   });
 });

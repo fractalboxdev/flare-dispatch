@@ -180,6 +180,19 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # Schema before code — the same rule the substrate job states, which the
+      # dispatcher's own database was never held to. Its five migrations were
+      # applied by hand in a single run on 2026-07-11 and nothing here has ever
+      # applied one since, so a PR that adds a migration ships code querying a
+      # column production does not have. Already-applied migrations are a no-op,
+      # which is what makes this safe to add after the fact.
+      - name: Apply D1 migrations
+        run: pnpm exec wrangler d1 migrations apply flare-dispatch --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       # Deploy from the repo root, which wrangler.jsonc points at
       # (main: apps/dispatcher/src/index.ts). Uses the pnpm-pinned wrangler.
       - run: pnpm exec wrangler deploy

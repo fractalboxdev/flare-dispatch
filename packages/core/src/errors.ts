@@ -19,7 +19,9 @@ export class ExecFailed extends Schema.TaggedError<ExecFailed>()("ExecFailed", {
   exitCode: Schema.Number,
   stderrTail: Schema.String,
 }) {
-  // Workflows attempt record persists only error.name + error.message (#88).
+  // Read by `runEffect` (step.ts) and folded into the own-property message of
+  // the Error thrown at the Workflow boundary — a prototype getter does not
+  // survive that crossing on its own (#80).
   override get message(): string {
     return `exec failed (exit ${this.exitCode}): ${this.stderrTail}`;
   }
@@ -29,7 +31,9 @@ export class ExecTimeout extends Schema.TaggedError<ExecTimeout>()("ExecTimeout"
   timeoutSec: Schema.Number,
   command: Schema.String,
 }) {
-  // Workflows attempt record persists only error.name + error.message (#88).
+  // Read by `runEffect` (step.ts) and folded into the own-property message of
+  // the Error thrown at the Workflow boundary — a prototype getter does not
+  // survive that crossing on its own (#80).
   override get message(): string {
     return `exec timed out after ${this.timeoutSec}s: ${this.command}`;
   }
@@ -196,7 +200,9 @@ export class RunSkipped extends Schema.TaggedError<RunSkipped>()("RunSkipped", {
   /** Operator/reader-facing one-liner: why the run was skipped. */
   reason: Schema.String,
 }) {
-  // Workflows attempt record persists only error.name + error.message (#88).
+  // Read by `runEffect` (step.ts) and folded into the own-property message of
+  // the Error thrown at the Workflow boundary — a prototype getter does not
+  // survive that crossing on its own (#80).
   override get message(): string {
     return `run skipped: ${this.reason}`;
   }
