@@ -1,10 +1,13 @@
 // Per-execution egress denial events (specs/adr/0005-deny-all-egress-with-grant-profiles.md).
 //
-// Every denial — handler 403s today, platform 520s when the report hook lands —
-// is aggregated as `{host, method, path, reason, count}` keyed by container id,
-// retrievable with the execution's artifacts and never surfaced into the
-// container (oracle resistance). Recording is fire-and-forget from the egress
-// handler: it must never delay or fail a denial.
+// Every denial is aggregated as `{host, method, path, reason, count}` keyed by
+// container id, retrievable with the execution's artifacts (facade `denials()`)
+// and never surfaced into the container (oracle resistance). Both halves land
+// here: the egress handler's own 403s, and the platform's 520s for hosts that
+// die at the container gate before any handler runs — those come from the
+// outbound proxy (../outbound-proxy.ts), which is the only place they are
+// observable. Recording is fire-and-forget on both paths: it must never delay
+// or fail a denial.
 import type { DenialEvent } from "@fractalboxdev/flare-dispatch-substrate-contract";
 
 export const recordDenialD1 = async (

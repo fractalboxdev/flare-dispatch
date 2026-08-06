@@ -18,6 +18,7 @@ import type {
   AttemptOutcome,
   CheckpointOutcome,
   CheckpointReason,
+  DenialEvent,
   EnsureOutcome,
   ExecInput,
   ExecOutcome,
@@ -320,6 +321,25 @@ export abstract class SubstrateFacadeBase
 
   async admissionRelease(key: SandboxKey): Promise<void> {
     await this.store.release(this.executionId(key));
+  }
+
+  /**
+   * The execution's egress denials (ADR-0005). Asked of the DO rather than read
+   * from D1 here: the rows are keyed by the container's own id, and the facade
+   * only ever holds the *name* it derives the object from — which is what keeps
+   * one consumer's key from ever addressing another's denials.
+   */
+  async denials(key: SandboxKey): Promise<readonly DenialEvent[]> {
+    try {
+      const stub = await this.rowStub(this.executionId(key));
+      return stub ? await stub.denials() : [];
+    } catch (err) {
+      // Diagnostics must not throw into a consumer that is already rendering a
+      // failure. An unreadable audit trail is reported as an empty one, loudly
+      // in the substrate's own logs.
+      console.error("denials: could not read the execution's denial events", err);
+      return [];
+    }
   }
 
   async poolStatus(): Promise<PoolStatus> {

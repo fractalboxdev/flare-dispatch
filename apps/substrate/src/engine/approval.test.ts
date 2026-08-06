@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ApprovalAttestation } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import {
+  attestationUseKey,
   checkApprovalFloor,
   commandRequiresApproval,
+  decideAttestationUse,
   sha256Hex,
+  type AttestationUse,
 } from "./approval";
 
 const attest = async (
@@ -98,5 +101,92 @@ describe("checkApprovalFloor — the gate at exec", () => {
     expect(
       await checkApprovalFloor(command, { ...a, commandSha256: a.commandSha256.toUpperCase() }),
     ).toBeUndefined();
+  });
+});
+
+describe("decideAttestationUse — one approval, one step (ADR-0007)", () => {
+  const NOW = 1_700_000_000_000;
+
+  const used = (over: Partial<AttestationUse> = {}): AttestationUse => ({
+    commandSha256: "a".repeat(64),
+    idempotencyKey: "k1",
+    usedAt: NOW - 1_000,
+    ...over,
+  });
+
+  it("claims an unspent ordinal", async () => {
+    const command = "git push origin main";
+    const a = await attest(command);
+    const decision = decideAttestationUse(a, "k1", undefined, NOW);
+    expect(decision).toEqual({
+      ok: true,
+      claim: { commandSha256: a.commandSha256, idempotencyKey: "k1", usedAt: NOW },
+    });
+  });
+
+  it("refuses the same approval under a fresh idempotency key", async () => {
+    // The whole point: `git push origin main` hashes the same every time, so
+    // the command binding alone would let one human decision authorise a
+    // second push. The ordinal is the unit of authority.
+    const command = "git push origin main";
+    const a = await attest(command);
+    expect(
+      decideAttestationUse(a, "k2", used({ commandSha256: a.commandSha256 }), NOW),
+    ).toEqual({
+      ok: false,
+      refusal: {
+        kind: "attestation-rejected",
+        reason: "approval for this step was already used",
+      },
+    });
+  });
+
+  it("lets the same durable step retry — at-least-once must not become at-most-once", async () => {
+    const command = "git push origin main";
+    const a = await attest(command);
+    const recorded = used({ commandSha256: a.commandSha256, idempotencyKey: "k1" });
+    // The claim returns the ORIGINAL record: a retry must not push `usedAt`
+    // forward and quietly extend the life of an approval.
+    expect(decideAttestationUse(a, "k1", recorded, NOW)).toEqual({ ok: true, claim: recorded });
+  });
+
+  it("refuses a retry that mutated the command under the same key", async () => {
+    const a = await attest("git push origin main --force");
+    expect(
+      decideAttestationUse(a, "k1", used({ commandSha256: "b".repeat(64) }), NOW),
+    ).toEqual({
+      ok: false,
+      refusal: {
+        kind: "attestation-rejected",
+        reason: "approval for this step was used for a different command",
+      },
+    });
+  });
+
+  it("compares hashes case-insensitively, as the floor check does", async () => {
+    const command = "git push origin main";
+    const a = await attest(command);
+    const recorded = used({ commandSha256: a.commandSha256, idempotencyKey: "k1" });
+    expect(
+      decideAttestationUse(
+        { ...a, commandSha256: a.commandSha256.toUpperCase() },
+        "k1",
+        recorded,
+        NOW,
+      ),
+    ).toEqual({ ok: true, claim: recorded });
+  });
+});
+
+describe("attestationUseKey — the pair cannot collide", () => {
+  it("puts the integer ordinal first so a colon-bearing taskId stays whole", () => {
+    // fractalbot's task ids are colon-joined. `{taskId: "a:1", ordinal: 2}` and
+    // `{taskId: "a", ordinal: 12}` would share a key if the pair were the other
+    // way round, and one task's approval would satisfy another's step.
+    expect(attestationUseKey({ taskId: "a:1", ordinal: 2 })).toBe("2:a:1");
+    expect(attestationUseKey({ taskId: "a", ordinal: 12 })).toBe("12:a");
+    expect(attestationUseKey({ taskId: "a:1", ordinal: 2 })).not.toBe(
+      attestationUseKey({ taskId: "a", ordinal: 12 }),
+    );
   });
 });
