@@ -75,6 +75,28 @@ capture chokepoint. Every egress denial is recorded as a per-execution event
 `{host, method, path, reason, count}` retrievable with the execution's artifacts — and never surfaced
 into the container.
 
+### Read against the Agent Access Model
+
+Cloudflare's [Agent Access Model](https://blog.cloudflare.com/the-agent-access-model/) proposes a
+vocabulary for agent security that a reviewer may arrive with. We do not adopt its terms — it is a
+reference architecture rather than a specification ("not a wire-level specification"), and our names
+are the more precise ones for what is built here: an admission ticket gates capacity, which is not
+what an identity broker does, and "the recipe is the grant source" carries a property ("never
+model-authored") that "task template" does not. The mapping, so nobody has to reconstruct it:
+
+| Agent Access Model | Here |
+| --- | --- |
+| Identity Broker → short-lived task-scoped credential | Admission ticket ([ADR-0004](adr/0004-admission-enforced-by-ticket.md)) — per (consumer, execution key, pool), TTL'd, and stored *into* the container rather than handed to the caller, so there is no credential in consumer hands to steal |
+| Task-Scoped Access Engine | Grant derivation from the recipe ([ADR-0005](adr/0005-deny-all-egress-with-grant-profiles.md)) — asserted per request on method, path and body, not host scope alone |
+| Mediation layer (harness and network) | The exec fence ([ADR-0003](adr/0003-facade-only-consumption.md)) and the outbound handler (ADR-0005) — one is structural, not a call-path convention |
+| Task template | The recipe, with the stronger property that it is frozen from an input no model authored |
+| Trust Ratchet | None. Grants are applied and revoked per execution, so there is no standing capability to narrow mid-task |
+| Agent Activity Log | Execution facts ([ADR-0008](adr/0008-verdict-neutral-execution-facts.md)) plus per-execution denial events — not one queryable store, and not OCSF-shaped |
+| Grant Review Loop | `legacy → report → enforce` (ADR-0005), which only widens — that ADR records the asymmetry |
+
+Where it cites an actual standard rather than a concept — DPoP (RFC 9449), OAuth Token Exchange
+(RFC 8693), OCSF, OpenTelemetry — the standard is named directly at the decision it bears on.
+
 ## Tenancy and deploy
 
 Per-org BYOC, unchanged: an org deploys its dispatcher **and** its the substrate worker (the substrate first — the
