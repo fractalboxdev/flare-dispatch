@@ -10,6 +10,18 @@ import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-w
 // Pinned to the 0.12.x line for the same reason runtime-cf is — 0.13+ moved to
 // Vitest 4's `poolRunner` API.
 //
+// **Run it with `pnpm test:workers`; `pnpm test` does not.** This project is
+// NOT registered in the root `vitest.workspace.ts`, and that is a real gap
+// rather than a tidiness choice: `offload-test` runs the suite inside a
+// `cloudflare/sandbox` container, which has no container engine, and every
+// class here is container-backed (see the `container` designator below). Run in
+// that exact image, runtime-cf's workers project passes 32/32 while this one
+// fails 22/29 with workerd `internal error` the moment a DO is constructed.
+// So CI covers the Node project only, and the ticket gate, the facade
+// round-trip and the exec dedupe are verified locally and in review — not on
+// every PR. Re-listing it in the workspace requires a runner that can construct
+// a container-backed DO.
+//
 // The DO bindings carry a `container` designator because `Container`'s
 // constructor throws when `ctx.container` is undefined — without one, no
 // substrate DO class is constructible at all. Nothing is ever built or pulled:
