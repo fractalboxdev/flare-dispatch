@@ -98,9 +98,11 @@
     {
       "binding": "ADMISSION_DB",
       "database_name": "flare-dispatch-substrate",
-      // Placeholder until `wrangler d1 create flare-dispatch-substrate` runs
-      // in the target account — deploy fails loudly on it, never silently.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // FractalBox account (c91d52c2…). Committed inline, as the dispatcher's
+      // own id is: this repo is single-org today, and an id that lives only in
+      // someone's shell is an id the next deploy cannot reproduce. A second org
+      // adopting the substrate replaces this in its operator overlay.
+      "database_id": "0bf91199-34dc-431e-b4d8-7073bd467269",
       "migrations_dir": "migrations",
     },
   ],
