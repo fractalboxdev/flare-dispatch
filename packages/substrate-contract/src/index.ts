@@ -360,6 +360,56 @@ export type ExecInput = {
   approval?: ApprovalAttestation;
 };
 
+/**
+ * A process the substrate is not synchronously awaiting (ADR-0012).
+ *
+ * The id is substrate-assigned and opaque — never a container pid, which is not
+ * a stable name across a restart and would let a consumer address a process it
+ * did not start.
+ */
+export type DetachedProcess = {
+  id: string;
+  startedAt: number;
+};
+
+/**
+ * What a detached process is doing. `unknown` is its own state rather than an
+ * error: a container that slept, restarted or was checkpointed no longer has
+ * the process, and a consumer polling from a durable step needs to tell that
+ * apart from "still running" without catching a throw.
+ */
+export type DetachedStatus =
+  | { state: "running" }
+  | { state: "exited"; exitCode: number }
+  | { state: "gone"; reason: string };
+
+/**
+ * Start a process that outlives the call. **No grant is applied** — a detached
+ * process runs under the container's deny-all floor (ADR-0012), so anything it
+ * needs from the network has to happen inside a fenced exec instead.
+ *
+ * `command` still crosses the ADR-0007 approval floor: starting a floor command
+ * detached must not be a way around the floor.
+ */
+export type StartDetachedInput = {
+  recipe: SubstrateRecipe;
+  command: string;
+  /** Stable across retries of one durable step. A retry returns the same process. */
+  idempotencyKey: string;
+  /** Path under the execution's artifact prefix that the process's output streams to. */
+  logPath: string;
+  /** Required when the command matches the irreversible floor (ADR-0007). */
+  approval?: ApprovalAttestation;
+};
+
+export type StartDetachedOutcome =
+  | { ok: true; process: DetachedProcess }
+  | { ok: false; refusal: SubstrateRefusal };
+
+export type DetachedStatusOutcome =
+  | { ok: true; status: DetachedStatus }
+  | { ok: false; refusal: SubstrateRefusal };
+
 /** The bounded receipt for one command; full output lives in artifacts. */
 export type ExecReceipt = {
   exitCode: number;
@@ -458,6 +508,25 @@ export interface SubstrateFacade {
    * ticket gate every other call crosses.
    */
   readFile(key: SandboxKey, path: string): Promise<ReadFileOutcome>;
+
+  /**
+   * Start a process that outlives this call, under no grant at all (ADR-0012).
+   * The substrate's fence spares it when a later `execUnderGrant` tears down,
+   * so a dev server started here is still listening when the next command
+   * dials `localhost` — and still cannot reach the network between fences.
+   */
+  startDetached(key: SandboxKey, input: StartDetachedInput): Promise<StartDetachedOutcome>;
+
+  /**
+   * Poll one detached process. There is deliberately no `waitForExit`: a
+   * consumer waits in its own durable steps, the shape admission already uses,
+   * because a Worker call that blocks for a twenty-minute agent turn is not a
+   * call.
+   */
+  detachedStatus(key: SandboxKey, processId: string): Promise<DetachedStatusOutcome>;
+
+  /** Kill one detached process and forget it. Idempotent. */
+  stopDetached(key: SandboxKey, processId: string): Promise<{ ok: true; stopped: boolean }>;
 
   /** Snapshot the workspace and stop the container; releases the admission slot. */
   checkpoint(key: SandboxKey, reason: CheckpointReason): Promise<CheckpointOutcome>;

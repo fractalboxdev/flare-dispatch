@@ -19,6 +19,7 @@ import type {
   CheckpointOutcome,
   CheckpointReason,
   DenialEvent,
+  DetachedStatusOutcome,
   EnsureOutcome,
   ExecInput,
   ExecOutcome,
@@ -27,6 +28,8 @@ import type {
   QueuePosition,
   ReadFileOutcome,
   SandboxKey,
+  StartDetachedInput,
+  StartDetachedOutcome,
   SubstrateFacade,
   SubstrateRecipe,
 } from "@fractalboxdev/flare-dispatch-substrate-contract";
@@ -39,6 +42,7 @@ import {
 } from "./admission/pools";
 import { makeAdmissionStoreD1, type AdmissionStore } from "./admission/store-d1";
 import { mintTicket, TICKET_TTL_MS } from "./admission/ticket";
+import { checkApprovalFloor, commandRequiresApproval } from "./engine/approval";
 import { selectionProblem } from "./engine/profiles";
 import { sandboxDoName } from "./engine/policy";
 import { sandboxByName, type SubstrateSandboxBase } from "./sandbox-do";
@@ -270,6 +274,115 @@ export abstract class SubstrateFacadeBase extends WorkerEntrypoint<Env> implemen
         },
       };
     }
+  }
+
+  /**
+   * Start a process that outlives this call (ADR-0012). Admission and the
+   * ticket are the same as for an exec — a detached process occupies a
+   * container and must be counted — but **no grant is derived and none is
+   * applied**: it runs under the container's deny-all floor.
+   *
+   * The approval floor (ADR-0007) is crossed here rather than in the DO,
+   * because a refusal must cost nothing: starting `git push` detached must be
+   * refused before a container is touched, exactly as `execUnderGrant` refuses
+   * it before the fence applies anything.
+   */
+  async startDetached(key: SandboxKey, input: StartDetachedInput): Promise<StartDetachedOutcome> {
+    const problem = recipeProblem(input.recipe);
+    if (problem) return { ok: false, refusal: { kind: "recipe-rejected", reason: problem } };
+
+    const command = input.command.trim();
+    if (!command)
+      return { ok: false, refusal: { kind: "recipe-rejected", reason: "empty command" } };
+
+    const floorRefusal = await checkApprovalFloor(command, input.approval);
+    if (floorRefusal) return { ok: false, refusal: floorRefusal };
+
+    const pool = selectPool(this.consumer, input.recipe);
+    let id: string;
+    try {
+      id = this.executionId(key);
+    } catch (err) {
+      return {
+        ok: false,
+        refusal: {
+          kind: "recipe-rejected",
+          reason: err instanceof Error ? err.message : "bad key",
+        },
+      };
+    }
+
+    try {
+      const admitted = await this.admitAndTicket(id, key, pool);
+      if (!admitted.admitted)
+        return {
+          ok: false,
+          refusal: {
+            kind: "admission-refused",
+            pool,
+            poolBusy: admitted.poolBusy,
+            cap: this.caps[pool],
+            position: admitted.position,
+            queuedForMs: Math.max(0, Date.now() - admitted.enqueuedAt),
+            retryAfterMs: ADMISSION_RETRY_AFTER_MS,
+          },
+        };
+
+      // The attestation is spent in the DO, where the ticket lives, for the
+      // same reason the fence spends it there: the record belongs at the object
+      // that runs the command, and only a floor command spends one.
+      if (input.approval && commandRequiresApproval(command) !== undefined) {
+        const spent = await admitted.stub.claimAttestation(input.approval, input.idempotencyKey);
+        if (spent) return { ok: false, refusal: spent };
+      }
+
+      const started = await admitted.stub.startDetached({
+        recipe: input.recipe,
+        command,
+        idempotencyKey: input.idempotencyKey,
+        logPath: input.logPath,
+      });
+      return started.ok
+        ? { ok: true, process: { id: started.process.id, startedAt: started.process.startedAt } }
+        : { ok: false, refusal: started.refusal };
+    } catch (err) {
+      return {
+        ok: false,
+        refusal: {
+          kind: "sandbox-unavailable",
+          reason: err instanceof Error ? err.message : "substrate error",
+        },
+      };
+    }
+  }
+
+  async detachedStatus(key: SandboxKey, processId: string): Promise<DetachedStatusOutcome> {
+    try {
+      const stub = await this.rowStub(this.executionId(key));
+      if (!stub)
+        return { ok: false, refusal: { kind: "sandbox-unavailable", reason: "no container" } };
+      return { ok: true, status: await stub.detachedStatus(processId) };
+    } catch (err) {
+      return {
+        ok: false,
+        refusal: {
+          kind: "sandbox-unavailable",
+          reason: err instanceof Error ? err.message : "substrate error",
+        },
+      };
+    }
+  }
+
+  async stopDetached(key: SandboxKey, processId: string): Promise<{ ok: true; stopped: boolean }> {
+    // Never refuses, for the same reason `abort` never does: a caller shutting
+    // something down cannot be left holding an error it has no move against.
+    try {
+      const stub = await this.rowStub(this.executionId(key));
+      if (stub) return { ok: true, ...(await stub.stopDetached(processId)) };
+    } catch (err) {
+      console.error("stopDetached: best-effort teardown hit an error", err);
+    }
+    return { ok: true, stopped: false };
   }
 
   async checkpoint(key: SandboxKey, reason: CheckpointReason): Promise<CheckpointOutcome> {

@@ -76,8 +76,18 @@ export interface GuardedSandbox extends GrantTarget {
    * processes; a double-forked grandchild that detached from the session is
    * not guaranteed to be among them, so this narrows the window rather than
    * closing it — see `KILL_COVERAGE_NOTE`.
+   *
+   * The fence does not call this — `killFencedProcesses` is its teardown. It
+   * stays on the interface because `abort` is the off-switch and spares
+   * nothing, and because a rename in the SDK has to fail here.
    */
   killAllProcesses(): Promise<number>;
+  /**
+   * The fence's teardown (ADR-0012): kill every tracked process this execution
+   * did not declare detached, and return how many died. Identical to
+   * `killAllProcesses` when nothing is declared, which is almost always.
+   */
+  killFencedProcesses(): Promise<number>;
 }
 
 /**
@@ -85,9 +95,15 @@ export interface GuardedSandbox extends GrantTarget {
  * (an accepted residual in specs/platform.md). Between the kill and the revoke
  * completing, a detached child still holds the grant; what bounds it is the
  * container's own lifetime and the fact that a revoked grant leaves deny-all.
+ *
+ * ADR-0012 adds a *declared* case alongside that accidental one: a process
+ * started through `startDetached` is spared on purpose. It holds no grant of
+ * its own — nothing applies one for it — but it lives in the container, so
+ * while a later fence is open it shares that fence's grant, bounded by the same
+ * host, method and path rules the fenced command is bounded by.
  */
 export const KILL_COVERAGE_NOTE =
-  "killAllProcesses covers tracked processes; a detached grandchild can outlive it";
+  "the fenced kill covers tracked processes this execution started; a detached grandchild can outlive it, and a declared detached process is spared by design";
 
 /** A repo task that clones, installs and runs a suite is minutes, not seconds. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60_000;
@@ -176,7 +192,9 @@ function grantFor(input: FenceInput): Grant | undefined {
  * 3. Apply, run, then in `finally`: **kill, then revoke**. A backgrounded
  *    process outlives the command that spawned it, so revoking first would
  *    close the grant on the foreground command while its children still hold
- *    it. A kill that throws must not skip the revoke.
+ *    it. A kill that throws must not skip the revoke. The kill spares processes
+ *    this execution declared detached (ADR-0012), which is safe for exactly one
+ *    reason: nothing ever applies a grant for them.
  */
 export async function runFence(sandbox: GuardedSandbox, input: FenceInput): Promise<FenceOutcome> {
   const command = input.command.trim();
@@ -231,8 +249,11 @@ export async function runFence(sandbox: GuardedSandbox, input: FenceInput): Prom
   } finally {
     // (3) Kill before revoke, and never let a failing kill skip the revoke —
     // the ordering is the point, and a swallowed revoke is a leaked grant.
+    // `killFencedProcesses` rather than `killAllProcesses`: a process this
+    // execution declared detached is spared, and holds no grant to spare it
+    // with (ADR-0012).
     try {
-      killed = await sandbox.killAllProcesses();
+      killed = await sandbox.killFencedProcesses();
     } catch {
       // Recorded by the revoke that follows either way; a container that is
       // already gone cannot be holding a grant open.

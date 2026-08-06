@@ -64,7 +64,14 @@ function fakeSandbox(opts: FakeOpts = {}) {
       calls.push(`claim:${attestation.taskId}:${attestation.ordinal}:${idempotencyKey}`);
       return opts.claimRefusal;
     },
+    // The off-switch's kill. The fence must never reach it — `abort` spares
+    // nothing, the fence spares declared detached processes (ADR-0012) — so it
+    // logs under its own name and any appearance in the call order is a bug.
     killAllProcesses: async () => {
+      calls.push("kill-all");
+      return 3;
+    },
+    killFencedProcesses: async () => {
       calls.push("kill");
       if (opts.killThrows) throw opts.killThrows;
       return 3;
@@ -183,6 +190,19 @@ describe("runFence — the sequence is the property", () => {
     // A backgrounded process outlives the command; revoking first would close
     // the grant on the foreground command while its children still hold it.
     expect(kill).toBeLessThan(firstRevoke);
+  });
+
+  it("tears down with the fenced kill, never the off-switch's (ADR-0012)", () => {
+    // `killAllProcesses` spares nothing, which is right for `abort` and wrong
+    // here: a process the execution declared detached holds no grant and must
+    // survive the revoke. If the fence ever reverts to the blunt call, this is
+    // the test that says so — the two are indistinguishable by the `killed`
+    // count alone.
+    const { sandbox, calls } = fakeSandbox();
+    return runFence(sandbox, base).then(() => {
+      expect(calls).toContain("kill");
+      expect(calls).not.toContain("kill-all");
+    });
   });
 
   it("revokes a grant left behind by a previous call before ensuring", async () => {

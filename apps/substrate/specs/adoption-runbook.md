@@ -143,14 +143,17 @@ fleets are sized for a ceiling only one of them has left.
 
 Stated rather than deferred, because each one bounds what this runbook can finish today.
 
-- **The facade serves no detached-process or preview-URL surface.** A process that outlives the
-  exec fence outlives the grant window the fence closes, which is a design question rather than a
-  missing method — until it is answered, the runs in § 2's exclusion list cannot move, and § 5
-  cannot run.
-- **Container-mode artifact upload** (tar a directory out of the container to R2) has no facade
-  equivalent either. The substrate mounts R2 at `/artifacts` inside the container, so the
-  replacement is a run writing its own archive there rather than the Worker pulling one out — a
-  per-run change, not a mechanical one.
+- **A detached process holds no grant** ([ADR-0012](adr/0012-processes-that-outlive-the-exec-fence.md)).
+  The facade serves `startDetached` / `detachedStatus` / `stopDetached`, and the fence spares what an
+  execution declared. What is left per run is the run body: `sandbox.runDetached` still targets this
+  fleet, and `waitForPort` becomes a fenced exec polling `localhost` rather than a facade call.
+- **Preview URLs stay off the facade.** `exposePort` is an inbound route, and serving it means the
+  substrate worker owns a proxy route of its own. Until that exists `cdp-acceptance` and
+  `product-demo` cannot move, so § 5 cannot run.
+- **Container-mode artifact upload** needs no facade method. The substrate mounts R2 at `/artifacts`
+  inside the container, so the replacement is a run writing its own archive there rather than the
+  Worker pulling one out — a per-run change. The half still missing is retrieval: a consumer holds a
+  sandbox key and never the container id, so it cannot address what the run wrote.
 - **A report window sees what the engine sees.** Requests reach the catch-all handler only for
   traffic the container runtime intercepts. HTTP and HTTPS both are; a protocol that is not is
   neither recorded nor, later, enforced — see § 3 for how the graduation gate accounts for it.

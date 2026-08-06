@@ -13,3 +13,4 @@
 | [0009](0009-two-tier-budgets.md) | Two-tier budgets: per-execution metering + per-consumer ceiling | Proposed |
 | [0010](0010-named-image-classes-policy-selected.md) | Named image classes, selected by policy | Proposed |
 | [0011](0011-sdk-pin-as-security-surface.md) | The sandbox SDK pin is a security surface | Proposed |
+| [0012](0012-processes-that-outlive-the-exec-fence.md) | A process that outlives the exec fence holds no grant | Proposed |

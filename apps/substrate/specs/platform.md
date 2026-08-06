@@ -61,12 +61,16 @@ model cooperation — is the floor for **all** workloads, CI included:
   ([ADR-0007](adr/0007-approval-attestation-at-exec.md)).
 - Execution tier and image class are policy-selected, never model- or payload-visible
   ([ADR-0010](adr/0010-named-image-classes-policy-selected.md)).
+- A process that outlives the exec fence holds no grant
+  ([ADR-0012](adr/0012-processes-that-outlive-the-exec-fence.md)).
 - The `@cloudflare/sandbox` + `@cloudflare/containers` pin is a security surface with a deploy-time
   canary ([ADR-0011](adr/0011-sdk-pin-as-security-surface.md)).
 
 **Accepted residuals** (inherited from fractalbot's ADR-0005, restated so consumers start from
-documented gaps): DNS exfiltration is uncovered; double-forked detached children survive
-`killAllProcesses`; `git-upload-pack` is a bounded exfiltration sink.
+documented gaps): DNS exfiltration is uncovered; double-forked detached children survive the fence's
+kill; `git-upload-pack` is a bounded exfiltration sink. A process a run *declares* detached is spared
+deliberately and holds no grant of its own, but shares whatever grant a later fence opens while it is
+open ([ADR-0012](adr/0012-processes-that-outlive-the-exec-fence.md)).
 
 **Never store, never log**: Slack bot tokens (never reach the substrate), GitHub installation tokens, secret
 values, capability-token values, raw prompts beyond metering metadata. Authenticated clone URLs are

@@ -260,3 +260,47 @@ describe("pool selection is consumer-driven across the binding (ADR-0010, #74)",
     expect(asFractalbot.pool).toBe("task");
   });
 });
+
+describe("startDetached (ADR-0012) - the refusals that land before a container", () => {
+  it("refuses a floor command carrying no attestation", async () => {
+    // The whole reason the floor is checked in the facade rather than the DO:
+    // starting `git push` detached must be refused before anything is admitted
+    // or booted, exactly as `execUnderGrant` refuses it before the fence
+    // applies a grant. A detached path that skipped the floor would be a way
+    // around ADR-0007 that costs one extra method call to find.
+    const outcome = await dispatcher().startDetached(freshKey(), {
+      recipe: RECIPE,
+      command: "git push origin main",
+      idempotencyKey: "step-1",
+      logPath: "push.log",
+    });
+    expect(outcome).toMatchObject({ ok: false, refusal: { kind: "approval-required" } });
+  });
+
+  it("refuses an empty command", async () => {
+    const outcome = await dispatcher().startDetached(freshKey(), {
+      recipe: RECIPE,
+      command: "   ",
+      idempotencyKey: "step-1",
+      logPath: "dev.log",
+    });
+    expect(outcome).toMatchObject({ ok: false, refusal: { kind: "recipe-rejected" } });
+  });
+
+  it("refuses a recipe the catalog cannot serve, before admission", async () => {
+    const outcome = await dispatcher().startDetached(freshKey(), {
+      recipe: { version: 1, profiles: ["js-install"] },
+      command: "pnpm dev",
+      idempotencyKey: "step-1",
+      logPath: "dev.log",
+    });
+    expect(outcome).toMatchObject({ ok: false, refusal: { kind: "recipe-rejected" } });
+  });
+
+  it("stops an unknown process without refusing — the off-switch never does", async () => {
+    expect(await dispatcher().stopDetached(freshKey(), "sub-detached-nothing")).toEqual({
+      ok: true,
+      stopped: false,
+    });
+  });
+});
