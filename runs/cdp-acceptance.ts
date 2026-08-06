@@ -168,11 +168,22 @@ const CdpAcceptanceInput = Schema.Struct({
    * Config-store keys whose values are injected — as env vars of the same
    * name — into the app boot and the test command. Empty when the suite needs
    * no credentials. See `loadSecrets`.
+   *
+   * @deprecated ADR-0006 — a value in the command's env is a long-lived
+   * credential reachable from inside the container, and redaction only keeps it
+   * out of the log. Migrate to worker-side writeback or to a grant profile whose
+   * credential the substrate's egress handler attaches
+   * (apps/substrate/specs/credential-boundary.md); removed at stage-2 exit.
    */
   secrets: Schema.optionalWith(Schema.Array(Schema.String), {
     default: () => [],
   }),
-  /** Prefix prepended to each `secrets` key for the config lookup. */
+  /**
+   * Prefix prepended to each `secrets` key for the config lookup.
+   *
+   * @deprecated Ignored by `loadSecrets` (Worker bindings are bare names), and
+   * removed with `secrets` at the substrate stage-2 exit (ADR-0006).
+   */
   secretPrefix: Schema.optional(Schema.String),
 });
 

@@ -129,6 +129,24 @@ describe("runFence — the sequence is the property", () => {
     expect(outcome.ensured).toEqual({ generation: 1, rebuilt: false });
   });
 
+  it("composes a selected profile's hosts onto the repo read, and revokes them", async () => {
+    // The recipe selects a NAME; what the name admits is authored in reviewed
+    // code (ADR-0005/0006). A profile that never reached the grant would leave
+    // the credential injector unreachable and `wrangler deploy` on deny-all.
+    const { sandbox, calls } = fakeSandbox();
+    const outcome = await runFence(sandbox, {
+      ...base,
+      recipe: { ...RECIPE, profiles: ["cf-api"] },
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.granted).toContain("api.cloudflare.com");
+    // A credentialed host left admitted past the command is the leak that
+    // matters most, so it has to come back out with everything else.
+    expect(calls).toContain("unallow:api.cloudflare.com");
+  });
+
   it("reports no grant for a recipe that named no repository", async () => {
     // Deny-all stays exactly as the class posture ships it, and `granted` is
     // how a reader tells "no repository" from "grant failed to apply".

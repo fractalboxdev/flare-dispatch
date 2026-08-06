@@ -70,6 +70,42 @@ export function repoSlug(repo: SubstrateRepoRef): string {
 }
 
 // ---------------------------------------------------------------------------
+// Credential descriptors (ADR-0006)
+// ---------------------------------------------------------------------------
+
+/**
+ * How a credential attaches to one host, for the writes that cannot ride
+ * worker-side writeback (ADR-0006). The descriptor names a secret; it never
+ * carries one, and nothing in it ever reaches a container.
+ *
+ * The shape is exported here so consumers can *read* what a profile attaches
+ * (documentation, refusal text) — never author it. Descriptors are frozen in
+ * the substrate's reviewed catalog and selected by `GrantProfileName`, the same
+ * rule ADR-0005 applies to grants: a payload may select among pre-authored
+ * definitions, never define one. A consumer-supplied descriptor would let a
+ * dispatch body name the secret it wants injected, which is the whole attack.
+ */
+export type CredentialDescriptor = {
+  /**
+   * The substrate Worker's own secret binding name (`CLOUDFLARE_API_TOKEN`).
+   * Resolvable only against a frozen allowlist inside the substrate, so a
+   * mis-authored descriptor cannot reach `TICKET_SECRET`.
+   */
+  secretName: string;
+  /** The exact host this credential attaches to. Never a glob — see below. */
+  host: string;
+  /**
+   * The header line to send, `Name: value`, with `{{secret}}` as the single
+   * substitution point — e.g. `authorization: Bearer {{secret}}`. A line rather
+   * than a pair because the ADR's descriptor is a triple; it is parsed and
+   * validated once at catalog authoring time, and a template with a CR/LF, a
+   * malformed name, or anything other than exactly one `{{secret}}` is refused
+   * before it can be used.
+   */
+  headerTemplate: string;
+};
+
+// ---------------------------------------------------------------------------
 // Admission (ADR-0004)
 // ---------------------------------------------------------------------------
 

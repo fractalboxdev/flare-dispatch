@@ -109,6 +109,12 @@ const CheckInput = Schema.Struct({
    * Config-store / Worker-secret keys whose values are injected — as env vars
    * of the same name — into the command's env. Empty when the command needs
    * no credentials. See `loadSecrets` + header.
+   *
+   * @deprecated ADR-0006 — a value in the command's env is a long-lived
+   * credential reachable from inside the container, and redaction only keeps it
+   * out of the log. Migrate to worker-side writeback or to a grant profile whose
+   * credential the substrate's egress handler attaches
+   * (apps/substrate/specs/credential-boundary.md); removed at stage-2 exit.
    */
   secrets: Schema.optionalWith(Schema.Array(Schema.String), {
     default: () => [],

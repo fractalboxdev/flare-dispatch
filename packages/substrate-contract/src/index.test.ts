@@ -4,6 +4,7 @@ import {
   isRefusalKind,
   repoSlug,
   type AdmissionRefused,
+  type CredentialDescriptor,
   type ExecOutcome,
   type SubstrateFacade,
   type SubstrateRefusal,
@@ -59,6 +60,18 @@ describe("contract shapes stay structured-clone-safe", () => {
       meter: { spentUsd: 12.5, capUsd: 10 },
     };
     expect(structuredClone(refusal)).toEqual(refusal);
+  });
+
+  it("a credential descriptor names a secret and never carries one", () => {
+    // The shape is exported so a consumer can read what a profile attaches —
+    // never to author one (ADR-0006). Three fields, all metadata.
+    const descriptor: CredentialDescriptor = {
+      secretName: "CLOUDFLARE_API_TOKEN",
+      host: "api.cloudflare.com",
+      headerTemplate: "authorization: Bearer {{secret}}",
+    };
+    expect(structuredClone(descriptor)).toEqual(descriptor);
+    expect(Object.keys(descriptor)).toEqual(["secretName", "host", "headerTemplate"]);
   });
 });
 

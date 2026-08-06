@@ -29,7 +29,18 @@
 //
 // --- Credentials --------------------------------------------------------------
 //
-// Same contract as `offload-test` header note 3: secret *names* ride the
+// DEPRECATED, and this run is the case that retires it. ADR-0006 bars a
+// long-lived credential from inside a container, and `CLOUDFLARE_API_TOKEN` in
+// the deploy command's env is exactly that — readable by anything the repo's
+// build runs, kept out of the log by `redactValues` but not out of the process.
+// `wrangler deploy` authenticates its own HTTPS calls to `api.cloudflare.com`,
+// so there is no artifact to write back: it ships on the `cf-api` grant profile
+// instead, where the substrate's egress handler attaches the token to the
+// outbound request and the container holds nothing. The env path below stays
+// until the dispatcher consumes the facade, and goes at stage-2 exit.
+// See apps/substrate/specs/credential-boundary.md.
+//
+// Until then, the contract is `offload-test` header note 3: secret *names* ride the
 // config store, never the dispatch body. Webhook dispatches can't name
 // secrets either (sync, payload-only `inputs`), so the run body resolves the
 // env-var names from `worker-deploy.secrets:<owner/repo>` (comma-separated)
@@ -89,11 +100,22 @@ const WorkerDeployInput = Schema.Struct({
    * Env-var names resolved from the config store into the command's env.
    * Empty on webhook dispatches — the run body falls back to
    * `worker-deploy.secrets:<owner/repo>` (comma-separated names).
+   *
+   * @deprecated ADR-0006 — this run is the credential boundary's acceptance
+   * case. `wrangler deploy` reaches `api.cloudflare.com`, so it ships on the
+   * `cf-api` grant profile: the substrate's egress handler attaches
+   * `CLOUDFLARE_API_TOKEN` to the request, and the container holds nothing
+   * (apps/substrate/specs/credential-boundary.md). Removed at stage-2 exit.
    */
   secrets: Schema.optionalWith(Schema.Array(Schema.String), {
     default: () => [],
   }),
-  /** Config-store prefix for the `secrets` lookup (e.g. `secret/`). */
+  /**
+   * Prefix prepended to each `secrets` key for the config lookup.
+   *
+   * @deprecated Ignored by `loadSecrets` (Worker bindings are bare names), and
+   * removed with `secrets` at the substrate stage-2 exit (ADR-0006).
+   */
   secretPrefix: Schema.optional(Schema.String),
   timeoutSec: Schema.optional(Schema.Number), // default 900
   /**

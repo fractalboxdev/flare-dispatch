@@ -21,6 +21,19 @@
 // state at rest. Call `loadSecrets` inline in the run body — it reads
 // `secrets` and is cheap + idempotent to re-run on replay.
 //
+// DEPRECATED by the substrate's credential boundary (ADR-0006). Everything this
+// primitive produces ends up in `sandbox.exec({ env })`, and an env var is a
+// long-lived credential reachable from inside the container — readable by any
+// `postinstall`, `build.rs` or `conftest.py` the workload runs, and kept out of
+// the *log* by `redactValues` but not out of the *process*. The two replacement
+// shapes both keep the value Worker-side: worker-side writeback (the container
+// produces an artifact, the Worker performs the authenticated write), or a
+// grant profile whose credential the substrate's egress handler attaches to the
+// outbound request (`apps/substrate/src/engine/credentials.ts`). Call sites are
+// migrated run by run; this primitive goes away with the `secrets` run input at
+// the substrate's stage-2 exit. Details:
+// apps/substrate/specs/credential-boundary.md.
+//
 // Rides on the `secrets` and `io` capabilities. Layer: 03-dsl § Primitives.
 
 import { Effect } from "effect";
