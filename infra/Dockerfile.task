@@ -177,11 +177,12 @@ RUN set -eux; \
 #
 # Every request a task makes is intercepted and re-issued by the substrate's
 # outbound handler (ADR-0005), so the certificate a tool validates is not the
-# origin's. The runtime's CA lands in the system trust store — and most of this
-# image's toolchain ignores it: Node ships its own root set, `requests` uses
-# certifi, and each then fails TLS on an interception it was never told about.
-# These point every one of them at the system store, so what is trusted is a
-# property of the image rather than of a flag each command has to remember.
+# origin's. The interception CA lands in the system trust store at boot (see the
+# entrypoint below) — and most of this image's toolchain ignores that store:
+# Node ships its own root set, `requests` uses certifi, and each then fails TLS
+# on an interception it was never told about. These point every one of them at
+# the system store, so what is trusted is a property of the image rather than of
+# a flag each command has to remember.
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     SSL_CERT_DIR=/etc/ssl/certs \
@@ -201,5 +202,18 @@ ENV PYTHON_POOL_MIN_SIZE=0 \
     JAVASCRIPT_POOL_MIN_SIZE=0 \
     TYPESCRIPT_POOL_MIN_SIZE=0
 
-# ENTRYPOINT is inherited from the base (`/container-server/sandbox`) and must
-# stay that way — it is the server the Durable Object half talks to.
+# ── interception CA, installed at boot ──────────────────────────────────────
+#
+# The CA the ENV block above points at only exists at RUNTIME — Cloudflare
+# materialises it into the container, not into the image — so trusting it is an
+# entrypoint step rather than a layer.
+#
+# The wrapper is the ONLY thing allowed in front of `/container-server/sandbox`,
+# and it `exec`s it: that binary is the server the Durable Object half speaks
+# its HTTP/RPC protocol to, and anything that replaces or outlives it breaks
+# every call. The `test -x` asserts it at build time, so a base image that moves
+# the binary fails here instead of shipping an image that starts nothing.
+RUN test -x /container-server/sandbox
+COPY container-entrypoint.sh /usr/local/bin/substrate-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/substrate-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/substrate-entrypoint.sh"]

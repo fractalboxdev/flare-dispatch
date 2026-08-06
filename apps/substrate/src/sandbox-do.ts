@@ -35,11 +35,7 @@ import type {
 import { repoSlug } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { denialsFor, recordDenialD1 } from "./admission/denials-d1";
 import { verifyTicket } from "./admission/ticket";
-import {
-  attestationUseKey,
-  decideAttestationUse,
-  type AttestationUse,
-} from "./engine/approval";
+import { attestationUseKey, decideAttestationUse, type AttestationUse } from "./engine/approval";
 import {
   applyGrant,
   buildGrant,
@@ -124,6 +120,37 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
    */
   override enableInternet = false;
   override allowedHosts: string[] = [];
+
+  /**
+   * HTTPS through the same handler chain as HTTP — without which the engine
+   * never sees the only protocol it grants.
+   *
+   * `applyOutboundInterception` registers `interceptAllOutboundHttp`
+   * unconditionally but puts `interceptOutboundHttps('*', …)` behind this flag,
+   * which defaults `false` (`@cloudflare/containers@0.3.7`,
+   * `container.js:329,1208`). `allowedHosts`, `deniedHosts` and
+   * `outboundByHost` are all evaluated inside `ContainerProxy.fetch`, and
+   * `engine/egress.ts` refuses any request whose protocol is not `https:` — so
+   * with the flag off, every host the substrate grants is exactly the traffic
+   * the request-level engine cannot observe. Path rules, method assertions,
+   * handler-injected credentials (ADR-0006) and `sub_denials` capture were all
+   * bypassed for real traffic, and a granted host was unreachable rather than
+   * merely uninspected: neither intercepted nor allowed out.
+   *
+   * The deny-all floor held either way — `enableInternet = false` killed an
+   * unlisted HTTPS host at the network layer instead of returning a 520 — but
+   * by a mechanism the specs do not describe, and one that produced no denial
+   * record.
+   *
+   * This half is inert without the other. The container must trust
+   * `/etc/cloudflare/certs/cloudflare-containers-ca.crt`, which exists only at
+   * runtime, so `infra/container-entrypoint.sh` installs it on every boot and
+   * both images run that wrapper. Flipping this flag on an image without the CA
+   * breaks TLS for everything in the container; the two ship together, and the
+   * ADR-0011 canary's HTTPS probe is what proves the pair is wired
+   * (`verify/probe.ts`).
+   */
+  override interceptHttps = true;
 
   /**
    * Idle timeout, from a var so changing it is not a deploy. `keepAlive` is

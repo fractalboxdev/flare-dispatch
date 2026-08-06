@@ -43,9 +43,7 @@ describe("the ticket gate (ADR-0004) - enforcement is at the container", () => {
   it("refuses ensure() on an object admission never admitted", async () => {
     // The platform spec's success criterion, driven the way it is written:
     // call ensure() directly, with no facade in front of it.
-    const outcome = await runInDurableObject(freshSandbox(), (instance) =>
-      instance.ensure(RECIPE),
-    );
+    const outcome = await runInDurableObject(freshSandbox(), (instance) => instance.ensure(RECIPE));
     expect(outcome).toEqual({
       ok: false,
       refusal: { kind: "ticket-rejected", reason: "no admission ticket" },
@@ -192,5 +190,48 @@ describe("denial retrieval (ADR-0005) - served with the artifacts, never inward"
 
   it("answers with an empty list for an execution that was refused nothing", async () => {
     expect(await runInDurableObject(freshSandbox(), (i) => i.denials())).toEqual([]);
+  });
+});
+
+describe("the outbound posture (ADR-0005) - read off a constructed instance", () => {
+  // These are the three fields `applyOutboundInterception` reads, asserted on a
+  // real instance rather than on the source: they are plain class properties,
+  // so a rename in the SDK or a shadowing field would leave the declaration
+  // looking right while the runtime read a different value. No container is
+  // started — the properties are set by the constructor.
+  const posture = (
+    ns: DurableObjectNamespace,
+  ): Promise<{ enableInternet: boolean; allowedHosts: unknown; interceptHttps: boolean }> => {
+    const stub = ns.get(ns.idFromName(`posture-${crypto.randomUUID()}`));
+    return runInDurableObject(stub as DurableObjectStub<SubstrateSandboxBase>, (i) => {
+      const container = i as unknown as {
+        enableInternet: boolean;
+        allowedHosts: unknown;
+        interceptHttps: boolean;
+      };
+      return {
+        enableInternet: container.enableInternet,
+        allowedHosts: container.allowedHosts,
+        interceptHttps: container.interceptHttps,
+      };
+    });
+  };
+
+  it.each([
+    ["lean", env.SANDBOX_LEAN],
+    ["browser", env.SANDBOX_BROWSER],
+    ["agent", env.SANDBOX_AGENT],
+    ["task", env.SANDBOX_TASK],
+  ] as const)("holds on every image class: %s", async (_pool, ns) => {
+    // `interceptHttps` is the half that makes the engine reachable at all
+    // (#72): with it false, `interceptOutboundHttps` is never registered, so
+    // every host the substrate grants — all of them HTTPS, `engine/egress.ts`
+    // refuses anything else — bypasses the policy engine entirely. The empty
+    // allowlist plus no internet is the floor underneath it.
+    expect(await posture(ns as unknown as DurableObjectNamespace)).toEqual({
+      enableInternet: false,
+      allowedHosts: [],
+      interceptHttps: true,
+    });
   });
 });

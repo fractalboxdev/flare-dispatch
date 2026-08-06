@@ -12,6 +12,7 @@ import {
 import type {
   AbortOutcome,
   CheckpointOutcome,
+  DenialEvent,
   EnsureOutcome,
   ExecInput,
   ExecOutcome,
@@ -35,6 +36,7 @@ function fake(
     ensure?: (recipe: SubstrateRecipe) => EnsureOutcome;
     exec?: (input: ExecInput, nth: number) => ExecOutcome;
     checkpoint?: () => CheckpointOutcome;
+    denials?: () => readonly DenialEvent[];
   } = {},
 ): ProbeFacade & { calls: Recorded[] } {
   const calls: Recorded[] = [];
@@ -58,10 +60,28 @@ function fake(
       calls.push({ method: "abort", key });
       return { ok: true, killed: 0 };
     },
+    async denials(key): Promise<readonly DenialEvent[]> {
+      calls.push({ method: "denials", key });
+      return handlers.denials?.() ?? [];
+    },
   };
 }
 
-const probeLine = (code: number) => `PROBE|http://example.com/|${code}||`;
+/** The row `outbound-proxy.ts` writes when the container gate answers 520. */
+const platformDenial = (host: string): DenialEvent => ({
+  host,
+  method: "GET",
+  path: "/",
+  reason: `host ${host} is not admitted (refused by the container gate)`,
+  count: 1,
+});
+
+/**
+ * HTTPS, because that is the scheme `interpretCanary` grades on (#72): plain
+ * HTTP is intercepted unconditionally by the SDK, so an http-only 520 is not
+ * evidence that the protocol every grant is written in reaches the engine.
+ */
+const probeLine = (code: number) => `PROBE|https://example.com/|${code}||`;
 
 describe("runCanary", () => {
   it("runs with no repo, so the container stays in the posture the class ships with", () => {
@@ -82,6 +102,37 @@ describe("runCanary", () => {
     });
     expect(isDeferred(run)).toBe(false);
     expect(isDeferred(run) ? undefined : run.status).toBe("passed");
+  });
+
+  it("names the denial row the 520 should have produced (#72)", async () => {
+    const run = await runCanary(
+      fake({
+        exec: () => receipt(probeLine(DENIED_STATUS)),
+        denials: () => [platformDenial("example.com")],
+      }),
+      { host: "example.com", idempotencyKey: "k" },
+    );
+    expect(isDeferred(run) ? "" : run.evidence).toContain("denial captured for example.com");
+  });
+
+  it("says so when the capture path recorded nothing — without failing the gate", async () => {
+    // The write is fire-and-forget on `waitUntil`, so its absence here is a
+    // race the probe does not control. The 520 is the evidence; this is the
+    // audit trail keeping up, reported rather than gated.
+    const run = await runCanary(fake({ exec: () => receipt(probeLine(DENIED_STATUS)) }), {
+      host: "example.com",
+      idempotencyKey: "k",
+    });
+    expect(isDeferred(run) ? undefined : run.status).toBe("passed");
+    expect(isDeferred(run) ? "" : run.evidence).toContain("no denial row for example.com");
+  });
+
+  it("does not let an unreadable denial log turn a verdict into a failure", async () => {
+    const facade = fake({ exec: () => receipt(probeLine(DENIED_STATUS)) });
+    facade.denials = () => Promise.reject(new Error("D1 unavailable"));
+    const run = await runCanary(facade, { host: "example.com", idempotencyKey: "k" });
+    expect(isDeferred(run) ? undefined : run.status).toBe("passed");
+    expect(isDeferred(run) ? "" : run.evidence).toContain("denial capture unread (D1 unavailable)");
   });
 
   it("defers on a full pool instead of recording a verdict about the floor", async () => {

@@ -73,16 +73,33 @@ describe("parseProbeLines", () => {
 });
 
 describe("interpretCanary", () => {
-  it("passes on a 520 from the container proxy", () => {
+  it("passes on a 520 from the HTTPS probe — the protocol every grant is written in", () => {
     const verdict = interpretCanary({
       exitCode: 0,
       output: [
-        line("https://example.com/", "000", "", "handshake failed"),
+        line("https://example.com/", String(DENIED_STATUS), "Origin is disallowed"),
         line("http://example.com/", String(DENIED_STATUS), "Origin is disallowed"),
       ].join("\n"),
     });
     expect(verdict.status).toBe("passed");
-    expect(verdict.evidence).toContain("520");
+    expect(verdict.evidence).toContain("HTTPS interception engaged");
+  });
+
+  it("does not pass on an http-only 520 — that is the untrusted-CA signature (#72)", () => {
+    // `interceptAllOutboundHttp` is registered unconditionally, so http answers
+    // 520 whether or not the container trusts the interception CA. An https
+    // probe dying at the handshake alongside it means every granted host is
+    // unreachable and no denial is recorded — not a verified deploy.
+    const verdict = interpretCanary({
+      exitCode: 0,
+      output: [
+        line("https://example.com/", "000", "", "SSL certificate problem: unable to get issuer"),
+        line("http://example.com/", String(DENIED_STATUS), "Origin is disallowed"),
+      ].join("\n"),
+    });
+    expect(verdict.status).toBe("inconclusive");
+    expect(verdict.evidence).toContain("unable to get issuer");
+    expect(verdict.evidence).toContain("no granted host is reachable");
   });
 
   it("fails when anything reached the host — the direction ADR-0011 names", () => {

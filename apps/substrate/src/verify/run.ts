@@ -19,7 +19,7 @@ import { canaryProbeScript, interpretCanary, type CanaryStatus, type CanaryVerdi
 /** What a probe needs from the facade — the consumer surface, nothing privileged. */
 export type ProbeFacade = Pick<
   SubstrateFacade,
-  "ensureSandbox" | "execUnderGrant" | "checkpoint" | "abort"
+  "ensureSandbox" | "execUnderGrant" | "checkpoint" | "abort" | "denials"
 >;
 
 /**
@@ -100,10 +100,38 @@ export async function runCanary(
     };
   }
 
-  return interpretCanary({
+  const verdict = interpretCanary({
     exitCode: outcome.receipt.exitCode,
     output: outcome.receipt.tail,
   });
+  return { ...verdict, evidence: `${verdict.evidence}; ${await captureNote(facade, opts.host)}` };
+}
+
+/**
+ * Whether the 520 the probe saw also became a `sub_denials` row — the capture
+ * path in `outbound-proxy.ts`, observed on real traffic rather than on a unit
+ * fake. Before HTTPS interception was wired an unlisted HTTPS host died at the
+ * network layer, so this row could not exist for the scheme every grant is
+ * written in; that it does now is the other half of #72's acceptance.
+ *
+ * **Reported, never gating.** The write is fire-and-forget on `waitUntil`
+ * (`SubstrateContainerProxy.fetch`), so its visibility here is a race the probe
+ * does not control — turning it into a pass/fail would make a deploy gate flap
+ * on write timing. The 520 itself is the load-bearing evidence: only
+ * `ContainerProxy.fetch` produces one, so an HTTPS 520 already proves the proxy
+ * saw the request. This line says whether the audit trail kept up.
+ */
+async function captureNote(facade: ProbeFacade, host: string): Promise<string> {
+  let rows: readonly { host: string; reason: string }[];
+  try {
+    rows = await facade.denials(CANARY_KEY);
+  } catch (err) {
+    return `denial capture unread (${err instanceof Error ? err.message : "read failed"})`;
+  }
+  const captured = rows.find((row) => row.host === host);
+  return captured
+    ? `denial captured for ${host} ("${captured.reason}")`
+    : `no denial row for ${host} yet — the capture path recorded nothing, or the waitUntil write had not landed`;
 }
 
 export type DogfoodStep = { step: string; ok: boolean; detail: string };
