@@ -29,6 +29,29 @@ export interface Env {
    */
   readonly TICKET_SECRET: string;
 
+  /**
+   * Keys the per-execution model-proxy token (ADR-0006/0009). A Worker secret,
+   * distinct from `TICKET_SECRET` so the one credential that *does* enter a
+   * container cannot be confused with, or forged from, the key that gates
+   * admission. Unset ⇒ no token can be minted and the proxy fails closed.
+   */
+  readonly MODEL_PROXY_SECRET?: string;
+
+  // -------------------------------------------------------------------------
+  // Injectable credentials (ADR-0006)
+  //
+  // Values the EGRESS HANDLER attaches to requests that pass a grant — never
+  // passed into a container, never in an exec env. Reachable only through
+  // `secrets.ts`, and only for the names on `INJECTABLE_SECRETS`; every other
+  // binding above is unreachable from a descriptor by construction.
+  // -------------------------------------------------------------------------
+
+  /** `wrangler deploy` → `api.cloudflare.com`, under the `cf-api` profile. */
+  readonly CLOUDFLARE_API_TOKEN?: string;
+
+  /** Private-package reads on `registry.npmjs.org`, under `js-install`. */
+  readonly NPM_TOKEN?: string;
+
   /** Idle window before a finished container sleeps. Optional; default "10m". */
   readonly SANDBOX_SLEEP_AFTER?: string;
 

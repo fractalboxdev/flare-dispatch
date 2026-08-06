@@ -122,6 +122,10 @@ function grantFor(input: FenceInput): Grant | undefined {
     repo: repoSlug(input.recipe.repo),
     containerId: input.containerId,
     lfs: input.lfs ?? input.recipe.lfs,
+    // Profile *selection* only (ADR-0005). The hosts, rules and credential
+    // descriptors each name implies are authored in the substrate's reviewed
+    // code — a recipe that selects `cf-api` cannot say what `cf-api` means.
+    profiles: input.recipe.profiles,
   };
   return buildGrant(params);
 }

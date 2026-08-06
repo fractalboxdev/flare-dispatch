@@ -43,7 +43,9 @@ import {
   type OutboundContext,
 } from "./engine/egress";
 import { runFence, type FenceInput, type FenceOutcome, type GuardedSandbox } from "./engine/exec-fence";
+import { redactCapturedGitConfigCommand, scrubRemotesCommand } from "./engine/git-scrub";
 import { clampTailBytes, nonceLogPath, shellQuote } from "./engine/policy";
+import { resolveSubstrateSecret } from "./secrets";
 import type { Env } from "./env";
 
 /** Namespaced so nothing here collides with the SDK's own storage keys. */
@@ -57,6 +59,9 @@ const EXEC_KEY_PREFIX = "sub:exec:";
 
 /** Reading a bounded tail is a local file read; it must not inherit a build's budget. */
 const TAIL_READ_TIMEOUT_MS = 15_000;
+
+/** Credential scrubbing walks the workspace; generous, but never a build's budget. */
+const SCRUB_TIMEOUT_MS = 60_000;
 
 const WORKSPACE_DIR = "/workspace";
 const ARTIFACTS_DIR = "/artifacts";
@@ -275,7 +280,9 @@ export class SubstrateSandboxBase
     // than by the caller, and that is forced rather than chosen: the fence
     // revokes unconditionally at its top as a backstop, so a grant applied
     // before `ensure()` would be destroyed by the very call that needs it.
-    // Same policy the fence uses — read-only, scoped to the recipe's repo.
+    // Same policy the fence uses — read-only, scoped to the recipe's repo, and
+    // deliberately WITHOUT the recipe's profiles: a clone needs github.com and
+    // nothing a profile adds, so no credentialed host is admitted here.
     const grant = this.repoGrant(recipe.repo, recipe.lfs);
     await applyGrant(this, grant);
     try {
@@ -289,6 +296,30 @@ export class SubstrateSandboxBase
       // Unconditional: a clone that failed halfway must not leave github.com
       // admitted for whatever runs next.
       await revokeGrant(this, grant);
+    }
+
+    // Scrub before any workload command can read `.git/config` (ADR-0006). The
+    // substrate's own clone is unauthenticated today, so this rewrites a URL
+    // that is already clean — deliberately: the scrub is what makes an
+    // authenticated clone safe to add, and a step that only starts running when
+    // it first matters is a step nobody has ever seen work.
+    await this.scrubGitRemotes(repoSlug(recipe.repo));
+  }
+
+  /**
+   * Rewrite the workspace's remotes to their credential-free form. Never
+   * throws: on a tree with no remote (a shell recipe, a partial clone) the
+   * command is a no-op, and a scrub that cannot run must not take down an
+   * `ensure()` whose clone succeeded — the capture-time redaction is the
+   * backstop that decides whether state may be persisted.
+   */
+  private async scrubGitRemotes(slug: string): Promise<void> {
+    try {
+      await this.exec(scrubRemotesCommand(WORKSPACE_DIR, slug), {
+        timeout: SCRUB_TIMEOUT_MS,
+      });
+    } catch (err) {
+      console.error("post-clone remote scrub failed", err);
     }
   }
 
@@ -307,7 +338,19 @@ export class SubstrateSandboxBase
   private async revokeStaleGrant(recipe: SubstrateRecipe): Promise<void> {
     if (!recipe.repo) return;
     try {
-      await revokeGrant(this, this.repoGrant(recipe.repo, recipe.lfs));
+      // The recipe's FULL grant, profiles included — a leaked handler mapping
+      // on a credentialed host is the one worth clearing most, and a repo-only
+      // backstop would leave `api.cloudflare.com` admitted with its injector
+      // still bound.
+      await revokeGrant(
+        this,
+        buildGrant(
+          grantParamsFor(recipe.repo, this.ctx.id.toString(), {
+            lfs: recipe.lfs,
+            profiles: recipe.profiles,
+          }),
+        ),
+      );
     } catch (err) {
       // Best effort by construction: a revoke that cannot run leaves the
       // deny-all posture in place, which is the safe direction.
@@ -538,6 +581,12 @@ export class SubstrateSandboxBase
     this.draining = (async () => {
       await this.setLifecycle("draining");
       try {
+        // The capture chokepoint (ADR-0006). Everything a workload wrote is
+        // about to become an R2 object with a three-day TTL, so the credential
+        // sweep runs here and its failure is a hard stop: no backup is strictly
+        // better than a backup carrying an installation token, and the recipe
+        // rebuilds the tree either way.
+        await this.redactCapturedCredentials();
         // `gitignore: true` keeps `node_modules` and build output out of the
         // authored-state snapshot — those are derived, and rebuilding them is
         // what a dep cache is for.
@@ -565,6 +614,25 @@ export class SubstrateSandboxBase
     } finally {
       this.draining = undefined;
     }
+  }
+
+  /**
+   * Redact credentials from the tree about to be captured (ADR-0006), throwing
+   * if the sweep does not complete.
+   *
+   * Throwing is the whole design. The caller's `catch` turns it into "checkpoint
+   * failed; next ensure() will rebuild", which is exactly the outcome we want:
+   * the execution continues, the backup is skipped, and no object carrying a
+   * token lands in R2 where its lifetime is the bucket's rather than the token's.
+   */
+  private async redactCapturedCredentials(): Promise<void> {
+    const result = await this.exec(redactCapturedGitConfigCommand(WORKSPACE_DIR), {
+      timeout: SCRUB_TIMEOUT_MS,
+    });
+    if (result.exitCode !== 0)
+      throw new Error(
+        `credential redaction exited ${result.exitCode}; refusing to capture this tree`,
+      );
   }
 
   /**
@@ -629,7 +697,9 @@ export function sandboxByName(
 /**
  * The egress handlers each class exposes, with the denial recorder wired to
  * D1 (ADR-0005: every denial is a per-execution event, never surfaced into
- * the container).
+ * the container) and the secret resolver wired to the Worker's own environment
+ * (ADR-0006: this is the only place a credential value exists on the request
+ * path, and it exists there for one `fetch`).
  *
  * Registered by assignment rather than a `static outboundHandlers = …` field:
  * the base declares `outboundHandlers` as a static *accessor* whose setter
@@ -652,6 +722,7 @@ const handlersFor = () => ({
           console.error("denial record failed", err),
         );
       },
+      resolveSecret: (name) => resolveSubstrateSecret(env, name),
     }),
 });
 

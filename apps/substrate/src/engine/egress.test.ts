@@ -6,6 +6,7 @@ import {
   decide,
   egressHandlers,
   grantParamsFor,
+  grantPolicy,
   hostMatches,
   normalizeHost,
   publicRepoPolicy,
@@ -620,5 +621,171 @@ describe("egressHandlers", () => {
       { containerId: CONTAINER, className: "SubstrateSandboxTask", params: undefined },
     );
     expect(res.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Handler-injected credentials (ADR-0006)
+// ---------------------------------------------------------------------------
+
+const CF_ACCOUNT = "0123456789abcdef0123456789abcdef";
+const CF_PARAMS: GrantParams = { ...PARAMS, profiles: ["cf-api"] };
+const CF_CTX: OutboundContext<GrantParams> = { ...CTX, params: CF_PARAMS };
+const CF_TOKEN = "cf-token-that-never-enters-a-container";
+
+const cfSecrets = (name: string): string | undefined =>
+  name === "CLOUDFLARE_API_TOKEN" ? CF_TOKEN : undefined;
+
+const scriptUrl = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/workers/scripts/hello`;
+
+describe("grantPolicy — profiles compose onto the repo read", () => {
+  it("admits nothing extra when no profile is selected", () => {
+    expect(grantPolicy(PARAMS).hosts.map((h) => h.host)).not.toContain("api.cloudflare.com");
+  });
+
+  it("admits api.cloudflare.com only under cf-api, and always with a handler", () => {
+    const grant = buildGrant(CF_PARAMS);
+    expect(grant.allow).toContain("api.cloudflare.com");
+    // The admitted-set == handled-set invariant must survive a profile being
+    // added — an admitted host with no handler gets an uninspected fetch.
+    expect(new Set(grant.handlers.map((h) => h.host))).toEqual(new Set(grant.allow));
+  });
+
+  it("scopes cf-api to one account's Workers surface, not the whole API", () => {
+    const policy = grantPolicy(CF_PARAMS);
+    const put = (path: string) => decide(policy, "PUT", at(`https://api.cloudflare.com${path}`));
+    expect(put(`/client/v4/accounts/${CF_ACCOUNT}/workers/scripts/hello`).ok).toBe(true);
+    expect(put(`/client/v4/accounts/${CF_ACCOUNT}/dns_records/x`).ok).toBe(false);
+    expect(put("/client/v4/zones/abc/dns_records/x").ok).toBe(false);
+    expect(put("/client/v4/accounts/not-an-account-id/workers/scripts/hello").ok).toBe(false);
+  });
+
+  it("still refuses a method no rule names, however wide the method union is", () => {
+    const policy = grantPolicy(CF_PARAMS);
+    expect(
+      decide(policy, "DELETE", at(`${scriptUrl}`)).ok,
+    ).toBe(false);
+    // And on the repo host, which names only GET/POST rules.
+    expect(decide(policy, "PUT", at("https://github.com/acme/widget/git-upload-pack")).ok).toBe(
+      false,
+    );
+  });
+});
+
+describe("handler — credential injection", () => {
+  it("attaches the substrate's token to a request that passes the grant", async () => {
+    const { calls, fetch } = recorder([new Response("{}")]);
+    const res = await serveGrantedRequest(
+      new Request(scriptUrl, { method: "PUT", body: "worker-bundle" }),
+      CF_CTX,
+      { fetch, resolveSecret: cfSecrets },
+    );
+    expect(res.status).toBe(200);
+    const sent = new Headers(calls[0]!.init.headers as HeadersInit);
+    expect(sent.get("authorization")).toBe(`Bearer ${CF_TOKEN}`);
+  });
+
+  it("overwrites a container-authored Authorization rather than forwarding it", async () => {
+    const { calls, fetch } = recorder([new Response("{}")]);
+    await serveGrantedRequest(
+      new Request(scriptUrl, {
+        method: "PUT",
+        body: "worker-bundle",
+        headers: { authorization: "Bearer attacker-supplied" },
+      }),
+      CF_CTX,
+      { fetch, resolveSecret: cfSecrets },
+    );
+    const sent = new Headers(calls[0]!.init.headers as HeadersInit);
+    expect(sent.get("authorization")).toBe(`Bearer ${CF_TOKEN}`);
+  });
+
+  it("injects nothing on a host the profile does not credential", async () => {
+    const { calls, fetch } = recorder([new Response("ok")]);
+    await serveGrantedRequest(
+      new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack"),
+      CF_CTX,
+      { fetch, resolveSecret: cfSecrets },
+    );
+    const sent = new Headers(calls[0]!.init.headers as HeadersInit);
+    expect(sent.get("authorization")).toBeNull();
+  });
+
+  it("fails closed when the binding is unset — never sends the request bare", async () => {
+    const { calls, fetch } = recorder([new Response("{}")]);
+    const res = await serveGrantedRequest(
+      new Request(scriptUrl, { method: "PUT", body: "worker-bundle" }),
+      CF_CTX,
+      { fetch, resolveSecret: () => undefined },
+    );
+    expect(res.status).toBe(403);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fails closed when no resolver is wired at all", async () => {
+    const { calls, fetch } = recorder([new Response("{}")]);
+    const res = await serveGrantedRequest(
+      new Request(scriptUrl, { method: "PUT", body: "worker-bundle" }),
+      CF_CTX,
+      { fetch },
+    );
+    expect(res.status).toBe(403);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("records the missing binding as a denial the operator can retrieve", async () => {
+    const events: Omit<DenialEvent, "count">[] = [];
+    const { fetch } = recorder([new Response("{}")]);
+    await serveGrantedRequest(
+      new Request(scriptUrl, { method: "PUT", body: "x" }),
+      CF_CTX,
+      { fetch, resolveSecret: () => undefined, recordDenial: (e) => events.push(e) },
+    );
+    expect(events[0]?.host).toBe("api.cloudflare.com");
+    expect(events[0]?.reason).toContain("CLOUDFLARE_API_TOKEN");
+  });
+
+  it("never puts the credential value in the 403 the container reads", async () => {
+    const { fetch } = recorder([new Response("{}")]);
+    const res = await serveGrantedRequest(
+      new Request(`https://api.cloudflare.com/client/v4/zones/abc`, { method: "PUT", body: "x" }),
+      CF_CTX,
+      { fetch, resolveSecret: cfSecrets },
+    );
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain(CF_TOKEN);
+  });
+
+  it("does not replay the credential onto a redirect target that is not credentialed", async () => {
+    // A 307 preserves method and body across hosts; the header must not ride
+    // along to a host whose policy attaches nothing.
+    const { calls, fetch } = recorder([
+      redirectTo("https://github.com/acme/widget/git-upload-pack", 307),
+      new Response("ok"),
+    ]);
+    const res = await serveGrantedRequest(
+      new Request(scriptUrl, { method: "POST", body: "x" }),
+      CF_CTX,
+      { fetch, resolveSecret: cfSecrets },
+    );
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(2);
+    expect(new Headers(calls[0]!.init.headers as HeadersInit).get("authorization")).toBe(
+      `Bearer ${CF_TOKEN}`,
+    );
+    expect(new Headers(calls[1]!.init.headers as HeadersInit).get("authorization")).toBeNull();
+  });
+
+  it("caps a credentialed upload body like every other sink", async () => {
+    const { calls, fetch } = recorder([new Response("{}")]);
+    const oversized = "a".repeat(300 * 1024);
+    const res = await serveGrantedRequest(
+      // The PATCH rule's cap is 256 KiB — smaller than the upload rule's.
+      new Request(scriptUrl, { method: "PATCH", body: oversized }),
+      CF_CTX,
+      { fetch, resolveSecret: cfSecrets },
+    );
+    expect(res.status).toBe(403);
+    expect(calls).toHaveLength(0);
   });
 });

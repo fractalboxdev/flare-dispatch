@@ -21,6 +21,7 @@ import type {
   EnsureOutcome,
   ExecInput,
   ExecOutcome,
+  GrantProfileName,
   PoolName,
   PoolStatus,
   QueuePosition,
@@ -41,15 +42,30 @@ import { sandboxDoName } from "./engine/policy";
 import { sandboxByName, type SubstrateSandboxBase } from "./sandbox-do";
 import type { Env } from "./env";
 
+/**
+ * The grant profiles this build actually serves. Selection is the consumer's
+ * only input to grant derivation and a name off this list is a typed
+ * `recipe-rejected` rather than a silently-empty grant — a run that believes it
+ * has `rust-install` and gets deny-all should fail at the facade, where the
+ * reason is legible, not deep in a build log.
+ */
+const SERVED_PROFILES: readonly GrantProfileName[] = ["public-repo-read", "cf-api", "js-install"];
+
 /** Well-formedness gate on the one consumer input grants derive from. */
 function recipeProblem(recipe: SubstrateRecipe): string | undefined {
   if (!Number.isInteger(recipe.version) || recipe.version < 0)
     return "recipe.version must be a non-negative integer";
   if (recipe.repo && !/^[\w.-]+\/[\w.-]+$/.test(`${recipe.repo.owner}/${recipe.repo.name}`))
     return "recipe.repo is not an owner/name pair";
-  const unserved = recipe.profiles?.find((p) => p !== "public-repo-read");
+  const unserved = recipe.profiles?.find((p) => !SERVED_PROFILES.includes(p));
   if (unserved !== undefined)
-    return `grant profile ${unserved} is not served yet — public-repo-read only`;
+    return `grant profile ${unserved} is not served yet — ${SERVED_PROFILES.join(", ")} only`;
+  // A profile grants hosts on top of the repo read, and `buildGrant` derives
+  // both from one params object. Without a repo there is nothing to build, and
+  // ADR-0005's "no repo ⇒ no egress" stays the rule rather than becoming
+  // "no repo ⇒ whatever the profile says".
+  if (!recipe.repo && (recipe.profiles?.length ?? 0) > 0)
+    return "a grant profile needs a repo to compose onto";
   return undefined;
 }
 
