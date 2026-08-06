@@ -205,12 +205,13 @@ export const OPEN_HOST = "*";
  * what the run had before it moved.
  *
  * What a report window still cannot see: traffic the container runtime does not
- * route through the proxy at all. `interceptHttps` is `false` by default in
- * `@cloudflare/containers` and the substrate's DO does not set it, so HTTPS
- * interception is an open question about platform behaviour rather than a
- * setting this module controls — and it cuts both ways, because unrouted
- * traffic is equally invisible to `enforce`. A clean report window is evidence
- * about the traffic the engine observed, never a proof about all of it.
+ * route through the proxy at all. Both schemes now are — the DO classes set
+ * `interceptHttps` and both images trust the interception CA at boot — so the
+ * gap that used to swallow every granted host is closed. What remains outside
+ * the proxy is non-HTTP egress (a raw socket, DNS, a protocol nothing here
+ * speaks), which cuts both ways: unrouted traffic is equally invisible to
+ * `enforce`. A clean report window is evidence about the traffic the engine
+ * observed, never a proof about all of it.
  *
  * @throws if the admitted set and the handled set differ under `enforce`, if a
  * selection cannot be served, or if the repo slug is not `owner/name`.

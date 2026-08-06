@@ -19,20 +19,20 @@
 // already answered. The proxy entrypoint is the only surface in front of the
 // gate, which is why capture lives there and not in a handler.
 //
-// **What this covers is bounded by `interceptHttps`, which the substrate does
-// not set.** Per the SDK's own reference, `interceptHttps` (default `false`) is
-// what routes outbound *HTTPS* "through the same handler chain as HTTP", and
-// that chain is `ContainerProxy.fetch` — where `allowedHosts`, `deniedHosts`
-// and `outboundByHost` are all evaluated. So on the documented reading, only
-// plain-HTTP egress reaches the chain today, while every host the substrate
-// grants is HTTPS (`decide()` refuses any other protocol outright). Turning it
-// on also requires the image to trust
-// `/etc/cloudflare/certs/cloudflare-containers-ca.crt`, which
-// `infra/Dockerfile.sandbox` does not do — the two halves are missing together.
-// Until both land, this classifier sees the denials for intercepted traffic;
-// what fraction of real traffic that is has not been measured on a live
-// container. Tracked as a finding, not fixed here: flipping the flag without
-// the CA in the image breaks TLS for everything inside the container.
+// **What this covers is bounded by what the runtime intercepts, and HTTPS now
+// is.** `interceptHttps` (SDK default `false`) is what routes outbound *HTTPS*
+// through that same chain, and the substrate's DO classes set it (`sandbox-do.ts`)
+// while both images trust `/etc/cloudflare/certs/cloudflare-containers-ca.crt`
+// at boot (`infra/container-entrypoint.sh`). Before that pair landed only
+// plain-HTTP egress reached the chain — while every host the substrate grants is
+// HTTPS, since `decide()` refuses any other protocol outright — so this
+// classifier was blind to real traffic and an unlisted HTTPS host died at the
+// network layer instead of producing a row.
+//
+// The residual is now the CA rather than the flag: a container that fails to
+// install it fails TLS on every HTTPS request, which produces no 520 for this
+// to classify. The ADR-0011 canary's HTTPS probe is the detector, and `/health`
+// answers 503 `unverified` until it passes.
 //
 // Pure, like the rest of `engine/` — the proxy that calls this
 // (`../outbound-proxy.ts`) is where the Cloudflare imports live.

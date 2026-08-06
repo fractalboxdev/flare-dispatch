@@ -44,16 +44,20 @@ const config = unstable_readConfig({ config: repoFile("apps/substrate/wrangler.j
 const containers = (config.containers ?? []) as readonly ContainerClass[];
 const bindings = (config.durable_objects?.bindings ?? []) as readonly DurableObjectBinding[];
 
-const taskDockerfile = readFileSync(repoFile("infra/Dockerfile.task"), "utf8");
 /**
  * Instructions only. Every content assertion below runs against this rather
  * than the raw file: the comments explain what is deliberately *absent*, so a
  * naive text search finds the explanation and calls it the thing.
  */
-const taskInstructions = taskDockerfile
-  .split("\n")
-  .filter((line) => !/^\s*#/.test(line))
-  .join("\n");
+const instructionsOf = (relative: string): string =>
+  readFileSync(repoFile(relative), "utf8")
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+
+const taskInstructions = instructionsOf("infra/Dockerfile.task");
+const substrateInstructions = instructionsOf("infra/Dockerfile.substrate");
+const entrypointScript = readFileSync(repoFile("infra/container-entrypoint.sh"), "utf8");
 const substratePackage = JSON.parse(
   readFileSync(repoFile("apps/substrate/package.json"), "utf8"),
 ) as { dependencies: Record<string, string> };
@@ -153,27 +157,88 @@ describe("the task image's contents", () => {
       expect(line, line).toContain("$apt_opts");
   });
 
-  it("points every toolchain's TLS at the system trust store", () => {
-    // The outbound handler re-issues each request (ADR-0005), so the cert a
-    // tool sees is not the origin's. Node, requests, curl, pip and git each
-    // default to their own root set and would fail TLS without these.
-    for (const variable of [
-      "NODE_EXTRA_CA_CERTS",
-      "SSL_CERT_FILE",
-      "REQUESTS_CA_BUNDLE",
-      "CURL_CA_BUNDLE",
-      "PIP_CERT",
-      "GIT_SSL_CAINFO",
-    ])
-      expect(taskInstructions, variable).toMatch(
-        new RegExp(`^(?:ENV\\s+)?\\s*${variable}=/etc/ssl/certs/ca-certificates\\.crt`, "m"),
-      );
-  });
-
   it("leaves the LFS smudge filter unwired", () => {
     // `recipe.lfs` is off by default and the grant only admits the object host
     // when it is set. A system filter would make every clone of an LFS repo
     // reach for objects it has no grant for and fail the checkout.
     expect(taskInstructions).not.toMatch(/git lfs install/);
+  });
+});
+
+/**
+ * The image half of HTTPS interception (#72). `interceptHttps = true` on the DO
+ * class is inert unless the container trusts the interception CA, and the CA is
+ * a runtime artifact — it does not exist during the build — so the trust step
+ * is an entrypoint the image has to run. Half of this pair shipping without the
+ * other is the failure these assertions exist to catch: the flag alone breaks
+ * TLS for everything in the container, the entrypoint alone does nothing.
+ */
+describe("HTTPS interception — the CA trust half (#72)", () => {
+  const images = [
+    ["Dockerfile.substrate", substrateInstructions],
+    ["Dockerfile.task", taskInstructions],
+  ] as const;
+
+  it.each(images)("%s runs the CA-installing entrypoint", (_name, instructions) => {
+    expect(instructions).toMatch(
+      /^COPY container-entrypoint\.sh \/usr\/local\/bin\/substrate-entrypoint\.sh$/m,
+    );
+    expect(instructions).toMatch(/^ENTRYPOINT \["\/usr\/local\/bin\/substrate-entrypoint\.sh"\]$/m);
+  });
+
+  it.each(images)("%s asserts the base server binary at build time", (_name, instructions) => {
+    // The wrapper `exec`s `/container-server/sandbox` by absolute path — the
+    // server the Durable Object half speaks its HTTP/RPC protocol to. A base
+    // image that moved it must fail the build, not produce an image whose
+    // entrypoint starts nothing.
+    expect(instructions).toMatch(/^RUN test -x \/container-server\/sandbox$/m);
+  });
+
+  it.each(images)(
+    "%s points every toolchain's TLS at the system trust store",
+    (_n, instructions) => {
+      // The outbound handler re-issues each request (ADR-0005), so the cert a
+      // tool sees is not the origin's. Node, requests, curl, pip and git each
+      // default to their own root set and would fail TLS without these — and the
+      // entrypoint's `update-ca-certificates` is what puts the interception CA
+      // into the bundle they all point at.
+      for (const variable of [
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "PIP_CERT",
+        "GIT_SSL_CAINFO",
+      ])
+        expect(instructions, variable).toMatch(
+          new RegExp(`^(?:ENV\\s+)?\\s*${variable}=/etc/ssl/certs/ca-certificates\\.crt`, "m"),
+        );
+    },
+  );
+
+  it("installs the runtime CA into the store those variables read", () => {
+    // The source path is the platform's, fixed by `@cloudflare/containers`; the
+    // destination and the refresh command are the Debian/Ubuntu pair both bases
+    // are. `update-ca-certificates` regenerates
+    // /etc/ssl/certs/ca-certificates.crt, which is what closes the loop with
+    // the ENV block above.
+    expect(entrypointScript).toContain("/etc/cloudflare/certs/cloudflare-containers-ca.crt");
+    expect(entrypointScript).toContain("/usr/local/share/ca-certificates/");
+    expect(entrypointScript).toMatch(/^\s*update-ca-certificates/m);
+  });
+
+  it("execs the sandbox server rather than leaving a wrapper as PID 1", () => {
+    // Without `exec` the wrapper stays in the process tree and swallows the
+    // SIGTERM the platform sends at idle-stop, turning every sleep into a kill.
+    expect(entrypointScript).toMatch(/^exec \/container-server\/sandbox "\$@"$/m);
+  });
+
+  it("does not fail the boot when the CA is absent", () => {
+    // The gate is the ADR-0011 canary and /health's `unverified` 503, not the
+    // entrypoint: a boot that dies here reports a container that never started
+    // and takes down a fleet that could still serve HTTP. The warning names the
+    // cause in the container log instead.
+    expect(entrypointScript).toMatch(/WARNING/);
+    expect(entrypointScript).not.toMatch(/^\s*exit 1$/m);
   });
 });

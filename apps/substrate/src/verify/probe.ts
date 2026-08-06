@@ -54,9 +54,12 @@ export function resolveProbeHost(raw: string | undefined): string {
 
 /**
  * The script the container runs. Both schemes are probed because they fail
- * differently: plain HTTP is always proxied, while HTTPS additionally depends
- * on the image's TLS interception being wired — so an https-only probe could
- * report a TLS error on a container whose gate is working perfectly.
+ * differently, and the pair is what makes a broken CA distinguishable from a
+ * broken gate: plain HTTP is proxied by `interceptAllOutboundHttp` and needs no
+ * certificate at all, while HTTPS additionally depends on the container
+ * trusting the interception CA (`infra/container-entrypoint.sh`). One scheme
+ * answering 520 and the other failing at the transport is a precise finding,
+ * not noise — see `interpretCanary`.
  *
  * Every step is failure-tolerant on purpose. A probe that aborts on the first
  * non-zero exit returns nothing, and "no output" is the one result that cannot
@@ -120,9 +123,18 @@ export type CanaryVerdict = {
  * — a redirect is a completed round trip to an unadmitted origin, so it counts
  * as reached, not as "not really data".
  *
- * `passed` requires a literal 520 from at least one scheme. The other scheme
- * failing at the transport is fine and expected on an image without TLS
- * interception; what matters is that one probe proves the proxy answered.
+ * **`passed` requires the 520 to come from the HTTPS probe.** That is the whole
+ * change #72 makes here, and it is not strictness for its own sake: HTTP is
+ * intercepted unconditionally by the SDK, so an http-only 520 proves the proxy
+ * is in the path for a protocol `engine/egress.ts` refuses outright — while
+ * saying nothing about the one protocol every grant is written in. A deploy
+ * where the HTTPS probe cannot reach the proxy is a deploy where no granted
+ * host is reachable and no denial is recorded, which is exactly the state
+ * `/health` must not call verified.
+ *
+ * The http probe is still read, and its verdict is the diagnosis rather than
+ * the gate: 520 on http with a dead https probe is the signature of a container
+ * that does not trust the interception CA, and the evidence line says so.
  *
  * Everything else is `inconclusive` — the canary could not observe the
  * invariant, which is neither a pass nor evidence of a breach. Callers treat it
@@ -144,11 +156,23 @@ export function interpretCanary(input: { exitCode: number; output: string }): Ca
       evidence: `${reached.url} answered HTTP ${reached.code} from inside a container with no grant — the deny-all gate is not engaged`,
     };
 
-  const denied = probes.find((p) => p.code === DENIED_STATUS);
-  if (denied)
+  const isHttps = (p: ProbeLine): boolean => p.url.startsWith("https://");
+  const httpsDenied = probes.find((p) => isHttps(p) && p.code === DENIED_STATUS);
+  if (httpsDenied)
     return {
       status: "passed",
-      evidence: `${denied.url} → HTTP ${DENIED_STATUS}${denied.body ? ` "${denied.body}"` : ""} — interception engaged, unlisted host refused`,
+      evidence: `${httpsDenied.url} → HTTP ${DENIED_STATUS}${httpsDenied.body ? ` "${httpsDenied.body}"` : ""} — HTTPS interception engaged, unlisted host refused`,
+    };
+
+  const https = probes.find(isHttps);
+  const httpDenied = probes.find((p) => !isHttps(p) && p.code === DENIED_STATUS);
+  if (httpDenied)
+    return {
+      status: "inconclusive",
+      evidence:
+        `${httpDenied.url} → HTTP ${DENIED_STATUS}, but the HTTPS probe did not reach the proxy ` +
+        `(${https ? `${https.url}→${https.code || "no-response"}${https.err ? ` — ${https.err}` : ""}` : "no https probe ran"}) — ` +
+        `HTTP interception is engaged and HTTPS is not, so no granted host is reachable and no denial is recorded`,
     };
 
   const seen = probes.map((p) => `${p.url}→${p.code || "no-response"}`).join(", ");

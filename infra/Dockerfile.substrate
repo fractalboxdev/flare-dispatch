@@ -45,3 +45,32 @@ RUN if [ "$WITH_BUILD_TOOLS" = "true" ]; then \
 # then a browser-class container is a lean container that says so.
 ARG WITH_BROWSER=false
 RUN echo "WITH_BROWSER=$WITH_BROWSER — chromium layer not baked in this build."
+
+# ── the CA bundle, baked as env ─────────────────────────────────────────────
+#
+# Every request a container makes is intercepted and re-issued by the
+# substrate's outbound handler (ADR-0005), so the certificate a tool validates
+# is not the origin's. The interception CA lands in the system trust store at
+# boot (see the entrypoint below) — and most toolchains ignore that store: Node
+# ships its own root set, `requests` uses certifi, and each then fails TLS on an
+# interception it was never told about. These point every one of them at the
+# system store, so what is trusted is a property of the image rather than of a
+# flag each command has to remember.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_DIR=/etc/ssl/certs \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
+    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+
+# ── interception CA, installed at boot ──────────────────────────────────────
+#
+# The CA the ENV block above points at only exists at RUNTIME, so trusting it is
+# an entrypoint step rather than a layer. The wrapper installs it and then execs
+# the base's own server — asserted here so a base image that moves the binary
+# fails the build instead of producing an image that starts nothing.
+RUN test -x /container-server/sandbox
+COPY container-entrypoint.sh /usr/local/bin/substrate-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/substrate-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/substrate-entrypoint.sh"]

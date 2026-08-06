@@ -85,10 +85,10 @@ case, not only the wrong-path one. That shape is deliberate: `ContainerProxy` ga
 set would 520 on precisely the finding the window exists to produce.
 
 What the window still cannot see is traffic the container runtime does not route through the engine
-at all. `interceptHttps` is `false` by default in `@cloudflare/containers` and the substrate's DO
-does not set it, so whether HTTPS reaches the handler is an open question about platform behaviour
-rather than a setting this code controls. It cuts both ways — unrouted traffic is equally
-unenforced under `enforce` — which is why it is a graduation caveat and not a report-mode bug.
+at all. Both HTTP and HTTPS now are: the DO classes set `interceptHttps` and both images install the
+interception CA at boot, so the protocol every grant is written in reaches the handler. What remains
+outside is non-HTTP egress — a raw socket, DNS, anything the proxy does not speak — and it cuts both
+ways, since unrouted traffic is equally unenforced under `enforce`.
 
 So the gate has two halves, and the second is not automatable today:
 
@@ -98,7 +98,8 @@ So the gate has two halves, and the second is not automatable today:
    window that recorded nothing because nothing was observed looks identical to one that recorded
    nothing because everything was already granted.
 
-Until interception coverage is settled, treat step 2 as the binding half.
+Step 2 is still the binding half: a report window is evidence about observed traffic, never a proof
+that a profile is complete.
 
 ## 4. Graduate to enforce
 
@@ -151,9 +152,8 @@ Stated rather than deferred, because each one bounds what this runbook can finis
   replacement is a run writing its own archive there rather than the Worker pulling one out — a
   per-run change, not a mechanical one.
 - **A report window sees what the engine sees.** Requests reach the catch-all handler only for
-  traffic the container runtime intercepts, and `interceptHttps` is off by default. A protocol it
-  does not intercept is neither recorded nor, later, enforced — see § 3 for how the graduation gate
-  accounts for it.
+  traffic the container runtime intercepts. HTTP and HTTPS both are; a protocol that is not is
+  neither recorded nor, later, enforced — see § 3 for how the graduation gate accounts for it.
 - **A target resolved inside a run body is invisible to the recipe.** `playwright-e2e` falls back
   to `playwright-e2e.base-url` in `CONFIG_KV` when a webhook dispatch carries no `baseURL`; that
   value never reaches the grant, so the run stays at `report` until its target is a dispatch input.
