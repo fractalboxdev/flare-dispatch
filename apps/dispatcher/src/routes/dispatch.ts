@@ -31,6 +31,13 @@ import { toInstanceId } from "../instance-id";
 import { readCheckLabel } from "../check-name";
 import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "../log-token";
 import { lookupRun } from "../registry";
+import {
+  decideSlackOriginInputs,
+  decideSlackOriginRun,
+  DispatchSource,
+  readSlackOriginConfig,
+  resolveSlackOriginKey,
+} from "../slack-origin";
 
 /** TTL on receiver-dedup KV entries — spec 04-gha § Receiver dedup (24h). */
 const IDEMPOTENCY_TTL_SEC = 86_400;
@@ -147,6 +154,13 @@ const DispatchBody = Schema.Struct({
   inputs: Schema.Unknown,
   trigger: Schema.optional(Schema.Unknown),
   notify: Schema.optional(NotifySpec),
+  /**
+   * Which surface asked for this run. Absent for the ordinary GHA-Action
+   * dispatch — that path is unchanged in every respect. Present with
+   * `kind: "slack"`, the whole slack-origin policy applies (slack-origin.ts):
+   * enforced `secrets: []`, run allowlist, pinned repo, fail-closed handoff.
+   */
+  source: Schema.optional(DispatchSource),
 });
 
 /** Render an Effect `ParseError` as the multi-line tree a caller can act on. */
@@ -175,8 +189,16 @@ export const handleDispatch = async (
   // by the GHA Action and pinpoint which side has the wrong value (issue #24).
   // Non-secret: 32 bits of pre-image after SHA-256 truncation is useless as a
   // credential, same shape as a git short-SHA.
+  //
+  // Two keys may verify. `SLACK_ORIGIN_HMAC_SECRET`, when configured, is a
+  // Slack-scoped dispatch credential: a body signed with it is FORCED through
+  // the slack-origin policy whatever the body claims about itself, so the
+  // Slack ingress can hold a key that cannot dispatch outside the envelope.
+  // Tried first — a deploy without one behaves exactly as before.
   const signature = request.headers.get(SIGNATURE_HEADER);
-  const signatureOk = await verify(env.HMAC_SECRET, signature, rawBody);
+  const slackKey = resolveSlackOriginKey(env);
+  const slackScoped = slackKey !== undefined && (await verify(slackKey, signature, rawBody));
+  const signatureOk = slackScoped || (await verify(env.HMAC_SECRET, signature, rawBody));
   if (!signatureOk) {
     return json(
       {
@@ -234,11 +256,42 @@ export const handleDispatch = async (
     );
   }
 
+  // 4.5 Slack-origin policy, run half — decided BEFORE the inputs are decoded
+  //     so a refusal reads as a sentence a Slack thread can show, not a schema
+  //     parse tree. A dispatch signed with the Slack-scoped key MUST carry the
+  //     origin context: that key exists to be incapable of anything else.
+  const source = body.source;
+  if (slackScoped && source === undefined) {
+    return json(
+      {
+        error: "slack_origin_context_required",
+        message:
+          "This dispatch was signed with the Slack-scoped key, which may only carry slack-origin dispatches. Include the `source` block (`kind`, `team_id`, `channel`, `thread_ts`) or sign with the deploy's general dispatch key.",
+      },
+      403,
+    );
+  }
+
+  if (source !== undefined) {
+    const config = await readSlackOriginConfig(env);
+    const verdict = decideSlackOriginRun({
+      runName,
+      run,
+      repo: body.github.repo,
+      rawInputs: body.inputs,
+      idempotencyKey: request.headers.get("Idempotency-Key"),
+      config,
+    });
+    if (verdict.kind === "refused") {
+      return json({ error: verdict.error, message: verdict.message, run: runName }, 403);
+    }
+  }
+
   // 5. Validate `inputs` against the *named run's* own Schema — the 400 here
   //    carries the run-specific parse error.
   const inputsResult = Schema.decodeUnknownEither(run.inputs)(body.inputs);
-  const inputs = Either.getOrUndefined(inputsResult);
-  if (inputs === undefined) {
+  const decodedInputs = Either.getOrUndefined(inputsResult);
+  if (decodedInputs === undefined) {
     return json(
       {
         error: "invalid_inputs",
@@ -250,6 +303,23 @@ export const handleDispatch = async (
       },
       400,
     );
+  }
+
+  // 5.5 Slack-origin policy, inputs half — refuse a dispatch that names a
+  //     credential, and normalize `secrets` to empty for what actually
+  //     executes. Everything downstream (cooldown scope, Workflow params) uses
+  //     the normalized value, so the enforcement is a property of the run, not
+  //     of what the caller happened to send.
+  let inputs: unknown = decodedInputs;
+  if (source !== undefined) {
+    const inputsVerdict = decideSlackOriginInputs({ runName, run, decoded: decodedInputs });
+    if (inputsVerdict.kind === "refused") {
+      return json(
+        { error: inputsVerdict.error, message: inputsVerdict.message, run: runName },
+        403,
+      );
+    }
+    inputs = inputsVerdict.inputs;
   }
 
   // 6. Compute the dedup key + Workflow instanceId.
@@ -367,6 +437,10 @@ export const handleDispatch = async (
     ...(body.notify !== undefined && body.notify.emails.length > 0
       ? { notify: { emails: body.notify.emails } }
       : {}),
+    // The Slack origin, when this came from the batch path — the finalize
+    // boundary reads it to send the verdict back to the thread that asked
+    // (slack-notify.ts). Absent on every other dispatch path.
+    ...(source !== undefined ? { source } : {}),
     // The dispatcher's public origin, so the run's artifact URLs come back
     // absolute (GitHub resolves a relative check-run link against github.com,
     // breaking it). `PUBLIC_ORIGIN` wins when set (a custom domain in front

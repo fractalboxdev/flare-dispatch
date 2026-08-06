@@ -56,6 +56,32 @@ const deriveKey = async (ikm: string, info: string): Promise<CryptoKey> => {
   );
 };
 
+/**
+ * Derive a 256-bit key from the input keying material as a lowercase hex
+ * STRING, domain-separated by `info`. Same HKDF construction as `deriveKey`
+ * above, materialized as a string so it can be handed to a byte-signing
+ * primitive that takes a secret rather than a `CryptoKey` — `hmac.sign`, which
+ * the verdict callback reuses so both sides of that callback run the exact
+ * signing path the dispatch route already agrees on (`slack-notify.ts`).
+ *
+ * The label is what makes the reuse safe: a key derived here can neither be
+ * confused with, nor used to forge, the raw `HMAC_SECRET` the dispatch route
+ * verifies against.
+ */
+export const deriveSecret = async (ikm: string, info: string): Promise<string> => {
+  const base = await crypto.subtle.importKey("raw", encoder.encode(ikm), "HKDF", false, [
+    "deriveBits",
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: encoder.encode(info) },
+    base,
+    256,
+  );
+  return Array.from(new Uint8Array(bits))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+};
+
 /** A sign/verify pair for one capability namespace (identified by its label). */
 export interface CapabilityToken {
   /** Mint the capability token for `executionId` under the given key material. */

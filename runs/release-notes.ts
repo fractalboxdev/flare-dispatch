@@ -311,6 +311,13 @@ export const releaseNotes = defineRun({
   // for almost all of it, consuming no CPU.
   limits: { maxDurationSec: 4 * 24 * 3600 },
 
+  // The 72h `waitForEvent` below is a PERSON deciding, not an event arriving.
+  // Dispatch paths with nowhere to ask refuse this run at the gate rather than
+  // park a Workflow for three days behind a silent caller.
+  humanGate: {
+    reason: "publishing the GitHub Release waits on someone merging or rejecting the release PR",
+  },
+
   run: (input) =>
     Effect.gen(function* () {
       // 1. Check out the release repo (the image is used only for `git`).

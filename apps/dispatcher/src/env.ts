@@ -416,4 +416,46 @@ export interface Env {
    * default for an unauthenticated gateway).
    */
   readonly AI_GATEWAY_AUTH_TOKEN?: string;
+
+  /**
+   * The one repository slack-origin dispatches may target — the config pin the
+   * `slack-origin.ts` policy checks `github.repo` against. A var, not a secret
+   * (a public `owner/name`). CONFIG_KV `slack-origin.repo` overrides it so an
+   * operator can re-point without a redeploy. With NEITHER set the Slack batch
+   * path is **off**: every slack-origin dispatch is refused, never silently
+   * allowed against whatever repo the caller named.
+   */
+  readonly SLACK_ORIGIN_REPO?: string;
+
+  /**
+   * Optional SECOND dispatch-signing key, scoped to the Slack path. A Worker
+   * secret. A dispatch whose signature verifies under this key is forced
+   * through the slack-origin policy whatever its body declares — so the Slack
+   * ingress can hold a credential incapable of dispatching outside the
+   * envelope, and "server-side enforcement" stops depending on the caller
+   * declaring its own origin honestly. Ignored when equal to `HMAC_SECRET`
+   * (one value under two names is not a scope). Absent → the body's declared
+   * `source` selects the policy.
+   */
+  readonly SLACK_ORIGIN_HMAC_SECRET?: string;
+
+  /**
+   * Where a slack-origin run's verdict is delivered at the finalize boundary —
+   * the Slack ingress's own signed callback endpoint, which posts it in-thread
+   * with the bot token this dispatcher deliberately never holds. A var, not a
+   * secret (a public HTTPS URL). CONFIG_KV `slack-origin.notify-url` overrides
+   * it. Absent → the check-run still completes and the verdict is logged; only
+   * the in-thread post is skipped.
+   */
+  readonly SLACK_NOTIFY_URL?: string;
+
+  /**
+   * Optional dedicated keying material for the verdict callback's signature.
+   * A Worker secret. When unset the callback key is HKDF-derived from
+   * `HMAC_SECRET` under its own label (`slack-notify.ts`), so the callback is
+   * signed by default with no extra secret and the derived key still cannot be
+   * confused with the dispatch HMAC. Absent AND `HMAC_SECRET` absent → the
+   * callback is skipped rather than sent unsigned.
+   */
+  readonly SLACK_NOTIFY_SECRET?: string;
 }
