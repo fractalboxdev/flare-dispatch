@@ -151,15 +151,19 @@ export const makeD1ExecutionsLive = (
           .run(),
       ),
 
-    finishStep: ({ executionId, name, completedAt, status }) =>
+    finishStep: ({ executionId, name, completedAt, status, errorTag }) =>
       run("finishStep", () =>
         db
           .prepare(
+            // `COALESCE(?, error_tag)` rather than a plain assignment: the
+            // success path passes no tag, and a step that is finished twice
+            // (Workflow replay re-runs this UPDATE) must not have a recorded
+            // reason overwritten with NULL by the second call.
             `UPDATE steps
-               SET status = ?, completed_at = ?
+               SET status = ?, completed_at = ?, error_tag = COALESCE(?, error_tag)
              WHERE execution_id = ? AND name = ?`,
           )
-          .bind(status, completedAt, executionId, name)
+          .bind(status, completedAt, errorTag ?? null, executionId, name)
           .run(),
       ),
   };

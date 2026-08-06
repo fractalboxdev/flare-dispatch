@@ -1,0 +1,11 @@
+-- steps.error_tag — the tagged error's `_tag` for a step that failed.
+--
+-- `StepRunnerCloudflare` has always computed this on the failure path and passed
+-- it to `finishStep` (`errorTag: errorTagOf(original)`), and `FinishStepInput`
+-- has always declared the field — but there was no column and the D1 store never
+-- read the argument, so it was computed and discarded on every failure. A failed
+-- step therefore recorded `status = 'failure'` and nothing about why.
+--
+-- Nullable with no default and no backfill: rows written before this migration
+-- genuinely do not know their tag, and inventing one would be worse than NULL.
+ALTER TABLE steps ADD COLUMN error_tag TEXT;
