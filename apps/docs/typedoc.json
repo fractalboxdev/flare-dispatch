@@ -1,0 +1,45 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+
+  // The facade API reference is generated from the contract package, never
+  // written by hand — a hand-maintained reference drifts from the types
+  // consumers actually pin, and the drift is invisible until someone follows it
+  // into a compile error. `.github/workflows/docs.yml` regenerates on every PR
+  // and fails when the committed output differs.
+  //
+  // Output is committed (rather than built at site-render time) so the
+  // reference is readable on GitHub, diffable in review — a contract change
+  // shows up as a reference diff in the same PR — and available to agents that
+  // fetch raw markdown without running a build.
+  "plugin": ["typedoc-plugin-markdown"],
+  "entryPoints": ["../../packages/substrate-contract/src/index.ts"],
+  "tsconfig": "../../packages/substrate-contract/tsconfig.json",
+  "out": "reference/substrate-contract",
+  "readme": "none",
+  "githubPages": false,
+
+  // No "Defined in: index.ts:313" footers. Line numbers shift under every edit
+  // above them, so leaving them on would rewrite most of this file whenever
+  // anyone reflows a comment — burying the one hunk that matters and firing the
+  // staleness check on changes that touched no type. Without them the reference
+  // diffs only when the documented surface actually moves, which is what makes
+  // the diff worth reading in review. The source is one file:
+  // packages/substrate-contract/src/index.ts.
+  "disableSources": true,
+
+  // One entry point, one file: the whole facade surface reads top to bottom in
+  // the order the source declares it, which is the order a consumer meets it
+  // (recipe → admission → approvals → refusals → the facade interface).
+  "outputFileStrategy": "modules",
+  "entryFileName": "README.md",
+  "sort": ["source-order"],
+  "hidePageHeader": true,
+  "hideBreadcrumbs": true,
+  "useCodeBlocks": true,
+  "expandObjects": true,
+  "excludeInternal": true,
+  "validation": {
+    "invalidLink": true,
+    "notExported": true
+  }
+}

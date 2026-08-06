@@ -10,4 +10,4 @@ BYOC CI/CD that moves the heavy compute off GitHub Actions and onto a Cloudflare
 
 Runs are typed Effect-TS programs — composable steps, tagged errors, exhaustive matching — not YAML, written against a layered DSL: capabilities → primitives → recipes. `wrangler deploy` into your own Cloudflare account; no multi-tenant SaaS.
 
-**Substrate.** The execution environment for agentic work — containers, admission, deny-all egress, metered model access — lives at [`apps/substrate`](apps/substrate/specs/platform.md) as its own worker, consumed by the dispatcher and by out-of-repo agents over a service binding.
+**Substrate.** The execution environment for agentic work — containers, admission, deny-all egress, metered model access — lives at [`apps/substrate`](apps/substrate/specs/platform.md) as its own worker, consumed by the dispatcher and by out-of-repo agents over a service binding. Consumer, maintainer and operator guides — plus the generated facade API reference — are under [`apps/docs/substrate`](apps/docs/substrate/README.md).
