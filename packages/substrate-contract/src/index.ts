@@ -108,6 +108,44 @@ export function repoSlug(repo: SubstrateRepoRef): string {
   return `${repo.owner}/${repo.name}`;
 }
 
+/**
+ * The type annotation is the lock. `Record<keyof Required<SubstrateRecipe>, true>`
+ * admits *exactly* the declared keys — omit one and a property is missing, add
+ * one the type does not declare and it is an excess property — so the exported
+ * array below cannot drift from the type it describes.
+ */
+const RECIPE_FIELDS: Record<keyof Required<SubstrateRecipe>, true> = {
+  version: true,
+  repo: true,
+  lfs: true,
+  profiles: true,
+  targets: true,
+  enforcement: true,
+};
+
+/**
+ * Every field a recipe declares, as a value rather than a type — the runtime
+ * witness of this contract's shape.
+ *
+ * ADR-0010's "no pool or image *input*" was enforced only by the absence of a
+ * field in {@link SubstrateRecipe}, and a TypeScript type is erased. A consumer
+ * sending `{ version: 1, pool: "agent" }` over RPC had it silently ignored — the
+ * correct outcome — but nothing asserted the ignoring, and nothing failed if a
+ * later refactor threaded such a field into pool selection.
+ *
+ * This is what the substrate projects a recipe through before its admission
+ * policy reads a field (`apps/substrate/src/admission/pools.ts`), so an
+ * undeclared key is dropped by construction rather than ignored by luck. A
+ * projection and not a refusal, deliberately: additive optional fields are
+ * non-breaking here, so a newer consumer's recipe legitimately carries keys an
+ * older substrate build has never heard of.
+ *
+ * Consumers can read it to check what a build of this contract understands.
+ */
+export const SUBSTRATE_RECIPE_KEYS = Object.keys(
+  RECIPE_FIELDS,
+) as readonly (keyof SubstrateRecipe)[];
+
 // ---------------------------------------------------------------------------
 // Credential descriptors (ADR-0006)
 // ---------------------------------------------------------------------------

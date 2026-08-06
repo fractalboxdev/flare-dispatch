@@ -29,6 +29,13 @@ default and re-opened through a grant, or it does not land.
   tool is offered to a model; neither is model- or payload-visible.
 - The class taxonomy stays out of the public facade contract, so capability-based planning can
   arrive later as a selection function over the same named classes without consumers noticing.
+- The two halves of that invariant are owned in different places, and this ADR says which:
+  **payload-visibility is the substrate's** and is enforced here; **model-visibility is the
+  consumer's**, because the substrate has no model-facing surface — the tool a model sees is the
+  consumer's own (`sandbox_exec`), and nothing in this repo can assert its schema. A consumer
+  adopting the facade owes a test that its exec tool's input schema names no pool, image, backend or
+  tier field. fractalbot satisfies this today: its `sandbox_exec` declares one property, `command`,
+  with `additionalProperties: false`.
 
 ## Consequences
 
@@ -50,6 +57,14 @@ default and re-opened through a grant, or it does not land.
   of the same account, so raising `task` today means taking them off another pool. The post-drain
   target is 12 at the same instance type — a task installs one repository and runs its suite, which
   never grows into the dispatcher's `standard-4`.
+- The payload half is enforced at runtime rather than by an erased type. `SUBSTRATE_RECIPE_KEYS` in
+  `packages/substrate-contract` is a value witness of the recipe's declared fields, derived from a
+  `Record<keyof Required<SubstrateRecipe>, true>` so it cannot drift from the type; `poolPolicyView`
+  in `apps/substrate/src/admission/pools.ts` projects every recipe through it before policy reads a
+  field. An undeclared `pool` is therefore dropped by construction, not ignored by luck — and a
+  refactor that reads one directly fails a Proxy-based test in `pools.test.ts`. A projection rather
+  than a refusal, because this contract calls additive optional fields non-breaking: a newer
+  consumer's recipe legitimately carries keys an older substrate build has never heard of.
 - fractalbot's stage-3 bind does not wait on an unbuilt planning system.
 - A future isolate tier enters as a policy-selected backend under the same invariant, or not at all —
   now with a concrete adoption bar. `@cloudflare/computer` (early preview, 2026-08-03) ships the

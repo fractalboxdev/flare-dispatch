@@ -5,7 +5,11 @@
 // FIFO fairness — is what prevents CI starving interactive tasks. The pool a
 // consumer lands in is policy-selected here from (consumer, recipe); no
 // facade input names one (ADR-0010).
-import type { PoolName, SubstrateRecipe } from "@fractalboxdev/flare-dispatch-substrate-contract";
+import {
+  SUBSTRATE_RECIPE_KEYS,
+  type PoolName,
+  type SubstrateRecipe,
+} from "@fractalboxdev/flare-dispatch-substrate-contract";
 
 /**
  * Consumer identity, carried by which named facade entrypoint the consumer's
@@ -95,12 +99,49 @@ export function validatePoolCaps(caps: PoolCaps, ceiling: number): void {
 }
 
 /**
+ * The recipe as pool policy is allowed to see it: the contract's declared
+ * fields, and nothing else.
+ *
+ * This is the runtime half of ADR-0010's "no pool or image input" (#74). The
+ * contract's silence about a `pool` field is a TypeScript type, erased before
+ * anything runs — so a consumer sending `{ version: 1, pool: "agent" }` over
+ * RPC was ignored by accident rather than by construction, and a refactor that
+ * threaded a recipe field into selection would have compiled green.
+ *
+ * A projection rather than a refusal, deliberately. The contract calls additive
+ * optional fields non-breaking, so a newer consumer's recipe legitimately
+ * carries keys this build has never heard of; rejecting them would make every
+ * contract addition a synchronised deploy. Dropping them keeps forward
+ * compatibility while making "an undeclared field cannot steer the pool" a
+ * property of the code rather than of the current implementation's incuriosity.
+ *
+ * Frozen so a policy that later wants to normalise something has to say so.
+ */
+export function poolPolicyView(recipe: SubstrateRecipe): SubstrateRecipe {
+  const declared: Record<string, unknown> = {};
+  const source = recipe as unknown as Record<string, unknown>;
+  for (const key of SUBSTRATE_RECIPE_KEYS) if (key in source) declared[key] = source[key];
+  return Object.freeze(declared) as SubstrateRecipe;
+}
+
+/**
  * Policy selection (ADR-0010): from (consumer, recipe), inside reviewed code —
  * never from a model or a payload. fractalbot's tasks run on the `task` image
  * (OpenCode harness et al.); the dispatcher lands on `lean` until its run
  * catalog migrates onto the facade with per-run class policy.
+ *
+ * The recipe reaches the policy through `poolPolicyView` and only through it.
+ * Today `classFor` reads nothing from it at all — the parameter exists so future
+ * policy can consider reviewed run definitions — but the projection is what
+ * makes that a guarantee instead of a coincidence: when policy does start
+ * reading the recipe, the only fields it can reach are the ones the contract
+ * declares.
  */
-export function selectPool(consumer: ConsumerId, _recipe: SubstrateRecipe): PoolName {
+export function selectPool(consumer: ConsumerId, recipe: SubstrateRecipe): PoolName {
+  return classFor(consumer, poolPolicyView(recipe));
+}
+
+function classFor(consumer: ConsumerId, _declared: SubstrateRecipe): PoolName {
   return consumer === "fractalbot" ? "task" : "lean";
 }
 

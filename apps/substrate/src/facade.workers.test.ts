@@ -144,10 +144,15 @@ describe("typed refusals - every failure a consumer must render", () => {
     });
   });
 
-  it("refuses a grant profile the engine does not serve yet", async () => {
+  it("refuses a grant profile selection the catalog cannot serve", async () => {
+    // Every name in `GrantProfileName` is served since the credential boundary
+    // landed, so the unservable case is a *selection*, not a name: ADR-0005's
+    // "no repo ⇒ no egress" means a profile composes onto a repository or onto
+    // nothing. A run that believes it has a grant and gets deny-all should fail
+    // at the boundary, where the reason is legible, not deep in a build log.
     const outcome = await dispatcher().ensureSandbox(
       freshKey(),
-      { version: 1, repo: { owner: "acme", name: "widget" }, profiles: ["js-install"] },
+      { version: 1, profiles: ["js-install"] },
       { mode: "refuse" },
     );
     expect(outcome).toMatchObject({
@@ -233,5 +238,25 @@ describe("denials (ADR-0005) - retrieved with the artifacts", () => {
 
   it("answers empty rather than throwing for an execution with no denials", async () => {
     expect(await dispatcher().denials(freshKey())).toEqual([]);
+  });
+});
+
+describe("pool selection is consumer-driven across the binding (ADR-0010, #74)", () => {
+  // The unit test proves `selectPool` ignores an undeclared field; this proves
+  // the whole hop does. The recipe crosses a real service binding, so the extra
+  // key survives structured clone and arrives at the facade exactly as a buggy
+  // — or hostile — consumer would send it, and the pool that comes back is
+  // still the one the entrypoint decides.
+  const smuggled = (pool: string) =>
+    ({ version: 1, pool, image: "task" }) as unknown as Parameters<
+      ReturnType<typeof dispatcher>["admissionEnqueue"]
+    >[1];
+
+  it("does not let a payload field name the pool", async () => {
+    const asDispatcher = await dispatcher().admissionEnqueue(freshKey(), smuggled("agent"));
+    expect(asDispatcher.pool).toBe("lean");
+
+    const asFractalbot = await fractalbot().admissionEnqueue(freshKey(), smuggled("lean"));
+    expect(asFractalbot.pool).toBe("task");
   });
 });
