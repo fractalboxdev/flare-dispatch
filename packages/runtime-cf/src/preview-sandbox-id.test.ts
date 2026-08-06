@@ -12,8 +12,44 @@ describe("previewSafeSandboxId", () => {
     const out = previewSafeSandboxId("cdp-acceptance:Numu-AI_numu-monorepo:6758041bc1ee");
     expect(out).toMatch(DNS_LABEL);
     expect(out).not.toMatch(/[A-Z]/);
-    // The unique sha suffix survives so executions stay distinct.
-    expect(out.endsWith("6758041bc1ee")).toBe(true);
+    // The sha stays readable so a container id can still be traced to a commit;
+    // uniqueness itself is the digest's job (see the fan-out case below).
+    expect(out).toContain("6758041bc1ee");
+  });
+
+  // The defect this normaliser used to have: truncation kept the TAIL, and the
+  // ONLY thing distinguishing one run's execution id from its siblings' is the
+  // `<run>` PREFIX — every run in a push's fan-out carries the same repo + sha.
+  // Every run therefore routed to one container, and `workspace()`'s opening
+  // `rm -rf <dir>` let a sibling's checkout delete a live run's tree mid-exec.
+  it("keeps the fan-out of one commit on distinct containers", () => {
+    const sha = "5b4f655bc6a6";
+    const ids = ["offload-test", "oxlint", "check", "pr-review", "worker-deploy"].map((run) =>
+      previewSafeSandboxId(`${run}_fractalboxdev_flare-dispatch_${sha}`),
+    );
+
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) {
+      expect(id).toMatch(DNS_LABEL);
+      expect(id.length).toBeLessThanOrEqual(40);
+    }
+  });
+
+  // The id is re-derived from the execution id in EVERY Worker invocation of a
+  // run — each durable step is its own invocation, and they must all reach the
+  // same Durable Object. A digest that varied per call would hand a resumed
+  // step a fresh, empty container.
+  it("is deterministic across calls", () => {
+    const executionId = "offload-test_fractalboxdev_flare-dispatch_5b4f655bc6a6";
+    expect(previewSafeSandboxId(executionId)).toBe(previewSafeSandboxId(executionId));
+  });
+
+  it("distinguishes ids that differ only past the truncation point", () => {
+    // Same run, same owner/repo, different commit — and long enough that the
+    // readable head is identical for both.
+    const a = previewSafeSandboxId("playwright-e2e_someverylongorgname_the-monorepo_aaaaaaaaaaaa");
+    const b = previewSafeSandboxId("playwright-e2e_someverylongorgname_the-monorepo_bbbbbbbbbbbb");
+    expect(a).not.toBe(b);
   });
 
   it("replaces `:` and `_` separators with `-`", () => {

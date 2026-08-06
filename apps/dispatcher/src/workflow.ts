@@ -712,14 +712,20 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
 
       // --- Per-container-id serialization (the lease) ----------------------
       //
-      // Two runs whose execution ids normalise to the SAME sandbox container id
-      // (e.g. `playwright-demo` + `product-demo` for one repo+sha, both
-      // `demo-<owner>-<repo>-<sha12>`) route to the same Durable Object and, run
-      // concurrently, contend — interleaved exec sessions, Browser Rendering
-      // pool contention — and fail nearly every time on a merge burst even
-      // though each passes solo. Acquire a lease on the container id before the
-      // run touches its container, hold it (heartbeating) for the run, release
-      // it after. A peer for the same id WAITS for us, then runs cleanly.
+      // Two runs on the same container id route to the same Durable Object and,
+      // run concurrently, contend — interleaved exec sessions, Browser Rendering
+      // pool contention, and a `workspace()` whose opening `rm -rf <dir>` frees
+      // the tree a peer is mid-exec in. Acquire a lease on the container id
+      // before the run touches its container, hold it (heartbeating) for the
+      // run, release it after. A peer for the same id WAITS for us, then runs
+      // cleanly.
+      //
+      // Distinct executions no longer share an id — `previewSafeSandboxId`
+      // digests the whole execution id rather than keeping a tail that dropped
+      // the `<run>` prefix (see its header). So this is now a backstop, not the
+      // steady state: it serializes an execution against a concurrent replay of
+      // ITSELF, which the Workflow engine can produce, and it is what keeps the
+      // teardown below safe to fire.
       //
       // `acquireUseRelease`: the heartbeat fiber + lease are torn down on EVERY
       // exit path (success / run failure / defect / interrupt). A failed acquire
@@ -740,12 +746,22 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // the entire time — on a CI-shaped workload that idle tail measured
       // ~45% of total container spend.
       //
-      // MUST run inside the lease window (before `lease.release()`): runs
-      // whose execution ids normalise to the same container id are serialized
-      // by the lease, and a destroy fired after release could race a peer
-      // that just acquired it and kill the peer's container mid-run. As an
-      // `ensuring` attached INSIDE `acquire`'s scope it also only ever fires
-      // when WE held the lease — a failed acquire destroys nothing.
+      // MUST run inside the lease window (before `lease.release()`): a destroy
+      // fired after release could race a peer that just acquired the id and kill
+      // its container mid-run. As an `ensuring` attached INSIDE `acquire`'s
+      // scope it also only ever fires when WE held the lease — a failed acquire
+      // destroys nothing.
+      //
+      // Unconditional, including for a run that never provisioned a container
+      // (`check` exits after `resolve-config` when the repo configures no check
+      // command). That costs one Durable Object wakeup destroying nothing, and
+      // the alternative is worse: whether THIS invocation called `acquire` is
+      // not the question — a checkpointed `checkout` is memoized on replay, so
+      // the invocation that reaches the teardown of a run that hibernated
+      // between steps never calls `acquire` at all, and a guard on it would
+      // leave the live container idling for the full `sleepAfter` window on
+      // exactly the long runs where that tail costs the most. The destroy is
+      // safe to fire blind only because the id is now this execution's alone.
       //
       // Best-effort + bounded: container RPCs can hang (every container wait
       // needs a timeout), and a teardown failure must never flip the verdict
