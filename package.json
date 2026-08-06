@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "typecheck": "pnpm -r --filter \"./packages/*\" --filter \"./apps/dispatcher\" --filter \"./runs\" exec tsc --noEmit",
+    "typecheck": "pnpm -r --filter \"./packages/*\" --filter \"./apps/dispatcher\" --filter \"./apps/substrate\" --filter \"./runs\" exec tsc --noEmit",
     "lint": "oxlint",
     "test": "vitest run --passWithNoTests",
     "format": "oxfmt --write"
