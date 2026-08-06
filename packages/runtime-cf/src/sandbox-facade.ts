@@ -29,7 +29,7 @@
 // working unchanged — a run's `logPath` still resolves. The full log lives in
 // the substrate's per-execution artifact prefix.
 
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Match } from "effect";
 import type {
   ApprovalAttestation,
   EnforcementPosition,
@@ -95,25 +95,29 @@ const sha256Hex = async (text: string): Promise<string> => {
     .join("");
 };
 
-/** A refusal rendered for a log line or an error tail — never an opaque throw. */
-export const describeRefusal = (refusal: SubstrateRefusal): string => {
-  switch (refusal.kind) {
-    case "admission-refused":
-      return `substrate admission refused: pool ${refusal.pool} is ${refusal.poolBusy}/${refusal.cap} busy`;
-    case "approval-required":
-      return `substrate refused an irreversible command: the run definition does not pre-assert "${refusal.rule}"`;
-    case "attestation-rejected":
-      return `substrate rejected the approval attestation: ${refusal.reason}`;
-    case "budget-stop":
-      return `substrate budget stop (${refusal.scope}): $${refusal.meter.spentUsd} of $${refusal.meter.capUsd}`;
-    case "recipe-rejected":
-      return `substrate rejected the recipe: ${refusal.reason}`;
-    case "ticket-rejected":
-      return `substrate admission ticket rejected: ${refusal.reason}`;
-    case "sandbox-unavailable":
-      return `substrate sandbox unavailable: ${refusal.reason}`;
-  }
-};
+/**
+ * A refusal rendered for a log line or an error tail — never an opaque throw.
+ *
+ * `discriminatorsExhaustive` rather than a `switch`: the contract's refusal
+ * union is the substrate's to grow, and a new kind must break this build rather
+ * than fall through to `undefined` in a check-run summary a human is reading to
+ * find out why their run stopped.
+ */
+export const describeRefusal: (refusal: SubstrateRefusal) => string =
+  Match.type<SubstrateRefusal>().pipe(
+    Match.discriminatorsExhaustive("kind")({
+      "admission-refused": (r) =>
+        `substrate admission refused: pool ${r.pool} is ${r.poolBusy}/${r.cap} busy`,
+      "approval-required": (r) =>
+        `substrate refused an irreversible command: the run definition does not pre-assert "${r.rule}"`,
+      "attestation-rejected": (r) => `substrate rejected the approval attestation: ${r.reason}`,
+      "budget-stop": (r) =>
+        `substrate budget stop (${r.scope}): $${r.meter.spentUsd} of $${r.meter.capUsd}`,
+      "recipe-rejected": (r) => `substrate rejected the recipe: ${r.reason}`,
+      "ticket-rejected": (r) => `substrate admission ticket rejected: ${r.reason}`,
+      "sandbox-unavailable": (r) => `substrate sandbox unavailable: ${r.reason}`,
+    }),
+  );
 
 export type SandboxFacadeOptions = {
   /** The `SUBSTRATE` service binding, entrypoint `DispatcherFacade`. */
@@ -339,8 +343,14 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
         }),
       ),
 
+    // `PortNeverOpened` carries no free-text cause, so the gap is named on the
+    // log line instead of vanishing into a bare timeout a reader would chase.
     waitForPort: ({ port, timeoutSec }) =>
-      Effect.fail(new PortNeverOpened({ port, timeoutSec: timeoutSec ?? 0 })),
+      Effect.logError(
+        `waitForPort(${port}) is unreachable on the substrate facade — no detached-process surface`,
+      ).pipe(
+        Effect.andThen(Effect.fail(new PortNeverOpened({ port, timeoutSec: timeoutSec ?? 0 }))),
+      ),
 
     exposePort: ({ port }) =>
       Effect.fail(
