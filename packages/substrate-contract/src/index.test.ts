@@ -3,6 +3,7 @@ import {
   CONTRACT_VERSION,
   isRefusalKind,
   repoSlug,
+  SUBSTRATE_RECIPE_KEYS,
   type AdmissionRefused,
   type CredentialDescriptor,
   type ExecOutcome,
@@ -60,6 +61,28 @@ describe("contract shapes stay structured-clone-safe", () => {
       meter: { spentUsd: 12.5, capUsd: 10 },
     };
     expect(structuredClone(refusal)).toEqual(refusal);
+  });
+
+  it("declares no pool or image input — asserted on a value, not on an erased type (#74)", () => {
+    // ADR-0010: image class and execution tier are policy-selected inside the
+    // substrate from (consumer, recipe), never named by a consumer, a model or
+    // a payload. `PoolName` appears in this contract only in outputs —
+    // `AdmissionRefused`, `QueuePosition`, `PoolStatus` — as observability.
+    //
+    // Until this, the input half was enforced by a TypeScript type and nothing
+    // else, so it vanished at runtime. Two locks now: adding `pool` to
+    // `SubstrateRecipe` fails to compile unless `RECIPE_FIELDS` grows the same
+    // key, and growing `RECIPE_FIELDS` fails the exact-list assertion here.
+    expect(SUBSTRATE_RECIPE_KEYS).toEqual([
+      "version",
+      "repo",
+      "lfs",
+      "profiles",
+      "targets",
+      "enforcement",
+    ]);
+    for (const banned of ["pool", "image", "imageClass", "class", "tier", "instanceType"])
+      expect(SUBSTRATE_RECIPE_KEYS, banned).not.toContain(banned);
   });
 
   it("a credential descriptor names a secret and never carries one", () => {
