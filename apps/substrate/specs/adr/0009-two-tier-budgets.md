@@ -10,9 +10,8 @@ conversation-scoped and provider-window-aware (per-task dollar cap, "unmeasured 
 per-minute token pacing); flare-dispatch's AgentBudget DO meters per execution behind its model
 proxy, with typed stop reasons. They meter different loops and neither survives the other's failure:
 a buggy or compromised consumer — or a leaked fleet of per-execution tokens — can drain the org's
-model budget through a proxy that meters but never refuses. The review panel answered the budget
-question unanimously: the substrate is the only place a spend cap holds without consumer
-cooperation.
+model budget through a proxy that meters but never refuses. The substrate is the only place a spend
+cap holds without consumer cooperation.
 
 ## Decision
 

@@ -6,12 +6,11 @@
 ## Context
 
 flare-dispatch's runs end in a terminal CI verdict feeding check-runs; fractalbot's tasks move
-through conversational states (`active` / `awaiting_human` / `done`) feeding a Slack thread. The
-founding analysis identified the verdict-model mismatch as one of the two reasons merging either
-product into the other fails, and the review panel answered the open question unanimously: a
-verdict-bearing substrate re-imports the mismatch through the back door, forces every future
-consumer to map its semantics onto one product's CI vocabulary, and enlarges the data the substrate holds
-about consumers — exactly what the tenancy posture wants to avoid.
+through conversational states (`active` / `awaiting_human` / `done`) feeding a Slack thread. That
+verdict-model mismatch is one of the two reasons merging either product into the other fails
+(ADR-0001) — and a verdict-bearing substrate re-imports the mismatch through the back door, forces
+every future consumer to map its semantics onto one product's CI vocabulary, and enlarges the data
+the substrate holds about consumers — exactly what the tenancy posture wants to avoid.
 
 ## Decision
 
