@@ -79,6 +79,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-runtime-cf";
 import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
+import { preAssertedApproval, resolveTargets, runGrant, runsOnFacade } from "./grant-catalog";
 import { selectSandboxNs } from "./sandbox-routing";
 import { queuedSummary } from "./admission-summary";
 import { appendFailureSummary, failureSummaryMd, runSkippedReason } from "./failure-summary";
@@ -272,6 +273,39 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // fails before any container boots.
     const input = Schema.decodeUnknownSync(run.inputs)(payload.inputs);
 
+    // --- Execution backend (the substrate adoption switch) -----------------
+    //
+    // Two independent decisions, deliberately not folded into one flag:
+    //
+    //   WHERE it runs — `SUBSTRATE_BACKEND=on` plus a bound `SUBSTRATE` plus a
+    //   run the facade can actually serve (`runsOnFacade`: a run needing a
+    //   detached process or a preview URL has no facade method to call, so it
+    //   stays on the container path until the boundary grows one).
+    //
+    //   HOW MUCH of the egress floor is enforced once it is there — the per-run
+    //   rollout position in grant-catalog.ts, which rides the recipe.
+    //
+    // Keeping them apart is what makes the cutover reversible: flipping the var
+    // moves a run's execution without changing what it may reach, and
+    // graduating a position changes what it may reach without moving it.
+    const grant = runGrant(payload.run);
+    const substrateFacade =
+      this.env.SUBSTRATE !== undefined &&
+      this.env.SUBSTRATE_BACKEND === "on" &&
+      runsOnFacade(payload.run)
+        ? this.env.SUBSTRATE
+        : undefined;
+
+    // Dynamic e2e targets are gated against the pattern the run's reviewed
+    // definition declares (ADR-0005) — an input host outside it fails HERE,
+    // before a container boots, not later as an unexplained egress denial. The
+    // dispatch route runs the same check for a legible 400; this is the
+    // backstop for the cron and webhook paths, which have no request to fail.
+    const targets = resolveTargets(payload.run, payload.inputs);
+    if (!targets.ok) {
+      throw new Error(`RunWorkflow: ${targets.reason}`);
+    }
+
     // Route to the sandbox image the run declares (`sandboxImage: "browser"`
     // → the chromium-baked binding; default → lean). A DIFFERENT axis from
     // `limits.requiresBrowser` — see sandbox-routing.ts + define-run.ts
@@ -399,7 +433,24 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     const runtime = makeCFRuntimeLive({
       db,
       bucket: this.env.RUNS_STORAGE,
-      sandboxNs,
+      // Exactly one of these is set: a run executes wholly on the substrate or
+      // wholly on the dispatcher's own fleet, never partly on each.
+      ...(substrateFacade !== undefined
+        ? {
+            substrate: {
+              facade: substrateFacade,
+              run: payload.run,
+              profiles: grant.profiles,
+              ...(targets.hosts.length > 0 ? { targets: targets.hosts } : {}),
+              enforcement: grant.rollout,
+              ...(grant.lfs === true ? { lfs: true } : {}),
+              // The `approvedBy: "run-definition"` half of ADR-0007: the Worker
+              // mints an attestation for a command its reviewed definition
+              // pre-asserts, and for nothing else. No dispatch input reaches it.
+              approvalFor: (command, scope) => preAssertedApproval(payload.run, command, scope),
+            },
+          }
+        : { sandboxNs }),
       workflowStep: step,
       // The `Workflow` binding backs the `childRuns` capability — a run can
       // `spawnChildRun` / `fanOut` to independent child `RunWorkflow` instances.
@@ -701,8 +752,14 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // the run already earned — log and move on; `sleepAfter` is the
       // backstop reaper for this and for paths that die before reaching the
       // finalizer at all (Worker eviction, deploy mid-run).
+      //
+      // On the substrate path the same teardown is `abort(key)` — kill + stop,
+      // skipping the snapshot, and it releases the admission slot with it. The
+      // dispatcher holds no container to destroy there, which is the point.
       const destroySandbox: Effect.Effect<void> = Effect.tryPromise(() =>
-        getSandbox(sandboxNs, containerId).destroy(),
+        substrateFacade !== undefined
+          ? substrateFacade.abort(payload.executionId).then(() => undefined)
+          : getSandbox(sandboxNs, containerId).destroy(),
       ).pipe(
         Effect.timeout(Duration.seconds(30)),
         Effect.asVoid,

@@ -10,7 +10,7 @@
 // Spec: specs/03-dsl.md § Layers, specs/pm/plan.md § PR4.
 
 // --- The composed runtime ----------------------------------------------------
-export { makeCFRuntimeLive, type CFRuntimeLiveOptions } from "./runtime";
+export { makeCFRuntimeLive, type CFRuntimeLiveOptions, type SubstrateExecution } from "./runtime";
 
 // --- Individual capability Layers (also exported for targeted tests) ---------
 export { IOLive, makeIOLive } from "./io-live";
@@ -30,6 +30,12 @@ export {
   type SendEmailBinding,
 } from "./email-cf";
 export { makeSandboxCloudflareLive } from "./sandbox-cf";
+export {
+  describeRefusal,
+  makeSandboxFacadeLive,
+  SUBSTRATE_WORKSPACE,
+  type SandboxFacadeOptions,
+} from "./sandbox-facade";
 export { previewSafeSandboxId } from "./preview-sandbox-id";
 export {
   makeContainerLeaseD1,

@@ -28,14 +28,14 @@ import type {
   SubstrateRecipe,
   SubstrateRefusal,
 } from "@fractalboxdev/flare-dispatch-substrate-contract";
-import { repoSlug } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { checkApprovalFloor, commandRequiresApproval } from "./approval";
 import {
   applyGrant,
   buildGrant,
+  grantParamsFor,
+  profilesFor,
   revokeGrant,
   type Grant,
-  type GrantParams,
   type GrantTarget,
 } from "./egress";
 import type { ApprovalAttestation } from "@fractalboxdev/flare-dispatch-substrate-contract";
@@ -124,21 +124,34 @@ export type FenceOutcome =
   | { ok: false; refusal: SubstrateRefusal };
 
 /**
- * A recipe that names no repository gets no grant at all — deny-all stays
- * exactly as the class posture ships it. Treating "no repo" as "no network"
- * rather than "no restriction" is the whole difference.
+ * The grant one command runs inside.
+ *
+ * Under `enforce`, a recipe that selects no profile and names no repository
+ * gets no grant at all — deny-all stays exactly as the class posture ships it.
+ * Treating "no selection" as "no network" rather than "no restriction" is the
+ * whole difference.
+ *
+ * Under `legacy` / `report` there is always a grant, because the open posture
+ * those positions carry is something that has to be applied and, more to the
+ * point, revoked (ADR-0005's rollout). A run in either position reaches the
+ * network exactly as it did before it moved onto the substrate; what differs is
+ * whether the engine is watching.
  */
 function grantFor(input: FenceInput): Grant | undefined {
-  if (!input.recipe.repo) return undefined;
-  const params: GrantParams = {
-    repo: repoSlug(input.recipe.repo),
-    containerId: input.containerId,
+  const position = input.recipe.enforcement ?? "enforce";
+  const params = grantParamsFor(input.recipe.repo, input.containerId, {
     lfs: input.lfs ?? input.recipe.lfs,
     // Profile *selection* only (ADR-0005). The hosts, rules and credential
     // descriptors each name implies are authored in the substrate's reviewed
     // code — a recipe that selects `cf-api` cannot say what `cf-api` means.
     profiles: input.recipe.profiles,
-  };
+    // Targets are the one input-derived value in a grant, and they are already
+    // gated consumer-side against the run definition's host pattern; a profile
+    // that does not accept targets refuses them here regardless.
+    targets: input.recipe.targets,
+    position,
+  });
+  if (position === "enforce" && profilesFor(params).length === 0) return undefined;
   return buildGrant(params);
 }
 
@@ -165,13 +178,9 @@ function grantFor(input: FenceInput): Grant | undefined {
  *    close the grant on the foreground command while its children still hold
  *    it. A kill that throws must not skip the revoke.
  */
-export async function runFence(
-  sandbox: GuardedSandbox,
-  input: FenceInput,
-): Promise<FenceOutcome> {
+export async function runFence(sandbox: GuardedSandbox, input: FenceInput): Promise<FenceOutcome> {
   const command = input.command.trim();
-  if (!command)
-    return { ok: false, refusal: { kind: "recipe-rejected", reason: "empty command" } };
+  if (!command) return { ok: false, refusal: { kind: "recipe-rejected", reason: "empty command" } };
 
   const floorRefusal = await checkApprovalFloor(command, input.approval);
   if (floorRefusal) return { ok: false, refusal: floorRefusal };
@@ -190,7 +199,10 @@ export async function runFence(
   } catch (err) {
     return {
       ok: false,
-      refusal: { kind: "recipe-rejected", reason: err instanceof Error ? err.message : "grant derivation failed" },
+      refusal: {
+        kind: "recipe-rejected",
+        reason: err instanceof Error ? err.message : "grant derivation failed",
+      },
     };
   }
 

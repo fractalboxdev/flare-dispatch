@@ -43,6 +43,7 @@ import {
 import {
   applyGrant,
   buildGrant,
+  egressHandlers,
   grantParamsFor,
   revokeGrant,
   serveGrantedRequest,
@@ -50,7 +51,12 @@ import {
   type GrantParams,
   type OutboundContext,
 } from "./engine/egress";
-import { runFence, type FenceInput, type FenceOutcome, type GuardedSandbox } from "./engine/exec-fence";
+import {
+  runFence,
+  type FenceInput,
+  type FenceOutcome,
+  type GuardedSandbox,
+} from "./engine/exec-fence";
 import { redactCapturedGitConfigCommand, scrubRemotesCommand } from "./engine/git-scrub";
 import { clampTailBytes, nonceLogPath, shellQuote } from "./engine/policy";
 import { resolveSubstrateSecret } from "./secrets";
@@ -97,10 +103,7 @@ type SandboxHandles = {
 
 type StoredIdentity = { consumer: string; key: string };
 
-export class SubstrateSandboxBase
-  extends Sandbox<Env>
-  implements GuardedSandbox
-{
+export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox {
   /**
    * Deny-all egress — the whole security posture of the class (ADR-0005,
    * verified against `@cloudflare/containers@0.3.7` internals; the pin is a
@@ -140,8 +143,17 @@ export class SubstrateSandboxBase
    * Verification here AND at ensure() is deliberate: the store-time check
    * refuses a facade bug loudly at admit; the boot-time check is the gate.
    */
-  async admit(consumer: string, key: string, ticket: string): Promise<{ ok: boolean; reason?: string }> {
-    const verdict = await verifyTicket(this.env.TICKET_SECRET, ticket, { consumer, key }, Date.now());
+  async admit(
+    consumer: string,
+    key: string,
+    ticket: string,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const verdict = await verifyTicket(
+      this.env.TICKET_SECRET,
+      ticket,
+      { consumer, key },
+      Date.now(),
+    );
     if (!verdict.ok) return { ok: false, reason: verdict.reason };
     this.ctx.storage.kv.put(IDENTITY_KEY, { consumer, key } satisfies StoredIdentity);
     this.ctx.storage.kv.put(TICKET_KEY, ticket);
@@ -218,10 +230,7 @@ export class SubstrateSandboxBase
    * what `onActivityExpired` reads to refuse a snapshot over a live
    * filesystem.
    */
-  private readonly running = new Map<
-    string,
-    { deadline: number; promise: Promise<ExecReceipt> }
-  >();
+  private readonly running = new Map<string, { deadline: number; promise: Promise<ExecReceipt> }>();
 
   private async runEnsure(recipe: SubstrateRecipe): Promise<EnsureOutcome> {
     await this.awaitDrain();
@@ -231,10 +240,7 @@ export class SubstrateSandboxBase
 
     // Fast path. `ensure()` runs inside every exec rather than once up front,
     // so reusing a live container has to cost nothing.
-    if (
-      (await this.lifecycle()) === "running" &&
-      handles?.recipeVersion === recipe.version
-    ) {
+    if ((await this.lifecycle()) === "running" && handles?.recipeVersion === recipe.version) {
       return { ok: true, generation: this.generation(), rebuilt: false };
     }
 
@@ -256,10 +262,7 @@ export class SubstrateSandboxBase
   }
 
   /** True when the recipe's tree was restored. Never throws — a miss is a miss. */
-  private async tryRestore(
-    recipe: SubstrateRecipe,
-    handles?: SandboxHandles,
-  ): Promise<boolean> {
+  private async tryRestore(recipe: SubstrateRecipe, handles?: SandboxHandles): Promise<boolean> {
     // A handle from a different recipe version describes a different execution.
     if (!handles?.tree || handles.recipeVersion !== recipe.version) return false;
     try {
@@ -486,7 +489,13 @@ export class SubstrateSandboxBase
   }
 
   private async executeCommand(
-    input: { command: string; idempotencyKey: string; logPath: string; timeoutMs: number; tailBytes: number },
+    input: {
+      command: string;
+      idempotencyKey: string;
+      logPath: string;
+      timeoutMs: number;
+      tailBytes: number;
+    },
     key: string,
   ): Promise<ExecReceipt> {
     // One nonce for the pair, so the script and its log are traceable to each
@@ -508,10 +517,10 @@ export class SubstrateSandboxBase
     // written out: `exec` buffers stdout into this isolate as a string, and a
     // repo build's log is a multi-megabyte allocation on its way to a file we
     // already have a path for.
-    const result = await this.exec(
-      `sh ${shellQuote(scriptFile)} > ${shellQuote(logFile)} 2>&1`,
-      { timeout: input.timeoutMs, cwd: WORKSPACE_DIR },
-    );
+    const result = await this.exec(`sh ${shellQuote(scriptFile)} > ${shellQuote(logFile)} 2>&1`, {
+      timeout: input.timeoutMs,
+      cwd: WORKSPACE_DIR,
+    });
 
     const { tail, truncated } = await this.readLogTail(logFile, input.tailBytes);
     const receipt: ExecReceipt = {
@@ -542,10 +551,9 @@ export class SubstrateSandboxBase
     tailBytes: number,
   ): Promise<{ tail: string; truncated: boolean }> {
     try {
-      const out = await this.exec(
-        `tail -c ${tailBytes + 1} ${shellQuote(logFile)}`,
-        { timeout: TAIL_READ_TIMEOUT_MS },
-      );
+      const out = await this.exec(`tail -c ${tailBytes + 1} ${shellQuote(logFile)}`, {
+        timeout: TAIL_READ_TIMEOUT_MS,
+      });
       return clampTailBytes(out.stdout ?? "", tailBytes);
     } catch (err) {
       console.error("could not read the command log tail", logFile, err);
@@ -572,6 +580,31 @@ export class SubstrateSandboxBase
         // Safe on an already-stopped container.
         console.debug("stop on an already-stopped container", err);
       }
+    }
+  }
+
+  /**
+   * Read one file's full text out of the container, behind the same ticket
+   * gate every other call crosses. No grant is opened and no command runs — the
+   * bytes were authored by the workload already, and the consumer named the
+   * path in reviewed code (`pr-review` reads back a diff too large for a
+   * receipt tail).
+   *
+   * Named `readWorkspaceFile` rather than overriding the SDK's `readFile`: the
+   * base method is part of the unfenced surface ADR-0003 keeps unreachable, and
+   * shadowing it with different semantics is how the two get confused later.
+   */
+  async readWorkspaceFile(
+    path: string,
+  ): Promise<{ ok: true; content: string } | { ok: false; reason: string }> {
+    const gateReason = await this.ticketGate();
+    if (gateReason !== undefined) return { ok: false, reason: gateReason };
+    try {
+      const result = await this.readFile(path);
+      if (!result.success) return { ok: false, reason: `read ${path} reported success=false` };
+      return { ok: true, content: result.content };
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : `read ${path} failed` };
     }
   }
 
@@ -756,12 +789,8 @@ export function sandboxByName(
  * is invisible until a grant is applied, at which point `setOutboundByHost`
  * throws "Outbound handler method 'publicRepo' not found".
  */
-const handlersFor = () => ({
-  publicRepo: (
-    req: Request,
-    env: Env,
-    ctx: OutboundContext<GrantParams>,
-  ): Promise<Response> =>
+const handlersFor = () => {
+  const served = (req: Request, env: Env, ctx: OutboundContext<GrantParams>): Promise<Response> =>
     serveGrantedRequest(req, ctx, {
       fetch,
       recordDenial: (event) => {
@@ -769,9 +798,23 @@ const handlersFor = () => ({
           console.error("denial record failed", err),
         );
       },
+      // Handler-injected credentials (ADR-0006): the descriptor a profile
+      // names is resolved here, Worker-side, and never reaches the container.
       resolveSecret: (name) => resolveSubstrateSecret(env, name),
-    }),
-});
+    });
+  return {
+    /** Per-host, mapped by an `enforce` grant. Refuses what the policy refuses. */
+    granted: served,
+    /**
+     * The catch-all a `report` grant maps. Same engine, same recorder, same
+     * credential resolution — the position in the params is what turns a
+     * refusal into a `would-deny` row and forwards the request anyway.
+     */
+    reportOnly: served,
+    /** What a revoked catch-all is re-pointed at; the SDK has no removal call. */
+    denyAll: egressHandlers.denyAll,
+  };
+};
 
 SubstrateSandboxLean.outboundHandlers = handlersFor();
 SubstrateSandboxBrowser.outboundHandlers = handlersFor();

@@ -46,15 +46,47 @@ import {
   repoSlug,
   type CredentialDescriptor,
   type DenialEvent,
+  type EnforcementPosition,
   type GrantProfileName,
   type SubstrateRepoRef,
 } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import {
   CONTAINER_AUTHORED_AUTH_HEADERS,
-  credentialsByHost,
   resolveCredential,
   type SecretResolver,
 } from "./credentials";
+import {
+  BODYLESS,
+  grantPolicy,
+  METHODS,
+  selectionProblem,
+  type EgressPolicy,
+  type GrantParams,
+  type PathRule,
+} from "./profiles";
+
+// The catalog is next door (profiles.ts) — the vocabulary is re-exported here
+// so the fence, the DO and the tests keep one import site for "what a grant is
+// made of", while the file that decides it stays reviewable on its own.
+export {
+  BODYLESS,
+  GRANT_PROFILES,
+  grantPolicy,
+  isProfileName,
+  METHODS,
+  POST_SINK_NOTE,
+  PROFILE_NAMES,
+  profilesFor,
+  publicRepoPolicy,
+  selectionProblem,
+  WRITE_SINKS,
+  type EgressPolicy,
+  type GrantParams,
+  type GrantProfile,
+  type HostPolicy,
+  type HttpMethod,
+  type PathRule,
+} from "./profiles";
 
 /**
  * The shape `@cloudflare/containers` passes to an outbound handler, declared
@@ -68,71 +100,12 @@ export type OutboundContext<P> = {
   params?: P;
 };
 
-/** What a grant freezes into `setOutboundByHost` params. None of it is model-authored. */
-export type GrantParams = {
-  /** `owner/name` from the recipe's repo — an input no model wrote. */
-  repo: string;
-  /**
-   * The container this grant was issued to. `setOutboundByHost` is already
-   * per-instance, so this is defence in depth against a handler reached from
-   * an instance the grant was never issued for.
-   */
-  containerId: string;
-  /** Admits the LFS object host, whose paths cannot be repo-scoped. Off by default. */
-  lfs?: boolean;
-  /**
-   * Named profiles this grant composes beyond the repo read (ADR-0005). Only
-   * names — the hosts, rules and credential descriptors each one implies are
-   * authored in reviewed code here and in `credentials.ts`, never carried in
-   * the grant. Frozen into `setOutboundByHost` params, so a handler reached
-   * with a profile the fence did not grant simply has no rule to match.
-   */
-  profiles?: readonly GrantProfileName[];
-};
+const MAX_REDIRECTS = 5;
 
 export type Decision =
   | { ok: true }
   | { ok: false; reason: string };
 
-const MAX_REDIRECTS = 5;
-
-/** git's pack negotiation body. Bounded, but genuinely workload-controlled — see `POST_SINK_NOTE`. */
-const MAX_UPLOAD_PACK_BYTES = 1024 * 1024;
-const MAX_LFS_BATCH_BYTES = 256 * 1024;
-
-/**
- * `git-upload-pack` takes a workload-authored body on an allowed host, so it is
- * a bounded exfiltration sink and is not claimed otherwise (an accepted
- * residual in specs/platform.md). What the rules below buy is that it is the
- * *only* POST body that reaches github.com, capped, and to one path under one
- * repository.
- */
-export const POST_SINK_NOTE =
-  "git-upload-pack carries a workload-controlled body; bounded, not eliminated";
-
-/**
- * Write sinks that must never be reachable, whatever a handler decides.
- * `deniedHosts` is the one rule a handler cannot override on the container
- * side — and `decide` applies it again on redirect targets, because the
- * platform's deny list does not govern a handler's own fetch.
- *
- * Wildcards here are deliberate: these hold even if the admitted set is later
- * widened to `*.github.com`.
- */
-export const WRITE_SINKS = [
-  "gist.github.com",
-  "uploads.github.com",
-  "api.github.com",
-] as const;
-
-/**
- * Lowercase, strip the root label's trailing dot, drop any port.
- *
- * `GitHub.com.` and `github.com:443` resolve to the same origin as
- * `github.com`, so a matcher that compares raw strings can be walked around.
- * Userinfo (`https://github.com@evil.com/`) never reaches here — callers pass
- * `URL.hostname`, which excludes it, and IDN is already punycoded by `URL`.
- */
 export function normalizeHost(host: string): string {
   let h = host.trim().toLowerCase();
   const lastColon = h.lastIndexOf(":");
@@ -168,285 +141,114 @@ export function hostMatches(pattern: string, host: string): boolean {
 }
 
 /**
- * Methods a rule may name. Deny-by-default is unchanged by the width of this
- * union: a method with no matching rule on the matched host is refused, so
- * adding `PUT` here admits nothing until some reviewed rule asks for it.
- * `wrangler deploy` is what needs more than GET/POST — a script upload is a
- * `PUT` — and a policy engine that cannot express the method it is asserting on
- * would have to admit the host without inspecting it.
- */
-export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-
-const METHODS: readonly HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
-
-/** Methods that carry no request body worth capping or asserting. */
-const BODYLESS: readonly HttpMethod[] = ["GET", "DELETE"];
-
-export type PathRule = {
-  method: HttpMethod;
-  match: (url: URL) => boolean;
-  maxBodyBytes?: number;
-  /** Returns a denial reason, or undefined when the body is acceptable. */
-  assertBody?: (raw: string) => string | undefined;
-};
-
-export type HostPolicy = {
-  /** Concrete hostname. The effective policy holds no globs — see `buildGrant`. */
-  host: string;
-  rules: PathRule[];
-  /**
-   * Attached by the handler on every request that passes this host's rules
-   * (ADR-0006). Per host rather than per policy: a redirect that leaves this
-   * host must not carry its credential onward, and `decide` returns the
-   * matched host's descriptor for exactly that reason.
-   */
-  credential?: CredentialDescriptor;
-};
-
-export type EgressPolicy = {
-  repo: string;
-  hosts: HostPolicy[];
-  deny: readonly string[];
-};
-
-/** git appends `.git` to the remote path about half the time; accept both spellings. */
-function repoPrefixes(slug: string): string[] {
-  return [`/${slug}`, `/${slug}.git`];
-}
-
-function underRepo(slug: string, url: URL, suffix: string): boolean {
-  return repoPrefixes(slug).some((p) => url.pathname === `${p}${suffix}`);
-}
-
-/**
- * The `public-repo-read` profile (ADR-0005): cloning and reading one public
- * repository. No credential is injected anywhere in it, so every rule is about
- * what the container may *say*, not what it may say it with.
- *
- * Read over git's smart HTTP transport is not GET-only — discovery is
- * `GET /info/refs?service=git-upload-pack` and negotiation is
- * `POST /git-upload-pack`. The push counterparts share both URLs, distinguished
- * only by the `service` parameter and the path's last segment, which is exactly
- * why the assertion is on method and path rather than host.
- */
-export function publicRepoPolicy(params: GrantParams): EgressPolicy {
-  const slug = params.repo;
-  const hosts: HostPolicy[] = [
-    {
-      host: "github.com",
-      rules: [
-        {
-          // Ref discovery. `service=git-receive-pack` is push discovery and is
-          // refused here rather than left to fail at GitHub.
-          method: "GET",
-          match: (url) =>
-            underRepo(slug, url, "/info/refs") &&
-            url.searchParams.get("service") === "git-upload-pack",
-        },
-        {
-          method: "POST",
-          match: (url) => underRepo(slug, url, "/git-upload-pack"),
-          maxBodyBytes: MAX_UPLOAD_PACK_BYTES,
-        },
-        {
-          // LFS batch. Download and upload are the same URL and the same
-          // method; only the body separates them, so the body is asserted.
-          method: "POST",
-          match: (url) =>
-            params.lfs === true &&
-            underRepo(slug, url, "/info/lfs/objects/batch"),
-          maxBodyBytes: MAX_LFS_BATCH_BYTES,
-          assertBody: (raw) => {
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(raw);
-            } catch {
-              return "lfs batch body is not JSON";
-            }
-            const op = (parsed as { operation?: unknown } | null)?.operation;
-            return op === "download"
-              ? undefined
-              : `lfs batch operation ${JSON.stringify(op)} is not download`;
-          },
-        },
-        {
-          // Archive download, which 302s to codeload.
-          method: "GET",
-          match: (url) =>
-            repoPrefixes(slug).some((p) =>
-              url.pathname.startsWith(`${p}/archive/`)
-            ),
-        },
-      ],
-    },
-    {
-      host: "codeload.github.com",
-      rules: [
-        {
-          method: "GET",
-          match: (url) =>
-            repoPrefixes(slug).some((p) =>
-              url.pathname.startsWith(`${p}/`)
-            ),
-        },
-      ],
-    },
-  ];
-
-  if (params.lfs === true) {
-    hosts.push({
-      host: "objects.githubusercontent.com",
-      // LFS object URLs are opaque signed paths with no repository segment, so
-      // this host cannot carry a repo-scoped path assertion — the only controls
-      // left are GET-only and no body. That weakness is why LFS is opt-in
-      // rather than part of the default clone grant.
-      rules: [{ method: "GET", match: () => true }],
-    });
-  }
-
-  return { repo: slug, hosts, deny: WRITE_SINKS };
-}
-
-/**
- * A Cloudflare account id as it appears in an API path: 32 lowercase hex.
- * Matching the shape rather than a specific id keeps the substrate free of a
- * per-account var while still pinning the path to one account segment — the
- * token is account-scoped anyway, and what this buys is product scope, below.
- */
-const CF_ACCOUNT_SEGMENT = /^[0-9a-f]{32}$/;
-
-/**
- * A `wrangler deploy` script upload. Workers' own script-size limit is 10 MB
- * compressed; 16 MB of multipart is comfortable headroom. The cap is not
- * decorative — the body is buffered in the isolate to be counted, so raising it
- * trades directly against isolate memory, and an unbounded cap on a host
- * reached with a write-scoped token is an unbounded exfiltration sink.
- */
-const MAX_CF_UPLOAD_BYTES = 16 * 1024 * 1024;
-const MAX_CF_JSON_BYTES = 256 * 1024;
-
-/** `/client/v4/accounts/<32-hex>/workers/...` — the Workers product, one account. */
-function underAccountWorkers(url: URL): boolean {
-  const parts = url.pathname.split("/").filter((p) => p.length > 0);
-  return (
-    parts[0] === "client" &&
-    parts[1] === "v4" &&
-    parts[2] === "accounts" &&
-    parts[3] !== undefined &&
-    CF_ACCOUNT_SEGMENT.test(parts[3]) &&
-    parts[4] === "workers"
-  );
-}
-
-/**
- * Host policies for the credentialed profiles — the half of the grant-profile
- * catalog ADR-0006 needs to exist at all, deliberately narrow: `cf-api` covers
- * what `wrangler deploy` calls and nothing else, `js-install` covers reading
- * the npm registry. The catalog's remaining profiles (`rust-install`,
- * `browser-fetch`, `github-api-read`, the rest of `js-install`'s registry set)
- * land with the dispatcher's run migration, and an unimplemented profile
- * contributes no host here rather than a permissive one.
- *
- * Product scope is the containment that matters on `api.cloudflare.com`: a
- * write-scoped token can also edit DNS, delete R2 buckets and read billing, and
- * pinning every path under `/client/v4/accounts/<id>/workers/` is what keeps a
- * hostile `postinstall` holding the injected header from reaching any of it.
- */
-export function profileHostPolicies(params: GrantParams): HostPolicy[] {
-  const byHost = credentialsByHost(params.profiles);
-  const hosts: HostPolicy[] = [];
-  const selected = new Set(params.profiles ?? []);
-
-  if (selected.has("cf-api")) {
-    hosts.push({
-      host: "api.cloudflare.com",
-      credential: byHost.get("api.cloudflare.com"),
-      rules: [
-        // Pre-flight: wrangler verifies the token and lists memberships before
-        // it uploads anything. Both are read-only and neither is account-scoped.
-        { method: "GET", match: (url) => url.pathname === "/client/v4/user/tokens/verify" },
-        { method: "GET", match: (url) => url.pathname === "/client/v4/memberships" },
-        { method: "GET", match: underAccountWorkers },
-        // The upload itself, plus version/deployment creation and the
-        // subdomain/settings writes a first deploy performs.
-        { method: "PUT", match: underAccountWorkers, maxBodyBytes: MAX_CF_UPLOAD_BYTES },
-        { method: "POST", match: underAccountWorkers, maxBodyBytes: MAX_CF_UPLOAD_BYTES },
-        { method: "PATCH", match: underAccountWorkers, maxBodyBytes: MAX_CF_JSON_BYTES },
-      ],
-    });
-  }
-
-  if (selected.has("js-install")) {
-    hosts.push({
-      host: "registry.npmjs.org",
-      credential: byHost.get("registry.npmjs.org"),
-      // Read only. `npm publish` is a write that has an artifact to hand back,
-      // so it belongs on the writeback path (ADR-0006 prefers it) rather than
-      // in a container holding a publish-capable token.
-      rules: [{ method: "GET", match: () => true }],
-    });
-  }
-
-  return hosts;
-}
-
-/**
- * The effective policy for a grant: the repo read, plus every host the selected
- * profiles contribute. One function so the handler and `buildGrant` cannot
- * disagree about what a grant admits — the admitted-set == handled-set
- * invariant depends on both reading the same list.
- */
-export function grantPolicy(params: GrantParams): EgressPolicy {
-  const base = publicRepoPolicy(params);
-  return { ...base, hosts: [...base.hosts, ...profileHostPolicies(params)] };
-}
-
-/**
  * The two calls that admit a host and the two that map a handler, plus the
  * denies. Kept as data so the caller's `finally` can reverse exactly what it
  * applied, and so a grant is reviewable in a test rather than only in a log.
  */
 export type Grant = {
+  /** Which floor this grant carries. `enforce` is the only one that refuses anything. */
+  position: EnforcementPosition;
   /**
-   * Concrete hostnames, never globs. A glob admits hosts no handler is mapped
-   * to, and precedence ends in public egress — the admitted host would get a
-   * direct, uninspected fetch.
+   * Concrete hostnames, never globs — except the single `*` an open posture
+   * admits, which is the whole point of that posture. Under `enforce` a glob
+   * admits hosts no handler is mapped to, and precedence ends in public egress:
+   * the admitted host would get a direct, uninspected fetch.
    */
   allow: string[];
   deny: string[];
   handlers: { host: string; method: keyof typeof egressHandlers; params: GrantParams }[];
+  /**
+   * The catch-all handler an open posture maps, so that a request to a host no
+   * profile names still reaches the engine and can be recorded. Only `report`
+   * sets one — `legacy` records nothing by definition, and `enforce` needs no
+   * catch-all because an unadmitted host never gets that far.
+   */
+  catchAll?: { method: keyof typeof egressHandlers; params: GrantParams };
 };
 
+/** The host pattern an open (legacy / report) posture admits. Matches every hostname. */
+export const OPEN_HOST = "*";
+
 /**
- * Build the grant for a public-read recipe, refusing any grant that would
- * admit a host it does not also inspect.
+ * Build the grant for a recipe's selected profiles, refusing any grant that
+ * would admit a host it does not also inspect.
  *
- * @throws if the admitted set and the handled set differ, or the repo slug is
- * not `owner/name` — a malformed slug would otherwise widen every path rule.
+ * Three shapes, one per rollout position (ADR-0005):
+ *
+ * - `enforce` — the composed profile hosts, each with its handler, plus the
+ *   deny floor. Anything else dies at the container's allowlist.
+ * - `report` — every host admitted and a catch-all handler mapped, so the
+ *   engine sees each request, records what it *would* have refused, and
+ *   forwards it anyway. Same reachability as `legacy`, plus the audit trail
+ *   that makes authoring a profile possible.
+ *
+ *   The wildcard is not a convenience, it is the whole mechanism. `ContainerProxy`
+ *   gates on `allowedHosts` **strictly before** it consults any handler
+ *   (`@cloudflare/containers@0.3.7`, `container.js:209`) and answers a bodyless
+ *   520 for a host that misses — so a report grant that kept the enforce host
+ *   set would be blind to exactly the finding it exists to produce: the host no
+ *   profile names. Note the matcher asymmetry this depends on — the platform's
+ *   `simpleGlobMatch` treats `*` as any substring, while `hostMatches` above
+ *   treats it as exactly one label and would NOT match `registry.npmjs.org`.
+ *   That divergence is deliberate (ours only ever re-checks the deny list,
+ *   where narrower is safe), so neither should be "fixed" to agree.
+ * - `legacy` — every host admitted, nothing mapped, nothing recorded. The
+ *   pre-adoption posture, kept only so a run can move onto the substrate
+ *   without its egress changing on the same day.
+ *
+ * The deny list is empty in both open postures on purpose: a deny there is a
+ * bodyless 520 the engine never sees, which is exactly the undiagnosable
+ * failure the report position exists to replace. Neither posture is weaker than
+ * what the run had before it moved.
+ *
+ * What a report window still cannot see: traffic the container runtime does not
+ * route through the proxy at all. `interceptHttps` is `false` by default in
+ * `@cloudflare/containers` and the substrate's DO does not set it — and it cuts
+ * both ways, because unrouted traffic is equally invisible to `enforce`. A clean
+ * report window is evidence about the traffic the engine observed, never a proof
+ * about all of it.
+ *
+ * @throws if the admitted set and the handled set differ under `enforce`, if a
+ * selection cannot be served, or if the repo slug is not `owner/name`.
  */
 export function buildGrant(params: GrantParams): Grant {
-  if (!/^[\w.-]+\/[\w.-]+$/.test(params.repo))
-    throw new Error(`egress: refusing a grant for malformed repo ${JSON.stringify(params.repo)}`);
   if (!params.containerId)
     throw new Error("egress: refusing a grant with no containerId to bind to");
+
+  const position = params.position ?? "enforce";
+
+  // Validate the selection in every position — a run must not discover its
+  // profile set is unservable on the day it graduates to `enforce`.
+  const problem = selectionProblem(params);
+  if (problem) throw new Error(`egress: ${problem}`);
+
+  if (position !== "enforce") {
+    return {
+      position,
+      allow: [OPEN_HOST],
+      deny: [],
+      handlers: [],
+      ...(position === "report" ? { catchAll: { method: "reportOnly" as const, params } } : {}),
+    };
+  }
+
+  if (!/^[\w.-]+\/[\w.-]+$/.test(params.repo))
+    throw new Error(`egress: refusing a grant for malformed repo ${JSON.stringify(params.repo)}`);
 
   const policy = grantPolicy(params);
   const allow = policy.hosts.map((h) => h.host);
   const handlers = allow.map((host) => ({
     host,
-    method: "publicRepo" as const,
+    method: "granted" as const,
     params,
   }));
 
   const admitted = new Set(allow);
   const handled = new Set(handlers.map((h) => h.host));
-  if (
-    admitted.size !== handled.size ||
-    [...admitted].some((h) => !handled.has(h))
-  )
+  if (admitted.size !== handled.size || [...admitted].some((h) => !handled.has(h)))
     throw new Error("egress: grant would admit a host with no handler");
 
-  return { allow, deny: [...policy.deny], handlers };
+  return { position, allow, deny: [...policy.deny], handlers };
 }
 
 /**
@@ -460,6 +262,11 @@ export type GrantTarget = {
   removeDeniedHost(hostname: string): Promise<void>;
   setOutboundByHost(hostname: string, methodName: string, params?: GrantParams): Promise<void>;
   removeOutboundByHost(hostname: string): Promise<void>;
+  /**
+   * The catch-all handler. The SDK offers no removal call for it, which is why
+   * `revokeGrant` re-points it at `denyAll` rather than clearing it — see there.
+   */
+  setOutboundHandler(methodName: string, params?: GrantParams): Promise<void>;
 };
 
 /**
@@ -472,8 +279,8 @@ export type GrantTarget = {
  */
 export async function applyGrant(target: GrantTarget, grant: Grant): Promise<void> {
   for (const host of grant.deny) await target.denyHost(host);
-  for (const h of grant.handlers)
-    await target.setOutboundByHost(h.host, h.method, h.params);
+  for (const h of grant.handlers) await target.setOutboundByHost(h.host, h.method, h.params);
+  if (grant.catchAll) await target.setOutboundHandler(grant.catchAll.method, grant.catchAll.params);
   for (const host of grant.allow) await target.allowHost(host);
 }
 
@@ -511,6 +318,7 @@ export async function revokeGrant(target: GrantTarget, grant: Grant): Promise<vo
 
   for (const host of grant.allow) await attempt(() => target.removeAllowedHost(host));
   for (const h of grant.handlers) await attempt(() => target.removeOutboundByHost(h.host));
+  if (grant.catchAll) await attempt(() => target.setOutboundHandler("denyAll"));
 
   if (errors.length)
     throw new AggregateError(errors, `egress: ${errors.length} revoke call(s) failed`);
@@ -601,6 +409,9 @@ for (const banned of CONTAINER_AUTHORED_AUTH_HEADERS)
   if (FORWARDED_HEADERS.includes(banned))
     throw new Error(`egress: ${banned} must never be forwarded from a container`);
 
+/** The prefix that separates an audit record from a refusal that actually happened. */
+export const WOULD_DENY_PREFIX = "would-deny: ";
+
 export type ServeDeps = {
   fetch: typeof fetch;
   /**
@@ -635,10 +446,7 @@ export async function serveGrantedRequest(
   ctx: OutboundContext<GrantParams>,
   deps: ServeDeps
 ): Promise<Response> {
-  const denied = (reason: string, at?: URL): Response => {
-    // The record carries the request; the body names only the rule, so a
-    // hostile process cannot use 403 text as an oracle for what else it could
-    // have reached.
+  const record = (reason: string, at?: URL): void => {
     try {
       const target = at ?? new URL(req.url);
       deps.recordDenial?.({
@@ -648,8 +456,15 @@ export async function serveGrantedRequest(
         reason,
       });
     } catch {
-      // An unparseable URL still gets its denial response below.
+      // An unparseable URL still gets its response below.
     }
+  };
+
+  const denied = (reason: string, at?: URL): Response => {
+    // The record carries the request; the body names only the rule, so a
+    // hostile process cannot use 403 text as an oracle for what else it could
+    // have reached.
+    record(reason, at);
     return new Response(`egress denied: ${reason}\n`, {
       status: 403,
       headers: { "content-type": "text/plain; charset=utf-8" },
@@ -659,11 +474,17 @@ export async function serveGrantedRequest(
   // No params means no grant was issued for this host — the handler was
   // reached through a class-level mapping or a stale override. Fail closed.
   const params = ctx.params;
-  if (!params?.repo || !params.containerId)
+  // An open posture carries no repo (it asserts no path rules), so the presence
+  // of a grant is `containerId` — the field every grant has and no stale
+  // class-level mapping does.
+  if (!params || !params.containerId) return denied("no grant is bound to this request");
+  if (!params.repo && (params.position ?? "enforce") === "enforce")
     return denied("no grant is bound to this request");
 
   if (ctx.containerId !== params.containerId)
     return denied("grant was issued to a different container");
+
+  const position = params.position ?? "enforce";
 
   let policy: EgressPolicy;
   try {
@@ -682,6 +503,18 @@ export async function serveGrantedRequest(
   }
 
   const first = decide(policy, req.method, url);
+
+  // The report position: decide, record what enforcement WOULD have refused,
+  // then hand the request on untouched. Untouched is the point — a report run
+  // must behave exactly as it did before it moved, or the window it is being
+  // watched through is not the behaviour being graduated. Nothing here injects
+  // a credential either: an unenforced grant must never be the path on which a
+  // secret first reaches a host (ADR-0006).
+  if (position === "report") {
+    if (!first.ok) record(`${WOULD_DENY_PREFIX}${first.reason}`, url);
+    return deps.fetch(req);
+  }
+
   if (!first.ok) return denied(first.reason, url);
 
   // Buffer once: the body is needed for the cap, for the LFS assertion, and
@@ -793,23 +626,34 @@ export async function serveGrantedRequest(
  * DO layer's wrapper can inject.
  */
 export const egressHandlers = {
-  publicRepo: (
-    req: Request,
-    _env: unknown,
-    ctx: OutboundContext<GrantParams>
-  ): Promise<Response> => serveGrantedRequest(req, ctx, { fetch }),
+  granted: (req: Request, _env: unknown, ctx: OutboundContext<GrantParams>): Promise<Response> =>
+    serveGrantedRequest(req, ctx, { fetch }),
+  reportOnly: (req: Request, _env: unknown, ctx: OutboundContext<GrantParams>): Promise<Response> =>
+    serveGrantedRequest(req, ctx, { fetch }),
+  denyAll: (): Response =>
+    new Response("egress denied: no grant is open\n", {
+      status: 403,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    }),
 };
 
 /** Convenience for callers holding a repo ref rather than a slug. */
 export function grantParamsFor(
-  repo: SubstrateRepoRef,
+  repo: SubstrateRepoRef | undefined,
   containerId: string,
-  opts: { lfs?: boolean; profiles?: readonly GrantProfileName[] } = {}
+  opts: {
+    lfs?: boolean;
+    profiles?: readonly GrantProfileName[];
+    targets?: readonly string[];
+    position?: EnforcementPosition;
+  } = {},
 ): GrantParams {
   return {
-    repo: repoSlug(repo),
+    repo: repo ? repoSlug(repo) : "",
     containerId,
     lfs: opts.lfs,
     profiles: opts.profiles,
+    targets: opts.targets,
+    position: opts.position,
   };
 }

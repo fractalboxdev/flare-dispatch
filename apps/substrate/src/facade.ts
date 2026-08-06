@@ -22,10 +22,10 @@ import type {
   EnsureOutcome,
   ExecInput,
   ExecOutcome,
-  GrantProfileName,
   PoolName,
   PoolStatus,
   QueuePosition,
+  ReadFileOutcome,
   SandboxKey,
   SubstrateFacade,
   SubstrateRecipe,
@@ -39,41 +39,37 @@ import {
 } from "./admission/pools";
 import { makeAdmissionStoreD1, type AdmissionStore } from "./admission/store-d1";
 import { mintTicket, TICKET_TTL_MS } from "./admission/ticket";
+import { selectionProblem } from "./engine/profiles";
 import { sandboxDoName } from "./engine/policy";
 import { sandboxByName, type SubstrateSandboxBase } from "./sandbox-do";
 import type { Env } from "./env";
 
 /**
- * The grant profiles this build actually serves. Selection is the consumer's
- * only input to grant derivation and a name off this list is a typed
- * `recipe-rejected` rather than a silently-empty grant — a run that believes it
- * has `rust-install` and gets deny-all should fail at the facade, where the
- * reason is legible, not deep in a build log.
+ * Well-formedness gate on the one consumer input grants derive from.
+ *
+ * The profile/target half delegates to the catalog (`selectionProblem`), which
+ * is now the served list: a name it does not carry is a typed `recipe-rejected`
+ * at the boundary rather than a silently-empty grant — a run that believes it
+ * has `rust-install` and gets deny-all should fail here, where the reason is
+ * legible, not deep in a build log. The catalog also keeps ADR-0005's
+ * "no repo ⇒ no egress" rule, so a profile cannot compose onto nothing.
  */
-const SERVED_PROFILES: readonly GrantProfileName[] = ["public-repo-read", "cf-api", "js-install"];
-
-/** Well-formedness gate on the one consumer input grants derive from. */
 function recipeProblem(recipe: SubstrateRecipe): string | undefined {
   if (!Number.isInteger(recipe.version) || recipe.version < 0)
     return "recipe.version must be a non-negative integer";
   if (recipe.repo && !/^[\w.-]+\/[\w.-]+$/.test(`${recipe.repo.owner}/${recipe.repo.name}`))
     return "recipe.repo is not an owner/name pair";
-  const unserved = recipe.profiles?.find((p) => !SERVED_PROFILES.includes(p));
-  if (unserved !== undefined)
-    return `grant profile ${unserved} is not served yet — ${SERVED_PROFILES.join(", ")} only`;
-  // A profile grants hosts on top of the repo read, and `buildGrant` derives
-  // both from one params object. Without a repo there is nothing to build, and
-  // ADR-0005's "no repo ⇒ no egress" stays the rule rather than becoming
-  // "no repo ⇒ whatever the profile says".
-  if (!recipe.repo && (recipe.profiles?.length ?? 0) > 0)
-    return "a grant profile needs a repo to compose onto";
-  return undefined;
+  return selectionProblem({
+    repo: recipe.repo ? `${recipe.repo.owner}/${recipe.repo.name}` : "",
+    containerId: "unbound",
+    lfs: recipe.lfs,
+    profiles: recipe.profiles,
+    targets: recipe.targets,
+    position: recipe.enforcement,
+  });
 }
 
-export abstract class SubstrateFacadeBase
-  extends WorkerEntrypoint<Env>
-  implements SubstrateFacade
-{
+export abstract class SubstrateFacadeBase extends WorkerEntrypoint<Env> implements SubstrateFacade {
   protected abstract readonly consumer: ConsumerId;
 
   private get store(): AdmissionStore {
@@ -115,7 +111,12 @@ export abstract class SubstrateFacadeBase
     const { enqueuedAt } = await this.store.enqueue(id, this.consumer, pool);
     const attempt = await this.store.attempt(id, this.consumer, pool, this.caps[pool]);
     if (!attempt.admitted)
-      return { admitted: false, position: attempt.position, poolBusy: attempt.poolBusy, enqueuedAt };
+      return {
+        admitted: false,
+        position: attempt.position,
+        poolBusy: attempt.poolBusy,
+        enqueuedAt,
+      };
 
     const expiresAt = Date.now() + TICKET_TTL_MS;
     const ticket = await mintTicket(this.env.TICKET_SECRET, {
@@ -126,8 +127,7 @@ export abstract class SubstrateFacadeBase
     });
     const stub = sandboxByName(this.namespaceFor(pool), id);
     const stored = await stub.admit(this.consumer, key, ticket);
-    if (!stored.ok)
-      throw new Error(`ticket store refused: ${stored.reason ?? "unknown"}`);
+    if (!stored.ok) throw new Error(`ticket store refused: ${stored.reason ?? "unknown"}`);
     return { admitted: true, stub, expiresAt };
   }
 
@@ -146,7 +146,10 @@ export abstract class SubstrateFacadeBase
     } catch (err) {
       return {
         ok: false,
-        refusal: { kind: "recipe-rejected", reason: err instanceof Error ? err.message : "bad key" },
+        refusal: {
+          kind: "recipe-rejected",
+          reason: err instanceof Error ? err.message : "bad key",
+        },
       };
     }
 
@@ -192,7 +195,10 @@ export abstract class SubstrateFacadeBase
     } catch (err) {
       return {
         ok: false,
-        refusal: { kind: "recipe-rejected", reason: err instanceof Error ? err.message : "bad key" },
+        refusal: {
+          kind: "recipe-rejected",
+          reason: err instanceof Error ? err.message : "bad key",
+        },
       };
     }
 
@@ -233,6 +239,28 @@ export abstract class SubstrateFacadeBase
         granted: outcome.granted,
         killed: outcome.killed,
       };
+    } catch (err) {
+      return {
+        ok: false,
+        refusal: {
+          kind: "sandbox-unavailable",
+          reason: err instanceof Error ? err.message : "substrate error",
+        },
+      };
+    }
+  }
+
+  async readFile(key: SandboxKey, path: string): Promise<ReadFileOutcome> {
+    if (!path || path.trim() !== path)
+      return { ok: false, refusal: { kind: "recipe-rejected", reason: "path is empty or padded" } };
+    try {
+      const stub = await this.rowStub(this.executionId(key));
+      if (!stub)
+        return { ok: false, refusal: { kind: "sandbox-unavailable", reason: "no container" } };
+      const result = await stub.readWorkspaceFile(path);
+      return result.ok
+        ? { ok: true, content: result.content }
+        : { ok: false, refusal: { kind: "sandbox-unavailable", reason: result.reason } };
     } catch (err) {
       return {
         ok: false,

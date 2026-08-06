@@ -83,6 +83,7 @@ const facadeFake: SubstrateFacade = {
     ok: false,
     refusal: { kind: "ticket-rejected", reason: "no admitted ticket" },
   }),
+  readFile: async () => ({ ok: true, content: "" }),
   checkpoint: async () => ({ ok: true }),
   abort: async () => ({ ok: true, killed: 0 }),
   admissionEnqueue: async () => ({ pool: "lean", position: 0, poolBusy: 0, cap: 6 }),

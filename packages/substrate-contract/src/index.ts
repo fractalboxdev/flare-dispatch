@@ -34,9 +34,9 @@ export type SubstrateRepoRef = {
 
 /**
  * Named, substrate-reviewed grant profiles (ADR-0005). A recipe may select
- * among them; it can never define one. v1 of the engine serves
- * `public-repo-read` (derived from `repo`); the rest of the catalog lands with
- * the dispatcher's run migration.
+ * among them; it can never define one. The full catalog is served — the host
+ * sets, method/path rules and deny-overrides live in the substrate's
+ * `engine/profiles.ts`, which is the only place they can be changed.
  */
 export type GrantProfileName =
   | "public-repo-read"
@@ -45,6 +45,23 @@ export type GrantProfileName =
   | "browser-fetch"
   | "cf-api"
   | "github-api-read";
+
+/**
+ * Per-run rollout position for the egress floor (ADR-0005). A run graduates
+ * `legacy` → `report` → `enforce`, and only after a clean report window.
+ *
+ * - `legacy` — the pre-substrate posture: every host reachable, nothing
+ *   inspected, nothing recorded. What a dispatcher run had before adoption.
+ * - `report` — the same reachability, but every request is decided against the
+ *   grant the run *would* get and each refusal is recorded as a would-be denial
+ *   (`would-deny: …`). This is the grant-authoring loop; it blocks nothing.
+ * - `enforce` — deny-all with the composed grant: unadmitted hosts never leave
+ *   the container, admitted ones are method/path-asserted, refusals are 403s.
+ *
+ * Absent ⇒ `enforce`. A consumer that forgets the field gets the floor, never
+ * the opt-out.
+ */
+export type EnforcementPosition = "legacy" | "report" | "enforce";
 
 /**
  * What the substrate needs to build (or restore) an execution environment and
@@ -62,6 +79,23 @@ export type SubstrateRecipe = {
   lfs?: boolean;
   /** Profile selection (never definition). Omitted ⇒ derived from `repo` alone. */
   profiles?: readonly GrantProfileName[];
+  /**
+   * Concrete hostnames for a profile that accepts dynamic targets (today only
+   * `browser-fetch`: an e2e run drives an app whose host is a dispatch input).
+   *
+   * The security property is where the check happens, not that one happens: a
+   * consumer validates each host against the **host-pattern schema declared in
+   * its reviewed run definition** and fails the dispatch when it does not match
+   * (ADR-0005). By the time a host reaches here it has already passed that gate,
+   * so the substrate's job is narrower — refuse a target when no selected
+   * profile accepts one, and admit nothing that is not listed.
+   */
+  targets?: readonly string[];
+  /**
+   * Rollout position for this run's egress floor. Absent ⇒ `enforce`.
+   * Only reviewed consumer code sets it; no dispatch payload reaches this field.
+   */
+  enforcement?: EnforcementPosition;
 };
 
 /** `owner/name` — the form egress path rules are asserted against. */
@@ -121,9 +155,7 @@ export type PoolName = "lean" | "browser" | "agent" | "task";
  * the consumer's own durable machinery via admissionEnqueue/Attempt/Release —
  * ensureSandbox never blocks on a queue in either mode.
  */
-export type AdmissionMode =
-  | { mode: "refuse" }
-  | { mode: "queue"; maxQueueAgeMs: number };
+export type AdmissionMode = { mode: "refuse" } | { mode: "queue"; maxQueueAgeMs: number };
 
 export type QueuePosition = {
   pool: PoolName;
@@ -135,7 +167,10 @@ export type QueuePosition = {
 };
 
 export type AttemptOutcome =
-  | { admitted: true; /** ms-epoch the admission ticket expires; heartbeat by exec'ing. */ expiresAt: number }
+  | {
+      admitted: true;
+      /** ms-epoch the admission ticket expires; heartbeat by exec'ing. */ expiresAt: number;
+    }
   | ({ admitted: false } & QueuePosition);
 
 export type PoolStatus = {
@@ -305,16 +340,22 @@ export type ExecOutcome =
     }
   | { ok: false; refusal: SubstrateRefusal };
 
-/** Why a checkpoint is being taken. Open set; these are the expected values. */
-export type CheckpointReason =
-  | "turn-boundary"
-  | "awaiting-approval"
-  | "final"
-  | (string & {});
-
-export type CheckpointOutcome =
-  | { ok: true }
+/**
+ * A container file read back into the consumer's Worker. The companion to
+ * `execUnderGrant` for output too large for a receipt tail — a run writes the
+ * full text to a file and reads it here (the dispatcher's `pr-review` does this
+ * with `git diff --output`). Bounding what a consumer does with the content is
+ * the consumer's problem; bounding what leaves the container is not this call's
+ * job — the workload already authored the bytes.
+ */
+export type ReadFileOutcome =
+  | { ok: true; content: string }
   | { ok: false; refusal: SubstrateRefusal };
+
+/** Why a checkpoint is being taken. Open set; these are the expected values. */
+export type CheckpointReason = "turn-boundary" | "awaiting-approval" | "final" | (string & {});
+
+export type CheckpointOutcome = { ok: true } | { ok: false; refusal: SubstrateRefusal };
 
 export type AbortOutcome = { ok: true; killed: number };
 
@@ -367,6 +408,13 @@ export interface SubstrateFacade {
    * identity. Consumers never construct grants.
    */
   execUnderGrant(key: SandboxKey, input: ExecInput): Promise<ExecOutcome>;
+
+  /**
+   * Read one container file's full text. No grant is involved and no command
+   * runs — this is a read of the execution's own filesystem, behind the same
+   * ticket gate every other call crosses.
+   */
+  readFile(key: SandboxKey, path: string): Promise<ReadFileOutcome>;
 
   /** Snapshot the workspace and stop the container; releases the admission slot. */
   checkpoint(key: SandboxKey, reason: CheckpointReason): Promise<CheckpointOutcome>;

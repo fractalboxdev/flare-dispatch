@@ -56,6 +56,9 @@ importers:
       '@fractalboxdev/flare-dispatch-runtime-cf':
         specifier: workspace:*
         version: link:../../packages/runtime-cf
+      '@fractalboxdev/flare-dispatch-substrate-contract':
+        specifier: workspace:*
+        version: link:../../packages/substrate-contract
       effect:
         specifier: 3.21.2
         version: 3.21.2
@@ -176,6 +179,9 @@ importers:
       '@fractalboxdev/flare-dispatch-github-app':
         specifier: workspace:*
         version: link:../github-app
+      '@fractalboxdev/flare-dispatch-substrate-contract':
+        specifier: workspace:*
+        version: link:../substrate-contract
       effect:
         specifier: 3.21.2
         version: 3.21.2
