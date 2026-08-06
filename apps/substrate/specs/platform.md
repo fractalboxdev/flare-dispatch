@@ -115,11 +115,3 @@ and 3 starts when the facade contract review lands.
 - May BYOC operators author custom grant profiles, and behind what review gate ([ADR-0005](adr/0005-deny-all-egress-with-grant-profiles.md) defers this).
 - Whether in-flight Workflows instances resume on new-deploy code (unverified platform behavior;
   affects consumer bake periods, not the substrate's contract).
-
-## Provenance
-
-Decisions here consolidate a 2026-08-06 cross-repo audit (three parallel code mappers, overlap
-analysis, three-position adversarial judging) and a five-lens spec review panel (product positioning,
-adoption/DX, platform architecture, security, contrarian red team): 5× approve-with-changes, 0
-rejects; all 24 blocking issues folded in. The contrarian's close: "no attack line survived against
-the central architecture." Per-decision context lives in [`specs/adr/`](adr/README.md).

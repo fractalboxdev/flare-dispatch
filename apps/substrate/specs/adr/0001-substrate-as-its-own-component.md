@@ -5,7 +5,7 @@
 
 ## Context
 
-A cross-repo audit (2026-08-06) found fractalbot and flare-dispatch building the same execution
+fractalbot and flare-dispatch were building the same execution
 environment twice: sandbox admission, CF Workflows quirks (instance-id sanitization, step
 idempotency, result clamps), container-FS-is-not-durable → R2 externalization, hand-built toolchain
 images, and two bespoke model stacks. Security maturity is inverted: fractalbot's egress engine
@@ -34,6 +34,3 @@ and drive the substrate through a narrow facade.
   (ADR-0005) and every workload inherits the stricter threat model as a floor.
 - The substrate must stay consumer-neutral: no verdicts (ADR-0008), no Slack or GitHub semantics in its
   types, execution facts only.
-- A five-lens review panel returned 5× approve-with-changes, 0 rejects on the founding spec; the
-  contrarian's close — "no attack line survived against the central architecture" — with all 24
-  blocking issues folded into `specs/platform.md`.
