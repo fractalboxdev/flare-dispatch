@@ -155,7 +155,32 @@ export type RunSpec<I, O, IEnc, OEnc> = {
    * Schedule mode is exempt (crons self-pace).
    */
   readonly cooldown?: CooldownSpec<I>;
+  /**
+   * Declares that this run PAUSES for a human decision partway through — it
+   * hibernates in `step.waitForEvent` until a person approves or rejects, and
+   * cannot finish without one.
+   *
+   * Declarative because a dispatcher cannot see a `waitForEvent` inside a run
+   * body, and some dispatch paths have nowhere to ask. A fire-and-forget
+   * origin (a Slack slash command, say) must refuse such a run at the gate
+   * with an explanation rather than instantiate a Workflow that parks for
+   * hours while the caller sees nothing.
+   *
+   * NOT for a run that merely waits on an external event — `email-otp-login`
+   * hibernates for a verification email, which arrives on its own. The
+   * distinction is whether a PERSON has to decide.
+   */
+  readonly humanGate?: HumanGateSpec;
   readonly run: (input: I) => Effect.Effect<O, RunError, RunContext>;
+};
+
+/**
+ * A run's human-decision gate. `reason` is operator-facing prose, quoted
+ * verbatim in the refusal a fire-and-forget dispatch path answers with, so it
+ * reads as a sentence fragment completing "…needs a human decision because X".
+ */
+export type HumanGateSpec = {
+  readonly reason: string;
 };
 
 /** A defined run — a portable value, not bound to any runtime. */
@@ -224,6 +249,11 @@ export const defineRun = <I, O, IEnc, OEnc>(spec: RunSpec<I, O, IEnc, OEnc>): Ru
         `defineRun: \`writeback.maxFiles\` must be positive, got ${wb.maxFiles} for run "${spec.name}"`,
       );
     }
+  }
+  if (spec.humanGate !== undefined && spec.humanGate.reason.trim().length === 0) {
+    throw new Error(
+      `defineRun: \`humanGate.reason\` must be non-empty — it is quoted verbatim in the refusal a fire-and-forget dispatch answers with — for run "${spec.name}"`,
+    );
   }
   return { ...spec, _tag: "Run" } as Run<I, O>;
 };

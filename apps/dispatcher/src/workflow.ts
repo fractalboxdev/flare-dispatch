@@ -88,6 +88,13 @@ import { checkRunNameFor } from "./check-name";
 import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "./log-token";
 import { resolveMailboxLinkSecret, signMailboxToken } from "./mailbox-token";
 import { resolveAgentProxySecret, signAgentToken } from "./agent-token";
+import {
+  deliverSlackVerdict,
+  readSlackNotifyUrl,
+  renderSlackVerdict,
+  resolveSlackNotifySecret,
+} from "./slack-notify";
+import { DispatchSource } from "./slack-origin";
 import type { Env } from "./env";
 
 /** The repo/ref/sha context a dispatch carries — `04-gha-integration § body`. */
@@ -145,6 +152,16 @@ const DispatchPayload = Schema.Struct({
    * relative paths, as before.
    */
   origin: Schema.optional(Schema.String),
+  /**
+   * The Slack origin this execution was re-dispatched from, when it came off
+   * the batch path (routes/dispatch.ts § 4.5). Its only job here is the
+   * verdict callback at the finalize boundary — the dispatcher posts the
+   * result back to the Slack ingress, which lands it in the thread with the
+   * bot token this Worker never holds. Absent for every other dispatch path.
+   *
+   * Distinct from `origin` above, which is the dispatcher's own public URL.
+   */
+  source: Schema.optional(DispatchSource),
 });
 type DispatchPayload = Schema.Schema.Type<typeof DispatchPayload>;
 
@@ -282,6 +299,9 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // Build the per-execution live runtime: D1 + R2 + Containers + Checks, with
     // `StepRunner` bound to *this* Workflow's `step` so each `step(...)` in the
     // run body is a real durable `WorkflowStep.do(...)` checkpoint.
+    // The binding env, captured for the Effect generator below (`this` is not
+    // bound inside a plain `function*`).
+    const env = this.env;
     const db = this.env.RUNS_METADATA;
     // Captured for the post-run writeback step: the R2 bucket the container's
     // changed-files artifact landed in, and the App config that mints the
@@ -954,6 +974,52 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
               Effect.logError(`notify: email send failed — ${cause}`),
             ),
           );
+      }
+
+      // Slack verdict callback — the in-thread half of the same finalize
+      // boundary the check-run just completed. Only for a run that CAME from
+      // the Slack batch path: the payload's `source` is the thread's return
+      // address. This dispatcher signs and POSTs; the Slack ingress verifies
+      // and posts, because the bot token lives there and stays there.
+      //
+      // Best-effort, exactly like the email above: a missing callback URL, a
+      // 500 from the receiver, or a timeout is a logged line. The run's
+      // verdict is already recorded in D1 and on the check-run.
+      const slackOrigin = payload.source;
+      if (slackOrigin !== undefined) {
+        const notifyUrl = yield* Effect.promise(() => readSlackNotifyUrl(env));
+        const notifySecret = resolveSlackNotifySecret(env);
+        if (notifyUrl === undefined || notifySecret === undefined) {
+          yield* Effect.logWarning(
+            `slack-notify: verdict for ${payload.executionId} not delivered — ${
+              notifyUrl === undefined
+                ? "no callback URL configured (slack-origin.notify-url / SLACK_NOTIFY_URL)"
+                : "no signing key (SLACK_NOTIFY_SECRET / HMAC_SECRET)"
+            }`,
+          );
+        } else {
+          const verdict = renderSlackVerdict({
+            executionId: payload.executionId,
+            run: payload.run,
+            status,
+            repo: payload.github.repo,
+            sha: payload.github.sha,
+            origin: slackOrigin,
+            checkRunName,
+            ...(logsBaseUrl !== undefined ? { logsUrl: logsBaseUrl } : {}),
+            ...(detailsUrl !== undefined ? { detailsUrl } : {}),
+            ...(failureMd !== undefined ? { failureSummary: failureMd } : {}),
+            ...(skipReason !== undefined ? { skipReason } : {}),
+          });
+          const delivery = yield* Effect.promise(() =>
+            deliverSlackVerdict({ url: notifyUrl, secret: notifySecret, payload: verdict }),
+          );
+          if (delivery.delivered) {
+            yield* Effect.logInfo(`slack-notify: verdict delivered (${delivery.status})`);
+          } else {
+            yield* Effect.logError(`slack-notify: verdict not delivered — ${delivery.reason}`);
+          }
+        }
       }
     });
 
