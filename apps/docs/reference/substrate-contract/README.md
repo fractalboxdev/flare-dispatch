@@ -74,6 +74,30 @@ identity. Consumers never construct grants.
 
 `Promise`\<[`ExecOutcome`](#execoutcome)\>
 
+##### readFile()
+
+```ts
+readFile(key, path): Promise<ReadFileOutcome>;
+```
+
+Read one container file's full text. No grant is involved and no command
+runs — this is a read of the execution's own filesystem, behind the same
+ticket gate every other call crosses.
+
+###### Parameters
+
+###### key
+
+`string`
+
+###### path
+
+`string`
+
+###### Returns
+
+`Promise`\<[`ReadFileOutcome`](#readfileoutcome)\>
+
 ##### checkpoint()
 
 ```ts
@@ -178,6 +202,28 @@ Release the slot or leave the line. Idempotent.
 
 `Promise`\<`void`\>
 
+##### denials()
+
+```ts
+denials(key): Promise<readonly DenialEvent[]>;
+```
+
+The execution's egress denials, aggregated (ADR-0005). Retrieved alongside
+its artifacts — a consumer renders them into a run's diagnostics or a
+thread; the container is never told any of it. Empty when nothing was
+refused, which is also what a `report`-mode run wants to see before it
+graduates to `enforce`.
+
+###### Parameters
+
+###### key
+
+`string`
+
+###### Returns
+
+`Promise`\<readonly [`DenialEvent`](#denialevent)[]\>
+
 ##### poolStatus()
 
 ```ts
@@ -239,9 +285,36 @@ type GrantProfileName =
 ```
 
 Named, substrate-reviewed grant profiles (ADR-0005). A recipe may select
-among them; it can never define one. v1 of the engine serves
-`public-repo-read` (derived from `repo`); the rest of the catalog lands with
-the dispatcher's run migration.
+among them; it can never define one. The full catalog is served — the host
+sets, method/path rules and deny-overrides live in the substrate's
+`engine/profiles.ts`, which is the only place they can be changed.
+
+***
+
+### EnforcementPosition
+
+```ts
+type EnforcementPosition = "legacy" | "report" | "enforce";
+```
+
+Per-run rollout position for the egress floor (ADR-0005). A run graduates
+`legacy` → `report` → `enforce`, and only after a clean report window.
+
+- `legacy` — the pre-substrate posture: every host reachable, nothing
+  inspected, nothing recorded. What a dispatcher run had before adoption.
+- `report` — the same reachability, but every request is decided against the
+  grant the run *would* get and each refusal is recorded as a would-be denial
+  (`would-deny: …`). This is the grant-authoring loop; it blocks nothing.
+  It records the missing-host case as well as the wrong-path one, because the
+  position admits every host precisely so each request reaches the engine.
+  It is still bounded by what the container runtime routes through that
+  engine — so a clean window is evidence about observed traffic, not a proof
+  that a profile is complete.
+- `enforce` — deny-all with the composed grant: unadmitted hosts never leave
+  the container, admitted ones are method/path-asserted, refusals are 403s.
+
+Absent ⇒ `enforce`. A consumer that forgets the field gets the floor, never
+the opt-out.
 
 ***
 
@@ -253,6 +326,8 @@ type SubstrateRecipe = {
   repo?: SubstrateRepoRef;
   lfs?: boolean;
   profiles?: readonly GrantProfileName[];
+  targets?: readonly string[];
+  enforcement?: EnforcementPosition;
 };
 ```
 
@@ -294,6 +369,87 @@ optional profiles?: readonly GrantProfileName[];
 ```
 
 Profile selection (never definition). Omitted ⇒ derived from `repo` alone.
+
+##### targets?
+
+```ts
+optional targets?: readonly string[];
+```
+
+Concrete hostnames for a profile that accepts dynamic targets (today only
+`browser-fetch`: an e2e run drives an app whose host is a dispatch input).
+
+The security property is where the check happens, not that one happens: a
+consumer validates each host against the **host-pattern schema declared in
+its reviewed run definition** and fails the dispatch when it does not match
+(ADR-0005). By the time a host reaches here it has already passed that gate,
+so the substrate's job is narrower — refuse a target when no selected
+profile accepts one, and admit nothing that is not listed.
+
+##### enforcement?
+
+```ts
+optional enforcement?: EnforcementPosition;
+```
+
+Rollout position for this run's egress floor. Absent ⇒ `enforce`.
+Only reviewed consumer code sets it; no dispatch payload reaches this field.
+
+***
+
+### CredentialDescriptor
+
+```ts
+type CredentialDescriptor = {
+  secretName: string;
+  host: string;
+  headerTemplate: string;
+};
+```
+
+How a credential attaches to one host, for the writes that cannot ride
+worker-side writeback (ADR-0006). The descriptor names a secret; it never
+carries one, and nothing in it ever reaches a container.
+
+The shape is exported here so consumers can *read* what a profile attaches
+(documentation, refusal text) — never author it. Descriptors are frozen in
+the substrate's reviewed catalog and selected by `GrantProfileName`, the same
+rule ADR-0005 applies to grants: a payload may select among pre-authored
+definitions, never define one. A consumer-supplied descriptor would let a
+dispatch body name the secret it wants injected, which is the whole attack.
+
+#### Properties
+
+##### secretName
+
+```ts
+secretName: string;
+```
+
+The substrate Worker's own secret binding name (`CLOUDFLARE_API_TOKEN`).
+Resolvable only against a frozen allowlist inside the substrate, so a
+mis-authored descriptor cannot reach `TICKET_SECRET`.
+
+##### host
+
+```ts
+host: string;
+```
+
+The exact host this credential attaches to. Never a glob — see below.
+
+##### headerTemplate
+
+```ts
+headerTemplate: string;
+```
+
+The header line to send, `Name: value`, with `{{secret}}` as the single
+substitution point — e.g. `authorization: Bearer {{secret}}`. A line rather
+than a pair because the ADR's descriptor is a triple; it is parsed and
+validated once at catalog authoring time, and a template with a CR/LF, a
+malformed name, or anything other than exactly one `{{secret}}` is refused
+before it can be used.
 
 ***
 
@@ -383,6 +539,37 @@ type AttemptOutcome =
   admitted: false;
 } & QueuePosition;
 ```
+
+#### Union Members
+
+##### Type Literal
+
+```ts
+{
+  admitted: true;
+  expiresAt: number;
+}
+```
+
+###### admitted
+
+```ts
+admitted: true;
+```
+
+###### expiresAt
+
+```ts
+expiresAt: number;
+```
+
+ms-epoch the admission ticket expires; heartbeat by exec'ing.
+
+***
+
+\{
+  `admitted`: `false`;
+\} & [`QueuePosition`](#queueposition)
 
 ***
 
@@ -999,6 +1186,29 @@ Processes the pre-revoke kill reported.
   refusal: SubstrateRefusal;
 }
 ```
+
+***
+
+### ReadFileOutcome
+
+```ts
+type ReadFileOutcome = 
+  | {
+  ok: true;
+  content: string;
+}
+  | {
+  ok: false;
+  refusal: SubstrateRefusal;
+};
+```
+
+A container file read back into the consumer's Worker. The companion to
+`execUnderGrant` for output too large for a receipt tail — a run writes the
+full text to a file and reads it here (the dispatcher's `pr-review` does this
+with `git diff --output`). Bounding what a consumer does with the content is
+the consumer's problem; bounding what leaves the container is not this call's
+job — the workload already authored the bytes.
 
 ***
 
