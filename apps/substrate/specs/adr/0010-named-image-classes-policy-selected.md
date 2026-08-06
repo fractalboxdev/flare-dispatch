@@ -32,6 +32,24 @@ default and re-opened through a grant, or it does not land.
 
 ## Consequences
 
+- The `task` class builds from its own `infra/Dockerfile.task`, not another `image_vars` branch of
+  the shared file. The base tag is half of [ADR-0011](0011-sdk-pin-as-security-surface.md)'s pinned
+  pair — the SDK speaks HTTP/RPC to a server baked into the image — and the two workers' pins
+  differ: this one runs `@cloudflare/sandbox` 0.12.4, the dispatcher 0.10.1. What it bakes is now
+  flare-dispatch's own requirement, stated once in that file: OpenCode as the harness CLI, git-lfs,
+  CPython 3.11 with a working `venv`, pnpm, ripgrep, a native toolchain, and the CA bundle as env
+  so an intercepted request validates against the store the runtime writes to rather than each
+  tool's vendored roots. No consumer names any of it.
+- Two of those are decisions rather than installs, and both follow from deny-all. git-lfs ships as a
+  binary with **no** system smudge filter, so a clone reaches for LFS objects only under a recipe
+  that opened the grant for them; a filter would fail every unasked-for LFS checkout on a denied
+  fetch. pnpm is installed globally rather than behind a corepack shim, which resolves the
+  repository's pinned version by downloading it — a fetch the v1 grant catalog refuses.
+- Sizing is `standard-3` × 4, which is what the ceiling leaves rather than what the pool wants: the
+  four caps already sum to `CONTAINERS_CEILING` (16) while the dispatcher still holds 40 instances
+  of the same account, so raising `task` today means taking them off another pool. The post-drain
+  target is 12 at the same instance type — a task installs one repository and runs its suite, which
+  never grows into the dispatcher's `standard-4`.
 - fractalbot's stage-3 bind does not wait on an unbuilt planning system.
 - A future isolate tier enters as a policy-selected backend under the same invariant, or not at all —
   now with a concrete adoption bar. `@cloudflare/computer` (early preview, 2026-08-03) ships the

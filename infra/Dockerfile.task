@@ -1,0 +1,205 @@
+# The substrate's `task` image class — the environment fractalbot's repo work
+# runs in (apps/substrate/specs/adr/0010-named-image-classes-policy-selected.md).
+#
+# A task clones one repository, installs its dependencies, runs its suite,
+# patches, and re-runs — driven either by the harness CLI or by commands the
+# substrate execs. Everything baked below is on that path.
+#
+# Its own file rather than another `image_vars` branch of Dockerfile.sandbox,
+# because the two are pinned to different sandbox SDK versions. The SDK speaks
+# an HTTP/RPC protocol to a server baked into the image, so the base tag has to
+# match the `@cloudflare/sandbox` version the Durable Object half runs:
+# apps/substrate/package.json pins 0.12.4, while Dockerfile.sandbox stays on
+# 0.10.1 for the dispatcher, whose own pin has not moved. ADR-0011 makes that
+# pair a security-reviewed surface — bump the tag and the package together,
+# never one alone.
+#
+# The `-python` variant is the base rather than the lean default: it carries
+# CPython 3.11.14 from python-build-standalone with the checksum verified in
+# the base's own Dockerfile, plus the symlinks, `update-alternatives` and
+# `ld.so.conf.d` entry already wired. Ubuntu 22.04's own python3 is 3.10, which
+# leaves support in October 2026 and is already under the floor of a growing
+# share of repositories. The variant's data-science wheels (numpy, pandas,
+# matplotlib, ipython) come along unused; that is the price of not owning a
+# CPython install of our own.
+#
+# amd64 only, deliberately: Cloudflare Containers runs amd64 and this tag
+# publishes no arm64 manifest, so every checksum below is the amd64 asset's and
+# a local build needs `--platform linux/amd64`.
+FROM docker.io/cloudflare/sandbox:0.12.4-python
+
+# ── git-lfs ─────────────────────────────────────────────────────────────────
+#
+# The facade contract carries `recipe.lfs`, and the grant it opens admits the
+# LFS object host — which buys nothing when the binary that speaks the protocol
+# is absent. Taken from the upstream release with its published checksum rather
+# than from apt: jammy ships 3.0.2 (February 2022), and an apt version is a
+# fact of whatever the archive holds on build day rather than of this file.
+#
+# Installed as a plain binary and NOT wired up with `git lfs install`. The
+# system smudge filter would make every clone of an LFS repository reach for
+# objects, and `recipe.lfs` is off by default — so an unasked-for clone would
+# fail its checkout on a denied fetch. Left unwired, a clone lands pointer
+# files and a task whose recipe did ask for LFS runs `git lfs pull` itself.
+ARG GIT_LFS_VERSION=3.7.1
+ARG GIT_LFS_SHA256=1c0b6ee5200ca708c5cebebb18fdeb0e1c98f1af5c1a9cba205a4c0ab5a5ec08
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSLO "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-linux-amd64-v${GIT_LFS_VERSION}.tar.gz"; \
+    echo "${GIT_LFS_SHA256}  git-lfs-linux-amd64-v${GIT_LFS_VERSION}.tar.gz" | sha256sum -c -; \
+    tar -xzf "git-lfs-linux-amd64-v${GIT_LFS_VERSION}.tar.gz"; \
+    install -m 0755 "git-lfs-${GIT_LFS_VERSION}/git-lfs" /usr/local/bin/git-lfs; \
+    rm -rf "/tmp/git-lfs-${GIT_LFS_VERSION}" "/tmp/git-lfs-linux-amd64-v${GIT_LFS_VERSION}.tar.gz"; \
+    git lfs version
+
+# ── ripgrep ─────────────────────────────────────────────────────────────────
+#
+# What a harness greps a checkout with. The musl asset is statically linked, so
+# it is one file with no runtime coupling to the base's glibc.
+ARG RIPGREP_VERSION=15.2.0
+ARG RIPGREP_SHA256=33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSLO "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz"; \
+    echo "${RIPGREP_SHA256}  ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" | sha256sum -c -; \
+    tar -xzf "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz"; \
+    install -m 0755 "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg" /usr/local/bin/rg; \
+    rm -rf "/tmp/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl" "/tmp/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz"; \
+    rg --version
+
+# ── pnpm ────────────────────────────────────────────────────────────────────
+#
+# Installed globally, deliberately NOT through `corepack enable` — the shim
+# resolves the version from a repository's `packageManager` field and downloads
+# it on first use. Under deny-all egress the registry is not an admitted host
+# (the v1 grant catalog serves `public-repo-read`), so every `pnpm` invocation
+# would become a denied fetch. A global install runs offline; once the
+# `js-install` profile admits the registry, a repository that pins a different
+# pnpm can still bootstrap it itself.
+ARG PNPM_VERSION=11.20.0
+RUN set -eux; \
+    npm install -g "pnpm@${PNPM_VERSION}"; \
+    pnpm --version
+
+# ── OpenCode — the harness CLI ──────────────────────────────────────────────
+#
+# Pinned here rather than inherited from the base's own `-opencode` variant.
+# That stage runs `npm i -g opencode-ai` unpinned, so its tag freezes a version
+# it never names; riding it would also weld the harness to the sandbox SDK tag,
+# which ADR-0011 makes a security-reviewed bump. Separate installs keep a
+# harness bump a harness bump and an SDK patch an SDK patch.
+#
+# `opencode-ai` resolves its platform binary from an optionalDependency at
+# install time, so nothing is fetched on first run inside a sandbox — which
+# matters, because at that point there is no grant for npm.
+#
+# One caveat on reproducibility: its postinstall chooses between the AVX2 and
+# baseline x64 builds by reading the BUILD host's `/proc/cpuinfo` and then
+# running the binary to confirm it works. So which of the two ends up wired to
+# `bin/opencode.exe` is a property of the machine that built the image. Both
+# packages are left in place (173 MB each) rather than pruned to the chosen
+# one — that unused variant is the only thing to fall back to if a container
+# host turns out to lack the instruction set the builder had.
+#
+# Harness state lands under `$HOME`, outside `/workspace`, and `/workspace` is
+# what `checkpoint` snapshots. So OpenCode's memory is per-task by
+# construction: that is the answer to the question fractalbot's state-routing
+# ADR leaves open per harness, and it is the one that fits task-scoped
+# sandboxes — the planner's transcript lives in the consumer's Durable Object,
+# not on this disk.
+ARG OPENCODE_VERSION=1.18.14
+RUN set -eux; \
+    npm install -g "opencode-ai@${OPENCODE_VERSION}"; \
+    opencode --version
+
+# ── python3 + venv ──────────────────────────────────────────────────────────
+#
+# CPython comes from the base variant, and on that base `python3 -m venv` does
+# not work. The distribution was built for prefix `/install` and relocated to
+# `/usr/local/python`; the system interpreter still finds its stdlib because it
+# searches relative to its own executable, but a venv's `pyvenv.cfg` records
+# `home = /usr/local/bin` (the symlink it was launched through), the landmark
+# search from there misses, and the interpreter falls back to the compiled-in
+# `/install` — which does not exist. The venv is created and then dies on
+# `ensurepip` with `ModuleNotFoundError: No module named 'encodings'`.
+#
+# Restoring `/install` as a symlink fixes it at the root rather than patching
+# one path: it is where the stdlib, the headers and `LIBDIR` all point, so a
+# venv gets a working pip AND `pip install` of an sdist with a C extension
+# finds `Python.h` — which the narrower stdlib-only fix leaves broken.
+RUN ln -s /usr/local/python /install
+
+# Asserted at build time, because both halves failed silently until probed:
+# a venv that cannot bootstrap pip, and a venv whose headers resolve nowhere.
+# A task discovering either mid-turn is an expensive way to find out.
+RUN set -eux; \
+    python3 --version; \
+    python3 -m venv /tmp/venv-probe; \
+    /tmp/venv-probe/bin/pip --version; \
+    test -f "$(/tmp/venv-probe/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platinclude"])')/Python.h"; \
+    rm -rf /tmp/venv-probe
+
+# ── native build toolchain ──────────────────────────────────────────────────
+#
+# Unconditional here, unlike Dockerfile.sandbox's `WITH_BUILD_TOOLS` flag,
+# because both ecosystems this image serves reach for a compiler on the
+# ordinary path: node-gyp addons need make + g++, and a Python dependency with
+# no wheel for 3.11 builds from an sdist. Without `cc` those fail at link,
+# deterministically, after the install has already spent the turn.
+#
+# Pinned to a dated Ubuntu archive snapshot rather than to package versions.
+# `build-essential=12.9ubuntu3` would look like a pin and not be one — the
+# metapackage's version says nothing about the gcc, g++, libc6-dev and make it
+# pulls — while also breaking the build outright the day `jammy-updates`
+# rotates that version out. A snapshot pins the whole transitive set to one
+# archive state and keeps resolving after the rotation, which matters because
+# this image is rebuilt on every substrate deploy.
+#
+# `Dir::Etc::SourceList` scopes the snapshot to this command instead of
+# rewriting `/etc/apt`: the runtime image keeps the sources the base shipped.
+# `Check-Valid-Until=false` is required — a snapshot serves a Release file
+# whose validity window has passed by definition.
+ARG APT_SNAPSHOT=20260801T000000Z
+RUN set -eux; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    for suite in jammy jammy-updates jammy-security; do \
+      echo "deb http://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT} ${suite} main universe"; \
+    done > /tmp/snapshot.list; \
+    apt_opts="-o Dir::Etc::SourceList=/tmp/snapshot.list -o Dir::Etc::SourceParts=/dev/null -o Acquire::Check-Valid-Until=false"; \
+    apt-get $apt_opts update; \
+    apt-get $apt_opts install -y --no-install-recommends build-essential pkg-config; \
+    rm -rf /var/lib/apt/lists/* /tmp/snapshot.list; \
+    cc --version; \
+    make --version | head -1; \
+    pkg-config --version
+
+# ── the CA bundle, baked as env ─────────────────────────────────────────────
+#
+# Every request a task makes is intercepted and re-issued by the substrate's
+# outbound handler (ADR-0005), so the certificate a tool validates is not the
+# origin's. The runtime's CA lands in the system trust store — and most of this
+# image's toolchain ignores it: Node ships its own root set, `requests` uses
+# certifi, and each then fails TLS on an interception it was never told about.
+# These point every one of them at the system store, so what is trusted is a
+# property of the image rather than of a flag each command has to remember.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_DIR=/etc/ssl/certs \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
+    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+
+# ── interpreter pools off ───────────────────────────────────────────────────
+#
+# The `-python` base warms three IPython workers plus three each of JS and TS
+# at boot for the code-interpreter API. The substrate never calls it — its only
+# container verbs are `gitCheckout` and `exec` (apps/substrate/src/sandbox-do.ts)
+# — so those nine processes are memory a task's test suite would rather have.
+# Zero is a supported setting, not a hack: the base's own musl variant ships it.
+ENV PYTHON_POOL_MIN_SIZE=0 \
+    JAVASCRIPT_POOL_MIN_SIZE=0 \
+    TYPESCRIPT_POOL_MIN_SIZE=0
+
+# ENTRYPOINT is inherited from the base (`/container-server/sandbox`) and must
+# stay that way — it is the server the Durable Object half talks to.

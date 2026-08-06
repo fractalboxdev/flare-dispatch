@@ -42,13 +42,21 @@
   // whatever last carried this semver (src/verify/store-d1.ts).
   "version_metadata": { "binding": "VERSION_METADATA" },
 
-  // The substrate's OWN Dockerfile, not the dispatcher's: the base image tag
-  // must match the `@cloudflare/sandbox` version this worker imports (0.12.4),
-  // and the dispatcher pins 0.10.1. Per-class `image_vars` gate the optional
-  // layers (ADR-0010: named image classes). The `task` class runs fractalbot's
-  // workloads — its dedicated image (OpenCode harness, git-lfs, python,
-  // CA bundle) replaces the build-tools variant in a follow-up; until then the
-  // class exists so the facade contract and pool partition are real.
+  // Two Dockerfiles across the four classes, both the substrate's OWN and both
+  // on the `@cloudflare/sandbox` version this worker imports (0.12.4) — never
+  // the dispatcher's Dockerfile.sandbox, which stays on its 0.10.1. The
+  // in-image server and the Durable Object SDK are one protocol's two halves;
+  // a mismatched pair fails at exec, not at deploy.
+  //
+  // `lean`/`browser`/`agent` share Dockerfile.substrate with per-class
+  // `image_vars` gating its optional layers (ADR-0010: named image classes).
+  // `task` has its own, Dockerfile.task, off the `-python` base with the
+  // OpenCode harness, git-lfs, python3 + venv, pnpm and ripgrep baked in.
+  //
+  // `max_instances` here and `POOL_CAPS_DEFAULT` in src/admission/pools.ts are
+  // the same partition written twice — the platform's physical cap and the
+  // gate's logical one. container-config.test.ts fails when they diverge: a
+  // logical cap above the physical one admits work the platform then refuses.
   "containers": [
     {
       "class_name": "SubstrateSandboxLean",
@@ -71,9 +79,27 @@
       "max_instances": 3,
     },
     {
+      // standard-3 (2 vCPU / 8 GiB): a task installs one repository's
+      // dependencies and runs its suite, which is heavier than the lean CI
+      // executor's checkout-and-diff but nothing like the dispatcher's
+      // standard-4 `RunSandbox`, whose size is set by cold `cargo test` over a
+      // large dep graph. The harness process sits alongside the suite in that
+      // memory; standard-2's 6 GiB is where a JS test runner forking per core
+      // starts trading.
+      //
+      // max_instances 4 is what today's ceiling allows, not what the pool
+      // wants: the four caps already sum to exactly CONTAINERS_CEILING (16),
+      // so raising `task` now means taking instances off lean/browser/agent
+      // while the dispatcher still runs its own 40-instance fleet against the
+      // same account. Four concurrent containers covers the current
+      // single-workspace load, since one task per conversation is a consumer
+      // rule enforced ahead of this gate. POST-DRAIN TARGET: 12, once the
+      // dispatcher's classes are drained and deleted and the substrate's
+      // ceiling rises to the account's — that lands roughly a fifth of the
+      // freed headroom on interactive work and leaves the rest for the CI
+      // pools the drain moves onto `lean`.
       "class_name": "SubstrateSandboxTask",
-      "image": "../../infra/Dockerfile.substrate",
-      "image_vars": { "WITH_BUILD_TOOLS": "true" },
+      "image": "../../infra/Dockerfile.task",
       "instance_type": "standard-3",
       "max_instances": 4,
     },
