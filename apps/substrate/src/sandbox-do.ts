@@ -37,6 +37,7 @@ import type {
 import { repoSlug } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { denialsFor, recordDenialD1 } from "./admission/denials-d1";
 import { verifyTicket } from "./admission/ticket";
+import { ARTIFACTS_DIR, artifactsPrefix } from "./artifacts";
 import { attestationUseKey, decideAttestationUse, type AttestationUse } from "./engine/approval";
 import {
   fencedKillSet,
@@ -91,19 +92,6 @@ const TAIL_READ_TIMEOUT_MS = 15_000;
 const SCRUB_TIMEOUT_MS = 60_000;
 
 const WORKSPACE_DIR = "/workspace";
-const ARTIFACTS_DIR = "/artifacts";
-
-/**
- * The per-container R2 prefix `/artifacts` is mounted at.
- *
- * Exported for one reason: the SDK's `validatePrefix` throws on anything that
- * does not start with `/`, and nothing in the mount path is reachable from a
- * test without booting a container. A relative prefix here does not degrade
- * logging, it stops every command running (see `mountArtifacts`), so the shape
- * is pinned by a test rather than by review.
- */
-export const artifactsPrefix = (containerId: string): string =>
-  `/artifacts/${containerId}/`;
 
 /**
  * Matches the SDK default. The TTL deletes nothing — it only makes
@@ -322,7 +310,26 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
     if (!(await this.tryRestore(recipe, handles))) {
       await this.cleanRebuild(recipe);
     }
-    await this.mountArtifacts();
+    // Fatal, but as a REFUSAL rather than a throw. Without this mount every
+    // command exits 1 having run nothing (see `mountArtifacts`), so continuing
+    // would hand back a container that cannot work. Throwing instead would
+    // leave the fence at `exec-fence.ts`'s `if (!ensured.ok)` untaken and the
+    // reason reduced to a raw SDK string by the facade's outer catch — which
+    // `SandboxUnavailable` exists to prevent: "Infrastructure failure surfaced
+    // as a typed fact, never a naked throw."
+    try {
+      await this.mountArtifacts();
+    } catch (err) {
+      return {
+        ok: false,
+        refusal: {
+          kind: "sandbox-unavailable",
+          reason: `artifacts mount failed, so no command could produce output: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        },
+      };
+    }
 
     // Record the version this tree was built to, so the fast path above can
     // recognise a live container on the next call — and so a later snapshot

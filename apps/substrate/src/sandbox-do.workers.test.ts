@@ -17,7 +17,8 @@ import type { ApprovalAttestation } from "@fractalboxdev/flare-dispatch-substrat
 import { recordDenialD1 } from "./admission/denials-d1";
 import { mintTicket, TICKET_TTL_MS } from "./admission/ticket";
 import { sha256Hex } from "./engine/approval";
-import { artifactsPrefix, type SubstrateSandboxBase } from "./sandbox-do";
+import { ARTIFACTS_DIR } from "./artifacts";
+import type { SubstrateSandboxBase } from "./sandbox-do";
 
 const SECRET = "substrate-test-ticket-secret";
 const RECIPE = { version: 1, repo: { owner: "acme", name: "widget" } } as const;
@@ -277,47 +278,66 @@ describe("detached processes (ADR-0012) - the paths that answer before a contain
   });
 });
 
-describe("the artifacts mount prefix", () => {
-  // Regression guard for the deploy-blocking bug: the prefix was relative
-  // (`artifacts/<id>/`), the SDK's `validatePrefix` throws on anything not
-  // starting with `/`, and the swallowing catch turned that into every command
-  // exiting 1 in ~100ms without running. The canary read that as `inconclusive`
-  // and gated every deploy from #68 on.
-  //
-  // `validatePrefix` is not exported, and the mount is unreachable without a
-  // live container, so the rule it enforces is asserted here directly.
-  it("is absolute, which is what the SDK's validatePrefix demands", () => {
-    expect(artifactsPrefix("abc123")).toMatch(/^\//);
+// The prefix SHAPE is pinned in `artifacts.test.ts`, a Node suite `pnpm test`
+// actually runs — this file is not in the root workspace (see its header).
+// What only workerd can answer lives here: whether the real SDK accepts the
+// prefix, and what the DO does when the mount fails.
+describe("the artifacts mount", () => {
+  // The regression guard that means something. `validatePrefix` is not
+  // exported, so the rule is driven through the real `mountBucket` instead of
+  // restated: it runs before any container work, so an absolute prefix must
+  // fail LATER (no container engine in this pool) while a relative one fails
+  // AT the check. Assert on which error comes back, not on whether one does.
+  const mountWith = (prefix: string): Promise<unknown> =>
+    runInDurableObject(freshSandbox(), (instance) =>
+      (
+        instance as unknown as {
+          mountBucket: (b: string, p: string, o: { prefix: string }) => Promise<void>;
+        }
+      )
+        .mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, { prefix })
+        .then(
+          () => "mounted",
+          (err: unknown) => (err instanceof Error ? err.message : String(err)),
+        ),
+    );
+
+  it("is rejected by the SDK on a relative prefix — the bug, reproduced", async () => {
+    expect(await mountWith(`artifacts/relative/`)).toMatch(/[Pp]refix must start with/);
   });
 
-  it("scopes the prefix to the container id, so two executions cannot collide", () => {
-    expect(artifactsPrefix("abc123")).toBe("/artifacts/abc123/");
-    expect(artifactsPrefix("def456")).not.toBe(artifactsPrefix("abc123"));
-  });
+  // The mirror of the above — mounting on the SHIPPED prefix and asserting it
+  // gets past `validatePrefix` — is deliberately absent, not overlooked.
+  // Clearing that check is exactly what puts the call into container boot, and
+  // this pool has no container engine: the SDK reports
+  // `this.container.interceptOutboundHttps is not a function` and then retries
+  // "Container not ready" until the test times out at 5s, taking the runner's
+  // isolated storage down with it and failing unrelated cases in this file.
+  // So the positive direction is covered by the pair that can be asserted
+  // cheaply: the SDK rejecting a relative prefix (above, real `mountBucket`,
+  // real `validatePrefix`) and `artifacts.test.ts` pinning that what we pass is
+  // absolute. Proving the mount COMPLETES needs a live container, which is the
+  // canary's job, not this suite's.
 
-  it("ends in a slash, so keys land under the prefix rather than beside it", () => {
-    expect(artifactsPrefix("abc123")).toMatch(/\/$/);
-  });
-
-  // `mountArtifacts` only calls `this.mountBucket`, so the failure posture is
-  // reachable with a stub and no container. This is the half a prefix assertion
-  // cannot cover: the bug was NOT that the prefix was wrong, it was that being
-  // wrong went unreported. A swallowed mount failure leaves `ensure()` claiming
-  // a booted container whose every command exits 1 having run nothing.
-  it("refuses rather than swallowing a mount failure", async () => {
+  // The other half, and the one a prefix assertion cannot reach: the bug was
+  // not only that the prefix was wrong, it was that being wrong went
+  // unreported. `mountArtifacts` only calls `this.mountBucket`, so the failure
+  // posture is reachable with a stub and no container.
+  it("propagates a mount failure out of mountArtifacts rather than swallowing it", async () => {
     await expect(
       runInDurableObject(freshSandbox(), (instance) => {
         const boom = new Error("Prefix must start with '/': \"artifacts/abc/\"");
         (instance as unknown as { mountBucket: () => Promise<void> }).mountBucket = () =>
           Promise.reject(boom);
-        return (
-          instance as unknown as { mountArtifacts: () => Promise<void> }
-        ).mountArtifacts();
+        return (instance as unknown as { mountArtifacts: () => Promise<void> }).mountArtifacts();
       }),
     ).rejects.toThrow(/Prefix must start with/);
   });
 
-  it("mounts on the absolute prefix, which is the call the SDK accepts", async () => {
+  it("calls mountBucket with the binding, path and absolute prefix it claims to", async () => {
+    // Named for what it is: an assertion about the ARGUMENTS, driven through a
+    // stub. It pins the wiring between `artifactsPrefix` and the mount call.
+    // Whether the SDK accepts those arguments is the pair of tests above.
     const seen: Array<{ binding: string; path: string; opts: { prefix: string } }> = [];
     await runInDurableObject(freshSandbox(), (instance) => {
       (
@@ -332,7 +352,7 @@ describe("the artifacts mount prefix", () => {
     });
     expect(seen).toHaveLength(1);
     expect(seen[0]?.binding).toBe("BACKUP_BUCKET");
-    expect(seen[0]?.path).toBe("/artifacts");
+    expect(seen[0]?.path).toBe(ARTIFACTS_DIR);
     expect(seen[0]?.opts.prefix).toMatch(/^\/artifacts\/.+\/$/);
   });
 });
