@@ -17,7 +17,7 @@ import type { ApprovalAttestation } from "@fractalboxdev/flare-dispatch-substrat
 import { recordDenialD1 } from "./admission/denials-d1";
 import { mintTicket, TICKET_TTL_MS } from "./admission/ticket";
 import { sha256Hex } from "./engine/approval";
-import type { SubstrateSandboxBase } from "./sandbox-do";
+import { artifactsPrefix, type SubstrateSandboxBase } from "./sandbox-do";
 
 const SECRET = "substrate-test-ticket-secret";
 const RECIPE = { version: 1, repo: { owner: "acme", name: "widget" } } as const;
@@ -274,5 +274,65 @@ describe("detached processes (ADR-0012) - the paths that answer before a contain
         instance.stopDetached("sub-detached-nothing"),
       ),
     ).toEqual({ stopped: false });
+  });
+});
+
+describe("the artifacts mount prefix", () => {
+  // Regression guard for the deploy-blocking bug: the prefix was relative
+  // (`artifacts/<id>/`), the SDK's `validatePrefix` throws on anything not
+  // starting with `/`, and the swallowing catch turned that into every command
+  // exiting 1 in ~100ms without running. The canary read that as `inconclusive`
+  // and gated every deploy from #68 on.
+  //
+  // `validatePrefix` is not exported, and the mount is unreachable without a
+  // live container, so the rule it enforces is asserted here directly.
+  it("is absolute, which is what the SDK's validatePrefix demands", () => {
+    expect(artifactsPrefix("abc123")).toMatch(/^\//);
+  });
+
+  it("scopes the prefix to the container id, so two executions cannot collide", () => {
+    expect(artifactsPrefix("abc123")).toBe("/artifacts/abc123/");
+    expect(artifactsPrefix("def456")).not.toBe(artifactsPrefix("abc123"));
+  });
+
+  it("ends in a slash, so keys land under the prefix rather than beside it", () => {
+    expect(artifactsPrefix("abc123")).toMatch(/\/$/);
+  });
+
+  // `mountArtifacts` only calls `this.mountBucket`, so the failure posture is
+  // reachable with a stub and no container. This is the half a prefix assertion
+  // cannot cover: the bug was NOT that the prefix was wrong, it was that being
+  // wrong went unreported. A swallowed mount failure leaves `ensure()` claiming
+  // a booted container whose every command exits 1 having run nothing.
+  it("refuses rather than swallowing a mount failure", async () => {
+    await expect(
+      runInDurableObject(freshSandbox(), (instance) => {
+        const boom = new Error("Prefix must start with '/': \"artifacts/abc/\"");
+        (instance as unknown as { mountBucket: () => Promise<void> }).mountBucket = () =>
+          Promise.reject(boom);
+        return (
+          instance as unknown as { mountArtifacts: () => Promise<void> }
+        ).mountArtifacts();
+      }),
+    ).rejects.toThrow(/Prefix must start with/);
+  });
+
+  it("mounts on the absolute prefix, which is the call the SDK accepts", async () => {
+    const seen: Array<{ binding: string; path: string; opts: { prefix: string } }> = [];
+    await runInDurableObject(freshSandbox(), (instance) => {
+      (
+        instance as unknown as {
+          mountBucket: (b: string, p: string, o: { prefix: string }) => Promise<void>;
+        }
+      ).mountBucket = (binding, path, opts) => {
+        seen.push({ binding, path, opts });
+        return Promise.resolve();
+      };
+      return (instance as unknown as { mountArtifacts: () => Promise<void> }).mountArtifacts();
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.binding).toBe("BACKUP_BUCKET");
+    expect(seen[0]?.path).toBe("/artifacts");
+    expect(seen[0]?.opts.prefix).toMatch(/^\/artifacts\/.+\/$/);
   });
 });

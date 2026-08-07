@@ -94,6 +94,18 @@ const WORKSPACE_DIR = "/workspace";
 const ARTIFACTS_DIR = "/artifacts";
 
 /**
+ * The per-container R2 prefix `/artifacts` is mounted at.
+ *
+ * Exported for one reason: the SDK's `validatePrefix` throws on anything that
+ * does not start with `/`, and nothing in the mount path is reachable from a
+ * test without booting a container. A relative prefix here does not degrade
+ * logging, it stops every command running (see `mountArtifacts`), so the shape
+ * is pinned by a test rather than by review.
+ */
+export const artifactsPrefix = (containerId: string): string =>
+  `/artifacts/${containerId}/`;
+
+/**
  * Matches the SDK default. The TTL deletes nothing — it only makes
  * `restoreBackup` reject — so the R2 lifecycle rule on `backups/` is what
  * actually reclaims objects; this decides when a handle stops being a cache
@@ -444,18 +456,28 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
    * `/artifacts` is where exec streams its logs, so it has to exist before any
    * command runs. Prefixed per container: one bucket, and two executions must
    * not be able to read or overwrite each other's output.
+   *
+   * The prefix is ABSOLUTE. `validatePrefix` in the SDK rejects anything that
+   * does not start with `/`, in 0.10.1 and 0.12.4 alike, so a relative prefix
+   * is not a degraded mount — it is a mount that never happens, on every boot,
+   * deterministically.
+   *
+   * A failure here is FATAL, and the swallowing `catch` this replaces was
+   * reasoned from a premise the code does not hold up: it said a missing mount
+   * "costs logs, not correctness — the receipt still carries its tail inline".
+   * The tail is not inline. `run` redirects the whole command into a file under
+   * this mount and `readLogTail` reads it back from there, so an unmounted
+   * `/artifacts` fails the redirect and the command never executes: `sh` exits
+   * 1 in ~100ms, having run nothing, and the empty tail is indistinguishable
+   * from a command that produced no output. That is what took the deploy canary
+   * from a verdict about egress to `inconclusive`, and blocked every deploy
+   * from #68 onward. Refusing at `ensure()` gives the caller a boot refusal
+   * naming the cause instead of a green-looking exec that ran no code.
    */
   private async mountArtifacts(): Promise<void> {
-    try {
-      await this.mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, {
-        prefix: `artifacts/${this.ctx.id.toString()}/`,
-      });
-    } catch (err) {
-      // A missing artifacts mount costs logs, not correctness — the receipt
-      // still carries its tail inline. Failing ensure() here would turn a
-      // degraded log path into a dead execution.
-      console.error("artifacts mount failed; logs will not persist", err);
-    }
+    await this.mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, {
+      prefix: artifactsPrefix(this.ctx.id.toString()),
+    });
   }
 
   // -------------------------------------------------------------------------
