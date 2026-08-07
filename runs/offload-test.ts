@@ -40,16 +40,20 @@
 //   * each stage runs `exec-<label>` with its own command
 //     (`offload-test.command:<repo>:<label>`, falling back to the unlabelled
 //     command — the labelled-rung ladder `check` v1.1.0 introduced) and its own
-//     timeout (`offload-test.timeoutSec:<repo>:<label>` ?? the unlabelled
-//     timeout ?? default), step timeout derived with the same headroom,
-//     `retries: 0`;
+//     timeout (`offload-test.timeoutSec:<repo>:<label>` ?? the dispatch
+//     `timeoutSec` ?? the unlabelled rung ?? default), step timeout derived
+//     with the same headroom, `retries: 0`;
 //   * each stage's log uploads as `step-<label>.log` IMMEDIATELY after the
 //     stage, so a later stage dying cannot take an earlier stage's log with it;
 //   * a stage that exits non-zero stops the sequence (later stages are
 //     `set -e`-style dependents of earlier ones); a stage step that DIES
 //     (timeout/internal/platform kill) gets a one-line marker uploaded under
-//     its `step-<label>.log` name — the artifact endpoint never 404s again —
-//     and the run fails naming the stage. The failure summary lists every
+//     its `step-<label>.log` name (the error class recovered from the
+//     boundary-wrapped cause where the typed tag was eaten) and the run fails
+//     naming the stage. One caveat scopes the no-404 claim: a WORKFLOW-level
+//     kill (stage ceilings summing past `maxDurationSec`) fires outside any
+//     step, so the in-flight stage still orphans — resolve warns when the
+//     configured ceilings make that reachable. The failure summary lists every
 //     stage with ✅/❌/⏭ and durations.
 //
 // The key is resolved inside the same `resolve-command` step that reads the
@@ -252,6 +256,20 @@ const stageTimeoutKey = (repo: string, label: string): string => `${repoTimeoutK
  * key that silently un-stages the run would resurrect exactly the
  * log-dies-with-the-step failure staging exists to fix.
  */
+/**
+ * Inner error classes worth recovering from a boundary-wrapped StepFailed's
+ * rendered cause (see the errorClass recovery in staged mode). Anchored to
+ * the known tag vocabulary so vendor free text can never mint a class.
+ */
+const INNER_EXEC_ERROR_RE = /\b(ExecTimeout|ExecFailed|CheckoutFailed)\b/;
+
+/**
+ * Wall-time ceiling — specs/02-runs.md § 1. A const rather than a literal in
+ * `limits` so the staged-mode resolve step can compare the configured stage
+ * ceilings against it (see the over-budget warn there).
+ */
+const MAX_DURATION_SEC = 1800;
+
 const STAGE_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 
 /** One resolved stage — plain JSON, because it rides the checkpointed resolve-step result. */
@@ -338,7 +356,7 @@ export const offloadTest = defineRun({
   limits: {
     // Wall-time ceiling — specs/02-runs.md § 1. Single container, no
     // concurrency parameter.
-    maxDurationSec: 1800,
+    maxDurationSec: MAX_DURATION_SEC,
   },
 
   run: (input) =>
@@ -380,11 +398,25 @@ export const offloadTest = defineRun({
                 // path, whose one buffered exec is the thing that dies. See
                 // header § Staged mode.
                 const stagesRaw = yield* config.get(repoStagesKey(input.repo));
-                const labels = (stagesRaw ?? "")
+                if (stagesRaw === undefined) return { command, install, timeoutSec };
+                const labels = stagesRaw
                   .split(",")
                   .map((l) => l.trim())
                   .filter((l) => l.length > 0);
-                if (labels.length === 0) return { command, install, timeoutSec };
+                // A PRESENT key that yields no labels ("", " , ") is a typo'd
+                // config, and silently un-staging the run would reproduce the
+                // original defect (one buffered exec) while the operator
+                // believes stages are on. Fail loudly, same as a bad label.
+                if (labels.length === 0) {
+                  return yield* Effect.fail(
+                    new StepFailed({
+                      step: "resolve-command",
+                      cause:
+                        `offload-test: \`${repoStagesKey(input.repo)}\` is set but ` +
+                        `contains no labels — delete the key to disable staged mode`,
+                    }),
+                  );
+                }
 
                 // A malformed or duplicate label fails LOUDLY (see
                 // STAGE_LABEL_RE's doc): a duplicate would mint two steps named
@@ -438,6 +470,26 @@ export const offloadTest = defineRun({
                     ),
                     commandFellBack,
                   });
+                }
+                // A workflow-level kill (`maxDurationSec`) fires OUTSIDE any
+                // step, so it orphans the in-flight stage's artifact despite
+                // the marker machinery. Warn while the operator can still fix
+                // the config: the worst-case wall time is every stage running
+                // to its ceiling plus per-stage headroom.
+                const worstCaseSec = stages.reduce(
+                  (sum, st) =>
+                    sum +
+                    (st.timeoutSec ?? input.timeoutSec ?? timeoutSec ?? TIMEOUT_SEC_DEFAULT) +
+                    STEP_TIMEOUT_HEADROOM_SEC,
+                  0,
+                );
+                if (worstCaseSec > MAX_DURATION_SEC) {
+                  yield* io.log(
+                    "warn",
+                    `offload-test: configured stage ceilings sum to ~${worstCaseSec}s, past ` +
+                      `maxDurationSec (${MAX_DURATION_SEC}s) — a workflow-level kill would ` +
+                      `orphan the in-flight stage's artifact`,
+                  );
                 }
                 return { command, install, timeoutSec, stages };
               }),
@@ -606,7 +658,17 @@ export const offloadTest = defineRun({
             const errorClass = Option.match(Cause.failureOption(exit.cause), {
               onSome: (f) => {
                 const tag = (f as { _tag?: unknown })._tag;
-                return typeof tag === "string" ? tag : "UnknownError";
+                if (typeof tag !== "string") return "UnknownError";
+                if (tag !== "StepFailed") return tag;
+                // Production loses the typed tag at the Workflow boundary:
+                // when no Effect Cause survives the step rejection, the CF
+                // step runner re-fails as a bare StepFailed (step-runner-cf).
+                // The original class usually survives in the rendered cause
+                // text — recover it there so the marker and rundown can still
+                // say ExecTimeout vs ExecFailed; unrecoverable stays
+                // StepFailed (honest: the boundary really did eat it).
+                const rendered = String((f as { cause?: unknown }).cause ?? "");
+                return INNER_EXEC_ERROR_RE.exec(rendered)?.[1] ?? tag;
               },
               onNone: () => "Defect",
             });
@@ -616,24 +678,30 @@ export const offloadTest = defineRun({
             // Label (STAGE_LABEL_RE), tag, and number only — shell-quote-safe
             // by construction.
             const markerLine = `stage=${stage.label} error=${errorClass} elapsedMs=${elapsedMs}`;
-            yield* step(`upload-log-${stage.label}`, () =>
-              sandbox
-                .exec({
-                  container,
-                  command: `printf '%s\\n' '${markerLine}' > ${markerPath}`,
-                  timeoutSec: 30,
-                })
-                .pipe(
-                  Effect.andThen(
-                    artifact.upload({
-                      name: `step-${stage.label}.log`,
-                      path: markerPath,
-                      container,
-                      contentType: "text/plain",
-                      signedUrlTTL: "30 days",
-                    }),
+            yield* step(
+              `upload-log-${stage.label}`,
+              () =>
+                sandbox
+                  .exec({
+                    container,
+                    command: `printf '%s\\n' '${markerLine}' > ${markerPath}`,
+                    timeoutSec: 30,
+                  })
+                  .pipe(
+                    Effect.andThen(
+                      artifact.upload({
+                        name: `step-${stage.label}.log`,
+                        path: markerPath,
+                        container,
+                        contentType: "text/plain",
+                        signedUrlTTL: "30 days",
+                      }),
+                    ),
                   ),
-                ),
+              // Best-effort against a possibly-dead container: never inherit
+              // the platform's default retries/timeout for work whose failure
+              // is already tolerated by the catch below.
+              { timeoutSec: 60, retries: 0 },
             ).pipe(
               Effect.catchAllCause((cause) =>
                 io.log(

@@ -888,6 +888,51 @@ describe("offload-test staged mode", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it.effect("a duplicate stage label fails the resolve step loudly", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {},
+      config: {
+        "offload-test.stages:owner/name": "build,test,build",
+        "offload-test.command:owner/name": "pnpm test",
+      },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
+      // Two `exec-build` steps would mint two `step-build.log` artifacts, the
+      // second silently clobbering the first — refused before any work.
+      expect(handles.sandbox.execs).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "a whitespace-only stages value fails loudly — a present key never silently un-stages",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {},
+        config: {
+          "offload-test.stages:owner/name": " , ",
+          "offload-test.command:owner/name": "pnpm test",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+        expect(Exit.isFailure(exit)).toBe(true);
+        const failure = Exit.isFailure(exit)
+          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+          : undefined;
+        expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
+        expect(handles.sandbox.execs).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
 
 // --- Source guard: no direct Date.now() / crypto.randomUUID() in the run -----
