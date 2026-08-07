@@ -97,14 +97,14 @@ describe("failureSummaryMd", () => {
 
   it("renders a StepFailed's summaryMd as real markdown, not a code fence", () => {
     // The dead-stage rundown (offload-test staged mode) rides `summaryMd`
-    // precisely so its ✅/❌/⏭ lines and log links render — fencing them made
+    // precisely so its ✓/✗/– lines and log links render — fencing them made
     // the links unclickable and the backticks literal.
     const rundown = [
       "Stage `b` — `run-b` — died (`ExecTimeout`) after ~600s.",
       "",
-      "- ✅ `a` — 12.3s ([log ↗](https://example.com/step-a.log))",
-      "- ❌ `b` — died (`ExecTimeout`) after ~600s",
-      "- ⏭ `c` — skipped",
+      "- ✓ `a` — 12.3s ([log ↗](https://example.com/step-a.log))",
+      "- ✗ `b` — died (`ExecTimeout`) after ~600s",
+      "- – `c` — skipped",
     ].join("\n");
     const md = failureSummaryMd(
       Exit.fail(
