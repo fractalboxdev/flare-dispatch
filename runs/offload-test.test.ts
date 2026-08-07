@@ -777,12 +777,12 @@ describe("offload-test staged mode", () => {
         expect((failure as { exitCode?: number })?.exitCode).toBe(2);
 
         // The failure summary names the stage and lists EVERY stage with its
-        // outcome — ✅ ran green, ❌ went red, ⏭ never ran.
+        // outcome — ✓ ran green, ✗ went red, – never ran.
         const summaryMd = (failure as { summaryMd?: string })?.summaryMd ?? "";
         expect(summaryMd).toContain("Stage `b`");
-        expect(summaryMd).toContain("✅ `a`");
-        expect(summaryMd).toContain("❌ `b`");
-        expect(summaryMd).toContain("⏭ `c` — skipped");
+        expect(summaryMd).toContain("✓ `a`");
+        expect(summaryMd).toContain("✗ `b`");
+        expect(summaryMd).toContain("– `c` — skipped");
 
         // `c` never ran; `a` and `b` both have their logs already uploaded —
         // the failing stage cannot orphan the earlier ones.
@@ -822,14 +822,14 @@ describe("offload-test staged mode", () => {
         expect((failure as { step?: string })?.step).toBe("exec-b");
         expect(String((failure as { cause?: unknown })?.cause)).toContain("ExecTimeout");
 
-        // The ✅/❌/⏭ rundown rides `summaryMd` — the run-authored-markdown
+        // The ✓/✗/– rundown rides `summaryMd` — the run-authored-markdown
         // channel — NOT the cause, whose renderer fences it as a code block
         // (links unclickable, emoji literal). The dispatcher splices
         // `summaryMd` as real markdown, same as `AcceptanceFailed`.
         const summaryMd = (failure as { summaryMd?: string })?.summaryMd ?? "";
-        expect(summaryMd).toContain("✅ `a`");
-        expect(summaryMd).toContain("❌ `b`");
-        expect(summaryMd).toContain("⏭ `c` — skipped");
+        expect(summaryMd).toContain("✓ `a`");
+        expect(summaryMd).toContain("✗ `b`");
+        expect(summaryMd).toContain("– `c` — skipped");
         expect(summaryMd).toContain("step-b.log");
 
         // Stage `a`'s log survived — uploaded before `b` ran at all. Stage

@@ -49,7 +49,7 @@
 //     `set -e`-style dependents of earlier ones); a stage step that DIES
 //     (timeout/internal/platform kill) gets a one-line marker uploaded under
 //     its `step-<label>.log` name and the run fails naming the stage, the
-//     ✅/❌/⏭ rundown riding `StepFailed.summaryMd` so the check-run renders
+//     ✓/✗/– rundown riding `StepFailed.summaryMd` so the check-run renders
 //     it as real markdown. The marker rides the marker exec's own R2 log
 //     stream (see the upload step), so it lands on both sandbox backends.
 //
@@ -589,12 +589,12 @@ export const offloadTest = defineRun({
 
       // --- Staged mode (semantics: header § Staged mode) ----------------------
       if (stages !== undefined) {
-        // Summary ledger — every stage lands here as a ✅/❌/⏭ line, and the
+        // Summary ledger — every stage lands here as a ✓/✗/– line, and the
         // failure summary carries the whole list so the check names the stage
         // without the operator opening a single log.
         const lines: string[] = [];
         const skippedLines = (from: number): string[] =>
-          stages.slice(from).map((s) => `- ⏭ \`${s.label}\` — skipped`);
+          stages.slice(from).map((s) => `- – \`${s.label}\` — skipped`);
         let durationTotalMs = 0;
         let logUri = "";
 
@@ -710,11 +710,11 @@ export const offloadTest = defineRun({
                 ),
               ),
             );
-            lines.push(`- ❌ \`${stage.label}\` — died (\`${errorClass}\`) after ~${elapsedS}s`);
+            lines.push(`- ✗ \`${stage.label}\` — died (\`${errorClass}\`) after ~${elapsedS}s`);
             lines.push(...skippedLines(i + 1));
             // The rundown rides `summaryMd` — the run-authored-markdown channel
             // `AcceptanceFailed` already uses for the red-stage path — so the
-            // check-run renders the ✅/❌/⏭ lines and log links as real
+            // check-run renders the ✓/✗/– lines and log links as real
             // markdown instead of fencing them inside `stepFailedMd`'s code
             // block. `AcceptanceFailed` itself does not fit here: its required
             // `exitCode` means "the command ran to completion", and a dead
@@ -747,7 +747,7 @@ export const offloadTest = defineRun({
 
           if (result.exitCode !== 0) {
             lines.push(
-              `- ❌ \`${stage.label}\` — exit \`${result.exitCode}\` in ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
+              `- ✗ \`${stage.label}\` — exit \`${result.exitCode}\` in ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
             );
             lines.push(...skippedLines(i + 1));
             yield* maybeDispatchSelfHeal(stage.command, result, logUri);
@@ -769,7 +769,7 @@ export const offloadTest = defineRun({
             return { exitCode: result.exitCode, durationMs: durationTotalMs, logUri };
           }
           lines.push(
-            `- ✅ \`${stage.label}\` — ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
+            `- ✓ \`${stage.label}\` — ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
           );
         }
 
