@@ -309,8 +309,8 @@ const WORKFLOWS_PREFIX = ".github/workflows/";
 export const matchGlob = (glob: string, path: string): boolean => {
   // Anchor, escape regex metacharacters, then re-expand the two wildcards.
   // Order matters: `**` before `*` so the doublestar isn't eaten as two singles.
-  const DOUBLE = " D"; // placeholders so escaping can't touch them
-  const SINGLE = " S";
+  const DOUBLE = "\0D"; // placeholders so escaping can't touch them
+  const SINGLE = "\0S";
   const escaped = glob
     .replace(/\/\*\*/g, DOUBLE)
     .replace(/\*/g, SINGLE)

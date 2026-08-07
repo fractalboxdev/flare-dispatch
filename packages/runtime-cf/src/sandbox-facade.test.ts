@@ -6,7 +6,7 @@ import type {
   SubstrateFacade,
   SubstrateRecipe,
 } from "@fractalboxdev/flare-dispatch-substrate-contract";
-import { Cache, Sandbox as SandboxTag } from "@fractalboxdev/flare-dispatch-core";
+import { Cache, CurrentStep, Sandbox as SandboxTag } from "@fractalboxdev/flare-dispatch-core";
 import { CacheOnFacade, makeSandboxFacadeLive, SUBSTRATE_WORKSPACE } from "./sandbox-facade";
 
 const EXECUTION = "01JQZ8Y2A0";
@@ -100,6 +100,14 @@ const run = <A, E>(
 const exec = (command: string, cwd = "/workspace") =>
   Effect.flatMap(SandboxTag, (s) => s.exec({ command, cwd }));
 
+/**
+ * Run an effect as `step(name, …)` does — the Tag provided around the body.
+ * Provided directly rather than through the DSL's `step`, which would drag a
+ * `StepRunner` and an `Executions` Layer into a test about one hash.
+ */
+const inStep = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.provideService(effect, CurrentStep, { name });
+
 describe("the recipe is what the substrate derives a grant from", () => {
   it("carries the run's selected profiles, position and pinned sha on every call", async () => {
     const f = facade();
@@ -189,6 +197,38 @@ describe("idempotency", () => {
     await run(exec("pnpm test", "/workspace/pkg"), f.api, r2.binding);
     const keys = new Set(f.calls.exec.map((e) => e.idempotencyKey));
     expect(keys.size).toBe(3);
+  });
+
+  it("distinguishes two STEPS running the identical command", async () => {
+    // The defect this closes: without the step scope both stages of a staged
+    // suite hash to one key, the substrate answers the second from the first's
+    // receipt, and the command never runs. Same command, same cwd, different
+    // step — three distinct units of work, three distinct keys.
+    const f = facade();
+    const r2 = bucket();
+    await run(inStep("exec-workspace", exec("pnpm test")), f.api, r2.binding);
+    await run(inStep("exec-features", exec("pnpm test")), f.api, r2.binding);
+    await run(exec("pnpm test"), f.api, r2.binding);
+    const keys = new Set(f.calls.exec.map((e) => e.idempotencyKey));
+    expect(keys.size).toBe(3);
+  });
+
+  it("gives a retried step the same key — the scope is the step, not the attempt", async () => {
+    // A step name is stable across CF's retries of that step, so a retry still
+    // joins its own receipt rather than re-running a `wrangler deploy`.
+    const f = facade();
+    const r2 = bucket();
+    await run(inStep("deploy", exec("wrangler deploy")), f.api, r2.binding);
+    await run(inStep("deploy", exec("wrangler deploy")), f.api, r2.binding);
+    expect(f.calls.exec[0]?.idempotencyKey).toBe(f.calls.exec[1]?.idempotencyKey);
+  });
+
+  it("logs under the step-scoped key, so two stages never share an artifact path", async () => {
+    const f = facade();
+    const r2 = bucket();
+    await run(inStep("exec-a", exec("pnpm test")), f.api, r2.binding);
+    await run(inStep("exec-b", exec("pnpm test")), f.api, r2.binding);
+    expect(f.calls.exec[0]?.logPath).not.toBe(f.calls.exec[1]?.logPath);
   });
 });
 

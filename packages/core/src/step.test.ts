@@ -7,11 +7,34 @@
 //     channel — no throw escapes the Effect.
 
 import { it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { expect } from "vitest";
+import { CurrentStep } from "./current-step";
 import { ApprovalTimedOut, EventPayloadInvalid, ExecFailed } from "./errors";
 import { enqueueInlineEvent, makeCFRuntimeTest } from "./testing";
 import { step } from "./step";
+
+it.effect("publishes the enclosing step name to the body, and only there", () => {
+  const { layer } = makeCFRuntimeTest();
+  const seen = Effect.serviceOption(CurrentStep).pipe(
+    Effect.map(Option.map((s) => s.name)),
+    Effect.map(Option.getOrElse(() => "<none>")),
+  );
+
+  return Effect.gen(function* () {
+    // A capability call inside a step can identify the durable unit of work it
+    // belongs to — the property the substrate facade's idempotency key rests on
+    // (packages/runtime-cf/src/sandbox-facade.ts § idempotencyKeyFor).
+    expect(yield* step("exec-workspace", () => seen)).toBe("exec-workspace");
+    expect(yield* step("exec-features", () => seen)).toBe("exec-features");
+    // Nested: the innermost step wins, which is what a caller reaching a
+    // capability from inside a nested step means by "which step am I".
+    expect(yield* step("outer", () => step("inner", () => seen))).toBe("inner");
+    // Outside any step there is no scope to read — the Tag stays optional so a
+    // capability called inline (loadSecrets, an inline io.now) still works.
+    expect(yield* seen).toBe("<none>");
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("records one start+end step record per step name", () => {
   const { layer, handles } = makeCFRuntimeTest();
