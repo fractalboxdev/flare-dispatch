@@ -24,6 +24,7 @@
 
 import { Cause, type Duration, Effect, Exit, Option, type Schema } from "effect";
 import type { RunContext } from "./context";
+import { CurrentStep } from "./current-step";
 import type { ApprovalTimedOut, EventPayloadInvalid, StepFailed } from "./errors";
 import { StepRunner } from "./services/step-runner";
 import type { StepOpts } from "./step-opts";
@@ -131,7 +132,14 @@ const stepImpl = <A, E>(
   body: () => Effect.Effect<A, E, RunContext>,
   opts?: StepOpts,
 ): Effect.Effect<A, E | StepFailed, RunContext> =>
-  Effect.flatMap(StepRunner, (runner) => runner.run(name, body, opts));
+  // `CurrentStep` is provided around the runner, not inside the body thunk, so
+  // it is already in the ambient context when `StepRunnerCloudflare` captures
+  // it (`Effect.context<RunContext>()`) to re-provide at the Workflow boundary
+  // — the body runs on a fresh fiber over there, and a captured Context is the
+  // only thing that crosses. See current-step.ts for why a capability needs it.
+  Effect.flatMap(StepRunner, (runner) => runner.run(name, body, opts)).pipe(
+    Effect.provideService(CurrentStep, { name }),
+  );
 
 const waitForEvent = <P, I>(
   name: string,

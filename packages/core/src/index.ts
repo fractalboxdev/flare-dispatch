@@ -25,6 +25,7 @@ export {
   type WebhookPayload,
 } from "./define-run";
 export { step, runEffect, type StepOpts } from "./step";
+export { CurrentStep, type CurrentStepInfo } from "./current-step";
 export { type RunContext } from "./context";
 
 // --- Writeback (run-declared "propose a diff as a PR") -----------------------

@@ -13,7 +13,10 @@
 //     asserted against has to be an input no model authored, and a clone driven
 //     by consumer-side `git` would put the URL back in the workload's reach.
 //   * `exec` → `execUnderGrant`, which runs the whole fence (stale-revoke,
-//     ensure, apply grant, run, kill-before-revoke) inside the substrate.
+//     ensure, apply grant, run, kill-before-revoke) inside the substrate. The
+//     substrate dedupes on the idempotency key this layer derives, so the key
+//     has to carry the ENCLOSING STEP as well as the command — see
+//     `idempotencyKeyFor`.
 //   * `readFile` → `readFile`. No grant, no command.
 //   * `runDetached` / `waitForExit` / `waitForPort` / `exposePort` → typed
 //     failures naming the gap. The facade has no detached-process surface, and
@@ -29,7 +32,7 @@
 // working unchanged — a run's `logPath` still resolves. The full log lives in
 // the substrate's per-execution artifact prefix.
 
-import { Effect, Layer, Match } from "effect";
+import { Effect, Layer, Match, Option } from "effect";
 import type {
   ApprovalAttestation,
   EnforcementPosition,
@@ -44,6 +47,7 @@ import {
   type Container,
   ContainerBusy,
   ContainerLaunchFailed,
+  CurrentStep,
   ExecFailed,
   type ExecResult,
   ExecTimeout,
@@ -201,18 +205,40 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
   /**
    * The idempotency key one command runs under.
    *
-   * Derived from the command text and its working directory rather than a
-   * counter: a counter is not replay-stable (a memoized durable step never
+   * Scoped to the enclosing durable step, then to the command text and its
+   * working directory. Both halves are load-bearing.
+   *
+   * A COUNTER is not replay-stable (a memoized durable step never
    * re-enters this layer, so the sequence a replay sees is not the one the
    * first attempt saw), and a retried step MUST arrive with the same key or the
-   * substrate re-runs work that is not idempotent. The cost is the converse
-   * case — one execution running the identical command twice on purpose gets
-   * the first receipt back on the second call. Threading the DSL's step name
-   * down here removes that; until then this fails toward not re-running, which
+   * substrate re-runs work that is not idempotent. The STEP NAME is the one
+   * value that is both stable across retries of a unit of work and distinct
+   * across units, which is why it is the scope rather than a number. The
+   * COMMAND + CWD below it keep a step that re-issues its own command (a retry
+   * inside one body) joining its own receipt.
+   *
+   * Without the step scope, two steps running the identical command in one
+   * execution collapse: the substrate returns the first receipt — exit code,
+   * duration and log — and the second command never runs. A staged suite whose
+   * stages share a command is exactly that shape.
+   *
+   * `Option.none()` (an exec outside any `step(...)`) falls back to the
+   * pre-scope key, so nothing that never had a step name changes identity.
+   *
+   * The residual is the converse case INSIDE one step: two `exec` calls with
+   * the same command and cwd there still share a key. That is what dedupe is
+   * for (a step body re-running on retry), and a step that means to run one
+   * command twice should say so with two steps — failing toward not re-running
    * is the safe direction for a `wrangler deploy`.
    */
-  const idempotencyKeyFor = async (command: string, cwd?: string): Promise<string> =>
-    `${opts.executionId}:${(await sha256Hex(`${cwd ?? ""} ${command}`)).slice(0, 32)}`;
+  const idempotencyKeyFor = async (
+    command: string,
+    stepName: Option.Option<string>,
+    cwd?: string,
+  ): Promise<string> =>
+    `${opts.executionId}:${(
+      await sha256Hex(`${Option.getOrElse(stepName, () => "")}\0${cwd ?? ""}\0${command}`)
+    ).slice(0, 32)}`;
 
   const service: SandboxService = {
     // The container is provisioned by the substrate on ensure; the handle is
@@ -260,56 +286,65 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
 
     exec: ({ command, cwd, timeoutSec, redactValues }) => {
       const cmd = asCommand(command);
-      return Effect.tryPromise({
-        try: async (): Promise<ExecResult> => {
-          const idempotencyKey = await idempotencyKeyFor(cmd, cwd);
-          const approval = await opts.approvalFor?.(cmd, {
-            taskId: opts.executionId,
-            // One ordinal per command in this execution, which is what scopes
-            // an attestation to a step rather than to the run.
-            ordinal: execSeq,
-          });
-          const outcome = await opts.facade.execUnderGrant(key, {
-            recipe,
-            command: cmd,
-            idempotencyKey,
-            // The substrate writes under its own per-execution artifact prefix;
-            // the name only has to be stable and unique within the execution.
-            logPath: `exec-${idempotencyKey.slice(-8)}.log`,
-            ...(timeoutSec !== undefined ? { timeoutMs: timeoutSec * 1000 } : {}),
-            tailBytes: TAIL_BYTES,
-            ...(approval !== undefined ? { approval } : {}),
-          });
-          if (!outcome.ok) throw outcome.refusal;
+      // Read the enclosing step BEFORE the Promise boundary — `serviceOption`
+      // needs the fiber's context, and `tryPromise`'s callback has none. The
+      // Tag is optional (`R` stays `never`, so `SandboxService` is unchanged),
+      // which is what lets an exec outside any step keep working.
+      return Effect.serviceOption(CurrentStep).pipe(
+        Effect.map(Option.map((s) => s.name)),
+        Effect.flatMap((stepName) =>
+          Effect.tryPromise({
+            try: async (): Promise<ExecResult> => {
+              const idempotencyKey = await idempotencyKeyFor(cmd, stepName, cwd);
+              const approval = await opts.approvalFor?.(cmd, {
+                taskId: opts.executionId,
+                // One ordinal per command in this execution, which is what scopes
+                // an attestation to a step rather than to the run.
+                ordinal: execSeq,
+              });
+              const outcome = await opts.facade.execUnderGrant(key, {
+                recipe,
+                command: cmd,
+                idempotencyKey,
+                // The substrate writes under its own per-execution artifact prefix;
+                // the name only has to be stable and unique within the execution.
+                logPath: `exec-${idempotencyKey.slice(-8)}.log`,
+                ...(timeoutSec !== undefined ? { timeoutMs: timeoutSec * 1000 } : {}),
+                tailBytes: TAIL_BYTES,
+                ...(approval !== undefined ? { approval } : {}),
+              });
+              if (!outcome.ok) throw outcome.refusal;
 
-          const tail = redact(outcome.receipt.tail, redactValues);
-          const logPath = nextLogKey();
-          await writeLog(logPath, cmd, tail);
-          const file = logPath.slice(logPath.lastIndexOf("/") + 1);
-          const viewerUrl =
-            opts.logsViewerBase !== undefined ? `${opts.logsViewerBase}#${file}` : undefined;
-          return {
-            exitCode: outcome.receipt.exitCode,
-            durationMs: outcome.receipt.durationMs,
-            logPath,
-            // The substrate merges stdout and stderr into one artifact stream,
-            // so the split the SDK path reported is not recoverable here.
-            stdout: inlineTail(tail, viewerUrl),
-            stderr: "",
-          };
-        },
-        catch: (cause): ExecFailed => {
-          const refusal = cause as SubstrateRefusal;
-          return new ExecFailed({
-            exitCode: -1,
-            stderrTail: refusal?.kind
-              ? describeRefusal(refusal)
-              : cause instanceof Error
-                ? cause.message
-                : String(cause),
-          });
-        },
-      });
+              const tail = redact(outcome.receipt.tail, redactValues);
+              const logPath = nextLogKey();
+              await writeLog(logPath, cmd, tail);
+              const file = logPath.slice(logPath.lastIndexOf("/") + 1);
+              const viewerUrl =
+                opts.logsViewerBase !== undefined ? `${opts.logsViewerBase}#${file}` : undefined;
+              return {
+                exitCode: outcome.receipt.exitCode,
+                durationMs: outcome.receipt.durationMs,
+                logPath,
+                // The substrate merges stdout and stderr into one artifact stream,
+                // so the split the SDK path reported is not recoverable here.
+                stdout: inlineTail(tail, viewerUrl),
+                stderr: "",
+              };
+            },
+            catch: (cause): ExecFailed => {
+              const refusal = cause as SubstrateRefusal;
+              return new ExecFailed({
+                exitCode: -1,
+                stderrTail: refusal?.kind
+                  ? describeRefusal(refusal)
+                  : cause instanceof Error
+                    ? cause.message
+                    : String(cause),
+              });
+            },
+          }),
+        ),
+      );
     },
 
     readFile: ({ path }) =>
