@@ -294,9 +294,10 @@ type ResolvedStage = {
    * True when the labelled command rung was missing and the stage fell back
    * to the unlabelled command. Suspicious when stages are declared (usually a
    * typo'd key), so it is warned at resolve and recorded on the stage's
-   * exec-step metadata. Note the fallback can apply to at most ONE stage: two
-   * stages resolving to the same command are refused outright, since they
-   * would collapse into one execution on the substrate backend.
+   * exec-step metadata. Two stages MAY share a command (a repo staging one
+   * command purely for the per-stage timeout and log split): the facade keys
+   * an exec's identity on the enclosing STEP as well as the command (#86), so
+   * `exec-a` and `exec-b` stay distinct executions on both backends.
    */
   readonly commandFellBack: boolean;
 };
@@ -487,39 +488,6 @@ export const offloadTest = defineRun({
                     commandFellBack,
                   });
                 }
-                // Two stages carrying the SAME command collapse on the
-                // substrate backend: the facade derives a command's exec
-                // identity from `sha256(cwd, command)` scoped to the execution
-                // (sandbox-facade.ts `idempotencyKeyFor`), and the sandbox DO
-                // returns the first receipt for a repeat key — so stage 2
-                // never runs and reports stage 1's exit code, duration and
-                // log. `offload-test` declares no `facadeGaps`, so it rides
-                // the facade the moment `SUBSTRATE_BACKEND` flips on.
-                //
-                // Refusing here removes the landmine without waiting on the
-                // per-step-identity fix (#86): a config whose stages differ
-                // only by timeout/log split has to say so with distinct
-                // commands, which costs the operator a `:` and buys a run
-                // whose rundown cannot lie about what executed.
-                const byCommand = new Map<string, string>();
-                for (const st of stages) {
-                  const first = byCommand.get(st.command);
-                  if (first !== undefined) {
-                    return yield* Effect.fail(
-                      new StepFailed({
-                        step: "resolve-command",
-                        cause:
-                          `offload-test: stages \`${first}\` and \`${st.label}\` carry the ` +
-                          `same command — two stages sharing a command collapse into one ` +
-                          `execution on the substrate backend (see #86), so the rundown ` +
-                          `would report a stage that never ran. Give each stage its own ` +
-                          `\`${stageCommandKey(input.repo, "<label>")}\` value`,
-                      }),
-                    );
-                  }
-                  byCommand.set(st.command, st.label);
-                }
-
                 return { command, install, timeoutSec, stages };
               }),
             )

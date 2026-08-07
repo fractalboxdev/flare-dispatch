@@ -242,12 +242,10 @@ wrangler kv key put --binding=CONFIG_KV \
   (a silent un-staging would resurrect the log-dies-with-the-step defect).
 - `offload-test.command:<repo>:<label>` — per-stage command, falling back to
   the unlabelled `offload-test.command:<repo>` (the fallback is warned and
-  flagged on the stage's step metadata). **Every stage must resolve to a
-  distinct command**: two stages sharing one collapse into a single execution
-  on the substrate backend (exec identity is keyed on the command, so the
-  second call gets the first's receipt and the rundown reports a stage that
-  never ran), so the run refuses that config at resolve. In practice the
-  fallback therefore applies to at most one stage.
+  flagged on the stage's step metadata). Two stages may share a command — a
+  repo staging one command purely for the per-stage timeout and log split is
+  a legitimate config, and the facade keys an exec's identity on the enclosing
+  step as well as the command, so the stages stay distinct executions.
 - `offload-test.timeoutSec:<repo>:<label>` — per-stage exec ceiling.
 
 Per-stage timeout precedence: labelled rung → dispatch `timeoutSec` →

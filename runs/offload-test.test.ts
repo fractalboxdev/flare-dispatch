@@ -907,47 +907,27 @@ describe("offload-test staged mode", () => {
     },
   );
 
-  // Two stages sharing a command collapse into ONE execution on the substrate
-  // backend (the facade keys exec identity on sha256(cwd, command), the sandbox
-  // DO returns the first receipt for a repeat key), so the rundown would report
-  // a stage that never ran. Refused at resolve, before any work — this is the
-  // case the unlabelled-command fallback would otherwise produce silently.
-  it.effect("two stages resolving to the same command fail the resolve step", () => {
-    const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: {},
-      config: {
-        "offload-test.stages:owner/name": "build,test",
-        // Neither stage has a labelled rung, so both fall back to this one.
-        "offload-test.command:owner/name": "pnpm test",
-      },
-    });
-
-    return Effect.gen(function* () {
-      const exit = yield* Effect.exit(offloadTest.run(webhookInput));
-      expect(Exit.isFailure(exit)).toBe(true);
-      const failure = Exit.isFailure(exit)
-        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
-        : undefined;
-      expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
-      expect(String((failure as { cause?: unknown })?.cause)).toContain("same command");
-      expect(handles.sandbox.execs).toHaveLength(0);
-    }).pipe(Effect.provide(layer));
-  });
-
-  // One stage falling back to the unlabelled command is still legal — the
-  // collapse needs two stages sharing it.
-  it.effect("a single stage may still fall back to the unlabelled command", () => {
+  // Two stages MAY share a command — the facade keys exec identity on the
+  // enclosing step as well as the command (#86), so they stay distinct
+  // executions. A repo staging one command for the timeout/log split is a
+  // legitimate config, so it must run both stages, not refuse.
+  it.effect("two stages may share a command — both stages run", () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: { "pnpm test": { exitCode: 0, stdout: "ok" } },
       config: {
-        "offload-test.stages:owner/name": "solo",
+        "offload-test.stages:owner/name": "quick,slow",
         "offload-test.command:owner/name": "pnpm test",
+        "offload-test.timeoutSec:owner/name:slow": "1800",
       },
     });
 
     return Effect.gen(function* () {
       yield* Effect.exit(offloadTest.run(webhookInput));
-      expect(handles.sandbox.execs.map((e) => e.command)).toEqual(["pnpm test"]);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual(["pnpm test", "pnpm test"]);
+      expect(handles.artifact.uploads.map((u) => u.name)).toEqual([
+        "step-quick.log",
+        "step-slow.log",
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
