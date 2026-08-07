@@ -49,7 +49,7 @@
 //     `set -e`-style dependents of earlier ones); a stage step that DIES
 //     (timeout/internal/platform kill) gets a one-line marker uploaded under
 //     its `step-<label>.log` name and the run fails naming the stage, the
-//     ✓/✗/– rundown riding `StepFailed.summaryMd` so the check-run renders
+//     ✓/✗/⊘ rundown riding `StepFailed.summaryMd` so the check-run renders
 //     it as real markdown. The marker rides the marker exec's own R2 log
 //     stream (see the upload step), so it lands on both sandbox backends.
 //
@@ -291,10 +291,12 @@ type ResolvedStage = {
   /** labelled `offload-test.timeoutSec:<repo>:<label>` — absent falls through to the unlabelled chain. */
   readonly timeoutSec?: number | undefined;
   /**
-   * True when the labelled command rung was missing and the stage fell back to
-   * the unlabelled command. Legal (a repo may stage one command purely for the
-   * per-stage timeout/log split) but suspicious when stages are declared — so
-   * it is recorded on the stage's exec-step metadata and warned at resolve.
+   * True when the labelled command rung was missing and the stage fell back
+   * to the unlabelled command. Suspicious when stages are declared (usually a
+   * typo'd key), so it is warned at resolve and recorded on the stage's
+   * exec-step metadata. Note the fallback can apply to at most ONE stage: two
+   * stages resolving to the same command are refused outright, since they
+   * would collapse into one execution on the substrate backend.
    */
   readonly commandFellBack: boolean;
 };
@@ -485,6 +487,39 @@ export const offloadTest = defineRun({
                     commandFellBack,
                   });
                 }
+                // Two stages carrying the SAME command collapse on the
+                // substrate backend: the facade derives a command's exec
+                // identity from `sha256(cwd, command)` scoped to the execution
+                // (sandbox-facade.ts `idempotencyKeyFor`), and the sandbox DO
+                // returns the first receipt for a repeat key — so stage 2
+                // never runs and reports stage 1's exit code, duration and
+                // log. `offload-test` declares no `facadeGaps`, so it rides
+                // the facade the moment `SUBSTRATE_BACKEND` flips on.
+                //
+                // Refusing here removes the landmine without waiting on the
+                // per-step-identity fix (#86): a config whose stages differ
+                // only by timeout/log split has to say so with distinct
+                // commands, which costs the operator a `:` and buys a run
+                // whose rundown cannot lie about what executed.
+                const byCommand = new Map<string, string>();
+                for (const st of stages) {
+                  const first = byCommand.get(st.command);
+                  if (first !== undefined) {
+                    return yield* Effect.fail(
+                      new StepFailed({
+                        step: "resolve-command",
+                        cause:
+                          `offload-test: stages \`${first}\` and \`${st.label}\` carry the ` +
+                          `same command — two stages sharing a command collapse into one ` +
+                          `execution on the substrate backend (see #86), so the rundown ` +
+                          `would report a stage that never ran. Give each stage its own ` +
+                          `\`${stageCommandKey(input.repo, "<label>")}\` value`,
+                      }),
+                    );
+                  }
+                  byCommand.set(st.command, st.label);
+                }
+
                 return { command, install, timeoutSec, stages };
               }),
             )
@@ -589,12 +624,12 @@ export const offloadTest = defineRun({
 
       // --- Staged mode (semantics: header § Staged mode) ----------------------
       if (stages !== undefined) {
-        // Summary ledger — every stage lands here as a ✓/✗/– line, and the
+        // Summary ledger — every stage lands here as a ✓/✗/⊘ line, and the
         // failure summary carries the whole list so the check names the stage
         // without the operator opening a single log.
         const lines: string[] = [];
         const skippedLines = (from: number): string[] =>
-          stages.slice(from).map((s) => `- – \`${s.label}\` — skipped`);
+          stages.slice(from).map((s) => `- ⊘ \`${s.label}\` — skipped`);
         let durationTotalMs = 0;
         let logUri = "";
 
@@ -714,7 +749,7 @@ export const offloadTest = defineRun({
             lines.push(...skippedLines(i + 1));
             // The rundown rides `summaryMd` — the run-authored-markdown channel
             // `AcceptanceFailed` already uses for the red-stage path — so the
-            // check-run renders the ✓/✗/– lines and log links as real
+            // check-run renders the ✓/✗/⊘ lines and log links as real
             // markdown instead of fencing them inside `stepFailedMd`'s code
             // block. `AcceptanceFailed` itself does not fit here: its required
             // `exitCode` means "the command ran to completion", and a dead

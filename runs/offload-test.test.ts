@@ -782,7 +782,7 @@ describe("offload-test staged mode", () => {
         expect(summaryMd).toContain("Stage `b`");
         expect(summaryMd).toContain("✓ `a`");
         expect(summaryMd).toContain("✗ `b`");
-        expect(summaryMd).toContain("– `c` — skipped");
+        expect(summaryMd).toContain("⊘ `c` — skipped");
 
         // `c` never ran; `a` and `b` both have their logs already uploaded —
         // the failing stage cannot orphan the earlier ones.
@@ -822,14 +822,14 @@ describe("offload-test staged mode", () => {
         expect((failure as { step?: string })?.step).toBe("exec-b");
         expect(String((failure as { cause?: unknown })?.cause)).toContain("ExecTimeout");
 
-        // The ✓/✗/– rundown rides `summaryMd` — the run-authored-markdown
+        // The ✓/✗/⊘ rundown rides `summaryMd` — the run-authored-markdown
         // channel — NOT the cause, whose renderer fences it as a code block
         // (links unclickable, emoji literal). The dispatcher splices
         // `summaryMd` as real markdown, same as `AcceptanceFailed`.
         const summaryMd = (failure as { summaryMd?: string })?.summaryMd ?? "";
         expect(summaryMd).toContain("✓ `a`");
         expect(summaryMd).toContain("✗ `b`");
-        expect(summaryMd).toContain("– `c` — skipped");
+        expect(summaryMd).toContain("⊘ `c` — skipped");
         expect(summaryMd).toContain("step-b.log");
 
         // Stage `a`'s log survived — uploaded before `b` ran at all. Stage
@@ -906,6 +906,50 @@ describe("offload-test staged mode", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  // Two stages sharing a command collapse into ONE execution on the substrate
+  // backend (the facade keys exec identity on sha256(cwd, command), the sandbox
+  // DO returns the first receipt for a repeat key), so the rundown would report
+  // a stage that never ran. Refused at resolve, before any work — this is the
+  // case the unlabelled-command fallback would otherwise produce silently.
+  it.effect("two stages resolving to the same command fail the resolve step", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {},
+      config: {
+        "offload-test.stages:owner/name": "build,test",
+        // Neither stage has a labelled rung, so both fall back to this one.
+        "offload-test.command:owner/name": "pnpm test",
+      },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
+      expect(String((failure as { cause?: unknown })?.cause)).toContain("same command");
+      expect(handles.sandbox.execs).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  // One stage falling back to the unlabelled command is still legal — the
+  // collapse needs two stages sharing it.
+  it.effect("a single stage may still fall back to the unlabelled command", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "pnpm test": { exitCode: 0, stdout: "ok" } },
+      config: {
+        "offload-test.stages:owner/name": "solo",
+        "offload-test.command:owner/name": "pnpm test",
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.exit(offloadTest.run(webhookInput));
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual(["pnpm test"]);
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("a duplicate stage label fails the resolve step loudly", () => {
     const { layer, handles } = makeCFRuntimeTest({
