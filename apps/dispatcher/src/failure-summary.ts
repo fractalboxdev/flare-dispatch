@@ -59,7 +59,7 @@ const execTimeoutMd = (e: ExecTimeout): string =>
 const stepFailedMd = (e: StepFailed): string => {
   // Run-authored presentation wins over the fenced cause — same contract as
   // `AcceptanceFailed.summaryMd`. A `StepFailed` that carries markdown (the
-  // dead-stage ✓/✗/– rundown with its log links) must render AS markdown;
+  // dead-stage ✓/✗/⊘ rundown with its log links) must render AS markdown;
   // fencing it turned the links literal and unclickable. The raw cause still
   // lands in the Workflow error record, so nothing diagnostic is lost.
   if (e.summaryMd !== undefined && e.summaryMd.trim() !== "") {

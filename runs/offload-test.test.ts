@@ -777,7 +777,7 @@ describe("offload-test staged mode", () => {
         expect((failure as { exitCode?: number })?.exitCode).toBe(2);
 
         // The failure summary names the stage and lists EVERY stage with its
-        // outcome — ✓ ran green, ✗ went red, – never ran.
+        // outcome — ✓ ran green, ✗ went red, ⊘ never ran.
         const summaryMd = (failure as { summaryMd?: string })?.summaryMd ?? "";
         expect(summaryMd).toContain("Stage `b`");
         expect(summaryMd).toContain("✓ `a`");
