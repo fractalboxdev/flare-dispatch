@@ -406,10 +406,9 @@ export const offloadTest = defineRun({
 
                 const stages: ResolvedStage[] = [];
                 for (const label of labels) {
-                  // Labelled rung wins; missing → fall back to the unlabelled
-                  // command. Legal but suspicious when stages are declared
-                  // (usually a typo'd key), so warn here and record it on the
-                  // stage's exec-step metadata below.
+                  // Falling back to the unlabelled command is legal but
+                  // suspicious when stages are declared (usually a typo'd key):
+                  // warn here and record it on the exec-step metadata below.
                   const labelled = yield* config.get(stageCommandKey(input.repo, label));
                   const stageCommand =
                     labelled !== undefined && labelled.trim().length > 0 ? labelled : command;
@@ -542,9 +541,7 @@ export const offloadTest = defineRun({
           );
         });
 
-      // --- Staged mode (header § Staged mode) --------------------------------
-      // One exec step per resolved stage, log uploaded IMMEDIATELY after each,
-      // so a later stage dying cannot take an earlier stage's log with it.
+      // --- Staged mode (semantics: header § Staged mode) ----------------------
       if (stages !== undefined) {
         // Summary ledger — every stage lands here as a ✅/❌/⏭ line, and the
         // failure summary carries the whole list so the check names the stage
