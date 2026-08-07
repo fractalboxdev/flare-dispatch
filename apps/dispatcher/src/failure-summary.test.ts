@@ -1,7 +1,8 @@
 // Tests for the failure-path presentation extraction (issue #85).
 //
 // `failureSummaryMd` pulls the run-authored markdown out of a run's `Exit`
-// (only `AcceptanceFailed.summaryMd` carries one today); `appendFailureSummary`
+// (`AcceptanceFailed.summaryMd`, and `StepFailed.summaryMd` since the staged
+// `offload-test` rundown needed a died-stage carrier); `appendFailureSummary`
 // splices it under the generic "execution failed" line, bounded to GitHub's
 // 65535-char check-run summary limit.
 
@@ -95,6 +96,32 @@ describe("failureSummaryMd", () => {
     expect(md).toContain("offload-test: no command");
   });
 
+  it("renders a StepFailed's summaryMd as real markdown, not a code fence", () => {
+    // The dead-stage rundown (offload-test staged mode) rides `summaryMd`
+    // precisely so its ✓/✗/⊘ lines and log links render — fencing them made
+    // the links unclickable and the backticks literal.
+    const rundown = [
+      "Stage `b` — `run-b` — died (`ExecTimeout`) after ~600s.",
+      "",
+      "- ✓ `a` — 12.3s ([log ↗](https://example.com/step-a.log))",
+      "- ✗ `b` — died (`ExecTimeout`) after ~600s",
+      "- ⊘ `c` — skipped",
+    ].join("\n");
+    const md = failureSummaryMd(
+      Exit.fail(
+        new StepFailed({
+          step: "exec-b",
+          cause: "stage `b` (`run-b`) died: ExecTimeout after ~600s",
+          summaryMd: rundown,
+        }),
+      ),
+    );
+    expect(md).toContain("Step `exec-b` failed");
+    expect(md).toContain(rundown);
+    // No fence anywhere — the rundown is spliced as markdown.
+    expect(md).not.toContain("```");
+  });
+
   it("renders SecretsMissing with the absent keys", () => {
     const md = failureSummaryMd(Exit.fail(new SecretsMissing({ keys: ["NPM_TOKEN", "FOO"] })));
     expect(md).toContain("Missing Worker secrets");
@@ -162,6 +189,26 @@ describe("appendFailureSummary", () => {
     expect(appendFailureSummary(generic, "| Chapter | Result |")).toBe(
       `${generic}\n\n| Chapter | Result |`,
     );
+  });
+
+  // The #85 seam: a generic line that already carries the signed log-link
+  // suffix, plus a StepFailed-borne staged rundown whose own lines carry
+  // per-stage log links. Both surfaces append to the same summary, so pin
+  // that they compose — links from both survive, blank-line separated, and
+  // the rundown is spliced as markdown rather than fenced.
+  it("composes a link-bearing generic line with a link-bearing staged rundown", () => {
+    const genericWithLinks = `✗ offload-test — execution failed. ([view log ↗](https://x/logs/i?t=t) · [dashboard ↗](https://dash/i))`;
+    const rundown = [
+      "- ✓ `a` — 12.3s ([log ↗](https://x/v1/artifacts/i/step-a.log))",
+      "- ✗ `b` — died (`ExecTimeout`) after ~600s",
+      "- ⊘ `c` — skipped",
+    ].join("\n");
+    const combined = appendFailureSummary(genericWithLinks, rundown);
+    expect(combined).toBe(`${genericWithLinks}\n\n${rundown}`);
+    expect(combined).toContain("[view log ↗]");
+    expect(combined).toContain("[log ↗](https://x/v1/artifacts/i/step-a.log)");
+    expect(combined).not.toContain("```");
+    expect(combined.length).toBeLessThanOrEqual(CHECK_SUMMARY_MAX_CHARS);
   });
 
   it("truncates an oversized summary so the total stays within GitHub's limit", () => {

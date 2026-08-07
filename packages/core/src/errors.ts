@@ -186,6 +186,16 @@ export class ArtifactUploadFailed extends Schema.TaggedError<ArtifactUploadFaile
 export class StepFailed extends Schema.TaggedError<StepFailed>()("StepFailed", {
   step: Schema.String,
   cause: Schema.Unknown,
+  /**
+   * Optional run-authored failure presentation — markdown the dispatcher
+   * renders in the check-run summary instead of fencing `cause` as code.
+   * Same contract as `AcceptanceFailed.summaryMd`. Exists for failures that
+   * have a rundown worth rendering but no exit code to report: a stage step
+   * that DIED (timeout / platform kill) never produced an `ExecResult`, so
+   * `AcceptanceFailed` — whose `exitCode` is required and means "the command
+   * ran to completion" — cannot carry it honestly.
+   */
+  summaryMd: Schema.optional(Schema.String),
 }) {}
 
 /**

@@ -57,6 +57,14 @@ const execTimeoutMd = (e: ExecTimeout): string =>
   `**Exec timed out** after \`${e.timeoutSec}s\`:\n\n\`${clip(e.command, 500)}\``;
 
 const stepFailedMd = (e: StepFailed): string => {
+  // Run-authored presentation wins over the fenced cause — same contract as
+  // `AcceptanceFailed.summaryMd`. A `StepFailed` that carries markdown (the
+  // dead-stage ✓/✗/⊘ rundown with its log links) must render AS markdown;
+  // fencing it turned the links literal and unclickable. The raw cause still
+  // lands in the Workflow error record, so nothing diagnostic is lost.
+  if (e.summaryMd !== undefined && e.summaryMd.trim() !== "") {
+    return `**Step \`${e.step}\` failed**\n\n${e.summaryMd}`;
+  }
   const cause =
     typeof e.cause === "string"
       ? e.cause
