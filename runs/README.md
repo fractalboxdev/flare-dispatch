@@ -5,6 +5,41 @@ registers them by name; Action mode dispatches via
 [`flare-dispatch-action`](../actions/flare-dispatch-action/), webhook mode fires
 from each run's `triggers`.
 
+## Finding your logs
+
+Three layers, closest first:
+
+1. **The check-run summary** (PR → Checks tab). Every check-run — in-progress
+   and completed, green and red, on every dispatch path — carries up to two
+   links: **"view full logs ↗"** opens the readable log viewer
+   (`<origin>/logs/<instance-id>?t=<token>`; the token is signed with
+   `LOG_LINK_SECRET`, falling back to `HMAC_SECRET`, and the link is omitted
+   when neither secret is set), and **"view step logs in Cloudflare ↗"** opens
+   the Workflows instance page (present only when `CLOUDFLARE_ACCOUNT_ID` is
+   set, and needs dashboard access to your account). The dispatcher's own
+   dashboard at `GET /` (Cloudflare Access-gated) lists recent executions with
+   the same tokened viewer links — the browse path when you don't have the PR
+   open. Cron-scheduled runs have no request to infer an origin from, so their
+   viewer links need the `PUBLIC_ORIGIN` var.
+2. **The Workflows step timeline.** The instance id is the semantic key with
+   disallowed chars mapped to `_`, e.g. `check_owner_repo_<sha12>`:
+
+   ```bash
+   wrangler workflows instances describe runs-workflow check_owner_repo_<sha12>
+   ```
+
+3. **Raw artifacts** at `GET <origin>/v1/artifacts/<instance-id>/<name>`. The
+   captured command log is a normal artifact; the name is per run — `check` →
+   `check.log`, `offload-test` / `worker-deploy` → `step.log`, `oxlint` →
+   `oxlint.log`, `playwright-demo` → `playwright.log`.
+
+A command's log is uploaded **after** the command completes — a run killed
+mid-command (timeout at the Workflow layer, container eviction) leaves no log
+artifact behind. For `offload-test`, per-stage exec steps
+([#82](https://github.com/fractalboxdev/flare-dispatch/pull/82)) split the run
+into `step-<label>.log` uploads so earlier stages' logs survive a later stage's
+death.
+
 ## `check` — universal command gate (opt-out by default)
 
 Configurable PR gate for repos that do **not** want the hardcoded Oxc/`oxlint`

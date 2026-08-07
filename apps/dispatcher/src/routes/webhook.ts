@@ -253,6 +253,14 @@ export const handleGithubWebhook = async (request: Request, env: Env): Promise<R
       run: run.name,
       github: synthesizeGithubBlock(payload),
       inputs,
+      // The dispatcher's public origin — same resolution as dispatch.ts /
+      // deploy.ts / signals-webhook.ts. A webhook dispatch HAS a request, so
+      // capture the origin here instead of leaving the Workflow to fall back
+      // to `PUBLIC_ORIGIN` (unset on most BYOC deploys). Without it the
+      // check-run summaries of webhook-triggered runs lose their tokened
+      // "view full logs ↗" viewer link and artifact URLs render relative
+      // (GitHub-broken).
+      origin: env.PUBLIC_ORIGIN ?? new URL(request.url).origin,
     };
 
     try {
