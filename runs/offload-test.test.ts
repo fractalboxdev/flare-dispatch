@@ -635,6 +635,261 @@ describe("offload-test", () => {
   });
 });
 
+// --- Staged mode (`offload-test.stages:<repo>`, run header § Staged mode) ----
+//
+// The production defect this exists for: one 40–60-min buffered exec killed by
+// the platform takes its whole log with it — no artifact ever lands. With the
+// stages key set, each stage runs as its own `exec-<label>` step and uploads
+// `step-<label>.log` IMMEDIATELY, so a later stage dying cannot orphan an
+// earlier stage's log; a stage step that dies gets a one-line marker uploaded
+// under its log name. ABSENT key → the 1.1.0 behaviour, byte-identical — the
+// unstaged tests above are the pin for that.
+describe("offload-test staged mode", () => {
+  // Webhook-shaped input — staged mode only exists on the path that omits
+  // `command` (the resolve step is where the stages key is read).
+  const webhookInput = {
+    repo: "owner/name",
+    sha: "abc123",
+    secrets: [] as readonly string[],
+    failOnNonZeroExit: true,
+  };
+
+  it.effect(
+    "per-stage execs in order — labelled command/timeout rungs win, fallback is recorded, logs upload per stage",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          "pnpm run workspace": { exitCode: 0, durationMs: 1000 },
+          "pnpm fallback": { exitCode: 0, durationMs: 500 },
+        },
+        config: {
+          "offload-test.stages:owner/name": "workspace, features",
+          // `features` has NO labelled command — falls back to this unlabelled
+          // per-repo command, and the fallback is flagged on its exec step.
+          "offload-test.command:owner/name": "pnpm fallback",
+          "offload-test.command:owner/name:workspace": "pnpm run workspace",
+          // Labelled timeout rung wins for `workspace`; `features` falls
+          // through to the unlabelled per-repo rung.
+          "offload-test.timeoutSec:owner/name:workspace": "900",
+          "offload-test.timeoutSec:owner/name": "1800",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* offloadTest.run(webhookInput);
+
+        // One exec per stage, in declaration order, each followed by ITS OWN
+        // upload — the log is durable before the next stage can die.
+        expect(handles.executions.steps.map((s) => s.name)).toEqual([
+          "resolve-command",
+          "checkout",
+          "exec-workspace",
+          "upload-log-workspace",
+          "exec-features",
+          "upload-log-features",
+        ]);
+        expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+          "pnpm run workspace",
+          "pnpm fallback",
+        ]);
+
+        // Documented timeout precedence: labelled rung ?? dispatch ??
+        // unlabelled rung ?? default.
+        expect(handles.sandbox.execs[0]?.timeoutSec).toBe(900);
+        expect(handles.sandbox.execs[1]?.timeoutSec).toBe(1800);
+
+        // Every stage step carries its derived ceiling + headroom and
+        // `retries: 0` — same contract as the single exec.
+        const execWorkspace = handles.executions.steps.find((s) => s.name === "exec-workspace");
+        expect(execWorkspace?.metadata?.["stepOpts.timeoutSec"]).toBe(900 + 120);
+        expect(execWorkspace?.metadata?.["stepOpts.retries"]).toBe(0);
+        // The suspicious labelled-key-missing fallback is recorded on the
+        // stage's step metadata — `workspace` resolved its own key, so only
+        // `features` is flagged.
+        expect(execWorkspace?.metadata?.["offload-test.commandFallback"]).toBeUndefined();
+        const execFeatures = handles.executions.steps.find((s) => s.name === "exec-features");
+        expect(execFeatures?.metadata?.["offload-test.commandFallback"]).toBe(true);
+        expect(execFeatures?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 + 120);
+
+        // Per-stage artifact names.
+        expect(handles.artifact.uploads.map((u) => u.name)).toEqual([
+          "step-workspace.log",
+          "step-features.log",
+        ]);
+
+        // Output mirrors the single-exec contract: exit 0, SUM of the
+        // checkpointed stage durations, last stage's log URL.
+        expect(result.exitCode).toBe(0);
+        expect(result.durationMs).toBe(1500);
+        expect(result.logUri).toBe(handles.artifact.urls.get("step-features.log"));
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "an Action dispatch that passes `command` stays single-exec even with stages set",
+    () => {
+      // Staged mode lives in the resolve step, which a dispatch carrying
+      // `command` skips entirely — the Action-mode contract is untouched.
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+        config: { "offload-test.stages:owner/name": "workspace,features" },
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* offloadTest.run(baseInput);
+        expect(result.exitCode).toBe(0);
+        expect(handles.executions.steps.map((s) => s.name)).toEqual([
+          "checkout",
+          "exec",
+          "upload-log",
+        ]);
+        expect(handles.artifact.uploads.map((u) => u.name)).toEqual(["step.log"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "a non-zero stage stops the sequence — later stages skipped, failure names the stage, earlier logs uploaded",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          "run-a": { exitCode: 0, durationMs: 1000 },
+          "run-b": { exitCode: 2, stderr: "2 failing", durationMs: 2000 },
+          "run-c": { exitCode: 0 },
+        },
+        config: {
+          "offload-test.stages:owner/name": "a,b,c",
+          "offload-test.command:owner/name:a": "run-a",
+          "offload-test.command:owner/name:b": "run-b",
+          "offload-test.command:owner/name:c": "run-c",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        const failure = Exit.isFailure(exit)
+          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+          : undefined;
+        expect((failure as { _tag?: string })?._tag).toBe("AcceptanceFailed");
+        expect((failure as { exitCode?: number })?.exitCode).toBe(2);
+
+        // The failure summary names the stage and lists EVERY stage with its
+        // outcome — ✅ ran green, ❌ went red, ⏭ never ran.
+        const summaryMd = (failure as { summaryMd?: string })?.summaryMd ?? "";
+        expect(summaryMd).toContain("Stage `b`");
+        expect(summaryMd).toContain("✅ `a`");
+        expect(summaryMd).toContain("❌ `b`");
+        expect(summaryMd).toContain("⏭ `c` — skipped");
+
+        // `c` never ran; `a` and `b` both have their logs already uploaded —
+        // the failing stage cannot orphan the earlier ones.
+        expect(handles.sandbox.execs.map((e) => e.command)).toEqual(["run-a", "run-b"]);
+        expect(handles.artifact.uploads.map((u) => u.name)).toEqual(["step-a.log", "step-b.log"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "a stage step that DIES uploads a marker log under the stage's log name and fails naming the stage",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          "run-a": { exitCode: 0 },
+          "run-b": { fail: "ExecTimeout", timeoutSec: 600 },
+          "run-c": { exitCode: 0 },
+        },
+        config: {
+          "offload-test.stages:owner/name": "a,b,c",
+          "offload-test.command:owner/name:a": "run-a",
+          "offload-test.command:owner/name:b": "run-b",
+          "offload-test.command:owner/name:c": "run-c",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+
+        // The run fails with a StepFailed NAMING the dead stage's step —
+        // not the raw ExecTimeout, which says nothing about which stage died.
+        expect(Exit.isFailure(exit)).toBe(true);
+        const failure = Exit.isFailure(exit)
+          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+          : undefined;
+        expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
+        expect((failure as { step?: string })?.step).toBe("exec-b");
+        expect(String((failure as { cause?: unknown })?.cause)).toContain("ExecTimeout");
+
+        // Stage `a`'s log survived — uploaded before `b` ran at all. Stage
+        // `b`'s artifact is the one-line marker (stage, error class, elapsed),
+        // uploaded from the container under the REAL log's name so the
+        // artifact endpoint never 404s (issue #39). `c` never ran.
+        expect(handles.artifact.uploads.map((u) => u.name)).toEqual(["step-a.log", "step-b.log"]);
+        expect(handles.artifact.uploads[1]?.path).toBe("/tmp/flare-dispatch-marker-b.log");
+        const markerWrite = handles.sandbox.execs.find((e) => e.command.includes("stage=b"));
+        expect(markerWrite?.command).toMatch(/stage=b error=ExecTimeout elapsedMs=\d+/);
+        expect(handles.sandbox.execs.map((e) => e.command)).not.toContain("run-c");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "failOnNonZeroExit off — a red stage still stops the sequence, exit surfaces as the run's exitCode",
+    () => {
+      // `set -e` semantics: later stages are dependents of the one that went
+      // red, so they don't run — but with the flag off the Effect SUCCEEDS
+      // (Action-mode contract: the exit code is data, the caller decides).
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          "run-a": { exitCode: 3, durationMs: 700 },
+          "run-b": { exitCode: 0 },
+        },
+        config: {
+          "offload-test.stages:owner/name": "a,b",
+          "offload-test.command:owner/name:a": "run-a",
+          "offload-test.command:owner/name:b": "run-b",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* offloadTest.run({ ...webhookInput, failOnNonZeroExit: false });
+        expect(result.exitCode).toBe(3);
+        expect(result.durationMs).toBe(700);
+        expect(handles.sandbox.execs.map((e) => e.command)).toEqual(["run-a"]);
+        expect(handles.artifact.uploads.map((u) => u.name)).toEqual(["step-a.log"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "a malformed stage label fails the resolve step loudly — never a silent un-staging",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {},
+        config: {
+          "offload-test.stages:owner/name": "good, bad label!",
+          "offload-test.command:owner/name": "pnpm test",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+        expect(Exit.isFailure(exit)).toBe(true);
+        const failure = Exit.isFailure(exit)
+          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+          : undefined;
+        expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
+        // Fail-fast: never cloned, never exec'd — a typo'd stages key degrading
+        // to a single 40-min exec would resurrect the exact defect staging fixes.
+        expect(handles.sandbox.clones).toHaveLength(0);
+        expect(handles.sandbox.execs).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+});
+
 // --- Source guard: no direct Date.now() / crypto.randomUUID() in the run -----
 // A grep guard per specs/pm/plan.md § 6 — the run body must not introduce
 // non-determinism; replay-sensitive values come from checkpointed step results
