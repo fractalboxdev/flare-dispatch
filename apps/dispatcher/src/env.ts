@@ -283,10 +283,13 @@ export interface Env {
    * `https://flare-dispatch.<account>.workers.dev`, or a custom domain) —
    * prefixed onto the `/v1/artifacts/...` URLs runs upload so the links a
    * GitHub check-run summary embeds are absolute (GitHub resolves relative
-   * markdown links against `github.com`, breaking them). A var, not a secret.
-   * Optional: HTTP dispatches fall back to the dispatch request's own origin;
-   * cron-scheduled runs have no request, so artifact links in their summaries
-   * stay relative (GitHub-broken) until this is set. Distinct from
+   * markdown links against `github.com`, breaking them) — and the base the
+   * tokened log-viewer link (`/logs/<execution>?t=…`) on every check-run
+   * summary is built on. A var, not a secret.
+   * Optional: HTTP dispatches (dispatch, deploy, webhook, signals) fall back
+   * to the request's own origin; cron-scheduled runs have no request, so their
+   * artifact links stay relative (GitHub-broken) and their summaries carry no
+   * viewer link until this is set. Distinct from
    * `SANDBOX_PREVIEW_HOSTNAME`, which is the *sandbox preview* domain — they
    * may differ (e.g. previews on a wildcard subdomain).
    */

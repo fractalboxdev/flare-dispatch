@@ -67,7 +67,9 @@ const webhookRequest = async (
   });
 };
 
-const fixture = (opts: { withWebhookSecret?: boolean; withKv?: boolean } = {}) => {
+const fixture = (
+  opts: { withWebhookSecret?: boolean; withKv?: boolean; publicOrigin?: string } = {},
+) => {
   const workflow = makeFakeWorkflow();
   const storage = makeFakeR2();
   const idempotencyKv = opts.withKv ? makeFakeKv() : undefined;
@@ -77,6 +79,7 @@ const fixture = (opts: { withWebhookSecret?: boolean; withKv?: boolean } = {}) =
     storage,
     idempotencyKv: idempotencyKv?.binding,
     githubWebhookSecret: opts.withWebhookSecret === false ? undefined : WEBHOOK_SECRET,
+    ...(opts.publicOrigin !== undefined ? { publicOrigin: opts.publicOrigin } : {}),
   });
   return { workflow, storage, env, idempotencyKv };
 };
@@ -175,6 +178,30 @@ describe("POST /v1/webhooks/github — trigger evaluation", () => {
     expect(params.github.installation_id).toBe(99999);
     expect(params.inputs.baseURL).toBe("https://example.com");
     expect(params.inputs.paths).toEqual(["/", "/health", "/api/status"]);
+  });
+
+  it("params carry the request origin — the base for the summary's viewer link", async () => {
+    // Without `origin` the Workflow falls back to `PUBLIC_ORIGIN`, which most
+    // BYOC deploys leave unset — check-run summaries of webhook-triggered runs
+    // then lose their tokened "view full logs ↗" link. Same capture as
+    // dispatch.ts / deploy.ts / signals-webhook.ts.
+    const { env, workflow } = fixture();
+    const res = await handleRequest(await webhookRequest(deploymentStatusPayload), env);
+    expect(res.status).toBe(202);
+    expect((workflow.calls[0]!.params as { origin: string }).origin).toBe(
+      "https://dispatcher.example",
+    );
+  });
+
+  it("PUBLIC_ORIGIN wins over the request origin when set", async () => {
+    // A custom domain in front of the worker — links must use the canonical
+    // origin, not whatever host the webhook happened to arrive on.
+    const { env, workflow } = fixture({ publicOrigin: "https://ci.example.dev" });
+    const res = await handleRequest(await webhookRequest(deploymentStatusPayload), env);
+    expect(res.status).toBe(202);
+    expect((workflow.calls[0]!.params as { origin: string }).origin).toBe(
+      "https://ci.example.dev",
+    );
   });
 
   it("gate rejects non-production deployments → 202 with dispatched: 0", async () => {

@@ -87,6 +87,7 @@ import { renderResultEmail } from "./notify";
 import { workflowDashboardUrl } from "./dashboard-url";
 import { checkRunNameFor } from "./check-name";
 import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "./log-token";
+import { logLinksSuffix, startedSummary } from "./summary-links";
 import { resolveMailboxLinkSecret, signMailboxToken } from "./mailbox-token";
 import { resolveAgentProxySecret, signAgentToken } from "./agent-token";
 import {
@@ -147,10 +148,12 @@ const DispatchPayload = Schema.Struct({
    * The dispatcher's public origin (e.g. `https://<worker>.workers.dev`) —
    * prefixed onto the `/v1/artifacts/...` URLs the run uploads so the links
    * embedded in check-run summaries are absolute (GitHub resolves relative
-   * markdown links against `github.com`, breaking them). The dispatch route
-   * captures it from `PUBLIC_ORIGIN` or the request URL; the scheduled path
-   * and `RunWorkflow` itself fall back to `PUBLIC_ORIGIN`. Absent everywhere →
-   * relative paths, as before.
+   * markdown links against `github.com`, breaking them) — and the base the
+   * tokened log-viewer link (`/logs/<execution>?t=…`) is built on. Every
+   * request-bearing route (dispatch, deploy, webhook, signals) captures it
+   * from `PUBLIC_ORIGIN` or the request URL; the scheduled path and
+   * `RunWorkflow` itself fall back to `PUBLIC_ORIGIN`. Absent everywhere →
+   * relative paths and link-less summaries, as before.
    */
   origin: Schema.optional(Schema.String),
   /**
@@ -390,6 +393,16 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             payload.executionId,
           )}?t=${logToken}`
         : undefined;
+    // The shared log-link suffix for EVERY summary this execution posts — the
+    // `in_progress` opener and the completed verdict, success and failure
+    // alike (summary-links.ts). Assembled once, up here, so the two posting
+    // sites below cannot drift apart again (the opener historically carried
+    // only the Cloudflare link).
+    const summaryLinks = {
+      ...(detailsUrl !== undefined ? { detailsUrl } : {}),
+      ...(logsBaseUrl !== undefined ? { logsUrl: logsBaseUrl } : {}),
+    };
+    const logsSuffix = logLinksSuffix(summaryLinks);
 
     // Self-heal agent-tier setup (specs/08-self-healing.md § 6.3): for a
     // `sandboxImage: "agent"` run, mint the per-execution model-proxy capability
@@ -559,10 +572,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
         output: {
           title: checkRunName,
-          summary:
-            detailsUrl !== undefined
-              ? `Execution [\`${payload.executionId}\`](${detailsUrl}) started — [view step logs in Cloudflare ↗](${detailsUrl})`
-              : `Execution \`${payload.executionId}\` started.`,
+          // Both log links from the very first render (summary-links.ts) — a
+          // reviewer watching an in-progress check reaches the viewer without
+          // waiting for the verdict update.
+          summary: startedSummary(payload.executionId, summaryLinks),
         },
       });
       // Persist the GitHub check-run id onto the `executions` row.
@@ -961,14 +974,8 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         }
       }
 
-      // Complete the check-run with the run's verdict. Two log links: the
-      // Cloudflare Workflows instance page (step timeline) and the readable
-      // full-log viewer on the dispatcher's own origin.
-      const cfLogsSuffix =
-        detailsUrl !== undefined ? ` — [view step logs in Cloudflare ↗](${detailsUrl})` : "";
-      const viewLogsSuffix =
-        logsBaseUrl !== undefined ? ` — [view full logs ↗](${logsBaseUrl})` : "";
-      const logsSuffix = `${cfLogsSuffix}${viewLogsSuffix}`;
+      // Complete the check-run with the run's verdict. Same two log links as
+      // the opener — the hoisted `logsSuffix` (summary-links.ts).
       // Only surfaced on the success branch below — a failed `product-demo`
       // has no `summary_json` for `/demos/:execution` to render.
       const demoSuffix = demoUrl !== undefined ? ` — [▶ view product demo ↗](${demoUrl})` : "";
