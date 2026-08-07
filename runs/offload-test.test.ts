@@ -822,14 +822,32 @@ describe("offload-test staged mode", () => {
         expect((failure as { step?: string })?.step).toBe("exec-b");
         expect(String((failure as { cause?: unknown })?.cause)).toContain("ExecTimeout");
 
+        // The ✅/❌/⏭ rundown rides `summaryMd` — the run-authored-markdown
+        // channel — NOT the cause, whose renderer fences it as a code block
+        // (links unclickable, emoji literal). The dispatcher splices
+        // `summaryMd` as real markdown, same as `AcceptanceFailed`.
+        const summaryMd = (failure as { summaryMd?: string })?.summaryMd ?? "";
+        expect(summaryMd).toContain("✅ `a`");
+        expect(summaryMd).toContain("❌ `b`");
+        expect(summaryMd).toContain("⏭ `c` — skipped");
+        expect(summaryMd).toContain("step-b.log");
+
         // Stage `a`'s log survived — uploaded before `b` ran at all. Stage
         // `b`'s artifact is the one-line marker (stage, error class, elapsed),
-        // uploaded from the container under the REAL log's name so the
-        // artifact endpoint never 404s (issue #39). `c` never ran.
+        // uploaded under the REAL log's name so the artifact endpoint never
+        // 404s (issue #39). `c` never ran.
         expect(handles.artifact.uploads.map((u) => u.name)).toEqual(["step-a.log", "step-b.log"]);
-        expect(handles.artifact.uploads[1]?.path).toBe("/tmp/flare-dispatch-marker-b.log");
         const markerWrite = handles.sandbox.execs.find((e) => e.command.includes("stage=b"));
         expect(markerWrite?.command).toMatch(/stage=b error=ExecTimeout elapsedMs=\d+/);
+
+        // The marker upload is R2-SOURCE mode: `path` is the marker exec's
+        // own streamed R2 log key (`result.logPath`), and NO `container`
+        // handle rides the upload — container-mode upload throws on the
+        // facade backend (no Sandbox namespace wired), so the marker would
+        // never land there.
+        expect(handles.artifact.uploads[1]?.path).toBe("logs/fake/exec.ndjson");
+        expect(handles.artifact.uploads[1]?.container).toBeUndefined();
+
         expect(handles.sandbox.execs.map((e) => e.command)).not.toContain("run-c");
       }).pipe(Effect.provide(layer));
     },

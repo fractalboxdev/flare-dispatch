@@ -214,6 +214,49 @@ one that passes `command` skips the config read entirely.
 
 A malformed value degrades to the default rather than propagating: a non-integer
 timeout would otherwise reach `sandbox.exec` as `NaN` — a timeout that never
-fires, i.e. a hung run holding a container until `maxDurationSec`.
+fires, i.e. a hung run holding a container indefinitely.
 
-`timeoutSec` is still bounded by the run's `maxDurationSec` (1800).
+`timeoutSec` is enforced per exec by the sandbox's own deadline. The run's
+`maxDurationSec` (1800) is validated at definition time only — it is not a
+runtime kill.
+
+### Staged mode (`offload-test.stages:<repo>`)
+
+One long buffered exec killed by the platform takes its whole log with it
+(issue #39). Three more rungs split the webhook-mode run into one exec step per
+stage, each uploading its `step-<label>.log` immediately, so a later stage's
+death cannot orphan an earlier stage's log:
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.stages:owner/repo"                "workspace,features,ts"
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.command:owner/repo:features"      "pnpm test --filter features"
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.timeoutSec:owner/repo:ts"         "900"
+```
+
+- `offload-test.stages:<repo>` — comma-separated stage labels
+  (`[A-Za-z0-9][A-Za-z0-9._-]{0,31}` each). Absent → the single-exec behaviour,
+  byte-identical. Present but malformed/empty/duplicated → the run fails loudly
+  (a silent un-staging would resurrect the log-dies-with-the-step defect).
+- `offload-test.command:<repo>:<label>` — per-stage command, falling back to
+  the unlabelled `offload-test.command:<repo>` (the fallback is warned and
+  flagged on the stage's step metadata).
+- `offload-test.timeoutSec:<repo>:<label>` — per-stage exec ceiling.
+
+Per-stage timeout precedence: labelled rung → dispatch `timeoutSec` →
+unlabelled rung → default (600). The labelled rung outranks the dispatch value
+— an inversion of the usual dispatch-wins rule — because staged mode only
+exists when the dispatch omitted `command` (webhook mode), so a `timeoutSec`
+riding such a dispatch is a coarse whole-run knob, and the stage-specific key
+is the more specific source.
+
+Staging makes earlier stages' logs durable; it does not give a long suite more
+wall time. Each stage still runs under its own exec ceiling, and those per-exec
+ceilings are the only runtime enforcement — size them to the suite.
+
+Staged mode is webhook-only: a dispatch that passes `command` skips the config
+read and stays single-exec. Stages run sequentially inside one workflow
+instance posting one check-run — they are ordered dependents of one checkout,
+not the parallel independent gates `matrix-fanout` + labelled `check` serve.

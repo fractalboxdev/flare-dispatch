@@ -48,13 +48,24 @@
 //   * a stage that exits non-zero stops the sequence (later stages are
 //     `set -e`-style dependents of earlier ones); a stage step that DIES
 //     (timeout/internal/platform kill) gets a one-line marker uploaded under
-//     its `step-<label>.log` name (the error class recovered from the
-//     boundary-wrapped cause where the typed tag was eaten) and the run fails
-//     naming the stage. One caveat scopes the no-404 claim: a WORKFLOW-level
-//     kill (stage ceilings summing past `maxDurationSec`) fires outside any
-//     step, so the in-flight stage still orphans — resolve warns when the
-//     configured ceilings make that reachable. The failure summary lists every
-//     stage with ✅/❌/⏭ and durations.
+//     its `step-<label>.log` name and the run fails naming the stage, the
+//     ✅/❌/⏭ rundown riding `StepFailed.summaryMd` so the check-run renders
+//     it as real markdown. The marker rides the marker exec's own R2 log
+//     stream (see the upload step), so it lands on both sandbox backends.
+//
+// Staging makes earlier stages' logs DURABLE — it does not buy a long suite
+// more wall time. Each stage runs under its own exec ceiling (the labelled /
+// unlabelled `timeoutSec` rungs), and those per-exec ceilings are the only
+// runtime enforcement there is: `limits.maxDurationSec` is validated at
+// definition time and never read again at runtime. Size the stage ceilings to
+// the suite; staging alone does not stretch them.
+//
+// Why sequential stages in ONE instance, not `matrix-fanout` + labelled
+// `check` (separate instances, independent timeouts, parallel)? The stages
+// are ordered dependents sharing one checkout — later stages assume earlier
+// ones passed — and the repo gates on ONE `flare-dispatch/offload-test`
+// check-run. Fanout buys parallelism an ordered suite cannot use, at the cost
+// of N checkouts and N check-runs to re-aggregate.
 //
 // The key is resolved inside the same `resolve-command` step that reads the
 // command, so staged mode exists only on the webhook path (a dispatch that
@@ -228,7 +239,9 @@ const repoCommandKey = (repo: string): string => `offload-test.command:${repo}`;
  *   wrangler kv key put --binding=CONFIG_KV "offload-test.timeoutSec:owner/repo" "1800"
  *
  * An explicit dispatch value always wins; these only fill the gap the trigger
- * leaves. `timeoutSec` is still clamped by the run's `maxDurationSec`.
+ * leaves. `timeoutSec` is enforced per exec by the sandbox's own deadline —
+ * there is no additional runtime wall-clock clamp (`limits.maxDurationSec` is
+ * a definition-time validation only).
  */
 const repoInstallKey = (repo: string): string => `offload-test.install:${repo}`;
 const repoTimeoutKey = (repo: string): string => `offload-test.timeoutSec:${repo}`;
@@ -258,17 +271,16 @@ const stageTimeoutKey = (repo: string, label: string): string => `${repoTimeoutK
  */
 /**
  * Inner error classes worth recovering from a boundary-wrapped StepFailed's
- * rendered cause (see the errorClass recovery in staged mode). Anchored to
- * the known tag vocabulary so vendor free text can never mint a class.
+ * rendered cause (see the errorClass recovery in staged mode). The typed tag
+ * usually survives the step boundary intact; this covers the case where the
+ * boundary eats it, where the class is usually still recoverable from the
+ * rendered cause text (staging evidence: the same death read
+ * `error=StepFailed` before this recovery, `error=ExecFailed` with it).
+ * Anchored to the known tag vocabulary so vendor free text can never mint a
+ * class — a pure platform error (`WorkflowInternalError`) contains none of
+ * these words and falls back to `StepFailed`, the honest answer there.
  */
 const INNER_EXEC_ERROR_RE = /\b(ExecTimeout|ExecFailed|CheckoutFailed)\b/;
-
-/**
- * Wall-time ceiling — specs/02-runs.md § 1. A const rather than a literal in
- * `limits` so the staged-mode resolve step can compare the configured stage
- * ceilings against it (see the over-budget warn there).
- */
-const MAX_DURATION_SEC = 1800;
 
 const STAGE_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 
@@ -355,8 +367,10 @@ export const offloadTest = defineRun({
 
   limits: {
     // Wall-time ceiling — specs/02-runs.md § 1. Single container, no
-    // concurrency parameter.
-    maxDurationSec: MAX_DURATION_SEC,
+    // concurrency parameter. Validated at definition time (define-run.ts);
+    // the runtime enforcement a stage actually meets is its per-exec
+    // `timeoutSec` ceiling — see header § Staged mode.
+    maxDurationSec: 1800,
   },
 
   run: (input) =>
@@ -470,26 +484,6 @@ export const offloadTest = defineRun({
                     ),
                     commandFellBack,
                   });
-                }
-                // A workflow-level kill (`maxDurationSec`) fires OUTSIDE any
-                // step, so it orphans the in-flight stage's artifact despite
-                // the marker machinery. Warn while the operator can still fix
-                // the config: the worst-case wall time is every stage running
-                // to its ceiling plus per-stage headroom.
-                const worstCaseSec = stages.reduce(
-                  (sum, st) =>
-                    sum +
-                    (st.timeoutSec ?? input.timeoutSec ?? timeoutSec ?? TIMEOUT_SEC_DEFAULT) +
-                    STEP_TIMEOUT_HEADROOM_SEC,
-                  0,
-                );
-                if (worstCaseSec > MAX_DURATION_SEC) {
-                  yield* io.log(
-                    "warn",
-                    `offload-test: configured stage ceilings sum to ~${worstCaseSec}s, past ` +
-                      `maxDurationSec (${MAX_DURATION_SEC}s) — a workflow-level kill would ` +
-                      `orphan the in-flight stage's artifact`,
-                  );
                 }
                 return { command, install, timeoutSec, stages };
               }),
@@ -660,13 +654,14 @@ export const offloadTest = defineRun({
                 const tag = (f as { _tag?: unknown })._tag;
                 if (typeof tag !== "string") return "UnknownError";
                 if (tag !== "StepFailed") return tag;
-                // Production loses the typed tag at the Workflow boundary:
-                // when no Effect Cause survives the step rejection, the CF
-                // step runner re-fails as a bare StepFailed (step-runner-cf).
-                // The original class usually survives in the rendered cause
-                // text — recover it there so the marker and rundown can still
-                // say ExecTimeout vs ExecFailed; unrecoverable stays
-                // StepFailed (honest: the boundary really did eat it).
+                // The typed tag usually survives the Workflow boundary (the
+                // CF step runner re-fails with the surviving Cause). When no
+                // Cause survives, the runner re-fails as a bare StepFailed
+                // (step-runner-cf) and the class is usually still recoverable
+                // from the rendered cause text — recover it there so the
+                // marker and rundown can say ExecTimeout vs ExecFailed. A
+                // pure platform error (WorkflowInternalError) carries no exec
+                // vocabulary to recover; it stays StepFailed, honestly.
                 const rendered = String((f as { cause?: unknown }).cause ?? "");
                 return INNER_EXEC_ERROR_RE.exec(rendered)?.[1] ?? tag;
               },
@@ -674,25 +669,30 @@ export const offloadTest = defineRun({
             });
             const elapsedMs = (yield* io.now) - stageStartMs;
             const elapsedS = Math.round(elapsedMs / 1000);
-            const markerPath = `/tmp/flare-dispatch-marker-${stage.label}.log`;
             // Label (STAGE_LABEL_RE), tag, and number only — shell-quote-safe
             // by construction.
             const markerLine = `stage=${stage.label} error=${errorClass} elapsedMs=${elapsedMs}`;
+            // The marker rides the marker exec's OWN log stream: `sandbox.exec`
+            // streams stdout to an R2 log key and returns it as `logPath`, so
+            // uploading THAT key in R2-source mode (no `container` — same mode
+            // as the green-stage upload above) works on both sandbox backends.
+            // Container-mode upload (`artifact.upload({ container })`) throws
+            // on the facade backend, where no Sandbox namespace is wired
+            // (runtime-cf/artifact-r2.ts) — the marker never landed there.
             yield* step(
               `upload-log-${stage.label}`,
               () =>
                 sandbox
                   .exec({
                     container,
-                    command: `printf '%s\\n' '${markerLine}' > ${markerPath}`,
+                    command: `printf '%s\\n' '${markerLine}'`,
                     timeoutSec: 30,
                   })
                   .pipe(
-                    Effect.andThen(
+                    Effect.flatMap((marker) =>
                       artifact.upload({
                         name: `step-${stage.label}.log`,
-                        path: markerPath,
-                        container,
+                        path: marker.logPath,
                         contentType: "text/plain",
                         signedUrlTTL: "30 days",
                       }),
@@ -712,11 +712,20 @@ export const offloadTest = defineRun({
             );
             lines.push(`- ❌ \`${stage.label}\` — died (\`${errorClass}\`) after ~${elapsedS}s`);
             lines.push(...skippedLines(i + 1));
+            // The rundown rides `summaryMd` — the run-authored-markdown channel
+            // `AcceptanceFailed` already uses for the red-stage path — so the
+            // check-run renders the ✅/❌/⏭ lines and log links as real
+            // markdown instead of fencing them inside `stepFailedMd`'s code
+            // block. `AcceptanceFailed` itself does not fit here: its required
+            // `exitCode` means "the command ran to completion", and a dead
+            // stage produced no exit code to report. `cause` stays a plain
+            // one-liner for the Workflow error record.
             return yield* Effect.fail(
               new StepFailed({
                 step: `exec-${stage.label}`,
-                cause: [
-                  `stage \`${stage.label}\` (\`${stage.command}\`) died: ${errorClass} after ~${elapsedS}s. ` +
+                cause: `stage \`${stage.label}\` (\`${stage.command}\`) died: ${errorClass} after ~${elapsedS}s`,
+                summaryMd: [
+                  `Stage \`${stage.label}\` — \`${stage.command}\` — died (\`${errorClass}\`) after ~${elapsedS}s. ` +
                     `Earlier stage logs are already uploaded; this stage's log is the marker artifact \`step-${stage.label}.log\`.`,
                   "",
                   ...lines,
