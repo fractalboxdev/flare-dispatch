@@ -423,14 +423,6 @@ export interface GithubService {
     installationId?: number;
   }) => Effect.Effect<void, GitHubApiError>;
 
-  /** Assign an issue to handles that already have repo access. */
-  readonly assignIssue: (req: {
-    repo: string;
-    issue: number;
-    assignees: readonly string[];
-    installationId?: number;
-  }) => Effect.Effect<void, GitHubApiError>;
-
   /**
    * Close an issue **as a duplicate of `duplicateOf`** — the only close on this
    * service, and deliberately not spellable as a bare "close".
@@ -519,12 +511,6 @@ export const github = {
   }) => Effect.flatMap(Github, (g) => g.removeIssueLabel(req)),
   commentOnIssue: (req: { repo: string; issue: number; body: string; installationId?: number }) =>
     Effect.flatMap(Github, (g) => g.commentOnIssue(req)),
-  assignIssue: (req: {
-    repo: string;
-    issue: number;
-    assignees: readonly string[];
-    installationId?: number;
-  }) => Effect.flatMap(Github, (g) => g.assignIssue(req)),
   closeIssueAsDuplicate: (req: {
     repo: string;
     issue: number;

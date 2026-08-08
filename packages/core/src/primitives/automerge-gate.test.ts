@@ -375,7 +375,6 @@ const githubService = (over: Partial<GithubService>): GithubService => ({
   addIssueLabels: () => Effect.void,
   removeIssueLabel: () => Effect.void,
   commentOnIssue: () => Effect.void,
-  assignIssue: () => Effect.void,
   closeIssueAsDuplicate: () => Effect.void,
   actionRuns: () => Effect.succeed([]),
   pullRequestHistory: () => Effect.succeed([]),

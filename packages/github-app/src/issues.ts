@@ -252,20 +252,6 @@ export const createIssueComment = async (opts: CreateIssueCommentOptions): Promi
   await assertOk(res, `comment failed for ${opts.repo}#${opts.issue}`);
 };
 
-export type AssignIssueOptions = IssueTarget & { readonly assignees: readonly string[] };
-
-/** Add assignees. GitHub silently drops handles without repo access. */
-export const assignIssue = async (opts: AssignIssueOptions): Promise<void> => {
-  if (opts.assignees.length === 0) return;
-  const { doFetch } = resolveClient(opts);
-  const res = await doFetch(issueUrl(opts, "/assignees"), {
-    method: "POST",
-    headers: ghHeaders(opts.token, { json: true }),
-    body: JSON.stringify({ assignees: opts.assignees }),
-  });
-  await assertOk(res, `assign failed for ${opts.repo}#${opts.issue}`);
-};
-
 export type CloseIssueAsDuplicateOptions = IssueTarget & {
   /**
    * The issue number this one duplicates. **Required** — see the header: this

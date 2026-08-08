@@ -69,13 +69,11 @@ export {
 } from "./repo-files";
 export {
   addIssueLabels,
-  assignIssue,
   closeIssueAsDuplicate,
   createIssueComment,
   listIssues,
   removeIssueLabel,
   type AddIssueLabelsOptions,
-  type AssignIssueOptions,
   type AuthorAssociation,
   type CloseIssueAsDuplicateOptions,
   type CreateIssueCommentOptions,

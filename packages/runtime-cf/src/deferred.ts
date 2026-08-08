@@ -139,10 +139,6 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
       Effect.logInfo(
         `github.commentOnIssue skipped (no GitHub App credentials) — ${repo}#${issue} not commented`,
       ),
-    assignIssue: ({ repo, issue }) =>
-      Effect.logInfo(
-        `github.assignIssue skipped (no GitHub App credentials) — ${repo}#${issue} unassigned`,
-      ),
     closeIssueAsDuplicate: ({ repo, issue, duplicateOf }) =>
       Effect.logInfo(
         `github.closeIssueAsDuplicate skipped (no GitHub App credentials) — ${repo}#${issue} (dup of #${duplicateOf}) left open`,

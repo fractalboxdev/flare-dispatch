@@ -80,8 +80,6 @@ export type GithubFakeState = {
   readonly removeIssueLabelCalls: Array<{ repo: string; issue: number; label: string }>;
   /** Every issue comment, in order — body included, so a test can assert the template. */
   readonly commentOnIssueCalls: Array<{ repo: string; issue: number; body: string }>;
-  /** Every assignment, in order. */
-  readonly assignIssueCalls: Array<{ repo: string; issue: number; assignees: readonly string[] }>;
   /**
    * Every close, in order. The only close there is, and it carries the link —
    * so `closeIssueAsDuplicateCalls` being empty IS the assertion that nothing
@@ -139,7 +137,6 @@ export const makeGithubFake = (
     addIssueLabelsCalls: [],
     removeIssueLabelCalls: [],
     commentOnIssueCalls: [],
-    assignIssueCalls: [],
     closeIssueAsDuplicateCalls: [],
   };
   const now = opts.now ?? NOW_DEFAULT;
@@ -192,11 +189,6 @@ export const makeGithubFake = (
     commentOnIssue: ({ repo, issue, body }) =>
       Effect.sync(() => {
         state.commentOnIssueCalls.push({ repo, issue, body });
-      }),
-
-    assignIssue: ({ repo, issue, assignees }) =>
-      Effect.sync(() => {
-        state.assignIssueCalls.push({ repo, issue, assignees });
       }),
 
     closeIssueAsDuplicate: ({ repo, issue, duplicateOf }) =>

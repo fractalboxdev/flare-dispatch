@@ -24,7 +24,6 @@
 
 import {
   addIssueLabels,
-  assignIssue,
   closeIssueAsDuplicate,
   createIssueComment,
   createPullReview,
@@ -320,13 +319,6 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
         if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
         const token = yield* mintToken(config, repo, installationId);
         yield* ghCall(() => createIssueComment({ token, repo, issue, body }));
-      }),
-
-    assignIssue: ({ repo, issue, assignees, installationId }) =>
-      Effect.gen(function* () {
-        if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
-        const token = yield* mintToken(config, repo, installationId);
-        yield* ghCall(() => assignIssue({ token, repo, issue, assignees }));
       }),
 
     closeIssueAsDuplicate: ({ repo, issue, duplicateOf, installationId }) =>

@@ -109,17 +109,14 @@ describe("makeGithubFake — the state-machine writes", () => {
     expect(state.removeIssueLabelCalls).toHaveLength(2);
   });
 
-  it("commentOnIssue and assignIssue record what they were asked to do", async () => {
+  it("commentOnIssue records the body it was asked to post", async () => {
     const { layer, state } = seedOne();
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const g = yield* Github;
-        yield* g.commentOnIssue({ repo: "owner/repo", issue: 7, body: "hello" });
-        yield* g.assignIssue({ repo: "owner/repo", issue: 7, assignees: ["alice"] });
-      }).pipe(Effect.provide(layer)),
+      Effect.flatMap(Github, (g) =>
+        g.commentOnIssue({ repo: "owner/repo", issue: 7, body: "hello" }),
+      ).pipe(Effect.provide(layer)),
     );
     expect(state.commentOnIssueCalls[0]).toMatchObject({ issue: 7, body: "hello" });
-    expect(state.assignIssueCalls[0]).toMatchObject({ issue: 7, assignees: ["alice"] });
   });
 
   it("closeIssueAsDuplicate closes it and keeps the link", async () => {
