@@ -19,12 +19,15 @@
 //     `idempotencyKeyFor`.
 //   * `readFile` → `readFile`. No grant, no command.
 //   * `runDetached` / `waitForExit` / `waitForPort` / `exposePort` → typed
-//     failures naming the gap. The facade has no detached-process surface, and
-//     that is a design question rather than an omission: a process that
-//     outlives the exec fence outlives the grant window the fence closes.
-//     `grant-catalog.ts` keeps the runs that need them off this path, so these
-//     branches are unreachable in production — they exist so the failure is
-//     legible if that ever stops being true.
+//     failures naming the gap. The facade DOES serve detached processes
+//     (`startDetached` / `detachedStatus` / `stopDetached`, ADR-0012: such a
+//     process holds no grant); what is missing is this adapter's wiring to it
+//     and the run bodies still calling `sandbox.runDetached`. `exposePort` is
+//     the one deliberate exclusion — preview URLs stay off the facade until the
+//     substrate worker owns a proxy route. `grant-catalog.ts` keeps the runs
+//     that need them off this path, so these branches are unreachable in
+//     production — they exist so the failure is legible if that ever stops
+//     being true. Each stub's own `cause` carries the specific reason.
 //
 // Logs: the substrate streams a command's full output to its own artifact mount
 // and returns a bounded tail. This layer writes that tail to the dispatcher's

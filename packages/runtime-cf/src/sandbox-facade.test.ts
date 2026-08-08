@@ -357,6 +357,29 @@ describe("the surfaces the facade does not serve", () => {
     expect(cause).toContain("startDetached");
   });
 
+  // `waitForExit`'s reason changed with `runDetached`'s and was the one of the
+  // three carrying a DIFFERENT claim — not "a gap", but "no such method, on
+  // purpose". Pinned for the same reason the one above is: the message is the
+  // whole product, so an untested one is free to go stale again.
+  it("fails waitForExit by pointing at the poll that replaces it", async () => {
+    const f = facade();
+    const r2 = bucket();
+    const exit = await run(
+      Effect.flatMap(SandboxTag, (s) =>
+        s.waitForExit({ handle: { id: "proc-1", container: { id: EXECUTION } } }),
+      ),
+      f.api,
+      r2.binding,
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) return;
+    const cause = JSON.stringify(exit.cause);
+    // What to do instead — the facade serves this, so the reader has a route.
+    expect(cause).toContain("detachedStatus");
+    // Why it is absent by design, rather than merely unbuilt.
+    expect(cause).toContain("ADR-0012");
+  });
+
   it("fails exposePort rather than handing back an unreachable localhost", async () => {
     const f = facade();
     const r2 = bucket();
