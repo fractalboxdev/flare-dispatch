@@ -320,10 +320,11 @@ export const prReview = defineRun({
       // comment — success or failure. `reviewBody` produces the output; the
       // catch arm posts a comment and re-fails so the check reflects what
       // happened. Two failure families (issue #21):
-      //   - CAPACITY (`ModelCallFailed` reasons in `CAPACITY_REASONS`): the
-      //     review never ran — post a "skipped" comment and fail `RunSkipped`,
-      //     which the dispatcher concludes as a `neutral` check-run, never
-      //     `failure`.
+      //   - CAPACITY (`ModelCallFailed` reason `context-overflow`, i.e. every
+      //     reviewer overflowed the model's context even after the engine's
+      //     shrink-retries): the review never ran — post a "skipped" comment
+      //     and fail `RunSkipped`, which the dispatcher concludes as a
+      //     `neutral` check-run, never `failure`.
       //   - everything else: post "could not complete" and re-fail as
       //     `StepFailed`, so the check goes red honestly.
       // The comment post itself is best-effort — a failure to post must not
@@ -332,8 +333,8 @@ export const prReview = defineRun({
         Effect.catchAll((err) =>
           Match.value(err).pipe(
             Match.tag("ModelCallFailed", (e) =>
-              CAPACITY_REASONS.has(e.reason)
-                ? skipReview(input, viewerUrl, e)
+              e.reason === "context-overflow" || e.reason === "rate-limited"
+                ? skipReview(input, viewerUrl, e, e.reason)
                 : failReview(input, viewerUrl, e),
             ),
             Match.orElse(() => failReview(input, viewerUrl, err)),
@@ -342,23 +343,6 @@ export const prReview = defineRun({
       );
     }),
 });
-
-/**
- * `ModelCallFailed` reasons where the review never happened, so the check must
- * be `neutral` rather than red — `RunSkipped`'s own doc: "a review that didn't
- * happen is not a failed review, and a red that isn't actionable trains people
- * to ignore the check."
- *
- * `rate-limited` is the AI Gateway shedding the call before the provider sees
- * it (`AiGatewayError` 2003), which is capacity exactly like `context-overflow`
- * — nine PRs reviewed at once against a 10-req/min gateway put eight of them
- * red while saying nothing about the code. Everything else stays red: an
- * `auth-failed` or `bad-response` is a broken deploy, not a busy one.
- */
-const CAPACITY_REASONS: ReadonlySet<ModelCallFailed["reason"]> = new Set([
-  "context-overflow",
-  "rate-limited",
-]);
 
 /** The boundary's red arm: post "could not complete", re-fail as `StepFailed`. */
 const failReview = (input: RunInput, viewerUrl: string | undefined, err: unknown) =>
@@ -384,26 +368,55 @@ const failReview = (input: RunInput, viewerUrl: string | undefined, err: unknown
     return yield* Effect.fail(new StepFailed({ step: "pr-review", cause: reason }));
   });
 
-/** Reader-facing line for a capacity skip — the check-run summary AND the
- *  `RunSkipped.reason`, so both surfaces tell the same story. */
-const CONTEXT_SKIP_REASON =
-  "the PR diff exceeds the model's context window even after truncation, so the review could not run";
+/** The two conditions under which the review was IMPOSSIBLE rather than bad.
+ *  Both are capacity, not a verdict on the code — see `skipReview`. */
+type SkipKind = "context-overflow" | "rate-limited";
+
+/** Reader-facing line per skip kind — the check-run summary AND the
+ *  `RunSkipped.reason`, so both surfaces tell the same story.
+ *
+ *  Each names the CAUSE, not the symptom, and says outright that no review
+ *  ran: a reader must not be left wondering whether the code was examined and
+ *  passed. "Capacity" alone would leave exactly that ambiguity. */
+const SKIP_REASON: Readonly<Record<SkipKind, string>> = {
+  "context-overflow":
+    "the PR diff exceeds the model's context window even after truncation, so the review could not run",
+  "rate-limited":
+    "the AI Gateway rate-limited every reviewer, so no code was reviewed",
+};
+
+/** The operator-facing "what to do" paragraph, per kind. */
+const SKIP_ADVICE: Readonly<Record<SkipKind, string>> = {
+  "context-overflow":
+    "To review PRs this size, configure a larger-context model " +
+    "(`pr-review.<backend>.model`) or lower `pr-review.<backend>.maxDiffChars`.",
+  "rate-limited":
+    "This is a shared-capacity condition, not a code problem: every reviewer " +
+    "for this PR was refused by the gateway, most often when several PRs are " +
+    "reviewed at once and the per-window quota is exhausted. Re-running once " +
+    "the window rolls over reviews the same commit; making it rare is a " +
+    "capacity decision (gateway rate limit, reviewer fan-out, or backend).",
+};
 
 /** The boundary's neutral arm: the review was IMPOSSIBLE for capacity reasons
  *  (context overflow after shrink-retries) — post a "skipped" comment and fail
  *  `RunSkipped` so the dispatcher concludes the check `neutral`, not red. */
-const skipReview = (input: RunInput, viewerUrl: string | undefined, err: ModelCallFailed) =>
+const skipReview = (
+  input: RunInput,
+  viewerUrl: string | undefined,
+  err: ModelCallFailed,
+  kind: SkipKind,
+) =>
   Effect.gen(function* () {
     yield* step("post-skip-comment", () =>
       postComment(
         input,
         [
-          `⊘ **pr-review skipped**: ${CONTEXT_SKIP_REASON}.`,
+          `⊘ **pr-review skipped**: ${SKIP_REASON[kind]}.`,
           "",
-          `A model-capacity limit, not a code problem (${describeError(err)}). ` +
-            "The check concludes `neutral`. To review PRs this size, configure a " +
-            "larger-context model (`pr-review.<backend>.model`) or lower " +
-            "`pr-review.<backend>.maxDiffChars`.",
+          `A capacity limit, not a code problem (${describeError(err)}). ` +
+            "The check concludes `neutral`. " +
+            SKIP_ADVICE[kind],
           ...viewerFooter(viewerUrl),
           "",
           COMMENT_MARKER,
@@ -414,7 +427,7 @@ const skipReview = (input: RunInput, viewerUrl: string | undefined, err: ModelCa
         ),
       ),
     );
-    return yield* Effect.fail(new RunSkipped({ reason: CONTEXT_SKIP_REASON }));
+    return yield* Effect.fail(new RunSkipped({ reason: SKIP_REASON[kind] }));
   });
 
 // ---------------------------------------------------------------------------
@@ -643,11 +656,22 @@ const reviewBody = (input: RunInput, viewerUrl?: string) =>
             }
           }
 
-          // Every reviewer failed → no partial review to salvage; re-raise the
-          // first cause (typed) so the error boundary names it precisely.
-          const firstLeft = results.find(Either.isLeft);
-          if (firstLeft !== undefined && results.every(Either.isLeft)) {
-            return yield* Effect.fail(firstLeft.left);
+          // Every reviewer failed → no partial review to salvage; re-raise a
+          // cause (typed) so the error boundary names it precisely.
+          //
+          // WHICH cause matters, because the boundary treats a rate-limit as a
+          // neutral skip. Raising the *first* left would let one rate-limited
+          // reviewer mask six that failed for real reasons — a red run
+          // laundered into "the gateway was busy". So prefer any cause that is
+          // NOT a rate-limit; the boundary sees `rate-limited` only when EVERY
+          // reviewer was rate-limited, which is the one case where nothing was
+          // reviewed for a reason that says nothing about the code.
+          const lefts = results.filter(Either.isLeft).map((l) => l.left);
+          if (lefts.length > 0 && lefts.length === results.length) {
+            const notRateLimited = lefts.find(
+              (e) => !(e._tag === "ModelCallFailed" && e.reason === "rate-limited"),
+            );
+            return yield* Effect.fail(notRateLimited ?? lefts[0]!);
           }
 
           // Findings from the domains that succeeded; failed domains contribute

@@ -227,6 +227,117 @@ describe("pr-review", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  /** A gateway rate-limit, in the shape the deployed gateway actually returns:
+   *  `AiGatewayError` / internalCode 2003, surfaced as reason `rate-limited`. */
+  const rateLimited = new ModelGatewayError({
+    model: "@cf/test/model",
+    reason: "rate-limited",
+    message:
+      'openai returned 429: {"error":[{"code":2003,"message":"Rate limited"}],"name":"AiGatewayError","httpCode":429}',
+  });
+
+  it.effect(
+    "a rate-limit across EVERY reviewer SKIPS the run (RunSkipped → neutral), never a red failure",
+    () => {
+      // The gateway refused every reviewer, so no code was read. That is a
+      // capacity condition, not a verdict — same family as context-overflow,
+      // and the same neutral conclusion. A red check here would mean "the
+      // gateway was busy", which is a badge that lies.
+      const { layer, handles } = makeCFRuntimeTest({
+        config: backendConfig,
+        sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+        // `wrangler.` is a sensitive path, which forces the FULL 7-reviewer
+        // tier. The one-line `x.ts` diff other tests use classifies `trivial`
+        // — a single reviewer, where "some failed" cannot be expressed.
+        sandboxFiles: {
+          [DIFF_FILE]: "diff --git a/wrangler.jsonc b/wrangler.jsonc\n+++ b/wrangler.jsonc\n+x\n",
+        },
+        modelGateway: { responses: [rateLimited] },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(prReview.run(baseInput));
+        const failure = Exit.match(exit, {
+          onSuccess: () => undefined,
+          onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
+        });
+        expect(failure).toBeInstanceOf(RunSkipped);
+        // The reason names the CAUSE and says no review ran — a reader must not
+        // be left thinking the code was examined and passed.
+        expect((failure as RunSkipped).reason).toContain("AI Gateway rate-limited");
+        expect((failure as RunSkipped).reason).toContain("no code was reviewed");
+
+        const body = handles.github.pullReviewCalls[0]!.body;
+        expect(body).toContain("pr-review skipped");
+        expect(body).toContain("AI Gateway rate-limited");
+        expect(body).not.toContain("could not complete");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a rate-limit on SOME reviewers is a partial review, not a skip", () => {
+    // One reviewer refused, the rest answered. There IS a review to ship, so
+    // the run must succeed and say which domain did not report — laundering
+    // this into a clean "skipped" would hide that the PR was only partly read.
+    const { layer, handles } = makeCFRuntimeTest({
+      config: backendConfig,
+      sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+      // `wrangler.` is a sensitive path, which forces the FULL 7-reviewer
+        // tier. The one-line `x.ts` diff other tests use classifies `trivial`
+        // — a single reviewer, where "some failed" cannot be expressed.
+        sandboxFiles: {
+          [DIFF_FILE]: "diff --git a/wrangler.jsonc b/wrangler.jsonc\n+++ b/wrangler.jsonc\n+x\n",
+        },
+      // Call 0 is refused; every later call repeats the last response.
+      modelGateway: { responses: [rateLimited, emptyReport] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(prReview.run(baseInput));
+      expect(Exit.isSuccess(exit)).toBe(true);
+
+      const body = handles.github.pullReviewCalls[0]!.body;
+      expect(body).not.toContain("pr-review skipped");
+      expect(body).not.toContain("could not complete");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("an all-fail whose causes are MIXED stays red, even when one is a rate-limit", () => {
+    // The precision case. Every reviewer failed, but only some for capacity —
+    // the rest returned unusable output, which IS a real failure. Raising the
+    // rate-limit here would launder six broken reviewers into a neutral badge,
+    // so the boundary must see the non-capacity cause.
+    const badResponse = new ModelGatewayError({
+      model: "@cf/test/model",
+      reason: "bad-response",
+      message: "no parseable JSON in the model answer",
+    });
+    const { layer, handles } = makeCFRuntimeTest({
+      config: backendConfig,
+      sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+      // `wrangler.` is a sensitive path, which forces the FULL 7-reviewer
+        // tier. The one-line `x.ts` diff other tests use classifies `trivial`
+        // — a single reviewer, where "some failed" cannot be expressed.
+        sandboxFiles: {
+          [DIFF_FILE]: "diff --git a/wrangler.jsonc b/wrangler.jsonc\n+++ b/wrangler.jsonc\n+x\n",
+        },
+      modelGateway: { responses: [rateLimited, badResponse] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(prReview.run(baseInput));
+      const failure = Exit.match(exit, {
+        onSuccess: () => undefined,
+        onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
+      });
+      expect(failure).not.toBeInstanceOf(RunSkipped);
+
+      const body = handles.github.pullReviewCalls[0]!.body;
+      expect(body).toContain("could not complete");
+      expect(body).not.toContain("pr-review skipped");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect(
     "a context-overflow across every reviewer SKIPS the run (RunSkipped → neutral), never a red failure",
     () => {
