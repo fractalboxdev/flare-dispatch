@@ -345,7 +345,16 @@ describe("the surfaces the facade does not serve", () => {
     );
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isSuccess(exit)) return;
-    expect(JSON.stringify(exit.cause)).toContain("no detached-process surface");
+    // Asserted on what a reader can DO with the message, not on one phrase.
+    // The old assertion pinned "no detached-process surface", which stopped
+    // being true when the facade grew `startDetached` (ADR-0012) — a test that
+    // holds a stale explanation in place is worse than no test, because the
+    // explanation is the whole product here.
+    const cause = JSON.stringify(exit.cause);
+    // Where the block is recorded, so the reader can find and clear it.
+    expect(cause).toContain("grant-catalog.ts");
+    // And that the facade half already exists, so nobody goes and builds it.
+    expect(cause).toContain("startDetached");
   });
 
   it("fails exposePort rather than handing back an unreachable localhost", async () => {

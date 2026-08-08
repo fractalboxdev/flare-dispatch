@@ -361,20 +361,32 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
           }),
       }),
 
+    // The three stubs below still fail, and must: this adapter is not wired to
+    // the facade's detached surface and the run bodies still call
+    // `sandbox.runDetached`. Only the REASON has changed. The facade now serves
+    // `startDetached` / `detachedStatus` / `stopDetached` (ADR-0012: a detached
+    // process holds no grant), so a message saying the surface does not exist
+    // sends whoever reads it off to build something that is already there.
+    // `grant-catalog.ts`'s `detached-process` gap states the real clearing
+    // condition — the run body moves off `sandbox.runDetached` — and stays.
     runDetached: () =>
       Effect.fail(
         new ContainerLaunchFailed({
           image: "substrate",
           cause:
-            "the substrate facade serves no detached-process surface — a process outliving the exec fence outlives its grant window (ADR-0003/0005). This run is kept off the facade by grant-catalog.ts",
+            "this adapter is not wired to the facade's detached surface — the facade serves `startDetached` (ADR-0012: a detached process holds no grant), but this run still calls `sandbox.runDetached`. Kept off the facade by grant-catalog.ts until the run body moves over",
         }),
       ),
 
+    // Correct to fail, and it is not a gap: ADR-0012 gives the facade no
+    // `waitForExit` on purpose. A consumer polls `detachedStatus` from its own
+    // durable steps, because a Worker call that blocks for twenty minutes is
+    // not a call.
     waitForExit: ({ handle }) =>
       Effect.fail(
         new ExecTimeout({
           timeoutSec: 0,
-          command: `detached:${handle.id} — the substrate facade serves no detached-process surface`,
+          command: `detached:${handle.id} — the facade has no waitForExit by design; poll detachedStatus from a durable step (ADR-0012)`,
         }),
       ),
 
@@ -382,7 +394,7 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
     // log line instead of vanishing into a bare timeout a reader would chase.
     waitForPort: ({ port, timeoutSec }) =>
       Effect.logError(
-        `waitForPort(${port}) is unreachable on the substrate facade — no detached-process surface`,
+        `waitForPort(${port}) is unreachable on the substrate facade — the fenced-exec localhost poll that grant-catalog.ts names as its replacement does not exist yet`,
       ).pipe(
         Effect.andThen(Effect.fail(new PortNeverOpened({ port, timeoutSec: timeoutSec ?? 0 }))),
       ),
