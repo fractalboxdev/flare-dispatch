@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-06
-- **Implementation:** `shipped` — the placement holds, and the lint rule this record promises now exists: `.oxlintrc.json` runs `no-restricted-imports` over `apps/dispatcher`, `runs`, `packages` and `actions`, so a path import into `apps/substrate` fails `pnpm lint` with the contract package named in the message. Static and dynamic `import()` are both caught; a type-position `typeof import(…)` is not, which crosses no runtime boundary.
+- **Implementation:** `shipped` — the placement holds, and the lint rule this record promises now exists: `.oxlintrc.json` runs `no-restricted-imports` repo-wide with `apps/substrate/**` exempted, so a new consumer tree is covered the day it appears rather than when someone remembers to list it. It restricts both routes in — a path into the substrate directory, and the workspace package `@fractalboxdev/flare-dispatch-substrate` plus its subpaths, which no path glob matches and which a `workspace:*` dependency makes the easier of the two. Static, `export *` and dynamic `import()` forms all fail `pnpm lint` with the contract package named; a type-position `typeof import(…)` does not, and crosses no runtime boundary. `src/facade-boundary.test.ts` holds the rule's shape so it cannot drift to `warn` or lose a route silently.
 
 ## Context
 

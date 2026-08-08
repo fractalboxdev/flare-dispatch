@@ -31,21 +31,23 @@ fractalbot's egress engine cites the library by line. The consumer repos current
 
 ## Consequences
 
-- **There is no auto-bump mechanism to disable, and the pin is held by a test instead.** This line
-  previously read "Renovate-style auto-bumps are disabled for these two packages" — vacuously true,
-  because the repo carries no Renovate or Dependabot configuration at all. A guarantee that holds
-  only because the mechanism it names is absent reads as a control in a security review and is not
-  one, which is worse than saying nothing. What actually holds the pin is
-  `src/container-config.test.ts` § "the pinned SDK pair (ADR-0011)": it asserts both **literal**
-  versions, so neither package moves without editing a test that points back at the checklist
-  above. The older test alongside it asserts the image tag *agrees with* `package.json`, which
-  catches skew between them and not a bump of both. If a dependency bot is ever adopted, it must be
-  configured to refuse these two packages and this line becomes that statement.
+- **A test holds the pin, because no auto-bump mechanism exists to disable.** `src/container-config.test.ts`
+  § "the pinned SDK pair (ADR-0011)" asserts both **literal** versions, so neither package moves
+  without editing a test that points back at the checklist above. The repo carries no Renovate or
+  Dependabot configuration, and GitHub's config-free Dependabot security updates are off at the repo
+  setting — so there is nothing to switch off, and a line claiming otherwise would read as a control
+  in a security review without being one. Adopting a dependency bot means configuring it to refuse
+  these two packages, and this line becomes that statement.
 - `@cloudflare/containers` is a **transitive** dependency — the substrate declares only
-  `@cloudflare/sandbox`, so the other half of the pair appears in no `package.json` in the repo.
-  The test therefore reads it out of `pnpm-lock.yaml`, which is what makes the undeclared half
-  reviewable at all. Declaring it directly would be the alternative; it is not done here because
-  the pin is what the ADR needs and a manifest edit would move the dependency graph to buy it.
+  `@cloudflare/sandbox`, so the other half of the pair appears in no `package.json` in the repo. The
+  test reaches it by walking `pnpm-lock.yaml`: the `apps/substrate` importer, the sandbox version it
+  resolved, and that snapshot's `@cloudflare/containers` edge. Scanning the lockfile for the version
+  string instead would be answered by any workspace member — `apps/dispatcher` and
+  `packages/runtime-cf` resolve the same version through `@cloudflare/sandbox` 0.10.1 — and would
+  stay green with the substrate's own dependency deleted.
+- The pin is scoped to the substrate. `apps/dispatcher` and `packages/runtime-cf` run
+  `@cloudflare/sandbox` 0.10.1 under no equivalent assertion; they do not carry the deny-all egress
+  posture this record protects, so their bumps are ordinary dependency updates.
 - The canary doubles as the BYOC health check that an org's deployed the substrate actually enforces the
   floor its version claims (see patch distribution in `specs/platform.md`).
 - The container image is part of the pin, not a separate concern: the DO is the client and the image

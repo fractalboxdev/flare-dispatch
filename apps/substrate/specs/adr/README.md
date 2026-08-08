@@ -59,7 +59,7 @@ this change only stops the two facts sharing one word in the meantime.
 | ADR | Decision | Status | Implementation |
 | --- | --- | --- | --- |
 | [0001](0001-substrate-as-its-own-component.md) | The execution substrate is its own component | Accepted | shipped |
-| [0002](0002-substrate-inside-the-flare-dispatch-monorepo.md) | Inside the flare-dispatch monorepo, no name of its own | Accepted | shipped — the lint rule forbidding path imports into substrate internals is in `.oxlintrc.json`, enforced over the four consumer trees |
+| [0002](0002-substrate-inside-the-flare-dispatch-monorepo.md) | Inside the flare-dispatch monorepo, no name of its own | Accepted | shipped — `.oxlintrc.json` forbids reaching substrate internals by path or by workspace package, repo-wide with the substrate exempted; its shape is held by `src/facade-boundary.test.ts` |
 | [0003](0003-facade-only-consumption.md) | Consumers reach the substrate only through a service-binding facade | Proposed | shipped |
 | [0004](0004-admission-enforced-by-ticket.md) | Admission enforced by ticket; the substrate alone owns the ceiling | Proposed | shipped |
 | [0005](0005-deny-all-egress-with-grant-profiles.md) | Deny-all egress with named grant profiles | Proposed | shipped |
@@ -68,5 +68,5 @@ this change only stops the two facts sharing one word in the meantime.
 | [0008](0008-verdict-neutral-execution-facts.md) | Verdict-neutral — execution facts only | Accepted | shipped — a negative decision, enforced by the contract carrying no verdict field |
 | [0009](0009-two-tier-budgets.md) | Two-tier budgets: per-execution metering + per-consumer ceiling | Proposed | partial — both tiers are pure logic with **no caller**; nothing outside `budget/` imports it and no metered proxy route exists |
 | [0010](0010-named-image-classes-policy-selected.md) | Named image classes, selected by policy | Proposed | shipped |
-| [0011](0011-sdk-pin-as-security-surface.md) | The sandbox SDK pin is a security surface | Proposed | shipped — literal pins on both halves, the transitive one walked through the lockfile edge; `@cloudflare/containers` is still undeclared and no bot config exists, which the record now states |
+| [0011](0011-sdk-pin-as-security-surface.md) | The sandbox SDK pin is a security surface | Proposed | shipped — literal pins on both halves, the transitive one walked through the `apps/substrate` lockfile edge; scoped to the substrate, so the dispatcher's own `@cloudflare/sandbox` 0.10.1 is unasserted |
 | [0012](0012-processes-that-outlive-the-exec-fence.md) | A process that outlives the exec fence holds no grant | Proposed | shipped — selective teardown and the `killAllProcesses` fallback both real |

@@ -318,12 +318,18 @@ describe("the pinned SDK pair (ADR-0011)", () => {
   const PINNED_SANDBOX = "0.12.4";
   const PINNED_CONTAINERS = "0.3.7";
 
+  // Every assertion here carries this. A bare "expected '0.13.0' to be
+  // '0.12.4'" reads as a stale constant somebody forgot, which is the one
+  // conclusion the ADR says a reader must not reach.
+  const CHECKLIST =
+    "ADR-0011: a bump of either package is a security-reviewed change to the substrate, not a routine dependency update. Re-run the invariant checklist in apps/substrate/specs/adr/0011-sdk-pin-as-security-surface.md, then update the pinned constant here.";
+
   const substrateImporter = (): readonly string[] =>
     lockBlock("apps/substrate:", 2, lockBlock("importers:", 0, lockfileLines));
   const lockPackages = (): readonly string[] => lockBlock("packages:", 0, lockfileLines);
 
   it("declares the reviewed @cloudflare/sandbox, not merely a self-consistent one", () => {
-    expect(substratePackage.dependencies["@cloudflare/sandbox"]).toBe(PINNED_SANDBOX);
+    expect(substratePackage.dependencies["@cloudflare/sandbox"], CHECKLIST).toBe(PINNED_SANDBOX);
   });
 
   it("installs the @cloudflare/sandbox it declares", () => {
@@ -335,8 +341,8 @@ describe("the pinned SDK pair (ADR-0011)", () => {
       6,
       lockBlock("dependencies:", 4, substrateImporter()),
     );
-    expect(lockField("specifier", edge)).toBe(PINNED_SANDBOX);
-    expect(lockField("version", edge)).toBe(PINNED_SANDBOX);
+    expect(lockField("specifier", edge), CHECKLIST).toBe(PINNED_SANDBOX);
+    expect(lockField("version", edge), CHECKLIST).toBe(PINNED_SANDBOX);
   });
 
   it("reaches @cloudflare/containers through that pinned sandbox", () => {
@@ -353,17 +359,27 @@ describe("the pinned SDK pair (ADR-0011)", () => {
         lockBlock("snapshots:", 0, lockfileLines),
       ),
     );
-    expect(lockField("'@cloudflare/containers'", snapshotDependencies)).toBe(PINNED_CONTAINERS);
+    expect(lockField("'@cloudflare/containers'", snapshotDependencies), CHECKLIST).toBe(
+      PINNED_CONTAINERS,
+    );
   });
 
   it("resolves exactly one @cloudflare/containers across the whole workspace", () => {
     // The edge above pins the substrate's path. This closes the other side: a
     // second resolved copy anywhere means some consumer runs an unreviewed
     // containers against the same substrate contract.
+    //
+    // Deliberately repo-wide, so it can fail for a reason outside this package.
+    // `apps/dispatcher` and `packages/runtime-cf` both declare
+    // `@cloudflare/sandbox` 0.10.1, which happens to resolve the same
+    // containers; bumping either to a sandbox that resolves a different one
+    // reddens this test. That is the intended signal — ADR-0011 calls the pair
+    // a security surface, and a second copy in the deploy is the thing to look
+    // at — but the fix lives in the consumer that moved, not here.
     const resolved = lockPackages()
       .map((line) => /^ {2}'@cloudflare\/containers@([^']+)':$/.exec(line)?.[1])
       .filter((version): version is string => version !== undefined);
-    expect(resolved).toEqual([PINNED_CONTAINERS]);
+    expect(resolved, CHECKLIST).toEqual([PINNED_CONTAINERS]);
   });
 
   it("pins that @cloudflare/containers to a resolution with an integrity hash", () => {
