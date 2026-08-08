@@ -6,11 +6,21 @@ import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import type { ModelCompletionResult } from "@fractalboxdev/flare-dispatch-core";
+import {
+  Github,
+  GitHubApiError,
+  type ModelCompletionResult,
+  type PullRequestHistoryRef,
+} from "@fractalboxdev/flare-dispatch-core";
+import type { SuppressionReport } from "@fractalboxdev/flare-dispatch-core/primitives";
 import { mergeAcrossRepos, orgSpecAudit, parseWindowHours, renderMessage } from "./org-spec-audit";
 
 const firedAt = Date.UTC(2026, 7, 8); // 2026-08-08
 const input = { firedAt } as const;
+const DAY = 86_400_000;
+
+/** Nothing suppressed, nothing broken — the shape most render tests want. */
+const noSuppression: SuppressionReport = { allowed: [], suppressed: [], degraded: [] };
 
 /** A tools-mode model result returning the `report_open_questions` payload. */
 const reported = (questions: unknown[]): ModelCompletionResult => ({
@@ -253,11 +263,12 @@ describe("org-spec-audit", () => {
 
       // The reader's own regex (packages/core/src/primitives/suppression.ts):
       // line-anchored, so it picks a key up from ANYWHERE in the body, not just
-      // the trailer block. Exactly one key must survive — this PR's own.
+      // the trailer block. The body carries one key per question it proposes —
+      // here exactly one — and nothing the model wrote may join that set.
       const keys = [...body.matchAll(/^[ \t]*maintenance-key:[ \t]*(\S+)[ \t]*$/gm)].map(
         (m) => m[1],
       );
-      expect(keys).toEqual(["org-spec-audit/2026-08-08"]);
+      expect(keys).toEqual(["org-spec-audit/per-run-spend-caps"]);
       expect(keys).not.toContain("org-spec-audit/unrelated-question");
       expect(keys).not.toContain("org-spec-audit/another-one");
 
@@ -285,6 +296,248 @@ describe("org-spec-audit", () => {
       expect(out.reposSwept).toBe(0);
       expect(out.reposSkipped).toBe(2);
       expect(out.prOpened).toBe(false);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+// --- Suppression: what the run refuses to propose twice ----------------------
+
+const LEDGER = "owner/control:maintenance/declined.jsonl";
+const KEY = "org-spec-audit/per-run-spend-caps";
+
+/** A prior proposal carrying the key, closed unmerged `daysAgo` days back. */
+const closedProposal = (daysAgo: number, over: Partial<PullRequestHistoryRef> = {}) =>
+  ({
+    repo: "owner/control",
+    number: 7,
+    title: "docs(maintenance): open questions",
+    body: `maintenance-key: ${KEY}`,
+    headBranch: `flare-dispatch/spec-audit-questions-2026-06-0${daysAgo % 9}`,
+    state: "closed",
+    draft: true,
+    url: "https://github.com/owner/control/pull/7",
+    createdAt: firedAt - (daysAgo + 5) * DAY,
+    // Touched today on purpose: a cooldown dated from `updated_at` would never
+    // expire, which is the whole reason `closed_at` is the field that counts.
+    updatedAt: firedAt,
+    closedAt: firedAt - daysAgo * DAY,
+    ...over,
+  }) satisfies PullRequestHistoryRef;
+
+/** The runtime the suppression tests share — one question, one control repo. */
+const suppressionRuntime = (
+  github: NonNullable<Parameters<typeof makeCFRuntimeTest>[0]>["github"],
+) =>
+  makeCFRuntimeTest({
+    config: baseConfig,
+    sandboxProgram: activeSandbox,
+    modelGateway: { responses: [reported([question()]), reported([question()])] },
+    github: { now: firedAt, ...github },
+  });
+
+describe("org-spec-audit — suppression", () => {
+  it.effect("never re-proposes a question the ledger declined", () => {
+    const { layer, handles } = suppressionRuntime({
+      files: {
+        [LEDGER]: JSON.stringify({
+          key: KEY,
+          reason: "answered in ADR-0011; the spec is right",
+          by: "@ada",
+          at: "2026-08-01",
+        }),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsAfterMerge).toBe(1);
+      expect(out.questionsSuppressed).toBe(1);
+      expect(out.prOpened).toBe(false);
+      // Nothing left to ask ⇒ no PR at all, and the count still reports why.
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  // The ledger's location is the operator's, like the questions dir. The
+  // default this repo ships is a placeholder, and an operator who moves the
+  // file must have the run follow it — including in the sentence the PR body
+  // prints telling a reviewer where to record a permanent decline.
+  it.effect("reads the ledger where `declined-path` says, and says so in the body", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.declined-path": "infra/loop/declined.jsonl" },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: {
+        now: firedAt,
+        files: { "owner/control:infra/loop/declined.jsonl": "" },
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      const calls = handles.github.openDraftPullRequestCalls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.body).toContain("`infra/loop/declined.jsonl`");
+      expect(calls[0]!.body).not.toContain("maintenance/declined.jsonl");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("honours a cooldown dated from when the proposal was closed", () => {
+    const { layer, handles } = suppressionRuntime({
+      pullRequestHistory: [closedProposal(5)],
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsSuppressed).toBe(1);
+      expect(out.prOpened).toBe(false);
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("asks again once the cooldown has expired", () => {
+    const { layer, handles } = suppressionRuntime({
+      pullRequestHistory: [closedProposal(45, { updatedAt: firedAt - 45 * DAY })],
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsSuppressed).toBe(0);
+      expect(out.prOpened).toBe(true);
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("does not suppress on a proposal that was merged", () => {
+    const { layer } = suppressionRuntime({
+      pullRequestHistory: [closedProposal(5, { mergedAt: firedAt - 5 * DAY })],
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsSuppressed).toBe(0);
+      expect(out.prOpened).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("skips a malformed ledger line and honours the rest", () => {
+    const { layer, handles } = suppressionRuntime({
+      files: {
+        [LEDGER]: [
+          "}}} not json at all",
+          JSON.stringify({ key: KEY, reason: "settled", by: "@ada", at: "2026-08-01" }),
+        ].join("\n"),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsSuppressed).toBe(1);
+      expect(handles.io.logs.some((l) => l.level === "warn" && l.msg.includes("not JSON"))).toBe(
+        true,
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("proposes anyway — and says so — when the ledger cannot be read", () => {
+    const { layer, handles } = suppressionRuntime({});
+
+    return Effect.gen(function* () {
+      // Wrap the fake so only the ledger read fails; every other `github` call
+      // (notably the draft-PR write this test asserts on) still records.
+      const fake = yield* Github;
+      const out = yield* orgSpecAudit.run(input).pipe(
+        Effect.provideService(Github, {
+          ...fake,
+          readTextFile: () => Effect.fail(new GitHubApiError({ status: 500, reason: "transient" })),
+        }),
+      );
+
+      expect(out.questionsSuppressed).toBe(0);
+      expect(out.prOpened).toBe(true);
+      const calls = handles.github.openDraftPullRequestCalls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.body).toContain("Suppression degraded");
+      expect(handles.io.logs.some((l) => l.level === "warn" && l.msg.includes("unreadable"))).toBe(
+        true,
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("reports the suppressed count and reason in the PR body and the file", () => {
+    // Two questions: one declined, one still open — so a PR is opened AND has
+    // something to explain. A shorter list with no explanation reads as "fewer
+    // problems", which is the opposite of true.
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: {
+        responses: [
+          reported([
+            question(),
+            question({ key: "who-owns-egress", question: "Who owns egress?" }),
+          ]),
+          reported([]),
+        ],
+      },
+      github: {
+        now: firedAt,
+        files: {
+          [LEDGER]: JSON.stringify({
+            key: KEY,
+            reason: "answered in ADR-0011",
+            by: "@ada",
+            at: "2026-08-01",
+          }),
+        },
+      },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsAfterMerge).toBe(2);
+      expect(out.questionsSuppressed).toBe(1);
+      expect(out.prOpened).toBe(true);
+
+      const call = handles.github.openDraftPullRequestCalls[0]!;
+      expect(call.body).toContain("**Suppressed: 1**");
+      expect(call.body).toContain("answered in ADR-0011");
+      expect(call.body).toContain("suppressed: 1");
+      // The message file IS the digest FractalBOT posts — it must say it too.
+      expect(call.files[0]!.content).toContain("**Suppressed: 1**");
+      expect(call.files[0]!.content).toContain("1 suppressed");
+      // The surviving question is still asked; the declined one is gone.
+      expect(call.files[0]!.content).toContain("Who owns egress?");
+      expect(call.files[0]!.content).not.toContain("Does the dispatcher still commit");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("carries one maintenance-key per question, not one per PR", () => {
+    // A dated per-PR key would be unique every day and suppress nothing, ever.
+    const { layer, handles } = suppressionRuntime({});
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      const body = handles.github.openDraftPullRequestCalls[0]!.body;
+      expect(body).toContain(`maintenance-key: ${KEY}`);
+      expect(body).not.toContain("maintenance-key: org-spec-audit/2026-08-08");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("asks about exactly the branch prefix its own proposals use", () => {
+    const { layer, handles } = suppressionRuntime({});
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      const [call] = handles.github.pullRequestHistoryCalls;
+      expect(call).toMatchObject({
+        repo: "owner/control",
+        headBranchPrefix: "flare-dispatch/spec-audit-questions-",
+        state: "all",
+      });
+      expect(handles.github.openDraftPullRequestCalls[0]!.headBranch).toMatch(
+        new RegExp(`^${call!.headBranchPrefix}`),
+      );
     }).pipe(Effect.provide(layer));
   });
 });
@@ -400,6 +653,7 @@ describe("renderMessage", () => {
       merged: merged(7, "decide"),
       outcomes: [{ repo: "o/a", skipped: false, questions: [] }],
       raised: 7,
+      suppression: noSuppression,
     });
     expect(out).toContain("2 more in this group, not shown");
     expect(out).toContain("Below the per-group cap: 2");
@@ -414,6 +668,7 @@ describe("renderMessage", () => {
         { repo: "o/dormant", skipped: true, questions: [] },
       ],
       raised: 1,
+      suppression: noSuppression,
     });
     expect(out).toContain("Swept: `o/a`");
     expect(out).toContain("`o/dormant`");
@@ -429,6 +684,7 @@ describe("renderMessage", () => {
         { repo: "o/broken", skipped: true, failure: "model call failed (429)", questions: [] },
       ],
       raised: 1,
+      suppression: noSuppression,
     });
     // A failure counted as "unchanged" turns an outage into good news.
     expect(out).toContain("1 unchanged or without specs");
@@ -445,6 +701,7 @@ describe("renderMessage", () => {
       merged: merged(1, "confirm"),
       outcomes: [{ repo: "o/a", skipped: false, questions: [] }],
       raised: 1,
+      suppression: noSuppression,
     });
     expect(out).toContain("Failed: none");
     expect(out).not.toContain("could not be swept");

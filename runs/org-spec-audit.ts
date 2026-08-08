@@ -32,6 +32,23 @@
 // consumer already holds the workspace token reads the file and posts it. One
 // direction of trust, no new credential here.
 //
+// --- Suppression: the loop's memory ------------------------------------------
+//
+// Before it proposes anything, the run asks the `suppression` primitive which
+// of today's questions it has already been told no to. A key in the control
+// repo's declines ledger is never proposed again; a
+// question whose proposal a human closed unmerged waits out a 30-day cooldown
+// dated from `closed_at`. Every proposed question carries its own
+// `maintenance-key: org-spec-audit/<question-key>` line in the PR body — that
+// line is what both halves match on.
+//
+// The suppressed count and the reason for each appear in the PR body AND in the
+// message file, because a silently shorter list reads as "fewer problems",
+// which is the opposite of what it means. Both reads fail open: if the ledger
+// or the PR history cannot be read, the run proposes anyway and prints the
+// warning, since a duplicate PR is a nuisance and a silently disabled loop is
+// the failure the mechanism exists to prevent.
+//
 // --- CONFIG the operator sets (out of band) ---------------------------------
 //
 // Every value that names an operator's own estate is a key, not a constant.
@@ -51,6 +68,7 @@
 //   CONFIG_KV  org-spec-audit.base           base branch to read (default "main")
 //   CONFIG_KV  org-spec-audit.control-repo   `owner/name` the questions PR lands in (REQUIRED — no default)
 //   CONFIG_KV  org-spec-audit.questions-dir  repo-relative dir for `<date>.md` (default "maintenance/questions")
+//   CONFIG_KV  org-spec-audit.declined-path  repo-relative declines ledger (default "maintenance/declined.jsonl")
 //   CONFIG_KV  org-spec-audit.window-hours   skip a repo with no commits in this window (default "26")
 //   CONFIG_KV  org-spec-audit.backend        "workers-ai" | "anthropic" | "bedrock" (default workers-ai)
 //   CONFIG_KV  org-spec-audit.prompt         (optional) override the question-detection system prompt
@@ -73,11 +91,15 @@ import {
 } from "@fractalboxdev/flare-dispatch-core";
 import type { CheckoutFailed, GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
 import {
+  checkSuppression,
+  DECLINED_LEDGER_PATH,
   isoDate,
   parseGitRef,
   parseList,
   parseRepo,
   parseRepoRelativePath,
+  renderSuppressionNote,
+  type SuppressionReport,
   workspace,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
 import {
@@ -97,6 +119,7 @@ const REPOS_KEY = key("repos");
 const BASE_KEY = key("base");
 const CONTROL_REPO_KEY = key("control-repo");
 const QUESTIONS_DIR_KEY = key("questions-dir");
+const DECLINED_PATH_KEY = key("declined-path");
 const WINDOW_HOURS_KEY = key("window-hours");
 
 /**
@@ -107,6 +130,20 @@ const WINDOW_HOURS_KEY = key("window-hours");
  * that every day overwrites.
  */
 const QUESTIONS_DIR_DEFAULT = "maintenance/questions";
+
+/**
+ * The `maintenance-key` namespace and the branch prefix every proposal shares.
+ *
+ * Both are load-bearing for suppression: the key is what the ledger matches on,
+ * and the prefix is how a later tick finds the PRs a human already closed
+ * (each day's proposal gets its own dated branch, so the prefix is all they
+ * have in common).
+ */
+const MAINTENANCE_SOURCE = "org-spec-audit";
+const BRANCH_PREFIX = "flare-dispatch/spec-audit-questions-";
+
+/** The stable, repo-independent id a question is suppressed by. */
+const maintenanceKey = (questionKey: string): string => `${MAINTENANCE_SOURCE}/${questionKey}`;
 
 /** A repo with no commits in this window is skipped before any model call. */
 const WINDOW_HOURS_DEFAULT = 26;
@@ -193,6 +230,8 @@ const Output = Schema.Struct({
   reposSkipped: Schema.Number,
   questionsRaised: Schema.Number,
   questionsAfterMerge: Schema.Number,
+  /** Merged questions the ledger or a cooldown kept out of the proposal. */
+  questionsSuppressed: Schema.Number,
   prOpened: Schema.Boolean,
 });
 
@@ -251,6 +290,7 @@ export const orgSpecAudit = defineRun({
           reposSkipped: 0,
           questionsRaised: 0,
           questionsAfterMerge: 0,
+          questionsSuppressed: 0,
           prOpened: false,
         };
       }
@@ -301,6 +341,19 @@ export const orgSpecAudit = defineRun({
           new StepFailed({
             step: "resolve-questions-dir",
             cause: `${QUESTIONS_DIR_KEY} is not a repo-relative directory (no leading "/", no "..", no backslashes)`,
+          }),
+        );
+      }
+
+      const declinedPath = parseRepoRelativePath(
+        yield* step("resolve-declined-path", () => config.get(DECLINED_PATH_KEY)),
+        DECLINED_LEDGER_PATH,
+      );
+      if (declinedPath === undefined) {
+        return yield* Effect.fail(
+          new StepFailed({
+            step: "resolve-declined-path",
+            cause: `${DECLINED_PATH_KEY} is not a repo-relative path (no leading "/", no "..", no backslashes)`,
           }),
         );
       }
@@ -360,21 +413,73 @@ export const orgSpecAudit = defineRun({
           reposSkipped: skipped,
           questionsRaised: raised.length,
           questionsAfterMerge: 0,
+          questionsSuppressed: 0,
           prOpened: false,
         };
       }
 
-      // 5. One control-plane PR against the configured control repo. The file
+      // 5. Suppression, BEFORE anything is proposed. A question the ledger
+      //    declined is never asked again; one whose proposal a human closed
+      //    unmerged waits out a cooldown dated from the close. Both reads fail
+      //    OPEN and say so — a duplicate PR is a nuisance, a silently disabled
+      //    loop is the failure this whole mechanism exists to prevent.
+      const suppression = yield* step("check-suppression", () =>
+        checkSuppression({
+          keys: merged.map((q) => maintenanceKey(q.key)),
+          // The ledger and the proposals live in the same control repo, so one
+          // installation covers both reads.
+          ledgerRepo: controlRepo,
+          ledgerPath: declinedPath,
+          headBranchPrefix: BRANCH_PREFIX,
+          nowMs: input.firedAt,
+        }),
+      );
+      const allowed = new Set(suppression.allowed);
+      const proposed = merged.filter((q) => allowed.has(maintenanceKey(q.key)));
+
+      // Every question suppressed is a *good* tick, and a silent one — there is
+      // nothing new to ask. The count still lands in the output so a digest can
+      // say "0 new, 3 suppressed" rather than implying a quiet estate.
+      if (proposed.length === 0) {
+        yield* io.log(
+          "info",
+          `org-spec-audit: ${merged.length} question(s), all suppressed — no PR opened`,
+        );
+        return {
+          reposSwept: swept,
+          reposSkipped: skipped,
+          questionsRaised: raised.length,
+          questionsAfterMerge: merged.length,
+          questionsSuppressed: suppression.suppressed.length,
+          prOpened: false,
+        };
+      }
+
+      // 6. One control-plane PR against the configured control repo. The file
       //    it carries IS the message a Slack consumer posts — this run holds no
       //    Slack credential and never will.
-      const message = renderMessage({ day, merged, outcomes, raised: raised.length });
+      const message = renderMessage({
+        day,
+        merged: proposed,
+        outcomes,
+        raised: raised.length,
+        suppression,
+      });
       const result = yield* step("open-questions-pr", () =>
         github.openDraftPullRequest({
           repo: controlRepo,
           baseBranch,
-          headBranch: `flare-dispatch/spec-audit-questions-${day}`,
+          headBranch: `${BRANCH_PREFIX}${day}`,
           title: `docs(maintenance): open questions from the spec audit sweep (${day})`,
-          body: renderPrBody({ day, merged, outcomes, raised: raised.length, message }),
+          body: renderPrBody({
+            day,
+            merged: proposed,
+            outcomes,
+            raised: raised.length,
+            suppression,
+            message,
+            declinedPath,
+          }),
           commitMessage: `docs(maintenance): spec audit open questions (${day})\n\nGenerated by flare-dispatch org-spec-audit.`,
           files: [
             {
@@ -387,7 +492,7 @@ export const orgSpecAudit = defineRun({
 
       yield* io.log(
         "info",
-        `org-spec-audit: ${merged.length} question(s) from ${raised.length} raised — ${result.created ? "opened" : "updated"} PR #${result.number}`,
+        `org-spec-audit: ${proposed.length} question(s) from ${raised.length} raised (${suppression.suppressed.length} suppressed) — ${result.created ? "opened" : "updated"} PR #${result.number}`,
       );
 
       return {
@@ -395,6 +500,7 @@ export const orgSpecAudit = defineRun({
         reposSkipped: skipped,
         questionsRaised: raised.length,
         questionsAfterMerge: merged.length,
+        questionsSuppressed: suppression.suppressed.length,
         prOpened: result.created,
       };
     }),
@@ -714,9 +820,12 @@ const MARKER = "<!-- flare-dispatch: org-spec-audit -->";
 
 type RenderArgs = {
   readonly day: string;
+  /** The questions actually being proposed — suppressed ones are already out. */
   readonly merged: readonly MergedQuestion[];
   readonly outcomes: readonly RepoOutcome[];
   readonly raised: number;
+  /** What suppression kept out, and whether either read degraded. */
+  readonly suppression: SuppressionReport;
 };
 
 /**
@@ -738,8 +847,15 @@ export const renderMessage = (args: RenderArgs): string => {
     `# Spec audit — ${args.day}`,
     "",
     `${swept.length} repo(s) swept · ${quiet.length} unchanged or without specs · ` +
-      `${failed.length} failed · ${args.merged.length} question(s) from ${args.raised} raised`,
+      `${failed.length} failed · ${args.merged.length} question(s) from ${args.raised} raised` +
+      (args.suppression.suppressed.length > 0
+        ? ` · ${args.suppression.suppressed.length} suppressed`
+        : ""),
     "",
+    // Immediately after the headline count, not in a footer: a reader who sees
+    // a short list has to see WHY it is short in the same glance, or a
+    // suppressed question reads as a problem that went away.
+    ...renderSuppressionNote(args.suppression),
   ];
 
   // Above the questions, not below them: a sweep that failed on half the estate
@@ -791,14 +907,23 @@ const countDropped = (merged: readonly MergedQuestion[]): number =>
   }, 0);
 
 /**
- * The PR body. Carries the loop's three machine-readable lines plus the
- * message itself, so a reviewer decides without opening the diff.
+ * The PR body. Carries the loop's machine-readable lines plus the message
+ * itself, so a reviewer decides without opening the diff.
+ *
+ * **One `maintenance-key` line per question, not one per PR.** The key is what
+ * a later tick matches against the ledger and against this PR once it is
+ * closed, so it has to name the thing a human declines — a question. A dated
+ * per-PR key would be unique every day and suppress nothing, ever.
  */
-const renderPrBody = (args: RenderArgs & { message: string }): string =>
+const renderPrBody = (
+  args: RenderArgs & { message: string; declinedPath: string },
+): string =>
   [
     "### Spec audit — the questions the sweep could not answer",
     "",
     "> 🤖 Draft opened by `flare-dispatch/org-spec-audit`. These are divergences where *which side is right* is a judgment nobody has made yet — not drift (`spec-drift-pr` proposes those). Answer in the thread or edit the file; merging records the answers.",
+    "",
+    `> Closing this unmerged suppresses every key below for 30 days. To suppress one permanently, add its key to \`${args.declinedPath}\` with a reason.`,
     "",
     // The trailers precede the message, and that order is load-bearing. Every
     // line of `message` below is model output derived from the contents of the
@@ -806,13 +931,14 @@ const renderPrBody = (args: RenderArgs & { message: string }): string =>
     // would, with the trailers last, put a spoofed value ahead of the real one
     // for any consumer that reads the first match. Emitted first, the authentic
     // trailers win and anything the model echoes is inert text further down.
-    `maintenance-key: org-spec-audit/${args.day}`,
+    ...args.merged.map((q) => `maintenance-key: ${maintenanceKey(q.key)}`),
     `swept: ${
       args.outcomes
         .filter((o) => !o.skipped)
         .map((o) => o.repo)
         .join(", ") || "none"
     }`,
+    `suppressed: ${args.suppression.suppressed.length}`,
     "auto-merge: never (specs are a sensitive path)",
     MARKER,
     "",

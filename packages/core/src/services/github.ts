@@ -174,6 +174,78 @@ export type ReleaseResult = {
 };
 
 /**
+ * A request to read **one text file** out of a repo — `readTextFile`.
+ *
+ * Narrow on purpose: this is not a filesystem, and it never becomes one. The
+ * maintenance loop's suppression ledger lives in git in a private repo, and a
+ * run that has to clone a repo to read one line on every cron tick pays a
+ * container for a string. Everything wider already has a home — a run that
+ * needs a working tree clones one (`workspace`), and writes go through
+ * `openDraftPullRequest`.
+ */
+export type ReadTextFileRequest = {
+  /** "owner/name". */
+  readonly repo: string;
+  /** Repo-relative path (e.g. `maintenance/declined.jsonl`). */
+  readonly path: string;
+  /** Branch, tag, or sha. Defaults to the repo's default branch. */
+  readonly ref?: string;
+  /**
+   * The GitHub installation id authenticating the read. Optional — the live
+   * Layer resolves it from the repo when absent, which is what a cron tick
+   * (carrying no webhook payload) always needs.
+   */
+  readonly installationId?: number;
+};
+
+/**
+ * The outcome of {@link GithubService.readTextFile}.
+ *
+ * Absent is a **value**, not a failure: a ledger nobody has written yet is
+ * `{ found: false }`, and a caller must be able to tell that apart from "GitHub
+ * returned 500" (a `GitHubApiError`) because the two demand opposite behavior.
+ * A path that exists but is not a file (a directory) reads as `found: false`
+ * too — it is not the text file that was asked for.
+ */
+export type TextFileResult =
+  | { readonly found: true; readonly content: string }
+  | { readonly found: false };
+
+/**
+ * A pull request as {@link GithubService.pullRequestHistory} returns it —
+ * **including closed ones**, and carrying the two timestamps that date a
+ * decision.
+ *
+ * Distinct from {@link PullRequestRef} (the open-PR sweep's unit of work)
+ * because the questions differ: a sweep asks "what is in flight", history asks
+ * "was this proposed before, and what happened to it". History therefore
+ * carries `body` (where a proposal's `maintenance-key` lines live) and
+ * `closedAt`, and `PullRequestRef` carries the head/base shas a review needs.
+ */
+export type PullRequestHistoryRef = {
+  /** "owner/name". */
+  readonly repo: string;
+  readonly number: number;
+  readonly title: string;
+  /** The PR body — a proposal's machine-readable lines ride here. */
+  readonly body: string;
+  /** The head branch name (no `owner:` prefix). */
+  readonly headBranch: string;
+  readonly state: "open" | "closed";
+  readonly draft: boolean;
+  /** The PR's web URL. */
+  readonly url: string;
+  /** epoch ms. */
+  readonly createdAt: number;
+  /** epoch ms — resets on ANY touch; never date a cooldown from this. */
+  readonly updatedAt: number;
+  /** epoch ms — `undefined` while open. The one field that dates a decision. */
+  readonly closedAt?: number;
+  /** epoch ms — `undefined` unless merged. Closed-and-merged ≠ closed-unmerged. */
+  readonly mergedAt?: number;
+};
+
+/**
  * A top-level PR review to post — `POST /repos/{o}/{r}/pulls/{n}/reviews`.
  * `event: "COMMENT"` leaves a visible review comment without approving or
  * requesting changes (the run's *verdict* is reported separately via the
@@ -239,6 +311,46 @@ export interface GithubService {
   }) => Effect.Effect<readonly WorkflowRunRef[], GitHubApiError>;
 
   /**
+   * A repo's PRs, **closed ones included**, newest-touched first — the read a
+   * caller needs to ask "was this proposed before, and did a human close it
+   * unmerged, and when". `openPullRequests` cannot answer it and must not
+   * pretend to; this is the separate question. Paginates internally (bounded by
+   * `updatedSince` and a page cap) and backs off on secondary rate limits.
+   *
+   * `headBranchPrefix` filters on the head branch — dated proposal branches
+   * (`flare-dispatch/spec-audit-questions-2026-08-08`) share a prefix and
+   * nothing else, and GitHub's own `head=` parameter matches one exact branch.
+   */
+  readonly pullRequestHistory: (opts: {
+    /** "owner/name" — one repo; history is asked about a known place. */
+    repo: string;
+    /** Keep only PRs whose head branch starts with this. */
+    headBranchPrefix?: string;
+    /** `open` | `closed` | `all` — defaults to `all`. */
+    state?: "open" | "closed" | "all";
+    /**
+     * Stop paginating past PRs last updated before this many days ago. A
+     * pagination bound only — `updatedAt >= closedAt` always, so nothing closed
+     * inside the window is missed, and every date the caller reasons about
+     * still comes from `closedAt`.
+     */
+    updatedWithinDays?: number;
+    /** Hard page cap (100 per page). */
+    maxPages?: number;
+    /** Installation authenticating the read; resolved from the repo when absent. */
+    installationId?: number;
+  }) => Effect.Effect<readonly PullRequestHistoryRef[], GitHubApiError>;
+
+  /**
+   * Read one text file from a repo at an optional ref. `{ found: false }` for a
+   * path that is not there — the answer a not-yet-written ledger gives, which a
+   * caller must be able to tell apart from an API failure.
+   */
+  readonly readTextFile: (
+    req: ReadTextFileRequest,
+  ) => Effect.Effect<TextFileResult, GitHubApiError>;
+
+  /**
    * Post a top-level PR review comment (`event: "COMMENT"`). The run uses this
    * to leave an always-visible comment on every review — success or failure.
    * Best-effort reporting: a live deploy without App credentials degrades to a
@@ -293,6 +405,15 @@ export const github = {
       conclusion?: string;
     } = {},
   ) => Effect.flatMap(Github, (g) => g.actionRuns(opts)),
+  pullRequestHistory: (opts: {
+    repo: string;
+    headBranchPrefix?: string;
+    state?: "open" | "closed" | "all";
+    updatedWithinDays?: number;
+    maxPages?: number;
+    installationId?: number;
+  }) => Effect.flatMap(Github, (g) => g.pullRequestHistory(opts)),
+  readTextFile: (req: ReadTextFileRequest) => Effect.flatMap(Github, (g) => g.readTextFile(req)),
   pullReview: (req: PullReviewRequest) => Effect.flatMap(Github, (g) => g.pullReview(req)),
   openDraftPullRequest: (req: OpenDraftPullRequest) =>
     Effect.flatMap(Github, (g) => g.openDraftPullRequest(req)),

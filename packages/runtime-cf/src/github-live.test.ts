@@ -139,6 +139,113 @@ describe("makeGithubLive — pullReview", () => {
   });
 });
 
+// --- The two reads suppression rides on -------------------------------------
+//
+// Both are pointed at a PRIVATE repo (the ledger lives in one), so the App-auth
+// path matters as much as the payload: with no installation id — which is every
+// cron tick — the Layer resolves the repo's installation itself before minting
+// a token.
+
+describe("makeGithubLive — readTextFile", () => {
+  it("resolves the installation, mints a token, and returns the file", async () => {
+    server.use(
+      http.get("https://api.github.com/repos/:owner/:repo/contents/*", ({ request }) => {
+        expect(request.headers.get("authorization")).toBe("Bearer ghs_install_token");
+        return HttpResponse.text('{"key":"org-spec-audit/a"}');
+      }),
+    );
+    const result = await Effect.runPromise(
+      github
+        .readTextFile({ repo: "owner/private", path: "maintenance/declined.jsonl" })
+        .pipe(Effect.provide(makeGithubLive(CONFIG))),
+    );
+    expect(result).toEqual({ found: true, content: '{"key":"org-spec-audit/a"}' });
+    expect(recorded.installationLookups).toBe(1);
+    expect(recorded.tokenExchanges).toBe(1);
+  });
+
+  it("returns found:false for a file that is not there", async () => {
+    server.use(
+      http.get("https://api.github.com/repos/:owner/:repo/contents/*", () =>
+        HttpResponse.text("Not Found", { status: 404 }),
+      ),
+    );
+    const result = await Effect.runPromise(
+      github
+        .readTextFile({ repo: "owner/private", path: "nope.jsonl", installationId: 12345 })
+        .pipe(Effect.provide(makeGithubLive(CONFIG))),
+    );
+    expect(result).toEqual({ found: false });
+  });
+
+  it("degraded — no App config FAILS rather than reporting an empty file", async () => {
+    // The writes degrade to a logged no-op; a read must not, because
+    // `{ found: false }` here would be a missing credential wearing a missing
+    // file's clothes, and a caller would suppress (or not) on a lie.
+    const exit = await Effect.runPromiseExit(
+      github
+        .readTextFile({ repo: "owner/private", path: "a.jsonl" })
+        .pipe(Effect.provide(makeGithubLive(undefined))),
+    );
+    expect(exit._tag).toBe("Failure");
+    expect(recorded.tokenExchanges).toBe(0);
+  });
+});
+
+describe("makeGithubLive — pullRequestHistory", () => {
+  it("asks for every state and tags each row with its repo", async () => {
+    let seen: URL | undefined;
+    server.use(
+      http.get("https://api.github.com/repos/:owner/:repo/pulls", ({ request }) => {
+        seen = new URL(request.url);
+        return HttpResponse.json([
+          {
+            number: 12,
+            title: "t",
+            body: "maintenance-key: org-spec-audit/a",
+            head: { ref: "flare-dispatch/spec-audit-questions-2026-07-01" },
+            state: "closed",
+            draft: true,
+            html_url: "https://github.com/owner/private/pull/12",
+            created_at: "2026-07-01T00:00:00Z",
+            updated_at: "2026-07-02T00:00:00Z",
+            closed_at: "2026-07-02T00:00:00Z",
+            merged_at: null,
+          },
+        ]);
+      }),
+    );
+    const prs = await Effect.runPromise(
+      github
+        .pullRequestHistory({
+          repo: "owner/private",
+          headBranchPrefix: "flare-dispatch/spec-audit-questions-",
+          updatedWithinDays: 30,
+          installationId: 12345,
+        })
+        .pipe(Effect.provide(makeGithubLive(CONFIG))),
+    );
+    expect(prs).toHaveLength(1);
+    expect(prs[0]).toMatchObject({
+      repo: "owner/private",
+      number: 12,
+      state: "closed",
+      closedAt: Date.parse("2026-07-02T00:00:00Z"),
+    });
+    expect(prs[0]!.mergedAt).toBeUndefined();
+    expect(seen?.searchParams.get("state")).toBe("all");
+  });
+
+  it("degraded — no App config FAILS rather than reporting an empty history", async () => {
+    const exit = await Effect.runPromiseExit(
+      github
+        .pullRequestHistory({ repo: "owner/private" })
+        .pipe(Effect.provide(makeGithubLive(undefined))),
+    );
+    expect(exit._tag).toBe("Failure");
+  });
+});
+
 describe("classifyReason", () => {
   it("classifies a 403 carrying a Retry-After as rate-limited, not unauthorized", () => {
     // The headline fix: GitHub returns 403 (not 429) for secondary rate limits,
