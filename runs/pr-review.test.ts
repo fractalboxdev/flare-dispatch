@@ -236,6 +236,12 @@ describe("pr-review", () => {
       'openai returned 429: {"error":[{"code":2003,"message":"Rate limited"}],"name":"AiGatewayError","httpCode":429}',
   });
 
+  /** A diff touching `wrangler.` — a SENSITIVE path, which classifies `full`
+   *  and so fans out all 7 reviewers. The one-line `x.ts` diff the other tests
+   *  use classifies `trivial` (one reviewer), where "some reviewers failed"
+   *  cannot be expressed at all. */
+  const SENSITIVE_DIFF = "diff --git a/wrangler.jsonc b/wrangler.jsonc\n+++ b/wrangler.jsonc\n+x\n";
+
   it.effect(
     "a rate-limit across EVERY reviewer SKIPS the run (RunSkipped → neutral), never a red failure",
     () => {
@@ -246,12 +252,7 @@ describe("pr-review", () => {
       const { layer, handles } = makeCFRuntimeTest({
         config: backendConfig,
         sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
-        // `wrangler.` is a sensitive path, which forces the FULL 7-reviewer
-        // tier. The one-line `x.ts` diff other tests use classifies `trivial`
-        // — a single reviewer, where "some failed" cannot be expressed.
-        sandboxFiles: {
-          [DIFF_FILE]: "diff --git a/wrangler.jsonc b/wrangler.jsonc\n+++ b/wrangler.jsonc\n+x\n",
-        },
+        sandboxFiles: { [DIFF_FILE]: SENSITIVE_DIFF },
         modelGateway: { responses: [rateLimited] },
       });
 
@@ -271,6 +272,13 @@ describe("pr-review", () => {
         expect(body).toContain("pr-review skipped");
         expect(body).toContain("AI Gateway rate-limited");
         expect(body).not.toContain("could not complete");
+        // The advice must not tell the reader to just re-run: the run's own
+        // cooldown (`pr-review.cooldown-seconds`, default 60 min, scoped
+        // `pr-<number>`) is armed at dispatch and is NOT released by a skip, so
+        // an earlier re-dispatch is answered with this execution's id and
+        // reviews nothing. Advice that omits that sends operators to retry a
+        // button that cannot work yet.
+        expect(body).toContain("pr-review.cooldown-seconds");
       }).pipe(Effect.provide(layer));
     },
   );
@@ -282,12 +290,7 @@ describe("pr-review", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: backendConfig,
       sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
-      // `wrangler.` is a sensitive path, which forces the FULL 7-reviewer
-        // tier. The one-line `x.ts` diff other tests use classifies `trivial`
-        // — a single reviewer, where "some failed" cannot be expressed.
-        sandboxFiles: {
-          [DIFF_FILE]: "diff --git a/wrangler.jsonc b/wrangler.jsonc\n+++ b/wrangler.jsonc\n+x\n",
-        },
+      sandboxFiles: { [DIFF_FILE]: SENSITIVE_DIFF },
       // Call 0 is refused; every later call repeats the last response.
       modelGateway: { responses: [rateLimited, emptyReport] },
     });
@@ -299,6 +302,14 @@ describe("pr-review", () => {
       const body = handles.github.pullReviewCalls[0]!.body;
       expect(body).not.toContain("pr-review skipped");
       expect(body).not.toContain("could not complete");
+      // The point of the case: the review is DEGRADED and says so. Without
+      // this, the three assertions above are equally satisfied by a run where
+      // zero reviewers were refused, so the test could not tell a partial
+      // review from a clean one. The engagement line renders a refused domain
+      // as `<agent> ⚠️` instead of a count — assert the COUNT of markers, not
+      // which agent carries it: which reviewer lands on gateway call 0 depends
+      // on fiber scheduling under `concurrency: plan.agents.length`.
+      expect(body.match(/⚠️/g) ?? []).toHaveLength(1);
     }).pipe(Effect.provide(layer));
   });
 
@@ -315,12 +326,7 @@ describe("pr-review", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: backendConfig,
       sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
-      // `wrangler.` is a sensitive path, which forces the FULL 7-reviewer
-        // tier. The one-line `x.ts` diff other tests use classifies `trivial`
-        // — a single reviewer, where "some failed" cannot be expressed.
-        sandboxFiles: {
-          [DIFF_FILE]: "diff --git a/wrangler.jsonc b/wrangler.jsonc\n+++ b/wrangler.jsonc\n+x\n",
-        },
+      sandboxFiles: { [DIFF_FILE]: SENSITIVE_DIFF },
       modelGateway: { responses: [rateLimited, badResponse] },
     });
 
@@ -335,6 +341,71 @@ describe("pr-review", () => {
       const body = handles.github.pullReviewCalls[0]!.body;
       expect(body).toContain("could not complete");
       expect(body).not.toContain("pr-review skipped");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("an all-fail mixing a CONTEXT-OVERFLOW with a real failure also stays red", () => {
+    // The same laundering hole, one door along. The cause preference must
+    // de-prioritise EVERY capacity kind, not just the rate limit: a preference
+    // that only skipped `rate-limited` would pick the context-overflow here —
+    // which the boundary also renders neutral — and six genuinely broken
+    // reviewers would ship as a neutral badge.
+    const contextOverflow = new ModelGatewayError({
+      model: "@cf/test/model",
+      reason: "context-overflow",
+      message: "prompt is too long: 300000 tokens exceeds the context window",
+    });
+    const badResponse = new ModelGatewayError({
+      model: "@cf/test/model",
+      reason: "bad-response",
+      message: "no parseable JSON in the model answer",
+    });
+    const { layer, handles } = makeCFRuntimeTest({
+      config: backendConfig,
+      sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+      sandboxFiles: { [DIFF_FILE]: SENSITIVE_DIFF },
+      modelGateway: { responses: [contextOverflow, badResponse] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(prReview.run(baseInput));
+      const failure = Exit.match(exit, {
+        onSuccess: () => undefined,
+        onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
+      });
+      expect(failure).not.toBeInstanceOf(RunSkipped);
+
+      const body = handles.github.pullReviewCalls[0]!.body;
+      expect(body).toContain("could not complete");
+      expect(body).not.toContain("pr-review skipped");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a rate-limit on the SINGLE reviewer of a trivial diff also skips neutral", () => {
+    // The commonest real shape, and the one the fan-out cannot express: a
+    // `trivial` diff plans ONE reviewer, so `lefts.length === 1` and the cause
+    // preference finds no hard failure and falls through to `lefts[0]`. That
+    // fallback carries every single-reviewer rate-limit — including
+    // `agents: "single"` mode — and was otherwise untested.
+    const { layer, handles } = makeCFRuntimeTest({
+      config: backendConfig,
+      sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+      sandboxFiles: { [DIFF_FILE]: "diff --git a/x.ts b/x.ts\n+++ b/x.ts\n+x\n" },
+      modelGateway: { responses: [rateLimited] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(prReview.run(baseInput));
+      const failure = Exit.match(exit, {
+        onSuccess: () => undefined,
+        onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
+      });
+      expect(failure).toBeInstanceOf(RunSkipped);
+      expect((failure as RunSkipped).reason).toContain("AI Gateway rate-limited");
+
+      const body = handles.github.pullReviewCalls[0]!.body;
+      expect(body).toContain("pr-review skipped");
+      expect(body).not.toContain("could not complete");
     }).pipe(Effect.provide(layer));
   });
 

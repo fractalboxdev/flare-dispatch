@@ -180,6 +180,15 @@ describe("makeModelGatewayLive", () => {
       { message: "request took too long to complete", expected: "unknown" },
       { message: "upstream error 5021 occurred", expected: "unknown" },
       { message: "connection timeout after 30s", expected: "timeout" },
+      // `rate-limited` downgrades to a NEUTRAL check too (PR #99), so it needs
+      // the same guard: "rate" as a substring of another word is not a rate
+      // limit, and 429 inside a longer number is not a status code.
+      { message: "failed to generate response", expected: "unknown" },
+      { message: "the model generated an inaccurate answer", expected: "unknown" },
+      { message: "upstream request id 8542998 failed", expected: "unknown" },
+      // ...while the genuine wordings still classify.
+      { message: "rate limit exceeded", expected: "rate-limited" },
+      { message: "openai returned 429: Too Many Requests", expected: "rate-limited" },
     ];
     for (const c of cases) {
       const ai: AiBinding = {
