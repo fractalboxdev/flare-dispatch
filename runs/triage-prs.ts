@@ -7,8 +7,9 @@
 // result, the same delivery `org-spec-audit` uses and for the same reason —
 // this run holds no Slack credential.
 //
-// Spec: process/content/maintenance-loop.md §5 (the triage desk), §9
-// (guardrails), in `fractalboxdev/org`.
+// Spec: the operator's maintenance-loop process doc, §5 (the triage desk) and
+// §9 (guardrails). That doc lives in the control repo, not here — this run is
+// the mechanism, and the estate it runs over is config.
 //
 // --- It decides and reports; it does not act ---------------------------------
 //
@@ -42,12 +43,19 @@
 //
 // --- CONFIG the operator sets (out of band) ---------------------------------
 //
-//   CONFIG_KV  triage-prs.repos          comma/space-separated estate (required)
-//   CONFIG_KV  triage-prs.control-repo   where the digest PR lands (default "fractalboxdev/org")
-//   CONFIG_KV  triage-prs.base           base branch (default "main")
-//   CONFIG_KV  triage-prs.stale-hours    unreviewed age that earns a nudge (default 24)
-//   CONFIG_KV  triage-prs.flaky-checks   check names a red run treats as unstick-able
-//   CONFIG_KV  triage-prs.reviewers      `repo=@handle` pairs — the reviewer of record
+// Every value naming an operator's own estate is a key, not a constant — see
+// `org-spec-audit` for the same rule and the same reason. A default control
+// repo is a default that files pull requests against somebody's repository.
+//
+//   CONFIG_KV  triage-prs.repos           comma/space-separated estate (required)
+//   CONFIG_KV  triage-prs.control-repo    `owner/name` the digest PR lands in (REQUIRED — no default)
+//   CONFIG_KV  triage-prs.digest-dir      repo-relative dir for `<date>.md` (default "maintenance/triage")
+//   CONFIG_KV  triage-prs.declined-path   repo-relative declines ledger (default "maintenance/declined.jsonl")
+//   CONFIG_KV  triage-prs.automerge-path  repo-relative auto-merge allowlist (default "maintenance/automerge.json")
+//   CONFIG_KV  triage-prs.base            base branch (default "main")
+//   CONFIG_KV  triage-prs.stale-hours     unreviewed age that earns a nudge (default 24)
+//   CONFIG_KV  triage-prs.flaky-checks    check names a red run treats as unstick-able
+//   CONFIG_KV  triage-prs.reviewers       `repo=@handle` pairs — the reviewer of record
 //
 // Mode: Schedule mode. No cron is armed in wrangler.jsonc — arming this is a
 // product decision, not a code one.
@@ -61,7 +69,9 @@ import type {
   WorkflowRunRef,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
+  AUTOMERGE_CONFIG_PATH,
   checkSuppression,
+  DECLINED_LEDGER_PATH,
   describeMergeVerdict,
   evaluateAutomerge,
   isoDate,
@@ -70,6 +80,8 @@ import {
   type MergeVerdict,
   parseList,
   renderSuppressionNote,
+  resolveControlRepo,
+  resolveRepoRelativePath,
   type SuppressionReport,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
 
@@ -77,12 +89,21 @@ const NAMESPACE = "triage-prs";
 const key = (suffix: string): string => `${NAMESPACE}.${suffix}`;
 const REPOS_KEY = key("repos");
 const CONTROL_REPO_KEY = key("control-repo");
+const DIGEST_DIR_KEY = key("digest-dir");
+const DECLINED_PATH_KEY = key("declined-path");
+const AUTOMERGE_PATH_KEY = key("automerge-path");
 const BASE_KEY = key("base");
 const STALE_HOURS_KEY = key("stale-hours");
 const FLAKY_CHECKS_KEY = key("flaky-checks");
 const REVIEWERS_KEY = key("reviewers");
 
-const CONTROL_REPO_DEFAULT = "fractalboxdev/org";
+/**
+ * Where the dated digest lands inside the control repo. A directory, not a
+ * template: the run appends `<date>.md`, so config cannot name one file that
+ * every day overwrites.
+ */
+const DIGEST_DIR_DEFAULT = "maintenance/triage";
+
 /** Green CI + nobody assigned + older than this ⇒ nudge. */
 const STALE_HOURS_DEFAULT = 24;
 /** Cap per exit in the digest, so one noisy repo cannot bury the rest. */
@@ -148,9 +169,19 @@ export const triagePrs = defineRun({
         return emptyOutput();
       }
 
-      const controlRepo =
-        (yield* step("resolve-control-repo", () => config.get(CONTROL_REPO_KEY))) ??
-        CONTROL_REPO_DEFAULT;
+      // Resolved before the sweep, not at the write: there is no default
+      // control repo (a default is a repository somebody else's deployment
+      // files pull requests against), and an estate's worth of reads whose
+      // digest has nowhere to land is an expensive way to learn a key is
+      // missing. See `primitives/control-plane`.
+      const controlRepo = yield* resolveControlRepo(CONTROL_REPO_KEY);
+      const digestDir = yield* resolveRepoRelativePath(DIGEST_DIR_KEY, DIGEST_DIR_DEFAULT);
+      const declinedPath = yield* resolveRepoRelativePath(DECLINED_PATH_KEY, DECLINED_LEDGER_PATH);
+      const automergePath = yield* resolveRepoRelativePath(
+        AUTOMERGE_PATH_KEY,
+        AUTOMERGE_CONFIG_PATH,
+      );
+
       const baseBranch = (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
       const staleHours = parseStaleHours(
         yield* step("resolve-stale-hours", () => config.get(STALE_HOURS_KEY)),
@@ -165,7 +196,7 @@ export const triagePrs = defineRun({
       // 2. The allowlist, read from the control repo. Unreadable ⇒ the closed
       //    config ⇒ every candidate refuses. Loudly, and never silently open.
       const automerge = yield* step("load-automerge-config", () =>
-        loadAutomergeConfig({ repo: controlRepo }),
+        loadAutomergeConfig({ repo: controlRepo, path: automergePath }),
       );
 
       // 3. Read each repo's open PRs and its recent CI. One repo's failure is
@@ -197,6 +228,7 @@ export const triagePrs = defineRun({
         checkSuppression({
           keys: routed.map((pr) => maintenanceKey(pr)),
           ledgerRepo: controlRepo,
+          ledgerPath: declinedPath,
           headBranchPrefix: BRANCH_PREFIX,
           nowMs: input.firedAt,
         }),
@@ -227,7 +259,7 @@ export const triagePrs = defineRun({
           title: `docs(maintenance): PR triage digest (${day})`,
           body: renderPrBody({ day, routed: proposed, reviewers, suppression, digest }),
           commitMessage: `docs(maintenance): PR triage digest (${day})\n\nGenerated by flare-dispatch triage-prs.`,
-          files: [{ path: `infra/maintenance-loop/triage/${day}.md`, content: digest }],
+          files: [{ path: `${digestDir}/${day}.md`, content: digest }],
         }),
       );
 

@@ -24,7 +24,11 @@ import {
   parseAutomergeConfig,
 } from "./automerge-gate";
 
-/** The real `automerge.json` from `fractalboxdev/org`, verbatim in shape. */
+/**
+ * A config in the shape a deployment actually ships: the gate off, no repo or
+ * class opted in, and a sensitive-path list broad enough that the "even if it
+ * were enabled" assertions below have something to bite on.
+ */
 const SHIPPED_CONFIG = JSON.stringify({
   version: 1,
   enabled: false,
@@ -39,10 +43,8 @@ const SHIPPED_CONFIG = JSON.stringify({
     "*secret*",
     "*auth*",
     "*token*",
-    "infra/maintenance-loop/",
+    "maintenance/",
     "specs/",
-    "process/content/",
-    "handbook/content/",
   ],
   neverEligibleRuns: ["org-spec-audit", "spec-drift-pr", "upstream-upgrade-pr"],
 });
@@ -277,7 +279,7 @@ describe("loadAutomergeConfig", () => {
     const { config, logs } = await load({ readTextFile: () => Effect.succeed({ found: false }) });
     expect(config).toEqual(AUTOMERGE_CONFIG_CLOSED);
     expect(
-      logs.some((l) => l.level === "warn" && l.msg.includes("no infra/maintenance-loop")),
+      logs.some((l) => l.level === "warn" && l.msg.includes("no maintenance/automerge.json")),
     ).toBe(true);
   });
 

@@ -200,6 +200,64 @@ describe("triage-prs — the run", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  // Same rule as `org-spec-audit`: no default control repo, because a default
+  // is a repository somebody else's deployment files pull requests against.
+  it.effect("fails when no control repo is configured, before reading anything", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { "triage-prs.repos": "owner/app", "triage-prs.reviewers": "owner/app=@ada" },
+      github: { now: firedAt, pullRequestHistory: [pr()], workflowRuns: [run()] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(triagePrs.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("triage-prs.control-repo");
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(handles.github.readTextFileCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("writes and reads where config says, not where the run was born", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: {
+        ...baseConfig,
+        "triage-prs.digest-dir": "infra/loop/triage/",
+        "triage-prs.automerge-path": "infra/loop/automerge.json",
+      },
+      github: {
+        now: firedAt,
+        pullRequestHistory: [pr()],
+        workflowRuns: [run()],
+        files: { "owner/control:infra/loop/automerge.json": '{"enabled":false}' },
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* triagePrs.run(input);
+      const call = handles.github.openDraftPullRequestCalls[0]!;
+      expect(call.files[0]!.path).toBe("infra/loop/triage/2026-08-08.md");
+      // The allowlist came from the configured path. Asserted on the read, not
+      // on the verdict: an unreadable config also refuses, so a verdict-only
+      // assertion would pass whether or not the path was honoured.
+      expect(handles.github.readTextFileCalls.map((c) => c.path)).toContain(
+        "infra/loop/automerge.json",
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses a digest-dir that escapes the repo root", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "triage-prs.digest-dir": "../../etc" },
+      github: { now: firedAt, pullRequestHistory: [pr()], workflowRuns: [run()] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(triagePrs.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("opens one digest naming each exit, and merges nothing", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: baseConfig,
@@ -231,7 +289,7 @@ describe("triage-prs — the run", () => {
       const call = handles.github.openDraftPullRequestCalls[0]!;
       expect(call.repo).toBe("owner/control");
       expect(call.headBranch).toBe("flare-dispatch/triage-digest-2026-08-08");
-      expect(call.files[0]!.path).toBe("infra/maintenance-loop/triage/2026-08-08.md");
+      expect(call.files[0]!.path).toBe("maintenance/triage/2026-08-08.md");
       // The auto-merge section must never read as though anything merged.
       expect(call.files[0]!.content).toContain("Nothing here was merged");
       expect(call.files[0]!.content).toContain("reviewer of record: @ada");
@@ -268,7 +326,7 @@ describe("triage-prs — the run", () => {
         pullRequestHistory: [pr({ number: 1 }), pr({ number: 2 })],
         workflowRuns: [run()],
         files: {
-          "owner/control:infra/maintenance-loop/declined.jsonl": JSON.stringify({
+          "owner/control:maintenance/declined.jsonl": JSON.stringify({
             key: "triage-prs/owner/app#1-ask",
             reason: "that PR is parked on purpose",
             by: "@ada",

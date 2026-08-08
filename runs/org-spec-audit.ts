@@ -96,9 +96,9 @@ import {
   isoDate,
   parseGitRef,
   parseList,
-  parseRepo,
-  parseRepoRelativePath,
   renderSuppressionNote,
+  resolveControlRepo,
+  resolveRepoRelativePath,
   type SuppressionReport,
   workspace,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
@@ -319,44 +319,11 @@ export const orgSpecAudit = defineRun({
       // did not say where to file this" is not a different repo — it is
       // stopping. Resolved before the sweep, not at the write, so a
       // misconfiguration is red on the first tick instead of after an hour of
-      // model calls whose output has nowhere to go.
-      const controlRepo = parseRepo(
-        yield* step("resolve-control-repo", () => config.get(CONTROL_REPO_KEY)),
-      );
-      if (controlRepo === undefined) {
-        return yield* Effect.fail(
-          new StepFailed({
-            step: "resolve-control-repo",
-            cause: `${CONTROL_REPO_KEY} is unset or not \`owner/name\` — this run has no default control repo, and will not guess one`,
-          }),
-        );
-      }
-
-      const questionsDir = parseRepoRelativePath(
-        yield* step("resolve-questions-dir", () => config.get(QUESTIONS_DIR_KEY)),
-        QUESTIONS_DIR_DEFAULT,
-      );
-      if (questionsDir === undefined) {
-        return yield* Effect.fail(
-          new StepFailed({
-            step: "resolve-questions-dir",
-            cause: `${QUESTIONS_DIR_KEY} is not a repo-relative directory (no leading "/", no "..", no backslashes)`,
-          }),
-        );
-      }
-
-      const declinedPath = parseRepoRelativePath(
-        yield* step("resolve-declined-path", () => config.get(DECLINED_PATH_KEY)),
-        DECLINED_LEDGER_PATH,
-      );
-      if (declinedPath === undefined) {
-        return yield* Effect.fail(
-          new StepFailed({
-            step: "resolve-declined-path",
-            cause: `${DECLINED_PATH_KEY} is not a repo-relative path (no leading "/", no "..", no backslashes)`,
-          }),
-        );
-      }
+      // model calls whose output has nowhere to go. See
+      // `primitives/control-plane` for the rule and the failure text.
+      const controlRepo = yield* resolveControlRepo(CONTROL_REPO_KEY);
+      const questionsDir = yield* resolveRepoRelativePath(QUESTIONS_DIR_KEY, QUESTIONS_DIR_DEFAULT);
+      const declinedPath = yield* resolveRepoRelativePath(DECLINED_PATH_KEY, DECLINED_LEDGER_PATH);
 
       const windowHours = parseWindowHours(
         yield* step("resolve-window", () => config.get(WINDOW_HOURS_KEY)),

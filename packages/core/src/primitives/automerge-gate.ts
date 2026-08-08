@@ -1,11 +1,10 @@
 // Primitive: the auto-merge gate — the one place software reaches `main`
 // without a human, and therefore the one place built to say no.
 //
-// The loop's process doc (§5, §9) is the spec. Config lives in the control repo
-// at `infra/maintenance-loop/automerge.json`, is changed by PR, and today reads
-// `enabled: false` with empty `repos` and `classes`. This primitive answers one
-// question — *may this PR merge itself?* — and its answer is `no` unless every
-// condition holds.
+// The loop's process doc (§5, §9) is the spec. Config lives as a JSON file in
+// the operator's control repo — the caller names the path — and is changed by
+// PR. This primitive answers one question — *may this PR merge itself?* — and
+// its answer is `no` unless every condition holds.
 //
 // --- Refusal is the default, structurally --------------------------------
 //
@@ -38,8 +37,15 @@ import type { GitHubApiError } from "../errors";
 import { github } from "../services/github";
 import { io } from "../services/io";
 
-/** Where the allowlist lives, in the control repo. */
-export const AUTOMERGE_CONFIG_PATH = "infra/maintenance-loop/automerge.json";
+/**
+ * Where the allowlist lives, in the control repo — the fallback only.
+ *
+ * Callers name their own path, and any real deployment does. This default
+ * describes no particular operator's directory layout: the package is public,
+ * and a control repo's file tree is the operator's business, not this
+ * primitive's.
+ */
+export const AUTOMERGE_CONFIG_PATH = "maintenance/automerge.json";
 
 /**
  * The rung a permitted class sits on. Always 0 until the promotion ladder is
