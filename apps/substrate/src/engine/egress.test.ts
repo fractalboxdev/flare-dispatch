@@ -40,7 +40,7 @@ function recorder(responses: Response[]) {
     calls.push({ url: String(url), init });
     return queue.shift() ?? new Response("no stub queued", { status: 500 });
   }) as unknown as typeof fetch;
-  return { calls, fetch: fetchStub };
+  return { calls, send: fetchStub };
 }
 
 const redirectTo = (location: string, status = 302) =>
@@ -48,7 +48,7 @@ const redirectTo = (location: string, status = 302) =>
 
 const serve = (
   req: Request,
-  deps: { fetch: typeof fetch; recordDenial?: (e: Omit<DenialEvent, "count">) => void },
+  deps: { send: typeof fetch; recordDenial?: (e: Omit<DenialEvent, "count">) => void },
   ctx = CTX,
 ) => serveGrantedRequest(req, ctx, deps);
 
@@ -295,10 +295,10 @@ describe("applyGrant / revokeGrant", () => {
 
 describe("handler — binding", () => {
   it("refuses when no grant params are bound", async () => {
-    const { calls, fetch } = recorder([]);
+    const { calls, send } = recorder([]);
     const res = await serve(
       new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack"),
-      { fetch },
+      { send },
       { containerId: CONTAINER, className: "SubstrateSandboxTask", params: undefined },
     );
     expect(res.status).toBe(403);
@@ -306,10 +306,10 @@ describe("handler — binding", () => {
   });
 
   it("refuses when the grant was issued to a different container", async () => {
-    const { calls, fetch } = recorder([]);
+    const { calls, send } = recorder([]);
     const res = await serve(
       new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack"),
-      { fetch },
+      { send },
       { containerId: "someone-elses-container", className: "SubstrateSandboxTask", params: PARAMS },
     );
     expect(res.status).toBe(403);
@@ -321,10 +321,10 @@ describe("handler — binding", () => {
 describe("handler — denial events (ADR-0005)", () => {
   it("records a denial with the request's host, method, path and the rule's reason", async () => {
     const denials: Omit<DenialEvent, "count">[] = [];
-    const { fetch } = recorder([]);
+    const { send } = recorder([]);
     const res = await serve(
       new Request("https://github.com/acme/widget/git-receive-pack", { method: "POST" }),
-      { fetch, recordDenial: (e) => denials.push(e) },
+      { send, recordDenial: (e) => denials.push(e) },
     );
     expect(res.status).toBe(403);
     expect(denials).toEqual([
@@ -339,9 +339,9 @@ describe("handler — denial events (ADR-0005)", () => {
 
   it("records the redirect target on a refused redirect, not the first hop", async () => {
     const denials: Omit<DenialEvent, "count">[] = [];
-    const { fetch } = recorder([redirectTo("https://evil.com/collect?d=secret")]);
+    const { send } = recorder([redirectTo("https://evil.com/collect?d=secret")]);
     await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), {
-      fetch,
+      send,
       recordDenial: (e) => denials.push(e),
     });
     expect(denials).toHaveLength(1);
@@ -350,10 +350,10 @@ describe("handler — denial events (ADR-0005)", () => {
 
   it("records nothing on an admitted request", async () => {
     const denials: Omit<DenialEvent, "count">[] = [];
-    const { fetch } = recorder([new Response("ok")]);
+    const { send } = recorder([new Response("ok")]);
     const res = await serve(
       new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack"),
-      { fetch, recordDenial: (e) => denials.push(e) },
+      { send, recordDenial: (e) => denials.push(e) },
     );
     expect(res.status).toBe(200);
     expect(denials).toHaveLength(0);
@@ -362,10 +362,10 @@ describe("handler — denial events (ADR-0005)", () => {
   it("never surfaces the denial record into the container's 403 body", async () => {
     // Oracle resistance: the body names the rule, the record carries the
     // request — a hostile process must not learn the policy's shape from text.
-    const { fetch } = recorder([]);
+    const { send } = recorder([]);
     const res = await serve(
       new Request("https://github.com/acme/widget/git-receive-pack", { method: "POST" }),
-      { fetch, recordDenial: () => {} },
+      { send, recordDenial: () => {} },
     );
     const body = await res.text();
     expect(body).not.toContain(CONTAINER);
@@ -374,12 +374,12 @@ describe("handler — denial events (ADR-0005)", () => {
 
 describe("handler — request construction", () => {
   it("sends redirect: manual and never forwards the container's Request object", async () => {
-    const { calls, fetch } = recorder([new Response("ok")]);
+    const { calls, send } = recorder([new Response("ok")]);
     await serve(
       new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack", {
         headers: { "git-protocol": "version=2", accept: "*/*" },
       }),
-      { fetch },
+      { send },
     );
     expect(calls).toHaveLength(1);
     expect(calls[0]!.init.redirect).toBe("manual");
@@ -387,7 +387,7 @@ describe("handler — request construction", () => {
   });
 
   it("drops credential-shaped headers the container invented", async () => {
-    const { calls, fetch } = recorder([new Response("ok")]);
+    const { calls, send } = recorder([new Response("ok")]);
     await serve(
       new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack", {
         headers: {
@@ -397,7 +397,7 @@ describe("handler — request construction", () => {
           "git-protocol": "version=2",
         },
       }),
-      { fetch },
+      { send },
     );
     const sent = new Headers(calls[0]!.init.headers as HeadersInit);
     expect(sent.get("authorization")).toBeNull();
@@ -408,20 +408,20 @@ describe("handler — request construction", () => {
   });
 
   it("strips set-cookie from the response", async () => {
-    const { fetch } = recorder([
+    const { send } = recorder([
       new Response("ok", { headers: { "set-cookie": "a=b", "content-type": "text/plain" } }),
     ]);
     const res = await serve(
       new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack"),
-      { fetch },
+      { send },
     );
     expect(res.headers.get("set-cookie")).toBeNull();
     expect(res.headers.get("content-type")).toBe("text/plain");
   });
 
   it("denies before any fetch when the path is outside the grant", async () => {
-    const { calls, fetch } = recorder([new Response("ok")]);
-    const res = await serve(new Request("https://github.com/acme/widget/git-receive-pack", { method: "POST" }), { fetch });
+    const { calls, send } = recorder([new Response("ok")]);
+    const res = await serve(new Request("https://github.com/acme/widget/git-receive-pack", { method: "POST" }), { send });
     expect(res.status).toBe(403);
     expect(calls).toHaveLength(0);
   });
@@ -429,11 +429,11 @@ describe("handler — request construction", () => {
 
 describe("handler — redirects", () => {
   it("follows a redirect that lands inside the grant", async () => {
-    const { calls, fetch } = recorder([
+    const { calls, send } = recorder([
       redirectTo("https://codeload.github.com/acme/widget/tar.gz/main"),
       new Response("tarball"),
     ]);
-    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { fetch });
+    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { send });
     expect(res.status).toBe(200);
     expect(calls.map((c) => c.url)).toEqual([
       "https://github.com/acme/widget/archive/main.tar.gz",
@@ -442,8 +442,8 @@ describe("handler — redirects", () => {
   });
 
   it("refuses a redirect off the allowlist — the channel through the allowlist", async () => {
-    const { calls, fetch } = recorder([redirectTo("https://evil.com/collect?d=secret")]);
-    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { fetch });
+    const { calls, send } = recorder([redirectTo("https://evil.com/collect?d=secret")]);
+    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { send });
     expect(res.status).toBe(403);
     expect(await res.text()).toMatch(/redirect to evil.com/);
     // The point of the control: the second leg never happened.
@@ -451,34 +451,34 @@ describe("handler — redirects", () => {
   });
 
   it("refuses a redirect to a denied write sink", async () => {
-    const { calls, fetch } = recorder([redirectTo("https://gist.github.com/acme/widget/tar.gz/main")]);
-    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { fetch });
+    const { calls, send } = recorder([redirectTo("https://gist.github.com/acme/widget/tar.gz/main")]);
+    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { send });
     expect(res.status).toBe(403);
     expect(calls).toHaveLength(1);
   });
 
   it("refuses a redirect that stays on an admitted host but leaves the granted path", async () => {
-    const { calls, fetch } = recorder([redirectTo("https://codeload.github.com/attacker/sink/tar.gz/main")]);
-    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { fetch });
+    const { calls, send } = recorder([redirectTo("https://codeload.github.com/attacker/sink/tar.gz/main")]);
+    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { send });
     expect(res.status).toBe(403);
     expect(calls).toHaveLength(1);
   });
 
   it("refuses a protocol downgrade on the redirect leg", async () => {
-    const { fetch } = recorder([redirectTo("http://codeload.github.com/acme/widget/tar.gz/main")]);
-    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { fetch });
+    const { send } = recorder([redirectTo("http://codeload.github.com/acme/widget/tar.gz/main")]);
+    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { send });
     expect(res.status).toBe(403);
   });
 
   it("re-decides a relative Location against the current target", async () => {
-    const { calls, fetch } = recorder([redirectTo("/attacker/sink/tar.gz/main"), new Response("nope")]);
-    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { fetch });
+    const { calls, send } = recorder([redirectTo("/attacker/sink/tar.gz/main"), new Response("nope")]);
+    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { send });
     expect(res.status).toBe(403);
     expect(calls).toHaveLength(1);
   });
 
   it("downgrades a 302 to GET and drops the body", async () => {
-    const { calls, fetch } = recorder([
+    const { calls, send } = recorder([
       redirectTo("https://github.com/acme/widget/info/refs?service=git-upload-pack"),
       new Response("refs"),
     ]);
@@ -488,7 +488,7 @@ describe("handler — redirects", () => {
         body: "0000",
         headers: { "content-type": "application/x-git-upload-pack-request" },
       }),
-      { fetch },
+      { send },
     );
     expect(res.status).toBe(200);
     expect(calls[1]!.init.method).toBe("GET");
@@ -496,7 +496,7 @@ describe("handler — redirects", () => {
   });
 
   it("re-decides the preserved method on a 308 rather than trusting the first hop", async () => {
-    const { calls, fetch } = recorder([
+    const { calls, send } = recorder([
       redirectTo("https://codeload.github.com/acme/widget/tar.gz/main", 308),
     ]);
     const res = await serve(
@@ -505,7 +505,7 @@ describe("handler — redirects", () => {
         body: "0000",
         headers: { "content-type": "application/x-git-upload-pack-request" },
       }),
-      { fetch },
+      { send },
     );
     // codeload has no POST rule, so the preserved-method hop is refused.
     expect(res.status).toBe(403);
@@ -514,8 +514,8 @@ describe("handler — redirects", () => {
 
   it("stops a redirect loop rather than following it forever", async () => {
     const hop = () => redirectTo("https://github.com/acme/widget/archive/main.tar.gz");
-    const { calls, fetch } = recorder([hop(), hop(), hop(), hop(), hop(), hop(), hop(), hop()]);
-    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { fetch });
+    const { calls, send } = recorder([hop(), hop(), hop(), hop(), hop(), hop(), hop(), hop()]);
+    const res = await serve(new Request("https://github.com/acme/widget/archive/main.tar.gz"), { send });
     expect(res.status).toBe(403);
     expect(await res.text()).toMatch(/too many redirects/);
     expect(calls.length).toBeLessThanOrEqual(6);
@@ -524,14 +524,14 @@ describe("handler — redirects", () => {
 
 describe("handler — bodies are sinks", () => {
   it("caps the upload-pack body", async () => {
-    const { calls, fetch } = recorder([new Response("ok")]);
+    const { calls, send } = recorder([new Response("ok")]);
     const res = await serve(
       new Request("https://github.com/acme/widget/git-upload-pack", {
         method: "POST",
         body: "x".repeat(1024 * 1024 + 1),
         headers: { "content-type": "application/x-git-upload-pack-request" },
       }),
-      { fetch },
+      { send },
     );
     expect(res.status).toBe(403);
     expect(await res.text()).toMatch(/over the .* cap/);
@@ -539,21 +539,21 @@ describe("handler — bodies are sinks", () => {
   });
 
   it("passes an upload-pack body within the cap", async () => {
-    const { calls, fetch } = recorder([new Response("pack")]);
+    const { calls, send } = recorder([new Response("pack")]);
     const res = await serve(
       new Request("https://github.com/acme/widget/git-upload-pack", {
         method: "POST",
         body: "0032want deadbeef\n0000",
         headers: { "content-type": "application/x-git-upload-pack-request" },
       }),
-      { fetch },
+      { send },
     );
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(1);
   });
 
   it("refuses an LFS batch that asks to upload — same URL, same method, different intent", async () => {
-    const { calls, fetch } = recorder([new Response("ok")]);
+    const { calls, send } = recorder([new Response("ok")]);
     const res = await serveGrantedRequest(
       new Request("https://github.com/acme/widget/info/lfs/objects/batch", {
         method: "POST",
@@ -561,7 +561,7 @@ describe("handler — bodies are sinks", () => {
         headers: { "content-type": "application/vnd.git-lfs+json" },
       }),
       { ...CTX, params: LFS_PARAMS },
-      { fetch },
+      { send },
     );
     expect(res.status).toBe(403);
     expect(await res.text()).toMatch(/is not download/);
@@ -569,7 +569,7 @@ describe("handler — bodies are sinks", () => {
   });
 
   it("admits an LFS batch that asks to download", async () => {
-    const { fetch } = recorder([new Response("{}")]);
+    const { send } = recorder([new Response("{}")]);
     const res = await serveGrantedRequest(
       new Request("https://github.com/acme/widget/info/lfs/objects/batch", {
         method: "POST",
@@ -577,13 +577,13 @@ describe("handler — bodies are sinks", () => {
         headers: { "content-type": "application/vnd.git-lfs+json" },
       }),
       { ...CTX, params: LFS_PARAMS },
-      { fetch },
+      { send },
     );
     expect(res.status).toBe(200);
   });
 
   it("refuses an unparseable LFS batch body rather than passing it through", async () => {
-    const { fetch } = recorder([new Response("{}")]);
+    const { send } = recorder([new Response("{}")]);
     const res = await serveGrantedRequest(
       new Request("https://github.com/acme/widget/info/lfs/objects/batch", {
         method: "POST",
@@ -591,20 +591,20 @@ describe("handler — bodies are sinks", () => {
         headers: { "content-type": "application/vnd.git-lfs+json" },
       }),
       { ...CTX, params: LFS_PARAMS },
-      { fetch },
+      { send },
     );
     expect(res.status).toBe(403);
   });
 
   it("refuses the LFS batch endpoint entirely when the grant did not opt in", async () => {
-    const { fetch } = recorder([new Response("{}")]);
+    const { send } = recorder([new Response("{}")]);
     const res = await serve(
       new Request("https://github.com/acme/widget/info/lfs/objects/batch", {
         method: "POST",
         body: JSON.stringify({ operation: "download" }),
         headers: { "content-type": "application/vnd.git-lfs+json" },
       }),
-      { fetch },
+      { send },
     );
     expect(res.status).toBe(403);
   });
@@ -676,11 +676,11 @@ describe("grantPolicy — profiles compose onto the repo read", () => {
 
 describe("handler — credential injection", () => {
   it("attaches the substrate's token to a request that passes the grant", async () => {
-    const { calls, fetch } = recorder([new Response("{}")]);
+    const { calls, send } = recorder([new Response("{}")]);
     const res = await serveGrantedRequest(
       new Request(scriptUrl, { method: "PUT", body: "worker-bundle" }),
       CF_CTX,
-      { fetch, resolveSecret: cfSecrets },
+      { send, resolveSecret: cfSecrets },
     );
     expect(res.status).toBe(200);
     const sent = new Headers(calls[0]!.init.headers as HeadersInit);
@@ -688,7 +688,7 @@ describe("handler — credential injection", () => {
   });
 
   it("overwrites a container-authored Authorization rather than forwarding it", async () => {
-    const { calls, fetch } = recorder([new Response("{}")]);
+    const { calls, send } = recorder([new Response("{}")]);
     await serveGrantedRequest(
       new Request(scriptUrl, {
         method: "PUT",
@@ -696,40 +696,40 @@ describe("handler — credential injection", () => {
         headers: { authorization: "Bearer attacker-supplied" },
       }),
       CF_CTX,
-      { fetch, resolveSecret: cfSecrets },
+      { send, resolveSecret: cfSecrets },
     );
     const sent = new Headers(calls[0]!.init.headers as HeadersInit);
     expect(sent.get("authorization")).toBe(`Bearer ${CF_TOKEN}`);
   });
 
   it("injects nothing on a host the profile does not credential", async () => {
-    const { calls, fetch } = recorder([new Response("ok")]);
+    const { calls, send } = recorder([new Response("ok")]);
     await serveGrantedRequest(
       new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack"),
       CF_CTX,
-      { fetch, resolveSecret: cfSecrets },
+      { send, resolveSecret: cfSecrets },
     );
     const sent = new Headers(calls[0]!.init.headers as HeadersInit);
     expect(sent.get("authorization")).toBeNull();
   });
 
   it("fails closed when the binding is unset — never sends the request bare", async () => {
-    const { calls, fetch } = recorder([new Response("{}")]);
+    const { calls, send } = recorder([new Response("{}")]);
     const res = await serveGrantedRequest(
       new Request(scriptUrl, { method: "PUT", body: "worker-bundle" }),
       CF_CTX,
-      { fetch, resolveSecret: () => undefined },
+      { send, resolveSecret: () => undefined },
     );
     expect(res.status).toBe(403);
     expect(calls).toHaveLength(0);
   });
 
   it("fails closed when no resolver is wired at all", async () => {
-    const { calls, fetch } = recorder([new Response("{}")]);
+    const { calls, send } = recorder([new Response("{}")]);
     const res = await serveGrantedRequest(
       new Request(scriptUrl, { method: "PUT", body: "worker-bundle" }),
       CF_CTX,
-      { fetch },
+      { send },
     );
     expect(res.status).toBe(403);
     expect(calls).toHaveLength(0);
@@ -737,22 +737,22 @@ describe("handler — credential injection", () => {
 
   it("records the missing binding as a denial the operator can retrieve", async () => {
     const events: Omit<DenialEvent, "count">[] = [];
-    const { fetch } = recorder([new Response("{}")]);
+    const { send } = recorder([new Response("{}")]);
     await serveGrantedRequest(
       new Request(scriptUrl, { method: "PUT", body: "x" }),
       CF_CTX,
-      { fetch, resolveSecret: () => undefined, recordDenial: (e) => events.push(e) },
+      { send, resolveSecret: () => undefined, recordDenial: (e) => events.push(e) },
     );
     expect(events[0]?.host).toBe("api.cloudflare.com");
     expect(events[0]?.reason).toContain("CLOUDFLARE_API_TOKEN");
   });
 
   it("never puts the credential value in the 403 the container reads", async () => {
-    const { fetch } = recorder([new Response("{}")]);
+    const { send } = recorder([new Response("{}")]);
     const res = await serveGrantedRequest(
       new Request(`https://api.cloudflare.com/client/v4/zones/abc`, { method: "PUT", body: "x" }),
       CF_CTX,
-      { fetch, resolveSecret: cfSecrets },
+      { send, resolveSecret: cfSecrets },
     );
     expect(res.status).toBe(403);
     expect(await res.text()).not.toContain(CF_TOKEN);
@@ -761,14 +761,14 @@ describe("handler — credential injection", () => {
   it("does not replay the credential onto a redirect target that is not credentialed", async () => {
     // A 307 preserves method and body across hosts; the header must not ride
     // along to a host whose policy attaches nothing.
-    const { calls, fetch } = recorder([
+    const { calls, send } = recorder([
       redirectTo("https://github.com/acme/widget/git-upload-pack", 307),
       new Response("ok"),
     ]);
     const res = await serveGrantedRequest(
       new Request(scriptUrl, { method: "POST", body: "x" }),
       CF_CTX,
-      { fetch, resolveSecret: cfSecrets },
+      { send, resolveSecret: cfSecrets },
     );
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(2);
@@ -779,15 +779,56 @@ describe("handler — credential injection", () => {
   });
 
   it("caps a credentialed upload body like every other sink", async () => {
-    const { calls, fetch } = recorder([new Response("{}")]);
+    const { calls, send } = recorder([new Response("{}")]);
     const oversized = "a".repeat(300 * 1024);
     const res = await serveGrantedRequest(
       // The PATCH rule's cap is 256 KiB — smaller than the upload rule's.
       new Request(scriptUrl, { method: "PATCH", body: oversized }),
       CF_CTX,
-      { fetch, resolveSecret: cfSecrets },
+      { send, resolveSecret: cfSecrets },
     );
     expect(res.status).toBe(403);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("the handler's fetch receiver", () => {
+  // Simulates workerd's brand check rather than running it: the production
+  // failure was `deps.fetch(…)` invoking the global with `this` set to the deps
+  // object. Pins that regression only — it says nothing about other builtins.
+  const withBrandCheckedFetch = async (run: () => Promise<Response>): Promise<Response> => {
+    const real = globalThis.fetch;
+    globalThis.fetch = function (this: unknown) {
+      if (this !== undefined && this !== globalThis)
+        throw new TypeError(
+          "Illegal invocation: function called with incorrect `this` reference.",
+        );
+      return Promise.resolve(new Response("refs", { status: 200 }));
+    } as unknown as typeof fetch;
+    try {
+      return await run();
+    } finally {
+      globalThis.fetch = real;
+    }
+  };
+
+  const refsRequest = (): Request =>
+    new Request("https://github.com/acme/widget/info/refs?service=git-upload-pack");
+
+  it("reaches the upstream with a receiver workerd accepts", async () => {
+    const res = await withBrandCheckedFetch(() =>
+      egressHandlers.granted(refsRequest(), {}, CTX),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("does the same on the report position, which forwards through its own call site", async () => {
+    const res = await withBrandCheckedFetch(() =>
+      egressHandlers.reportOnly(refsRequest(), {}, {
+        ...CTX,
+        params: { ...PARAMS, position: "report" },
+      }),
+    );
+    expect(res.status).toBe(200);
   });
 });

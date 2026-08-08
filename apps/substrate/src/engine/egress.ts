@@ -420,10 +420,10 @@ export const WOULD_DENY_PREFIX = "would-deny: ";
 export type ServeDeps = {
   /**
    * Tests substitute a stub; production omits it. Passing the global as
-   * `{ fetch }` detaches it from `globalThis` and throws `Illegal invocation`
-   * in workerd — which no suite here reproduces.
+   * `{ send: fetch }` detaches it from `globalThis` and throws
+   * `Illegal invocation` in workerd — see "the handler's fetch receiver".
    */
-  fetch?: typeof fetch;
+  send?: typeof fetch;
   /**
    * Denial recorder (ADR-0005): every handler 403 is reported here so the
    * substrate can aggregate `{host, method, path, reason, count}` per
@@ -441,9 +441,8 @@ export type ServeDeps = {
 };
 
 /**
- * The engine. Exported for tests; `egressHandlers.publicRepo` is the thin
- * production wrapper that supplies the real `fetch` (the DO layer adds the
- * denial recorder).
+ * The engine. Exported for tests; `egressHandlers.granted` / `reportOnly` are
+ * the thin production wrappers (the DO layer adds the denial recorder).
  *
  * Every outbound request is constructed here from scratch. Passing the
  * container's Request through — even with headers edited — would carry its
@@ -456,8 +455,9 @@ export async function serveGrantedRequest(
   ctx: OutboundContext<GrantParams>,
   deps: ServeDeps,
 ): Promise<Response> {
-  // Arrow, so there is no `this` for a caller to lose.
-  const send: typeof fetch = deps.fetch ?? ((input, init) => fetch(input, init));
+  // Called as a free identifier, so the receiver is `undefined` and never the
+  // deps object — which is the whole failure this indirection exists to stop.
+  const send: typeof fetch = deps.send ?? ((input, init) => fetch(input, init));
 
   const record = (reason: string, at?: URL): void => {
     try {
