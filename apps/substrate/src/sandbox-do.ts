@@ -310,9 +310,8 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
     if (!(await this.tryRestore(recipe, handles))) {
       await this.cleanRebuild(recipe);
     }
-    // A REFUSAL rather than a throw: throwing leaves `exec-fence.ts`'s
-    // `if (!ensured.ok)` untaken and lets the facade's outer catch reduce the
-    // cause to a raw SDK string, which `SandboxUnavailable` exists to prevent.
+    // Refusal, not throw: a throw skips `exec-fence.ts`'s `if (!ensured.ok)`
+    // and the facade's catch reduces the cause to a raw SDK string.
     try {
       await this.mountArtifacts();
     } catch (err) {
@@ -456,14 +455,9 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
   }
 
   /**
-   * `/artifacts` is where exec streams its logs, so it has to exist before any
-   * command runs.
-   *
-   * A failure here is fatal, not degraded: `run` redirects the whole command
-   * into a file under this mount and `readLogTail` reads it back from there, so
-   * without it the redirect fails and the command never executes — `sh` exits 1
-   * having run nothing, with an empty tail indistinguishable from a command
-   * that produced none. `runEnsure` turns that into a refusal.
+   * Fatal, not degraded: `run` redirects the command into a file under this
+   * mount, so without it the redirect fails and nothing executes — `sh` exits 1
+   * with an empty tail, indistinguishable from a command that printed nothing.
    */
   private async mountArtifacts(): Promise<void> {
     await this.mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, {

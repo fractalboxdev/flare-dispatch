@@ -1,8 +1,5 @@
-// The prefix rule, pinned where CI can see it.
-//
-// The natural home for this guard is `sandbox-do.workers.test.ts`, next to the
-// code. That file is invisible to `pnpm test` (see `artifacts.ts`), so the rule
-// is asserted here instead. The workers suite drives the real SDK call.
+// Here rather than beside the code because `pnpm test` never runs the Workers
+// pool. The workers suite drives the real SDK call.
 import { describe, expect, it } from "vitest";
 import { artifactsPrefix } from "./artifacts";
 

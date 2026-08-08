@@ -278,13 +278,7 @@ describe("detached processes (ADR-0012) - the paths that answer before a contain
   });
 });
 
-// The prefix SHAPE is pinned in `artifacts.test.ts`, a Node suite `pnpm test`
-// actually runs — this file is not in the root workspace (see its header).
-// What only workerd can answer lives here: whether the real SDK accepts the
-// prefix, and what the DO does when the mount fails.
 describe("the artifacts mount", () => {
-  // `validatePrefix` is not exported, so the rule is driven through the real
-  // `mountBucket` rather than restated. Assert on WHICH error comes back.
   const mountWith = (prefix: string): Promise<unknown> =>
     runInDurableObject(freshSandbox(), (instance) =>
       (
@@ -303,12 +297,8 @@ describe("the artifacts mount", () => {
     expect(await mountWith(`artifacts/relative/`)).toMatch(/[Pp]refix must start with/);
   });
 
-  // The mirror — mounting on the SHIPPED prefix — is deliberately absent, not
-  // overlooked. Clearing `validatePrefix` is what puts the call into container
-  // boot, which this pool cannot do: it retries until the 5s timeout and takes
-  // the runner's isolated storage with it, failing unrelated cases here.
-
-  // The half a prefix assertion cannot reach: being wrong went UNREPORTED.
+  // No mirror case: clearing `validatePrefix` advances into container boot,
+  // which hangs this pool to a 5s timeout and breaks its isolated storage.
   it("propagates a mount failure out of mountArtifacts rather than swallowing it", async () => {
     await expect(
       runInDurableObject(freshSandbox(), (instance) => {
