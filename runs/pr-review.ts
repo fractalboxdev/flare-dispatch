@@ -320,11 +320,10 @@ export const prReview = defineRun({
       // comment — success or failure. `reviewBody` produces the output; the
       // catch arm posts a comment and re-fails so the check reflects what
       // happened. Two failure families (issue #21):
-      //   - CAPACITY (`ModelCallFailed` reason `context-overflow`, i.e. every
-      //     reviewer overflowed the model's context even after the engine's
-      //     shrink-retries): the review never ran — post a "skipped" comment
-      //     and fail `RunSkipped`, which the dispatcher concludes as a
-      //     `neutral` check-run, never `failure`.
+      //   - CAPACITY (`ModelCallFailed` reasons in `CAPACITY_REASONS`): the
+      //     review never ran — post a "skipped" comment and fail `RunSkipped`,
+      //     which the dispatcher concludes as a `neutral` check-run, never
+      //     `failure`.
       //   - everything else: post "could not complete" and re-fail as
       //     `StepFailed`, so the check goes red honestly.
       // The comment post itself is best-effort — a failure to post must not
@@ -333,7 +332,7 @@ export const prReview = defineRun({
         Effect.catchAll((err) =>
           Match.value(err).pipe(
             Match.tag("ModelCallFailed", (e) =>
-              e.reason === "context-overflow"
+              CAPACITY_REASONS.has(e.reason)
                 ? skipReview(input, viewerUrl, e)
                 : failReview(input, viewerUrl, e),
             ),
@@ -343,6 +342,23 @@ export const prReview = defineRun({
       );
     }),
 });
+
+/**
+ * `ModelCallFailed` reasons where the review never happened, so the check must
+ * be `neutral` rather than red — `RunSkipped`'s own doc: "a review that didn't
+ * happen is not a failed review, and a red that isn't actionable trains people
+ * to ignore the check."
+ *
+ * `rate-limited` is the AI Gateway shedding the call before the provider sees
+ * it (`AiGatewayError` 2003), which is capacity exactly like `context-overflow`
+ * — nine PRs reviewed at once against a 10-req/min gateway put eight of them
+ * red while saying nothing about the code. Everything else stays red: an
+ * `auth-failed` or `bad-response` is a broken deploy, not a busy one.
+ */
+const CAPACITY_REASONS: ReadonlySet<ModelCallFailed["reason"]> = new Set([
+  "context-overflow",
+  "rate-limited",
+]);
 
 /** The boundary's red arm: post "could not complete", re-fail as `StepFailed`. */
 const failReview = (input: RunInput, viewerUrl: string | undefined, err: unknown) =>
