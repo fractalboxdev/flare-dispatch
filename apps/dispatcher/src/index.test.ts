@@ -123,6 +123,7 @@ describe("GET /health", () => {
         "release-notes",
         "self-heal-pr",
         "spec-drift-pr",
+        "triage-prs",
         "vitest-shard",
         "worker-deploy",
       ],

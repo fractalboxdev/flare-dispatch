@@ -158,6 +158,10 @@ export const RUN_GRANTS: Readonly<Record<string, RunGrant>> = {
   // `git`, never installs or builds, and its single write is the Worker-side
   // draft PR. No `js-install`.
   "org-spec-audit": { profiles: ["public-repo-read"], rollout: "legacy" },
+  // `triage-prs` never enters a container: every read is a Worker-side
+  // `github` call and its single write is the Worker-side draft PR. An empty
+  // profile list is the honest grant, not an oversight.
+  "triage-prs": { profiles: [], rollout: "legacy" },
   "ci-triage-pr": { profiles: JS_BUILD, rollout: "legacy" },
   "refresh-fixtures": { profiles: JS_BUILD, rollout: "legacy" },
   "release-notes": { profiles: JS_BUILD, rollout: "legacy" },

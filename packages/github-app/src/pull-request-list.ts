@@ -28,8 +28,20 @@ export type PullRequestSummary = {
   readonly body: string;
   /** The head branch name (no `owner:` prefix). */
   readonly headBranch: string;
+  /** The head commit sha — what a CI run is matched against. */
+  readonly headSha: string;
   readonly state: "open" | "closed";
   readonly draft: boolean;
+  /**
+   * Label names on the PR. GitHub returns these on the LIST endpoint, unlike
+   * the org context store's `pulls` table, which carries none — so a
+   * `triage:*` state machine has to read them here.
+   */
+  readonly labels: readonly string[];
+  /** The login that opened it — `""` when GitHub returned no user. */
+  readonly author: string;
+  /** Reviewers requested but not yet responded — empty means nobody is on it. */
+  readonly requestedReviewers: readonly string[];
   readonly url: string;
   /** epoch ms. */
   readonly createdAt: number;
@@ -76,15 +88,27 @@ type RawPullRequest = {
   readonly number: number;
   readonly title?: string | null;
   readonly body?: string | null;
-  readonly head?: { readonly ref?: string | null } | null;
+  readonly head?: { readonly ref?: string | null; readonly sha?: string | null } | null;
   readonly state?: string | null;
   readonly draft?: boolean | null;
+  readonly labels?: readonly { readonly name?: string | null }[] | null;
+  readonly user?: { readonly login?: string | null } | null;
+  readonly requested_reviewers?: readonly { readonly login?: string | null }[] | null;
   readonly html_url?: string | null;
   readonly created_at?: string | null;
   readonly updated_at?: string | null;
   readonly closed_at?: string | null;
   readonly merged_at?: string | null;
 };
+
+/** Pluck a `login` / `name` list, dropping anything GitHub left null. */
+const names = (
+  raw:
+    | readonly { readonly name?: string | null; readonly login?: string | null }[]
+    | null
+    | undefined,
+): readonly string[] =>
+  (raw ?? []).map((entry) => entry.name ?? entry.login ?? "").filter((name) => name.length > 0);
 
 const PAGE_SIZE_DEFAULT = 100;
 const MAX_PAGES_DEFAULT = 5;
@@ -126,8 +150,12 @@ export const normalizePullRequest = (repo: string, raw: RawPullRequest): PullReq
     title: raw.title ?? "",
     body: raw.body ?? "",
     headBranch: raw.head?.ref ?? "",
+    headSha: raw.head?.sha ?? "",
     state: raw.state === "closed" ? "closed" : "open",
     draft: raw.draft ?? false,
+    labels: names(raw.labels),
+    author: raw.user?.login ?? "",
+    requestedReviewers: names(raw.requested_reviewers),
     url: raw.html_url ?? `https://github.com/${repo}/pull/${raw.number}`,
     createdAt: epochMs(raw.created_at) ?? 0,
     updatedAt: epochMs(raw.updated_at) ?? 0,

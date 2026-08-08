@@ -82,6 +82,36 @@ describe("normalizePullRequest (pure)", () => {
     expect(pr.mergedAt).toBeUndefined();
   });
 
+  it("carries the labels, author, requested reviewers and head sha triage needs", () => {
+    const pr = normalizePullRequest(
+      "owner/name",
+      rawPr({
+        labels: [{ name: "triage:needs-repro" }, { name: "bug" }],
+        user: { login: "dependabot[bot]" },
+        requested_reviewers: [{ login: "ada" }],
+        head: { ref: "feat/x", sha: "deadbeef" },
+      }),
+    );
+    expect(pr.labels).toEqual(["triage:needs-repro", "bug"]);
+    expect(pr.author).toBe("dependabot[bot]");
+    expect(pr.requestedReviewers).toEqual(["ada"]);
+    expect(pr.headSha).toBe("deadbeef");
+  });
+
+  it("drops null entries rather than emitting empty label or reviewer names", () => {
+    const pr = normalizePullRequest(
+      "owner/name",
+      rawPr({
+        labels: [{ name: null }, { name: "real" }],
+        requested_reviewers: [{ login: null }],
+        user: null,
+      }),
+    );
+    expect(pr.labels).toEqual(["real"]);
+    expect(pr.requestedReviewers).toEqual([]);
+    expect(pr.author).toBe("");
+  });
+
   it("tolerates a null body — a PR with no description is not a parse failure", () => {
     expect(normalizePullRequest("owner/name", rawPr({ body: null })).body).toBe("");
   });

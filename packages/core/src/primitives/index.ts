@@ -37,3 +37,17 @@ export {
   type SuppressionReport,
   type SuppressionVerdict,
 } from "./suppression";
+export {
+  evaluateAutomerge,
+  loadAutomergeConfig,
+  parseAutomergeConfig,
+  matchesSensitivePath,
+  describeVerdict as describeMergeVerdict,
+  AUTOMERGE_CONFIG_CLOSED,
+  AUTOMERGE_CONFIG_PATH,
+  LADDER_NOT_IMPLEMENTED,
+  type AutomergeConfig,
+  type MergeCandidate,
+  type MergeVerdict,
+  type RefusalReason,
+} from "./automerge-gate";
