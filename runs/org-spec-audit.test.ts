@@ -150,6 +150,73 @@ describe("org-spec-audit", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("announces the same text it committed, under a use case", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+
+      const [notice] = handles.notice.published;
+      const file = handles.github.openDraftPullRequestCalls[0]!.files[0]!;
+      if (notice === undefined) throw new Error("no notice was published");
+
+      // One rendering, two destinations. A second wording would be a second
+      // thing to keep true, and the first question a reader asks about a
+      // digest is which copy is the real one.
+      expect(notice.text).toBe(file.content);
+      // A KIND of message, never a room. The receiver maps this to a channel
+      // from its own config; nothing here can name one.
+      expect(notice.useCase).toBe("org-spec-audit");
+      expect(JSON.stringify(notice)).not.toMatch(/channel/i);
+      // The PR link rides as a typed entry, because markup inside `text` would
+      // be escaped by the receiver along with everything else.
+      expect(notice.links).toEqual([
+        { url: "https://github.com/owner/control/pull/1", label: "the questions PR" },
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keys the notice on the day, so a retried step cannot double-post", () => {
+    // The receiver dedups on `<run>:<dedupeKey>` and claims it before posting,
+    // so the id has to be a function of the run and the day — never a clock or
+    // a random. This is the same string the schedule's idempotency key uses.
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      expect(handles.notice.published[0]!.dedupeKey).toBe("2026-08-08");
+      expect(
+        orgSpecAudit.schedules?.[0]?.idempotencyKey({ cron: "45 5 * * *", firedAt }),
+      ).toContain("2026-08-08");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps the file and the verdict when the notice does not land", () => {
+    // The digest is already in git, which is the copy that has to survive. An
+    // announcement that failed must not retroactively make the sweep a failure.
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      notice: { outcome: "failed" },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.prOpened).toBe(true);
+      expect(out.questionsAfterMerge).toBe(1);
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("skips a repo with no commits in the window, before any model call", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: baseConfig,
@@ -178,6 +245,10 @@ describe("org-spec-audit", () => {
       expect(out.questionsAfterMerge).toBe(0);
       expect(out.prOpened).toBe(false);
       expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      // Empty means silent in the channel too. A digest that fires whether or
+      // not there is news is one people stop reading, and by then it has
+      // nothing left to spend.
+      expect(handles.notice.published).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
@@ -399,6 +470,10 @@ describe("org-spec-audit — suppression", () => {
       expect(out.questionsSuppressed).toBe(1);
       expect(out.prOpened).toBe(false);
       expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      // And nothing is announced either. Suppression runs BEFORE the notice, so
+      // a question a human declined is not re-broadcast into a channel — which
+      // is the louder half of re-proposing it, and the one nobody can close.
+      expect(handles.notice.published).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 

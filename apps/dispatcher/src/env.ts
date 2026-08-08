@@ -483,12 +483,29 @@ export interface Env {
   readonly SLACK_NOTIFY_URL?: string;
 
   /**
-   * Optional dedicated keying material for the verdict callback's signature.
-   * A Worker secret. When unset the callback key is HKDF-derived from
-   * `HMAC_SECRET` under its own label (`slack-notify.ts`), so the callback is
-   * signed by default with no extra secret and the derived key still cannot be
-   * confused with the dispatch HMAC. Absent AND `HMAC_SECRET` absent → the
-   * callback is skipped rather than sent unsigned.
+   * Where a run's NOTICE is delivered — the Slack ingress's
+   * `/flare-dispatch/notify` route, which resolves the destination from its own
+   * use-case map. A var, not a secret (a public HTTPS URL). CONFIG_KV
+   * `slack-notice.url` overrides it. Absent → `notice.publish` is a logged
+   * no-op and the run is otherwise unaffected.
+   *
+   * Separate from `SLACK_NOTIFY_URL` on purpose: a different endpoint, a
+   * different payload, and a blast radius an operator must be able to move
+   * without silencing the in-thread verdicts a human is waiting on. See
+   * `SLACK_NOTICE_URL_KEY` in slack-notify.ts.
+   */
+  readonly SLACK_NOTICE_URL?: string;
+
+  /**
+   * Optional dedicated keying material for BOTH signed callbacks — the verdict
+   * and the notice. One secret, but TWO derived keys: each surface derives
+   * under its own HKDF label (`flare-dispatch/slack-notify/v1` and
+   * `flare-dispatch/slack-notice/v1`, `slack-notify.ts`), because only the
+   * verdict body names a channel and a notice key must not be able to sign one.
+   * A Worker secret. When unset both keys are HKDF-derived from `HMAC_SECRET`
+   * instead, so both surfaces are signed by default with no extra secret and
+   * neither derived key can be confused with the dispatch HMAC. Absent AND
+   * `HMAC_SECRET` absent → both are skipped rather than sent unsigned.
    */
   readonly SLACK_NOTIFY_SECRET?: string;
 }

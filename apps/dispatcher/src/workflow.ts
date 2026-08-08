@@ -92,6 +92,7 @@ import { resolveMailboxLinkSecret, signMailboxToken } from "./mailbox-token";
 import { resolveAgentProxySecret, signAgentToken } from "./agent-token";
 import {
   deliverSlackVerdict,
+  emitSlackNotice,
   readSlackNotifyUrl,
   renderSlackVerdict,
   resolveSlackNotifySecret,
@@ -509,6 +510,22 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           },
         };
       })(),
+      // `notice` capability — a run saying something out loud. Wired for EVERY
+      // execution, not only slack-origin ones: this is the path a cron run
+      // needs, and a cron run has no origin to gate on. The gate is the
+      // capability's own shape instead — a notice names a use case and cannot
+      // name a destination, so "who may be told" stays a decision of the
+      // receiver's config rather than of whatever dispatched this.
+      //
+      // The closure keeps the HKDF/HMAC, the secret and the ingress URL in the
+      // Dispatcher (slack-notify.ts `emitSlackNotice`); runtime-cf only calls
+      // it. A deploy with no ingress configured answers `skipped` and the run
+      // is otherwise unaffected.
+      notice: {
+        run: payload.run,
+        executionId: payload.executionId,
+        deliver: (emission) => emitSlackNotice(this.env, emission),
+      },
       // Workers AI binding backs the `modelGateway` capability (the `pr-review`
       // engine's model backend). The binding is the auth — no model API key.
       // `AI_GATEWAY_ID`, when set, routes the calls through an AI Gateway.

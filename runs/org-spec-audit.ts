@@ -22,15 +22,24 @@
 // reason this sweeps instead of running per repo, and it is why the output is
 // ONE PR against the control repo rather than one per repo.
 //
-// --- Delivery: GitHub acts, Slack tells --------------------------------------
+// --- Delivery: the file is the record, the notice is the announcement --------
 //
 // This run does not post to Slack, and must not be given a way to. Slack bot
 // tokens live with the Slack ingress and stay there (see
 // `apps/dispatcher/src/slack-notify.ts`) — a cron run holding a workspace-write
-// credential is how a token ends up somewhere nobody meant it to be. So the
-// run's output is a reviewed file in git whose body IS the message: whichever
-// consumer already holds the workspace token reads the file and posts it. One
-// direction of trust, no new credential here.
+// credential is how a token ends up somewhere nobody meant it to be.
+//
+// So it does two things with one rendering. The PR carries the message as a
+// dated markdown file: that is the durable artifact and the reviewed record,
+// and answering in its thread is how the questions get closed. Then
+// `notice.publish` hands the SAME text to the `notice` capability, which names
+// a use case and nothing else; the Slack ingress resolves that to a room and
+// posts it with the token it already holds. One direction of trust, no new
+// credential here, and no second wording to drift from the first.
+//
+// Both halves are best-effort in the one direction that matters: a notice that
+// did not land is a logged line, never a verdict. The questions are already in
+// git, which is the copy that has to survive.
 //
 // --- Suppression: the loop's memory ------------------------------------------
 //
@@ -84,6 +93,7 @@ import {
   defineRun,
   github,
   io,
+  notice,
   sandbox,
   StepFailed,
   step,
@@ -145,6 +155,14 @@ const BRANCH_PREFIX = "flare-dispatch/spec-audit-questions-";
 
 /** The stable, repo-independent id a question is suppressed by. */
 const maintenanceKey = (questionKey: string): string => `${MAINTENANCE_SOURCE}/${questionKey}`;
+
+/**
+ * The routing key the notice carries. A KIND of message, not a destination —
+ * the Slack ingress maps it to a room in its own deploy config, and a use case
+ * it has no mapping for is refused there. Adding a destination is a PR against
+ * that repo, never a value this run could set.
+ */
+const NOTICE_USE_CASE = "org-spec-audit";
 
 /** A repo with no commits in this window is skipped before any model call. */
 const WINDOW_HOURS_DEFAULT = 26;
@@ -372,8 +390,10 @@ export const orgSpecAudit = defineRun({
       const swept = outcomes.filter((o) => !o.skipped).length;
       const skipped = outcomes.filter((o) => o.skipped).length;
 
-      // 4. Empty means silent. A digest that fires whether or not there is news
-      //    is one people learn to skip.
+      // 4. Empty means silent — no PR and, now, no notice. A digest that fires
+      //    whether or not there is news is one people learn to skip, and that
+      //    is far more expensive in a channel than in a repo: the day it does
+      //    have something to say, nobody is reading.
       if (merged.length === 0) {
         yield* io.log("info", `org-spec-audit: ${swept} repo(s) swept, no open questions`);
         return {
@@ -424,8 +444,8 @@ export const orgSpecAudit = defineRun({
       }
 
       // 6. One control-plane PR against the configured control repo. The file
-      //    it carries IS the message a Slack consumer posts — this run holds no
-      //    Slack credential and never will.
+      //    it carries is the durable record — and the same text is what gets
+      //    announced.
       const message = renderMessage({
         day,
         merged: proposed,
@@ -455,6 +475,28 @@ export const orgSpecAudit = defineRun({
               content: message,
             },
           ],
+        }),
+      );
+
+      // 7. Say it out loud. The same `message`, verbatim — the file and the
+      //    announcement are one rendering on purpose, so nobody has to ask
+      //    which of two wordings is the real one. It is the SUPPRESSION-FILTERED
+      //    rendering, so a tick that proposes nothing new announces nothing new
+      //    either. No markup is built here:
+      //    `text` is data the receiver escapes, and the PR link rides in the
+      //    typed `links` field precisely because markup inside `text` would be
+      //    escaped along with everything else.
+      //
+      //    `dedupeKey` is the day, which is also this run's schedule
+      //    idempotency key. Deterministic per (run, day) and free of any clock
+      //    read, so a retried step re-sends bytes the receiver has already
+      //    claimed and gets a 409 instead of posting the digest twice.
+      yield* step("publish-notice", () =>
+        notice.publish({
+          useCase: NOTICE_USE_CASE,
+          dedupeKey: day,
+          text: message,
+          links: [{ url: result.url, label: "the questions PR" }],
         }),
       );
 

@@ -25,6 +25,7 @@ import {
 } from "./fakes/executions-fake";
 import { IOFake, type IOFakeState, makeIOFake } from "./fakes/io-fake";
 import { MailboxFake, type MailboxFakeState, makeMailboxFake } from "./fakes/mailbox-fake";
+import { NoticeFake, type NoticeFakeState, makeNoticeFake } from "./fakes/notice-fake";
 import {
   BrowserFake,
   type BrowserFakeState,
@@ -78,6 +79,12 @@ export {
   type MailboxFakeState,
   type MailboxFakeOptions,
 } from "./fakes/mailbox-fake";
+export {
+  NoticeFake,
+  makeNoticeFake,
+  type NoticeFakeState,
+  type NoticeFakeOptions,
+} from "./fakes/notice-fake";
 export {
   ExecutionsFake,
   makeExecutionsFake,
@@ -150,6 +157,7 @@ export const CFRuntimeTest: Layer.Layer<RunContext> = Layer.mergeAll(
   ChecksFake,
   EmailFake,
   MailboxFake,
+  NoticeFake,
   GithubFake,
   CloudflareFake,
   ModelGatewayFake,
@@ -169,6 +177,7 @@ export type CFRuntimeTestHandles = {
   readonly checks: ChecksFakeState;
   readonly email: EmailFakeState;
   readonly mailbox: MailboxFakeState;
+  readonly notice: NoticeFakeState;
   readonly executions: ExecutionsFakeState;
   readonly github: GithubFakeState;
   readonly cloudflare: CloudflareFakeState;
@@ -202,6 +211,8 @@ export type CFRuntimeTestOptions = {
   /** Mailbox fake options — the inbox domain + local-part seed the
    * deterministic `allocate` mint uses. */
   readonly mailbox?: Parameters<typeof makeMailboxFake>[0];
+  /** Notice fake options — the outcome every `notice.publish` reports. */
+  readonly notice?: Parameters<typeof makeNoticeFake>[0];
   /** Github fake seed — repos + PRs + workflow runs returned by `github.*`. */
   readonly github?: Parameters<typeof makeGithubFake>[0];
   /** Cloudflare fake seed — deployments returned by `cloudflare.*`. */
@@ -249,6 +260,7 @@ export const makeCFRuntimeTest = (
   const checks = makeChecksFake();
   const emailFake = makeEmailFake();
   const mailboxFake = makeMailboxFake(opts.mailbox);
+  const noticeFake = makeNoticeFake(opts.notice);
   const github = makeGithubFake(opts.github);
   const cloudflare = makeCloudflareFake(opts.cloudflare);
   const modelGateway = makeModelGatewayFake(opts.modelGateway);
@@ -272,6 +284,7 @@ export const makeCFRuntimeTest = (
     checks.layer,
     emailFake.layer,
     mailboxFake.layer,
+    noticeFake.layer,
     github.layer,
     cloudflare.layer,
     modelGateway.layer,
@@ -291,6 +304,7 @@ export const makeCFRuntimeTest = (
       checks: checks.state,
       email: emailFake.state,
       mailbox: mailboxFake.state,
+      notice: noticeFake.state,
       github: github.state,
       cloudflare: cloudflare.state,
       modelGateway: modelGateway.state,

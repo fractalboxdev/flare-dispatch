@@ -29,6 +29,13 @@ export {
   type EmailCloudflareConfig,
   type SendEmailBinding,
 } from "./email-cf";
+export {
+  makeNoticeCloudflareLive,
+  noticeDeliveryId,
+  type NoticeCloudflareConfig,
+  type NoticeEmission,
+  type NoticeEmissionResult,
+} from "./notice-cf";
 export { makeSandboxCloudflareLive } from "./sandbox-cf";
 // `SandboxGithubAuth` only — it is param 4 of the exported
 // `makeSandboxCloudflareLive`, so a consumer needs the type to call it.
