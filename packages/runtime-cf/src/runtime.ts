@@ -151,8 +151,9 @@ export type CFRuntimeLiveOptions = {
   /**
    * Browser Rendering connect config for the `browser` capability
    * (`BROWSER_CDP_*` Worker secrets). `undefined` — a deploy with no Browser
-   * Rendering configured — selects the dying `Browser` stub: a browser run
-   * (`cdp-acceptance`) fails loudly. Non-browser runs never touch the Tag.
+   * Rendering configured — selects the deferred `Browser` stub: a browser run
+   * (`cdp-acceptance`) fails with a typed `BrowserUnavailable`, not a defect.
+   * Non-browser runs never touch the Tag.
    */
   readonly browser?: BrowserRenderingConfig;
   /**
@@ -215,8 +216,9 @@ export type CFRuntimeLiveOptions = {
    * Cloudflare Workers AI binding (`env.AI`) for the `modelGateway` capability —
    * the model backend the `pr-review` engine calls. The binding is the auth
    * (Workers AI is account-billed), so no model API key is configured. `undefined`
-   * (no `"ai"` binding on this deploy) selects the dying `ModelGateway` stub: a
-   * run that calls a model fails loudly; non-model runs never touch the Tag.
+   * (no `"ai"` binding on this deploy) selects the deferred `ModelGateway` stub:
+   * a run that calls a model fails with a typed `ModelGatewayError`, not a
+   * defect; non-model runs never touch the Tag.
    */
   readonly ai?: AiBinding;
   /**
@@ -307,8 +309,8 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
       ? ConfigDeferred
       : makeConfigKvLive(opts.configKv, opts.configOverrides);
   const secrets = makeSecretsLive(opts.secretsLookup);
-  // `Browser` is live when Browser Rendering is configured; absent, the dying
-  // stub keeps a browser run from silently mis-behaving.
+  // `Browser` is live when Browser Rendering is configured; absent, the deferred
+  // stub keeps a browser run from silently mis-behaving (typed failure, no die).
   const browser =
     opts.browser === undefined ? BrowserDeferred : makeBrowserRenderingLive(opts.browser);
   // `Oidc` is live when the signing JWK + issuer are configured; absent, a
@@ -323,7 +325,8 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
   // inbound rule delivers to.
   const mailbox = makeMailboxCloudflareLive(opts.mailbox);
   // `ModelGateway` is live when the Workers AI `"ai"` binding is present; absent,
-  // the dying stub keeps a model-calling run from silently mis-behaving. The
+  // the deferred stub keeps a model-calling run from silently mis-behaving with
+  // a typed failure rather than a die. The
   // binding is the auth (account-billed) — no model API key is configured.
   const modelGateway =
     opts.ai === undefined
