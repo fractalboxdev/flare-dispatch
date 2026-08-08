@@ -270,6 +270,45 @@ describe("pr-review", () => {
     },
   );
 
+  it.effect(
+    "a gateway rate-limit SKIPS the run (RunSkipped → neutral), never a red failure",
+    () => {
+      // The AI Gateway sheds the call before the provider sees it — an
+      // `AiGatewayError` 2003, which the backend maps to `rate-limited`. That
+      // is capacity, exactly like `context-overflow`: the review never ran, so
+      // a red check would claim a verdict nobody formed. Observed for real when
+      // nine PRs were reviewed at once against a 10-req/min gateway.
+      const limited = new ModelGatewayError({
+        model: "@cf/test/model",
+        reason: "rate-limited",
+        message:
+          'openai returned 429: {"name":"AiGatewayError","httpCode":429,"internalCode":2003,"message":"Rate limited"}',
+      });
+      const { layer, handles } = makeCFRuntimeTest({
+        config: backendConfig,
+        sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+        sandboxFiles: {
+          [DIFF_FILE]: "diff --git a/x.ts b/x.ts\n+++ b/x.ts\n+x\n",
+        },
+        modelGateway: { responses: [limited] },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(prReview.run(baseInput));
+        const failure = Exit.match(exit, {
+          onSuccess: () => undefined,
+          onFailure: (cause) => Option.getOrUndefined(Cause.failureOption(cause)),
+        });
+        expect(failure).toBeInstanceOf(RunSkipped);
+
+        expect(handles.github.pullReviewCalls).toHaveLength(1);
+        const body = handles.github.pullReviewCalls[0]!.body;
+        expect(body).toContain("pr-review skipped");
+        expect(body).not.toContain("could not complete");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("the PR comment is anchored to the head sha and carries the installation id", () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
