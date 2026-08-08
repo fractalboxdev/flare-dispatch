@@ -21,6 +21,7 @@ export { provisionInbox, waitForOtp, type OtpResult } from "./wait-for-otp";
 export { awsAssumeRole, type AwsCredentials } from "./aws-assume-role";
 export { isoDate, parseGitRef, parseList, parseRepo, parseRepoRelativePath } from "./scheduling";
 export { isNothingToLint } from "./oxlint";
+export { resolveControlRepo, resolveRepoRelativePath } from "./control-plane";
 export {
   checkSuppression,
   decideSuppression,
@@ -37,3 +38,17 @@ export {
   type SuppressionReport,
   type SuppressionVerdict,
 } from "./suppression";
+export {
+  evaluateAutomerge,
+  loadAutomergeConfig,
+  parseAutomergeConfig,
+  matchesSensitivePath,
+  describeVerdict as describeMergeVerdict,
+  AUTOMERGE_CONFIG_CLOSED,
+  AUTOMERGE_CONFIG_PATH,
+  LADDER_NOT_IMPLEMENTED,
+  type AutomergeConfig,
+  type MergeCandidate,
+  type MergeVerdict,
+  type RefusalReason,
+} from "./automerge-gate";

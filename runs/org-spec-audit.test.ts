@@ -306,15 +306,22 @@ const LEDGER = "owner/control:maintenance/declined.jsonl";
 const KEY = "org-spec-audit/per-run-spend-caps";
 
 /** A prior proposal carrying the key, closed unmerged `daysAgo` days back. */
-const closedProposal = (daysAgo: number, over: Partial<PullRequestHistoryRef> = {}) =>
+const closedProposal = (
+  daysAgo: number,
+  over: Partial<PullRequestHistoryRef> = {},
+): PullRequestHistoryRef =>
   ({
     repo: "owner/control",
     number: 7,
     title: "docs(maintenance): open questions",
     body: `maintenance-key: ${KEY}`,
     headBranch: `flare-dispatch/spec-audit-questions-2026-06-0${daysAgo % 9}`,
+    headSha: "abc123",
     state: "closed",
     draft: true,
+    labels: [],
+    author: "flare-dispatch[bot]",
+    requestedReviewers: [],
     url: "https://github.com/owner/control/pull/7",
     createdAt: firedAt - (daysAgo + 5) * DAY,
     // Touched today on purpose: a cooldown dated from `updated_at` would never

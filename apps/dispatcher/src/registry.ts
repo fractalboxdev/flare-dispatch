@@ -30,6 +30,7 @@ import {
   releaseNotes,
   selfHealPr,
   specDriftPr,
+  triagePrs,
   vitestShard,
   workerDeploy,
 } from "@fractalboxdev/flare-dispatch-runs";
@@ -49,6 +50,7 @@ const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
   // machine can fix, this sweeps the estate for what needs a human answer and
   // opens ONE control-plane PR carrying them grouped and deduplicated.
   [orgSpecAudit.name]: orgSpecAudit as Run<unknown, unknown>,
+  [triagePrs.name]: triagePrs as Run<unknown, unknown>,
   [ciTriagePr.name]: ciTriagePr as Run<unknown, unknown>,
   // The fix stage `ci-triage-pr`'s diagnosis (and `product-demo`'s confirmed
   // demo failures) escalate into. Demo-class auto-dispatch is gated OFF unless

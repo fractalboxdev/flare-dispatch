@@ -231,8 +231,20 @@ export type PullRequestHistoryRef = {
   readonly body: string;
   /** The head branch name (no `owner:` prefix). */
   readonly headBranch: string;
+  /** The head commit sha — what a CI run is matched against. */
+  readonly headSha: string;
   readonly state: "open" | "closed";
   readonly draft: boolean;
+  /**
+   * Label names on the PR — the `triage:*` state machine's storage. GitHub's
+   * list endpoint returns these; the org context store's `pulls` table does
+   * not, which is why triage routing reads the API rather than the store.
+   */
+  readonly labels: readonly string[];
+  /** The login that opened it — `""` when GitHub returned no user. */
+  readonly author: string;
+  /** Reviewers requested but not yet responded — empty means nobody is on it. */
+  readonly requestedReviewers: readonly string[];
   /** The PR's web URL. */
   readonly url: string;
   /** epoch ms. */
