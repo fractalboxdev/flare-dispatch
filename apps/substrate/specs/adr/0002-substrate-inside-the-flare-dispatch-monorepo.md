@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-06
-- **Implementation:** `partial` — the placement holds, but the lint rule this record promises (forbidding imports from substrate internals) does not exist: `.oxlintrc.json` declares no rules.
+- **Implementation:** `shipped` — the placement holds, and the lint rule this record promises now exists: `.oxlintrc.json` runs `no-restricted-imports` over `apps/dispatcher`, `runs`, `packages` and `actions`, so a path import into `apps/substrate` fails `pnpm lint` with the contract package named in the message. Static and dynamic `import()` are both caught; a type-position `typeof import(…)` is not, which crosses no runtime boundary.
 
 ## Context
 

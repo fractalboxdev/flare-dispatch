@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
-- **Implementation:** `shipped`, with one-sided enforcement — the pin is exact in `apps/substrate/package.json` and both Dockerfiles, and the canary (`src/verify/`) gates CI between the substrate and dispatcher deploys. But `container-config.test.ts:109` asserts image/package *agreement*, so it catches skew and not a bump; `@cloudflare/containers` is unpinned (transitive), and "auto-bumps are disabled" is vacuous — the repo has no renovate or dependabot config to disable.
+- **Implementation:** `shipped` — the pin is exact in `apps/substrate/package.json` and both Dockerfiles, the canary (`src/verify/`) gates CI between the substrate and dispatcher deploys, and `container-config.test.ts` § "the pinned SDK pair (ADR-0011)" asserts both halves as literals: `@cloudflare/sandbox` against the manifest *and* the lockfile importer that resolved it, `@cloudflare/containers` by walking that importer's snapshot edge. A bump of either now fails a test, where the older assertion at `container-config.test.ts:109` catches only image/package skew. `@cloudflare/containers` remains **transitive** — declared in no `package.json` — and the repo still carries no renovate or dependabot config, which the Consequences below now state rather than claiming auto-bumps are "disabled".
 
 ## Context
 
