@@ -463,6 +463,10 @@ describe("org-spec-audit — suppression", () => {
       expect(out.questionsSuppressed).toBe(1);
       expect(out.prOpened).toBe(false);
       expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      // And nothing is announced either. Suppression runs BEFORE the notice, so
+      // a question a human declined is not re-broadcast into a channel — which
+      // is the louder half of re-proposing it, and the one nobody can close.
+      expect(handles.notice.published).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 

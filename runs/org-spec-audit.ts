@@ -476,8 +476,8 @@ export const orgSpecAudit = defineRun({
       }
 
       // 6. One control-plane PR against the configured control repo. The file
-      //    it carries IS the message a Slack consumer posts — this run holds no
-      //    Slack credential and never will.
+      //    it carries is the durable record — and the same text is what gets
+      //    announced.
       const message = renderMessage({
         day,
         merged: proposed,
@@ -510,9 +510,11 @@ export const orgSpecAudit = defineRun({
         }),
       );
 
-      // 6. Say it out loud. The same `message`, verbatim — the file and the
+      // 7. Say it out loud. The same `message`, verbatim — the file and the
       //    announcement are one rendering on purpose, so nobody has to ask
-      //    which of two wordings is the real one. No markup is built here:
+      //    which of two wordings is the real one. It is the SUPPRESSION-FILTERED
+      //    rendering, so a tick that proposes nothing new announces nothing new
+      //    either. No markup is built here:
       //    `text` is data the receiver escapes, and the PR link rides in the
       //    typed `links` field precisely because markup inside `text` would be
       //    escaped along with everything else.
