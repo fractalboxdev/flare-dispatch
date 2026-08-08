@@ -418,7 +418,12 @@ for (const banned of CONTAINER_AUTHORED_AUTH_HEADERS)
 export const WOULD_DENY_PREFIX = "would-deny: ";
 
 export type ServeDeps = {
-  fetch: typeof fetch;
+  /**
+   * Tests substitute a stub; production omits it. Passing the global as
+   * `{ fetch }` detaches it from `globalThis` and throws `Illegal invocation`
+   * in workerd — which no suite here reproduces.
+   */
+  fetch?: typeof fetch;
   /**
    * Denial recorder (ADR-0005): every handler 403 is reported here so the
    * substrate can aggregate `{host, method, path, reason, count}` per
@@ -451,6 +456,9 @@ export async function serveGrantedRequest(
   ctx: OutboundContext<GrantParams>,
   deps: ServeDeps,
 ): Promise<Response> {
+  // Arrow, so there is no `this` for a caller to lose.
+  const send: typeof fetch = deps.fetch ?? ((input, init) => fetch(input, init));
+
   const record = (reason: string, at?: URL): void => {
     try {
       const target = at ?? new URL(req.url);
@@ -517,7 +525,7 @@ export async function serveGrantedRequest(
   // secret first reaches a host (ADR-0006).
   if (position === "report") {
     if (!first.ok) record(`${WOULD_DENY_PREFIX}${first.reason}`, url);
-    return deps.fetch(req);
+    return send(req);
   }
 
   if (!first.ok) return denied(first.reason, url);
@@ -566,7 +574,7 @@ export async function serveGrantedRequest(
       outbound.set(resolved.header.name, resolved.header.value);
     }
 
-    const upstream = await deps.fetch(target.toString(), {
+    const upstream = await send(target.toString(), {
       method,
       headers: outbound,
       body: (BODYLESS as readonly string[]).includes(method) ? undefined : payload,
@@ -638,9 +646,9 @@ export async function serveGrantedRequest(
  */
 export const egressHandlers = {
   granted: (req: Request, _env: unknown, ctx: OutboundContext<GrantParams>): Promise<Response> =>
-    serveGrantedRequest(req, ctx, { fetch }),
+    serveGrantedRequest(req, ctx, {}),
   reportOnly: (req: Request, _env: unknown, ctx: OutboundContext<GrantParams>): Promise<Response> =>
-    serveGrantedRequest(req, ctx, { fetch }),
+    serveGrantedRequest(req, ctx, {}),
   denyAll: (): Response =>
     new Response("egress denied: no grant is open\n", {
       status: 403,

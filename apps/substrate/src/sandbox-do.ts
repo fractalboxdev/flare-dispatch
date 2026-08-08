@@ -1042,7 +1042,6 @@ export function sandboxByName(
 const handlersFor = () => {
   const served = (req: Request, env: Env, ctx: OutboundContext<GrantParams>): Promise<Response> =>
     serveGrantedRequest(req, ctx, {
-      fetch,
       recordDenial: (event) => {
         void recordDenialD1(env.ADMISSION_DB, ctx.containerId, event).catch((err) =>
           console.error("denial record failed", err),
