@@ -310,8 +310,7 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
     if (!(await this.tryRestore(recipe, handles))) {
       await this.cleanRebuild(recipe);
     }
-    // Refusal, not throw: a throw skips `exec-fence.ts`'s `if (!ensured.ok)`
-    // and the facade's catch reduces the cause to a raw SDK string.
+    // Refusal, not throw: a throw skips `exec-fence.ts`'s `if (!ensured.ok)`.
     try {
       await this.mountArtifacts();
     } catch (err) {
