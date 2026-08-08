@@ -421,7 +421,7 @@ export type ServeDeps = {
   /**
    * Tests substitute a stub; production omits it. Passing the global as
    * `{ send: fetch }` detaches it from `globalThis` and throws
-   * `Illegal invocation` in workerd — see "the handler's fetch receiver".
+   * `Illegal invocation` in workerd — pinned by egress.test.ts.
    */
   send?: typeof fetch;
   /**
