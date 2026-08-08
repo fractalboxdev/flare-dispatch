@@ -40,11 +40,12 @@ describe("repoContentsUrl (pure)", () => {
     expect(
       repoContentsUrl({
         repo: "owner/name",
-        path: "infra/maintenance loop/declined.jsonl",
+        // The space is the point: a segment is encoded, the separators are not.
+        path: "spec audit/declined.jsonl",
         ref: "feat/x",
       }),
     ).toBe(
-      "https://api.github.com/repos/owner/name/contents/infra/maintenance%20loop/declined.jsonl?ref=feat%2Fx",
+      "https://api.github.com/repos/owner/name/contents/spec%20audit/declined.jsonl?ref=feat%2Fx",
     );
   });
 
@@ -60,7 +61,7 @@ describe("readRepoTextFile", () => {
     const result = await readRepoTextFile({
       token: "inst-token-abc",
       repo: "owner/name",
-      path: "infra/maintenance-loop/declined.jsonl",
+      path: "maintenance/declined.jsonl",
     });
     expect(result).toEqual({ found: true, content: "line one\nline two" });
     expect(requests[0]?.accept).toBe("application/vnd.github.raw");

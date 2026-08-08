@@ -6,7 +6,7 @@
 //
 // Two rules, and they come from the loop's process doc, not from here:
 //
-//   * a key in `infra/maintenance-loop/declined.jsonl` means **never again**;
+//   * a key in the declines ledger means **never again**;
 //   * a PR carrying the key that a human **closed unmerged**, with no ledger
 //     entry, means a **30-day cooldown dated from `closed_at`**.
 //
@@ -50,8 +50,16 @@ import type { GitHubApiError } from "../errors";
 import { github, type PullRequestHistoryRef } from "../services/github";
 import { io } from "../services/io";
 
-/** Where a decline is recorded, in the control repo. */
-export const DECLINED_LEDGER_PATH = "infra/maintenance-loop/declined.jsonl";
+/**
+ * Where a decline is recorded, in the control repo — the fallback only.
+ *
+ * Every caller may name its own path, and the ones that live in a real estate
+ * do. This default exists so an unconfigured deployment reads a sensible place
+ * rather than throwing; it deliberately describes no particular operator's
+ * directory layout, because this package is public and a repo's internal file
+ * tree is the operator's business, not this primitive's.
+ */
+export const DECLINED_LEDGER_PATH = "maintenance/declined.jsonl";
 
 /** A closed-unmerged proposal with no ledger entry waits this long. */
 export const COOLDOWN_DAYS_DEFAULT = 30;

@@ -321,7 +321,7 @@ describe("checkSuppression", () => {
     const { layer } = makeCFRuntimeTest({
       github: {
         files: {
-          "owner/control:infra/maintenance-loop/declined.jsonl": declineLine(args.keys[0]!),
+          "owner/control:maintenance/declined.jsonl": declineLine(args.keys[0]!),
         },
         pullRequestHistory: [prior({ body: `maintenance-key: ${args.keys[1]}` })],
         now: NOW,

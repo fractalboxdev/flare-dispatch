@@ -156,7 +156,7 @@ describe("makeGithubLive — readTextFile", () => {
     );
     const result = await Effect.runPromise(
       github
-        .readTextFile({ repo: "owner/private", path: "infra/maintenance-loop/declined.jsonl" })
+        .readTextFile({ repo: "owner/private", path: "maintenance/declined.jsonl" })
         .pipe(Effect.provide(makeGithubLive(CONFIG))),
     );
     expect(result).toEqual({ found: true, content: '{"key":"org-spec-audit/a"}' });

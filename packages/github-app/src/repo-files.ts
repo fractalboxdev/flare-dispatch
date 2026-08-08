@@ -7,7 +7,7 @@
 // round-trip and no 1 MB inline-content ceiling to trip over.
 //
 // Deliberately ONE narrow read, not a filesystem. The maintenance loop's
-// suppression ledger (`infra/maintenance-loop/declined.jsonl`) lives in git in a
+// suppression ledger (`maintenance/declined.jsonl`) lives in git in a
 // private repo, and cloning a repo to read one line on every cron tick is
 // absurd. Anything wider — trees, directories, writes — has a home already
 // (`commitFilesAndOpenPr` writes; a run that needs a working tree clones).
@@ -29,7 +29,7 @@ export type ReadRepoTextFileOptions = {
   readonly token: string;
   /** `"owner/repo"`. */
   readonly repo: string;
-  /** Repo-relative path (e.g. `infra/maintenance-loop/declined.jsonl`). */
+  /** Repo-relative path (e.g. `maintenance/declined.jsonl`). */
   readonly path: string;
   /** Branch, tag, or sha. Defaults to the repo's default branch. */
   readonly ref?: string;

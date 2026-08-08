@@ -214,7 +214,7 @@ describe("makeGithubFake — pullRequestHistory() / readTextFile()", () => {
 
   it("answers a seeded file, and found:false for anything else", async () => {
     const { layer, state } = makeGithubFake({
-      files: { "owner/control:infra/maintenance-loop/declined.jsonl": '{"key":"a/b"}' },
+      files: { "owner/control:maintenance/declined.jsonl": '{"key":"a/b"}' },
     });
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -222,7 +222,7 @@ describe("makeGithubFake — pullRequestHistory() / readTextFile()", () => {
         return [
           yield* g.readTextFile({
             repo: "owner/control",
-            path: "infra/maintenance-loop/declined.jsonl",
+            path: "maintenance/declined.jsonl",
           }),
           yield* g.readTextFile({ repo: "owner/control", path: "nope.jsonl" }),
         ];

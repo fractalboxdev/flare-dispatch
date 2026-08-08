@@ -302,7 +302,7 @@ describe("org-spec-audit", () => {
 
 // --- Suppression: what the run refuses to propose twice ----------------------
 
-const LEDGER = "owner/control:infra/maintenance-loop/declined.jsonl";
+const LEDGER = "owner/control:maintenance/declined.jsonl";
 const KEY = "org-spec-audit/per-run-spend-caps";
 
 /** A prior proposal carrying the key, closed unmerged `daysAgo` days back. */
@@ -355,6 +355,30 @@ describe("org-spec-audit — suppression", () => {
       expect(out.prOpened).toBe(false);
       // Nothing left to ask ⇒ no PR at all, and the count still reports why.
       expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  // The ledger's location is the operator's, like the questions dir. The
+  // default this repo ships is a placeholder, and an operator who moves the
+  // file must have the run follow it — including in the sentence the PR body
+  // prints telling a reviewer where to record a permanent decline.
+  it.effect("reads the ledger where `declined-path` says, and says so in the body", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.declined-path": "infra/loop/declined.jsonl" },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: {
+        now: firedAt,
+        files: { "owner/control:infra/loop/declined.jsonl": "" },
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      const calls = handles.github.openDraftPullRequestCalls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.body).toContain("`infra/loop/declined.jsonl`");
+      expect(calls[0]!.body).not.toContain("maintenance/declined.jsonl");
     }).pipe(Effect.provide(layer));
   });
 

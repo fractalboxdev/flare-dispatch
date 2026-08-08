@@ -186,7 +186,7 @@ export type ReleaseResult = {
 export type ReadTextFileRequest = {
   /** "owner/name". */
   readonly repo: string;
-  /** Repo-relative path (e.g. `infra/maintenance-loop/declined.jsonl`). */
+  /** Repo-relative path (e.g. `maintenance/declined.jsonl`). */
   readonly path: string;
   /** Branch, tag, or sha. Defaults to the repo's default branch. */
   readonly ref?: string;
