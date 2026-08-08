@@ -265,9 +265,31 @@ export type CloseIssueAsDuplicateOptions = IssueTarget & {
  * Close an issue as a duplicate of `duplicateOf`.
  *
  * The only close in this package, and the only one the triage desk has. GitHub
- * records `state_reason: "duplicate"`, so the reason survives in the timeline
+ * records `state_reason: "duplicate"`, so the *reason* survives in the timeline
  * where a reader (and a later audit) will find it, not only in whatever comment
  * the caller left.
+ *
+ * --- `duplicateOf` is required, and is NOT sent to GitHub ---------------------
+ *
+ * Requiring it in the signature is what makes "close on a non-duplicate verdict"
+ * unrepresentable at the call site — that is its whole job, and it does it
+ * whether or not it reaches the wire. What GitHub currently records is the
+ * reason without the target; the *link* to the original reaches the issue as the
+ * `#N` cross-reference in the comment the caller posts immediately before this.
+ *
+ * GitHub does have a parameter for the canonical target — `duplicate_issue_id`,
+ * "the ID of the issue to mark as the canonical duplicate when state_reason is
+ * duplicate". **It takes the issue's `id`, not its `number`.** `duplicateOf` is
+ * a NUMBER (that is what the issue list carries, what the classifier names, and
+ * what `knownNumbers` validates against), and the two are unrelated: ids are
+ * global and in the hundreds of millions, so passing a number here would mark
+ * some arbitrary unrelated issue — very likely in a different repository — as
+ * the canonical original.
+ *
+ * So wiring it up is not a one-line change: `IssueListItem`/`IssueRef` must
+ * carry `id` alongside `number`, the normalizer must read it, and the fake must
+ * agree. Deliberately left for a follow-up rather than half-done here, because
+ * the half-done version is silently wrong in production and green in every test.
  */
 export const closeIssueAsDuplicate = async (opts: CloseIssueAsDuplicateOptions): Promise<void> => {
   const { doFetch } = resolveClient(opts);
