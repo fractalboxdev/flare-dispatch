@@ -66,11 +66,11 @@
 //
 //   1. **Estate scoping and the label allowlist.** `github.issues` is per-repo
 //      and the repo list comes from CONFIG_KV, so a client repo cannot arrive by
-//      enumeration. Belt and braces: `assertInEstate` re-checks at the write
-//      boundary, and `assertWriteableLabels` refuses any label outside
-//      `WRITEABLE_LABELS`, so a repo that
-//      reached an action some other way still cannot be written to (§9 — "never
-//      open a PR, never apply a label" in a client repo).
+//      enumeration. Belt and braces at the write boundary: `assertInEstate`
+//      re-checks the repo, so one that reached an action some other way still
+//      cannot be written to (§9 — "never open a PR, never apply a label" in a
+//      client repo), and `assertWriteableLabels` refuses any label outside
+//      `WRITEABLE_LABELS`, so a plan carrying one writes nothing at all.
 //   2. **Suppression runs BEFORE any write.** A `maintenance:declined` label or
 //      a closed-unmerged digest means the loop was told no; re-litigating it
 //      with a comment is the loop's likeliest failure mode (§1), and a write is
@@ -306,21 +306,47 @@ export const triageIssues = defineRun({
 
       // 2. Read. One repo at a time; a repo that fails is logged and skipped,
       //    because a partial digest beats none.
-      const perRepo = yield* Effect.forEach(
+      //
+      //    But a repo failing and EVERY repo failing are different facts, and
+      //    only the first one is survivable. `github.issues` is deliberately
+      //    the one read that FAILS rather than degrading on an uncredentialed
+      //    deploy — its own docstring says why: "an empty issue list reading as
+      //    'nothing to triage' is a lie a scheduled run would act on". Catching
+      //    it per repo and carrying on re-tells exactly that lie whenever the
+      //    cause is the credential rather than the repo: every read fails, the
+      //    run reports a clean estate, and it does so green on every tick
+      //    forever, with nothing louder than a warn log.
+      //
+      //    So: skip the repos that fail, and fail the run when none succeeded.
+      const perRepoResults = yield* Effect.forEach(
         repos,
         (repo) =>
           step(`read-issues:${repo}`, () =>
             github.issues({ repo, state: "open", updatedWithinDays: UPDATED_WITHIN_DAYS }).pipe(
               Effect.map((all) => all.slice(0, maxIssues)),
+              Effect.map((issues) => ({ ok: true as const, issues })),
               Effect.catchAll((err: GitHubApiError) =>
                 io
                   .log("warn", `triage-issues: ${repo} unreadable (${err.reason}) — skipped`)
-                  .pipe(Effect.as([] as readonly IssueRef[])),
+                  .pipe(Effect.as({ ok: false as const, issues: [] as readonly IssueRef[] })),
               ),
             ),
           ),
         { concurrency: 1 },
       );
+      const readable = perRepoResults.filter((r) => r.ok).length;
+      if (readable === 0) {
+        return yield* Effect.fail(
+          new StepFailed({
+            step: "read-issues",
+            cause:
+              `triage-issues: all ${repos.length} configured repo(s) were unreadable. ` +
+              "Refusing to report a clean estate — an empty issue list here means the " +
+              "read failed, not that there is nothing to triage.",
+          }),
+        );
+      }
+      const perRepo = perRepoResults.map((r) => r.issues);
       const issues = perRepo.flat();
       if (issues.length === 0) {
         yield* io.log("info", `triage-issues: ${repos.length} repo(s) swept, no open issues`);

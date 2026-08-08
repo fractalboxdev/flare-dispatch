@@ -7,10 +7,11 @@
 // configured estate is refused, and that a suppressed key writes NOTHING.
 
 import { it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import type { IssueRef, StepFailed } from "@fractalboxdev/flare-dispatch-core";
+import { Github, GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
+import type { GithubService, IssueRef, StepFailed } from "@fractalboxdev/flare-dispatch-core";
 import {
   ARMING_LABEL,
   DECLINED_LEDGER_PATH,
@@ -154,6 +155,58 @@ describe("triage-issues — each verdict's writes reach GitHub", () => {
       expect(handles.github.commentOnIssueCalls).toHaveLength(0);
       expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
       expect(out.unclassified).toBe(1);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+// A read that fails and a read that finds nothing are different facts, and
+// `github.issues` is deliberately the one read that fails rather than degrading
+// -- so the run must not convert it back into "nothing to triage".
+describe("triage-issues — an unreadable estate is not an empty one", () => {
+  /** The seeded runtime, with `issues` swapped for one that always fails. */
+  const withBrokenReads = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const real = yield* Github;
+      const broken: GithubService = {
+        ...real,
+        issues: () => Effect.fail(new GitHubApiError({ status: 401, reason: "unauthorized" })),
+      };
+      return yield* eff.pipe(Effect.provideService(Github, broken));
+    });
+
+  it.effect("fails the run when EVERY configured repo is unreadable", () => {
+    const { layer, handles } = drive({ verdict: { kind: "feature" } });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(withBrokenReads(triageIssues.run(input)));
+      // Not a green tick reporting a clean estate.
+      expect(Exit.isFailure(exit)).toBe(true);
+      // And nothing was written or proposed on the strength of an empty read.
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("one unreadable repo among several is still skipped, not fatal", () => {
+    const OTHER = "fractalboxdev/other";
+    const { layer, handles } = drive({
+      verdict: { kind: "feature" },
+      config: { "triage-issues.repos": `${ESTATE} ${OTHER}` },
+      issues: [issue({ number: 7 })],
+    });
+    return Effect.gen(function* () {
+      const real = yield* Github;
+      const flaky: GithubService = {
+        ...real,
+        issues: (opts) =>
+          opts.repo === OTHER
+            ? Effect.fail(new GitHubApiError({ status: 500, reason: "transient" }))
+            : real.issues(opts),
+      };
+      const out = yield* triageIssues.run(input).pipe(Effect.provideService(Github, flaky));
+      // The readable repo was triaged; a partial digest beats none.
+      expect(out.issuesRead).toBe(1);
+      expect(handles.github.addIssueLabelsCalls[0]?.repo).toBe(ESTATE);
     }).pipe(Effect.provide(layer));
   });
 });
