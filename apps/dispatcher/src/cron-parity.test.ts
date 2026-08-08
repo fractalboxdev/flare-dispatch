@@ -50,12 +50,15 @@ describe("cron parity", () => {
     expect(armed.filter((cron) => schedulesByCron(cron).length === 0)).toEqual([]);
   });
 
-  it("every scheduled run is armed unless deliberately left off", () => {
+  it("every cron a scheduled run declares is armed unless deliberately left off", () => {
     const armed = new Set(readArmedCrons());
+    // EVERY declared expression, not merely one per run: a run that declares
+    // two schedules and has one armed is half-dead in exactly the way the file
+    // header describes, and an any-cron assertion reports it as healthy.
     const missing = scheduledRuns()
       .filter((r) => !DELIBERATELY_UNARMED.has(r.name))
-      .filter((r) => !r.crons.some((cron) => armed.has(cron)));
-    expect(missing.map((r) => r.name)).toEqual([]);
+      .flatMap((r) => r.crons.filter((cron) => !armed.has(cron)).map((cron) => `${r.name}: ${cron}`));
+    expect(missing).toEqual([]);
   });
 
   it("names every deliberately-unarmed run, so the list can't outlive its runs", () => {

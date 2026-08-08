@@ -40,7 +40,14 @@
 // live in their config, never in this file. A default that names somebody's
 // repo is a default that files a PR against it.
 //
-//   CONFIG_KV  org-spec-audit.repos          comma/space-separated `owner/name` estate to sweep (required)
+// Unset keys are not uniform, and the split is deliberate. An unset `repos` is
+// a run nobody has pointed at anything yet: it warns and no-ops, because on a
+// fresh install the cron fires before the estate is configured and a daily red
+// tick trains operators to ignore the check. An unset `control-repo` is the
+// opposite — the sweep would do all its work with nowhere to put the answer —
+// so that one fails the run loudly.
+//
+//   CONFIG_KV  org-spec-audit.repos          comma/space-separated `owner/name` estate to sweep (optional — unset disables the sweep)
 //   CONFIG_KV  org-spec-audit.base           base branch to read (default "main")
 //   CONFIG_KV  org-spec-audit.control-repo   `owner/name` the questions PR lands in (REQUIRED — no default)
 //   CONFIG_KV  org-spec-audit.questions-dir  repo-relative dir for `<date>.md` (default "maintenance/questions")
@@ -520,8 +527,21 @@ export const parseWindowHours = (raw: string | undefined | null): number => {
 
 // --- In-container gather scripts (plain `git`, no extra CLI) -----------------
 
-/** Concatenate every tracked spec markdown with a path delimiter. */
-const SPECS_SCRIPT = `for f in $(git ls-files 'specs/*.md' 'specs/**/*.md' 2>/dev/null); do printf '\\n===FILE %s===\\n' "$f"; cat "$f"; done`;
+/**
+ * Concatenate every tracked spec markdown with a path delimiter, bounded.
+ *
+ * The `head -c` is the real cap, not a duplicate of the `slice` at the call
+ * site. Truncating in TypeScript only bounds what reaches the *model* — the
+ * container has by then already `cat`-ed every spec in the repo and streamed
+ * the whole thing back, so an estate with large specs pays the memory, the
+ * transfer, and the time regardless of a limit applied afterwards. Capping in
+ * the pipeline makes `head` close the pipe and the loop stop reading.
+ *
+ * Both limits stay: this one is BYTES, the caller's `slice` is UTF-16 code
+ * units, so neither subsumes the other. A multi-byte character straddling the
+ * cut leaves a partial sequence at the tail, which is acceptable in a prompt.
+ */
+const SPECS_SCRIPT = `{ for f in $(git ls-files 'specs/*.md' 'specs/**/*.md' 2>/dev/null); do printf '\\n===FILE %s===\\n' "$f"; cat "$f"; done; } | head -c ${MAX_SPECS_CHARS}`;
 /** The repo's tracked file tree — the signal for which paths actually exist. */
 const TREE_SCRIPT = `git ls-files | head -800`;
 /** Commits in the window. Empty output is the deterministic exit. */
