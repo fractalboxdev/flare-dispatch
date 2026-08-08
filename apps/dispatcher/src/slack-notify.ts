@@ -1,19 +1,32 @@
-// FlareDispatch Dispatcher — the verdict callback for slack-origin runs.
+// FlareDispatch Dispatcher — the two signed callbacks that reach a Slack room.
 //
-// A slack-origin dispatch is fire-and-forget: the caller gets a 202 and the
-// thread gets nothing until the run finishes. The verdict then has to travel
-// back to the thread it came from — and this dispatcher must not be the thing
-// that posts it. Slack bot tokens live with the Slack ingress and stay there;
-// giving a CI dispatcher a workspace-write credential to save one hop is how a
-// token ends up somewhere nobody meant it to be.
+// This dispatcher must never be the thing that posts. Slack bot tokens live
+// with the Slack ingress and stay there; giving a CI dispatcher a
+// workspace-write credential to save one hop is how a token ends up somewhere
+// nobody meant it to be (substrate ADR-0006 names consumer bot tokens on its
+// never-store list for the same reason). So everything here signs a body and
+// POSTs it; the receiver verifies and posts with the token it already holds.
 //
-// So the finalize boundary does what it already does for GitHub — completes
-// the check-run — and then POSTs the same verdict, HMAC-signed, to the Slack
-// ingress's callback endpoint. That side verifies the signature and posts
-// in-thread with the token it already holds. One direction of trust, no new
-// credential here.
+// Two shapes ride that hop, and the difference between them is the design:
 //
-// --- The signature -----------------------------------------------------------
+//   1. THE VERDICT CALLBACK — for a run that CAME FROM a Slack thread. The
+//      dispatch carried a `SlackOrigin`, so the callback echoes it back and the
+//      receiver posts in that thread. The caller names the destination because
+//      the caller is relaying a conversation it was already in.
+//
+//   2. THE NOTICE — for a run that came from a cron. There is no thread, no
+//      asker, and no standing to name a room, so the payload names a USE CASE
+//      and the receiver resolves it against a map in its own deploy config. A
+//      body that could name `C…` would turn one leaked key into "post as the
+//      bot anywhere the bot can see", so there is no channel field and no
+//      fallback to one.
+//
+// Neither path weakens the other: the verdict callback is still gated on an
+// origin existing (workflow.ts, at the finalize boundary), and the notice is
+// reached only from inside a run through the `notice` capability, which cannot
+// express a destination at all.
+//
+// --- The signature (identical for both) --------------------------------------
 //
 //   X-FlareDispatch-Signature: sha256=<hex over the raw JSON body bytes>
 //
@@ -27,11 +40,18 @@
 //
 //   k = HKDF-SHA256(ikm, salt="", info="flare-dispatch/slack-notify/v1")
 //
+// One load-bearing detail: `deriveSecret` returns HEX and `sign` UTF-8 encodes
+// its `secret` argument, so the HMAC key is the 64 ASCII bytes of the hex, not
+// the 32 bytes it encodes. A receiver importing the raw bytes rejects every
+// honest request, with nothing but a 401 to say why — which is what the
+// cross-repo parity test in slack-notify.test.ts exists to catch.
+//
 // Delivery is best-effort and bounded, like the completion-notify email: a
 // failed callback is a logged line, never a flip of a verdict the run already
 // earned.
 //
-// Spec: apps/dispatcher/specs/slack-origin.md § The verdict callback.
+// Spec: apps/dispatcher/specs/slack-origin.md § The verdict callback,
+// § The notice. Receiver contract: fractalbot `specs/flare-dispatch-notify.md`.
 
 import { deriveSecret } from "./capability-token";
 import type { Env } from "./env";
@@ -41,8 +61,31 @@ import { SLACK_NOTIFY_URL_KEY, type SlackOrigin } from "./slack-origin";
 /** HKDF `info` label — domain-separates the callback key from the dispatch HMAC. */
 export const SLACK_NOTIFY_HKDF_INFO = "flare-dispatch/slack-notify/v1";
 
-/** How long the callback may take before we give up and log. */
+/** How long a callback may take before we give up and log. */
 const CALLBACK_TIMEOUT_MS = 10_000;
+
+/**
+ * The notice ingress URL, under its OWN CONFIG_KV key rather than reusing
+ * `slack-origin.notify-url`.
+ *
+ * Three reasons, any one of which is enough:
+ *
+ *   - They are different ENDPOINTS. The verdict callback goes wherever the
+ *     ingress exposes its verdict handler; a notice goes to the receiver's
+ *     `/flare-dispatch/notify` route, which takes a different payload and
+ *     answers different codes. One value cannot address both.
+ *   - They are different AUTHORITIES. `slack-origin.*` is the namespace of the
+ *     origin-gated policy (the repo pin, the run allowlist). A cron notice is
+ *     not a slack-origin dispatch and must not inherit that policy's trust, nor
+ *     be switched on as a side effect of enabling it.
+ *   - They have different BLAST RADII, so an operator needs to move them
+ *     independently — turning the announcement path off, or pointing it at a
+ *     staging receiver, must not silence the in-thread verdicts a human is
+ *     waiting on.
+ */
+export const SLACK_NOTICE_URL_KEY = "slack-notice.url";
+
+// --- The verdict callback (origin-gated) -------------------------------------
 
 /** The terminal verdict, same family as the check-run conclusion. */
 export type SlackVerdictStatus = "success" | "failure" | "skipped";
@@ -127,10 +170,136 @@ export const renderSlackVerdict = (input: RenderSlackVerdictInput): SlackVerdict
   };
 };
 
+// --- The notice (un-originated) ----------------------------------------------
+
 /**
- * The keying material for the callback signature: a dedicated
- * `SLACK_NOTIFY_SECRET` when set, else `HMAC_SECRET`. `undefined` only when
- * neither exists — the callback is then skipped rather than sent unsigned.
+ * Contract bounds, mirrored from the receiver's `parseNotice`. Checked HERE so
+ * a payload that would earn a 400 never becomes a network round trip and a log
+ * line that says only "the receiver said 400" — the emit side knows exactly
+ * which field it got wrong and can say so.
+ */
+const MAX_NOTICE_TEXT_CHARS = 12_000;
+const MAX_NOTICE_LINKS = 4;
+const MAX_NOTICE_URL_CHARS = 512;
+const MAX_NOTICE_LABEL_CHARS = 80;
+const NOTICE_USE_CASE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const NOTICE_DELIVERY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const NOTICE_RUN_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/** A link the receiver renders as `<url|label>` — never markup we build. */
+export type SlackNoticeLink = {
+  readonly url: string;
+  readonly label: string;
+};
+
+/**
+ * What the `notice` capability hands this module: everything about the message
+ * EXCEPT the clock. `sentAt` is stamped at signing time, not at enqueue time —
+ * the receiver's freshness window is five minutes and a value stamped earlier
+ * spends part of it in a queue.
+ */
+export type SlackNoticeEmission = {
+  readonly useCase: string;
+  /** The receiver's dedup key. Must be stable across a retry of this post. */
+  readonly deliveryId: string;
+  readonly text: string;
+  readonly links?: readonly SlackNoticeLink[];
+  readonly run?: string;
+  readonly executionId?: string;
+};
+
+/**
+ * The signed body. Deliberately NOT `SlackVerdictPayload`: that one carries a
+ * `SlackOrigin` because it answers a request that came from a thread. This is
+ * the other shape — no thread, no asker, so the destination is the receiver's
+ * to decide and `text` arrives without markup baked into it.
+ */
+export type SlackNoticePayload = {
+  readonly version: 1;
+  readonly useCase: string;
+  readonly deliveryId: string;
+  readonly sentAt: number;
+  readonly text: string;
+  readonly links?: readonly SlackNoticeLink[];
+  readonly run?: string;
+  readonly executionId?: string;
+};
+
+/** Build the notice body. Pure — the clock is an argument, not a call. */
+export const renderSlackNotice = (
+  emission: SlackNoticeEmission,
+  sentAt: number,
+): SlackNoticePayload => ({
+  version: 1,
+  useCase: emission.useCase,
+  deliveryId: emission.deliveryId,
+  sentAt,
+  text: emission.text,
+  ...(emission.links !== undefined && emission.links.length > 0 ? { links: emission.links } : {}),
+  ...(emission.run !== undefined ? { run: emission.run } : {}),
+  ...(emission.executionId !== undefined ? { executionId: emission.executionId } : {}),
+});
+
+/**
+ * The receiver's shape rules, applied before we spend a request on them.
+ * Returns the reason it would be refused, or `undefined` when it is sendable.
+ *
+ * This is a MIRROR, not a second opinion: the receiver re-checks all of it and
+ * its answer wins. What checking here buys is a legible failure — "text is
+ * 14203 chars, the cap is 12000" in our own log, instead of a 400 whose body
+ * nobody reads because a notice failing is (correctly) never fatal.
+ */
+export const validateSlackNotice = (payload: SlackNoticePayload): string | undefined => {
+  if (!NOTICE_USE_CASE.test(payload.useCase)) {
+    return `useCase "${payload.useCase}" must match ${NOTICE_USE_CASE.source}`;
+  }
+  if (!NOTICE_DELIVERY_ID.test(payload.deliveryId)) {
+    return `deliveryId "${payload.deliveryId}" must match ${NOTICE_DELIVERY_ID.source}`;
+  }
+  if (!Number.isFinite(payload.sentAt)) return "sentAt must be finite epoch milliseconds";
+  if (payload.text.trim().length === 0) return "text is empty — an empty notice is not a notice";
+  if (payload.text.length > MAX_NOTICE_TEXT_CHARS) {
+    return `text is ${payload.text.length} chars; the cap is ${MAX_NOTICE_TEXT_CHARS}`;
+  }
+  if (payload.run !== undefined && !NOTICE_RUN_NAME.test(payload.run)) {
+    return `run "${payload.run}" must match ${NOTICE_RUN_NAME.source}`;
+  }
+  if (payload.executionId !== undefined && !NOTICE_DELIVERY_ID.test(payload.executionId)) {
+    return `executionId "${payload.executionId}" must match ${NOTICE_DELIVERY_ID.source}`;
+  }
+  const links = payload.links ?? [];
+  if (links.length > MAX_NOTICE_LINKS) {
+    return `${links.length} links; the cap is ${MAX_NOTICE_LINKS}`;
+  }
+  for (const link of links) {
+    // https only, and no character that could close the `<url|label>` span the
+    // receiver renders or smuggle a second one into it.
+    if (!link.url.startsWith("https://") || link.url.length > MAX_NOTICE_URL_CHARS) {
+      return `link url must be https:// and at most ${MAX_NOTICE_URL_CHARS} chars`;
+    }
+    // The receiver refuses control characters in a link url by exactly this
+    // class; mirroring it is the point.
+    // oxlint-disable-next-line no-control-regex
+    if (/[<>|\s]|[\u0000-\u001f]/.test(link.url)) {
+      return "link url must not contain <, >, |, whitespace or control characters";
+    }
+    if (link.label.length === 0 || link.label.length > MAX_NOTICE_LABEL_CHARS) {
+      return `link label must be 1-${MAX_NOTICE_LABEL_CHARS} chars`;
+    }
+  }
+  return undefined;
+};
+
+// --- Config resolution -------------------------------------------------------
+
+/**
+ * The keying material for both signatures: a dedicated `SLACK_NOTIFY_SECRET`
+ * when set, else `HMAC_SECRET`. `undefined` only when neither exists — the
+ * callback is then skipped rather than sent unsigned.
+ *
+ * One secret for both surfaces on purpose. They share the HKDF label, so they
+ * are the same key to the receiver; a second secret would be a second thing to
+ * keep in sync for no separation it does not already have.
  */
 export const resolveSlackNotifySecret = (env: Env): string | undefined => {
   const dedicated = env.SLACK_NOTIFY_SECRET;
@@ -140,18 +309,75 @@ export const resolveSlackNotifySecret = (env: Env): string | undefined => {
   return undefined;
 };
 
-/**
- * The callback endpoint for this deploy — CONFIG_KV first, then the var, the
- * same precedence as the rest of the slack-origin config. `undefined` ⇒ no
- * callback is attempted.
- */
-export const readSlackNotifyUrl = async (env: Env): Promise<string | undefined> => {
-  const configured =
-    env.CONFIG_KV === undefined ? null : await env.CONFIG_KV.get(SLACK_NOTIFY_URL_KEY);
+/** CONFIG_KV first, then the wrangler var — the slack-origin config precedence. */
+const readUrl = async (
+  env: Env,
+  kvKey: string,
+  fromVar: string | undefined,
+): Promise<string | undefined> => {
+  const configured = env.CONFIG_KV === undefined ? null : await env.CONFIG_KV.get(kvKey);
   if (typeof configured === "string" && configured.trim().length > 0) return configured.trim();
-  const fromVar = env.SLACK_NOTIFY_URL;
   if (typeof fromVar === "string" && fromVar.trim().length > 0) return fromVar.trim();
   return undefined;
+};
+
+/**
+ * The verdict callback endpoint for this deploy. `undefined` ⇒ no callback is
+ * attempted.
+ */
+export const readSlackNotifyUrl = (env: Env): Promise<string | undefined> =>
+  readUrl(env, SLACK_NOTIFY_URL_KEY, env.SLACK_NOTIFY_URL);
+
+/**
+ * The notice ingress endpoint for this deploy. Separate key — see
+ * `SLACK_NOTICE_URL_KEY`. `undefined` ⇒ notices are a logged no-op.
+ */
+export const readSlackNoticeUrl = (env: Env): Promise<string | undefined> =>
+  readUrl(env, SLACK_NOTICE_URL_KEY, env.SLACK_NOTICE_URL);
+
+// --- Delivery ----------------------------------------------------------------
+
+/** A signed POST that happened, or a reason it did not. */
+type SignedPost =
+  | { readonly sent: true; readonly status: number }
+  | { readonly sent: false; readonly reason: string };
+
+/**
+ * Sign the exact bytes and POST them. Never throws: a non-2xx, a network error
+ * and a timeout all come back as data.
+ *
+ * The body is serialized ONCE and both the MAC and the request see the same
+ * `Uint8Array`. Re-stringifying for the request would open the one gap the
+ * raw-bytes canonicalization exists to close.
+ */
+const postSigned = async (opts: {
+  readonly url: string;
+  readonly secret: string;
+  readonly payload: unknown;
+  readonly fetchImpl?: typeof fetch;
+}): Promise<SignedPost> => {
+  const body = new TextEncoder().encode(JSON.stringify(opts.payload));
+  const key = await deriveSecret(opts.secret, SLACK_NOTIFY_HKDF_INFO);
+  const signature = await sign(key, body);
+  const doFetch = opts.fetchImpl ?? fetch;
+
+  try {
+    const response = await doFetch(opts.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [SIGNATURE_HEADER]: signature,
+      },
+      body,
+      signal: AbortSignal.timeout(CALLBACK_TIMEOUT_MS),
+    });
+    return { sent: true, status: response.status };
+  } catch (cause) {
+    return {
+      sent: false,
+      reason: cause instanceof Error ? cause.message : String(cause),
+    };
+  }
 };
 
 export type SlackVerdictDelivery =
@@ -170,29 +396,90 @@ export const deliverSlackVerdict = async (opts: {
   /** Injected in tests; defaults to the ambient `fetch`. */
   readonly fetchImpl?: typeof fetch;
 }): Promise<SlackVerdictDelivery> => {
-  const body = new TextEncoder().encode(JSON.stringify(opts.payload));
-  const key = await deriveSecret(opts.secret, SLACK_NOTIFY_HKDF_INFO);
-  const signature = await sign(key, body);
-  const doFetch = opts.fetchImpl ?? fetch;
+  const posted = await postSigned(opts);
+  if (!posted.sent) return { delivered: false, reason: posted.reason };
+  if (posted.status < 200 || posted.status >= 300) {
+    return { delivered: false, reason: `callback answered ${posted.status}` };
+  }
+  return { delivered: true, status: posted.status };
+};
 
-  try {
-    const response = await doFetch(opts.url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        [SIGNATURE_HEADER]: signature,
-      },
-      body,
-      signal: AbortSignal.timeout(CALLBACK_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      return { delivered: false, reason: `callback answered ${response.status}` };
-    }
-    return { delivered: true, status: response.status };
-  } catch (cause) {
+/**
+ * What one notice attempt did. The vocabulary is the receiver's own
+ * (`posted` / `duplicate` / `failed`, plus a local `skipped`) so the two halves
+ * describe the same events with the same words.
+ */
+export type SlackNoticeOutcome =
+  | { readonly outcome: "posted"; readonly status: number }
+  | { readonly outcome: "duplicate" }
+  | { readonly outcome: "skipped"; readonly reason: string }
+  | { readonly outcome: "failed"; readonly reason: string };
+
+/**
+ * Sign and POST one notice. Never throws.
+ *
+ * A 409 is `duplicate`, not a failure: the receiver claims a delivery id before
+ * it posts, so 409 means the message is already in the room — which is the
+ * outcome the caller wanted. Treating it as an error would make a retried
+ * Workflow step look broken for behaving correctly.
+ */
+export const deliverSlackNotice = async (opts: {
+  readonly url: string;
+  readonly secret: string;
+  readonly payload: SlackNoticePayload;
+  readonly fetchImpl?: typeof fetch;
+}): Promise<SlackNoticeOutcome> => {
+  const invalid = validateSlackNotice(opts.payload);
+  if (invalid !== undefined) return { outcome: "failed", reason: invalid };
+
+  const posted = await postSigned(opts);
+  if (!posted.sent) return { outcome: "failed", reason: posted.reason };
+  if (posted.status === 409) return { outcome: "duplicate" };
+  if (posted.status < 200 || posted.status >= 300) {
+    return { outcome: "failed", reason: `notice ingress answered ${posted.status}` };
+  }
+  return { outcome: "posted", status: posted.status };
+};
+
+/**
+ * The whole emit path for a notice, from `env` to an outcome — the single
+ * entry point the `notice` capability's live Layer calls.
+ *
+ * Config is resolved HERE, per call, rather than when the runtime Layer is
+ * built: most executions never publish anything, and a KV read on every one of
+ * them to answer a question almost none of them ask is a cost with no payer.
+ *
+ * The credential never leaves this module. runtime-cf receives a closure over
+ * this function, not the secret — the same seam `signMailboxToken` uses, and
+ * the reason ADR-0006 can say the keying material stays in the Worker's own
+ * environment.
+ */
+export const emitSlackNotice = async (
+  env: Env,
+  emission: SlackNoticeEmission,
+  opts: { readonly now?: () => number; readonly fetchImpl?: typeof fetch } = {},
+): Promise<SlackNoticeOutcome> => {
+  const url = await readSlackNoticeUrl(env);
+  const secret = resolveSlackNotifySecret(env);
+  if (url === undefined) {
     return {
-      delivered: false,
-      reason: cause instanceof Error ? cause.message : String(cause),
+      outcome: "skipped",
+      reason: `no notice ingress configured (CONFIG_KV ${SLACK_NOTICE_URL_KEY} / SLACK_NOTICE_URL)`,
     };
   }
+  if (secret === undefined) {
+    return {
+      outcome: "skipped",
+      reason: "no signing key (SLACK_NOTIFY_SECRET / HMAC_SECRET)",
+    };
+  }
+  // Stamped here, immediately before signing — the receiver's window is ±5
+  // minutes and it measures from this value, which the signature covers.
+  const sentAt = (opts.now ?? Date.now)();
+  return deliverSlackNotice({
+    url,
+    secret,
+    payload: renderSlackNotice(emission, sentAt),
+    ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
+  });
 };

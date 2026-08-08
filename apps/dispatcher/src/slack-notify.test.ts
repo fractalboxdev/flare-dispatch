@@ -4,6 +4,9 @@
 // verify a callback with the same primitive it already uses to sign
 // dispatches, and a callback signature must be useless as a dispatch
 // signature. Both are asserted here against the real `verify`.
+//
+// The other half of this module — the un-originated notice a cron run reaches,
+// and its cross-repo signature parity — is in slack-notify.notice.test.ts.
 
 import { describe, expect, it } from "vitest";
 import { deriveSecret } from "./capability-token";

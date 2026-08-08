@@ -125,6 +125,14 @@ export {
   type EmailSendResult,
   type EmailRejection,
 } from "./services/email";
+export {
+  notice,
+  Notice,
+  type NoticeService,
+  type NoticeRequest,
+  type NoticeResult,
+  type NoticeLink,
+} from "./services/notice";
 export { mailbox, Mailbox, type MailboxService, type AllocateOpts } from "./services/mailbox";
 export {
   INBOX_EVENT_TYPE,

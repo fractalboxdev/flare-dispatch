@@ -50,6 +50,7 @@ import {
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
 import { makeEmailCloudflareLive } from "./email-cf";
 import { makeMailboxCloudflareLive } from "./mailbox-cf";
+import { makeNoticeCloudflareLive } from "./notice-cf";
 import { makeIOLive } from "./io-live";
 import { makeStepRunnerCloudflare } from "./step-runner-cf";
 import { countRows, makeTestBindings, type TestBindings } from "./test-support";
@@ -114,6 +115,8 @@ const makeRuntimeUnderTest = (
     makeEmailCloudflareLive(undefined),
     // No INBOX_DOMAIN in this suite → the dying `Mailbox` stub.
     makeMailboxCloudflareLive(undefined),
+    // No notice ingress in this suite → the no-op `Notice` Layer.
+    makeNoticeCloudflareLive(undefined),
     // No RUNS_WORKFLOW binding in this suite → the dying `ChildRuns` stub.
     ChildRunsDeferred,
     executions,

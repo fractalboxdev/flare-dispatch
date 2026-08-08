@@ -10,8 +10,11 @@ held to, enforced here, on this deploy, against this deploy's config. The ingres
 send only what the envelope allows; the dispatcher does not depend on it having done so.
 
 Implementation: [`../src/slack-origin.ts`](../src/slack-origin.ts) (policy),
-[`../src/slack-notify.ts`](../src/slack-notify.ts) (verdict callback),
+[`../src/slack-notify.ts`](../src/slack-notify.ts) (the verdict callback and the notice),
 [`../src/routes/dispatch.ts`](../src/routes/dispatch.ts) § 4.5 / § 5.5 (enforcement points).
+
+Everything up to § The verdict callback is about runs that **came from** Slack. § The notice covers
+the other direction — a scheduled run with something to say and no thread to say it in.
 
 ## The dispatch body
 
@@ -140,6 +143,66 @@ inside a run's cooldown window (`skipped: "cooldown"` + `retryAfterSec`) and a d
 `Idempotency-Key`. Both come back synchronously with the prior execution id for the ingress to
 relay.
 
+## The notice
+
+The verdict callback reaches a thread because the dispatch carried one. A **cron tick carries no
+origin**, so a scheduled run — `org-spec-audit` produces a digest of open questions that belongs in
+a channel — could not reach that path at all. This is the un-originated half.
+
+A run publishes through the `notice` capability
+([`packages/core/src/services/notice.ts`](../../../packages/core/src/services/notice.ts)):
+
+```ts
+notice.publish({ useCase, text, dedupeKey, links });
+```
+
+**The shape is the security property.** There is no channel, thread, recipient or URL, and no way to
+express one. `useCase` is a routing *key* the receiver resolves against a map in its own deploy
+config; an unmapped one is refused there. The emit side is the untrusted half — `text` may be
+model-authored — so it says what it wants published and never who hears it. A signed body that could
+name `C…` would turn one leaked key into workspace-wide write.
+
+`text` is **data**. The receiver escapes `&`, `<`, `>` before posting, which neutralizes
+`<!channel>`, `<@U…>` and the rest in one rule. Nothing here builds Slack markup: links that must
+survive ride in the typed `links[]` field and are rendered by the receiver from a validated https
+URL.
+
+Wire format, signature and refusal codes are the receiver's contract
+(fractalbot `specs/flare-dispatch-notify.md`, `POST /flare-dispatch/notify`). The envelope is
+byte-identical to the verdict callback — same header, same raw-bytes canonicalization, same
+`HKDF-SHA256(ikm, "", "flare-dispatch/slack-notify/v1")` derivation, same `SLACK_NOTIFY_SECRET` (or
+`HMAC_SECRET`) keying material. `apps/dispatcher/src/slack-notify.notice.test.ts` carries the
+receiver's own verification verbatim so the two repos cannot drift silently.
+
+### At most once, across a retry
+
+The receiver claims a `deliveryId` before it posts, so the guarantee is one post per id. That is
+worth nothing if the id moves between attempts — and a Workflow step **can** be retried. So the id
+is derived, never drawn:
+
+```
+deliveryId = "<run>:<dedupeKey>"
+```
+
+No clock, no randomness. A scheduled run passes its day string (the same value its schedule
+idempotency key uses); a retry re-sends identical bytes and earns a 409, which this side reads as
+*already delivered* rather than as a failure. `Date.now()` and `Math.random()` are also simply
+unavailable on a replayed step, which makes derivation the only construction correct on every path.
+
+### Its own URL, deliberately
+
+`slack-notice.url`, not `slack-origin.notify-url`. Three reasons, any one sufficient: it is a
+different **endpoint** (a different route taking a different payload); `slack-origin.*` is the
+namespace of the **origin-gated policy** and a cron notice must not inherit that policy's trust or
+be enabled as a side effect of it; and the two have different **blast radii**, so pointing the
+announcement path elsewhere must not silence in-thread verdicts a human is waiting on.
+
+Delivery is best-effort, like the verdict callback and the completion-notify email: no ingress
+configured, no signing key, a 5xx, a timeout — all are a logged line and `delivered: false`. A run's
+verdict is earned by what it did, and an announcement that did not land is not one of those things.
+`org-spec-audit` keeps its questions PR either way; the file in git is the record, the notice is the
+announcement, and **empty means silent** — no questions, no PR, no notice.
+
 ## Operator configuration
 
 The batch path is **off** until a target repo is pinned. Nothing here is set by default.
@@ -151,13 +214,20 @@ The batch path is **off** until a target repo is pinned. Nothing here is set by 
 | `slack-origin.runs` | CONFIG_KV | Narrow the run allowlist (comma-separated); cannot widen |
 | `slack-origin.notify-url` | CONFIG_KV | Where the verdict callback POSTs |
 | `SLACK_NOTIFY_URL` | wrangler var | Same, lower precedence |
+| `slack-notice.url` | CONFIG_KV | Where a notice POSTs — the receiver's `/flare-dispatch/notify` |
+| `SLACK_NOTICE_URL` | wrangler var | Same, lower precedence |
 | `SLACK_ORIGIN_HMAC_SECRET` | Worker secret | Optional Slack-scoped dispatch key |
-| `SLACK_NOTIFY_SECRET` | Worker secret | Optional dedicated callback key material |
+| `SLACK_NOTIFY_SECRET` | Worker secret | Optional dedicated key material for **both** callbacks |
 
 ```bash
 wrangler kv key put --binding=CONFIG_KV "slack-origin.repo" "owner/repo"
 wrangler kv key put --binding=CONFIG_KV "slack-origin.notify-url" "https://ingress.example/verdict"
+wrangler kv key put --binding=CONFIG_KV "slack-notice.url" "https://ingress.example/flare-dispatch/notify"
 ```
+
+Unset `slack-notice.url` ⇒ every `notice.publish` is a logged no-op. The receiver additionally needs
+the use case mapped in its own `FLARE_NOTIFY_CHANNELS` — an unmapped one is a 403 there, never a
+message in a room nobody chose.
 
 ## Dogfood: a Slack mention's verdict lands in-thread
 
@@ -185,3 +255,22 @@ once after the first deploy that carries this path.
 6. **Ingress down.** Point `slack-origin.notify-url` at an unroutable host and dispatch again. The
    run must still complete, the check-run must still post, and the Worker log must carry
    `slack-notify: verdict not delivered`. A callback failure never changes a verdict.
+
+## Dogfood: a scheduled digest reaches a channel with no thread to reply to
+
+Needs a deployed dispatcher and a deployed receiver, so it is an operator step. Run it once after
+the first deploy that carries the notice path.
+
+1. **Point it.** `wrangler kv key put --binding=CONFIG_KV "slack-notice.url" …` (command above), and
+   confirm the receiver maps `org-spec-audit` in its own `FLARE_NOTIFY_CHANNELS`.
+2. **Sync the key.** The receiver's `FLARE_NOTIFY_SECRET` must equal `SLACK_NOTIFY_SECRET` here (or
+   both sides share `HMAC_SECRET`). A 401 means drift, not a bug.
+3. **The round trip.** Let the 05:45 UTC tick run against an estate with at least one open question.
+   Expect the questions PR on the control repo **and** the same text in the mapped channel, carrying
+   the receiver's `via flare-dispatch` footer and the PR link.
+4. **The replay.** Re-run the same day. The receiver must answer 409 and post **nothing** a second
+   time — the delivery id is `org-spec-audit:<day>` on both attempts.
+5. **Silence.** Re-run against an estate with no open questions. No PR, no message.
+6. **Ingress down.** Point `slack-notice.url` at an unroutable host and run again. The PR must still
+   open, the run must still be `success`, and the Worker log must carry
+   `notice.publish: org-spec-audit not delivered`.

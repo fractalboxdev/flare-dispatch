@@ -27,6 +27,7 @@ import { makeConfigKvLive } from "./config-kv";
 import { makeSecretsLive } from "./secrets-live";
 import { type EmailCloudflareConfig, makeEmailCloudflareLive } from "./email-cf";
 import { type MailboxCloudflareConfig, makeMailboxCloudflareLive } from "./mailbox-cf";
+import { type NoticeCloudflareConfig, makeNoticeCloudflareLive } from "./notice-cf";
 import {
   BrowserDeferred,
   ChildRunsDeferred,
@@ -217,6 +218,18 @@ export type CFRuntimeLiveOptions = {
    */
   readonly mailbox?: MailboxCloudflareConfig;
   /**
+   * The signed emit path backing the `notice` capability — the run name, the
+   * execution id, and a closure over the Dispatcher's `emitSlackNotice`.
+   * `undefined` selects the no-op `Notice` Layer: `notice.publish` becomes a
+   * logged no-op (`skipped: true`). Like `email`, an announcement is reporting
+   * and never a gate on the run's verdict.
+   *
+   * The closure — not a URL and not a secret — is what keeps the keying
+   * material inside the Dispatcher's own environment (ADR-0006), the same seam
+   * `mailbox.signToken` uses.
+   */
+  readonly notice?: NoticeCloudflareConfig;
+  /**
    * Cloudflare Workers AI binding (`env.AI`) for the `modelGateway` capability —
    * the model backend the `pr-review` engine calls. The binding is the auth
    * (Workers AI is account-billed), so no model API key is configured. `undefined`
@@ -338,6 +351,10 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
   // keeps a provisioning run (`email-otp-login`) from minting addresses no
   // inbound rule delivers to.
   const mailbox = makeMailboxCloudflareLive(opts.mailbox);
+  // `Notice` is live when the deploy has a notice ingress reachable through the
+  // injected emit closure; absent, the no-op Layer logs and skips. An
+  // announcement must never fail a run, so there is no dying stub here.
+  const notice = makeNoticeCloudflareLive(opts.notice);
   // `ModelGateway` is live when the Workers AI `"ai"` binding is present; absent,
   // the deferred stub keeps a model-calling run from silently mis-behaving with
   // a typed failure rather than a die. The
@@ -407,6 +424,7 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
     checks,
     email,
     mailbox,
+    notice,
     github,
     cloudflare,
     modelGateway,
