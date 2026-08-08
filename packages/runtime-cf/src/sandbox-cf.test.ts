@@ -650,12 +650,13 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
   );
 
   // "The command exited 0" is a weaker claim than "the remote no longer carries
-  // a credential" — a git that silently no-ops still exits 0.
+  // a credential" — a git that silently no-ops still exits 0. Exit 4 is the
+  // in-shell verdict for "userinfo survived".
   it.effect("fails when the remote still carries a credential after the rewrite", () =>
     Effect.gen(function* () {
       currentBox.exec = vi.fn(async (command: string) =>
-        command.includes("--get remote.origin.url")
-          ? { exitCode: 0, duration: 0, stdout: `${AUTHED_URL}\n`, stderr: "" }
+        command.includes("remote.origin.url")
+          ? { exitCode: 4, duration: 0, stdout: "", stderr: "" }
           : { exitCode: 0, duration: 0, stdout: "", stderr: "" },
       );
 
@@ -664,10 +665,26 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
       const err = failureOf<{ _tag: string; cause: unknown }>(exit);
       expect(err?._tag).toBe("CheckoutFailed");
       const cause = err?.cause as Error;
-      expect(cause.message).toContain("could not be verified");
-      // The read-back stdout is the one thing that might still hold the token,
-      // so it must never be quoted into the error Workflows persists.
+      expect(cause.message).toContain("still carries an embedded credential");
       expect(cause.message).not.toContain(TOKEN);
+    }),
+  );
+
+  // The verification must not PRINT the URL to prove it is clean: in exactly the
+  // case the guard exists to catch, that URL is the token — emitted into an
+  // `exec` result the SDK may retain.
+  it.effect("verifies the remote without ever emitting it", () =>
+    Effect.gen(function* () {
+      yield* clone(SCHEDULED_AUTH);
+
+      const verify = execCommands().find((c) => c.includes("remote.origin.url")) as string;
+      // Captured by a shell assignment and matched in-shell; only an exit code
+      // crosses back.
+      expect(verify).toContain("url=$(");
+      expect(verify).toContain("case");
+      expect(verify).toContain("exit 4");
+      // Never a bare read that puts the URL on stdout.
+      expect(verify).not.toMatch(/^git -C .* --get remote\.origin\.url$/);
     }),
   );
 

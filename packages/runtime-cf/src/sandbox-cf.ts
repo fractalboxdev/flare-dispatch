@@ -399,9 +399,8 @@ export const makeSandboxCloudflareLive = (
    *
    * So: the rewrite runs alone and ungated-by-`|| true` (its exit code is the
    * signal); the two `config` clauses stay tolerant, because the section/key
-   * being absent IS the desired end state; and the result is then VERIFIED by
-   * reading the remote back, since "the command exited 0" is a weaker claim
-   * than "the remote no longer carries userinfo".
+   * being absent IS the desired end state; and the result is then VERIFIED
+   * in-shell, without the URL ever being emitted (see below).
    */
   const scrubCloneCredential = async (targetDir: string, originUrl: string): Promise<void> => {
     const dir = shellQuote(targetDir);
@@ -422,14 +421,27 @@ export const makeSandboxCloudflareLive = (
       ].join("; "),
     );
 
-    // Read back what the remote actually says now. A clean HTTPS clone URL has
-    // no userinfo, so any `@` before the path means a credential survived.
-    // `stdout` is NOT quoted into the error — it is the very thing that might
-    // still hold the token.
-    const readBack = await box.exec(`git -C ${dir} config --local --get remote.origin.url`);
-    if (readBack.exitCode !== 0 || readBack.stdout.includes("@")) {
+    // Verify what the remote actually says now — "the command exited 0" is a
+    // weaker claim than "the remote no longer carries userinfo".
+    //
+    // The test runs INSIDE the shell and emits nothing. Reading the URL out to
+    // stdout and inspecting it here would mean that, in exactly the case this
+    // guard exists to catch (the scrub failed, the remote is still
+    // authenticated), the token is what gets printed — into an `exec` result the
+    // SDK may retain and any future capture of the container could reach. A
+    // credential must not be emitted to prove it was removed. So the URL is
+    // captured by a shell assignment, matched by `case`, and only an exit code
+    // crosses back: 3 = could not read the remote, 4 = a credential survived.
+    const verify = await box.exec(
+      `url=$(git -C ${dir} config --local --get remote.origin.url) || exit 3; case "$url" in *@*) exit 4;; esac`,
+    );
+    if (verify.exitCode !== 0) {
       throw new Error(
-        `clone-credential scrub of ${targetDir} could not be verified — remote.origin.url still carries an embedded credential (read-back exited ${readBack.exitCode}); refusing to hand the workload the checkout`,
+        `clone-credential scrub of ${targetDir} could not be verified (exit ${verify.exitCode}: ${
+          verify.exitCode === 4
+            ? "remote.origin.url still carries an embedded credential"
+            : "could not read remote.origin.url back"
+        }) — refusing to hand the workload the checkout`,
       );
     }
   };
