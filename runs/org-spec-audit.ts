@@ -28,15 +28,22 @@
 // tokens live with the Slack ingress and stay there (see
 // `apps/dispatcher/src/slack-notify.ts`) — a cron run holding a workspace-write
 // credential is how a token ends up somewhere nobody meant it to be. So the
-// run's output is a reviewed file in git whose body IS the message: FractalBOT
-// reads it from the org corpus and posts the digest with the token it already
-// holds. One direction of trust, no new credential here.
+// run's output is a reviewed file in git whose body IS the message: whichever
+// consumer already holds the workspace token reads the file and posts it. One
+// direction of trust, no new credential here.
 //
 // --- CONFIG the operator sets (out of band) ---------------------------------
 //
+// Every value that names an operator's own estate is a key, not a constant.
+// This run is generic machinery — which repos it reads, which repo it writes
+// to, and where in that repo the file lands are the operator's business and
+// live in their config, never in this file. A default that names somebody's
+// repo is a default that files a PR against it.
+//
 //   CONFIG_KV  org-spec-audit.repos          comma/space-separated `owner/name` estate to sweep (required)
 //   CONFIG_KV  org-spec-audit.base           base branch to read (default "main")
-//   CONFIG_KV  org-spec-audit.control-repo   where the questions PR lands (default "fractalboxdev/org")
+//   CONFIG_KV  org-spec-audit.control-repo   `owner/name` the questions PR lands in (REQUIRED — no default)
+//   CONFIG_KV  org-spec-audit.questions-dir  repo-relative dir for `<date>.md` (default "maintenance/questions")
 //   CONFIG_KV  org-spec-audit.window-hours   skip a repo with no commits in this window (default "26")
 //   CONFIG_KV  org-spec-audit.backend        "workers-ai" | "anthropic" | "bedrock" (default workers-ai)
 //   CONFIG_KV  org-spec-audit.prompt         (optional) override the question-detection system prompt
@@ -58,7 +65,13 @@ import {
   type Container,
 } from "@fractalboxdev/flare-dispatch-core";
 import type { GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
-import { isoDate, parseList, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  isoDate,
+  parseList,
+  parseRepo,
+  parseRepoRelativePath,
+  workspace,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
 import {
   type BackendUnconfigured,
   completeStructured,
@@ -75,10 +88,18 @@ const key = namespacedKey(NAMESPACE);
 const REPOS_KEY = key("repos");
 const BASE_KEY = key("base");
 const CONTROL_REPO_KEY = key("control-repo");
+const QUESTIONS_DIR_KEY = key("questions-dir");
 const WINDOW_HOURS_KEY = key("window-hours");
 
-/** Where the grouped questions land when the operator names no control repo. */
-const CONTROL_REPO_DEFAULT = "fractalboxdev/org";
+/**
+ * Where the dated questions file lands inside the control repo.
+ *
+ * A directory, not a template: the run appends `<date>.md`, so there is no
+ * placeholder syntax to get wrong and no way for config to name a single file
+ * that every day overwrites.
+ */
+const QUESTIONS_DIR_DEFAULT = "maintenance/questions";
+
 /** A repo with no commits in this window is skipped before any model call. */
 const WINDOW_HOURS_DEFAULT = 26;
 
@@ -211,9 +232,38 @@ export const orgSpecAudit = defineRun({
       }
 
       const baseBranch = (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
-      const controlRepo =
-        (yield* step("resolve-control-repo", () => config.get(CONTROL_REPO_KEY))) ??
-        CONTROL_REPO_DEFAULT;
+
+      // The one key with no default. Everything else here degrades to a sane
+      // value; a write TARGET cannot, because the fallback for "the operator
+      // did not say where to file this" is not a different repo — it is
+      // stopping. Resolved before the sweep, not at the write, so a
+      // misconfiguration is red on the first tick instead of after an hour of
+      // model calls whose output has nowhere to go.
+      const controlRepo = parseRepo(
+        yield* step("resolve-control-repo", () => config.get(CONTROL_REPO_KEY)),
+      );
+      if (controlRepo === undefined) {
+        return yield* Effect.fail(
+          new StepFailed({
+            step: "resolve-control-repo",
+            cause: `${CONTROL_REPO_KEY} is unset or not \`owner/name\` — this run has no default control repo, and will not guess one`,
+          }),
+        );
+      }
+
+      const questionsDir = parseRepoRelativePath(
+        yield* step("resolve-questions-dir", () => config.get(QUESTIONS_DIR_KEY)),
+        QUESTIONS_DIR_DEFAULT,
+      );
+      if (questionsDir === undefined) {
+        return yield* Effect.fail(
+          new StepFailed({
+            step: "resolve-questions-dir",
+            cause: `${QUESTIONS_DIR_KEY} is not a repo-relative directory (no leading "/", no "..", no backslashes)`,
+          }),
+        );
+      }
+
       const windowHours = parseWindowHours(
         yield* step("resolve-window", () => config.get(WINDOW_HOURS_KEY)),
       );
@@ -270,8 +320,9 @@ export const orgSpecAudit = defineRun({
         };
       }
 
-      // 5. One control-plane PR against the org repo. The file it carries IS
-      //    the message FractalBOT posts — this run holds no Slack credential.
+      // 5. One control-plane PR against the configured control repo. The file
+      //    it carries IS the message a Slack consumer posts — this run holds no
+      //    Slack credential and never will.
       const message = renderMessage({ day, merged, outcomes, raised: raised.length });
       const result = yield* step("open-questions-pr", () =>
         github.openDraftPullRequest({
@@ -283,7 +334,7 @@ export const orgSpecAudit = defineRun({
           commitMessage: `docs(maintenance): spec audit open questions (${day})\n\nGenerated by flare-dispatch org-spec-audit.`,
           files: [
             {
-              path: `infra/maintenance-loop/open-questions/${day}.md`,
+              path: `${questionsDir}/${day}.md`,
               content: message,
             },
           ],
@@ -519,7 +570,7 @@ type RenderArgs = {
 };
 
 /**
- * The file the PR carries — and the message FractalBOT posts, verbatim.
+ * The file the PR carries — and the message a Slack consumer posts, verbatim.
  *
  * Written as GitHub markdown, not Slack mrkdwn: the canonical artifact is the
  * reviewed file in git, and the Slack twin is derived at send time by whoever

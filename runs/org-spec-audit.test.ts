@@ -34,6 +34,10 @@ const baseConfig = {
   "org-spec-audit.workers-ai.model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
 };
 
+/** `baseConfig` with one key genuinely absent — not present-and-undefined. */
+const withoutKey = (config: Record<string, string>, drop: string): Record<string, string> =>
+  Object.fromEntries(Object.entries(config).filter(([k]) => k !== drop));
+
 /** Specs present, a file tree, and commits inside the window. */
 const activeSandbox = {
   "specs/*.md": { exitCode: 0, stdout: "\n===FILE specs/runs.md===\nevery run declares a cap" },
@@ -76,11 +80,63 @@ describe("org-spec-audit", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]!.repo).toBe("owner/control");
       expect(calls[0]!.headBranch).toBe("flare-dispatch/spec-audit-questions-2026-08-08");
-      expect(calls[0]!.files[0]!.path).toBe("infra/maintenance-loop/open-questions/2026-08-08.md");
+      // The neutral default — `questions-dir` is unset in `baseConfig`, and no
+      // value in this repo names any particular operator's layout.
+      expect(calls[0]!.files[0]!.path).toBe("maintenance/questions/2026-08-08.md");
       // Both repos are named as sources on the single merged line.
       expect(calls[0]!.files[0]!.content).toContain("owner/alpha");
       expect(calls[0]!.files[0]!.content).toContain("owner/beta");
       expect(calls[0]!.body).toContain("auto-merge: never");
+    }).pipe(Effect.provide(layer));
+  });
+
+  // The run holds no default control repo on purpose: a default is a repo
+  // somebody else's deployment files pull requests against. Unset must stop the
+  // run, and stop it BEFORE the sweep — an hour of model calls whose output has
+  // nowhere to go is the expensive way to learn a key is missing.
+  it.effect("fails when no control repo is configured, before sweeping anything", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: withoutKey(baseConfig, "org-spec-audit.control-repo"),
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(orgSpecAudit.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("org-spec-audit.control-repo");
+      // Nothing was cloned, nothing was executed, nothing was proposed.
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(handles.sandbox.clones).toHaveLength(0);
+      expect(handles.sandbox.execs).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("writes where `questions-dir` says, not where the run was born", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.questions-dir": "infra/loop/open-questions/" },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      const calls = handles.github.openDraftPullRequestCalls;
+      expect(calls[0]!.files[0]!.path).toBe("infra/loop/open-questions/2026-08-08.md");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses a questions-dir that escapes the repo root", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.questions-dir": "../../etc" },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()])] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(orgSpecAudit.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
