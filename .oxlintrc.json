@@ -14,5 +14,32 @@
   "categories": {
     "correctness": "error"
   },
-  "rules": {}
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": [
+              "**/substrate/src/**",
+              "**/apps/substrate",
+              "**/apps/substrate/**",
+              "../**/substrate/**",
+              "@fractalboxdev/flare-dispatch-substrate",
+              "@fractalboxdev/flare-dispatch-substrate/**"
+            ],
+            "message": "Import @fractalboxdev/flare-dispatch-substrate-contract instead — consumers reach the substrate only through the facade contract, never by path or by workspace package into its internals (ADR-0002, ADR-0003)."
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["apps/substrate/**"],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ]
 }

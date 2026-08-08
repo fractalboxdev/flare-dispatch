@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
-- **Implementation:** `shipped`, with one-sided enforcement — the pin is exact in `apps/substrate/package.json` and both Dockerfiles, and the canary (`src/verify/`) gates CI between the substrate and dispatcher deploys. But `container-config.test.ts:109` asserts image/package *agreement*, so it catches skew and not a bump; `@cloudflare/containers` is unpinned (transitive), and "auto-bumps are disabled" is vacuous — the repo has no renovate or dependabot config to disable.
+- **Implementation:** `shipped` — the pin is exact in `apps/substrate/package.json` and both Dockerfiles, the canary (`src/verify/`) gates CI between the substrate and dispatcher deploys, and `container-config.test.ts` § "the pinned SDK pair (ADR-0011)" asserts both halves as literals: `@cloudflare/sandbox` against the manifest *and* the lockfile importer that resolved it, `@cloudflare/containers` by walking that importer's snapshot edge. A bump of either fails a test; the older assertion at `container-config.test.ts:109` catches only image/package skew. `@cloudflare/containers` remains **transitive**, declared in no `package.json`. The pin is scoped to the substrate — `apps/dispatcher` and `packages/runtime-cf` run `@cloudflare/sandbox` 0.10.1 unasserted. No renovate or dependabot config exists, and GitHub's config-free Dependabot security updates are off at the repo setting.
 
 ## Context
 
@@ -31,7 +31,23 @@ fractalbot's egress engine cites the library by line. The consumer repos current
 
 ## Consequences
 
-- Renovate-style auto-bumps are disabled for these two packages.
+- **A test holds the pin, because no auto-bump mechanism exists to disable.** `src/container-config.test.ts`
+  § "the pinned SDK pair (ADR-0011)" asserts both **literal** versions, so neither package moves
+  without editing a test that points back at the checklist above. The repo carries no Renovate or
+  Dependabot configuration, and GitHub's config-free Dependabot security updates are off at the repo
+  setting — so there is nothing to switch off, and a line claiming otherwise would read as a control
+  in a security review without being one. Adopting a dependency bot means configuring it to refuse
+  these two packages, and this line becomes that statement.
+- `@cloudflare/containers` is a **transitive** dependency — the substrate declares only
+  `@cloudflare/sandbox`, so the other half of the pair appears in no `package.json` in the repo. The
+  test reaches it by walking `pnpm-lock.yaml`: the `apps/substrate` importer, the sandbox version it
+  resolved, and that snapshot's `@cloudflare/containers` edge. Scanning the lockfile for the version
+  string instead would be answered by any workspace member — `apps/dispatcher` and
+  `packages/runtime-cf` resolve the same version through `@cloudflare/sandbox` 0.10.1 — and would
+  stay green with the substrate's own dependency deleted.
+- The pin is scoped to the substrate. `apps/dispatcher` and `packages/runtime-cf` run
+  `@cloudflare/sandbox` 0.10.1 under no equivalent assertion; they do not carry the deny-all egress
+  posture this record protects, so their bumps are ordinary dependency updates.
 - The canary doubles as the BYOC health check that an org's deployed the substrate actually enforces the
   floor its version claims (see patch distribution in `specs/platform.md`).
 - The container image is part of the pin, not a separate concern: the DO is the client and the image

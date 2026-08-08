@@ -242,3 +242,139 @@ describe("HTTPS interception — the CA trust half (#72)", () => {
     expect(entrypointScript).not.toMatch(/^\s*exit 1$/m);
   });
 });
+
+const lockfileLines = readFileSync(repoFile("pnpm-lock.yaml"), "utf8").split("\n");
+
+/**
+ * The lines nested under `header` at `indent`, up to the next line indented no
+ * deeper — enough of a YAML reader to walk `pnpm-lock.yaml`'s three top-level
+ * sections without adding a parser dependency to this package.
+ *
+ * It throws rather than returning empty. Every caller below asserts on what it
+ * finds, so a missing block that returned `[]` would turn each of those into a
+ * vacuous pass on the next lockfile format change — the exact failure mode this
+ * whole describe exists to remove.
+ */
+const lockBlock = (
+  header: string,
+  indent: number,
+  within: readonly string[],
+): readonly string[] => {
+  const start = within.indexOf(`${" ".repeat(indent)}${header}`);
+  if (start === -1) throw new Error(`pnpm-lock.yaml: no \`${header}\` at indent ${indent}`);
+  const body = within.slice(start + 1);
+  const end = body.findIndex(
+    (line) => line.trim() !== "" && !line.startsWith(" ".repeat(indent + 1)),
+  );
+  return end === -1 ? body : body.slice(0, end);
+};
+
+const lockField = (name: string, within: readonly string[]): string => {
+  const prefix = `${name}:`;
+  const line = within.find((candidate) => candidate.trim().startsWith(prefix));
+  if (line === undefined) throw new Error(`pnpm-lock.yaml: no \`${name}\` in block`);
+  return line.trim().slice(prefix.length).trim();
+};
+
+/**
+ * ADR-0011 pins a *pair* — `@cloudflare/sandbox` and `@cloudflare/containers` —
+ * and calls every bump of either "a security-reviewed change to the substrate,
+ * never a routine dependency update", with an invariant checklist to re-run.
+ *
+ * The image-tag test above cannot enforce that. It asserts the Dockerfile tag
+ * AGREES with package.json, so it catches skew between the two and says nothing
+ * about a bump: move both together and it stays green — which is exactly the
+ * change the ADR exists to make deliberate.
+ *
+ * So these assert the literal versions. The cost is one line per legitimate
+ * bump, and that line IS the control: neither package can move without editing
+ * a test that says the checklist has to be re-run first. A reviewer sees the
+ * version change as its own diff hunk rather than as a lockfile detail.
+ *
+ * `@cloudflare/containers` is asserted by *walking* the lockfile, not by
+ * scanning it. A scan for the version string anywhere in the file is answered
+ * by any workspace member — `apps/dispatcher` and `packages/runtime-cf` both
+ * pull the same version through `@cloudflare/sandbox` 0.10.1 — so deleting the
+ * substrate's dependency outright would leave it green. The path below is the
+ * substrate's own: importer → the sandbox version that importer resolved →
+ * that snapshot's `@cloudflare/containers` edge.
+ */
+describe("the pinned SDK pair (ADR-0011)", () => {
+  const PINNED_SANDBOX = "0.12.4";
+  const PINNED_CONTAINERS = "0.3.7";
+
+  // Every assertion here carries this. A bare "expected '0.13.0' to be
+  // '0.12.4'" reads as a stale constant somebody forgot, which is the one
+  // conclusion the ADR says a reader must not reach.
+  const CHECKLIST =
+    "ADR-0011: a bump of either package is a security-reviewed change to the substrate, not a routine dependency update. Re-run the invariant checklist in apps/substrate/specs/adr/0011-sdk-pin-as-security-surface.md, then update the pinned constant here.";
+
+  const substrateImporter = (): readonly string[] =>
+    lockBlock("apps/substrate:", 2, lockBlock("importers:", 0, lockfileLines));
+  const lockPackages = (): readonly string[] => lockBlock("packages:", 0, lockfileLines);
+
+  it("declares the reviewed @cloudflare/sandbox, not merely a self-consistent one", () => {
+    expect(substratePackage.dependencies["@cloudflare/sandbox"], CHECKLIST).toBe(PINNED_SANDBOX);
+  });
+
+  it("installs the @cloudflare/sandbox it declares", () => {
+    // The manifest states an intent; the lockfile states what `pnpm install`
+    // actually puts on disk. Asserting only the first would pass on a lockfile
+    // that never caught up with a manifest edit.
+    const edge = lockBlock(
+      "'@cloudflare/sandbox':",
+      6,
+      lockBlock("dependencies:", 4, substrateImporter()),
+    );
+    expect(lockField("specifier", edge), CHECKLIST).toBe(PINNED_SANDBOX);
+    expect(lockField("version", edge), CHECKLIST).toBe(PINNED_SANDBOX);
+  });
+
+  it("reaches @cloudflare/containers through that pinned sandbox", () => {
+    // The substrate declares only `@cloudflare/sandbox`, so the other half of
+    // the ADR's pair is invisible to every package.json in the repo. This edge
+    // is where it becomes reviewable: the dependency the pinned sandbox itself
+    // resolved, which is what the container actually loads.
+    const snapshotDependencies = lockBlock(
+      "dependencies:",
+      4,
+      lockBlock(
+        `'@cloudflare/sandbox@${PINNED_SANDBOX}':`,
+        2,
+        lockBlock("snapshots:", 0, lockfileLines),
+      ),
+    );
+    expect(lockField("'@cloudflare/containers'", snapshotDependencies), CHECKLIST).toBe(
+      PINNED_CONTAINERS,
+    );
+  });
+
+  it("resolves exactly one @cloudflare/containers across the whole workspace", () => {
+    // The edge above pins the substrate's path. This closes the other side: a
+    // second resolved copy anywhere means some consumer runs an unreviewed
+    // containers against the same substrate contract.
+    //
+    // Deliberately repo-wide, so it can fail for a reason outside this package.
+    // `apps/dispatcher` and `packages/runtime-cf` both declare
+    // `@cloudflare/sandbox` 0.10.1, which happens to resolve the same
+    // containers; bumping either to a sandbox that resolves a different one
+    // reddens this test. That is the intended signal — ADR-0011 calls the pair
+    // a security surface, and a second copy in the deploy is the thing to look
+    // at — but the fix lives in the consumer that moved, not here.
+    const resolved = lockPackages()
+      .map((line) => /^ {2}'@cloudflare\/containers@([^']+)':$/.exec(line)?.[1])
+      .filter((version): version is string => version !== undefined);
+    expect(resolved, CHECKLIST).toEqual([PINNED_CONTAINERS]);
+  });
+
+  it("pins that @cloudflare/containers to a resolution with an integrity hash", () => {
+    // Without this the three assertions above are satisfied by a version
+    // *number* agreeing with itself; the hash is what ties the number to bytes.
+    const containersPackage = lockBlock(
+      `'@cloudflare/containers@${PINNED_CONTAINERS}':`,
+      2,
+      lockPackages(),
+    );
+    expect(lockField("resolution", containersPackage)).toMatch(/integrity: sha512-/);
+  });
+});
