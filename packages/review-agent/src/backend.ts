@@ -446,8 +446,14 @@ export const classifyModelError = (
       (m) => m.includes("401") || m.includes("403") || m.includes("unauthor"),
       () => "auth-failed" as const,
     ),
+    // TIGHT for the same reason the context-overflow phrases are, and since
+    // PR #99 for the same stakes — `rate-limited` also downgrades a run to a
+    // neutral skip. `includes("rate")` matched the substring inside "generate"
+    // / "accurate" / "separate" ("failed to generate response" read as a rate
+    // limit), and a bare `includes("429")` matches any id containing those
+    // digits; both would conclude neutral on a non-capacity failure.
     Match.when(
-      (m) => m.includes("429") || m.includes("rate"),
+      (m) => /\b429\b|rate[ _-]?limit|too many requests|quota exceeded/i.test(m),
       () => "rate-limited" as const,
     ),
     Match.when(

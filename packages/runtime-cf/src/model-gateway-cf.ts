@@ -278,11 +278,26 @@ const isContextOverflow = (text: string): boolean =>
     text,
   );
 
+/**
+ * True when a provider error text describes a rate limit.
+ *
+ * TIGHT for the same reason `isContextOverflow` is, and since PR #99 for
+ * exactly the same stakes: `rate-limited` now ALSO downgrades an all-reviewers
+ * failure to a NEUTRAL check via `RunSkipped`. The former `includes("rate")`
+ * test matched the substring inside "generate", "generated", "accurate" and
+ * "separate" — so "failed to generate response" classified as a rate limit —
+ * and a bare `includes("429")` matches any id or token count containing those
+ * digits. Either would conclude neutral on a failure that has nothing to do
+ * with capacity. Match the word, the phrase, or a standalone 429.
+ */
+const isRateLimit = (text: string): boolean =>
+  /\b429\b|rate[ _-]?limit|too many requests|quota exceeded/i.test(text);
+
 /** Map a thrown binding error to a `ModelGatewayError.reason`. */
 const reasonFor = (message: string): ModelGatewayError["reason"] => {
   const m = message.toLowerCase();
   if (isContextOverflow(m)) return "context-overflow";
-  if (m.includes("429") || m.includes("rate")) return "rate-limited";
+  if (isRateLimit(m)) return "rate-limited";
   if (m.includes("401") || m.includes("403") || m.includes("unauthor")) return "auth-failed";
   if (m.includes("timeout")) return "timeout";
   return "unknown";

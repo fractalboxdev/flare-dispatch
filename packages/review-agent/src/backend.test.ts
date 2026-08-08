@@ -282,4 +282,21 @@ describe("classifyModelError", () => {
     expect(classifyModelError(new Error("request took too long"))).toBe("unknown");
     expect(classifyModelError(new Error("operation timeout — took too long"))).toBe("timeout");
   });
+
+  it("does NOT read 'rate' inside another word as a rate limit (loose-substring guard)", () => {
+    // Same guard as the one above, for the other reason that downgrades a run
+    // to a NEUTRAL skip. The former `includes("rate")` test matched the
+    // substring inside "generate" / "generated" / "accurate" / "separate", so
+    // an ordinary provider failure classified as a rate limit and — once
+    // `rate-limited` became a skip kind — concluded neutral instead of red.
+    expect(classifyModelError(new Error("failed to generate response"))).toBe("unknown");
+    expect(classifyModelError(new Error("the model generated an inaccurate answer"))).toBe(
+      "unknown",
+    );
+    // ...while every genuine wording still classifies.
+    expect(classifyModelError(new Error("rate limit exceeded"))).toBe("rate-limited");
+    expect(classifyModelError(new Error("rate_limit_error"))).toBe("rate-limited");
+    expect(classifyModelError(new Error("HTTP 429 Too Many Requests"))).toBe("rate-limited");
+    expect(classifyModelError(new Error("quota exceeded for this model"))).toBe("rate-limited");
+  });
 });
