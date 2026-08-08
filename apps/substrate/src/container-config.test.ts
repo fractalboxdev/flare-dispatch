@@ -243,21 +243,6 @@ describe("HTTPS interception — the CA trust half (#72)", () => {
   });
 });
 
-/**
- * ADR-0011 pins a *pair* — `@cloudflare/sandbox` and `@cloudflare/containers` —
- * and calls every bump of either "a security-reviewed change to the substrate,
- * never a routine dependency update", with an invariant checklist to re-run.
- *
- * The image-tag test above cannot enforce that. It asserts the Dockerfile tag
- * AGREES with package.json, so it catches skew between the two and says nothing
- * about a bump: move both together and it stays green — which is exactly the
- * change the ADR exists to make deliberate.
- *
- * So these assert the literal versions. The cost is one line per legitimate
- * bump, and that line IS the control: neither package can move without editing
- * a test that says the checklist has to be re-run first. A reviewer sees the
- * version change as its own diff hunk rather than as a lockfile detail.
- */
 const lockfileLines = readFileSync(repoFile("pnpm-lock.yaml"), "utf8").split("\n");
 
 /**
