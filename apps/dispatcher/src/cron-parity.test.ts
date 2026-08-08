@@ -57,12 +57,28 @@ describe("cron parity", () => {
     // header describes, and an any-cron assertion reports it as healthy.
     const missing = scheduledRuns()
       .filter((r) => !DELIBERATELY_UNARMED.has(r.name))
-      .flatMap((r) => r.crons.filter((cron) => !armed.has(cron)).map((cron) => `${r.name}: ${cron}`));
+      .flatMap((r) =>
+        r.crons.filter((cron) => !armed.has(cron)).map((cron) => `${r.name}: ${cron}`),
+      );
     expect(missing).toEqual([]);
   });
 
   it("names every deliberately-unarmed run, so the list can't outlive its runs", () => {
     const known = new Set(runNames());
     expect([...DELIBERATELY_UNARMED].filter((n) => !known.has(n))).toEqual([]);
+  });
+
+  it("drops a run from the unarmed list as soon as it is actually armed", () => {
+    // The list only rots in one direction without this. Arming `release-notes`
+    // in wrangler.jsonc satisfies every assertion above — the run is armed, so
+    // nothing reports it missing — while the list keeps asserting it is a
+    // deliberate omission, and the comment explaining why it is unarmed
+    // silently becomes false.
+    const armed = new Set(readArmedCrons());
+    const armedButListed = scheduledRuns()
+      .filter((r) => DELIBERATELY_UNARMED.has(r.name))
+      .filter((r) => r.crons.some((cron) => armed.has(cron)))
+      .map((r) => r.name);
+    expect(armedButListed).toEqual([]);
   });
 });

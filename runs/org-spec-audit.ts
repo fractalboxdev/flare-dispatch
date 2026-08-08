@@ -71,9 +71,10 @@ import {
   step,
   type Container,
 } from "@fractalboxdev/flare-dispatch-core";
-import type { GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
+import type { CheckoutFailed, GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
 import {
   isoDate,
+  parseGitRef,
   parseList,
   parseRepo,
   parseRepoRelativePath,
@@ -224,7 +225,23 @@ export const orgSpecAudit = defineRun({
       // 1. Scope: the operator's estate. Listing is the attestation — this run
       //    never enumerates the installation, because a repo it was not told
       //    about is a repo nobody agreed it may propose against.
-      const repos = parseList(yield* step("resolve-repos", () => config.get(REPOS_KEY)));
+      //    Each entry is validated, not merely split. A repo name reaches the
+      //    checkout as a path segment and as part of a command string, so an
+      //    entry that is not `owner/name` is refused here rather than
+      //    discovered by the container. One bad entry fails the sweep instead
+      //    of being dropped: silently sweeping 3 of 4 repos is how a repo stops
+      //    being audited without anyone being told.
+      const rawRepos = parseList(yield* step("resolve-repos", () => config.get(REPOS_KEY)));
+      const badRepos = rawRepos.filter((r) => parseRepo(r) === undefined);
+      if (badRepos.length > 0) {
+        return yield* Effect.fail(
+          new StepFailed({
+            step: "resolve-repos",
+            cause: `${REPOS_KEY} has ${badRepos.length} entr${badRepos.length === 1 ? "y" : "ies"} that are not \`owner/name\`: ${badRepos.join(", ")}`,
+          }),
+        );
+      }
+      const repos = rawRepos;
       if (repos.length === 0) {
         yield* step("log-empty", () =>
           io.log("warn", `org-spec-audit: ${REPOS_KEY} is unset — nothing to sweep`),
@@ -238,7 +255,24 @@ export const orgSpecAudit = defineRun({
         };
       }
 
-      const baseBranch = (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
+      // The ref is validated for the same reason the repo names are: the
+      // checkout interpolates it into a command string, so an unchecked value
+      // is an unchecked command. Unset takes the default; set-and-unusable is
+      // an error rather than a silent fall back to `main`, which would audit a
+      // branch the operator did not ask for and report it as the one they did.
+      const rawBase = yield* step("resolve-base", () => config.get(BASE_KEY));
+      const baseBranch =
+        rawBase === undefined || rawBase === null || rawBase.trim() === ""
+          ? "main"
+          : parseGitRef(rawBase);
+      if (baseBranch === undefined) {
+        return yield* Effect.fail(
+          new StepFailed({
+            step: "resolve-base",
+            cause: `${BASE_KEY} is not a usable git ref`,
+          }),
+        );
+      }
 
       // The one key with no default. Everything else here degrades to a sane
       // value; a write TARGET cannot, because the fallback for "the operator
@@ -300,11 +334,14 @@ export const orgSpecAudit = defineRun({
         repos,
         (repo) =>
           sweepRepo({ repo, baseBranch, windowHours, resolved, systemPrompt }).pipe(
-            Effect.catchAll((err) =>
-              io
-                .log("warn", `org-spec-audit: skipped ${repo} — ${describe(err)}`)
-                .pipe(Effect.as({ repo, skipped: true, questions: [] } satisfies RepoOutcome)),
-            ),
+            Effect.catchAll((err) => {
+              const failure = describe(err);
+              return io
+                .log("warn", `org-spec-audit: skipped ${repo} — ${failure}`)
+                .pipe(
+                  Effect.as({ repo, skipped: true, failure, questions: [] } satisfies RepoOutcome),
+                );
+            }),
           ),
         { concurrency: 2 },
       );
@@ -383,8 +420,18 @@ export type MergedQuestion = {
 
 type RepoOutcome = {
   readonly repo: string;
-  /** True when the repo was skipped — dormant, no specs, or an error. */
+  /** True when the repo produced no questions — dormant, no specs, or failed. */
   readonly skipped: boolean;
+  /**
+   * Why the repo failed, when it did. Absent for a repo that was legitimately
+   * quiet.
+   *
+   * A failure and a dormant week both end the sweep early, and reporting them
+   * as one bucket makes an outage read as good news: a model rate-limit across
+   * the whole estate renders as "every repo unchanged", which is the sentence a
+   * reader is least likely to question. The digest separates them.
+   */
+  readonly failure?: string;
   readonly questions: readonly RaisedQuestion[];
 };
 
@@ -428,9 +475,18 @@ const sweepRepo = (args: SweepArgs) =>
       return { repo: args.repo, skipped: true, questions: [] } satisfies RepoOutcome;
     }
 
-    const specsText = yield* step(`gather-specs-${args.repo}`, () =>
-      shOut(container, dir, SPECS_SCRIPT).pipe(Effect.map((s) => s.slice(0, MAX_SPECS_CHARS))),
+    const specs = yield* step(`gather-specs-${args.repo}`, () =>
+      shRun(container, dir, SPECS_SCRIPT),
     );
+    if (specs.exitCode !== 0) {
+      return yield* Effect.fail(
+        new StepFailed({
+          step: `gather-specs-${args.repo}`,
+          cause: `spec gather exited ${specs.exitCode}: ${specs.stderr.slice(0, 200)}`,
+        }),
+      );
+    }
+    const specsText = specs.stdout.slice(0, MAX_SPECS_CHARS);
     if (specsText.trim().length === 0) {
       // No specs/ — nothing to audit. Worth a line, not a question: a product
       // repo with no specs is a finding a human already knows how to read.
@@ -438,9 +494,21 @@ const sweepRepo = (args: SweepArgs) =>
       return { repo: args.repo, skipped: true, questions: [] } satisfies RepoOutcome;
     }
 
-    const tree = yield* step(`gather-tree-${args.repo}`, () =>
-      shOut(container, dir, TREE_SCRIPT).pipe(Effect.map((s) => s.slice(0, MAX_TREE_CHARS))),
+    // An empty tree is not benign here: it is the half of the prompt the model
+    // contradicts the specs WITH, so a silent failure leaves it agreeing with
+    // every spec and reporting nothing.
+    const treeResult = yield* step(`gather-tree-${args.repo}`, () =>
+      shRun(container, dir, TREE_SCRIPT),
     );
+    if (treeResult.exitCode !== 0) {
+      return yield* Effect.fail(
+        new StepFailed({
+          step: `gather-tree-${args.repo}`,
+          cause: `tree gather exited ${treeResult.exitCode}: ${treeResult.stderr.slice(0, 200)}`,
+        }),
+      );
+    }
+    const tree = treeResult.stdout.slice(0, MAX_TREE_CHARS);
 
     const found = yield* step(`ask-${args.repo}`, () =>
       completeStructured({
@@ -499,10 +567,15 @@ export const mergeAcrossRepos = (raised: readonly RaisedQuestion[]): readonly Me
     byKey.set(k, { ...existing, sources: [...existing.sources, source] });
   }
 
-  // Most-shared first: a question three repos ask is worth more of a reader's
-  // attention than one only a single repo raised.
-  return [...byKey.values()].sort((a, b) => b.sources.length - a.sources.length);
+  // Most-shared first, counting distinct REPOS rather than sources. One repo
+  // raising the same question from two spec files is still one repo asking;
+  // ranking by source count lets it outrank a question two repos genuinely
+  // share, which inverts the merge's entire purpose.
+  return [...byKey.values()].sort((a, b) => distinctRepos(b) - distinctRepos(a));
 };
+
+/** How many distinct repos raised a merged question. */
+const distinctRepos = (q: MergedQuestion): number => new Set(q.sources.map((s) => s.repo)).size;
 
 /** Lowercase slug; falls back to the question text when the model's key is junk. */
 const normalizeKey = (key: string, question: string): string => {
@@ -528,6 +601,18 @@ export const parseWindowHours = (raw: string | undefined | null): number => {
 // --- In-container gather scripts (plain `git`, no extra CLI) -----------------
 
 /**
+ * `git rev-parse` guard prefixed to every gather script.
+ *
+ * Each gather ends in a pipe, and a pipeline's exit status is its LAST
+ * command's — `head` succeeds whether or not the `git` feeding it did, so the
+ * exit code alone cannot distinguish "no specs" from "not a repo". Asserting
+ * the checkout up front restores that distinction without giving up streaming
+ * (`set -o pipefail` is not POSIX `sh`, and buffering the output to inspect
+ * `git`'s status would reintroduce exactly the unbounded read the cap removes).
+ */
+const REQUIRE_REPO = `git rev-parse --git-dir >/dev/null 2>&1 || exit 1`;
+
+/**
  * Concatenate every tracked spec markdown with a path delimiter, bounded.
  *
  * The `head -c` is the real cap, not a duplicate of the `slice` at the call
@@ -541,19 +626,15 @@ export const parseWindowHours = (raw: string | undefined | null): number => {
  * units, so neither subsumes the other. A multi-byte character straddling the
  * cut leaves a partial sequence at the tail, which is acceptable in a prompt.
  */
-const SPECS_SCRIPT = `{ for f in $(git ls-files 'specs/*.md' 'specs/**/*.md' 2>/dev/null); do printf '\\n===FILE %s===\\n' "$f"; cat "$f"; done; } | head -c ${MAX_SPECS_CHARS}`;
+const SPECS_SCRIPT = `${REQUIRE_REPO}; { for f in $(git ls-files 'specs/*.md' 'specs/**/*.md'); do printf '\\n===FILE %s===\\n' "$f"; cat "$f"; done; } | head -c ${MAX_SPECS_CHARS}`;
 /** The repo's tracked file tree — the signal for which paths actually exist. */
-const TREE_SCRIPT = `git ls-files | head -800`;
+const TREE_SCRIPT = `${REQUIRE_REPO}; git ls-files | head -800`;
 /** Commits in the window. Empty output is the deterministic exit. */
 const logScript = (hours: number): string => `git log --oneline --since="${hours} hours ago" -n 40`;
 
 /** Run a `sh -lc <script>` in the container and return the full result. */
 const shRun = (container: Container, cwd: string, script: string) =>
   sandbox.exec({ container, cwd, command: ["sh", "-lc", script] });
-
-/** Run a `sh -lc <script>` in the container and return stdout (best-effort). */
-const shOut = (container: Container, cwd: string, script: string) =>
-  shRun(container, cwd, script).pipe(Effect.map((r) => r.stdout));
 
 // --- Prompt + message rendering ----------------------------------------------
 
@@ -598,16 +679,29 @@ type RenderArgs = {
  */
 export const renderMessage = (args: RenderArgs): string => {
   const swept = args.outcomes.filter((o) => !o.skipped).map((o) => o.repo);
-  const skipped = args.outcomes.filter((o) => o.skipped).map((o) => o.repo);
+  const failed = args.outcomes.filter((o) => o.failure !== undefined);
+  const quiet = args.outcomes
+    .filter((o) => o.skipped && o.failure === undefined)
+    .map((o) => o.repo);
   const dropped = countDropped(args.merged);
 
   const lines: string[] = [
     `# Spec audit — ${args.day}`,
     "",
-    `${swept.length} repo(s) swept · ${skipped.length} unchanged or without specs · ` +
-      `${args.merged.length} question(s) from ${args.raised} raised`,
+    `${swept.length} repo(s) swept · ${quiet.length} unchanged or without specs · ` +
+      `${failed.length} failed · ${args.merged.length} question(s) from ${args.raised} raised`,
     "",
   ];
+
+  // Above the questions, not below them: a sweep that failed on half the estate
+  // is a caveat on everything that follows, and a reader who stops after the
+  // first screen has to have seen it.
+  if (failed.length > 0) {
+    lines.push(
+      `> ⚠️ ${failed.length} repo(s) could not be swept — the questions below are from the rest of the estate, not all of it.`,
+      "",
+    );
+  }
 
   for (const group of GROUPS) {
     const inGroup = args.merged.filter((q) => q.group === group);
@@ -632,7 +726,8 @@ export const renderMessage = (args: RenderArgs): string => {
     "---",
     "",
     `Swept: ${swept.length > 0 ? swept.map((r) => `\`${r}\``).join(" · ") : "none"}`,
-    `Unchanged or no \`specs/\`: ${skipped.length > 0 ? skipped.map((r) => `\`${r}\``).join(" · ") : "none"}`,
+    `Unchanged or no \`specs/\`: ${quiet.length > 0 ? quiet.map((r) => `\`${r}\``).join(" · ") : "none"}`,
+    `Failed: ${failed.length > 0 ? failed.map((o) => `\`${o.repo}\` (${o.failure})`).join(" · ") : "none"}`,
     dropped > 0 ? `Below the per-group cap: ${dropped}` : "Nothing dropped by the cap.",
   );
 
@@ -656,8 +751,12 @@ const renderPrBody = (args: RenderArgs & { message: string }): string =>
     "",
     "> 🤖 Draft opened by `flare-dispatch/org-spec-audit`. These are divergences where *which side is right* is a judgment nobody has made yet — not drift (`spec-drift-pr` proposes those). Answer in the thread or edit the file; merging records the answers.",
     "",
-    args.message,
-    "",
+    // The trailers precede the message, and that order is load-bearing. Every
+    // line of `message` below is model output derived from the contents of the
+    // swept repos, so a spec crafted to make the model emit `auto-merge: yes`
+    // would, with the trailers last, put a spoofed value ahead of the real one
+    // for any consumer that reads the first match. Emitted first, the authentic
+    // trailers win and anything the model echoes is inert text further down.
     `maintenance-key: org-spec-audit/${args.day}`,
     `swept: ${
       args.outcomes
@@ -666,14 +765,32 @@ const renderPrBody = (args: RenderArgs & { message: string }): string =>
         .join(", ") || "none"
     }`,
     "auto-merge: never (specs are a sensitive path)",
-    "",
     MARKER,
+    "",
+    "---",
+    "",
+    args.message,
   ].join("\n");
 
 /** The errors `sweepRepo`'s `catchAll` knows how to describe precisely. */
-type CaughtError = BackendUnconfigured | ModelCallFailed | StructuredOutputInvalid | GitHubApiError;
+type CaughtError =
+  | BackendUnconfigured
+  | ModelCallFailed
+  | StructuredOutputInvalid
+  | GitHubApiError
+  | CheckoutFailed
+  | StepFailed;
 
-/** Human-readable one-liner for any caught error (model / git / GitHub). */
+/**
+ * Human-readable one-liner for any caught error (model / git / GitHub).
+ *
+ * `CheckoutFailed` is matched explicitly and its `cause` deliberately dropped.
+ * The clone URL carries a GitHub App installation token
+ * (`https://x-access-token:<token>@github.com/...`), the cause is typed
+ * `unknown` so it serializes whole, and this string is both logged and written
+ * into a PR body. The repo and ref are the whole diagnosis anyway — the tail of
+ * the `git` error adds nothing that is worth carrying a credential to get.
+ */
 const describe = (err: unknown): string =>
   Match.value(err as CaughtError).pipe(
     Match.tag(
@@ -683,5 +800,9 @@ const describe = (err: unknown): string =>
     Match.tag("ModelCallFailed", (e) => `model call failed (${e.reason}): ${e.message}`),
     Match.tag("StructuredOutputInvalid", (e) => `unparseable model output (${e.reason})`),
     Match.tag("GitHubApiError", (e) => `GitHub API ${e.status} (${e.reason})`),
-    Match.orElse(() => (err instanceof Error ? err.message : JSON.stringify(err))),
+    Match.tag("CheckoutFailed", (e) => `checkout of ${e.repo} at ${e.sha} failed`),
+    Match.tag("StepFailed", (e) => `${e.step}: ${e.cause}`),
+    // Deliberately not `JSON.stringify(err)`: an unrecognised error is exactly
+    // the case where nothing is known about what its fields hold.
+    Match.orElse(() => (err instanceof Error ? err.message : "unrecognised failure")),
   );

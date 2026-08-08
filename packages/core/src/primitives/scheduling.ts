@@ -39,7 +39,32 @@ export const parseList = (raw: string | undefined): readonly string[] =>
  */
 export const parseRepo = (raw: string | undefined | null): string | undefined => {
   const trimmed = (raw ?? "").trim();
-  return /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(trimmed) ? trimmed : undefined;
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(trimmed)) return undefined;
+  // The character class alone admits `.` and `..`, which are legal repo-name
+  // characters in every position but the only position. A name segment is also
+  // a PATH segment downstream: the checkout derives its target directory from
+  // the trailing segment and clears it with `rm -rf`, so `owner/..` aims that
+  // at the workspace root rather than at one repo's tree.
+  if (trimmed.split("/").some((seg) => /^\.+$/.test(seg))) return undefined;
+  return trimmed;
+};
+
+/**
+ * A git ref safe to hand to a shell — or `undefined`.
+ *
+ * The checkout interpolates this into a command string rather than passing it
+ * as argv, so a value with shell metacharacters in it is a value that runs.
+ * Validating here keeps the check next to the other config validators instead
+ * of leaving each run to remember it. Mirrors `git check-ref-format`'s useful
+ * subset: no leading `-` (a ref that parses as a flag), no `..`, no `@{`.
+ */
+export const parseGitRef = (raw: string | undefined | null): string | undefined => {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed.length === 0 || trimmed.length > 255) return undefined;
+  if (!/^[A-Za-z0-9._/-]+$/.test(trimmed)) return undefined;
+  if (trimmed.startsWith("-") || trimmed.startsWith("/") || trimmed.endsWith("/")) return undefined;
+  if (trimmed.includes("..") || trimmed.includes("@{")) return undefined;
+  return trimmed;
 };
 
 /**

