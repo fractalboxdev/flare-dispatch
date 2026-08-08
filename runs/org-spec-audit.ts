@@ -96,6 +96,7 @@ import {
   isoDate,
   parseGitRef,
   parseList,
+  parseRepo,
   renderSuppressionNote,
   resolveControlRepo,
   resolveRepoRelativePath,

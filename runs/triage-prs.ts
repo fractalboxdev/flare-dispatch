@@ -446,6 +446,11 @@ export const routePr = (
     };
   }
 
+  // `requestedReviewers` is *pending* requests only — GitHub clears the request
+  // once a reviewer submits. So this reads "nobody is currently on the hook",
+  // not "nobody has looked", and a reviewed-then-quiet PR can land here. The
+  // reason string says "no reviewer requested" for exactly that reason, and the
+  // exit only ever produces a digest line for a human to judge.
   const ageHours = (args.nowMs - pr.updatedAt) / 3_600_000;
   if (ci.green && pr.requestedReviewers.length === 0 && ageHours > args.staleHours) {
     return {

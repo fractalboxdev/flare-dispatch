@@ -40,7 +40,15 @@ export type PullRequestSummary = {
   readonly labels: readonly string[];
   /** The login that opened it — `""` when GitHub returned no user. */
   readonly author: string;
-  /** Reviewers requested but not yet responded — empty means nobody is on it. */
+  /**
+   * Reviewers with a **pending** review request.
+   *
+   * Empty means nobody is currently *requested* — which is not the same as
+   * nobody being on the PR. GitHub drops the request once that reviewer
+   * submits, so a PR that has already been reviewed reads as empty here, as
+   * does one owned via CODEOWNERS, an assignee, or a team convention this
+   * endpoint never sees.
+   */
   readonly requestedReviewers: readonly string[];
   readonly url: string;
   /** epoch ms. */
