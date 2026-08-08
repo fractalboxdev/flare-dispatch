@@ -55,6 +55,8 @@ export {
 export {
   classifierUser,
   decideIssueActions,
+  duplicateCandidates,
+  DUPLICATE_CANDIDATE_LIMIT,
   duplicateComment,
   extractCommandRepro,
   quoteReproForRecord,

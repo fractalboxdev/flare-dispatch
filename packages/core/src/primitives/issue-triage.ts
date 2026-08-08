@@ -386,7 +386,7 @@ const BODY_MAX_CHARS = 4_000;
  * That strip is the point. Without it, a body containing the closing delimiter
  * ends the data block early and everything after it reads as prompt — the exact
  * shape of every delimiter-escape attack. Control characters go too, since a
- * body is prose and a stray ` ` is only ever an attempt at something.
+ * body is prose and a stray NUL or ESC is only ever an attempt at something.
  */
 export const fenceUntrusted = (text: string): string => {
   const stripped = text
@@ -441,10 +441,31 @@ export const CLASSIFIER_SCHEMA = {
 } as const;
 
 /** Build the user message for one issue: its own fenced text, plus the candidate set. */
+export const DUPLICATE_CANDIDATE_LIMIT = 40;
+
+/**
+ * The issues offered to the model as possible duplicate targets: this repo's
+ * other issues, capped.
+ *
+ * **Control 3 must validate against exactly this set, not against every issue
+ * read.** The two are the same at default settings (`triage-issues.max-issues`
+ * is 25, below the cap) and diverge the moment an operator raises that ceiling
+ * — at which point the model is shown 40 titles while a larger set is accepted,
+ * so a number it was never offered would still pass. That gap is narrow, but it
+ * moves the guarantee from "a candidate this run put in front of the model" to
+ * "any issue that happens to exist", and the first is the one the docs claim.
+ *
+ * Deriving both the prompt and the validation set from one function is what
+ * keeps them from drifting apart again.
+ */
+export const duplicateCandidates = (
+  issue: IssueRef,
+  candidates: readonly IssueRef[],
+): readonly IssueRef[] =>
+  candidates.filter((c) => c.number !== issue.number).slice(0, DUPLICATE_CANDIDATE_LIMIT);
+
 export const classifierUser = (issue: IssueRef, candidates: readonly IssueRef[]): string => {
-  const others = candidates
-    .filter((c) => c.number !== issue.number)
-    .slice(0, 40)
+  const others = duplicateCandidates(issue, candidates)
     .map((c) => `#${c.number}: ${fenceUntrusted(c.title)}`)
     .join("\n");
   return [

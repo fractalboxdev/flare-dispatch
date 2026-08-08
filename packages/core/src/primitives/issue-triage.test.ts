@@ -10,6 +10,8 @@ import type { IssueRef } from "../services/github";
 import {
   classifierUser,
   decideIssueActions,
+  duplicateCandidates,
+  DUPLICATE_CANDIDATE_LIMIT,
   extractCommandRepro,
   quoteReproForRecord,
   fenceUntrusted,
@@ -264,6 +266,29 @@ describe("an issue body instructing the classifier", () => {
     // #99999 was never read, so there is no verdict — and therefore no close.
     expect(obeyed).toBeUndefined();
     expect(decideIssueActions(attack, obeyed).actions).toEqual([]);
+  });
+
+  it("the validated candidate set is exactly the set the model was shown", () => {
+    // Past the cap, the model sees the first 40 titles. Control 3 has to accept
+    // exactly those: validating against every issue READ would let a number the
+    // model was never offered through, the moment `max-issues` exceeds the cap.
+    const many = Array.from({ length: 60 }, (_, i) => issue({ number: i + 1 }));
+    const target = issue({ number: 7 });
+    const offered = duplicateCandidates(target, many);
+
+    expect(offered).toHaveLength(DUPLICATE_CANDIDATE_LIMIT);
+    expect(offered.map((c) => c.number)).not.toContain(7); // never itself
+
+    const prompt = classifierUser(target, many);
+    for (const c of offered) expect(prompt).toContain(`#${c.number}:`);
+
+    // #55 exists and was read, but was never offered — so it is not a duplicate.
+    const shown = new Set(offered.map((c) => c.number));
+    expect(shown.has(55)).toBe(false);
+    expect(prompt).not.toContain("#55:");
+    expect(
+      parseVerdict({ kind: "duplicate", duplicateOf: 55 }, { issueNumber: 7, knownNumbers: shown }),
+    ).toBeUndefined();
   });
 
   it("a label the issue demanded is never applied, because labels are derived", () => {

@@ -112,6 +112,7 @@ import {
   classifierUser,
   DECLINED_LEDGER_PATH,
   decideIssueActions,
+  duplicateCandidates,
   isoDate,
   parseList,
   parseVerdict,
@@ -459,9 +460,13 @@ const classifyOne = (issue: IssueRef, candidates: readonly IssueRef[], model: st
       raw = undefined;
     }
 
+    // Control 3 validates against exactly the candidates the model was shown —
+    // `duplicateCandidates` is the same function `classifierUser` builds the
+    // prompt from, so the two cannot drift when `max-issues` is raised past the
+    // candidate cap.
     const verdict = parseVerdict(raw, {
       issueNumber: issue.number,
-      knownNumbers: new Set(candidates.map((c) => c.number)),
+      knownNumbers: new Set(duplicateCandidates(issue, candidates).map((c) => c.number)),
     });
     return decideIssueActions(issue, verdict);
   });
