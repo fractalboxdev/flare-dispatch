@@ -137,9 +137,10 @@ and 3 starts when the facade contract review lands.
 Stage 2's operator sequence is [adoption-runbook.md](adoption-runbook.md): deploy with the binding,
 flip `SUBSTRATE_BACKEND`, open a report window per run, graduate to `enforce`, then drain, delete
 the dispatcher's classes and raise the caps. It also names what still blocks the drain — the facade
-serves no detached-process, preview-URL or container-artifact surface, so the three runs that need
-one stay on the dispatcher's fleet until the boundary answers for a process that outlives the exec
-fence.
+serves no preview-URL or container-artifact surface, and while it does serve detached processes
+(`startDetached` / `detachedStatus` / `stopDetached`, ADR-0012), the runtime adapter is not wired to
+them and the run bodies still call `sandbox.runDetached`. So the three runs that need one stay on
+the dispatcher's fleet until those move over.
 
 ## Success criteria
 

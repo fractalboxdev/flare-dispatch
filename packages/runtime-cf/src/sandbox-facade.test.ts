@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Logger } from "effect";
 import type {
   ExecInput,
   SandboxKey,
@@ -96,6 +96,26 @@ const run = <A, E>(
   r2: R2Bucket,
   over: Record<string, unknown> = {},
 ) => Effect.runPromiseExit(Effect.provide(effect, layerFor(api, r2, over)));
+
+/**
+ * `run`, plus every log line the effect emitted. `waitForPort` names its reason
+ * on a log line and nowhere else — `PortNeverOpened` carries no free-text cause
+ * — so the only way to pin that message is to capture what was logged.
+ */
+const runCapturingLogs = <A, E>(
+  effect: Effect.Effect<A, E, SandboxTag>,
+  api: SubstrateFacade,
+  r2: R2Bucket,
+) => {
+  const lines: string[] = [];
+  const capture = Logger.replace(
+    Logger.defaultLogger,
+    Logger.make(({ message }) => void lines.push(String(message))),
+  );
+  return Effect.runPromiseExit(
+    Effect.provide(Effect.provide(effect, layerFor(api, r2)), capture),
+  ).then((exit) => ({ exit, lines }));
+};
 
 const exec = (command: string, cwd = "/workspace") =>
   Effect.flatMap(SandboxTag, (s) => s.exec({ command, cwd }));
@@ -345,7 +365,59 @@ describe("the surfaces the facade does not serve", () => {
     );
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isSuccess(exit)) return;
-    expect(JSON.stringify(exit.cause)).toContain("no detached-process surface");
+    // Asserted on what a reader can DO with the message, not on one phrase.
+    // The old assertion pinned "no detached-process surface", which stopped
+    // being true when the facade grew `startDetached` (ADR-0012) — a test that
+    // holds a stale explanation in place is worse than no test, because the
+    // explanation is the whole product here.
+    const cause = JSON.stringify(exit.cause);
+    // Where the block is recorded, so the reader can find and clear it.
+    expect(cause).toContain("grant-catalog.ts");
+    // And that the facade half already exists, so nobody goes and builds it.
+    expect(cause).toContain("startDetached");
+  });
+
+  // `waitForExit`'s reason changed with `runDetached`'s and was the one of the
+  // three carrying a DIFFERENT claim — not "a gap", but "no such method, on
+  // purpose". Pinned for the same reason the one above is: the message is the
+  // whole product, so an untested one is free to go stale again.
+  it("fails waitForExit by pointing at the poll that replaces it", async () => {
+    const f = facade();
+    const r2 = bucket();
+    const exit = await run(
+      Effect.flatMap(SandboxTag, (s) =>
+        s.waitForExit({ handle: { id: "proc-1", container: { id: EXECUTION } } }),
+      ),
+      f.api,
+      r2.binding,
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) return;
+    const cause = JSON.stringify(exit.cause);
+    // What to do instead — the facade serves this, so the reader has a route.
+    expect(cause).toContain("detachedStatus");
+    // Why it is absent by design, rather than merely unbuilt.
+    expect(cause).toContain("ADR-0012");
+  });
+
+  // The third rewritten message, and the most fragile: it exists ONLY on a log
+  // line, so nothing about the failure value would catch it going stale.
+  it("names waitForPort's replacement on the log line, not just a bare timeout", async () => {
+    const f = facade();
+    const r2 = bucket();
+    const { exit, lines } = await runCapturingLogs(
+      Effect.flatMap(SandboxTag, (s) =>
+        s.waitForPort({ handle: { id: "proc-1", container: { id: EXECUTION } }, port: 4173 }),
+      ),
+      f.api,
+      r2.binding,
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    const logged = lines.join("\n");
+    // The port, so the reader knows which wait died.
+    expect(logged).toContain("4173");
+    // And where the replacement is recorded, rather than a bare timeout to chase.
+    expect(logged).toContain("grant-catalog.ts");
   });
 
   it("fails exposePort rather than handing back an unreachable localhost", async () => {

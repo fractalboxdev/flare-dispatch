@@ -19,12 +19,15 @@
 //     `idempotencyKeyFor`.
 //   * `readFile` → `readFile`. No grant, no command.
 //   * `runDetached` / `waitForExit` / `waitForPort` / `exposePort` → typed
-//     failures naming the gap. The facade has no detached-process surface, and
-//     that is a design question rather than an omission: a process that
-//     outlives the exec fence outlives the grant window the fence closes.
-//     `grant-catalog.ts` keeps the runs that need them off this path, so these
-//     branches are unreachable in production — they exist so the failure is
-//     legible if that ever stops being true.
+//     failures naming the gap. The facade DOES serve detached processes
+//     (`startDetached` / `detachedStatus` / `stopDetached`, ADR-0012: such a
+//     process holds no grant); what is missing is this adapter's wiring to it
+//     and the run bodies still calling `sandbox.runDetached`. `exposePort` is
+//     the one deliberate exclusion — preview URLs stay off the facade until the
+//     substrate worker owns a proxy route. `grant-catalog.ts` keeps the runs
+//     that need them off this path, so these branches are unreachable in
+//     production — they exist so the failure is legible if that ever stops
+//     being true. Each stub's own `cause` carries the specific reason.
 //
 // Logs: the substrate streams a command's full output to its own artifact mount
 // and returns a bounded tail. This layer writes that tail to the dispatcher's
@@ -361,20 +364,41 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
           }),
       }),
 
+    // `runDetached` and `waitForPort` below still fail, and must: this adapter
+    // is not wired to the facade's detached surface and the run bodies still
+    // call `sandbox.runDetached`. Only the REASON has changed. The facade now
+    // serves `startDetached` / `detachedStatus` / `stopDetached` (ADR-0012: a
+    // detached process holds no grant), so a message saying the surface does
+    // not exist sends whoever reads it off to build something already there.
+    // `grant-catalog.ts`'s `detached-process` gap states the real clearing
+    // condition — the run body moves off `sandbox.runDetached` — and stays.
+    // (`waitForExit` below fails for a different reason again: see its own
+    // comment. `exposePort` is a separate gap entirely.)
+    //
+    // Closing the gap for a run takes three things, not one: this adapter
+    // wired, that run's body moved over, and its `rollout` graduated through a
+    // clean `report` window and on to `enforce` (`adoption-runbook.md` § 3–4).
+    // Moving where untrusted code executes is that runbook's decision to make.
     runDetached: () =>
       Effect.fail(
         new ContainerLaunchFailed({
           image: "substrate",
           cause:
-            "the substrate facade serves no detached-process surface — a process outliving the exec fence outlives its grant window (ADR-0003/0005). This run is kept off the facade by grant-catalog.ts",
+            "this adapter is not wired to the facade's detached surface — the facade serves `startDetached` (ADR-0012: a detached process holds no grant), but this run still calls `sandbox.runDetached`. Kept off the facade by grant-catalog.ts until the run body moves over",
         }),
       ),
 
+    // Correct to fail, and it is not a gap: ADR-0012 gives the facade no
+    // `waitForExit` on purpose. A consumer polls the SUBSTRATE FACADE's
+    // `detachedStatus` from its own durable steps — that method is on
+    // `SubstrateFacade`, not on this `Sandbox` port, so naming it unqualified
+    // sends a reader grepping the port for something that was never there.
+    // A Worker call that blocks for twenty minutes is not a call.
     waitForExit: ({ handle }) =>
       Effect.fail(
         new ExecTimeout({
           timeoutSec: 0,
-          command: `detached:${handle.id} — the substrate facade serves no detached-process surface`,
+          command: `detached:${handle.id} — the facade has no waitForExit by design; poll the substrate facade's detachedStatus from a durable step (ADR-0012)`,
         }),
       ),
 
@@ -382,7 +406,7 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
     // log line instead of vanishing into a bare timeout a reader would chase.
     waitForPort: ({ port, timeoutSec }) =>
       Effect.logError(
-        `waitForPort(${port}) is unreachable on the substrate facade — no detached-process surface`,
+        `waitForPort(${port}) is unreachable on the substrate facade — the fenced-exec localhost poll that grant-catalog.ts names as its replacement does not exist yet`,
       ).pipe(
         Effect.andThen(Effect.fail(new PortNeverOpened({ port, timeoutSec: timeoutSec ?? 0 }))),
       ),
