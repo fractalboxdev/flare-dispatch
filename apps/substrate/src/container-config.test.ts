@@ -242,3 +242,45 @@ describe("HTTPS interception — the CA trust half (#72)", () => {
     expect(entrypointScript).not.toMatch(/^\s*exit 1$/m);
   });
 });
+
+/**
+ * ADR-0011 pins a *pair* — `@cloudflare/sandbox` and `@cloudflare/containers` —
+ * and calls every bump of either "a security-reviewed change to the substrate,
+ * never a routine dependency update", with an invariant checklist to re-run.
+ *
+ * The image-tag test above cannot enforce that. It asserts the Dockerfile tag
+ * AGREES with package.json, so it catches skew between the two and says nothing
+ * about a bump: move both together and it stays green — which is exactly the
+ * change the ADR exists to make deliberate.
+ *
+ * So these assert the literal versions. The cost is one line per legitimate
+ * bump, and that line IS the control: neither package can move without editing
+ * a test that says the checklist has to be re-run first. A reviewer sees the
+ * version change as its own diff hunk rather than as a lockfile detail.
+ */
+describe("the pinned SDK pair (ADR-0011)", () => {
+  const PINNED_SANDBOX = "0.12.4";
+  const PINNED_CONTAINERS = "0.3.7";
+
+  it("runs the reviewed @cloudflare/sandbox, not merely a self-consistent one", () => {
+    expect(substratePackage.dependencies["@cloudflare/sandbox"]).toBe(PINNED_SANDBOX);
+  });
+
+  it("resolves @cloudflare/containers to the version reviewed with it", () => {
+    // Asserted from the lockfile rather than a manifest: the substrate declares
+    // only `@cloudflare/sandbox`, so the other half of the ADR's pair arrives
+    // transitively and is invisible to every package.json in the repo. Reading
+    // the lockfile is what makes the half nobody declared reviewable at all.
+    const lockfile = readFileSync(repoFile("pnpm-lock.yaml"), "utf8");
+    const resolved = new Set(
+      [...lockfile.matchAll(/'@cloudflare\/containers(?:@|':\s*)([0-9][^\s':]*)/g)].map(
+        (m) => m[1],
+      ),
+    );
+    // Non-empty guards the regex itself: a lockfile format change that stopped
+    // matching would otherwise make this assertion vacuously true, which is the
+    // failure mode this whole change is about.
+    expect(resolved.size).toBeGreaterThan(0);
+    expect([...resolved]).toEqual([PINNED_CONTAINERS]);
+  });
+});

@@ -31,7 +31,21 @@ fractalbot's egress engine cites the library by line. The consumer repos current
 
 ## Consequences
 
-- Renovate-style auto-bumps are disabled for these two packages.
+- **There is no auto-bump mechanism to disable, and the pin is held by a test instead.** This line
+  previously read "Renovate-style auto-bumps are disabled for these two packages" — vacuously true,
+  because the repo carries no Renovate or Dependabot configuration at all. A guarantee that holds
+  only because the mechanism it names is absent reads as a control in a security review and is not
+  one, which is worse than saying nothing. What actually holds the pin is
+  `src/container-config.test.ts` § "the pinned SDK pair (ADR-0011)": it asserts both **literal**
+  versions, so neither package moves without editing a test that points back at the checklist
+  above. The older test alongside it asserts the image tag *agrees with* `package.json`, which
+  catches skew between them and not a bump of both. If a dependency bot is ever adopted, it must be
+  configured to refuse these two packages and this line becomes that statement.
+- `@cloudflare/containers` is a **transitive** dependency — the substrate declares only
+  `@cloudflare/sandbox`, so the other half of the pair appears in no `package.json` in the repo.
+  The test therefore reads it out of `pnpm-lock.yaml`, which is what makes the undeclared half
+  reviewable at all. Declaring it directly would be the alternative; it is not done here because
+  the pin is what the ADR needs and a manifest edit would move the dependency graph to buy it.
 - The canary doubles as the BYOC health check that an org's deployed the substrate actually enforces the
   floor its version claims (see patch distribution in `specs/platform.md`).
 - The container image is part of the pin, not a separate concern: the DO is the client and the image
