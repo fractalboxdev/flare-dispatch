@@ -18,25 +18,18 @@ import { Secrets, type SecretsService } from "../services/secrets";
 export type BrowserFakeState = {
   /** every `newCDPSession` call, in order. */
   readonly cdpSessions: { targetUrl: string }[];
-  /** count of `newPage` calls. */
-  pageCount: number;
 };
 
 /**
  * Build a Browser fake plus an inspectable state handle. `newCDPSession`
- * returns a canned `wsEndpoint`; `newPage` a no-op page. A test that needs the
- * browser to be *unavailable* builds its own failing `Browser` Layer.
+ * returns a canned `wsEndpoint`. A test that needs the browser to be
+ * *unavailable* builds its own failing `Browser` Layer.
  */
 export const makeBrowserFake = (
   opts: { wsEndpoint?: string } = {},
 ): { layer: Layer.Layer<Browser>; state: BrowserFakeState } => {
-  const state: BrowserFakeState = { cdpSessions: [], pageCount: 0 };
+  const state: BrowserFakeState = { cdpSessions: [] };
   const service: BrowserService = {
-    newPage: () =>
-      Effect.sync(() => {
-        state.pageCount += 1;
-        return { goto: () => Effect.void, close: Effect.void };
-      }),
     newCDPSession: ({ targetUrl }) =>
       Effect.sync(() => {
         state.cdpSessions.push({ targetUrl });

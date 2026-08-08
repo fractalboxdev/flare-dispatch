@@ -136,12 +136,6 @@ export const makeBrowserRenderingLive = (config: BrowserRenderingConfig): Layer.
             wsEndpoint: composeCdpEndpoint(config),
             close: Effect.void,
           }),
-
-    // REST-mode `newPage` (Worker-side Puppeteer) is not used by `cdp-acceptance`
-    // and would need the `BROWSER` binding + `@cloudflare/puppeteer`; it lands
-    // with the first run that needs it.
-    newPage: () =>
-      Effect.die("browser.newPage: REST mode not implemented — cdp-acceptance uses newCDPSession"),
   };
 
   return Layer.succeed(Browser, service);
