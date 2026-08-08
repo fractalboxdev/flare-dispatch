@@ -35,9 +35,15 @@
 //
 // `declined.jsonl` is a file humans hand-edit in PRs. A malformed line is
 // skipped with a warning and never crashes a run; a line's `key` is only ever
-// used as an exact-match string, never as a pattern; and its `reason` is
-// flattened before it reaches a PR body, so ledger prose cannot inject markdown
-// structure into a proposal.
+// used as an exact-match string, never as a pattern; and its `reason` / `by` /
+// `at` are flattened **and markdown-escaped** at parse time, so ledger prose
+// cannot inject a link, an image, raw HTML, or emphasis into a proposal.
+//
+// Escaping at parse rather than at render is deliberate: a `DeclineEntry` is
+// safe to interpolate wherever it lands — this note, a digest, a check-run
+// summary — so a later caller cannot reintroduce the hole by writing its own
+// renderer. The cost is that the stored string carries backslashes; nothing
+// logs or matches on it, and `key` (the field anything keys off) is untouched.
 //
 // Pure decision (`decideSuppression`) is separated from the two reads
 // (`checkSuppression`) — the rules are unit-testable with plain data and no
@@ -46,7 +52,6 @@
 // Rides on the `github` and `io` capabilities. Layer: 03-dsl § Primitives.
 
 import { Effect } from "effect";
-import type { GitHubApiError } from "../errors";
 import { github, type PullRequestHistoryRef } from "../services/github";
 import { io } from "../services/io";
 
@@ -71,6 +76,17 @@ const KEY_MAX_CHARS = 200;
 /** Reasons are rendered into markdown; longer than this is truncated. */
 const REASON_MAX_CHARS = 200;
 
+/**
+ * The most ledger lines one parse will read.
+ *
+ * `declined.jsonl` is append-only, so it only ever grows, and it is read into a
+ * Worker isolate on every tick. A decline is a deliberate human act; an estate
+ * producing thousands of them has a process problem, not a parsing one. Lines
+ * past the cap are reported through `malformed` rather than dropped silently,
+ * so the run says so instead of quietly forgetting the oldest declines.
+ */
+const LEDGER_MAX_LINES = 5_000;
+
 // --- The ledger --------------------------------------------------------------
 
 /** One permanently declined proposal, as `declined.jsonl` records it. */
@@ -92,16 +108,74 @@ export type LedgerParse = {
   readonly malformed: readonly { readonly line: number; readonly why: string }[];
 };
 
-/** Flatten untrusted prose to one safe single-line fragment for markdown. */
+/**
+ * Characters carrying **inline** markdown or HTML meaning. Escaped rather than
+ * stripped, so the ledger's prose survives verbatim while rendering as literal
+ * text: `<img …>` reads as `<img …>` instead of loading, and `[go](http://…)`
+ * reads as itself instead of becoming a link a reader might trust.
+ *
+ * Block-level markers (`#`, `-`, `+`, leading `>`) are deliberately absent —
+ * {@link flatten} collapses the value to a single line and every call site
+ * interpolates it mid-sentence, so nothing it contains can open a block. `<`
+ * and `>` are here because they open raw HTML and autolinks *inline*.
+ */
+const MARKDOWN_META = /[\\`*_[\]()<>~!|]/g;
+
+/**
+ * Control, bidi-override and zero-width characters — stripped, not escaped.
+ * They have no legitimate place in a decline reason, and a bidi override can
+ * render text as the reverse of what the ledger literally says, which escaping
+ * alone would faithfully preserve. `\t\n\r\v\f` are excluded: they are `\s`,
+ * and the whitespace collapse below turns them into a space rather than
+ * deleting them (so `"foo\nbar"` stays two words).
+ */
+const INVISIBLE =
+  // oxlint-disable-next-line no-control-regex -- matching control characters is the point here: they are what gets stripped from untrusted ledger prose
+  /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069]/g;
+
+/**
+ * Flatten untrusted prose to one line of literal, markdown-safe text.
+ *
+ * `max` bounds the **visible** text, so it is applied before escaping: a
+ * reader's 200 characters stay 200 characters, and truncation can never land
+ * mid-escape and leave a dangling backslash that eats the next character.
+ */
 const flatten = (raw: unknown, max: number): string =>
   typeof raw === "string"
     ? raw
-        .replace(/[\r\n]+/g, " ")
-        // Backticks and pipes would break out of inline code / table cells.
-        .replace(/[`|]/g, "")
+        .replace(INVISIBLE, "")
+        .replace(/\s+/g, " ")
         .trim()
         .slice(0, max)
+        .replace(MARKDOWN_META, "\\$&")
     : "";
+
+/**
+ * Render a key inside an inline code span.
+ *
+ * Backslash escapes do **not** apply inside a code span, so a stray backtick
+ * cannot be escaped out of one — it can only be removed. Keys are `[a-z0-9-]`
+ * slugs in every current caller; this is the guard for one whose keys are not,
+ * since a key reaches here from the caller's candidate list rather than from
+ * the ledger and so is never touched by {@link flatten}.
+ */
+const codeSpan = (key: string): string =>
+  `\`${key.replace(INVISIBLE, "").replace(/\s+/g, " ").replace(/`/g, "").trim()}\``;
+
+/**
+ * Percent-encode the characters that can terminate a markdown link destination
+ * early — parentheses, angle brackets and whitespace. GitHub's `html_url` never
+ * contains them, so this is a belt-and-braces guard on a value that only
+ * *looks* trusted; percent-encoding leaves a well-formed URL still resolving.
+ *
+ * The parentheses are spelled out rather than left to `encodeURIComponent`,
+ * which deliberately does **not** encode `(` or `)` — precisely the two
+ * characters that matter here.
+ */
+const LINK_META: Record<string, string> = { "(": "%28", ")": "%29", "<": "%3C", ">": "%3E" };
+
+const linkTarget = (url: string): string =>
+  url.replace(/[()<>\s]/g, (char) => LINK_META[char] ?? encodeURIComponent(char));
 
 /**
  * Parse `declined.jsonl` — one JSON object per line.
@@ -109,13 +183,22 @@ const flatten = (raw: unknown, max: number): string =>
  * Never throws. A line that is not an object, or whose `key` is missing / not a
  * string / empty / implausibly long, is skipped and reported in `malformed` for
  * the caller to log. A later line for a key wins over an earlier one (the
- * ledger is append-only, so the last word is the current one).
+ * ledger is append-only, so the last word is the current one). Beyond
+ * {@link LEDGER_MAX_LINES} the read stops and says so in `malformed`.
  */
 export const parseDeclinedLedger = (text: string): LedgerParse => {
   const byKey = new Map<string, DeclineEntry>();
   const malformed: { line: number; why: string }[] = [];
 
-  text.split("\n").forEach((raw, index) => {
+  const allLines = text.split("\n");
+  if (allLines.length > LEDGER_MAX_LINES) {
+    malformed.push({
+      line: LEDGER_MAX_LINES + 1,
+      why: `ledger exceeds ${LEDGER_MAX_LINES} lines — the rest was NOT read`,
+    });
+  }
+
+  allLines.slice(0, LEDGER_MAX_LINES).forEach((raw, index) => {
     const line = raw.trim();
     if (line.length === 0) return;
 
@@ -363,7 +446,7 @@ export const checkSuppression = (args: CheckSuppressionArgs) =>
       })
       .pipe(
         Effect.map((result) => (result.found ? result.content : "")),
-        Effect.catchAll((err: GitHubApiError) =>
+        Effect.catchTag("GitHubApiError", (err) =>
           Effect.gen(function* () {
             const why = `ledger ${args.ledgerRepo}:${ledgerPath} unreadable (GitHub ${err.status} ${err.reason}) — declines NOT applied this tick`;
             degraded.push(why);
@@ -391,7 +474,7 @@ export const checkSuppression = (args: CheckSuppressionArgs) =>
         updatedWithinDays: cooldownDays,
       })
       .pipe(
-        Effect.catchAll((err: GitHubApiError) =>
+        Effect.catchTag("GitHubApiError", (err) =>
           Effect.gen(function* () {
             const why = `PR history for ${proposalRepo} (${args.headBranchPrefix}*) unreadable (GitHub ${err.status} ${err.reason}) — cooldowns NOT applied this tick`;
             degraded.push(why);
@@ -444,12 +527,12 @@ export const renderSuppressionNote = (report: SuppressionReport): readonly strin
     for (const { key, verdict } of report.suppressed) {
       lines.push(
         verdict.status === "declined"
-          ? `- \`${key}\` — declined${verdict.at !== "" ? ` ${verdict.at}` : ""}${
+          ? `- ${codeSpan(key)} — declined${verdict.at !== "" ? ` ${verdict.at}` : ""}${
               verdict.by !== "" ? ` by ${verdict.by}` : ""
             }${verdict.reason !== "" ? `: ${verdict.reason}` : ""}`
-          : `- \`${key}\` — closed unmerged in [#${verdict.pr}](${verdict.url}) on ${isoDay(
-              verdict.closedAtMs,
-            )}; cooling until ${verdict.until}`,
+          : `- ${codeSpan(key)} — closed unmerged in [#${verdict.pr}](${linkTarget(
+              verdict.url,
+            )}) on ${isoDay(verdict.closedAtMs)}; cooling until ${verdict.until}`,
       );
     }
     lines.push("");

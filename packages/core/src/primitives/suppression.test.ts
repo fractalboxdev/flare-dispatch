@@ -90,7 +90,83 @@ describe("parseDeclinedLedger", () => {
     const { byKey } = parseDeclinedLedger(
       declineLine("org-spec-audit/a", { reason: "line one\n## Injected heading\n`code`" }),
     );
-    expect(byKey.get("org-spec-audit/a")?.reason).toBe("line one ## Injected heading code");
+    // One line, and the backticks are escaped rather than deleted — the prose
+    // survives verbatim, it just cannot open a code span.
+    expect(byKey.get("org-spec-audit/a")?.reason).toBe("line one ## Injected heading \\`code\\`");
+  });
+
+  it("escapes markdown and HTML in a reason, so a ledger edit cannot forge content", () => {
+    const { byKey } = parseDeclinedLedger(
+      declineLine("org-spec-audit/a", {
+        reason:
+          '[click here](https://evil.example/phish) <img src=x onerror="alert(1)"> **bold** _em_',
+      }),
+    );
+    const reason = byKey.get("org-spec-audit/a")?.reason ?? "";
+    // Nothing that opens a link, an image, a raw tag, or emphasis survives
+    // unescaped — every metacharacter is preceded by a backslash.
+    expect(reason).toBe(
+      "\\[click here\\]\\(https://evil.example/phish\\) " +
+        '\\<img src=x onerror="alert\\(1\\)"\\> \\*\\*bold\\*\\* \\_em\\_',
+    );
+    for (const meta of ["[", "]", "(", ")", "<", ">", "*", "_"]) {
+      expect(reason).not.toMatch(new RegExp(`(^|[^\\\\])\\${meta}`));
+    }
+  });
+
+  it("escapes `by` and `at` too — every ledger-controlled field reaches a PR body", () => {
+    const { byKey } = parseDeclinedLedger(
+      declineLine("org-spec-audit/a", {
+        by: "[@ada](https://evil.example)",
+        at: "<b>2026-07-01</b>",
+      }),
+    );
+    const entry = byKey.get("org-spec-audit/a");
+    expect(entry?.by).toBe("\\[@ada\\]\\(https://evil.example\\)");
+    expect(entry?.at).toBe("\\<b\\>2026-07-01\\</b\\>");
+  });
+
+  it("strips zero-width and bidi-override characters instead of escaping them", () => {
+    // A right-to-left override can make rendered text read as its reverse,
+    // and a zero-width space can split a word a reader thinks they matched;
+    // escaping would faithfully preserve both deceptions, so they are removed.
+    const RLO = "\u202E";
+    const PDF = "\u202C";
+    const ZWSP = "\u200B";
+    const { byKey } = parseDeclinedLedger(
+      declineLine("org-spec-audit/a", {
+        reason: `safe${RLO}reversed${PDF}${ZWSP}text`,
+      }),
+    );
+    const reason = byKey.get("org-spec-audit/a")?.reason ?? "";
+    expect(reason).toBe("safereversedtext");
+    for (const invisible of [RLO, PDF, ZWSP]) {
+      expect(reason).not.toContain(invisible);
+    }
+  });
+
+  it("bounds the visible reason, and never truncates mid-escape", () => {
+    const { byKey } = parseDeclinedLedger(
+      // 400 metacharacters: the visible cap is 200, and escaping happens after
+      // the slice, so the result is exactly 200 escape pairs — never a string
+      // ending in a lone backslash that would eat the next character.
+      declineLine("org-spec-audit/a", { reason: "*".repeat(400) }),
+    );
+    const reason = byKey.get("org-spec-audit/a")?.reason ?? "";
+    expect(reason).toBe("\\*".repeat(200));
+    expect(reason.endsWith("\\")).toBe(false);
+  });
+
+  it("stops at the line cap and says so, rather than reading an unbounded file", () => {
+    const { byKey, malformed } = parseDeclinedLedger(
+      Array.from({ length: 6_000 }, (_, i) => declineLine(`org-spec-audit/k${i}`)).join("\n"),
+    );
+    expect(byKey.size).toBe(5_000);
+    expect(byKey.has("org-spec-audit/k4999")).toBe(true);
+    expect(byKey.has("org-spec-audit/k5000")).toBe(false);
+    // Reported, not silent — an unread decline would otherwise be re-proposed
+    // with nothing anywhere saying why.
+    expect(malformed.some((m) => m.why.includes("exceeds 5000 lines"))).toBe(true);
   });
 
   it("lets a later line win — the ledger is append-only", () => {
@@ -195,6 +271,20 @@ describe("decideSuppression", () => {
     );
     expect(verdict?.status).toBe("open");
   });
+
+  it("expires the cooldown exactly at the boundary, not a tick either side", () => {
+    // The rule is `nowMs < closedAt + cooldown`. Without both sides pinned,
+    // flipping it to `<=` passes every other test in this file.
+    const atExpiry = decide({
+      priorProposals: [prior({ closedAt: NOW - COOLDOWN_DAYS_DEFAULT * DAY })],
+    }).get("org-spec-audit/spend-caps");
+    expect(atExpiry?.status).toBe("open");
+
+    const oneMsShort = decide({
+      priorProposals: [prior({ closedAt: NOW - COOLDOWN_DAYS_DEFAULT * DAY + 1 })],
+    }).get("org-spec-audit/spend-caps");
+    expect(oneMsShort?.status).toBe("cooling");
+  });
 });
 
 // --- checkSuppression: the two reads, and what happens when they fail --------
@@ -251,15 +341,36 @@ describe("checkSuppression", () => {
     expect(report.degraded).toEqual([]);
   });
 
-  it("proposes anyway, loudly, when the ledger cannot be read", async () => {
+  it("proposes anyway, loudly, when the ledger cannot be read — and still cools", async () => {
     const { report, logs } = await runWith({
       readTextFile: () => Effect.fail(new GitHubApiError({ status: 500, reason: "transient" })),
+      // The cooldown half must survive the ledger half failing — that is the
+      // independent degradation the module header promises. With no prior
+      // proposal seeded, an implementation that abandoned BOTH sources on the
+      // first failure would pass this test unchanged.
+      pullRequestHistory: () => Effect.succeed([prior()]),
     });
-    expect(report.allowed).toEqual([...args.keys]);
-    expect(report.suppressed).toEqual([]);
+    expect(report.allowed).toEqual([args.keys[1]]);
+    expect(report.suppressed).toHaveLength(1);
+    expect(report.suppressed[0]!.verdict.status).toBe("cooling");
     expect(report.degraded).toHaveLength(1);
     expect(report.degraded[0]).toContain("declines NOT applied");
     expect(logs.some((l) => l.level === "warn" && l.msg.includes("unreadable"))).toBe(true);
+  });
+
+  it("reads the ledger at the ref it was given", async () => {
+    const seen: Array<string | undefined> = [];
+    const { report } = await runWith(
+      {
+        readTextFile: (req) => {
+          seen.push(req.ref);
+          return Effect.succeed({ found: true, content: declineLine(args.keys[0]!) });
+        },
+      },
+      { ledgerRef: "release/2026-08" },
+    );
+    expect(seen).toEqual(["release/2026-08"]);
+    expect(report.suppressed).toHaveLength(1);
   });
 
   it("still applies declines when only the PR history read fails", async () => {
@@ -368,7 +479,75 @@ describe("renderSuppressionNote", () => {
     expect(note).toContain("**Suppressed: 2**");
     expect(note).toContain("1 previously declined, 1 in cooldown");
     expect(note).toContain("declined 2026-07-01 by @ada: settled in ADR-0011");
-    expect(note).toContain("cooling until 2026-09-02");
+    // The whole cooling line, so the close date rendered from `closedAtMs` and
+    // the PR link are both pinned — not just the `until` string handed in.
+    expect(note).toContain(
+      "closed unmerged in [#12](https://github.com/owner/control/pull/12) on 2026-08-03; cooling until 2026-09-02",
+    );
+  });
+
+  it("renders an escaped reason as inert text — end to end from the ledger", () => {
+    // The whole path a hostile ledger line takes: parse, decide, render. The
+    // note must not contain a usable link, image, or raw tag.
+    const { byKey } = parseDeclinedLedger(
+      declineLine("org-spec-audit/a", {
+        reason: '[click](https://evil.example) <img src=x onerror="alert(1)">',
+        by: "<b>@ada</b>",
+      }),
+    );
+    const verdicts = decideSuppression({
+      candidates: ["org-spec-audit/a"],
+      declined: byKey,
+      priorProposals: [],
+      nowMs: NOW,
+    });
+    const verdict = verdicts.get("org-spec-audit/a");
+    if (verdict === undefined || verdict.status !== "declined") {
+      throw new Error(`expected a declined verdict, got ${verdict?.status ?? "none"}`);
+    }
+    const note = renderSuppressionNote({
+      allowed: [],
+      suppressed: [{ key: "org-spec-audit/a", verdict }],
+      degraded: [],
+    }).join("\n");
+
+    // A markdown link is `](` with no backslash in front of either character.
+    expect(note).not.toMatch(/[^\\]\]\(/);
+    expect(note).not.toMatch(/[^\\]<img/);
+    expect(note).not.toMatch(/[^\\]<b>/);
+    // …and the text itself is still there for a human to read.
+    expect(note).toContain("evil.example");
+  });
+
+  it("keeps a hostile key inside its code span, and a hostile URL inside its link", () => {
+    const note = renderSuppressionNote({
+      allowed: [],
+      suppressed: [
+        {
+          key: "a/b` <img src=x>",
+          verdict: {
+            status: "cooling",
+            untilMs: NOW + 25 * DAY,
+            until: "2026-09-02",
+            pr: 12,
+            // A `)` here would close the link destination early and spill the
+            // rest into the body as markdown.
+            url: "https://github.com/owner/control/pull/12) [spoof](https://evil.example",
+            closedAtMs: NOW - 5 * DAY,
+          },
+        },
+      ],
+      degraded: [],
+    }).join("\n");
+
+    // Backslashes do not escape inside a code span, so the stray backtick is
+    // removed rather than escaped — the span still opens and closes cleanly.
+    expect(note).toContain("`a/b <img src=x>`");
+    expect(note).not.toContain("`a/b` <img");
+    // The destination's parens and spaces are percent-encoded, so it cannot
+    // terminate early and spill `[spoof](…)` into the body as live markdown.
+    expect(note).toContain("pull/12%29%20[spoof]%28https://evil.example)");
+    expect(note).not.toContain("](https://evil.example");
   });
 
   it("prints the degradation so a short list is never mistaken for calm", () => {
