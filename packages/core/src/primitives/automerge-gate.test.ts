@@ -58,7 +58,10 @@ const PERMISSIVE: AutomergeConfig = {
   enabled: true,
   repos: ["owner/app"],
   classes: ["dependency-patch"],
-  botAuthors: ["dependabot[bot]"],
+  // Both vouched for by name. `botAuthors` is the ONLY thing that clears the
+  // author condition, so the loop's own login has to be listed here like any
+  // other bot — there is no marker that stands in for it.
+  botAuthors: ["dependabot[bot]", "flare-dispatch[bot]"],
   sensitivePaths: ["specs/", "*secret*", "CODEOWNERS"],
   neverEligibleRuns: ["org-spec-audit", "spec-drift-pr", "upstream-upgrade-pr"],
   dailyRateLimit: 3,
@@ -223,6 +226,11 @@ describe("evaluateAutomerge — the one path that permits", () => {
     expect(verdict.permitted).toBe(true);
   });
 
+  it("permits a vouched-for author with no marker at all — the marker is not a condition", () => {
+    const verdict = evaluateAutomerge(PERMISSIVE, candidate({ producedByRun: undefined }));
+    expect(verdict.permitted).toBe(true);
+  });
+
   it("cannot be permitted by the shipped config under any candidate", () => {
     // The property that matters: with what is actually committed in `org`,
     // there is no PR shape that merges itself.
@@ -234,6 +242,81 @@ describe("evaluateAutomerge — the one path that permits", () => {
       { author: "dependabot[bot]", changeClass: "dependency-patch" },
     ]) {
       expect(evaluateAutomerge(shipped, candidate(over)).permitted).toBe(false);
+    }
+  });
+});
+
+// --- The marker is a claim, not a credential --------------------------------
+//
+// A PR body is written by whoever opens the PR. These tests pin the property
+// that makes that safe: `producedByRun` may narrow a verdict and may never
+// widen one. The gate once skipped the author check whenever a marker was
+// present, which made pasting one HTML comment a complete bypass.
+
+describe("evaluateAutomerge — a self-declared run marker is not authorship", () => {
+  it("refuses a human-authored PR carrying a forged loop marker", () => {
+    const verdict = evaluateAutomerge(
+      PERMISSIVE,
+      candidate({ author: "a-real-person", producedByRun: "refresh-fixtures" }),
+    );
+    expect(verdict).toMatchObject({ permitted: false, reason: "human-author" });
+    expect(verdict.permitted === false && verdict.detail).toContain("a-real-person");
+  });
+
+  it("refuses every forgeable marker an attacker could pick, on an otherwise perfect PR", () => {
+    // Everything else about this candidate is exactly what the gate wants:
+    // opted-in repo, allowlisted class, clean paths, green checks, review
+    // posted, under the rate limit. The author is the only thing wrong, and it
+    // must be enough on its own.
+    for (const forged of ["refresh-fixtures", "dependency-patch", "triage-prs", "pr-review"]) {
+      const verdict = evaluateAutomerge(
+        PERMISSIVE,
+        candidate({ author: "some-external-contributor", producedByRun: forged }),
+      );
+      expect(verdict).toMatchObject({ permitted: false, reason: "human-author" });
+    }
+  });
+
+  it("refuses an author it cannot place, marker or no marker", () => {
+    for (const producedByRun of [undefined, "refresh-fixtures"]) {
+      expect(evaluateAutomerge(PERMISSIVE, candidate({ author: "", producedByRun }))).toMatchObject(
+        {
+          permitted: false,
+          reason: "human-author",
+        },
+      );
+    }
+  });
+
+  it("gives a marker no power to widen: same author, same verdict either way", () => {
+    for (const author of ["a-real-person", "dependabot[bot]"]) {
+      const bare = evaluateAutomerge(PERMISSIVE, candidate({ author }));
+      const marked = evaluateAutomerge(
+        PERMISSIVE,
+        candidate({ author, producedByRun: "refresh-fixtures" }),
+      );
+      expect(marked).toEqual(bare);
+    }
+  });
+
+  it("still lets a marker NARROW — a never-eligible run is refused even for a vouched author", () => {
+    const verdict = evaluateAutomerge(
+      PERMISSIVE,
+      candidate({ author: "flare-dispatch[bot]", producedByRun: "spec-drift-pr" }),
+    );
+    expect(verdict).toMatchObject({ permitted: false, reason: "never-eligible-run" });
+  });
+
+  it("cannot be opened by a marker when no author is vouched for at all", () => {
+    // The shipped-shaped case: `botAuthors` empty. No marker, no class, no
+    // author can reach a permit — the lane is shut until an operator adds a
+    // login by PR.
+    const noBots: AutomergeConfig = { ...PERMISSIVE, botAuthors: [] };
+    for (const author of ["flare-dispatch[bot]", "dependabot[bot]", "a-real-person"]) {
+      expect(
+        evaluateAutomerge(noBots, candidate({ author, producedByRun: "refresh-fixtures" }))
+          .permitted,
+      ).toBe(false);
     }
   });
 });

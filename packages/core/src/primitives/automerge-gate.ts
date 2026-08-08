@@ -16,6 +16,16 @@
 // path. The only input that permits is one that satisfies the whole
 // conjunction, and `enabled: false` short-circuits before any of it is read.
 //
+// --- What it trusts, and what it refuses to ------------------------------
+//
+// Exactly one field carries identity: `candidate.author`, as GitHub reports it.
+// Everything derived from PR *text* — the `<!-- flare-dispatch: <run> -->`
+// marker, the declared change class — is written by whoever opened the PR, so
+// it is allowed to make the verdict stricter and never looser. `producedByRun`
+// can refuse a candidate by naming a never-eligible run; it can never satisfy a
+// condition, skip one, or stand in for authorship. Read the marker as a claim,
+// not a credential.
+//
 // --- What this deliberately does NOT do -----------------------------------
 //
 // **It does not merge.** It returns a verdict; acting on a permit is the
@@ -64,13 +74,16 @@ export type AutomergeConfig = {
   /** Change classes opted in. Empty ⇒ nothing is eligible. */
   readonly classes: readonly string[];
   /**
-   * Dependency-bot logins the allowlist accepts as non-human authors.
+   * The logins the allowlist accepts as non-human authors — the loop's own app
+   * login and any dependency bot the operator vouches for.
    *
-   * Not in `automerge.json` today, and absent reads as empty — so until
-   * someone adds one by PR, the only author that can clear the human-author
-   * condition is a loop run identifying itself in the PR body. That is the
-   * correct default: §5 says "never a human, never an external contributor",
-   * and an author nobody has vouched for is indistinguishable from both.
+   * **This is the only source of authorship.** Not the PR body, not a marker,
+   * not anything else a PR author can type. Absent reads as empty, and empty
+   * means nothing is ever eligible anywhere — including the loop's own PRs.
+   * That is the correct default: §5 says "never a human, never an external
+   * contributor", and an author nobody has vouched for is indistinguishable
+   * from both. An operator turning the lane on must add the loop's bot login
+   * here by PR, which is the reviewable act that grants the loop this power.
    */
   readonly botAuthors: readonly string[];
   /** Path globs that disqualify a whole PR if the diff touches one. */
@@ -198,10 +211,15 @@ export type MergeCandidate = {
   /** The login that opened it. A human author is never eligible. */
   readonly author: string;
   /**
-   * The loop run that produced it, when the PR body identifies one. Matched
-   * against `neverEligibleRuns`; `undefined` is not a pass, because an
-   * unidentified producer fails the "author is the loop or a configured bot"
-   * condition anyway.
+   * The loop run a PR *claims* produced it — parsed out of the PR body, which
+   * anyone who can open a PR can write.
+   *
+   * **Untrusted, and it may only ever narrow.** It is matched against
+   * `neverEligibleRuns` to refuse more, and it is evidence of nothing else —
+   * in particular it is not evidence of who authored the PR. Forging it can
+   * only move a candidate toward refusal; omitting it cannot skip a condition.
+   * Authorship is read from {@link MergeCandidate.author}, which comes from
+   * GitHub, not from the body.
    */
   readonly producedByRun?: string;
   /** The declared change class (`dependency-patch`, `formatting-only`, …). */
@@ -292,10 +310,19 @@ export const evaluateAutomerge = (
     };
   }
   // "The author is the loop itself or a configured dependency bot — never a
-  // human, never an external contributor". A loop run that identified itself
-  // clears this; so does a bot the config vouches for. Anyone else is human as
-  // far as the gate is concerned, including an author it simply cannot place.
-  if (candidate.producedByRun === undefined && !config.botAuthors.includes(candidate.author)) {
+  // human, never an external contributor".
+  //
+  // This reads ONLY `candidate.author`, which GitHub reports, and it is checked
+  // unconditionally. It used to be skipped whenever the PR body carried a
+  // recognised `<!-- flare-dispatch: <run> -->` marker, on the theory that a
+  // marker meant the loop wrote the PR. It does not: the body is authored by
+  // whoever opened the PR, so that made "paste one HTML comment" a complete
+  // bypass of the one condition standing between a human's PR and a merge
+  // permit. A self-declared identity is not an identity. Anyone the config has
+  // not vouched for is a human as far as the gate is concerned, including an
+  // author it simply cannot place — and with `botAuthors` empty, that is
+  // everyone.
+  if (!config.botAuthors.includes(candidate.author)) {
     return {
       permitted: false,
       reason: "human-author",

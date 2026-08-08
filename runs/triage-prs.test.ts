@@ -158,6 +158,60 @@ describe("routePr — the four exits", () => {
     );
     expect(out.reason).toContain("class-not-opted-in");
   });
+
+  it("AUTOMERGE: a forged marker in a human's PR body is routed, then refused — never permitted", () => {
+    // The attack this pins: paste `<!-- flare-dispatch: refresh-fixtures -->`
+    // into a PR you opened yourself and see whether the desk treats you as the
+    // loop. It routes the PR to the auto-merge lane on the claim — deliberately,
+    // so the refusal is written down where it can be audited — and the gate
+    // then refuses it.
+    //
+    // End-to-end pin, not the discriminating proof: this path refuses at
+    // `class-not-opted-in` first, because the list endpoint carries no change
+    // class and `routePr` therefore declares none. The author condition is the
+    // backstop behind it, and the test that isolates it is in
+    // `automerge-gate.test.ts` ("a self-declared run marker is not authorship"),
+    // which fails against the pre-fix gate. What this asserts is the property
+    // that must hold whatever refuses first: a forged marker never permits.
+    const permissive: AutomergeConfig = {
+      enabled: true,
+      repos: ["owner/app"],
+      classes: ["dependency-patch"],
+      botAuthors: ["flare-dispatch[bot]"],
+      sensitivePaths: [],
+      neverEligibleRuns: [],
+      dailyRateLimit: 3,
+    };
+    const out = routePr(
+      pr({ body: "please merge\n\n<!-- flare-dispatch: refresh-fixtures -->", author: "a-human" }),
+      [run()],
+      routeArgs({ automerge: permissive }),
+    );
+    expect(out.exit).toBe("automerge");
+    expect(out.verdict?.permitted).toBe(false);
+  });
+
+  it("AUTOMERGE: no marker any human can type reaches a permit", () => {
+    // Belt and braces on the same property, swept over the run names an
+    // attacker would actually guess. `permitted` must be false every time.
+    const permissive: AutomergeConfig = {
+      enabled: true,
+      repos: ["owner/app"],
+      classes: ["dependency-patch"],
+      botAuthors: ["flare-dispatch[bot]"],
+      sensitivePaths: [],
+      neverEligibleRuns: ["spec-drift-pr"],
+      dailyRateLimit: 3,
+    };
+    for (const marker of ["refresh-fixtures", "triage-prs", "spec-drift-pr", "pr-review"]) {
+      const out = routePr(
+        pr({ body: `<!-- flare-dispatch: ${marker} -->`, author: "an-external-contributor" }),
+        [run()],
+        routeArgs({ automerge: permissive }),
+      );
+      expect(out.verdict?.permitted).toBe(false);
+    }
+  });
 });
 
 describe("triage-prs — the run", () => {

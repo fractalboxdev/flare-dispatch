@@ -125,8 +125,14 @@ const EXIT_HEADING: Record<Exit, string> = {
 };
 
 /**
- * How the loop identifies a PR it produced itself. Every loop run stamps its
- * name in an HTML comment; `neverEligibleRuns` is matched against this.
+ * The run a PR *claims* produced it. Every loop run stamps its name in an HTML
+ * comment, and `neverEligibleRuns` is matched against what this finds.
+ *
+ * A PR body is written by whoever opened the PR, so this is a claim and not a
+ * credential: anyone can paste the comment. It is safe to route on and safe to
+ * refuse on, because the gate reads authorship from the GitHub author field and
+ * checks it unconditionally — see `automerge-gate`. Never treat a match here as
+ * evidence that the loop wrote the PR.
  */
 const RUN_MARKER = /<!--\s*flare-dispatch:\s*([a-z0-9-]+)\s*-->/;
 
@@ -355,9 +361,12 @@ export const routePr = (
     author: pr.author,
   } as const;
 
-  // The auto-merge lane: anything the loop itself produced is *considered*,
+  // The auto-merge lane: anything *claiming* to be loop-produced is considered,
   // which means its refusal gets written down. A PR that never reaches the gate
-  // is a PR whose eligibility nobody can audit.
+  // is a PR whose eligibility nobody can audit — and that includes a forged
+  // marker, whose refusal (`human-author`) is precisely the line worth having in
+  // the digest. Routing on the claim is deliberate; only the gate decides, and
+  // it authenticates the author itself rather than believing this marker.
   if (producedByRun !== undefined) {
     const verdict = evaluateAutomerge(args.automerge, {
       repo: pr.repo,
