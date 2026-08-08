@@ -113,6 +113,7 @@ describe("GET /health", () => {
         "finops-audit",
         "matrix-fanout",
         "offload-test",
+        "org-spec-audit",
         "oxlint",
         "playwright-demo",
         "playwright-e2e",

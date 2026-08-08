@@ -56,6 +56,7 @@ import {
   ReadFileFailed,
   Sandbox as SandboxTag,
   type SandboxService,
+  flattenCommand,
 } from "@fractalboxdev/flare-dispatch-core";
 
 /** The workspace the substrate clones into — fixed, and not consumer-chosen. */
@@ -88,8 +89,7 @@ const redact = (text: string, values?: readonly string[]): string => {
 };
 
 /** Normalise a `command` (string | array) to a single shell string. */
-const asCommand = (command: string | readonly string[]): string =>
-  typeof command === "string" ? command : command.join(" ");
+const asCommand = flattenCommand;
 
 /** Lowercase hex SHA-256. */
 const sha256Hex = async (text: string): Promise<string> => {

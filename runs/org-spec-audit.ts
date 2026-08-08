@@ -348,9 +348,23 @@ const sweepRepo = (args: SweepArgs) =>
     // The deterministic exit, before a single model call: a repo nobody has
     // touched in the window cannot have drifted since the last sweep. Most
     // repos on most days end here, and this is why the sweep is affordable.
-    const recentLog = yield* step(`gather-log-${args.repo}`, () =>
-      shOut(container, dir, logScript(args.windowHours)),
+    //
+    // The exit code is checked, not just the output: an empty stdout from a
+    // `git` that FAILED is indistinguishable from a quiet week, and silently
+    // skipping a repo because the tooling broke is the same failure as a radar
+    // that sees nothing. A broken gather fails the repo loudly instead.
+    const log = yield* step(`gather-log-${args.repo}`, () =>
+      shRun(container, dir, logScript(args.windowHours)),
     );
+    if (log.exitCode !== 0) {
+      return yield* Effect.fail(
+        new StepFailed({
+          step: `gather-log-${args.repo}`,
+          cause: `git log exited ${log.exitCode}: ${log.stderr.slice(0, 200)}`,
+        }),
+      );
+    }
+    const recentLog = log.stdout;
     if (recentLog.trim().length === 0) {
       yield* io.log("info", `org-spec-audit: ${args.repo} — no commits in window, skipped`);
       return { repo: args.repo, skipped: true, questions: [] } satisfies RepoOutcome;
@@ -462,11 +476,13 @@ const TREE_SCRIPT = `git ls-files | head -800`;
 /** Commits in the window. Empty output is the deterministic exit. */
 const logScript = (hours: number): string => `git log --oneline --since="${hours} hours ago" -n 40`;
 
+/** Run a `sh -lc <script>` in the container and return the full result. */
+const shRun = (container: Container, cwd: string, script: string) =>
+  sandbox.exec({ container, cwd, command: ["sh", "-lc", script] });
+
 /** Run a `sh -lc <script>` in the container and return stdout (best-effort). */
 const shOut = (container: Container, cwd: string, script: string) =>
-  sandbox
-    .exec({ container, cwd, command: ["sh", "-lc", script] })
-    .pipe(Effect.map((r) => r.stdout));
+  shRun(container, cwd, script).pipe(Effect.map((r) => r.stdout));
 
 // --- Prompt + message rendering ----------------------------------------------
 
