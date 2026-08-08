@@ -132,7 +132,7 @@ export type ResolveRepoInstallationOptions = {
  * Process-memory repo→installation-id cache (installations are stable).
  *
  * Keyed on the LOWERCASED slug: GitHub preserves the case an owner typed but
- * routes case-insensitively, so `Acme/Hakiri` and `acme/hakiri` are one repo and
+ * routes case-insensitively, so `Acme/Beacon` and `acme/beacon` are one repo and
  * must not cost two lookups (nor disagree about which installation covers them).
  */
 const repoInstallationCache = new Map<string, number>();
