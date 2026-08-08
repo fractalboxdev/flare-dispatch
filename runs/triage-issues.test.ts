@@ -11,7 +11,11 @@ import { Effect } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import type { IssueRef } from "@fractalboxdev/flare-dispatch-core";
-import { DECLINED_LEDGER_PATH, TRIAGE_LABELS } from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  ARMING_LABEL,
+  DECLINED_LEDGER_PATH,
+  TRIAGE_LABELS,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
 import { assertInEstate, issueMaintenanceKey, triageIssues } from "./triage-issues";
 
 const firedAt = Date.UTC(2026, 7, 8);
@@ -266,5 +270,58 @@ describe("issueMaintenanceKey", () => {
     expect(issueMaintenanceKey(issue({ number: 7 }))).toBe(
       "triage-issues/fractalboxdev_flare-dispatch#7",
     );
+  });
+});
+
+// Requirement 3 of the escalation amendment, end to end: the captured repro is
+// actually IN the record a human reads, quoted and attributed — a digest that
+// claims a capture it does not show is worse than not capturing.
+describe("triage-issues — the captured repro reaches the digest as evidence", () => {
+  it.effect(
+    "quotes the command with its source, author and standing, and says it was not run",
+    () => {
+      const { layer, handles } = drive({
+        verdict: { kind: "bug" },
+        issues: [
+          issue({
+            number: 7,
+            body: "Broken.\n\n```sh\npnpm build && ./deploy.sh\n```",
+            author: "outsider",
+            authorAssociation: "FIRST_TIME_CONTRIBUTOR",
+          }),
+        ],
+      });
+      return Effect.gen(function* () {
+        yield* triageIssues.run(input);
+        const files = handles.github.openDraftPullRequestCalls[0]!.files;
+        const digest = files.map((f) => f.content).join("\n");
+
+        expect(digest).toContain("pnpm build && ./deploy.sh");
+        expect(digest).toContain("outsider");
+        expect(digest).toContain("FIRST_TIME_CONTRIBUTOR");
+        expect(digest).toContain("not run");
+        // It names the arming label as the thing a MEMBER applies…
+        expect(digest).toContain(ARMING_LABEL);
+        // …and the loop did not apply it.
+        const applied = handles.github.addIssueLabelsCalls.flatMap((c) => c.labels);
+        expect(applied).not.toContain(ARMING_LABEL);
+        expect(applied).toEqual([TRIAGE_LABELS.fixPending]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a repro that contains a fence cannot break the digest's structure", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "bug" },
+      issues: [issue({ number: 7, body: "```sh\necho hi\n```\n```\n## Injected\n```" })],
+    });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      const digest = handles.github.openDraftPullRequestCalls[0]!.files.map((f) => f.content).join(
+        "\n",
+      );
+      // The captured text is indented evidence, never a heading of its own.
+      expect(digest).not.toMatch(/^## Injected$/m);
+    }).pipe(Effect.provide(layer));
   });
 });

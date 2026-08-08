@@ -67,12 +67,48 @@ export const TRIAGE_LABELS = {
 /** Applied by a human to opt an issue out of the loop entirely. */
 export const DECLINED_LABEL = "maintenance:declined";
 
+/**
+ * **The arming label. A human applies it; this loop never does.**
+ *
+ * `fractalboxdev/flare-dispatch` is public, so anyone with a GitHub account can
+ * open an issue on it. §5's escalation runs a command lifted from an issue body
+ * in the agent sandbox — which is credential-free by ADR-0006, so the blast
+ * radius is bounded — but containment is not consent. An escalation armed by
+ * *repro presence* is a path from "a stranger wrote a code fence" to "we ran
+ * it" with no member of the studio doing anything, and bounded-blast-radius RCE
+ * is still RCE.
+ *
+ * So the property this label exists to hold is:
+ * **a stranger's issue cannot, by itself, cause code from that issue to run.**
+ *
+ * Which means the dispatch, when it is built, MUST key on this label and MUST
+ * NOT key on {@link TRIAGE_LABELS.fixPending} — the loop applies `fix-pending`
+ * automatically to any issue carrying a command fence, so a dispatch wired to
+ * it would re-open the path silently while every test still passed. That is the
+ * trap this constant exists to spring early: it is in {@link NEVER_WRITTEN} and
+ * asserted by test, so a future change that makes the loop apply it fails.
+ *
+ * Nothing reads it today. It ships unused, deliberately, so the eventual
+ * implementer finds the decision already made and written down.
+ */
+export const ARMING_LABEL = "triage:run-repro";
+
 /** Every label this primitive may add — an allowlist, so a typo cannot invent state. */
 export const WRITEABLE_LABELS: readonly string[] = [
   TRIAGE_LABELS.needsRepro,
   TRIAGE_LABELS.notActionable,
   TRIAGE_LABELS.fixPending,
   TRIAGE_LABELS.needsHuman,
+];
+
+/**
+ * Labels the loop must NEVER apply, because each one means a human decided
+ * something. Asserted against every action plan in the test suite.
+ */
+export const NEVER_WRITTEN: readonly string[] = [
+  ARMING_LABEL,
+  DECLINED_LABEL,
+  TRIAGE_LABELS.fixVerified,
 ];
 
 // --- The verdict --------------------------------------------------------------
@@ -278,6 +314,42 @@ export const decideIssueActions = (
       };
     }
   }
+};
+
+/** A captured repro is quoted to this many lines; the rest is a pointer. */
+const REPRO_MAX_LINES = 20;
+
+/**
+ * Render a captured repro as **quoted evidence**, for the digest.
+ *
+ * Three properties, and each is a rule about how it must NOT read:
+ *
+ *   * **It cannot escape its own quoting.** The lines are indented four spaces —
+ *     a markdown code block with no closing delimiter — rather than wrapped in
+ *     a fence. A fence can be ended by content that contains a fence; an indent
+ *     cannot be ended by anything the content says. The command came from a
+ *     stranger, so its rendering must not depend on what it contains.
+ *   * **It never reads as a command the loop endorses.** It is introduced as a
+ *     quotation with its source and its author's standing attached, and the
+ *     heading says it was not run. A digest line that reads like an instruction
+ *     is one copy-paste away from being followed by a human who assumed the
+ *     loop had vetted it.
+ *   * **It is bounded.** Long output is truncated with the truncation stated,
+ *     because a repro that fills the digest hides the rest of the triage.
+ */
+export const quoteReproForRecord = (repro: CapturedRepro, issue: IssueRef): readonly string[] => {
+  const lines = repro.command.split("\n");
+  const shown = lines.slice(0, REPRO_MAX_LINES);
+  const truncated = lines.length > shown.length;
+  return [
+    `**${issue.repo}#${issue.number}** — quoted from the issue body, not run.`,
+    `Reported by \`${repro.author}\` (\`${repro.authorAssociation}\`) · ${issue.url}`,
+    "",
+    // Four-space indent: a code block with no delimiter to close.
+    ...shown.map((line) => `    ${line}`),
+    ...(truncated ? [`    … ${lines.length - shown.length} more line(s) not shown`] : []),
+    "",
+  ];
 };
 
 // --- Fencing the untrusted text ----------------------------------------------

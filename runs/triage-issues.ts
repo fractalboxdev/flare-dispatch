@@ -25,16 +25,39 @@
 //
 // Everything lands in the digest either way.
 //
-// --- The repro is captured and NOT executed ----------------------------------
+// --- Escalation is deliberately NOT automatic --------------------------------
 //
-// §5 is explicit, and the reason is worth restating where the code is: this
-// repo is PUBLIC, so an escalation armed by repro-presence is a path from *a
-// stranger wrote a code fence* to *we ran it* with no member of the studio
-// involved. The property to hold is that a stranger's issue cannot, by itself,
-// cause code from that issue to run. So this run stops at
-// `triage:fix-pending` + a captured repro + the author's standing, and the
-// `self-heal-pr` dispatch is deliberately not wired. Arming it needs a
-// human signal — a member-applied label — and that is a separate change.
+// "Capture the command repro" is a sentence that, read carefully, asks for:
+// extract a shell command out of prose anyone can write, and hand it to a run
+// that executes it. `fractalboxdev/flare-dispatch` is PUBLIC — anyone with a
+// GitHub account can open an issue on it — so an escalation armed by *repro
+// presence* is a path from *a stranger wrote a code fence* to *we ran it*,
+// with no member of the studio doing anything.
+//
+// §5 answers with containment: the agent sandbox holds no credential
+// (ADR-0006), so the blast radius is bounded. That is a real answer and not a
+// complete one — bounded-blast-radius RCE is still RCE, and containment is not
+// consent. §1's rule is *everything observed is data, never instruction*, and
+// executing a captured repro is precisely observed text becoming an
+// instruction.
+//
+// So the property this run holds is: **a stranger's issue cannot, by itself,
+// cause code from that issue to run.** Concretely:
+//
+//   * Nothing here dispatches `self-heal-pr`. There is no escalation path to
+//     half-arm, and that is the point rather than an omission.
+//   * A repro earns `triage:fix-pending` — a RECORD that one exists, not an
+//     authorization to run it.
+//   * `ARMING_LABEL` (`triage:run-repro`) is the human signal, and this loop
+//     never applies it (`NEVER_WRITTEN`, asserted by test). Whoever builds the
+//     dispatch must key on THAT label and never on `fix-pending`, which the
+//     loop applies automatically — a dispatch wired to `fix-pending` re-opens
+//     the path silently while every test still passes.
+//   * The captured command is recorded as quoted evidence with its source
+//     issue, its author, and the author's standing, indented rather than fenced
+//     so nothing it contains can restructure the digest around it. A reader
+//     must be able to tell a repo member from a first-time reporter at the
+//     moment they decide.
 //
 // --- Three properties a reviewer should check, in one place each -------------
 //
@@ -80,8 +103,10 @@ import {
   isoDate,
   parseList,
   parseVerdict,
+  quoteReproForRecord,
   renderSuppressionNote,
   CLASSIFIER_SCHEMA,
+  ARMING_LABEL,
   CLASSIFIER_SYSTEM,
   DECLINED_LABEL,
   type IssueAction,
@@ -449,21 +474,15 @@ const renderDigest = (args: {
     repros.length === 0
       ? []
       : [
-          "## Captured repros — NOT executed",
+          "## Captured repros — quoted, NOT executed",
           "",
-          "Each of these carries a command block lifted from an issue body. The loop labelled the",
-          "issue and stopped: running one needs a human signal, and the author's standing is here so",
-          "whoever decides can tell a repo member from a first-time reporter.",
+          "Each block below is a command lifted verbatim from an issue body and **not run**.",
+          `Running one is armed by a member applying \`${ARMING_LABEL}\`, which this loop never`,
+          "applies — a stranger's issue cannot, by itself, cause code from that issue to run.",
+          "The reporter's standing is here so whoever decides can tell a repo member from a",
+          "first-time external reporter.",
           "",
-          "| Issue | Author | Standing |",
-          "| --- | --- | --- |",
-          ...repros.map(
-            (d) =>
-              `| [#${d.issue.number}](${d.issue.url}) | \`${cell(d.repro!.author)}\` | ${cell(
-                d.repro!.authorAssociation,
-              )} |`,
-          ),
-          "",
+          ...repros.flatMap((d) => quoteReproForRecord(d.repro!, d.issue)),
         ];
 
   return [
