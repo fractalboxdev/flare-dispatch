@@ -53,23 +53,74 @@ export type SandboxGithubAuth = {
   /** `GITHUB_APP_PRIVATE_KEY` — the App's PKCS#8 PEM private key. */
   readonly privateKeyPem: string;
   /**
-   * The dispatch payload's `github.installation_id`, when the run was triggered
-   * by a GitHub event. Authoritative for {@link payloadRepo} and nothing else —
-   * an installation covers one account, so any other clone target resolves its
-   * own. Always absent on the Schedule path.
+   * The installation the dispatch payload already resolved, and the repo it
+   * covers — one field, because neither half means anything alone: an
+   * installation id with no repo to attribute it to cannot be safely applied to
+   * any clone target, and a repo with no id resolves like any other. Absent on
+   * the Schedule path (a cron tick carries no payload).
+   *
+   * Authoritative for {@link repo} and nothing else — an installation covers one
+   * account, so every other clone target resolves its own.
    */
-  readonly installationId?: number;
-  /** The `owner/name` that {@link installationId} belongs to. */
-  readonly payloadRepo?: string;
+  readonly payload?: {
+    /** The payload's `github.installation_id`. */
+    readonly installationId: number;
+    /** The `owner/name` that {@link installationId} belongs to. */
+    readonly repo: string;
+  };
+};
+
+/** The two App secrets, without any installation pinned to them. */
+export type GithubAppCredentials = {
+  readonly appId: string;
+  readonly privateKeyPem: string;
 };
 
 /**
- * HTTP seam for the two GitHub calls. Tests pass `apiBase` / `fetchImpl`;
- * production passes neither and gets `https://api.github.com` + global `fetch`.
+ * Decide what the App-authenticated capabilities run with, from the two config
+ * shapes a dispatch may carry.
+ *
+ * Kept here, pure and exported, because it is the decision the Schedule-mode bug
+ * lived in and it is otherwise unreachable from a test: `makeCFRuntimeLive`
+ * builds a full Layer stack around a Containers binding, so the assembly can
+ * only be asserted by reproducing it — which is what let the original
+ * `opts.checks`-only wiring look correct.
+ *
+ * - `app` — credentials for every capability that authenticates AS the App
+ *   (`github`, and the clone). `githubApp` is the unconditional source (present
+ *   whenever the App secrets are configured, Schedule mode included); `checks`
+ *   is the fallback for a deploy that only wired the check-run path.
+ * - `clone` — the same credentials plus, when the dispatch resolved one, the
+ *   payload's installation TAGGED with the repo it covers. Tagged and not bare,
+ *   because an installation covers one account and a run that sweeps an estate
+ *   clones repos the dispatch never named: applying the payload's id to every
+ *   clone target would be wrong for all but one.
  */
-export type CloneAuthClient = {
-  readonly apiBase?: string;
-  readonly fetchImpl?: typeof fetch;
+export const resolveAppCredentials = (opts: {
+  readonly githubApp?: GithubAppCredentials;
+  readonly checks?: GithubAppCredentials & { readonly installationId: number };
+  /** The dispatch payload's repo — the one `checks.installationId` covers. */
+  readonly payloadRepo: string;
+}): {
+  readonly app: GithubAppCredentials | undefined;
+  readonly clone: SandboxGithubAuth | undefined;
+} => {
+  const { checks } = opts;
+  const app =
+    opts.githubApp ??
+    (checks === undefined
+      ? undefined
+      : { appId: checks.appId, privateKeyPem: checks.privateKeyPem });
+
+  if (app === undefined) return { app: undefined, clone: undefined };
+
+  return {
+    app,
+    clone:
+      checks === undefined
+        ? app
+        : { ...app, payload: { installationId: checks.installationId, repo: opts.payloadRepo } },
+  };
 };
 
 /**
@@ -90,18 +141,13 @@ const isSameRepo = (a: string, b: string): boolean => a.toLowerCase() === b.toLo
  * repo→installation cache: an estate sweep pays one lookup per repo per Worker
  * isolate, not one per clone.
  */
-const installationIdFor = async (
-  auth: SandboxGithubAuth,
-  repo: string,
-  client: CloneAuthClient,
-): Promise<number> => {
+const installationIdFor = async (auth: SandboxGithubAuth, repo: string): Promise<number> => {
   if (
-    auth.installationId !== undefined &&
-    auth.installationId > 0 &&
-    auth.payloadRepo !== undefined &&
-    isSameRepo(auth.payloadRepo, repo)
+    auth.payload !== undefined &&
+    auth.payload.installationId > 0 &&
+    isSameRepo(auth.payload.repo, repo)
   ) {
-    return auth.installationId;
+    return auth.payload.installationId;
   }
 
   try {
@@ -109,7 +155,6 @@ const installationIdFor = async (
       appId: auth.appId,
       privateKeyPem: auth.privateKeyPem,
       repo,
-      ...client,
     });
   } catch (cause) {
     // 404 is the specific, actionable case: the App exists and the JWT is
@@ -137,11 +182,9 @@ const installationIdFor = async (
 export const resolveCloneToken = async (
   auth: SandboxGithubAuth,
   repo: string,
-  client: CloneAuthClient = {},
 ): Promise<string> =>
   getInstallationToken({
     appId: auth.appId,
     privateKeyPem: auth.privateKeyPem,
-    installationId: await installationIdFor(auth, repo, client),
-    ...client,
+    installationId: await installationIdFor(auth, repo),
   });

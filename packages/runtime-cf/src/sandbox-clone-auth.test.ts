@@ -22,7 +22,11 @@ import { TEST_APP_PRIVATE_KEY } from "@fractalboxdev/flare-dispatch-github-app/t
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { resolveCloneToken, type SandboxGithubAuth } from "./sandbox-clone-auth";
+import {
+  resolveAppCredentials,
+  resolveCloneToken,
+  type SandboxGithubAuth,
+} from "./sandbox-clone-auth";
 
 /** Which installation each repo resolves to, and what MSW actually saw. */
 type Recorded = {
@@ -83,8 +87,7 @@ const SCHEDULED: SandboxGithubAuth = {
 /** Webhook mode: the dispatch already resolved an installation for its repo. */
 const DISPATCHED: SandboxGithubAuth = {
   ...SCHEDULED,
-  installationId: 111,
-  payloadRepo: "acme/flare-dispatch",
+  payload: { installationId: 111, repo: "acme/flare-dispatch" },
 };
 
 describe("resolveCloneToken — Schedule mode (no installation id)", () => {
@@ -157,10 +160,21 @@ describe("resolveCloneToken — dispatch mode (payload installation id)", () => 
   it("ignores a non-positive payload installation id and resolves instead", async () => {
     // A stray 0 reaches the runtime from the schedule path / a direct Workflow
     // instantiation; minting against it would 404 inside GitHub.
-    await resolveCloneToken({ ...DISPATCHED, installationId: 0 }, DISPATCHED.payloadRepo as string);
+    const repo = (DISPATCHED.payload as { repo: string }).repo;
+    await resolveCloneToken({ ...DISPATCHED, payload: { installationId: 0, repo } }, repo);
 
     expect(recorded.lookups).toEqual(["acme/flare-dispatch"]);
     expect(recorded.mints).toEqual([111]);
+  });
+
+  it("keys the repo→installation cache case-insensitively", async () => {
+    // The cache lives in `resolveRepoInstallationId`. Keyed on the raw slug,
+    // `Acme/Hakiri` and `acme/hakiri` would be two entries and two round trips
+    // for one repo — and could disagree about which installation covers it.
+    await resolveCloneToken(SCHEDULED, "acme/hakiri");
+    await resolveCloneToken(SCHEDULED, "Acme/Hakiri");
+
+    expect(recorded.lookups).toEqual(["acme/hakiri"]);
   });
 });
 
@@ -184,5 +198,57 @@ describe("resolveCloneToken — honest failure", () => {
     await expect(resolveCloneToken(SCHEDULED, "acme/hakiri")).rejects.toThrow(
       "GitHub App installation lookup failed for acme/hakiri",
     );
+  });
+});
+
+// The assembly `makeCFRuntimeLive` performs. This is where the Schedule-mode bug
+// lived — the clone was handed the check-run config, which requires an
+// installation id a cron tick never has — and it was untestable through the
+// Layer, so it is pure and asserted directly.
+describe("resolveAppCredentials", () => {
+  const APP = { appId: "42", privateKeyPem: TEST_APP_PRIVATE_KEY };
+
+  it("Schedule mode — App secrets, no dispatch installation, clone still credentialed", () => {
+    // The regression guard: the clone must get credentials even though there is
+    // no `checks` config at all. Reverting to `cloneAuth = opts.checks` makes
+    // this `undefined` — an unauthenticated clone, i.e. the original bug.
+    const { app, clone } = resolveAppCredentials({
+      githubApp: APP,
+      payloadRepo: "acme/flare-dispatch",
+    });
+
+    expect(app).toEqual(APP);
+    expect(clone).toEqual(APP);
+    expect(clone?.payload).toBeUndefined();
+  });
+
+  it("dispatch mode — the payload installation is tagged with the repo it covers", () => {
+    const { app, clone } = resolveAppCredentials({
+      githubApp: APP,
+      checks: { ...APP, installationId: 111 },
+      payloadRepo: "acme/flare-dispatch",
+    });
+
+    expect(app).toEqual(APP);
+    // Tagged, never bare: an installation covers one account, so an estate
+    // sweep must not reuse it for a repo the dispatch never named.
+    expect(clone?.payload).toEqual({ installationId: 111, repo: "acme/flare-dispatch" });
+  });
+
+  it("falls back to the check-run config's credentials when `githubApp` is absent", () => {
+    const { app, clone } = resolveAppCredentials({
+      checks: { ...APP, installationId: 111 },
+      payloadRepo: "acme/flare-dispatch",
+    });
+
+    expect(app).toEqual(APP);
+    expect(clone?.payload).toEqual({ installationId: 111, repo: "acme/flare-dispatch" });
+  });
+
+  it("no App secrets at all → both undefined (public repos, unauthenticated)", () => {
+    expect(resolveAppCredentials({ payloadRepo: "acme/flare-dispatch" })).toEqual({
+      app: undefined,
+      clone: undefined,
+    });
   });
 });

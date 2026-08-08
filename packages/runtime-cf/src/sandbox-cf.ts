@@ -59,7 +59,12 @@ import {
 } from "@fractalboxdev/flare-dispatch-core";
 import { previewSafeSandboxId } from "./preview-sandbox-id";
 import { resolveCloneToken, type SandboxGithubAuth } from "./sandbox-clone-auth";
-import { acceptsInstallationToken, authenticateCloneUrl, repoUrl } from "./sandbox-clone-url";
+import {
+  authenticateCloneUrl,
+  installationLookupSlug,
+  repoUrl,
+  shellQuote,
+} from "./sandbox-clone-url";
 
 /** Normalise a `command` (string | array) to a single shell string. */
 const asCommand = (command: string | readonly string[]): string =>
@@ -381,20 +386,50 @@ export const makeSandboxCloudflareLive = (
    * later `git fetch` the workload runs. The clean URL is the one derived from
    * the slug, never parsed back out of the dirty one — the layer already knows
    * what the remote should say. The `extraheader` and `credential` clauses cover
-   * the other two documented ways a token gets persisted. Every clause tolerates
-   * absence (`|| true`), so a partially-cloned tree still gets scrubbed.
+   * the other two documented ways a token gets persisted.
+   *
+   * THREE execs, not one chained string, and the split is the whole point. The
+   * substrate's equivalent (`apps/substrate/src/engine/git-scrub.ts`) ends every
+   * clause in `|| true` because it is deliberately best-effort. Chaining the
+   * same shape here and then gating on the compound's exit code does not make it
+   * load-bearing — it makes the gate DEAD: `a || true; b || true` exits with the
+   * status of the last `|| true`, i.e. always 0, so a `remote set-url` that
+   * really failed would report success and hand the workload a `.git/config`
+   * still holding a live installation token.
+   *
+   * So: the rewrite runs alone and ungated-by-`|| true` (its exit code is the
+   * signal); the two `config` clauses stay tolerant, because the section/key
+   * being absent IS the desired end state; and the result is then VERIFIED by
+   * reading the remote back, since "the command exited 0" is a weaker claim
+   * than "the remote no longer carries userinfo".
    */
   const scrubCloneCredential = async (targetDir: string, originUrl: string): Promise<void> => {
-    const scrub = await box.exec(
+    const dir = shellQuote(targetDir);
+    const url = shellQuote(originUrl);
+
+    const setUrl = await box.exec(`git -C ${dir} remote set-url origin ${url}`);
+    if (setUrl.exitCode !== 0) {
+      throw new Error(
+        `clone-credential scrub of ${targetDir} failed: 'git remote set-url' exited ${setUrl.exitCode} — refusing to hand the workload a checkout still holding an installation token: ${setUrl.stderr}`,
+      );
+    }
+
+    // Tolerant by design: these no-op when the section/key was never written.
+    await box.exec(
       [
-        `git -C '${targetDir}' remote set-url origin '${originUrl}' || true`,
-        `git -C '${targetDir}' config --local --remove-section credential || true`,
-        `git -C '${targetDir}' config --local --unset-all http.https://github.com/.extraheader || true`,
+        `git -C ${dir} config --local --remove-section credential || true`,
+        `git -C ${dir} config --local --unset-all http.https://github.com/.extraheader || true`,
       ].join("; "),
     );
-    if (scrub.exitCode !== 0) {
+
+    // Read back what the remote actually says now. A clean HTTPS clone URL has
+    // no userinfo, so any `@` before the path means a credential survived.
+    // `stdout` is NOT quoted into the error — it is the very thing that might
+    // still hold the token.
+    const readBack = await box.exec(`git -C ${dir} config --local --get remote.origin.url`);
+    if (readBack.exitCode !== 0 || readBack.stdout.includes("@")) {
       throw new Error(
-        `clone-credential scrub of ${targetDir} exited ${scrub.exitCode} — refusing to hand the workload a checkout still holding an installation token: ${scrub.stderr}`,
+        `clone-credential scrub of ${targetDir} could not be verified — remote.origin.url still carries an embedded credential (read-back exited ${readBack.exitCode}); refusing to hand the workload the checkout`,
       );
     }
   };
@@ -424,11 +459,19 @@ export const makeSandboxCloudflareLive = (
           // embedded in the URL handed to the sandbox's `gitCheckout`, used
           // once for the initial fetch, and scrubbed back out of the remote
           // below. Operator-supplied custom URLs and SSH remotes skip the whole
-          // path (see `acceptsInstallationToken`) — an App token cannot
+          // path (see `installationLookupSlug`) — an App token cannot
           // authenticate them, so a clone of one is never blocked on a lookup.
+          //
+          // The lookup key is derived from the canonical clone URL, NOT from the
+          // raw `repo`: a run may name its target as a full `https://github.com/…`
+          // URL (`repoUrl` passes those through), and
+          // `GET /repos/{owner}/{repo}/installation` takes the SLUG — handed a
+          // URL it 404s, failing a clone of a repo that does have an
+          // installation.
+          const lookupRepo = installationLookupSlug(originUrl);
           const token =
-            githubAuth !== undefined && acceptsInstallationToken(originUrl)
-              ? await resolveCloneToken(githubAuth, repo)
+            githubAuth !== undefined && lookupRepo !== undefined
+              ? await resolveCloneToken(githubAuth, lookupRepo)
               : undefined;
           const cloneUrl = token === undefined ? originUrl : authenticateCloneUrl(originUrl, token);
           // Clear the target BEFORE cloning: `targetDir` is derived from the
@@ -471,20 +514,40 @@ export const makeSandboxCloudflareLive = (
             }
           } catch (cause) {
             // A failed clone can still have left a `.git` holding the
-            // authenticated remote, so scrub before re-raising — best effort,
-            // because a scrub failure must never replace the real diagnosis.
+            // authenticated remote, so scrub before re-raising. The scrub must
+            // not REPLACE the real diagnosis — but it must not vanish either:
+            // container filesystems are reused across executions (see the
+            // `rm -rf` note above), so a scrub that failed here leaves a live
+            // token readable by whatever runs in this container next. Swallowing
+            // that silently is the same class of quiet failure this PR exists to
+            // remove, so it is appended to the (redacted) error instead.
             if (token !== undefined) {
-              await scrubCloneCredential(targetDir, originUrl).catch(() => {});
-              throw redactCloneFailure(cause, token);
+              const scrubFailure = await scrubCloneCredential(targetDir, originUrl).then(
+                () => undefined,
+                (e: unknown) => (e instanceof Error ? e.message : String(e)),
+              );
+              const err = redactCloneFailure(cause, token);
+              if (scrubFailure !== undefined) {
+                err.message = `${err.message}\n[post-failure credential scrub ALSO failed: ${redact(
+                  scrubFailure,
+                  [token],
+                )} — this container may still hold an installation token in ${targetDir}/.git/config]`;
+              }
+              throw err;
             }
             throw cause;
           }
           // On the success path the scrub is load-bearing, not best effort: the
           // workload is about to run in this container, and it must not find a
           // live installation token in `.git/config`. A scrub that could not run
-          // fails the checkout.
+          // fails the checkout. Redacted like any other clone failure — this
+          // throw becomes `CheckoutFailed.cause`, which Workflows persists.
           if (token !== undefined) {
-            await scrubCloneCredential(targetDir, originUrl);
+            try {
+              await scrubCloneCredential(targetDir, originUrl);
+            } catch (cause) {
+              throw redactCloneFailure(cause, token);
+            }
           }
           return targetDir;
         },

@@ -42,7 +42,7 @@ import { makeOidcLive, type OidcLiveConfig } from "./oidc-live";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
 import { makeIOLive } from "./io-live";
 import { makeSandboxCloudflareLive } from "./sandbox-cf";
-import type { SandboxGithubAuth } from "./sandbox-clone-auth";
+import { resolveAppCredentials } from "./sandbox-clone-auth";
 import { CacheOnFacade, makeSandboxFacadeLive, type SandboxFacadeOptions } from "./sandbox-facade";
 import { makeStepRunnerCloudflare } from "./step-runner-cf";
 
@@ -273,35 +273,15 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
     opts.publicOrigin,
   );
   // The App credentials, resolved once for every capability that authenticates
-  // as the App. `githubApp` is the unconditional source (present whenever the
-  // App secrets are configured, Schedule mode included); `checks` is the
-  // fallback for a deploy that only wired the check-run path. Neither carries
-  // an installation for an arbitrary repo — the capabilities resolve that
-  // themselves — so a run is never capped at the one repo a dispatch named.
-  const githubAppCfg =
-    opts.githubApp ??
-    (opts.checks === undefined
-      ? undefined
-      : {
-          appId: opts.checks.appId,
-          privateKeyPem: opts.checks.privateKeyPem,
-        });
-  // What `gitClone` authenticates with. The dispatch's installation id rides
-  // along ONLY tagged with the repo it belongs to: an installation covers one
-  // account, and a run that sweeps an estate clones repos the dispatch never
-  // named, so applying it to every clone target would be wrong for all but one.
-  const cloneAuth: SandboxGithubAuth | undefined =
-    githubAppCfg === undefined
-      ? undefined
-      : {
-          ...githubAppCfg,
-          ...(opts.checks !== undefined
-            ? {
-                installationId: opts.checks.installationId,
-                payloadRepo: opts.execution.repo,
-              }
-            : {}),
-        };
+  // as the App, plus what `gitClone` rides on. Neither carries an installation
+  // for an arbitrary repo — the capabilities resolve that themselves — so a run
+  // is never capped at the one repo a dispatch named. Pure and unit-tested in
+  // `sandbox-clone-auth.ts`; see there for why the payload id is tagged.
+  const { app: githubAppCfg, clone: cloneAuth } = resolveAppCredentials({
+    ...(opts.githubApp !== undefined ? { githubApp: opts.githubApp } : {}),
+    ...(opts.checks !== undefined ? { checks: opts.checks } : {}),
+    payloadRepo: opts.execution.repo,
+  });
   // The substrate path and the container path are mutually exclusive by
   // construction: one execution runs entirely on one of them, so there is never
   // a call that reaches a container the rest of the runtime does not know about.
