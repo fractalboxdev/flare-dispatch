@@ -95,20 +95,19 @@ export const ConfigDeferred: Layer.Layer<Config> = Layer.succeed(
 );
 
 /**
- * Github — the fallback until a live HTTP-backed binding lands. The Tag exists
- * so a run author can write `github.openPullRequests(...)` and unit-test it
- * against the in-memory fake (`GithubFake` in `@fractalboxdev/flare-dispatch-core/testing`).
- * A live deploy that has not wired the GitHub-API caller dies loudly rather
- * than silently returning empty arrays — this surface is V3+ work, paired
- * with the `pr-review-sweep` recipe.
+ * Github — the fallback for a deploy with no App credentials. The Tag exists so
+ * a run author can write `github.issues(...)` and unit-test it against the
+ * in-memory fake (`GithubFake` in `@fractalboxdev/flare-dispatch-core/testing`).
+ *
+ * Every method here answers the *degraded* way its live twin does: a read whose
+ * empty answer would be mistaken for data fails; a read whose empty answer is
+ * honest returns empty; a write logs and skips. Nothing here dies — a die in a
+ * Layer selected by "this deploy is not configured" is a crash on a path the
+ * operator has already been told about.
  */
 export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
   Github,
   ((): GithubService => ({
-    repositories: () =>
-      Effect.die("github.repositories: not implemented in this deploy — V3 capability"),
-    openPullRequests: () =>
-      Effect.die("github.openPullRequests: not implemented in this deploy — V3 capability"),
     // `actionRuns` (a read) degrades to empty on an uncredentialed deploy — a
     // Schedule-mode sweep simply finds nothing rather than dying. The live
     // credentialed path is `makeGithubLive` (github-live.ts).
@@ -124,6 +123,26 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
     pullRequestHistory: () =>
       Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     readTextFile: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    // `issues` is the same class: an empty list reads as "nothing to triage",
+    // which a scheduled run would act on by reporting a clean estate.
+    issues: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    // The state-machine writes degrade to a logged no-op, like `pullReview`.
+    addIssueLabels: ({ repo, issue }) =>
+      Effect.logInfo(
+        `github.addIssueLabels skipped (no GitHub App credentials) — ${repo}#${issue} unlabelled`,
+      ),
+    removeIssueLabel: ({ repo, issue }) =>
+      Effect.logInfo(
+        `github.removeIssueLabel skipped (no GitHub App credentials) — ${repo}#${issue} unchanged`,
+      ),
+    commentOnIssue: ({ repo, issue }) =>
+      Effect.logInfo(
+        `github.commentOnIssue skipped (no GitHub App credentials) — ${repo}#${issue} not commented`,
+      ),
+    closeIssueAsDuplicate: ({ repo, issue, duplicateOf }) =>
+      Effect.logInfo(
+        `github.closeIssueAsDuplicate skipped (no GitHub App credentials) — ${repo}#${issue} (dup of #${duplicateOf}) left open`,
+      ),
     // `pullReview` is *reporting*, not correctness — a deploy without GitHub
     // App credentials degrades to a logged no-op (the same posture as the no-op
     // `Checks` Layer), never failing an otherwise-green run. The live

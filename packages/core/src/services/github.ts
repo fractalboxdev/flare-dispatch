@@ -17,29 +17,37 @@
 import { Context, Effect } from "effect";
 import type { GitHubApiError } from "../errors";
 
-/** A repository the FlareDispatch App is installed on. */
-export type RepoRef = {
-  /** "owner/name". */
-  readonly repo: string;
-  readonly branchDefault: string;
-  readonly installationId: number;
-  readonly archived: boolean;
-  /** epoch ms — last push to any branch. */
-  readonly pushedAt: number;
-};
-
-/** An open pull request — the unit of work for `pr-review-sweep`. */
-export type PullRequestRef = {
+/**
+ * One issue — the unit of work for the triage desk's issue half (§5).
+ *
+ * `title` and `body` are prose a stranger wrote on a public repo. They are
+ * **data everywhere downstream**: fenced before they reach a model, never
+ * interpolated into an instruction, and never rendered into a comment. The
+ * three fields that decide anything are `labels` (the state machine), `number`,
+ * and `authorAssociation`.
+ */
+export type IssueRef = {
   /** "owner/name". */
   readonly repo: string;
   readonly number: number;
-  readonly headSha: string;
-  readonly baseSha: string;
+  /** UNTRUSTED. */
   readonly title: string;
-  readonly draft: boolean;
+  /** UNTRUSTED, and possibly empty. */
+  readonly body: string;
+  readonly state: "open" | "closed";
   readonly labels: readonly string[];
   readonly author: string;
-  readonly installationId: number;
+  /**
+   * The author's standing in the repo, as GitHub reports it. §5 requires this
+   * to travel with a captured repro: "whoever wires the dispatch must be able
+   * to tell a repo member from a first-time external reporter", and by the time
+   * a human reads the digest the association is the only thing that answers it.
+   */
+  readonly authorAssociation: string;
+  readonly url: string;
+  readonly commentCount: number;
+  /** epoch ms. */
+  readonly createdAt: number;
   /** epoch ms. */
   readonly updatedAt: number;
 };
@@ -216,11 +224,13 @@ export type TextFileResult =
  * **including closed ones**, and carrying the two timestamps that date a
  * decision.
  *
- * Distinct from {@link PullRequestRef} (the open-PR sweep's unit of work)
- * because the questions differ: a sweep asks "what is in flight", history asks
- * "was this proposed before, and what happened to it". History therefore
- * carries `body` (where a proposal's `maintenance-key` lines live) and
- * `closedAt`, and `PullRequestRef` carries the head/base shas a review needs.
+ * This is now the ONLY pull-request shape on the service. It used to sit beside
+ * a `PullRequestRef` carrying head/base shas for an installation-wide open-PR
+ * sweep; that type and its two enumeration methods are gone (see the note on
+ * {@link GithubService}), so history answers both questions: "what is in
+ * flight" via `state: "open"`, and "was this proposed before, and what happened
+ * to it" via `body` (where a proposal's `maintenance-key` lines live) and
+ * `closedAt`.
  */
 export type PullRequestHistoryRef = {
   /** "owner/name". */
@@ -282,29 +292,27 @@ export type PullReviewRequest = {
   readonly installationId?: number;
 };
 
-/** The service contract a runtime Layer implements. */
+/**
+ * The service contract a runtime Layer implements.
+ *
+ * --- Two methods that used to be here, and why they are not -------------------
+ *
+ * `repositories()` and `openPullRequests()` both enumerated **installation-wide**
+ * — every repo the App can see — and both were `Effect.die` in the LIVE Layer
+ * while type-checking clean everywhere. A stub that dies is correct in a
+ * deferred/no-op Layer, where "this deploy has no such binding" is the honest
+ * answer; in the live Layer it is a landmine that reviews clean and takes the
+ * run down when something finally calls it.
+ *
+ * Deleted rather than implemented, on two grounds. Nothing called them: the only
+ * intended consumer, the triage desk, uses `pullRequestHistory({ state: "open" })`
+ * instead, which is per-repo and matches "listing is the attestation". And
+ * installation-wide enumeration is the wrong shape for this estate — the loop's
+ * §9 forbids writes into client repos, so a surface whose natural output is
+ * "every repo the App can see" hands every caller a list it must then remember
+ * to filter. A per-repo call over a configured estate cannot make that mistake.
+ */
 export interface GithubService {
-  /**
-   * Every repo the App is installed on — the enumeration surface for
-   * Schedule-mode runs whose unit of work is a repo.
-   */
-  readonly repositories: (opts?: {
-    includeArchived?: boolean;
-    pushedWithinDays?: number;
-  }) => Effect.Effect<readonly RepoRef[], GitHubApiError>;
-
-  /**
-   * Open PRs across every repo the App is installed on. Paginates internally
-   * and backs off on secondary rate limits. The primary surface
-   * Schedule-mode sweeps enumerate against — a cron tick names no target,
-   * so the run must discover them.
-   */
-  readonly openPullRequests: (opts?: {
-    updatedWithinHours?: number;
-    includeDrafts?: boolean;
-    repos?: readonly string[];
-  }) => Effect.Effect<readonly PullRequestRef[], GitHubApiError>;
-
   /**
    * Recent GitHub Actions workflow runs across the App's installations — the
    * enumeration surface `ci-triage` scans for failures. `status` defaults to
@@ -368,6 +376,72 @@ export interface GithubService {
    * Best-effort reporting: a live deploy without App credentials degrades to a
    * logged no-op rather than failing the run.
    */
+  /**
+   * Open (or closed, or all) issues in ONE repo, carrying their labels and the
+   * author's standing. Pull requests are filtered out — `GET /issues` returns
+   * them too, and a triage pass that labelled pull requests as bugs would be
+   * the first thing anyone noticed.
+   *
+   * Per-repo, never installation-wide: the caller names the estate, so a client
+   * repo cannot arrive in the result set by accident (§9).
+   *
+   * FAILS rather than degrades on an uncredentialed deploy — an empty issue list
+   * reading as "nothing to triage" is a lie a scheduled run would act on.
+   */
+  readonly issues: (opts: {
+    repo: string;
+    state?: "open" | "closed" | "all";
+    labels?: readonly string[];
+    updatedWithinDays?: number;
+    maxPages?: number;
+    installationId?: number;
+  }) => Effect.Effect<readonly IssueRef[], GitHubApiError>;
+
+  /** Add labels to an issue — the state machine's write (§5). */
+  readonly addIssueLabels: (req: {
+    repo: string;
+    issue: number;
+    labels: readonly string[];
+    installationId?: number;
+  }) => Effect.Effect<void, GitHubApiError>;
+
+  /** Remove one label. Already-absent is the requested end state, not an error. */
+  readonly removeIssueLabel: (req: {
+    repo: string;
+    issue: number;
+    label: string;
+    installationId?: number;
+  }) => Effect.Effect<void, GitHubApiError>;
+
+  /**
+   * Comment on an issue. Callers pass a rendered TEMPLATE — no model-authored
+   * prose reaches a comment, because a comment is the loop speaking in its own
+   * name and a model cannot be held to what it says.
+   */
+  readonly commentOnIssue: (req: {
+    repo: string;
+    issue: number;
+    body: string;
+    installationId?: number;
+  }) => Effect.Effect<void, GitHubApiError>;
+
+  /**
+   * Close an issue **as a duplicate of `duplicateOf`** — the only close on this
+   * service, and deliberately not spellable as a bare "close".
+   *
+   * §5 authorizes closing for exactly one verdict. Requiring the link in the
+   * signature makes closing-on-another-verdict unrepresentable rather than
+   * merely forbidden: there is no call to review, because there is no call to
+   * write. GitHub records `state_reason: "duplicate"`, so the claim survives in
+   * the timeline rather than only in a comment.
+   */
+  readonly closeIssueAsDuplicate: (req: {
+    repo: string;
+    issue: number;
+    duplicateOf: number;
+    installationId?: number;
+  }) => Effect.Effect<void, GitHubApiError>;
+
   readonly pullReview: (req: PullReviewRequest) => Effect.Effect<void, GitHubApiError>;
 
   /**
@@ -396,19 +470,10 @@ export class Github extends Context.Tag("@fractalboxdev/flare-dispatch-core/Gith
 
 /**
  * The `github` accessor namespace. Each function reads the Github service
- * from context and delegates — so a run writes `github.openPullRequests(...)`
- * rather than `Effect.flatMap(Github, (g) => g.openPullRequests(...))`.
+ * from context and delegates — so a run writes `github.issues({ repo })`
+ * rather than `Effect.flatMap(Github, (g) => g.issues({ repo }))`.
  */
 export const github = {
-  repositories: (opts: { includeArchived?: boolean; pushedWithinDays?: number } = {}) =>
-    Effect.flatMap(Github, (g) => g.repositories(opts)),
-  openPullRequests: (
-    opts: {
-      updatedWithinHours?: number;
-      includeDrafts?: boolean;
-      repos?: readonly string[];
-    } = {},
-  ) => Effect.flatMap(Github, (g) => g.openPullRequests(opts)),
   actionRuns: (
     opts: {
       repos?: readonly string[];
@@ -426,6 +491,34 @@ export const github = {
     installationId?: number;
   }) => Effect.flatMap(Github, (g) => g.pullRequestHistory(opts)),
   readTextFile: (req: ReadTextFileRequest) => Effect.flatMap(Github, (g) => g.readTextFile(req)),
+  issues: (opts: {
+    repo: string;
+    state?: "open" | "closed" | "all";
+    labels?: readonly string[];
+    updatedWithinDays?: number;
+    maxPages?: number;
+    installationId?: number;
+  }) => Effect.flatMap(Github, (g) => g.issues(opts)),
+  addIssueLabels: (req: {
+    repo: string;
+    issue: number;
+    labels: readonly string[];
+    installationId?: number;
+  }) => Effect.flatMap(Github, (g) => g.addIssueLabels(req)),
+  removeIssueLabel: (req: {
+    repo: string;
+    issue: number;
+    label: string;
+    installationId?: number;
+  }) => Effect.flatMap(Github, (g) => g.removeIssueLabel(req)),
+  commentOnIssue: (req: { repo: string; issue: number; body: string; installationId?: number }) =>
+    Effect.flatMap(Github, (g) => g.commentOnIssue(req)),
+  closeIssueAsDuplicate: (req: {
+    repo: string;
+    issue: number;
+    duplicateOf: number;
+    installationId?: number;
+  }) => Effect.flatMap(Github, (g) => g.closeIssueAsDuplicate(req)),
   pullReview: (req: PullReviewRequest) => Effect.flatMap(Github, (g) => g.pullReview(req)),
   openDraftPullRequest: (req: OpenDraftPullRequest) =>
     Effect.flatMap(Github, (g) => g.openDraftPullRequest(req)),

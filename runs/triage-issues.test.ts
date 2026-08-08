@@ -1,0 +1,473 @@
+// Run-level tests for `triage-issues`. Driven against the in-memory test
+// runtime with seeded config, github and model fakes. No CF, no network.
+//
+// The pure decision logic is covered in `issue-triage.test.ts`; what is proven
+// HERE is the wiring a reviewer cannot check by reading the primitive — that
+// the writes actually reach GitHub for each verdict, that a repo outside the
+// configured estate is refused, and that a suppressed key writes NOTHING.
+
+import { it } from "@effect/vitest";
+import { Effect, Exit } from "effect";
+import { describe, expect } from "vitest";
+import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
+import { Github, GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
+import type { GithubService, IssueRef, StepFailed } from "@fractalboxdev/flare-dispatch-core";
+import {
+  ARMING_LABEL,
+  DECLINED_LEDGER_PATH,
+  NEVER_WRITTEN,
+  TRIAGE_LABELS,
+  WRITEABLE_LABELS,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  assertInEstate,
+  assertWriteableLabels,
+  issueMaintenanceKey,
+  triageIssues,
+} from "./triage-issues";
+
+const firedAt = Date.UTC(2026, 7, 8);
+const input = { firedAt } as const;
+const ESTATE = "fractalboxdev/flare-dispatch";
+const CONTROL = "owner/control";
+
+const issue = (over: Partial<IssueRef> = {}): IssueRef => ({
+  repo: ESTATE,
+  number: 7,
+  title: "Something is broken",
+  body: "It breaks.",
+  state: "open",
+  labels: [],
+  author: "stranger",
+  authorAssociation: "NONE",
+  url: `https://github.com/${ESTATE}/issues/7`,
+  commentCount: 0,
+  createdAt: firedAt,
+  updatedAt: firedAt,
+  ...over,
+});
+
+const baseConfig = {
+  "triage-issues.repos": ESTATE,
+  "triage-issues.control-repo": CONTROL,
+};
+
+/** A model fake that answers every classify call with `verdict`. */
+const verdictResponses = (verdict: unknown) => [
+  { text: JSON.stringify(verdict), toolCalls: [], usage: {} },
+];
+
+const drive = (opts: {
+  issues?: readonly IssueRef[];
+  verdict?: unknown;
+  config?: Record<string, string>;
+  files?: Record<string, string>;
+}) => {
+  const { layer, handles } = makeCFRuntimeTest({
+    config: { ...baseConfig, ...opts.config },
+    github: {
+      now: firedAt,
+      issues: opts.issues ?? [issue()],
+      pullRequestHistory: [],
+      files: opts.files ?? {},
+    },
+    ...(opts.verdict !== undefined
+      ? { modelGateway: { responses: verdictResponses(opts.verdict) } }
+      : {}),
+  });
+  return { layer, handles };
+};
+
+describe("triage-issues — each verdict's writes reach GitHub", () => {
+  it.effect("needs-repro labels the issue and posts the template", () => {
+    const { layer, handles } = drive({ verdict: { kind: "needs-repro" } });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      expect(handles.github.addIssueLabelsCalls[0]).toMatchObject({
+        repo: ESTATE,
+        issue: 7,
+        labels: [TRIAGE_LABELS.needsRepro],
+      });
+      expect(handles.github.commentOnIssueCalls[0]?.body).toContain("reproduce");
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("feature is labelled not-actionable and left — no comment, no close", () => {
+    const { layer, handles } = drive({ verdict: { kind: "feature" } });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      expect(handles.github.addIssueLabelsCalls[0]?.labels).toEqual([TRIAGE_LABELS.notActionable]);
+      expect(handles.github.commentOnIssueCalls).toHaveLength(0);
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a bug with a command repro is labelled fix-pending and NOT escalated", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "bug" },
+      issues: [issue({ body: "```sh\npnpm test\n```" })],
+    });
+    return Effect.gen(function* () {
+      const out = yield* triageIssues.run(input);
+      expect(handles.github.addIssueLabelsCalls[0]?.labels).toEqual([TRIAGE_LABELS.fixPending]);
+      expect(out.reprosCaptured).toBe(1);
+      // Nothing dispatches, nothing closes, nothing comments — capture is the
+      // whole action (§5: executing a stranger's repro needs a human signal).
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+      expect(handles.github.commentOnIssueCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a duplicate comments with the link, then closes", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "duplicate", duplicateOf: 3 },
+      issues: [issue({ number: 7 }), issue({ number: 3, title: "the original" })],
+    });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      const closed = handles.github.closeIssueAsDuplicateCalls;
+      expect(closed.length).toBeGreaterThan(0);
+      expect(closed[0]).toMatchObject({ repo: ESTATE, duplicateOf: 3 });
+      // The comment precedes the close, so the reason is on the issue.
+      expect(handles.github.commentOnIssueCalls[0]?.body).toContain("#3");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a duplicate target the run never read closes nothing", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "duplicate", duplicateOf: 99_999 },
+      issues: [issue({ number: 7 })],
+    });
+    return Effect.gen(function* () {
+      const out = yield* triageIssues.run(input);
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+      expect(out.unclassified).toBe(1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("an unusable model answer writes nothing", () => {
+    const { layer, handles } = drive({ verdict: { kind: "close-it-now" } });
+    return Effect.gen(function* () {
+      const out = yield* triageIssues.run(input);
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+      expect(handles.github.commentOnIssueCalls).toHaveLength(0);
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+      expect(out.unclassified).toBe(1);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+// A read that fails and a read that finds nothing are different facts, and
+// `github.issues` is deliberately the one read that fails rather than degrading
+// -- so the run must not convert it back into "nothing to triage".
+describe("triage-issues — an unreadable estate is not an empty one", () => {
+  /** The seeded runtime, with `issues` swapped for one that always fails. */
+  const withBrokenReads = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const real = yield* Github;
+      const broken: GithubService = {
+        ...real,
+        issues: () => Effect.fail(new GitHubApiError({ status: 401, reason: "unauthorized" })),
+      };
+      return yield* eff.pipe(Effect.provideService(Github, broken));
+    });
+
+  it.effect("fails the run when EVERY configured repo is unreadable", () => {
+    const { layer, handles } = drive({ verdict: { kind: "feature" } });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(withBrokenReads(triageIssues.run(input)));
+      // Not a green tick reporting a clean estate.
+      expect(Exit.isFailure(exit)).toBe(true);
+      // And nothing was written or proposed on the strength of an empty read.
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("one unreadable repo among several is still skipped, not fatal", () => {
+    const OTHER = "fractalboxdev/other";
+    const { layer, handles } = drive({
+      verdict: { kind: "feature" },
+      config: { "triage-issues.repos": `${ESTATE} ${OTHER}` },
+      issues: [issue({ number: 7 })],
+    });
+    return Effect.gen(function* () {
+      const real = yield* Github;
+      const flaky: GithubService = {
+        ...real,
+        issues: (opts) =>
+          opts.repo === OTHER
+            ? Effect.fail(new GitHubApiError({ status: 500, reason: "transient" }))
+            : real.issues(opts),
+      };
+      const out = yield* triageIssues.run(input).pipe(Effect.provideService(Github, flaky));
+      // The readable repo was triaged; a partial digest beats none.
+      expect(out.issuesRead).toBe(1);
+      expect(handles.github.addIssueLabelsCalls[0]?.repo).toBe(ESTATE);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+// §9 — "No writes into client repos. Read for context where the pack lists it;
+// never open a PR, never apply a label."
+describe("triage-issues — the estate is the write boundary", () => {
+  /**
+   * The refusal reason, or `"WROTE"` if the guard let the write through.
+   *
+   * `catchTag` rather than an `Exit`/`Cause` walk on purpose: it only catches a
+   * *typed* `StepFailed`, so a guard that reverted to `throw` would fail this
+   * test as a defect instead of quietly passing. That the refusal is typed is
+   * half of what is being asserted.
+   */
+  const refusal = (guard: Effect.Effect<void, StepFailed>) =>
+    guard.pipe(
+      Effect.as("WROTE"),
+      Effect.catchTag("StepFailed", (e) => Effect.succeed(String(e.cause))),
+    );
+
+  it.effect("assertInEstate refuses a repo nobody configured", () => {
+    const estate = new Set([ESTATE]);
+    return Effect.gen(function* () {
+      expect(yield* refusal(assertInEstate(ESTATE, estate))).toBe("WROTE");
+
+      const why = yield* refusal(assertInEstate("acme-client/private-app", estate));
+      expect(why).toMatch(/refusing to write to acme-client\/private-app/);
+      expect(why).toMatch(/§9/);
+    });
+  });
+
+  // The allowlist is asserted over `decideIssueActions`' output in
+  // `issue-triage.test.ts`; this asserts it over the actual write, so a label
+  // that reaches the boundary from anywhere else is still refused.
+  it.effect("assertWriteableLabels refuses any label outside the allowlist", () =>
+    Effect.gen(function* () {
+      // Everything `decideIssueActions` can emit passes.
+      expect(yield* refusal(assertWriteableLabels(ESTATE, [...WRITEABLE_LABELS]))).toBe("WROTE");
+
+      // Nothing a human owns does — the arming label above all, because the
+      // loop applying it would turn a captured repro into an authorized one.
+      for (const label of NEVER_WRITTEN) {
+        expect(yield* refusal(assertWriteableLabels(ESTATE, [label]))).not.toBe("WROTE");
+      }
+
+      const why = yield* refusal(assertWriteableLabels(ESTATE, [ARMING_LABEL]));
+      expect(why).toMatch(/not in WRITEABLE_LABELS/);
+      expect(why).toMatch(/applied by a human/);
+
+      // One bad label in an otherwise-fine batch refuses the whole batch.
+      expect(
+        yield* refusal(assertWriteableLabels(ESTATE, [TRIAGE_LABELS.needsRepro, ARMING_LABEL])),
+      ).not.toBe("WROTE");
+    }),
+  );
+
+  it.effect("an issue from outside the estate is never read, so never written", () => {
+    // The client repo's issue is seeded into the fake, but the run only asks
+    // for the configured repo — so it never appears, and nothing writes to it.
+    const { layer, handles } = drive({
+      verdict: { kind: "feature" },
+      issues: [issue({ number: 7 }), issue({ repo: "acme-client/app", number: 1 })],
+    });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      const touched = [
+        ...handles.github.addIssueLabelsCalls,
+        ...handles.github.commentOnIssueCalls,
+        ...handles.github.closeIssueAsDuplicateCalls,
+      ].map((c) => c.repo);
+      expect(touched.every((r) => r === ESTATE)).toBe(true);
+      expect(handles.github.issuesCalls.every((c) => c.repo === ESTATE)).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("an unset estate sweeps nothing and writes nothing", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "feature" },
+      config: { "triage-issues.repos": "" },
+    });
+    return Effect.gen(function* () {
+      const out = yield* triageIssues.run(input);
+      expect(out.reposSwept).toBe(0);
+      expect(handles.github.issuesCalls).toHaveLength(0);
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+// The loop's likeliest failure is not a bad write, it is re-proposing what a
+// human already declined — and a write re-litigates louder than a digest line.
+describe("triage-issues — suppression gates the writes", () => {
+  const declined = (key: string) =>
+    `${JSON.stringify({ key, reason: "not our bug", at: "2026-08-01" })}\n`;
+
+  it.effect("a declined key writes nothing at all", () => {
+    const target = issue({ number: 7 });
+    const { layer, handles } = drive({
+      verdict: { kind: "needs-repro" },
+      issues: [target],
+      files: { [`${CONTROL}:${DECLINED_LEDGER_PATH}`]: declined(issueMaintenanceKey(target)) },
+    });
+    return Effect.gen(function* () {
+      const out = yield* triageIssues.run(input);
+      expect(out.suppressed).toBe(1);
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+      expect(handles.github.commentOnIssueCalls).toHaveLength(0);
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a declined duplicate is not closed", () => {
+    const target = issue({ number: 7 });
+    const { layer, handles } = drive({
+      verdict: { kind: "duplicate", duplicateOf: 3 },
+      issues: [target, issue({ number: 3 })],
+      files: { [`${CONTROL}:${DECLINED_LEDGER_PATH}`]: declined(issueMaintenanceKey(target)) },
+    });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      expect(handles.github.closeIssueAsDuplicateCalls.filter((c) => c.issue === 7)).toHaveLength(
+        0,
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("suppression does not silence the digest — it still reports", () => {
+    const target = issue({ number: 7 });
+    const { layer, handles } = drive({
+      verdict: { kind: "needs-repro" },
+      issues: [target],
+      files: { [`${CONTROL}:${DECLINED_LEDGER_PATH}`]: declined(issueMaintenanceKey(target)) },
+    });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("triage-issues — a human's opt-out is absolute", () => {
+  it.effect("maintenance:declined skips the model call AND every write", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "duplicate", duplicateOf: 3 },
+      issues: [issue({ number: 7, labels: ["maintenance:declined"] }), issue({ number: 3 })],
+    });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      expect(handles.github.closeIssueAsDuplicateCalls.filter((c) => c.issue === 7)).toHaveLength(
+        0,
+      );
+      expect(handles.github.addIssueLabelsCalls.filter((c) => c.issue === 7)).toHaveLength(0);
+      // No tokens spent asking about an issue a human already answered.
+      expect(handles.modelGateway.requests.every((r) => !r.user.includes("#7 body"))).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("issueMaintenanceKey", () => {
+  it("is stable per issue and namespaced to this run", () => {
+    expect(issueMaintenanceKey(issue({ number: 7 }))).toBe(
+      "triage-issues/fractalboxdev_flare-dispatch#7",
+    );
+  });
+});
+
+// Requirement 3 of the escalation amendment, end to end: the captured repro is
+// actually IN the record a human reads, quoted and attributed — a digest that
+// claims a capture it does not show is worse than not capturing.
+describe("triage-issues — the captured repro reaches the digest as evidence", () => {
+  it.effect(
+    "quotes the command with its source, author and standing, and says it was not run",
+    () => {
+      const { layer, handles } = drive({
+        verdict: { kind: "bug" },
+        issues: [
+          issue({
+            number: 7,
+            body: "Broken.\n\n```sh\npnpm build && ./deploy.sh\n```",
+            author: "outsider",
+            authorAssociation: "FIRST_TIME_CONTRIBUTOR",
+          }),
+        ],
+      });
+      return Effect.gen(function* () {
+        yield* triageIssues.run(input);
+        const files = handles.github.openDraftPullRequestCalls[0]!.files;
+        const digest = files.map((f) => f.content).join("\n");
+
+        expect(digest).toContain("pnpm build && ./deploy.sh");
+        expect(digest).toContain("outsider");
+        expect(digest).toContain("FIRST_TIME_CONTRIBUTOR");
+        expect(digest).toContain("not run");
+        // It names the arming label as the thing a MEMBER applies…
+        expect(digest).toContain(ARMING_LABEL);
+        // …and the loop did not apply it.
+        const applied = handles.github.addIssueLabelsCalls.flatMap((c) => c.labels);
+        expect(applied).not.toContain(ARMING_LABEL);
+        expect(applied).toEqual([TRIAGE_LABELS.fixPending]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a repro that contains a fence cannot break the digest's structure", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "bug" },
+      issues: [issue({ number: 7, body: "```sh\necho hi\n```\n```\n## Injected\n```" })],
+    });
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      const digest = handles.github.openDraftPullRequestCalls[0]!.files.map((f) => f.content).join(
+        "\n",
+      );
+      // The captured text is indented evidence, never a heading of its own.
+      expect(digest).not.toMatch(/^## Injected$/m);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("triage-issues — the control plane is config", () => {
+  // Same rule as `org-spec-audit` and `triage-prs`: no default control repo,
+  // because a default is a repository somebody else's deployment writes to.
+  it.effect("fails when no control repo is configured, before reading anything", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { "triage-issues.repos": ESTATE },
+      github: { now: firedAt, issues: [issue()], pullRequestHistory: [], files: {} },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(triageIssues.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("triage-issues.control-repo");
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("writes the digest where `digest-dir` says", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "bug" },
+      config: { "triage-issues.digest-dir": "infra/loop/issues/" },
+    });
+
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      const files = handles.github.openDraftPullRequestCalls[0]!.files;
+      expect(files[0]!.path).toBe("infra/loop/issues/2026-08-08.md");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses a digest-dir that escapes the repo root", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "bug" },
+      config: { "triage-issues.digest-dir": "../../etc" },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(triageIssues.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+});

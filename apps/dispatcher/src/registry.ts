@@ -30,6 +30,7 @@ import {
   releaseNotes,
   selfHealPr,
   specDriftPr,
+  triageIssues,
   triagePrs,
   vitestShard,
   workerDeploy,
@@ -50,6 +51,7 @@ const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
   // machine can fix, this sweeps the estate for what needs a human answer and
   // opens ONE control-plane PR carrying them grouped and deduplicated.
   [orgSpecAudit.name]: orgSpecAudit as Run<unknown, unknown>,
+  [triageIssues.name]: triageIssues as Run<unknown, unknown>,
   [triagePrs.name]: triagePrs as Run<unknown, unknown>,
   [ciTriagePr.name]: ciTriagePr as Run<unknown, unknown>,
   // The fix stage `ci-triage-pr`'s diagnosis (and `product-demo`'s confirmed
