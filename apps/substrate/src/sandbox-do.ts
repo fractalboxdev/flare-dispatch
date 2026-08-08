@@ -1042,7 +1042,7 @@ export function sandboxByName(
 const handlersFor = () => {
   const served = (req: Request, env: Env, ctx: OutboundContext<GrantParams>): Promise<Response> =>
     serveGrantedRequest(req, ctx, {
-      // No `send` here — see `ServeDeps.send`. This call site is the one that
+      // No `fetchImpl` here — see `ServeDeps.fetchImpl`. This call site is the one that
       // shipped the bug, and no test reaches it: `handlersFor` is private and
       // importing this file pulls in a container-backed DO.
       recordDenial: (event) => {

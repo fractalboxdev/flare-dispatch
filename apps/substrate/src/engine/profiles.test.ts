@@ -374,7 +374,7 @@ describe("the report position forwards and records", () => {
     const res = await serveGrantedRequest(
       new Request("https://telemetry.example.com/collect", { method: "POST", body: "x" }),
       ctx("report"),
-      { send: (async () => upstream) as unknown as typeof fetch, recordDenial: rec.recordDenial },
+      { fetchImpl: (async () => upstream) as unknown as typeof fetch, recordDenial: rec.recordDenial },
     );
 
     expect(res.status).toBe(200);
@@ -386,7 +386,7 @@ describe("the report position forwards and records", () => {
   it("records nothing for a request the grant would have allowed", async () => {
     const rec = recorder();
     await serveGrantedRequest(new Request("https://registry.npmjs.org/effect"), ctx("report"), {
-      send: (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch,
+      fetchImpl: (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch,
       recordDenial: rec.recordDenial,
     });
     expect(rec.events).toEqual([]);
@@ -398,7 +398,7 @@ describe("the report position forwards and records", () => {
       new Request("https://telemetry.example.com/collect", { method: "POST", body: "x" }),
       ctx("enforce"),
       {
-        send: (async () => new Response("unreached", { status: 200 })) as unknown as typeof fetch,
+        fetchImpl: (async () => new Response("unreached", { status: 200 })) as unknown as typeof fetch,
         recordDenial: rec.recordDenial,
       },
     );

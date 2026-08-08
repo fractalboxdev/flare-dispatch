@@ -420,10 +420,10 @@ export const WOULD_DENY_PREFIX = "would-deny: ";
 export type ServeDeps = {
   /**
    * Tests substitute a stub; production omits it. Passing the global as
-   * `{ send: fetch }` detaches it from `globalThis` and throws
+   * `{ fetchImpl: fetch }` detaches it from `globalThis` and throws
    * `Illegal invocation` in workerd — pinned by egress.test.ts.
    */
-  send?: typeof fetch;
+  fetchImpl?: typeof fetch;
   /**
    * Denial recorder (ADR-0005): every handler 403 is reported here so the
    * substrate can aggregate `{host, method, path, reason, count}` per
@@ -457,7 +457,7 @@ export async function serveGrantedRequest(
 ): Promise<Response> {
   // Called as a free identifier, so the receiver is `undefined` and never the
   // deps object — which is the whole failure this indirection exists to stop.
-  const send: typeof fetch = deps.send ?? ((input, init) => fetch(input, init));
+  const fetchImpl: typeof fetch = deps.fetchImpl ?? ((input, init) => fetch(input, init));
 
   const record = (reason: string, at?: URL): void => {
     try {
@@ -525,7 +525,7 @@ export async function serveGrantedRequest(
   // secret first reaches a host (ADR-0006).
   if (position === "report") {
     if (!first.ok) record(`${WOULD_DENY_PREFIX}${first.reason}`, url);
-    return send(req);
+    return fetchImpl(req);
   }
 
   if (!first.ok) return denied(first.reason, url);
@@ -574,7 +574,7 @@ export async function serveGrantedRequest(
       outbound.set(resolved.header.name, resolved.header.value);
     }
 
-    const upstream = await send(target.toString(), {
+    const upstream = await fetchImpl(target.toString(), {
       method,
       headers: outbound,
       body: (BODYLESS as readonly string[]).includes(method) ? undefined : payload,
