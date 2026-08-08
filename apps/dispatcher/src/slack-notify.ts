@@ -21,30 +21,51 @@
 //      bot anywhere the bot can see", so there is no channel field and no
 //      fallback to one.
 //
-// Neither path weakens the other: the verdict callback is still gated on an
-// origin existing (workflow.ts, at the finalize boundary), and the notice is
-// reached only from inside a run through the `notice` capability, which cannot
-// express a destination at all.
+// Neither path weakens the other, and it takes both halves to be true. The
+// verdict callback is gated on an origin existing (workflow.ts, at the finalize
+// boundary); the notice is reached only from inside a run through the `notice`
+// capability, which cannot express a destination at all. And the two sign under
+// separate derived keys, so "the notice cannot name a room" survives a leak of
+// the notice's key — see the signature section below.
 //
-// --- The signature (identical for both) --------------------------------------
+// --- The signature (same envelope, two keys) ---------------------------------
 //
 //   X-FlareDispatch-Signature: sha256=<hex over the raw JSON body bytes>
 //
 // The same header, the same raw-bytes canonicalization, and the same `sign`
 // primitive as the inbound dispatch route (hmac.ts) — so the receiver's
 // verification is the code it already wrote to sign dispatches, read backwards.
-// The KEY is different: HKDF-derived from `SLACK_NOTIFY_SECRET` (or, by
-// default, from `HMAC_SECRET`) under this file's own label, so a callback
-// signature can never be replayed as a dispatch signature or vice versa. The
-// receiver derives it the same way:
+// The KEY is HKDF-derived from `SLACK_NOTIFY_SECRET` (or, by default, from
+// `HMAC_SECRET`), so a callback signature can never be replayed as a dispatch
+// signature or vice versa.
 //
-//   k = HKDF-SHA256(ikm, salt="", info="flare-dispatch/slack-notify/v1")
+// The two shapes derive under DIFFERENT labels, and that is a security boundary
+// rather than bookkeeping:
+//
+//   k_verdict = HKDF-SHA256(ikm, salt="", info="flare-dispatch/slack-notify/v1")
+//   k_notice  = HKDF-SHA256(ikm, salt="", info="flare-dispatch/slack-notice/v1")
+//
+// One label would make them one key, and the two payloads are not equally
+// dangerous. `SlackVerdictPayload.origin` carries `channel` and `thread_ts` —
+// it NAMES a destination, because it is relaying a conversation the caller was
+// already in. `SlackNoticePayload` deliberately cannot. Under a shared key,
+// anything able to sign a notice could sign a verdict naming any channel the
+// bot can see, and the notice's whole "the shape is the security property"
+// argument would be worth nothing: the shape stops being a bound the moment the
+// same key opens a shape without it. Splitting the label makes the weaker
+// credential structurally unable to reach the stronger surface.
+//
+// The `ikm` is still one secret. Two labels off one secret is domain
+// separation; two secrets would be a second thing to rotate for a separation
+// HKDF already gives.
 //
 // One load-bearing detail: `deriveSecret` returns HEX and `sign` UTF-8 encodes
 // its `secret` argument, so the HMAC key is the 64 ASCII bytes of the hex, not
 // the 32 bytes it encodes. A receiver importing the raw bytes rejects every
 // honest request, with nothing but a 401 to say why — which is what the
-// cross-repo parity test in slack-notify.notice.test.ts exists to catch.
+// cross-repo parity test in slack-notify.notice.test.ts exists to catch. The
+// same test pins both label strings, because a receiver deriving the notice key
+// under the old label fails exactly that way and no other.
 //
 // Delivery is best-effort and bounded, like the completion-notify email: a
 // failed callback is a logged line, never a flip of a verdict the run already
@@ -58,8 +79,32 @@ import type { Env } from "./env";
 import { SIGNATURE_HEADER, sign } from "./hmac";
 import { SLACK_NOTIFY_URL_KEY, type SlackOrigin } from "./slack-origin";
 
-/** HKDF `info` label — domain-separates the callback key from the dispatch HMAC. */
+/**
+ * HKDF `info` label for the VERDICT callback — domain-separates its key from
+ * the dispatch HMAC.
+ *
+ * Unchanged, and it must stay unchanged: receivers already deployed verify
+ * verdicts under this exact string. The split introduced below moves the
+ * notice, never this.
+ */
 export const SLACK_NOTIFY_HKDF_INFO = "flare-dispatch/slack-notify/v1";
+
+/**
+ * HKDF `info` label for the NOTICE — its own key, not the verdict callback's.
+ *
+ * The verdict body names a destination (`origin.channel`, `origin.thread_ts`);
+ * the notice body cannot. Sharing one label made them one key, which handed
+ * every notice-key holder the ability to sign a verdict naming any channel the
+ * bot can reach — collapsing the notice's central claim that its *shape* is
+ * what bounds it. A shape is only a bound while nothing else can sign a
+ * different shape with the same key.
+ *
+ * **Receiver-side change required.** fractalbot's `deriveNotifyKey` must derive
+ * notices under this string. Until it does, every notice 401s — silently and
+ * forever, because a notice failing is correctly never fatal. Ship the receiver
+ * first; see the deploy-ordering note in `specs/slack-origin.md` § The notice.
+ */
+export const SLACK_NOTICE_HKDF_INFO = "flare-dispatch/slack-notice/v1";
 
 /** How long a callback may take before we give up and log. */
 const CALLBACK_TIMEOUT_MS = 10_000;
@@ -81,7 +126,9 @@ const CALLBACK_TIMEOUT_MS = 10_000;
  *   - They have different BLAST RADII, so an operator needs to move them
  *     independently — turning the announcement path off, or pointing it at a
  *     staging receiver, must not silence the in-thread verdicts a human is
- *     waiting on.
+ *     waiting on. The radii differ in the KEY too, not just the URL: the two
+ *     derive under separate HKDF labels, so pointing this one at a staging
+ *     receiver hands that receiver a key that cannot sign a verdict.
  */
 export const SLACK_NOTICE_URL_KEY = "slack-notice.url";
 
@@ -323,9 +370,12 @@ export const validateSlackNotice = (payload: SlackNoticePayload): string | undef
  * when set, else `HMAC_SECRET`. `undefined` only when neither exists — the
  * callback is then skipped rather than sent unsigned.
  *
- * One secret for both surfaces on purpose. They share the HKDF label, so they
- * are the same key to the receiver; a second secret would be a second thing to
- * keep in sync for no separation it does not already have.
+ * One secret for both surfaces, two keys out of it. The verdict callback and
+ * the notice derive under different HKDF labels
+ * (`SLACK_NOTIFY_HKDF_INFO` / `SLACK_NOTICE_HKDF_INFO`), so they are already
+ * independent keys to the receiver — a leaked notice key cannot sign a verdict,
+ * which is the shape that names a channel. A second SECRET would add a second
+ * thing to rotate and keep in sync for separation HKDF has already given.
  */
 export const resolveSlackNotifySecret = (env: Env): string | undefined => {
   const dedicated = env.SLACK_NOTIFY_SECRET;
@@ -398,11 +448,17 @@ type SignedPost =
 const postSigned = async (opts: {
   readonly url: string;
   readonly secret: string;
+  /**
+   * The HKDF label to derive under. Required, with no default: a default would
+   * silently be the wrong one for whichever surface forgot to pass it, and the
+   * failure mode is a 401 nobody reads.
+   */
+  readonly hkdfInfo: string;
   readonly payload: unknown;
   readonly fetchImpl?: typeof fetch;
 }): Promise<SignedPost> => {
   const body = new TextEncoder().encode(JSON.stringify(opts.payload));
-  const key = await deriveSecret(opts.secret, SLACK_NOTIFY_HKDF_INFO);
+  const key = await deriveSecret(opts.secret, opts.hkdfInfo);
   const signature = await sign(key, body);
   const doFetch = opts.fetchImpl ?? fetch;
 
@@ -442,7 +498,7 @@ export const deliverSlackVerdict = async (opts: {
   /** Injected in tests; defaults to the ambient `fetch`. */
   readonly fetchImpl?: typeof fetch;
 }): Promise<SlackVerdictDelivery> => {
-  const posted = await postSigned(opts);
+  const posted = await postSigned({ ...opts, hkdfInfo: SLACK_NOTIFY_HKDF_INFO });
   if (!posted.sent) return { delivered: false, reason: posted.reason };
   if (posted.status < 200 || posted.status >= 300) {
     return { delivered: false, reason: `callback answered ${posted.status}` };
@@ -487,7 +543,7 @@ export const deliverSlackNotice = async (opts: {
   const invalid = validateSlackNotice(opts.payload);
   if (invalid !== undefined) return { outcome: "failed", reason: invalid };
 
-  const posted = await postSigned(opts);
+  const posted = await postSigned({ ...opts, hkdfInfo: SLACK_NOTICE_HKDF_INFO });
   if (!posted.sent) return { outcome: "failed", reason: posted.reason };
   if (posted.status === 409) return { outcome: "duplicate" };
   if (posted.status < 200 || posted.status >= 300) {

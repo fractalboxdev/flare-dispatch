@@ -9,21 +9,30 @@
 //      field" has to be an assertion, not a habit.
 //   2. THE SIGNATURE AGREES WITH A RECEIVER IN ANOTHER REPO. fractalbot
 //      deploys separately and shares no package with this one. `the receiver's
-//      own verification` below carries its `deriveNotifyKey`,
+//      own verification` below carries its `deriveNoticeKey`,
 //      `verifyNotifySignature` and `parseNotice` VERBATIM, so a change on
 //      either side that breaks agreement fails here — instead of in production,
 //      as a 401 with nothing to say why. fractalbot's PR #27 carries the mirror
 //      of this test, pointing the other way.
+//   3. THE NOTICE KEY IS NOT THE VERDICT KEY. They derive under different HKDF
+//      labels, and the reason is that only the verdict body names a channel
+//      (`origin.channel`, `origin.thread_ts`). `key separation` below pins both
+//      label strings as literals and asserts the cross-surface forgery each
+//      label denies the other — which is the assertion that fails if anyone
+//      collapses them back into one.
 
 import { describe, expect, it } from "vitest";
 import { deriveSecret } from "./capability-token";
 import { verify } from "./hmac";
 import {
   deliverSlackNotice,
+  deliverSlackVerdict,
   emitSlackNotice,
   readSlackNoticeUrl,
   readSlackNotifyUrl,
   renderSlackNotice,
+  renderSlackVerdict,
+  SLACK_NOTICE_HKDF_INFO,
   SLACK_NOTICE_URL_KEY,
   SLACK_NOTIFY_HKDF_INFO,
   type SlackNoticeEmission,
@@ -211,7 +220,7 @@ describe("validateSlackNotice", () => {
 });
 
 describe("deliverSlackNotice", () => {
-  it("signs the exact bytes it POSTs, under the same domain-separated key", async () => {
+  it("signs the exact bytes it POSTs, under its own domain-separated key", async () => {
     const { seen, fetchImpl } = capture();
     const payload = renderSlackNotice(emission(), NOW);
 
@@ -226,11 +235,19 @@ describe("deliverSlackNotice", () => {
     expect(seen[0]!.url).toBe("https://bot.test/flare-dispatch/notify");
     expect(JSON.parse(new TextDecoder().decode(seen[0]!.body))).toEqual(payload);
 
-    const derived = await deriveSecret(SECRET, SLACK_NOTIFY_HKDF_INFO);
+    const derived = await deriveSecret(SECRET, SLACK_NOTICE_HKDF_INFO);
     expect(await verify(derived, seen[0]!.signature, seen[0]!.body)).toBe(true);
-    // Same label as the verdict callback — one shared secret to keep in sync
-    // with the receiver, and still useless as a dispatch signature.
+    // Its OWN label, not the verdict callback's — one shared secret, two
+    // derived keys. Useless as a dispatch signature, and useless as a verdict
+    // one (see `key separation`).
     expect(await verify(SECRET, seen[0]!.signature, seen[0]!.body)).toBe(false);
+    expect(
+      await verify(
+        await deriveSecret(SECRET, SLACK_NOTIFY_HKDF_INFO),
+        seen[0]!.signature,
+        seen[0]!.body,
+      ),
+    ).toBe(false);
   });
 
   it("reads 409 as delivered-already, not as a failure", async () => {
@@ -322,23 +339,24 @@ describe("the receiver's own verification", () => {
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
 
-  const deriveNotifyKey = async (ikm: string): Promise<string> => {
+  const deriveUnder = async (ikm: string, info: string): Promise<string> => {
     const base = await crypto.subtle.importKey("raw", enc.encode(ikm), "HKDF", false, [
       "deriveBits",
     ]);
     const bits = await crypto.subtle.deriveBits(
-      {
-        name: "HKDF",
-        hash: "SHA-256",
-        salt: new Uint8Array(0),
-        // The label as the RECEIVER spells it, not as our constant does.
-        info: enc.encode("flare-dispatch/slack-notify/v1"),
-      },
+      { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: enc.encode(info) },
       base,
       256,
     );
     return hex(bits);
   };
+
+  // The labels as the RECEIVER spells them — string literals on purpose, never
+  // the exported constants. Importing those would make this a tautology: the
+  // dispatcher could rename its label and the "mirror" would follow it and stay
+  // green, which is the exact drift this file exists to catch.
+  const deriveNoticeKey = (ikm: string) => deriveUnder(ikm, "flare-dispatch/slack-notice/v1");
+  const deriveVerdictKey = (ikm: string) => deriveUnder(ikm, "flare-dispatch/slack-notify/v1");
 
   const hexToBytes = (value: string): Uint8Array | null => {
     if (value.length === 0 || value.length % 2 !== 0) return null;
@@ -419,7 +437,7 @@ describe("the receiver's own verification", () => {
 
     const sent = seen[0]!;
     expect(
-      await verifyNotifySignature(await deriveNotifyKey(SECRET), sent.signature, sent.body),
+      await verifyNotifySignature(await deriveNoticeKey(SECRET), sent.signature, sent.body),
     ).toBe(true);
     expect(parses(JSON.parse(new TextDecoder().decode(sent.body)))).toBe(true);
   });
@@ -488,7 +506,7 @@ describe("the receiver's own verification", () => {
 
     expect(
       await verifyNotifySignature(
-        await deriveNotifyKey("another-secret"),
+        await deriveNoticeKey("another-secret"),
         sent.signature,
         sent.body,
       ),
@@ -499,18 +517,102 @@ describe("the receiver's own verification", () => {
       JSON.stringify(renderSlackNotice(emission({ useCase: "release-notes" }), NOW)),
     );
     expect(
-      await verifyNotifySignature(await deriveNotifyKey(SECRET), sent.signature, tampered),
+      await verifyNotifySignature(await deriveNoticeKey(SECRET), sent.signature, tampered),
     ).toBe(false);
   });
 
   it("derives byte for byte the key this repo's `deriveSecret` produces", async () => {
-    const theirs = await deriveNotifyKey(SECRET);
-    const ours = await deriveSecret(SECRET, SLACK_NOTIFY_HKDF_INFO);
+    const theirs = await deriveNoticeKey(SECRET);
+    const ours = await deriveSecret(SECRET, SLACK_NOTICE_HKDF_INFO);
     expect(theirs).toMatch(/^[0-9a-f]{64}$/);
     expect(theirs).toBe(ours);
     // Domain separation: the derived key is not the secret, so a notice
     // signature is not a dispatch signature.
     expect(theirs).not.toBe(SECRET);
+  });
+
+  // --- key separation --------------------------------------------------------
+  //
+  // The reason the notice has its own label at all. `SlackVerdictPayload.origin`
+  // carries `channel` and `thread_ts`; `SlackNoticePayload` has no field that
+  // could name a room. Under one key those two facts do not compose — anything
+  // holding the notice key could sign a verdict naming any channel the bot can
+  // see, and the notice's "the shape is the security property" argument would
+  // be decoration. These assertions are what fails if the labels are ever
+  // collapsed back together.
+
+  it("pins both label strings, so a rename on either side is a red test", () => {
+    // Spelled out, not compared to themselves. A receiver deriving the notice
+    // key under the OLD label 401s on every notice and says nothing about why;
+    // this line is the only place that mistake is visible before deploy.
+    expect(SLACK_NOTICE_HKDF_INFO).toBe("flare-dispatch/slack-notice/v1");
+    expect(SLACK_NOTIFY_HKDF_INFO).toBe("flare-dispatch/slack-notify/v1");
+    expect(SLACK_NOTICE_HKDF_INFO).not.toBe(SLACK_NOTIFY_HKDF_INFO);
+  });
+
+  it("gives the notice a key that is not the verdict key", async () => {
+    const notice = await deriveNoticeKey(SECRET);
+    const verdict = await deriveVerdictKey(SECRET);
+    expect(notice).toMatch(/^[0-9a-f]{64}$/);
+    expect(verdict).toMatch(/^[0-9a-f]{64}$/);
+    expect(notice).not.toBe(verdict);
+    // Same ikm, both times — the separation is the label, not a second secret.
+    expect(verdict).toBe(await deriveSecret(SECRET, SLACK_NOTIFY_HKDF_INFO));
+  });
+
+  it("cannot sign a channel-naming verdict with the notice key", async () => {
+    // The whole point, stated as the attack it denies. A holder of the notice
+    // key produces a signature the verdict receiver rejects, so it cannot post
+    // into `C0HIJACKED` by borrowing the shape that has a channel field.
+    const { seen, fetchImpl } = capture();
+    await deliverSlackVerdict({
+      url: "https://bot.test/verdict",
+      secret: SECRET,
+      payload: renderSlackVerdict({
+        executionId: "01JZ9F3ATBQ2W7X8Y0KDPM4RVH",
+        run: "spec-drift-pr",
+        status: "success",
+        repo: "owner/repo",
+        sha: "0123456789abcdef",
+        origin: {
+          kind: "slack",
+          team_id: "T0TEAM",
+          channel: "C0HIJACKED",
+          thread_ts: "1754640000.000100",
+        },
+      }),
+      fetchImpl,
+    });
+    const sent = seen[0]!;
+
+    // The verdict receiver takes it under the verdict key, as it always has.
+    expect(
+      await verifyNotifySignature(await deriveVerdictKey(SECRET), sent.signature, sent.body),
+    ).toBe(true);
+    // And the notice key is useless against it.
+    expect(
+      await verifyNotifySignature(await deriveNoticeKey(SECRET), sent.signature, sent.body),
+    ).toBe(false);
+    // The body it could not sign is precisely the one that names a room.
+    expect(JSON.parse(new TextDecoder().decode(sent.body)).origin.channel).toBe("C0HIJACKED");
+  });
+
+  it("cannot sign a notice with the verdict key either — separation runs both ways", async () => {
+    const { seen, fetchImpl } = capture();
+    await deliverSlackNotice({
+      url: "https://bot.test/flare-dispatch/notify",
+      secret: SECRET,
+      payload: renderSlackNotice(emission(), NOW),
+      fetchImpl,
+    });
+    const sent = seen[0]!;
+
+    expect(
+      await verifyNotifySignature(await deriveNoticeKey(SECRET), sent.signature, sent.body),
+    ).toBe(true);
+    expect(
+      await verifyNotifySignature(await deriveVerdictKey(SECRET), sent.signature, sent.body),
+    ).toBe(false);
   });
 });
 
@@ -611,7 +713,7 @@ describe("emitSlackNotice", () => {
     const sent = seen[0]!;
     expect(JSON.parse(new TextDecoder().decode(sent.body)).sentAt).toBe(NOW + 1234);
     expect(
-      await verify(await deriveSecret(SECRET, SLACK_NOTIFY_HKDF_INFO), sent.signature, sent.body),
+      await verify(await deriveSecret(SECRET, SLACK_NOTICE_HKDF_INFO), sent.signature, sent.body),
     ).toBe(true);
   });
 });

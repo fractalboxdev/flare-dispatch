@@ -498,13 +498,14 @@ export interface Env {
 
   /**
    * Optional dedicated keying material for BOTH signed callbacks — the verdict
-   * and the notice. They share the HKDF label, so they are one key to the
-   * receiver and a second secret would only be a second thing to keep in sync.
-   * A Worker secret. When unset the key is HKDF-derived from `HMAC_SECRET`
-   * under that label (`slack-notify.ts`), so both are signed by default with no
-   * extra secret and the derived key still cannot be confused with the dispatch
-   * HMAC. Absent AND `HMAC_SECRET` absent → both are skipped rather than sent
-   * unsigned.
+   * and the notice. One secret, but TWO derived keys: each surface derives
+   * under its own HKDF label (`flare-dispatch/slack-notify/v1` and
+   * `flare-dispatch/slack-notice/v1`, `slack-notify.ts`), because only the
+   * verdict body names a channel and a notice key must not be able to sign one.
+   * A Worker secret. When unset both keys are HKDF-derived from `HMAC_SECRET`
+   * instead, so both surfaces are signed by default with no extra secret and
+   * neither derived key can be confused with the dispatch HMAC. Absent AND
+   * `HMAC_SECRET` absent → both are skipped rather than sent unsigned.
    */
   readonly SLACK_NOTIFY_SECRET?: string;
 }

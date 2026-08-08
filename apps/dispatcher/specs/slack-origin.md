@@ -126,9 +126,11 @@ receiver's verification is the code it already wrote to sign dispatches, read ba
 domain-separated so a callback signature can never be replayed as a dispatch signature:
 
 ```
-k = HKDF-SHA256(ikm, salt = "", info = "flare-dispatch/slack-notify/v1")
-ikm = SLACK_NOTIFY_SECRET, or HMAC_SECRET when that is unset
+k_verdict = HKDF-SHA256(ikm, salt = "", info = "flare-dispatch/slack-notify/v1")
+ikm       = SLACK_NOTIFY_SECRET, or HMAC_SECRET when that is unset
 ```
+
+The notice derives from the same `ikm` under a **different** label — see § The notice.
 
 Body: `version`, `executionId`, `run`, `status` (`success` | `failure` | `skipped`), `repo`, `sha`,
 the echoed `origin`, a ready-to-post `text` line, and optional `checkRunName`, `logsUrl`,
@@ -176,11 +178,36 @@ length-only bound on purpose: it is the half this repo controls. The receiver sh
 label as well; neither guard is sufficient alone.
 
 Wire format, signature and refusal codes are the receiver's contract
-(fractalbot `specs/flare-dispatch-notify.md`, `POST /flare-dispatch/notify`). The envelope is
-byte-identical to the verdict callback — same header, same raw-bytes canonicalization, same
-`HKDF-SHA256(ikm, "", "flare-dispatch/slack-notify/v1")` derivation, same `SLACK_NOTIFY_SECRET` (or
+(fractalbot `specs/flare-dispatch-notify.md`, `POST /flare-dispatch/notify`). The envelope matches
+the verdict callback — same header, same raw-bytes canonicalization, same `SLACK_NOTIFY_SECRET` (or
 `HMAC_SECRET`) keying material. `apps/dispatcher/src/slack-notify.notice.test.ts` carries the
 receiver's own verification verbatim so the two repos cannot drift silently.
+
+### The notice signs under its own key
+
+The **label differs**, and that is a boundary rather than bookkeeping:
+
+```
+k_notice = HKDF-SHA256(ikm, salt = "", info = "flare-dispatch/slack-notice/v1")
+```
+
+One label would make the two surfaces one key, and the two payloads are not equally dangerous.
+`SlackVerdictPayload.origin` carries `channel` and `thread_ts` — it *names a destination*, because
+it relays a conversation the caller was already in. The notice body deliberately cannot. Under a
+shared key, anything able to sign a notice could sign a verdict naming any channel the bot can see,
+and "the shape is the security property" would be worth nothing: a shape bounds only while nothing
+else can sign a different shape with the same key. The weaker credential is now structurally unable
+to reach the stronger surface.
+
+The `ikm` is still one secret. Two labels off one secret is domain separation; two secrets would be
+a second thing to rotate for a separation HKDF already gives.
+
+> **Deploy the receiver first.** The receiver must derive notices under the exact string
+> `flare-dispatch/slack-notice/v1`. A receiver still on `flare-dispatch/slack-notify/v1` rejects
+> every notice with a 401 — silently and indefinitely, because a failed notice is correctly never
+> fatal, so nothing turns red and nothing pages. Verdicts are unaffected either way: their label is
+> unchanged, so an already-deployed receiver keeps verifying them. Ordering: receiver accepts the
+> new label → deploy this dispatcher → the dogfood below.
 
 ### At most once, across a retry
 
@@ -232,6 +259,13 @@ namespace of the **origin-gated policy** and a cron notice must not inherit that
 be enabled as a side effect of it; and the two have different **blast radii**, so pointing the
 announcement path elsewhere must not silence in-thread verdicts a human is waiting on.
 
+The radii differ in the **key**, not only in the URL. Each surface derives under its own HKDF label
+(§ The notice signs under its own key), so what a notice endpoint holds is a credential that can
+publish a use case and cannot name a channel. Pointing `slack-notice.url` at a staging receiver
+hands that receiver exactly that and no more — it cannot forge a verdict into a room. Before the
+split the separation stopped at the URL: one derived key signed both, so an operator moving the
+announcement path was moving an endpoint while the authority behind it stayed whole.
+
 Delivery is best-effort, like the verdict callback and the completion-notify email: no ingress
 configured, no signing key, a 5xx, a timeout — all are a logged line and `delivered: false`. A run's
 verdict is earned by what it did, and an announcement that did not land is not one of those things.
@@ -252,7 +286,7 @@ The batch path is **off** until a target repo is pinned. Nothing here is set by 
 | `slack-notice.url` | CONFIG_KV | Where a notice POSTs — the receiver's `/flare-dispatch/notify` |
 | `SLACK_NOTICE_URL` | wrangler var | Same, lower precedence |
 | `SLACK_ORIGIN_HMAC_SECRET` | Worker secret | Optional Slack-scoped dispatch key |
-| `SLACK_NOTIFY_SECRET` | Worker secret | Optional dedicated key material for **both** callbacks |
+| `SLACK_NOTIFY_SECRET` | Worker secret | Optional dedicated key material for **both** callbacks — one secret, two keys (one HKDF label each) |
 
 ```bash
 wrangler kv key put --binding=CONFIG_KV "slack-origin.repo" "owner/repo"
@@ -298,8 +332,10 @@ the first deploy that carries the notice path.
 
 1. **Point it.** `wrangler kv key put --binding=CONFIG_KV "slack-notice.url" …` (command above), and
    confirm the receiver maps `org-spec-audit` in its own `FLARE_NOTIFY_CHANNELS`.
-2. **Sync the key.** The receiver's `FLARE_NOTIFY_SECRET` must equal `SLACK_NOTIFY_SECRET` here (or
-   both sides share `HMAC_SECRET`). A 401 means drift, not a bug.
+2. **Sync the key material, and check the label.** The receiver's `FLARE_NOTIFY_SECRET` must equal
+   `SLACK_NOTIFY_SECRET` here (or both sides share `HMAC_SECRET`) — and the receiver must derive the
+   notice key under `flare-dispatch/slack-notice/v1`, not the verdict label. A 401 means drift, and
+   with a matching secret the label is what to check first.
 3. **The round trip.** Let the 05:45 UTC tick run against an estate with at least one open question.
    Expect the questions PR on the control repo **and** the same text in the mapped channel, carrying
    the receiver's `via flare-dispatch` footer and the PR link.
