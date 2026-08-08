@@ -15,11 +15,11 @@
 // in production, on a line that type-checked and reviewed clean.
 //
 // So: an unbuildable method in a LIVE Layer gets implemented, deleted from the
-// service interface, or degraded where the degraded answer cannot be mistaken
-// for data — never parked on a `die`. `browser.newPage` was parked on one and
-// is gone. A live Layer still carrying a `die` is a violation to fix, not a
-// precedent to copy. The rule, and how to pick between the three endings, is
-// written up in AGENTS.md § Conventions.
+// service interface, or degraded where nothing downstream decides on the
+// degraded answer — never parked on a `die`. `browser.newPage` was parked on
+// one and is gone. A live Layer still carrying a `die` is a violation to fix,
+// not a precedent to copy. The rule, and how to pick between the three
+// endings, is written up in AGENTS.md § Conventions.
 //
 // Live as of PR8: `Cache` (R2-backed, see cache-r2.ts — always wired) and
 // `Config` (KV-backed, see config-kv.ts — wired when the `CONFIG_KV` binding
