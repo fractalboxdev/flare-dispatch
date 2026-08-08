@@ -56,6 +56,7 @@ import {
   ReadFileFailed,
   Sandbox as SandboxTag,
   type SandboxService,
+  flattenCommand,
 } from "@fractalboxdev/flare-dispatch-core";
 import { getInstallationToken } from "@fractalboxdev/flare-dispatch-github-app";
 import type { ChecksGithubConfig } from "./checks-github";
@@ -63,8 +64,7 @@ import { previewSafeSandboxId } from "./preview-sandbox-id";
 import { authenticateCloneUrl, repoUrl } from "./sandbox-clone-url";
 
 /** Normalise a `command` (string | array) to a single shell string. */
-const asCommand = (command: string | readonly string[]): string =>
-  typeof command === "string" ? command : command.join(" ");
+const asCommand = flattenCommand;
 
 /**
  * Cap the stdout/stderr *preview* carried inline in the `ExecResult`. The FULL

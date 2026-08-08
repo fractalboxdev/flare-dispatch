@@ -59,6 +59,37 @@ export type ExecOpts = {
 };
 
 /**
+ * Characters safe to leave bare in a POSIX shell word. Anything outside this
+ * set gets quoted.
+ */
+const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/**
+ * Flatten an argv array into the single shell string the container runtimes
+ * execute — quoting each element so it stays ONE argument.
+ *
+ * The array form of `ExecOpts.command` is argv: each element is one argument,
+ * and a `["sh", "-lc", script]` call means "run this whole script". A bare
+ * `join(" ")` breaks exactly that, because the script's own spaces re-split it:
+ * `sh -lc for f in $(...)` hands `sh` the script `"for"` and the rest as
+ * positional args, which is a syntax error, and `sh -lc git log --oneline`
+ * runs bare `git`. Both fail in ways that look like the command itself
+ * misbehaving — a git usage dump, an exit 2 from a shell that never ran the
+ * script — rather than like a quoting bug, which is why this went unnoticed:
+ * every caller passing a script had never run in production.
+ *
+ * Elements that need no quoting are left bare so logs stay readable.
+ */
+export const flattenCommand = (command: string | readonly string[]): string =>
+  typeof command === "string"
+    ? command
+    : command
+        .map((arg) =>
+          arg.length > 0 && SHELL_SAFE.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`,
+        )
+        .join(" ");
+
+/**
  * The result of exposing a container port: a publicly-reachable URL. A process
  * bound to the container's `localhost:<port>` is not reachable from outside the
  * container (e.g. a cloud browser dialling it); `exposePort` returns a public

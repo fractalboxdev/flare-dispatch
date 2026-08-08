@@ -93,6 +93,7 @@ export {
 export {
   sandbox,
   Sandbox,
+  flattenCommand,
   type SandboxService,
   type Container,
   type DetachedHandle,

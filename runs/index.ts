@@ -19,6 +19,7 @@ export { productDemo } from "./product-demo";
 export { playwrightDemo } from "./playwright-demo";
 export { prReview } from "./pr-review";
 export { specDriftPr } from "./spec-drift-pr";
+export { orgSpecAudit } from "./org-spec-audit";
 export { ciTriagePr } from "./ci-triage-pr";
 export { refreshFixtures } from "./refresh-fixtures";
 export { selfHealPr } from "./self-heal-pr";

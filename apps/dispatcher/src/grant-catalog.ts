@@ -154,6 +154,10 @@ export const RUN_GRANTS: Readonly<Record<string, RunGrant>> = {
   // installation token (ADR-0006), so no API host is admitted.
   "pr-review": { profiles: ["public-repo-read"], rollout: "legacy" },
   "spec-drift-pr": { profiles: JS_BUILD, rollout: "legacy" },
+  // Narrower than its sibling on purpose: the sweep only clones and reads with
+  // `git`, never installs or builds, and its single write is the Worker-side
+  // draft PR. No `js-install`.
+  "org-spec-audit": { profiles: ["public-repo-read"], rollout: "legacy" },
   "ci-triage-pr": { profiles: JS_BUILD, rollout: "legacy" },
   "refresh-fixtures": { profiles: JS_BUILD, rollout: "legacy" },
   "release-notes": { profiles: JS_BUILD, rollout: "legacy" },
