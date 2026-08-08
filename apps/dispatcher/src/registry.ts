@@ -20,6 +20,7 @@ import {
   finopsAudit,
   matrixFanout,
   offloadTest,
+  orgSpecAudit,
   oxlint,
   playwrightDemo,
   playwrightE2E,
@@ -44,6 +45,10 @@ const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
   [playwrightDemo.name]: playwrightDemo as Run<unknown, unknown>,
   [prReview.name]: prReview as Run<unknown, unknown>,
   [specDriftPr.name]: specDriftPr as Run<unknown, unknown>,
+  // The other half of the internal audit: `spec-drift-pr` proposes the drift a
+  // machine can fix, this sweeps the estate for what needs a human answer and
+  // opens ONE control-plane PR carrying them grouped and deduplicated.
+  [orgSpecAudit.name]: orgSpecAudit as Run<unknown, unknown>,
   [ciTriagePr.name]: ciTriagePr as Run<unknown, unknown>,
   // The fix stage `ci-triage-pr`'s diagnosis (and `product-demo`'s confirmed
   // demo failures) escalate into. Demo-class auto-dispatch is gated OFF unless
@@ -104,6 +109,19 @@ export const schedulesByCron = (cron: string): readonly ScheduleMatch[] => {
   }
   return matches;
 };
+
+/**
+ * Every registered run that declares a schedule, with the crons it declares.
+ *
+ * The enumeration the cron-parity test reads to answer the reverse of
+ * `schedulesByCron`: not "which run does this expression wake", but "which run
+ * declared a schedule nothing arms". A run exported and registered but absent
+ * from `wrangler.jsonc` never fires, and nothing else in the system says so.
+ */
+export const scheduledRuns = (): readonly { name: string; crons: readonly string[] }[] =>
+  Object.values(RUN_REGISTRY)
+    .filter((run) => (run.schedules?.length ?? 0) > 0)
+    .map((run) => ({ name: run.name, crons: (run.schedules ?? []).map((s) => s.cron) }));
 
 /**
  * Find every (run, trigger-spec) pair in the registry whose `event` matches
