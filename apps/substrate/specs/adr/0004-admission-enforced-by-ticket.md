@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
+- **Implementation:** `shipped` — `src/admission/ticket.ts:71` mint / `:87` verify, gated at `src/sandbox-do.ts:204,221`, minted at `src/facade.ts:126`. Tests: `admission/ticket.test.ts`, `admission/pools.test.ts`, `sandbox-do.workers.test.ts`.
 
 ## Context
 
