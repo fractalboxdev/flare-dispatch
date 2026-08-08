@@ -369,6 +369,13 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
     // sends whoever reads it off to build something that is already there.
     // `grant-catalog.ts`'s `detached-process` gap states the real clearing
     // condition — the run body moves off `sandbox.runDetached` — and stays.
+    //
+    // Wiring this to `startDetached` is deliberately NOT part of correcting the
+    // text. Closing the gap for a run takes three things, not one: this adapter
+    // wired, that run's body moved over, and its `rollout` graduated through a
+    // clean `report` window (`adoption-runbook.md` § 3). Moving where untrusted
+    // code executes is that runbook's decision to make, not a side effect of
+    // fixing a comment.
     runDetached: () =>
       Effect.fail(
         new ContainerLaunchFailed({
