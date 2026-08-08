@@ -387,21 +387,35 @@ const BODY_MAX_CHARS = 4_000;
  * ends the data block early and everything after it reads as prompt — the exact
  * shape of every delimiter-escape attack. Control characters go too, since a
  * body is prose and a stray NUL or ESC is only ever an attempt at something.
+ *
+ * **Bound first, then sanitize.** The caller's input is an issue body a stranger
+ * wrote, so the work done on it has to be bounded by something the stranger does
+ * not choose. Sanitizing first and truncating afterwards made the cost O(whole
+ * body) — several full-string copies plus one array element per character — for
+ * an output that was never going to exceed {@link BODY_MAX_CHARS} anyway, and
+ * this runs once per issue per tick. Slicing first makes `BODY_MAX_CHARS` a
+ * bound on the processing as well as on the prompt.
+ *
+ * Slicing before the strip is safe: a delimiter straddling the cut survives only
+ * as a fragment, and a fragment is not a delimiter. Whole delimiters inside the
+ * bounded text are still replaced below.
  */
 export const fenceUntrusted = (text: string): string => {
-  const stripped = text
+  const truncated = text.length > BODY_MAX_CHARS;
+  const bounded = truncated ? text.slice(0, BODY_MAX_CHARS) : text;
+
+  const defanged = bounded
     .split(UNTRUSTED_FENCE)
     .join("[fence]")
     .split(UNTRUSTED_FENCE_END)
-    .join("[fence]")
-    .split("")
-    .map((ch) => (isControl(ch) ? " " : ch))
-    .join("");
-  const bounded =
-    stripped.length > BODY_MAX_CHARS
-      ? `${stripped.slice(0, BODY_MAX_CHARS)}\n…[truncated]`
-      : stripped;
-  return `${UNTRUSTED_FENCE}\n${bounded}\n${UNTRUSTED_FENCE_END}`;
+    .join("[fence]");
+
+  // One pass, no per-character array: `for…of` walks code points, so a
+  // surrogate pair is one iteration rather than two lone halves.
+  let clean = "";
+  for (const ch of defanged) clean += isControl(ch) ? " " : ch;
+
+  return `${UNTRUSTED_FENCE}\n${clean}${truncated ? "\n…[truncated]" : ""}\n${UNTRUSTED_FENCE_END}`;
 };
 
 /**

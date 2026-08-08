@@ -219,6 +219,26 @@ describe("fenceUntrusted — the body cannot close its own fence", () => {
     expect(fenceUntrusted("a\u0000b\u001bc")).toContain("a b c");
   });
 
+  it("still strips the delimiter in a body that is ALSO over the limit", () => {
+    // The bound is applied before the strip, so the two have to be checked
+    // together: a huge body must not smuggle a delimiter through by being long.
+    const hostile = `${"x".repeat(100)}${UNTRUSTED_FENCE}${"y".repeat(50_000)}`;
+    const fenced = fenceUntrusted(hostile);
+    // Exactly the opening delimiter this function added — none from the body.
+    expect(fenced.split(UNTRUSTED_FENCE).length - 1).toBe(1);
+    expect(fenced).toContain("[fence]");
+    expect(fenced).toContain("truncated");
+    expect(fenced.length).toBeLessThan(5_000);
+  });
+
+  it("a delimiter straddling the cut survives only as a fragment", () => {
+    // Padding chosen so the slice lands inside the delimiter.
+    const pad = "z".repeat(3_990);
+    const fenced = fenceUntrusted(`${pad}${UNTRUSTED_FENCE}tail`);
+    expect(fenced.split(UNTRUSTED_FENCE).length - 1).toBe(1);
+    expect(fenced).not.toContain("tail");
+  });
+
   it("bounds a body that is trying to be a novel", () => {
     const fenced = fenceUntrusted("x".repeat(50_000));
     expect(fenced.length).toBeLessThan(5_000);
