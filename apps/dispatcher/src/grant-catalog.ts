@@ -162,6 +162,12 @@ export const RUN_GRANTS: Readonly<Record<string, RunGrant>> = {
   // `github` call and its single write is the Worker-side draft PR. An empty
   // profile list is the honest grant, not an oversight.
   "triage-prs": { profiles: [], rollout: "legacy" },
+  // Same shape, and the same empty grant. `triage-issues` reads issues and
+  // writes labels/comments/closes entirely Worker-side through the `github`
+  // capability, and its model call goes through the metered proxy — so it needs
+  // no egress profile at all. Notably it never executes the command repros it
+  // captures, which is exactly why it needs no container to execute them in.
+  "triage-issues": { profiles: [], rollout: "legacy" },
   "ci-triage-pr": { profiles: JS_BUILD, rollout: "legacy" },
   "refresh-fixtures": { profiles: JS_BUILD, rollout: "legacy" },
   "release-notes": { profiles: JS_BUILD, rollout: "legacy" },

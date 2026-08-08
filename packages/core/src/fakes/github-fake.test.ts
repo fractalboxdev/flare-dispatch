@@ -1,173 +1,138 @@
-// Tests for the in-memory `Github` fake — the read-only GitHub capability.
+// Tests for the in-memory `Github` fake.
 //
-// Pins the filters the fake applies on `repositories()` and
-// `openPullRequests()`: archived skip, pushedWithinDays cutoff, drafts skip,
-// repos allow-list, updatedWithinHours cutoff, plus the call recording.
+// Pins the filters `issues()` applies (repo, state, labels, recency) and the
+// mutations the state-machine writes make to the seeded issue — a run test
+// asserts "the label landed", so the fake has to actually move it.
 
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import {
-  Github,
-  type PullRequestHistoryRef,
-  type PullRequestRef,
-  type RepoRef,
-} from "../services/github";
+import { Github, type IssueRef, type PullRequestHistoryRef } from "../services/github";
 import { makeGithubFake } from "./github-fake";
 
 const NOW = 1_700_000_000_000;
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
 
-const repo = (overrides: Partial<RepoRef> = {}): RepoRef => ({
-  repo: "owner/repo",
-  branchDefault: "main",
-  installationId: 1,
-  archived: false,
-  pushedAt: NOW - DAY,
-  ...overrides,
-});
-
-const pr = (overrides: Partial<PullRequestRef> = {}): PullRequestRef => ({
+const issue = (overrides: Partial<IssueRef> = {}): IssueRef => ({
   repo: "owner/repo",
   number: 1,
-  headSha: "abc",
-  baseSha: "def",
-  title: "Test PR",
-  draft: false,
+  title: "Test issue",
+  body: "",
+  state: "open",
   labels: [],
   author: "alice",
-  installationId: 1,
+  authorAssociation: "NONE",
+  url: "https://github.com/owner/repo/issues/1",
+  commentCount: 0,
+  createdAt: NOW - DAY,
   updatedAt: NOW - HOUR,
   ...overrides,
 });
 
-describe("makeGithubFake — repositories()", () => {
-  it("returns seeded repos, skipping archived by default", async () => {
-    const { layer, state } = makeGithubFake({
-      now: NOW,
-      repositories: [
-        repo({ repo: "owner/active" }),
-        repo({ repo: "owner/archived", archived: true }),
-      ],
-    });
-    const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.repositories()).pipe(Effect.provide(layer)),
+describe("makeGithubFake — issues()", () => {
+  const seeded = [
+    issue({ number: 1 }),
+    issue({ number: 2, labels: ["triage:needs-repro"] }),
+    issue({ number: 3, state: "closed" }),
+    issue({ number: 4, repo: "owner/other" }),
+    issue({ number: 5, updatedAt: NOW - 30 * DAY }),
+  ];
+
+  const read = async (opts: {
+    repo: string;
+    state?: "open" | "closed" | "all";
+    labels?: readonly string[];
+    updatedWithinDays?: number;
+  }) => {
+    const { layer, state } = makeGithubFake({ now: NOW, issues: seeded });
+    const got = await Effect.runPromise(
+      Effect.flatMap(Github, (g) => g.issues(opts)).pipe(Effect.provide(layer)),
     );
-    expect(result.map((r) => r.repo)).toEqual(["owner/active"]);
-    expect(state.repositoriesCalls).toHaveLength(1);
-    expect(state.repositoriesCalls[0]).toEqual({
-      includeArchived: false,
-      pushedWithinDays: undefined,
-    });
+    return { got, state };
+  };
+
+  it("returns this repo's open issues and records the call", async () => {
+    const { got, state } = await read({ repo: "owner/repo" });
+    expect(got.map((i) => i.number)).toEqual([1, 2, 5]);
+    expect(state.issuesCalls[0]).toMatchObject({ repo: "owner/repo", state: "open" });
   });
 
-  it("includeArchived: true returns archived repos too", async () => {
-    const { layer } = makeGithubFake({
-      now: NOW,
-      repositories: [
-        repo({ repo: "owner/active" }),
-        repo({ repo: "owner/archived", archived: true }),
-      ],
-    });
-    const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.repositories({ includeArchived: true })).pipe(
-        Effect.provide(layer),
-      ),
-    );
-    expect(result.map((r) => r.repo).sort()).toEqual(["owner/active", "owner/archived"]);
+  it("never leaks another repo's issues", async () => {
+    const { got } = await read({ repo: "owner/repo" });
+    expect(got.every((i) => i.repo === "owner/repo")).toBe(true);
   });
 
-  it("pushedWithinDays cutoff filters idle repos", async () => {
-    const { layer } = makeGithubFake({
-      now: NOW,
-      repositories: [
-        repo({ repo: "owner/fresh", pushedAt: NOW - 2 * DAY }),
-        repo({ repo: "owner/stale", pushedAt: NOW - 60 * DAY }),
-      ],
-    });
-    const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.repositories({ pushedWithinDays: 7 })).pipe(
-        Effect.provide(layer),
-      ),
-    );
-    expect(result.map((r) => r.repo)).toEqual(["owner/fresh"]);
+  it("filters by state and by label", async () => {
+    expect((await read({ repo: "owner/repo", state: "closed" })).got.map((i) => i.number)).toEqual([
+      3,
+    ]);
+    expect(
+      (await read({ repo: "owner/repo", labels: ["triage:needs-repro"] })).got.map((i) => i.number),
+    ).toEqual([2]);
+  });
+
+  it("applies the recency cutoff", async () => {
+    const { got } = await read({ repo: "owner/repo", updatedWithinDays: 7 });
+    expect(got.map((i) => i.number)).toEqual([1, 2]);
   });
 });
 
-describe("makeGithubFake — openPullRequests()", () => {
-  it("skips drafts by default", async () => {
+describe("makeGithubFake — the state-machine writes", () => {
+  const seedOne = () => makeGithubFake({ now: NOW, issues: [issue({ number: 7 })] });
+
+  it("addIssueLabels records the call and moves the label onto the issue", async () => {
+    const { layer, state } = seedOne();
+    await Effect.runPromise(
+      Effect.flatMap(Github, (g) =>
+        g.addIssueLabels({ repo: "owner/repo", issue: 7, labels: ["triage:diagnosed"] }),
+      ).pipe(Effect.provide(layer)),
+    );
+    expect(state.addIssueLabelsCalls).toEqual([
+      { repo: "owner/repo", issue: 7, labels: ["triage:diagnosed"] },
+    ]);
+    expect(state.issues[0]!.labels).toEqual(["triage:diagnosed"]);
+  });
+
+  it("removeIssueLabel takes it off again, and tolerates one that was never on", async () => {
     const { layer, state } = makeGithubFake({
       now: NOW,
-      pullRequests: [pr({ number: 1, draft: false }), pr({ number: 2, draft: true })],
+      issues: [issue({ number: 7, labels: ["triage:needs-repro"] })],
     });
-    const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.openPullRequests()).pipe(Effect.provide(layer)),
-    );
-    expect(result.map((p) => p.number)).toEqual([1]);
-    expect(state.openPullRequestsCalls[0]).toEqual({
-      includeDrafts: false,
-      updatedWithinHours: undefined,
-      repos: undefined,
-    });
-  });
-
-  it("includeDrafts: true returns drafts", async () => {
-    const { layer } = makeGithubFake({
-      now: NOW,
-      pullRequests: [pr({ number: 1, draft: true })],
-    });
-    const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.openPullRequests({ includeDrafts: true })).pipe(
-        Effect.provide(layer),
-      ),
-    );
-    expect(result.map((p) => p.number)).toEqual([1]);
-  });
-
-  it("repos allow-list scopes results", async () => {
-    const { layer } = makeGithubFake({
-      now: NOW,
-      pullRequests: [
-        pr({ repo: "owner/a", number: 1 }),
-        pr({ repo: "owner/b", number: 2 }),
-        pr({ repo: "owner/c", number: 3 }),
-      ],
-    });
-    const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.openPullRequests({ repos: ["owner/a", "owner/c"] })).pipe(
-        Effect.provide(layer),
-      ),
-    );
-    expect(result.map((p) => `${p.repo}#${p.number}`).sort()).toEqual(["owner/a#1", "owner/c#3"]);
-  });
-
-  it("updatedWithinHours cutoff filters stale PRs", async () => {
-    const { layer } = makeGithubFake({
-      now: NOW,
-      pullRequests: [
-        pr({ number: 1, updatedAt: NOW - 2 * HOUR }),
-        pr({ number: 2, updatedAt: NOW - 48 * HOUR }),
-      ],
-    });
-    const result = await Effect.runPromise(
-      Effect.flatMap(Github, (g) => g.openPullRequests({ updatedWithinHours: 24 })).pipe(
-        Effect.provide(layer),
-      ),
-    );
-    expect(result.map((p) => p.number)).toEqual([1]);
-  });
-
-  it("records each call", async () => {
-    const { layer, state } = makeGithubFake();
     await Effect.runPromise(
       Effect.gen(function* () {
         const g = yield* Github;
-        yield* g.openPullRequests();
-        yield* g.openPullRequests({ updatedWithinHours: 12 });
-        yield* g.openPullRequests({ repos: ["x/y"] });
+        yield* g.removeIssueLabel({ repo: "owner/repo", issue: 7, label: "triage:needs-repro" });
+        yield* g.removeIssueLabel({ repo: "owner/repo", issue: 7, label: "never-applied" });
       }).pipe(Effect.provide(layer)),
     );
-    expect(state.openPullRequestsCalls).toHaveLength(3);
+    expect(state.issues[0]!.labels).toEqual([]);
+    expect(state.removeIssueLabelCalls).toHaveLength(2);
+  });
+
+  it("commentOnIssue and assignIssue record what they were asked to do", async () => {
+    const { layer, state } = seedOne();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const g = yield* Github;
+        yield* g.commentOnIssue({ repo: "owner/repo", issue: 7, body: "hello" });
+        yield* g.assignIssue({ repo: "owner/repo", issue: 7, assignees: ["alice"] });
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(state.commentOnIssueCalls[0]).toMatchObject({ issue: 7, body: "hello" });
+    expect(state.assignIssueCalls[0]).toMatchObject({ issue: 7, assignees: ["alice"] });
+  });
+
+  it("closeIssueAsDuplicate closes it and keeps the link", async () => {
+    const { layer, state } = seedOne();
+    await Effect.runPromise(
+      Effect.flatMap(Github, (g) =>
+        g.closeIssueAsDuplicate({ repo: "owner/repo", issue: 7, duplicateOf: 3 }),
+      ).pipe(Effect.provide(layer)),
+    );
+    expect(state.closeIssueAsDuplicateCalls).toEqual([
+      { repo: "owner/repo", issue: 7, duplicateOf: 3 },
+    ]);
+    expect(state.issues[0]!.state).toBe("closed");
   });
 });
 

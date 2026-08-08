@@ -67,6 +67,22 @@ export {
   type ReadRepoTextFileOptions,
   type ReadRepoTextFileResult,
 } from "./repo-files";
+export {
+  addIssueLabels,
+  assignIssue,
+  closeIssueAsDuplicate,
+  createIssueComment,
+  listIssues,
+  removeIssueLabel,
+  type AddIssueLabelsOptions,
+  type AssignIssueOptions,
+  type AuthorAssociation,
+  type CloseIssueAsDuplicateOptions,
+  type CreateIssueCommentOptions,
+  type IssueListItem,
+  type ListIssuesOptions,
+  type RemoveIssueLabelOptions,
+} from "./issues";
 export { createRelease, type CreateReleaseOptions, type CreateReleaseResult } from "./releases";
 export {
   fetchPublicAppRegistration,

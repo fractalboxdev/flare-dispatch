@@ -52,3 +52,23 @@ export {
   type MergeVerdict,
   type RefusalReason,
 } from "./automerge-gate";
+export {
+  classifierUser,
+  decideIssueActions,
+  duplicateComment,
+  extractCommandRepro,
+  fenceUntrusted,
+  parseVerdict,
+  CLASSIFIER_SCHEMA,
+  CLASSIFIER_SYSTEM,
+  DECLINED_LABEL,
+  NEEDS_REPRO_COMMENT,
+  TRIAGE_LABELS,
+  UNTRUSTED_FENCE,
+  VERDICT_KINDS,
+  WRITEABLE_LABELS,
+  type CapturedRepro,
+  type IssueAction,
+  type IssueDecision,
+  type IssueVerdict,
+} from "./issue-triage";

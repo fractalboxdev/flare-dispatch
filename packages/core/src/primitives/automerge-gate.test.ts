@@ -371,8 +371,12 @@ describe("evaluateAutomerge — a self-declared run marker is not authorship", (
 // --- loadAutomergeConfig: unreadable must mean refuse -----------------------
 
 const githubService = (over: Partial<GithubService>): GithubService => ({
-  repositories: () => Effect.succeed([]),
-  openPullRequests: () => Effect.succeed([]),
+  issues: () => Effect.succeed([]),
+  addIssueLabels: () => Effect.void,
+  removeIssueLabel: () => Effect.void,
+  commentOnIssue: () => Effect.void,
+  assignIssue: () => Effect.void,
+  closeIssueAsDuplicate: () => Effect.void,
   actionRuns: () => Effect.succeed([]),
   pullRequestHistory: () => Effect.succeed([]),
   readTextFile: () => Effect.succeed({ found: false }),

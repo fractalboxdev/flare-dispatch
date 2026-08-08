@@ -23,13 +23,19 @@
 // Spec: specs/04-gha-integration.md § Check-runs callback (symmetric write).
 
 import {
+  addIssueLabels,
+  assignIssue,
+  closeIssueAsDuplicate,
+  createIssueComment,
   createPullReview,
   createRelease,
   getInstallationToken,
   listActionRuns,
+  listIssues,
   listPullRequests,
   openDraftPullRequest,
   readRepoTextFile,
+  removeIssueLabel,
   resolveRepoInstallationId,
   GithubApiError as GithubAppApiError,
 } from "@fractalboxdev/flare-dispatch-github-app";
@@ -39,6 +45,7 @@ import {
   Github,
   GitHubApiError,
   type GithubService,
+  type IssueRef,
   type PullRequestHistoryRef,
   type ReleaseResult,
   type TextFileResult,
@@ -140,12 +147,17 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
       );
     });
 
-  const service: GithubService = {
-    repositories: () =>
-      Effect.die("github.repositories: not implemented in this deploy — V3 capability"),
-    openPullRequests: () =>
-      Effect.die("github.openPullRequests: not implemented in this deploy — V3 capability"),
+  /**
+   * The uncredentialed answer for a READ: fail, never an empty list.
+   *
+   * An empty issue list is indistinguishable from "nothing to triage", and a
+   * scheduled run would act on it — labelling nothing, closing nothing, and
+   * reporting a clean estate. Same reasoning `pullRequestHistory` states.
+   */
+  const readNeedsCredentials = <A>(): Effect.Effect<A, GitHubApiError> =>
+    Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" }));
 
+  const service: GithubService = {
     actionRuns: ({ repos, createdWithinHours, status, conclusion } = {}) =>
       Effect.gen(function* () {
         if (config === undefined) {
@@ -252,6 +264,76 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
         return yield* ghCall(() =>
           readRepoTextFile({ token, repo, path, ...(ref !== undefined ? { ref } : {}) }),
         );
+      }),
+
+    issues: ({ repo, state, labels, updatedWithinDays, maxPages, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* readNeedsCredentials<readonly IssueRef[]>();
+        const token = yield* mintToken(config, repo, installationId);
+        const raw = yield* ghCall(() =>
+          listIssues({
+            token,
+            repo,
+            ...(state !== undefined ? { state } : {}),
+            ...(labels !== undefined && labels.length > 0 ? { labels } : {}),
+            ...(updatedWithinDays !== undefined
+              ? { updatedSince: Date.now() - updatedWithinDays * 86_400_000 }
+              : {}),
+            ...(maxPages !== undefined ? { maxPages } : {}),
+          }),
+        );
+        return raw.map((i): IssueRef => ({
+          repo,
+          number: i.number,
+          title: i.title,
+          body: i.body,
+          state: i.state,
+          labels: i.labels,
+          author: i.author,
+          authorAssociation: i.authorAssociation,
+          url: i.url,
+          commentCount: i.commentCount,
+          createdAt: Date.parse(i.createdAt) || 0,
+          updatedAt: Date.parse(i.updatedAt) || 0,
+        }));
+      }),
+
+    // The four state-machine writes + the one close. Each degrades to a logged
+    // no-op without credentials, matching `pullReview` — though in practice the
+    // read above fails first, so an uncredentialed deploy never reaches here.
+    addIssueLabels: ({ repo, issue, labels, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
+        const token = yield* mintToken(config, repo, installationId);
+        yield* ghCall(() => addIssueLabels({ token, repo, issue, labels }));
+      }),
+
+    removeIssueLabel: ({ repo, issue, label, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
+        const token = yield* mintToken(config, repo, installationId);
+        yield* ghCall(() => removeIssueLabel({ token, repo, issue, label }));
+      }),
+
+    commentOnIssue: ({ repo, issue, body, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
+        const token = yield* mintToken(config, repo, installationId);
+        yield* ghCall(() => createIssueComment({ token, repo, issue, body }));
+      }),
+
+    assignIssue: ({ repo, issue, assignees, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
+        const token = yield* mintToken(config, repo, installationId);
+        yield* ghCall(() => assignIssue({ token, repo, issue, assignees }));
+      }),
+
+    closeIssueAsDuplicate: ({ repo, issue, duplicateOf, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
+        const token = yield* mintToken(config, repo, installationId);
+        yield* ghCall(() => closeIssueAsDuplicate({ token, repo, issue, duplicateOf }));
       }),
 
     pullReview: ({ repo, pr, sha, body, installationId }) =>

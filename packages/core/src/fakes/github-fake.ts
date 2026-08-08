@@ -1,7 +1,7 @@
 // @fractalboxdev/flare-dispatch-core — Github fake (read-only GitHub access).
 //
 // In-memory fake of the `github` capability. Tests pre-populate the state with
-// `repositories` / `pullRequests` / `pullRequestHistory` arrays and a `files`
+// `issues` / `workflowRuns` / `pullRequestHistory` arrays and a `files`
 // map; the service applies the documented filters (archived skip, push age,
 // draft skip, repo allow-list, update age, head-branch prefix) and returns the
 // surviving rows. Call counts are recorded for assertions.
@@ -21,22 +21,19 @@ import {
   type DraftPullRequestResult,
   Github,
   type GithubService,
+  type IssueRef,
   type OpenDraftPullRequest,
   type PullRequestHistoryRef,
-  type PullRequestRef,
   type PullReviewRequest,
   type ReadTextFileRequest,
   type ReleaseResult,
-  type RepoRef,
   type TextFileResult,
   type WorkflowRunRef,
 } from "../services/github";
 
 export type GithubFakeState = {
-  /** Seeded repos — returned by `repositories` (after filtering). */
-  repositories: RepoRef[];
-  /** Seeded PRs — returned by `openPullRequests` (after filtering). */
-  pullRequests: PullRequestRef[];
+  /** Seeded issues — returned by `issues` (after filtering). */
+  issues: IssueRef[];
   /** Seeded workflow runs — returned by `actionRuns` (after filtering). */
   workflowRuns: WorkflowRunRef[];
   /** Seeded PR history — returned by `pullRequestHistory` (after filtering). */
@@ -47,16 +44,12 @@ export type GithubFakeState = {
    * caller passes a matching `ref`.
    */
   files: Record<string, string>;
-  /** Every `repositories` call, in order. */
-  readonly repositoriesCalls: Array<{
-    includeArchived: boolean;
-    pushedWithinDays?: number;
-  }>;
-  /** Every `openPullRequests` call, in order. */
-  readonly openPullRequestsCalls: Array<{
-    updatedWithinHours?: number;
-    includeDrafts: boolean;
-    repos?: readonly string[];
+  /** Every `issues` call, in order. */
+  readonly issuesCalls: Array<{
+    repo: string;
+    state: "open" | "closed" | "all";
+    labels?: readonly string[];
+    updatedWithinDays?: number;
   }>;
   /** Every `actionRuns` call, in order. */
   readonly actionRunsCalls: Array<{
@@ -81,6 +74,20 @@ export type GithubFakeState = {
   readonly openDraftPullRequestCalls: OpenDraftPullRequest[];
   /** Every `createRelease` call, in order — lets a test assert a release published. */
   readonly createReleaseCalls: CreateRelease[];
+  /** Every label ADD, in order. */
+  readonly addIssueLabelsCalls: Array<{ repo: string; issue: number; labels: readonly string[] }>;
+  /** Every label REMOVE, in order. */
+  readonly removeIssueLabelCalls: Array<{ repo: string; issue: number; label: string }>;
+  /** Every issue comment, in order — body included, so a test can assert the template. */
+  readonly commentOnIssueCalls: Array<{ repo: string; issue: number; body: string }>;
+  /** Every assignment, in order. */
+  readonly assignIssueCalls: Array<{ repo: string; issue: number; assignees: readonly string[] }>;
+  /**
+   * Every close, in order. The only close there is, and it carries the link —
+   * so `closeIssueAsDuplicateCalls` being empty IS the assertion that nothing
+   * was closed, with no second close path to check.
+   */
+  readonly closeIssueAsDuplicateCalls: Array<{ repo: string; issue: number; duplicateOf: number }>;
 };
 
 /** Default reference clock — fakes use this when callers don't override. */
@@ -99,8 +106,7 @@ const HISTORY_MAX_PAGES_DEFAULT = 5;
 
 export const makeGithubFake = (
   opts: {
-    repositories?: readonly RepoRef[];
-    pullRequests?: readonly PullRequestRef[];
+    issues?: readonly IssueRef[];
     workflowRuns?: readonly WorkflowRunRef[];
     /** PR history (closed PRs included) — what `pullRequestHistory` returns. */
     pullRequestHistory?: readonly PullRequestHistoryRef[];
@@ -119,19 +125,22 @@ export const makeGithubFake = (
   } = {},
 ): { layer: Layer.Layer<Github>; state: GithubFakeState } => {
   const state: GithubFakeState = {
-    repositories: [...(opts.repositories ?? [])],
-    pullRequests: [...(opts.pullRequests ?? [])],
+    issues: [...(opts.issues ?? [])],
     workflowRuns: [...(opts.workflowRuns ?? [])],
     pullRequestHistory: [...(opts.pullRequestHistory ?? [])],
     files: { ...opts.files },
-    repositoriesCalls: [],
-    openPullRequestsCalls: [],
+    issuesCalls: [],
     actionRunsCalls: [],
     pullRequestHistoryCalls: [],
     readTextFileCalls: [],
     pullReviewCalls: [],
     openDraftPullRequestCalls: [],
     createReleaseCalls: [],
+    addIssueLabelsCalls: [],
+    removeIssueLabelCalls: [],
+    commentOnIssueCalls: [],
+    assignIssueCalls: [],
+    closeIssueAsDuplicateCalls: [],
   };
   const now = opts.now ?? NOW_DEFAULT;
   const pageSize = Math.max(1, opts.historyPageSize ?? HISTORY_PAGE_SIZE_DEFAULT);
@@ -140,36 +149,62 @@ export const makeGithubFake = (
   const openedBranches = new Set<string>();
 
   const service: GithubService = {
-    repositories: ({ includeArchived = false, pushedWithinDays } = {}) =>
+    issues: ({ repo, state: want = "open", labels, updatedWithinDays }) =>
       Effect.sync(() => {
-        state.repositoriesCalls.push({ includeArchived, pushedWithinDays });
-        return state.repositories.filter((r) => {
-          if (!includeArchived && r.archived) return false;
-          if (pushedWithinDays !== undefined) {
-            const cutoff = now - pushedWithinDays * 86_400_000;
-            if (r.pushedAt < cutoff) return false;
+        state.issuesCalls.push({ repo, state: want, labels, updatedWithinDays });
+        const need = labels === undefined ? undefined : new Set(labels);
+        return state.issues.filter((i) => {
+          if (i.repo !== repo) return false;
+          if (want !== "all" && i.state !== want) return false;
+          if (need !== undefined && ![...need].every((l) => i.labels.includes(l))) return false;
+          if (
+            updatedWithinDays !== undefined &&
+            i.updatedAt < now - updatedWithinDays * 86_400_000
+          ) {
+            return false;
           }
           return true;
         });
       }),
 
-    openPullRequests: ({ updatedWithinHours, includeDrafts = false, repos } = {}) =>
+    // The writes record and mutate the seeded issue, so a test can assert both
+    // "the call was made" and "the state machine advanced".
+    addIssueLabels: ({ repo, issue, labels }) =>
       Effect.sync(() => {
-        state.openPullRequestsCalls.push({
-          updatedWithinHours,
-          includeDrafts,
-          repos,
-        });
-        const allow = repos === undefined ? undefined : new Set(repos);
-        return state.pullRequests.filter((pr) => {
-          if (!includeDrafts && pr.draft) return false;
-          if (allow !== undefined && !allow.has(pr.repo)) return false;
-          if (updatedWithinHours !== undefined) {
-            const cutoff = now - updatedWithinHours * 3_600_000;
-            if (pr.updatedAt < cutoff) return false;
-          }
-          return true;
-        });
+        state.addIssueLabelsCalls.push({ repo, issue, labels });
+        const target = state.issues.find((i) => i.repo === repo && i.number === issue);
+        if (target !== undefined) {
+          const merged = [...new Set([...target.labels, ...labels])];
+          state.issues = state.issues.map((i) => (i === target ? { ...i, labels: merged } : i));
+        }
+      }),
+
+    removeIssueLabel: ({ repo, issue, label }) =>
+      Effect.sync(() => {
+        state.removeIssueLabelCalls.push({ repo, issue, label });
+        state.issues = state.issues.map((i) =>
+          i.repo === repo && i.number === issue
+            ? { ...i, labels: i.labels.filter((l) => l !== label) }
+            : i,
+        );
+      }),
+
+    commentOnIssue: ({ repo, issue, body }) =>
+      Effect.sync(() => {
+        state.commentOnIssueCalls.push({ repo, issue, body });
+      }),
+
+    assignIssue: ({ repo, issue, assignees }) =>
+      Effect.sync(() => {
+        state.assignIssueCalls.push({ repo, issue, assignees });
+      }),
+
+    closeIssueAsDuplicate: ({ repo, issue, duplicateOf }) =>
+      Effect.sync(() => {
+        state.closeIssueAsDuplicateCalls.push({ repo, issue, duplicateOf });
+        state.issues = state.issues.map((i) =>
+          i.repo === repo && i.number === issue ? { ...i, state: "closed" as const } : i,
+        );
       }),
 
     actionRuns: ({ repos, createdWithinHours, status, conclusion } = {}) =>
