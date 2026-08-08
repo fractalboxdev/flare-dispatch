@@ -191,6 +191,23 @@ describe("validateSlackNotice", () => {
       validateSlackNotice(payload({ links: [{ url: "https://gh.test", label: "   " }] })),
     ).toContain("label");
   });
+
+  it("checks the fields the happy path never exercises", () => {
+    // Each of these is a bound the receiver enforces too; an untested branch
+    // here is a 400 whose body nobody reads, since a notice failing is never
+    // fatal by design.
+    expect(validateSlackNotice({ ...payload(), sentAt: Number.NaN })).toContain("sentAt");
+    expect(validateSlackNotice(payload({ run: "Org Spec Audit" }))).toContain("run");
+    expect(validateSlackNotice(payload({ executionId: "not a ulid!" }))).toContain("executionId");
+    expect(
+      validateSlackNotice(payload({ links: [{ url: "https://gh.test", label: "x".repeat(81) }] })),
+    ).toContain("label");
+    expect(
+      validateSlackNotice(
+        payload({ links: [{ url: `https://gh.test/${"x".repeat(512)}`, label: "PR" }] }),
+      ),
+    ).toContain("512");
+  });
 });
 
 describe("deliverSlackNotice", () => {
@@ -233,6 +250,26 @@ describe("deliverSlackNotice", () => {
         fetchImpl,
       }),
     ).toEqual({ outcome: "duplicate" });
+  });
+
+  it("never follows a redirect — that would replay the signature elsewhere", async () => {
+    // A 3xx the receiver chose would carry the body AND the signature header to
+    // an origin no operator configured. It reads as a plain non-2xx instead.
+    let init: RequestInit | undefined;
+    const fetchImpl = (async (_url: string, got: RequestInit) => {
+      init = got;
+      return new Response("", { status: 307, headers: { location: "https://evil.test/x" } });
+    }) as unknown as typeof fetch;
+
+    expect(
+      await deliverSlackNotice({
+        url: "https://bot.test/flare-dispatch/notify",
+        secret: SECRET,
+        payload: renderSlackNotice(emission(), NOW),
+        fetchImpl,
+      }),
+    ).toMatchObject({ outcome: "failed" });
+    expect(init?.redirect).toBe("manual");
   });
 
   it("reports a refusal or a transport failure rather than throwing", async () => {
@@ -387,6 +424,58 @@ describe("the receiver's own verification", () => {
     expect(parses(JSON.parse(new TextDecoder().decode(sent.body)))).toBe(true);
   });
 
+  it("agrees with our own validation on what it refuses, not just on what it takes", () => {
+    // `parses` asserted true once is a mirror that stays green if it regresses
+    // to `return true`. What is actually worth pinning is the AGREEMENT: for
+    // every shape, the receiver's answer and ours must match. Where they are
+    // allowed to differ, they differ in one direction only — this side may be
+    // stricter (the label rule), never looser.
+    const shapes: { payload: ReturnType<typeof renderSlackNotice>; stricterHere?: true }[] = [
+      { payload: renderSlackNotice(emission(), NOW) },
+      { payload: renderSlackNotice(emission({ useCase: "C0SECRET000" }), NOW) },
+      { payload: renderSlackNotice(emission({ deliveryId: "day 2026/08/08" }), NOW) },
+      { payload: renderSlackNotice(emission({ text: "   " }), NOW) },
+      { payload: renderSlackNotice(emission({ text: "x".repeat(12_001) }), NOW) },
+      { payload: renderSlackNotice(emission({ run: "Org Spec Audit" }), NOW) },
+      {
+        payload: renderSlackNotice(
+          emission({ links: [{ url: "http://gh.test", label: "PR" }] }),
+          NOW,
+        ),
+      },
+      {
+        payload: renderSlackNotice(
+          emission({
+            links: Array.from({ length: 5 }, () => ({ url: "https://gh.test", label: "PR" })),
+          }),
+          NOW,
+        ),
+      },
+      // The receiver bounds a label by length alone, so it accepts this and we
+      // do not. That gap is the reason the emit-side label rule exists.
+      {
+        payload: renderSlackNotice(
+          emission({ links: [{ url: "https://gh.test", label: "PR> <!channel" }] }),
+          NOW,
+        ),
+        stricterHere: true,
+      },
+    ];
+
+    for (const { payload, stricterHere } of shapes) {
+      const weAccept = validateSlackNotice(payload) === undefined;
+      const theyAccept = parses(JSON.parse(JSON.stringify(payload)));
+      if (stricterHere === true) {
+        expect(theyAccept, "the receiver still takes this — hence our own rule").toBe(true);
+        expect(weAccept, "we must refuse what the receiver would render as markup").toBe(false);
+      } else {
+        expect(weAccept, `disagreement on ${JSON.stringify(payload).slice(0, 80)}`).toBe(
+          theyAccept,
+        );
+      }
+    }
+  });
+
   it("rejects those bytes under any other secret, or after any edit", async () => {
     const { seen, fetchImpl } = capture();
     await deliverSlackNotice({
@@ -446,6 +535,43 @@ describe("emitSlackNotice", () => {
     expect(seen[0]!.url).toBe("https://bot.test/flare-dispatch/notify");
     expect(await readSlackNoticeUrl(env)).toBe("https://bot.test/flare-dispatch/notify");
     expect(await readSlackNotifyUrl(env)).toBe("https://bot.test/verdict");
+  });
+
+  it("falls back to its OWN wrangler var, and lets CONFIG_KV win over it", async () => {
+    // Without this, `readUrl(env, SLACK_NOTICE_URL_KEY, env.SLACK_NOTIFY_URL)` —
+    // a one-token copy-paste naming the verdict var — passes the whole suite.
+    expect(
+      await readSlackNoticeUrl(envWith({}, { SLACK_NOTICE_URL: "https://var.test/notify" })),
+    ).toBe("https://var.test/notify");
+    expect(
+      await readSlackNoticeUrl(
+        envWith(
+          { [SLACK_NOTICE_URL_KEY]: "https://kv.test/notify" },
+          { SLACK_NOTICE_URL: "https://var.test/notify" },
+        ),
+      ),
+    ).toBe("https://kv.test/notify");
+    // The verdict var must not stand in for the notice one.
+    expect(
+      await readSlackNoticeUrl(envWith({}, { SLACK_NOTIFY_URL: "https://var.test/verdict" })),
+    ).toBeUndefined();
+  });
+
+  it("refuses a plaintext ingress rather than posting a signature in the clear", async () => {
+    // The body travels with an HMAC over it in a header; http:// puts both on
+    // the wire for anyone on the path. A bad endpoint degrades to silence.
+    const { seen, fetchImpl } = capture();
+    const env = envWith({ [SLACK_NOTICE_URL_KEY]: "http://bot.test/flare-dispatch/notify" });
+
+    expect(await readSlackNoticeUrl(env)).toBeUndefined();
+    expect(await emitSlackNotice(env, emission(), { now: () => NOW, fetchImpl })).toMatchObject({
+      outcome: "skipped",
+    });
+    expect(seen).toHaveLength(0);
+    // Same rule on the verdict callback — one `readUrl` serves both.
+    expect(
+      await readSlackNotifyUrl(envWith({ "slack-origin.notify-url": "http://bot.test/verdict" })),
+    ).toBeUndefined();
   });
 
   it("stays silent on a deploy that has only the verdict URL", async () => {

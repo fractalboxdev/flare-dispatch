@@ -44,7 +44,7 @@
 // its `secret` argument, so the HMAC key is the 64 ASCII bytes of the hex, not
 // the 32 bytes it encodes. A receiver importing the raw bytes rejects every
 // honest request, with nothing but a 401 to say why — which is what the
-// cross-repo parity test in slack-notify.test.ts exists to catch.
+// cross-repo parity test in slack-notify.notice.test.ts exists to catch.
 //
 // Delivery is best-effort and bounded, like the completion-notify email: a
 // failed callback is a logged line, never a flip of a verdict the run already
@@ -335,16 +335,29 @@ export const resolveSlackNotifySecret = (env: Env): string | undefined => {
   return undefined;
 };
 
-/** CONFIG_KV first, then the wrangler var — the slack-origin config precedence. */
+/**
+ * CONFIG_KV first, then the wrangler var — the slack-origin config precedence.
+ *
+ * **https only.** Both callbacks carry an HMAC over the body in a header, and
+ * `http://` would put that signature and the payload on the wire in clear for
+ * anyone on the path to read and replay. A misconfigured endpoint degrades to
+ * "no callback attempted", which is the same best-effort silence as an unset
+ * key — the wrong destination is not worth a leaked signature.
+ */
 const readUrl = async (
   env: Env,
   kvKey: string,
   fromVar: string | undefined,
 ): Promise<string | undefined> => {
   const configured = env.CONFIG_KV === undefined ? null : await env.CONFIG_KV.get(kvKey);
-  if (typeof configured === "string" && configured.trim().length > 0) return configured.trim();
-  if (typeof fromVar === "string" && fromVar.trim().length > 0) return fromVar.trim();
-  return undefined;
+  const chosen =
+    typeof configured === "string" && configured.trim().length > 0
+      ? configured.trim()
+      : typeof fromVar === "string" && fromVar.trim().length > 0
+        ? fromVar.trim()
+        : undefined;
+  if (chosen === undefined) return undefined;
+  return chosen.startsWith("https://") ? chosen : undefined;
 };
 
 /**
@@ -375,6 +388,12 @@ type SignedPost =
  * The body is serialized ONCE and both the MAC and the request see the same
  * `Uint8Array`. Re-stringifying for the request would open the one gap the
  * raw-bytes canonicalization exists to close.
+ *
+ * `redirect: "manual"` because a followed redirect replays the body AND the
+ * `X-FlareDispatch-Signature` header to an origin the receiver chose, not the
+ * one an operator configured — a signed payload delivered somewhere nobody
+ * approved. A 3xx therefore reads as a non-2xx and is logged like any other
+ * refusal; a receiver that wants to move endpoints changes the config key.
  */
 const postSigned = async (opts: {
   readonly url: string;
@@ -395,6 +414,7 @@ const postSigned = async (opts: {
         [SIGNATURE_HEADER]: signature,
       },
       body,
+      redirect: "manual",
       signal: AbortSignal.timeout(CALLBACK_TIMEOUT_MS),
     });
     return { sent: true, status: response.status };
