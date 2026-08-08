@@ -16,13 +16,21 @@
 //
 // --- The delivery id is derived, never drawn ---------------------------------
 //
-//   deliveryId = "<run>:<dedupeKey>"
+//   deliveryId = "<run>:<useCase>:<dedupeKey>"
 //
 // No clock, no randomness, no counter. The receiver dedups on this value, and a
 // Workflow step can be retried — so an id that changed between attempts would
 // double-post exactly when the dedup was supposed to save us. A run supplies the
-// stable half (a scheduled run's day string); the run name is prefixed here so
-// two runs publishing on the same day under the same use case cannot collide.
+// stable half (a scheduled run's day string); the run name and the use case are
+// prefixed here so the id is unique across everything that shares that half.
+//
+// Both prefixes are load-bearing, in opposite directions. `run` keeps two runs
+// announcing on the same day apart. `useCase` keeps ONE run's two announcements
+// apart: `dedupeKey` is documented as "a scheduled run's day string", so a run
+// that publishes a digest and an alert on the same tick would otherwise mint one
+// id twice, and the second would be answered 409 and read as already delivered.
+// That is the capability's worst failure — a dropped message reported as fine —
+// reached without anything going wrong.
 //
 // `Math.random()` and `Date.now()` are also simply not available on some paths
 // (a replayed Workflow step is fed its recorded result, not re-executed), which
@@ -32,7 +40,7 @@
 // Spec: specs/03-dsl.md § Capabilities. Receiver contract: fractalbot
 // `specs/flare-dispatch-notify.md`.
 
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Match } from "effect";
 import { Notice, type NoticeResult, type NoticeService } from "@fractalboxdev/flare-dispatch-core";
 
 /** One message on its way out, as the dispatcher's emit path takes it. */
@@ -74,19 +82,43 @@ export type NoticeCloudflareConfig = {
 };
 
 /**
+ * FNV-1a (32-bit), hex. Not a security primitive — a short, deterministic tag
+ * that survives a Workflow replay, which `crypto.randomUUID` and a hash needing
+ * `await` both do not.
+ */
+const fnv1a32 = (input: string): string => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+};
+
+/**
  * The delivery id the receiver dedups on. Pure and total.
  *
- * Sanitized rather than validated: the run supplies half of this and the
+ * Sanitized rather than validated: the run supplies part of this and the
  * receiver's charset is narrower than a run author will assume. Refusing a
  * notice because a day string grew a slash would be a silence nobody notices,
  * which is the worst failure this capability has — so the id is coerced into
  * the contract and the dispatcher's own check stays as the backstop.
+ *
+ * Coercion and the 128-char bound are both many-to-one, though, and a collision
+ * here is the SAME silence arriving by another road: two distinct notices would
+ * share an id and the second would be answered 409. So whenever either step
+ * actually loses information, a hash of the original is appended — the id stays
+ * a pure function of its inputs, and distinct inputs keep distinct ids.
  */
-export const noticeDeliveryId = (run: string, dedupeKey: string): string => {
-  const raw = `${run}:${dedupeKey}`;
-  const cleaned = raw.replace(/[^A-Za-z0-9._:-]/g, "-").slice(0, 128);
+export const noticeDeliveryId = (run: string, useCase: string, dedupeKey: string): string => {
+  const raw = `${run}:${useCase}:${dedupeKey}`;
+  const cleaned = raw.replace(/[^A-Za-z0-9._:-]/g, "-");
   // The receiver requires an alphanumeric first character.
-  return /^[A-Za-z0-9]/.test(cleaned) ? cleaned : `x${cleaned}`.slice(0, 128);
+  const started = /^[A-Za-z0-9]/.test(cleaned) ? cleaned : `x${cleaned}`;
+  if (started === raw && started.length <= 128) return started;
+
+  const tag = `-${fnv1a32(raw)}`;
+  return `${started.slice(0, 128 - tag.length)}${tag}`;
 };
 
 /**
@@ -125,7 +157,7 @@ export const makeNoticeCloudflareLive = (
       Effect.gen(function* () {
         const emission: NoticeEmission = {
           useCase: req.useCase,
-          deliveryId: noticeDeliveryId(config.run, req.dedupeKey),
+          deliveryId: noticeDeliveryId(config.run, req.useCase, req.dedupeKey),
           text: req.text,
           ...(req.links !== undefined && req.links.length > 0 ? { links: req.links } : {}),
           run: config.run,
@@ -144,13 +176,19 @@ export const makeNoticeCloudflareLive = (
           ),
         );
 
-        switch (result.outcome) {
-          case "posted":
-            yield* Effect.logInfo(
-              `notice.publish: ${req.useCase} posted (delivery=${emission.deliveryId})`,
-            );
-            return { delivered: true, duplicate: false, skipped: false } satisfies NoticeResult;
-          case "duplicate":
+        // `discriminatorsExhaustive` rather than a `switch`, matching
+        // `describeRefusal` in sandbox-facade.ts: the emit path's vocabulary is
+        // the receiver's to grow, and a new outcome must break this build rather
+        // than fall through and hand a run `undefined` as its NoticeResult.
+        return yield* Match.value(result).pipe(
+          Match.discriminatorsExhaustive("outcome")({
+            posted: () =>
+              Effect.as(
+                Effect.logInfo(
+                  `notice.publish: ${req.useCase} posted (delivery=${emission.deliveryId})`,
+                ),
+                { delivered: true, duplicate: false, skipped: false } satisfies NoticeResult,
+              ),
             // Not a failure: a retry meeting its own earlier post is the dedup
             // working. But it is not a delivery THIS attempt witnessed either —
             // the receiver's word is all there is, and `delivered` stays false
@@ -160,30 +198,33 @@ export const makeNoticeCloudflareLive = (
             // Reserving 409 for a delivered id (never a merely claimed one) is
             // the receiver's obligation — apps/dispatcher/specs/slack-origin.md
             // § At most once, across a retry.
-            yield* Effect.logInfo(
-              `notice.publish: ${req.useCase} already claimed by the receiver as delivered ` +
-                `(delivery=${emission.deliveryId})`,
-            );
-            return { delivered: false, duplicate: true, skipped: false } satisfies NoticeResult;
-          case "skipped":
-            yield* Effect.logInfo(`notice.publish skipped (${result.reason}) — ${req.useCase}`);
-            return {
-              delivered: false,
-              duplicate: false,
-              skipped: true,
-              reason: result.reason,
-            } satisfies NoticeResult;
-          case "failed":
-            yield* Effect.logWarning(
-              `notice.publish: ${req.useCase} not delivered — ${result.reason}`,
-            );
-            return {
-              delivered: false,
-              duplicate: false,
-              skipped: false,
-              reason: result.reason,
-            } satisfies NoticeResult;
-        }
+            duplicate: () =>
+              Effect.as(
+                Effect.logInfo(
+                  `notice.publish: ${req.useCase} already claimed by the receiver as delivered ` +
+                    `(delivery=${emission.deliveryId})`,
+                ),
+                { delivered: false, duplicate: true, skipped: false } satisfies NoticeResult,
+              ),
+            skipped: ({ reason }) =>
+              Effect.as(Effect.logInfo(`notice.publish skipped (${reason}) — ${req.useCase}`), {
+                delivered: false,
+                duplicate: false,
+                skipped: true,
+                reason,
+              } satisfies NoticeResult),
+            failed: ({ reason }) =>
+              Effect.as(
+                Effect.logWarning(`notice.publish: ${req.useCase} not delivered — ${reason}`),
+                {
+                  delivered: false,
+                  duplicate: false,
+                  skipped: false,
+                  reason,
+                } satisfies NoticeResult,
+              ),
+          }),
+        );
       }),
   };
 
