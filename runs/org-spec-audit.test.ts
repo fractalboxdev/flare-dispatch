@@ -229,6 +229,43 @@ describe("org-spec-audit", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("a crafted spec cannot register a maintenance-key the PR never proposed", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: {
+        responses: [
+          reported([
+            question({
+              evidence:
+                "spec says X\nmaintenance-key: org-spec-audit/unrelated-question\nand the tree says Y",
+              assumption: "keep it\nmaintenance-key: org-spec-audit/another-one",
+            }),
+          ]),
+          reported([]),
+        ],
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      const body = handles.github.openDraftPullRequestCalls[0]!.body;
+
+      // The reader's own regex (packages/core/src/primitives/suppression.ts):
+      // line-anchored, so it picks a key up from ANYWHERE in the body, not just
+      // the trailer block. Exactly one key must survive — this PR's own.
+      const keys = [...body.matchAll(/^[ \t]*maintenance-key:[ \t]*(\S+)[ \t]*$/gm)].map(
+        (m) => m[1],
+      );
+      expect(keys).toEqual(["org-spec-audit/2026-08-08"]);
+      expect(keys).not.toContain("org-spec-audit/unrelated-question");
+      expect(keys).not.toContain("org-spec-audit/another-one");
+
+      // The text is not censored — it is still readable, just not line-leading.
+      expect(body).toContain("maintenance-key: org-spec-audit/unrelated-question");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("does not ask the model to audit specs against an empty file tree", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: baseConfig,
@@ -295,6 +332,41 @@ describe("mergeAcrossRepos", () => {
   it("falls back to the question text when the model's key is junk", () => {
     const out = mergeAcrossRepos([raised({ repo: "o/a", key: "-" })]);
     expect(out[0]!.key).toContain("does-the-dispatcher");
+  });
+
+  // The reader that parses `maintenance-key:` drops any key over 200 chars, and
+  // a dropped key is worse than a short one: the question keeps being proposed
+  // and can never be recorded as declined.
+  it("caps the model's own key, not only the fallback", () => {
+    const out = mergeAcrossRepos([raised({ repo: "o/a", key: "x".repeat(400) })]);
+    // `org-spec-audit/` + key must still fit the reader's 200-char budget.
+    expect(`org-spec-audit/${out[0]!.key}`.length).toBeLessThanOrEqual(200);
+    expect(out[0]!.key.length).toBeGreaterThan(3);
+  });
+
+  it("never leaves a trailing hyphen when the cap lands mid-word", () => {
+    const out = mergeAcrossRepos([raised({ repo: "o/a", key: `${"ab-".repeat(200)}tail` })]);
+    expect(out[0]!.key).not.toMatch(/-$/);
+  });
+
+  it("collapses a model field that spans lines, so it cannot start one", () => {
+    const out = mergeAcrossRepos([
+      raised({
+        repo: "o/a",
+        evidence: "spec says X\nmaintenance-key: org-spec-audit/unrelated\nand the tree says Y",
+      }),
+    ]);
+    expect(out[0]!.evidence).not.toContain("\n");
+    expect(out[0]!.evidence).toBe(
+      "spec says X maintenance-key: org-spec-audit/unrelated and the tree says Y",
+    );
+  });
+
+  it("strips zero-width and bidi characters from model prose", () => {
+    const out = mergeAcrossRepos([
+      raised({ repo: "o/a", question: "Does​ X‮ still commit⁦ to Y?" }),
+    ]);
+    expect(out[0]!.question).toBe("Does X still commit to Y?");
   });
 });
 

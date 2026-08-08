@@ -546,16 +546,16 @@ export const mergeAcrossRepos = (raised: readonly RaisedQuestion[]): readonly Me
   for (const q of raised) {
     const k = normalizeKey(q.key, q.question);
     const existing = byKey.get(k);
-    const source = { repo: q.repo, specPath: q.specPath };
+    const source = { repo: q.repo, specPath: oneLine(q.specPath) };
 
     if (existing === undefined) {
       byKey.set(k, {
         key: k,
         group: q.group,
-        question: q.question.trim(),
-        assumption: q.assumption.trim(),
+        question: oneLine(q.question),
+        assumption: oneLine(q.assumption),
         sources: [source],
-        evidence: q.evidence.trim(),
+        evidence: oneLine(q.evidence),
       });
       continue;
     }
@@ -577,19 +577,68 @@ export const mergeAcrossRepos = (raised: readonly RaisedQuestion[]): readonly Me
 /** How many distinct repos raised a merged question. */
 const distinctRepos = (q: MergedQuestion): number => new Set(q.sources.map((s) => s.repo)).size;
 
-/** Lowercase slug; falls back to the question text when the model's key is junk. */
-const normalizeKey = (key: string, question: string): string => {
-  const slug = key
+/**
+ * Control, C1, zero-width and bidi-override characters — stripped, not escaped.
+ *
+ * They have no legitimate place in a question, and a bidi override renders text
+ * as the reverse of what the file literally says, which escaping would
+ * faithfully preserve. The tab/newline/CR range is deliberately absent: those
+ * are `\s`, and the collapse in {@link oneLine} turns them into a space rather
+ * than deleting them, so a newline between two words stays a word boundary.
+ */
+const INVISIBLE =
+  // oxlint-disable-next-line no-control-regex -- matching control characters is the point here: they are what gets stripped from untrusted model prose
+  /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069]/g;
+
+/**
+ * Collapse a model-supplied string onto one line.
+ *
+ * Every model field is rendered inside a markdown list item beginning `- ` or
+ * `  - `, so a field that cannot contain a newline can never *start* a line of
+ * the PR body — and that is the whole defence. The suppression reader picks up
+ * `maintenance-key: <key>` from a line-anchored match anywhere in the body, not
+ * only from the trailer block, so emitting the authentic trailers first stops
+ * them being shadowed but does nothing about a second key registered further
+ * down. Evidence containing a newline followed by `maintenance-key: other/thing`
+ * would otherwise register a key this PR never proposed, and closing the PR
+ * would then cool an unrelated question for the whole cooldown window.
+ *
+ * Collapsing rather than escaping keeps the digest readable and costs nothing
+ * real: the prompt already contracts each of these fields to a single sentence.
+ */
+const oneLine = (raw: string): string =>
+  raw.replace(INVISIBLE, "").replace(/\s+/g, " ").trim();
+
+/**
+ * The longest question-key that survives the round trip.
+ *
+ * A key is published as `maintenance-key: <namespace>/<key>`, and the reader
+ * that parses those lines drops any whole key over 200 characters. A key it
+ * drops is strictly worse than a short one: the question is still proposed and
+ * still written into the PR body, but nothing can ever record it as declined,
+ * so every tick re-proposes it forever. The namespace and its separator come
+ * out of the same budget, so they are subtracted rather than assumed.
+ */
+const MAX_KEY_CHARS = 200 - (NAMESPACE.length + 1);
+
+/** Lowercase, hyphen-separated slug of an arbitrary string. */
+const slugify = (raw: string): string =>
+  raw
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return slug.length >= 3
-    ? slug
-    : question
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 60);
+
+/**
+ * Lowercase slug; falls back to the question text when the model's key is junk.
+ *
+ * The cap applies to whichever branch produced the slug. It used to bound only
+ * the fallback, which left the branch actually taken in the common case — the
+ * model's own key — unbounded, and a long one silently unreadable downstream.
+ */
+const normalizeKey = (key: string, question: string): string => {
+  const slug = slugify(key);
+  const chosen = slug.length >= 3 ? slug : slugify(question).slice(0, 60);
+  return chosen.slice(0, MAX_KEY_CHARS).replace(/-+$/g, "");
 };
 
 /** `window-hours` as a positive integer, falling back to the default. */
