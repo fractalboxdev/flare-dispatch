@@ -139,6 +139,58 @@ describe("validateSlackNotice", () => {
       ),
     ).toContain("cap is 4");
   });
+
+  // A label is model-authored and lands INSIDE the `<url|label>` span, where the
+  // receiver's wholesale escaping of `text` never reaches it. `>` closes the
+  // span, `<` opens a new one — which is a way back into markup, and into
+  // `<!channel>`, for anything that only escaped the body.
+  it("refuses a hostile link label, character by character", () => {
+    const hostile = [
+      // Close the span, then open a broadcast ping in the space after it.
+      "PR> <!channel",
+      "PR> <!here",
+      // Open a user mention inside the label.
+      "see <@U024BE7LH> now",
+      // A second `|` re-splits the span the receiver parses.
+      "PR|<https://evil.test",
+      // Bare `<` and `>` on their own are equally sufficient.
+      "<b>PR</b>",
+      // A newline breaks the span just as effectively as an angle bracket.
+      "PR\nquestions",
+      "PR\rquestions",
+      // NUL and DEL — the control characters the receiver's url rule refuses
+      // and its length-only label rule lets straight through.
+      "PR\u0000questions",
+      "PR\u007fquestions",
+    ];
+
+    for (const label of hostile) {
+      expect(
+        validateSlackNotice(payload({ links: [{ url: "https://gh.test/pr/9", label }] })),
+        `label ${JSON.stringify(label)} must be refused`,
+      ).toContain("label");
+    }
+  });
+
+  it("still accepts the labels a run legitimately writes", () => {
+    // The rule refuses `<`, `>`, `|` and control characters — and nothing else.
+    // `&` in particular stays legal: Slack parses markup before it decodes
+    // entities, so `&lt;` is literal text, and "Q&A" is a label people write.
+    for (const label of ["the questions PR", "Q&A digest", "run #42 — 3 open", "100% green"]) {
+      expect(
+        validateSlackNotice(payload({ links: [{ url: "https://gh.test/pr/9", label }] })),
+        `label ${JSON.stringify(label)} must be accepted`,
+      ).toBeUndefined();
+    }
+  });
+
+  it("refuses a blank label, not just an empty one", () => {
+    // `"   ".length` is 3, so a length-only bound lets a label through that
+    // renders as an invisible, unclickable link.
+    expect(
+      validateSlackNotice(payload({ links: [{ url: "https://gh.test", label: "   " }] })),
+    ).toContain("label");
+  });
 });
 
 describe("deliverSlackNotice", () => {
@@ -165,9 +217,11 @@ describe("deliverSlackNotice", () => {
   });
 
   it("reads 409 as delivered-already, not as a failure", async () => {
-    // The receiver claims the delivery id before it posts, so 409 means the
-    // message is in the room. A retried Workflow step re-sends identical bytes
-    // and must not look broken for behaving correctly.
+    // A retried Workflow step re-sends identical bytes and must not look broken
+    // for behaving correctly. `duplicate` is as far as this side goes, though —
+    // it does not become `delivered` (see notice-cf.ts), because the receiver
+    // owes 409 only for an id it actually posted, and this side never witnessed
+    // that post. Contract: specs/slack-origin.md § At most once, across a retry.
     const { respond, fetchImpl } = capture();
     respond.status = 409;
 

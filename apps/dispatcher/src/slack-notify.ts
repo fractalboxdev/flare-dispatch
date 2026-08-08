@@ -186,6 +186,28 @@ const NOTICE_USE_CASE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const NOTICE_DELIVERY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const NOTICE_RUN_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
+/**
+ * What a link LABEL may not contain. This is the one rule here that is NOT a
+ * mirror: the receiver's `parseNotice` bounds a label by length alone, and then
+ * renders it inside `<url|label>`. A label is model-authored like `text` is —
+ * but unlike `text`, which the receiver escapes wholesale, it lands INSIDE a
+ * markup span, where `>` closes the link early and `<` opens a fresh one. That
+ * is enough to smuggle `<!channel>` or `<@U…>` past an escaper that never saw
+ * the label as text.
+ *
+ * So the emit side refuses the three characters that span can be broken with.
+ * A label is short display prose; none of them belong in one, and refusing
+ * costs a legible local error instead of a message nobody meant to send.
+ * `&` is deliberately NOT refused: Slack parses markup before entity decoding,
+ * so `&lt;!channel&gt;` renders as literal text — and "Q&A" is a real label.
+ *
+ * Control characters go with them: a newline inside the span breaks it too.
+ * This does not excuse the receiver from escaping — it is the half we control.
+ * Receiver-side obligation: `specs/slack-origin.md` § The notice.
+ */
+// oxlint-disable-next-line no-control-regex
+const NOTICE_LABEL_FORBIDDEN = /[<>|]|[\u0000-\u001f\u007f]/;
+
 /** A link the receiver renders as `<url|label>` — never markup we build. */
 export type SlackNoticeLink = {
   readonly url: string;
@@ -283,8 +305,12 @@ export const validateSlackNotice = (payload: SlackNoticePayload): string | undef
     if (/[<>|\s]|[\u0000-\u001f]/.test(link.url)) {
       return "link url must not contain <, >, |, whitespace or control characters";
     }
-    if (link.label.length === 0 || link.label.length > MAX_NOTICE_LABEL_CHARS) {
-      return `link label must be 1-${MAX_NOTICE_LABEL_CHARS} chars`;
+    if (link.label.trim().length === 0 || link.label.length > MAX_NOTICE_LABEL_CHARS) {
+      return `link label must be 1-${MAX_NOTICE_LABEL_CHARS} non-blank chars`;
+    }
+    // STRICTER than the receiver, deliberately — see NOTICE_LABEL_FORBIDDEN.
+    if (NOTICE_LABEL_FORBIDDEN.test(link.label)) {
+      return "link label must not contain <, > or | (it is rendered inside a `<url|label>` span)";
     }
   }
   return undefined;
@@ -418,10 +444,19 @@ export type SlackNoticeOutcome =
 /**
  * Sign and POST one notice. Never throws.
  *
- * A 409 is `duplicate`, not a failure: the receiver claims a delivery id before
- * it posts, so 409 means the message is already in the room — which is the
- * outcome the caller wanted. Treating it as an error would make a retried
- * Workflow step look broken for behaving correctly.
+ * A 409 is `duplicate`, not a failure. Treating it as an error would make a
+ * retried Workflow step look broken for behaving correctly.
+ *
+ * This reading rests on one receiver obligation: **409 is reserved for an id it
+ * actually delivered**, never for one it merely claimed and has not posted. A
+ * receiver that answers 409 for an unposted claim turns a crash between claim
+ * and post into a silence with a success beside it. The contract, and the
+ * `claimed` / `delivered` split it requires, is in `specs/slack-origin.md`
+ * § At most once, across a retry.
+ *
+ * `duplicate` is deliberately NOT `delivered` in the capability's result — see
+ * runtime-cf `notice-cf.ts`. Nothing here witnessed a post, so nothing here
+ * claims one.
  */
 export const deliverSlackNotice = async (opts: {
   readonly url: string;
