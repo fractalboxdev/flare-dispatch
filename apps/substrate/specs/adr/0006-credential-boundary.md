@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
+- **Implementation:** `partial` — machinery shipped (`src/engine/credentials.ts:200` catalog, `:264` resolve; `src/engine/git-scrub.ts:91`), adoption pending. `../credential-boundary.md` records `CLOUDFLARE_API_TOKEN` and `NPM_TOKEN` as "machinery done, adoption pending" and operator secrets as open.
 
 ## Context
 

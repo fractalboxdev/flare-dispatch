@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-06
+- **Implementation:** `shipped` — `apps/substrate/` and `packages/substrate-contract/` exist as separate workspace packages.
 
 ## Context
 

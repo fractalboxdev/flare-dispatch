@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
+- **Implementation:** `shipped` — `src/admission/pools.ts:120` `poolPolicyView` / `:140` `selectPool`, four image classes in `apps/substrate/wrangler.jsonc`, recipe keys frozen by `SUBSTRATE_RECIPE_KEYS`. Tests: `admission/pools.test.ts`, `container-config.test.ts`.
 
 ## Context
 

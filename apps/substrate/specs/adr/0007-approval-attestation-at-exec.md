@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
+- **Implementation:** `shipped` — `src/engine/approval.ts:36` `APPROVAL_FLOOR`, `:64` `checkApprovalFloor`, called from `src/engine/exec-fence.ts:206` and `src/facade.ts:298`; single-use spend at `src/sandbox-do.ts:497`. Tests: `engine/approval.test.ts`, `sandbox-do.workers.test.ts`.
 
 ## Context
 

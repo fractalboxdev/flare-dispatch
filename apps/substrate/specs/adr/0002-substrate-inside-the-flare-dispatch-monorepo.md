@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-06
+- **Implementation:** `partial` — the placement holds, but the lint rule this record promises (forbidding imports from substrate internals) does not exist: `.oxlintrc.json` declares no rules.
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-06
+- **Implementation:** `shipped` — a negative decision, enforced by shape rather than by code: `ExecReceipt`, `ExecOutcome` and `DenialEvent` in `packages/substrate-contract/src/index.ts` carry no verdict field. Tests: `substrate-contract/src/index.test.ts`.
 
 ## Context
 

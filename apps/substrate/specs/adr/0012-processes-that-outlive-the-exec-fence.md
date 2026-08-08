@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-07
+- **Implementation:** `shipped` — `src/facade.ts:290` `startDetached` / `:359` `detachedStatus` / `:376` `stopDetached`; selective teardown at `src/sandbox-do.ts:808` `killFencedProcesses`, including the `killAllProcesses()` fallback when `listProcesses` cannot be read (`:817`); decision functions in `src/engine/detached.ts`. Tests: `engine/detached.test.ts`, `engine/exec-fence.test.ts`, `facade.workers.test.ts`. The record's own deferrals (preview URLs, directory retrieval) are out of scope by its text, not gaps.
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
+- **Implementation:** `shipped` — `src/facade.ts:76` `SubstrateFacadeBase`, three consumer entrypoints at `:492`/`:497`/`:511`, bound in the root `wrangler.jsonc`. Tests: `facade.workers.test.ts`.
 
 ## Context
 

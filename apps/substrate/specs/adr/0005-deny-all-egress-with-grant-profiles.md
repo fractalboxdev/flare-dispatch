@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
+- **Implementation:** `shipped` — `src/engine/egress.ts:453` `serveGrantedRequest`, `:219` `buildGrant`, `:285`/`:314` apply/revoke; profiles at `src/engine/profiles.ts:441`; floor posture at `src/sandbox-do.ts:147`. Tests: `engine/egress.test.ts`, `engine/profiles.test.ts`, `engine/exec-fence.test.ts`.
 
 ## Context
 

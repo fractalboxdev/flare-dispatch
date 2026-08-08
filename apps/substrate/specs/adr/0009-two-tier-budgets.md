@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
+- **Implementation:** `partial` — both tiers exist as pure logic (`src/budget/meter.ts:133` `decideSpend`, `src/budget/store-d1.ts:72`, `src/budget/token.ts:66`, migration `0003_model_budgets.sql`) and have **no caller**: nothing outside `src/budget/` imports them, `facade.ts` never touches them, and no metered model-proxy route exists.
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
+- **Implementation:** `shipped`, with one-sided enforcement — the pin is exact in `apps/substrate/package.json` and both Dockerfiles, and the canary (`src/verify/`) gates CI between the substrate and dispatcher deploys. But `container-config.test.ts:109` asserts image/package *agreement*, so it catches skew and not a bump; `@cloudflare/containers` is unpinned (transitive), and "auto-bumps are disabled" is vacuous — the repo has no renovate or dependabot config to disable.
 
 ## Context
 
