@@ -151,11 +151,18 @@ export const makeNoticeCloudflareLive = (
             );
             return { delivered: true, duplicate: false, skipped: false } satisfies NoticeResult;
           case "duplicate":
-            // Not a failure. The receiver claims the id before it posts, so this
-            // says the message is already in the room — the outcome we wanted,
-            // reached by a retry doing exactly what it should.
+            // Not a failure: a retry meeting its own earlier post is the dedup
+            // working. But it is not a delivery THIS attempt witnessed either —
+            // the receiver's word is all there is, and `delivered` stays false
+            // so the flag that says "a post reached Slack" is only ever set by
+            // a 2xx the dispatcher actually received.
+            //
+            // Reserving 409 for a delivered id (never a merely claimed one) is
+            // the receiver's obligation — apps/dispatcher/specs/slack-origin.md
+            // § At most once, across a retry.
             yield* Effect.logInfo(
-              `notice.publish: ${req.useCase} already delivered (delivery=${emission.deliveryId})`,
+              `notice.publish: ${req.useCase} already claimed by the receiver as delivered ` +
+                `(delivery=${emission.deliveryId})`,
             );
             return { delivered: false, duplicate: true, skipped: false } satisfies NoticeResult;
           case "skipped":

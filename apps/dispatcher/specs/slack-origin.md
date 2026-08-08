@@ -167,6 +167,14 @@ name `C…` would turn one leaked key into workspace-wide write.
 survive ride in the typed `links[]` field and are rendered by the receiver from a validated https
 URL.
 
+A link **label** is the one field that escaping does not cover, because it lands *inside* the
+`<url|label>` span rather than in the text the receiver escapes. `>` closes that span early and `<`
+opens a new one, so a model-authored label is a way back into markup — and into `<!channel>` — for
+anything that only escaped `text`. The emit side therefore refuses `<`, `>`, `|` and control
+characters in a label outright (`validateSlackNotice`), which is stricter than the receiver's own
+length-only bound on purpose: it is the half this repo controls. The receiver should escape the
+label as well; neither guard is sufficient alone.
+
 Wire format, signature and refusal codes are the receiver's contract
 (fractalbot `specs/flare-dispatch-notify.md`, `POST /flare-dispatch/notify`). The envelope is
 byte-identical to the verdict callback — same header, same raw-bytes canonicalization, same
@@ -176,7 +184,7 @@ receiver's own verification verbatim so the two repos cannot drift silently.
 
 ### At most once, across a retry
 
-The receiver claims a `deliveryId` before it posts, so the guarantee is one post per id. That is
+The receiver dedups on a `deliveryId`, so the guarantee it can offer is one post per id. That is
 worth nothing if the id moves between attempts — and a Workflow step **can** be retried. So the id
 is derived, never drawn:
 
@@ -185,9 +193,36 @@ deliveryId = "<run>:<dedupeKey>"
 ```
 
 No clock, no randomness. A scheduled run passes its day string (the same value its schedule
-idempotency key uses); a retry re-sends identical bytes and earns a 409, which this side reads as
-*already delivered* rather than as a failure. `Date.now()` and `Math.random()` are also simply
-unavailable on a replayed step, which makes derivation the only construction correct on every path.
+idempotency key uses), so a retry re-sends identical bytes. `Date.now()` and `Math.random()` are
+also simply unavailable on a replayed step, which makes derivation the only construction correct on
+every path.
+
+#### 409 means *delivered*, not *claimed* — a receiver obligation
+
+A single-phase claim would be unsafe here. If the receiver marked the id taken and then died before
+Slack accepted the post, the retry would meet that mark, earn a 409, and this side would record the
+notice as handled while nothing was ever published — a silence with a success next to it, which is
+the worst failure this capability has.
+
+So the id carries **two** states in the receiver's store, and only the second is a duplicate:
+
+| State       | Meaning                                             | Answer to a second POST of the same id                                       |
+| ----------- | --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `claimed`   | The post was attempted; outcome unknown or failed   | **Not** 409 — re-attempt the post, taking over the claim, or answer a 5xx     |
+| `delivered` | Slack accepted the post                             | `409`                                                                          |
+
+**`409` is reserved for `delivered`.** A receiver that answers 409 for a `claimed`-but-unposted id
+breaks the reading on this side, and does it silently. Implementing the split is the receiver's half
+(fractalbot `specs/flare-dispatch-notify.md`); it is written here because it is the assumption the
+dispatcher's 409 handling rests on, and because the mirror test is the only place the two repos meet.
+
+The residual window is much smaller but not zero: a post Slack accepted whose `delivered` write did
+not land is re-attempted and can double-post. That is the trade this design takes on purpose — for
+an announcement, a visible duplicate is cheaper than an invisible silence.
+
+This side never upgrades a 409 into a delivery it witnessed. `duplicate` maps to
+`{ delivered: false, duplicate: true }`, so the one flag that claims a post reached Slack is set
+only by a 2xx this dispatcher actually received.
 
 ### Its own URL, deliberately
 

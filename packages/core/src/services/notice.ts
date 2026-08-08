@@ -38,13 +38,19 @@
 //
 // --- `dedupeKey`: at-most-once is the caller's job too ------------------------
 //
-// The receiver claims a delivery id before it posts, so the guarantee it offers
-// is "at most one post per delivery id". That guarantee is worth nothing if the
-// id changes on every attempt — and a Workflow step CAN be retried, which is
+// The receiver dedups on a delivery id, so the guarantee it can offer is "at
+// most one post per delivery id". That guarantee is worth nothing if the id
+// changes on every attempt — and a Workflow step CAN be retried, which is
 // precisely the case it exists to cover. So the caller supplies the stable half
 // of the id and the runtime Layer prefixes the run name onto it. A scheduled
 // run's day string is the natural value: the same intended post keeps its id
 // across a retry, and tomorrow's post gets a different one.
+//
+// The receiver owes the other half of that guarantee: it must treat an id it
+// claimed but never posted as still re-attemptable, and reserve its "already
+// handled" answer for a post that actually reached Slack. Otherwise a crash
+// between claim and post becomes a notice nobody sent and nobody missed. The
+// contract is in `apps/dispatcher/specs/slack-origin.md` § At most once.
 //
 // A random id, or one derived from `Date.now()`, would defeat the receiver's
 // dedup and double-post on the first retry.
@@ -90,15 +96,22 @@ export type NoticeRequest = {
 };
 
 /**
- * What one `publish` did. `delivered` and `duplicate` are both successes from
- * the caller's point of view — a duplicate means the message is already out
- * there, which is the outcome that was wanted. `skipped` means the deploy has
- * no notice backend at all.
+ * What one `publish` did. `delivered` and `duplicate` are both non-failures
+ * from the caller's point of view, but they are NOT the same claim: `delivered`
+ * is a post this attempt witnessed, `duplicate` is the receiver's word that it
+ * handled this id earlier. They are mutually exclusive — a duplicate leaves
+ * `delivered` false, so no caller can read "it reached Slack" out of a 409.
+ * `skipped` means the deploy has no notice backend at all.
  */
 export type NoticeResult = {
-  /** `true` when the receiver accepted and posted it. */
+  /** `true` when the receiver accepted and posted it, in THIS attempt. */
   readonly delivered: boolean;
-  /** `true` when the receiver had already accepted this delivery id. */
+  /**
+   * `true` when the receiver reported this delivery id as already delivered.
+   * Trustworthy exactly as far as the receiver's obligation to reserve that
+   * answer for a post it completed — see `apps/dispatcher/specs/slack-origin.md`
+   * § At most once, across a retry.
+   */
   readonly duplicate: boolean;
   /** `true` when this deploy has no notice backend configured — a logged no-op. */
   readonly skipped: boolean;
