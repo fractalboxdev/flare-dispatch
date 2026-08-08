@@ -364,21 +364,21 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
           }),
       }),
 
-    // The three stubs below still fail, and must: this adapter is not wired to
-    // the facade's detached surface and the run bodies still call
-    // `sandbox.runDetached`. Only the REASON has changed. The facade now serves
-    // `startDetached` / `detachedStatus` / `stopDetached` (ADR-0012: a detached
-    // process holds no grant), so a message saying the surface does not exist
-    // sends whoever reads it off to build something that is already there.
+    // `runDetached` and `waitForPort` below still fail, and must: this adapter
+    // is not wired to the facade's detached surface and the run bodies still
+    // call `sandbox.runDetached`. Only the REASON has changed. The facade now
+    // serves `startDetached` / `detachedStatus` / `stopDetached` (ADR-0012: a
+    // detached process holds no grant), so a message saying the surface does
+    // not exist sends whoever reads it off to build something already there.
     // `grant-catalog.ts`'s `detached-process` gap states the real clearing
     // condition — the run body moves off `sandbox.runDetached` — and stays.
+    // (`waitForExit` below fails for a different reason again: see its own
+    // comment. `exposePort` is a separate gap entirely.)
     //
-    // Wiring this to `startDetached` is deliberately NOT part of correcting the
-    // text. Closing the gap for a run takes three things, not one: this adapter
+    // Closing the gap for a run takes three things, not one: this adapter
     // wired, that run's body moved over, and its `rollout` graduated through a
-    // clean `report` window (`adoption-runbook.md` § 3). Moving where untrusted
-    // code executes is that runbook's decision to make, not a side effect of
-    // fixing a comment.
+    // clean `report` window and on to `enforce` (`adoption-runbook.md` § 3–4).
+    // Moving where untrusted code executes is that runbook's decision to make.
     runDetached: () =>
       Effect.fail(
         new ContainerLaunchFailed({
@@ -389,14 +389,16 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
       ),
 
     // Correct to fail, and it is not a gap: ADR-0012 gives the facade no
-    // `waitForExit` on purpose. A consumer polls `detachedStatus` from its own
-    // durable steps, because a Worker call that blocks for twenty minutes is
-    // not a call.
+    // `waitForExit` on purpose. A consumer polls the SUBSTRATE FACADE's
+    // `detachedStatus` from its own durable steps — that method is on
+    // `SubstrateFacade`, not on this `Sandbox` port, so naming it unqualified
+    // sends a reader grepping the port for something that was never there.
+    // A Worker call that blocks for twenty minutes is not a call.
     waitForExit: ({ handle }) =>
       Effect.fail(
         new ExecTimeout({
           timeoutSec: 0,
-          command: `detached:${handle.id} — the facade has no waitForExit by design; poll detachedStatus from a durable step (ADR-0012)`,
+          command: `detached:${handle.id} — the facade has no waitForExit by design; poll the substrate facade's detachedStatus from a durable step (ADR-0012)`,
         }),
       ),
 
