@@ -418,7 +418,12 @@ for (const banned of CONTAINER_AUTHORED_AUTH_HEADERS)
 export const WOULD_DENY_PREFIX = "would-deny: ";
 
 export type ServeDeps = {
-  fetch: typeof fetch;
+  /**
+   * Tests substitute a stub; production omits it. Passing the global as
+   * `{ fetchImpl: fetch }` detaches it from `globalThis` and throws
+   * `Illegal invocation` in workerd — pinned by egress.test.ts.
+   */
+  fetchImpl?: typeof fetch;
   /**
    * Denial recorder (ADR-0005): every handler 403 is reported here so the
    * substrate can aggregate `{host, method, path, reason, count}` per
@@ -436,9 +441,8 @@ export type ServeDeps = {
 };
 
 /**
- * The engine. Exported for tests; `egressHandlers.publicRepo` is the thin
- * production wrapper that supplies the real `fetch` (the DO layer adds the
- * denial recorder).
+ * The engine. Exported for tests; `egressHandlers.granted` / `reportOnly` are
+ * the thin production wrappers (the DO layer adds the denial recorder).
  *
  * Every outbound request is constructed here from scratch. Passing the
  * container's Request through — even with headers edited — would carry its
@@ -451,6 +455,10 @@ export async function serveGrantedRequest(
   ctx: OutboundContext<GrantParams>,
   deps: ServeDeps,
 ): Promise<Response> {
+  // Called as a free identifier, so the receiver is `undefined` and never the
+  // deps object — which is the whole failure this indirection exists to stop.
+  const fetchImpl: typeof fetch = deps.fetchImpl ?? ((input, init) => fetch(input, init));
+
   const record = (reason: string, at?: URL): void => {
     try {
       const target = at ?? new URL(req.url);
@@ -517,7 +525,7 @@ export async function serveGrantedRequest(
   // secret first reaches a host (ADR-0006).
   if (position === "report") {
     if (!first.ok) record(`${WOULD_DENY_PREFIX}${first.reason}`, url);
-    return deps.fetch(req);
+    return fetchImpl(req);
   }
 
   if (!first.ok) return denied(first.reason, url);
@@ -566,7 +574,7 @@ export async function serveGrantedRequest(
       outbound.set(resolved.header.name, resolved.header.value);
     }
 
-    const upstream = await deps.fetch(target.toString(), {
+    const upstream = await fetchImpl(target.toString(), {
       method,
       headers: outbound,
       body: (BODYLESS as readonly string[]).includes(method) ? undefined : payload,
@@ -638,9 +646,9 @@ export async function serveGrantedRequest(
  */
 export const egressHandlers = {
   granted: (req: Request, _env: unknown, ctx: OutboundContext<GrantParams>): Promise<Response> =>
-    serveGrantedRequest(req, ctx, { fetch }),
+    serveGrantedRequest(req, ctx, {}),
   reportOnly: (req: Request, _env: unknown, ctx: OutboundContext<GrantParams>): Promise<Response> =>
-    serveGrantedRequest(req, ctx, { fetch }),
+    serveGrantedRequest(req, ctx, {}),
   denyAll: (): Response =>
     new Response("egress denied: no grant is open\n", {
       status: 403,
