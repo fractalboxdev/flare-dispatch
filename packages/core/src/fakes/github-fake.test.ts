@@ -6,7 +6,12 @@
 
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { Github, type PullRequestRef, type RepoRef } from "../services/github";
+import {
+  Github,
+  type PullRequestHistoryRef,
+  type PullRequestRef,
+  type RepoRef,
+} from "../services/github";
 import { makeGithubFake } from "./github-fake";
 
 const NOW = 1_700_000_000_000;
@@ -163,5 +168,67 @@ describe("makeGithubFake — openPullRequests()", () => {
       }).pipe(Effect.provide(layer)),
     );
     expect(state.openPullRequestsCalls).toHaveLength(3);
+  });
+});
+
+describe("makeGithubFake — pullRequestHistory() / readTextFile()", () => {
+  const history = (over: Partial<PullRequestHistoryRef> = {}): PullRequestHistoryRef => ({
+    repo: "owner/control",
+    number: 12,
+    title: "docs(maintenance): open questions",
+    body: "maintenance-key: org-spec-audit/spend-caps",
+    headBranch: "flare-dispatch/spec-audit-questions-2026-07-01",
+    state: "closed",
+    draft: true,
+    url: "https://github.com/owner/control/pull/12",
+    createdAt: NOW - 40 * DAY,
+    updatedAt: NOW - 5 * DAY,
+    closedAt: NOW - 5 * DAY,
+    ...over,
+  });
+
+  it("filters by repo, state, head-branch prefix, and the update window", async () => {
+    const { layer, state } = makeGithubFake({
+      now: NOW,
+      pullRequestHistory: [
+        history({ number: 1 }),
+        history({ number: 2, repo: "owner/other" }),
+        history({ number: 3, headBranch: "feat/unrelated" }),
+        history({ number: 4, updatedAt: NOW - 90 * DAY }),
+        history({ number: 5, state: "open", closedAt: undefined }),
+      ],
+    });
+    const result = await Effect.runPromise(
+      Effect.flatMap(Github, (g) =>
+        g.pullRequestHistory({
+          repo: "owner/control",
+          headBranchPrefix: "flare-dispatch/spec-audit-questions-",
+          state: "closed",
+          updatedWithinDays: 30,
+        }),
+      ).pipe(Effect.provide(layer)),
+    );
+    expect(result.map((p) => p.number)).toEqual([1]);
+    expect(state.pullRequestHistoryCalls).toHaveLength(1);
+  });
+
+  it("answers a seeded file, and found:false for anything else", async () => {
+    const { layer, state } = makeGithubFake({
+      files: { "owner/control:infra/maintenance-loop/declined.jsonl": '{"key":"a/b"}' },
+    });
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const g = yield* Github;
+        return [
+          yield* g.readTextFile({
+            repo: "owner/control",
+            path: "infra/maintenance-loop/declined.jsonl",
+          }),
+          yield* g.readTextFile({ repo: "owner/control", path: "nope.jsonl" }),
+        ];
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(result).toEqual([{ found: true, content: '{"key":"a/b"}' }, { found: false }]);
+    expect(state.readTextFileCalls).toHaveLength(2);
   });
 });

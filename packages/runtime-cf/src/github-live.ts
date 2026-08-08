@@ -5,10 +5,11 @@
 // for a short-lived installation token (cached in Worker memory), and that
 // token authenticates `POST /repos/{o}/{r}/pulls/{n}/reviews`.
 //
-// The *read* surface (`repositories` / `openPullRequests`) is still V3 work —
-// this Layer leaves both as the dying stubs from `GithubDeferred`. Only
-// `pullReview` is wired, because the `pr-review` run needs an always-visible PR
-// comment on every review.
+// The installation-wide *enumeration* surface (`repositories` /
+// `openPullRequests`) is still V3 work — this Layer leaves both as the dying
+// stubs from `GithubDeferred`. Everything a run points at a **named** repo is
+// wired: `actionRuns`, `pullRequestHistory`, `readTextFile`, and the three
+// writes.
 //
 // --- Graceful degradation ----------------------------------------------------
 //
@@ -26,7 +27,9 @@ import {
   createRelease,
   getInstallationToken,
   listActionRuns,
+  listPullRequests,
   openDraftPullRequest,
+  readRepoTextFile,
   resolveRepoInstallationId,
   GithubApiError as GithubAppApiError,
 } from "@fractalboxdev/flare-dispatch-github-app";
@@ -36,7 +39,9 @@ import {
   Github,
   GitHubApiError,
   type GithubService,
+  type PullRequestHistoryRef,
   type ReleaseResult,
+  type TextFileResult,
   type WorkflowRunRef,
 } from "@fractalboxdev/flare-dispatch-core";
 
@@ -193,6 +198,60 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
           { concurrency: 4 },
         );
         return perRepo.flat();
+      }),
+
+    pullRequestHistory: ({
+      repo,
+      headBranchPrefix,
+      state,
+      updatedWithinDays,
+      maxPages,
+      installationId,
+    }): Effect.Effect<readonly PullRequestHistoryRef[], GitHubApiError> =>
+      Effect.gen(function* () {
+        if (config === undefined) {
+          // Unlike the writes, a read does NOT degrade to a no-op: an empty
+          // history is indistinguishable from "never proposed", and a caller
+          // deciding suppression from it would silently decide wrong. Failing
+          // is what lets that caller fail open *loudly*.
+          return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" }));
+        }
+        const token = yield* mintToken(config, repo, installationId);
+        const prs = yield* ghCall(() =>
+          listPullRequests({
+            token,
+            repo,
+            ...(state !== undefined ? { state } : {}),
+            ...(headBranchPrefix !== undefined ? { headBranchPrefix } : {}),
+            ...(updatedWithinDays !== undefined
+              ? { updatedSince: Date.now() - updatedWithinDays * 86_400_000 }
+              : {}),
+            ...(maxPages !== undefined ? { maxPages } : {}),
+          }),
+        );
+        return prs.map((p): PullRequestHistoryRef => ({ repo, ...p }));
+      }),
+
+    readTextFile: ({
+      repo,
+      path,
+      ref,
+      installationId,
+    }): Effect.Effect<TextFileResult, GitHubApiError> =>
+      Effect.gen(function* () {
+        if (config === undefined) {
+          // Same reasoning as `pullRequestHistory`: `{ found: false }` here
+          // would be a missing *credential* wearing a missing *file*'s clothes.
+          return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" }));
+        }
+        // The ledger repo is private, so this always needs App auth — and a
+        // cron tick carries no installation id, which `mintToken` resolves from
+        // the repo itself (the App is the source of truth for which
+        // installation covers a repo).
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() =>
+          readRepoTextFile({ token, repo, path, ...(ref !== undefined ? { ref } : {}) }),
+        );
       }),
 
     pullReview: ({ repo, pr, sha, body, installationId }) =>

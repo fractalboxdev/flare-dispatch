@@ -1,9 +1,10 @@
 // @fractalboxdev/flare-dispatch-core — Github fake (read-only GitHub access).
 //
 // In-memory fake of the `github` capability. Tests pre-populate the state with
-// `repositories` / `pullRequests` arrays; the service applies the documented
-// filters (archived skip, push age, draft skip, repo allow-list, update age)
-// and returns the surviving rows. Call counts are recorded for assertions.
+// `repositories` / `pullRequests` / `pullRequestHistory` arrays and a `files`
+// map; the service applies the documented filters (archived skip, push age,
+// draft skip, repo allow-list, update age, head-branch prefix) and returns the
+// surviving rows. Call counts are recorded for assertions.
 //
 // A test that wants `github` to fail with `GitHubApiError` constructs its own
 // failing `Github` Layer — the fake is the green-path simulator.
@@ -15,10 +16,13 @@ import {
   Github,
   type GithubService,
   type OpenDraftPullRequest,
+  type PullRequestHistoryRef,
   type PullRequestRef,
   type PullReviewRequest,
+  type ReadTextFileRequest,
   type ReleaseResult,
   type RepoRef,
+  type TextFileResult,
   type WorkflowRunRef,
 } from "../services/github";
 
@@ -29,6 +33,10 @@ export type GithubFakeState = {
   pullRequests: PullRequestRef[];
   /** Seeded workflow runs — returned by `actionRuns` (after filtering). */
   workflowRuns: WorkflowRunRef[];
+  /** Seeded PR history — returned by `pullRequestHistory` (after filtering). */
+  pullRequestHistory: PullRequestHistoryRef[];
+  /** Seeded repo files, keyed `"owner/name:path"` — answers `readTextFile`. */
+  files: Record<string, string>;
   /** Every `repositories` call, in order. */
   readonly repositoriesCalls: Array<{
     includeArchived: boolean;
@@ -47,6 +55,16 @@ export type GithubFakeState = {
     status?: string;
     conclusion?: string;
   }>;
+  /** Every `pullRequestHistory` call, in order. */
+  readonly pullRequestHistoryCalls: Array<{
+    repo: string;
+    headBranchPrefix?: string;
+    state: "open" | "closed" | "all";
+    updatedWithinDays?: number;
+    maxPages?: number;
+  }>;
+  /** Every `readTextFile` call, in order. */
+  readonly readTextFileCalls: ReadTextFileRequest[];
   /** Every `pullReview` call, in order — lets a test assert a comment posted. */
   readonly pullReviewCalls: PullReviewRequest[];
   /** Every `openDraftPullRequest` call, in order. */
@@ -63,6 +81,10 @@ export const makeGithubFake = (
     repositories?: readonly RepoRef[];
     pullRequests?: readonly PullRequestRef[];
     workflowRuns?: readonly WorkflowRunRef[];
+    /** PR history (closed PRs included) — what `pullRequestHistory` returns. */
+    pullRequestHistory?: readonly PullRequestHistoryRef[];
+    /** Repo files keyed `"owner/name:path"`; an unseeded path is `found: false`. */
+    files?: Record<string, string>;
     /** Clock used to evaluate `pushedWithinDays` / `updatedWithinHours`. */
     now?: number;
   } = {},
@@ -71,9 +93,13 @@ export const makeGithubFake = (
     repositories: [...(opts.repositories ?? [])],
     pullRequests: [...(opts.pullRequests ?? [])],
     workflowRuns: [...(opts.workflowRuns ?? [])],
+    pullRequestHistory: [...(opts.pullRequestHistory ?? [])],
+    files: { ...opts.files },
     repositoriesCalls: [],
     openPullRequestsCalls: [],
     actionRunsCalls: [],
+    pullRequestHistoryCalls: [],
+    readTextFileCalls: [],
     pullReviewCalls: [],
     openDraftPullRequestCalls: [],
     createReleaseCalls: [],
@@ -135,6 +161,46 @@ export const makeGithubFake = (
           }
           return true;
         });
+      }),
+
+    pullRequestHistory: ({
+      repo,
+      headBranchPrefix,
+      state: prState = "all",
+      updatedWithinDays,
+      maxPages,
+    }) =>
+      Effect.sync(() => {
+        state.pullRequestHistoryCalls.push({
+          repo,
+          headBranchPrefix,
+          state: prState,
+          updatedWithinDays,
+          maxPages,
+        });
+        return state.pullRequestHistory.filter((pr) => {
+          if (pr.repo !== repo) return false;
+          if (prState !== "all" && pr.state !== prState) return false;
+          if (headBranchPrefix !== undefined && !pr.headBranch.startsWith(headBranchPrefix)) {
+            return false;
+          }
+          // The live read stops PAGINATING at this bound; the fake applies it as
+          // a filter, which is the same observable contract for a caller.
+          if (
+            updatedWithinDays !== undefined &&
+            pr.updatedAt < now - updatedWithinDays * 86_400_000
+          ) {
+            return false;
+          }
+          return true;
+        });
+      }),
+
+    readTextFile: (req): Effect.Effect<TextFileResult, never> =>
+      Effect.sync(() => {
+        state.readTextFileCalls.push(req);
+        const content = state.files[`${req.repo}:${req.path}`];
+        return content === undefined ? { found: false } : { found: true, content };
       }),
 
     pullReview: (req) =>

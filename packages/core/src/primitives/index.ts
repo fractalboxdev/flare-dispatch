@@ -21,3 +21,19 @@ export { provisionInbox, waitForOtp, type OtpResult } from "./wait-for-otp";
 export { awsAssumeRole, type AwsCredentials } from "./aws-assume-role";
 export { isoDate, parseGitRef, parseList, parseRepo, parseRepoRelativePath } from "./scheduling";
 export { isNothingToLint } from "./oxlint";
+export {
+  checkSuppression,
+  decideSuppression,
+  describeVerdict,
+  parseDeclinedLedger,
+  parseMaintenanceKeys,
+  renderSuppressionNote,
+  COOLDOWN_DAYS_DEFAULT,
+  DECLINED_LEDGER_PATH,
+  type CheckSuppressionArgs,
+  type DeclineEntry,
+  type LedgerParse,
+  type SuppressedKey,
+  type SuppressionReport,
+  type SuppressionVerdict,
+} from "./suppression";

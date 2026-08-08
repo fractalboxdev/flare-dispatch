@@ -41,6 +41,7 @@ import {
   Config,
   type ConfigService,
   Github,
+  GitHubApiError,
   type GithubService,
   ModelGateway,
   ModelGatewayError,
@@ -115,6 +116,14 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
       Effect.logInfo("github.actionRuns skipped (no GitHub App credentials) — empty").pipe(
         Effect.as([]),
       ),
+    // `pullRequestHistory` and `readTextFile` are reads whose degraded answer
+    // would be *indistinguishable from data*: an empty history reads as "never
+    // proposed", a missing file as "nothing declined". Both would make a caller
+    // decide suppression wrongly and silently, so an uncredentialed deploy
+    // fails them instead — which is what lets that caller fail open loudly.
+    pullRequestHistory: () =>
+      Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    readTextFile: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     // `pullReview` is *reporting*, not correctness — a deploy without GitHub
     // App credentials degrades to a logged no-op (the same posture as the no-op
     // `Checks` Layer), never failing an otherwise-green run. The live

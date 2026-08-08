@@ -54,6 +54,19 @@ export {
   type OpenDraftPullRequestOptions,
   type OpenDraftPullRequestResult,
 } from "./pull-requests";
+export {
+  listPullRequests,
+  normalizePullRequest,
+  pullRequestsUrl,
+  type ListPullRequestsOptions,
+  type PullRequestSummary,
+} from "./pull-request-list";
+export {
+  readRepoTextFile,
+  repoContentsUrl,
+  type ReadRepoTextFileOptions,
+  type ReadRepoTextFileResult,
+} from "./repo-files";
 export { createRelease, type CreateReleaseOptions, type CreateReleaseResult } from "./releases";
 export {
   fetchPublicAppRegistration,
