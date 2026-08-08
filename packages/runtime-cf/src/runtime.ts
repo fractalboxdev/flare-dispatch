@@ -42,6 +42,7 @@ import { makeOidcLive, type OidcLiveConfig } from "./oidc-live";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
 import { makeIOLive } from "./io-live";
 import { makeSandboxCloudflareLive } from "./sandbox-cf";
+import { resolveAppCredentials } from "./sandbox-clone-auth";
 import { CacheOnFacade, makeSandboxFacadeLive, type SandboxFacadeOptions } from "./sandbox-facade";
 import { makeStepRunnerCloudflare } from "./step-runner-cf";
 
@@ -99,27 +100,30 @@ export type CFRuntimeLiveOptions = {
   /** repo/ref/sha/input the `executions` row requires. */
   readonly execution: ExecutionContext;
   /**
-   * GitHub App credentials + installation id for the `Checks` capability
-   * (PR check-run posting) AND the `Sandbox` capability's `gitClone`
-   * (private-repo HTTPS auth). `undefined` (no `GITHUB_APP_ID` /
-   * `GITHUB_APP_PRIVATE_KEY` secret, or a dispatch with no `installation_id`)
-   * selects the no-op `Checks` Layer + unauthenticated clone — the execution
-   * still runs against public repos, only the PR check-run is skipped.
+   * GitHub App credentials + installation id for the `Checks` capability —
+   * the PR check-run write, which is pinned to one repo and one installation.
+   * `undefined` (no `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` secret, or a
+   * dispatch with no `installation_id`) selects the no-op `Checks` Layer: the
+   * execution still runs, only the PR check-run is skipped.
    *
-   * One config powers both capabilities: a dispatch that can post a check-run
-   * to a repo can also mint a fresh installation token for cloning the same
-   * repo, so a second field would diverge silently. Pass once.
+   * This field also supplies the *credentials* for `gitClone` when `githubApp`
+   * is absent, and its `installationId` is passed along as the already-resolved
+   * installation for the payload repo — a repo the clone therefore never has to
+   * look up. It is NOT the clone's only credential source: a run clones repos
+   * the dispatch never named, so the Sandbox layer resolves per clone target.
    */
   readonly checks?: ChecksGithubConfig;
   /**
-   * GitHub App credentials for the `github` capability's read + content-write
-   * surface (`actionRuns`, `openDraftPullRequest`) — used by Schedule-mode runs
-   * (`spec-drift`, `ci-triage`) that carry no per-dispatch `installation_id`,
-   * so they cannot ride `checks`. The capability resolves the per-repo
-   * installation itself from the App JWT. `undefined` (no App secrets) → the
-   * write surface is a logged no-op and the read surface returns empty. Distinct
-   * from `checks`, which additionally pins a specific installation for the
-   * check-run write; one App can power both.
+   * GitHub App credentials, independent of any per-dispatch `installation_id`,
+   * for the `github` capability's read + content-write surface (`actionRuns`,
+   * `openDraftPullRequest`) and for the `Sandbox` capability's `gitClone`.
+   *
+   * This is what Schedule-mode runs (`spec-drift-pr`, `ci-triage-pr`,
+   * `finops-audit`) ride: a cron tick carries no GitHub payload, so there is no
+   * `installation_id` to put in `checks`, and both capabilities resolve the
+   * per-repo installation themselves from the App JWT. `undefined` (no App
+   * secrets) → the write surface is a logged no-op, the read surface returns
+   * empty, and clones go out unauthenticated (public repos only).
    */
   readonly githubApp?: GithubLiveConfig;
   /**
@@ -268,6 +272,16 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
     opts.sandboxNs,
     opts.publicOrigin,
   );
+  // The App credentials, resolved once for every capability that authenticates
+  // as the App, plus what `gitClone` rides on. Neither carries an installation
+  // for an arbitrary repo — the capabilities resolve that themselves — so a run
+  // is never capped at the one repo a dispatch named. Pure and unit-tested in
+  // `sandbox-clone-auth.ts`; see there for why the payload id is tagged.
+  const { app: githubAppCfg, clone: cloneAuth } = resolveAppCredentials({
+    ...(opts.githubApp !== undefined ? { githubApp: opts.githubApp } : {}),
+    ...(opts.checks !== undefined ? { checks: opts.checks } : {}),
+    payloadRepo: opts.execution.repo,
+  });
   // The substrate path and the container path are mutually exclusive by
   // construction: one execution runs entirely on one of them, so there is never
   // a call that reaches a container the rest of the runtime does not know about.
@@ -285,7 +299,7 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
           opts.sandboxNs as DurableObjectNamespace<Sandbox>,
           opts.bucket,
           opts.executionId,
-          opts.checks,
+          cloneAuth,
           opts.sandboxPreviewHostname,
           opts.logsViewerBase,
         );
@@ -346,21 +360,11 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
           // attribution). Same db + executionId the rest of the runtime uses.
           { db: opts.db, executionId: opts.executionId },
         );
-  // `Github` is live when App credentials are present. Prefer the dedicated
-  // `githubApp` creds (Schedule-mode runs that carry no installation_id), then
-  // fall back to the `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` the `Checks`
-  // capability carries (Webhook/Action mode). Absent → `pullReview` /
-  // `openDraftPullRequest` are logged no-ops and the read surface returns empty
-  // (reporting must never fail a run). The per-repo installation is resolved by
-  // the capability itself when a request carries no `installationId`.
-  const githubAppCfg =
-    opts.githubApp ??
-    (opts.checks === undefined
-      ? undefined
-      : {
-          appId: opts.checks.appId,
-          privateKeyPem: opts.checks.privateKeyPem,
-        });
+  // `Github` is live when App credentials are present (resolved above, shared
+  // with the clone path). Absent → `pullReview` / `openDraftPullRequest` are
+  // logged no-ops and the read surface returns empty (reporting must never fail
+  // a run). The per-repo installation is resolved by the capability itself when
+  // a request carries no `installationId`.
   const github = makeGithubLive(githubAppCfg);
   // `Cloudflare` is live when a scoped API token + account id are configured;
   // absent, the deferred Layer returns empty (a read-only capability degrades

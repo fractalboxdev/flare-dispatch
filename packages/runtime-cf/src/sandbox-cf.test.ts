@@ -1,7 +1,7 @@
 // Unit coverage for the detached-boot reliability surface of
 // `makeSandboxCloudflareLive`: the wait-for-port timeout ceiling (A), log
-// capture on a failed boot (B), and the `exposePort` reachable-URL capability
-// (C).
+// capture on a failed boot (B), the `exposePort` reachable-URL capability (C),
+// exec result folding (D), and the clone's credential handling (E).
 //
 // The Layer imports `@cloudflare/sandbox` for the live `getSandbox` call, which
 // Node + Vitest can't resolve outside a `vitest-pool-workers` environment — so
@@ -15,7 +15,7 @@
 
 import { it } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Fiber, Option, TestClock } from "effect";
-import { describe, expect, vi } from "vitest";
+import { beforeEach, describe, expect, vi } from "vitest";
 import { type PortNeverOpened, Sandbox as SandboxTag } from "@fractalboxdev/flare-dispatch-core";
 
 // --- The fake `box` the mocked `getSandbox` hands back -----------------------
@@ -53,6 +53,7 @@ const makeFakeBox = (opts: {
       stdout: "",
       stderr: "",
     })),
+    gitCheckout: vi.fn(async () => ({ success: true })),
     getProcess: vi.fn(async () => proc),
     exposePort: vi.fn(
       opts.exposePort ??
@@ -89,6 +90,13 @@ vi.mock("@cloudflare/sandbox", () => ({
   getSandbox: () => currentBox,
   SessionTerminatedError: FakeSessionTerminatedError,
 }));
+
+// The clone's credential resolution is stubbed here so these tests assert what
+// the LAYER does with a token (embed it, scrub it, keep it out of the failure
+// record) rather than re-testing the resolution — that lives, against a mocked
+// api.github.com, in `sandbox-clone-auth.test.ts`.
+const { resolveCloneToken } = vi.hoisted(() => ({ resolveCloneToken: vi.fn() }));
+vi.mock("./sandbox-clone-auth", () => ({ resolveCloneToken }));
 
 // Imported AFTER the mock is registered so the Layer binds the mocked SDK.
 const { makeSandboxCloudflareLive, isWorkingDirFailure } = await import("./sandbox-cf");
@@ -490,6 +498,294 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       }
       const logBody = puts.map((p) => String(p.body)).join("");
       expect(logBody).not.toContain("super-secret");
+    }),
+  );
+});
+
+// (E) gitClone credential handling. A cron tick carries no GitHub payload and
+// therefore no `installation_id`, so the clone used to go out unauthenticated
+// and 404 on every private repo — reported as a bare `Failed to clone
+// repository`. The Layer now authenticates whenever App credentials exist and
+// resolves the installation for the repo it is cloning; the token is embedded
+// for exactly one fetch, scrubbed back out of the remote, and never persisted
+// into a failure record (ADR-0006).
+describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
+  /** App credentials with no installation id — the Schedule-mode shape. */
+  const SCHEDULED_AUTH = { appId: "42", privateKeyPem: "-----BEGIN PRIVATE KEY-----" };
+  const TOKEN = "ghs_clone_token";
+  const AUTHED_URL = `https://x-access-token:${TOKEN}@github.com/acme/hakiri.git`;
+
+  /**
+   * Every command string the Layer ran, in order. The fake `exec` declares no
+   * parameters (tests that need them replace it wholesale), so its recorded
+   * calls are read back as a bare argument list.
+   */
+  const execCommands = (): string[] =>
+    (currentBox.exec.mock.calls as unknown as unknown[][]).map((call) => String(call[0]));
+
+  const cloneLayer = (auth?: typeof SCHEDULED_AUTH) =>
+    makeSandboxCloudflareLive(ns, makeBucket().bucket, "exec-1", auth);
+
+  const clone = (auth?: typeof SCHEDULED_AUTH) =>
+    Effect.flatMap(SandboxTag, (s) => s.gitClone({ repo: "acme/hakiri", sha: "deadbee" })).pipe(
+      Effect.provide(cloneLayer(auth)),
+      Effect.exit,
+    );
+
+  beforeEach(() => {
+    currentBox = makeFakeBox({ proc: null });
+    resolveCloneToken.mockReset();
+    resolveCloneToken.mockResolvedValue(TOKEN);
+  });
+
+  it.effect("a run with no installation id still clones a private repo", () =>
+    Effect.gen(function* () {
+      const exit = yield* clone(SCHEDULED_AUTH);
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      // The installation is resolved for the repo being CLONED — not for the
+      // dispatch payload's repo, which a scheduled run does not have.
+      expect(resolveCloneToken).toHaveBeenCalledWith(SCHEDULED_AUTH, "acme/hakiri");
+      expect(currentBox.gitCheckout).toHaveBeenCalledWith(AUTHED_URL, {
+        targetDir: "/workspace/hakiri",
+      });
+    }),
+  );
+
+  it.effect("scrubs the token out of the remote before the workload runs", () =>
+    Effect.gen(function* () {
+      yield* clone(SCHEDULED_AUTH);
+
+      // `.git/config` would otherwise hold the authenticated URL for the life
+      // of the container, readable by every command the run afterwards issues.
+      const scrub = execCommands().find((c) => c.includes("remote set-url"));
+      expect(scrub).toContain("git -C '/workspace/hakiri' remote set-url origin");
+      expect(scrub).toContain("'https://github.com/acme/hakiri.git'");
+      expect(scrub).not.toContain(TOKEN);
+      // …and it runs after the checkout, not before it.
+      expect(execCommands().indexOf(scrub as string)).toBeGreaterThan(
+        execCommands().findIndex((c) => c.startsWith("git checkout")),
+      );
+    }),
+  );
+
+  it.effect("fails, naming the repo, when no installation covers it", () =>
+    Effect.gen(function* () {
+      resolveCloneToken.mockRejectedValue(
+        new Error("no GitHub App installation for acme/hakiri — install the GitHub App"),
+      );
+
+      const exit = yield* clone(SCHEDULED_AUTH);
+
+      const err = failureOf<{ _tag: string; cause: unknown }>(exit);
+      expect(err?._tag).toBe("CheckoutFailed");
+      const cause = err?.cause as Error;
+      expect(cause.message).toContain("no GitHub App installation for acme/hakiri");
+      // The whole point: no silent degrade to an unauthenticated clone that
+      // 404s and reports it as a git problem.
+      expect(currentBox.gitCheckout).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("keeps the token out of a clone failure, which Workflows persists", () =>
+    Effect.gen(function* () {
+      // git puts the URL it failed on straight into its error text.
+      currentBox.gitCheckout = vi.fn(async () => {
+        const e = new Error(`GitError: failed to clone ${AUTHED_URL}`);
+        e.name = "GitError";
+        throw e;
+      });
+
+      const exit = yield* clone(SCHEDULED_AUTH);
+
+      const err = failureOf<{ _tag: string; cause: unknown }>(exit);
+      expect(err?._tag).toBe("CheckoutFailed");
+      const cause = err?.cause as Error;
+      expect(cause.message).not.toContain(TOKEN);
+      expect(cause.message).toContain("***");
+      // The diagnosis survives the redaction.
+      expect(cause.name).toBe("GitError");
+      // A failed clone can still leave a `.git` holding the authed remote.
+      expect(execCommands().some((c) => c.includes("remote set-url"))).toBe(true);
+    }),
+  );
+
+  it.effect(
+    "a scrub that cannot run fails the checkout rather than handing over a live token",
+    () =>
+      Effect.gen(function* () {
+        currentBox.exec = vi.fn(async (command: string) =>
+          command.includes("remote set-url")
+            ? { exitCode: 1, duration: 0, stdout: "", stderr: "git: not found" }
+            : { exitCode: 0, duration: 0, stdout: "", stderr: "" },
+        );
+
+        const exit = yield* clone(SCHEDULED_AUTH);
+
+        const err = failureOf<{ _tag: string; cause: unknown }>(exit);
+        expect(err?._tag).toBe("CheckoutFailed");
+        const cause = err?.cause as Error;
+        expect(cause.message).toContain("clone-credential scrub");
+      }),
+  );
+
+  // The rewrite must be its OWN command, with no `|| true`, or its exit code is
+  // not the compound's and the guard above is dead: `a || true; b || true` exits
+  // 0 whatever `a` did. This asserts the command SHAPE, which is what the fake
+  // `exec` cannot otherwise tell us — the guard test above stubs a non-zero exit
+  // that a `|| true`-chained string could never actually produce.
+  it.effect("issues the credential rewrite as its own ungated command", () =>
+    Effect.gen(function* () {
+      yield* clone(SCHEDULED_AUTH);
+
+      const setUrl = execCommands().find((c) => c.includes("remote set-url")) as string;
+      expect(setUrl).not.toContain("|| true");
+      expect(setUrl).not.toContain(";");
+      // The tolerant clauses are a separate exec — absence of the section is the
+      // desired end state, so those legitimately keep `|| true`.
+      const tolerant = execCommands().find((c) => c.includes("--remove-section credential"));
+      expect(tolerant).toContain("|| true");
+      expect(tolerant).not.toContain("remote set-url");
+    }),
+  );
+
+  // "The command exited 0" is a weaker claim than "the remote no longer carries
+  // a credential" — a git that silently no-ops still exits 0. Exit 4 is the
+  // in-shell verdict for "userinfo survived".
+  it.effect("fails when the remote still carries a credential after the rewrite", () =>
+    Effect.gen(function* () {
+      currentBox.exec = vi.fn(async (command: string) =>
+        command.includes("remote.origin.url")
+          ? { exitCode: 4, duration: 0, stdout: "", stderr: "" }
+          : { exitCode: 0, duration: 0, stdout: "", stderr: "" },
+      );
+
+      const exit = yield* clone(SCHEDULED_AUTH);
+
+      const err = failureOf<{ _tag: string; cause: unknown }>(exit);
+      expect(err?._tag).toBe("CheckoutFailed");
+      const cause = err?.cause as Error;
+      expect(cause.message).toContain("still carries an embedded credential");
+      expect(cause.message).not.toContain(TOKEN);
+    }),
+  );
+
+  // The verification must not PRINT the URL to prove it is clean: in exactly the
+  // case the guard exists to catch, that URL is the token — emitted into an
+  // `exec` result the SDK may retain.
+  it.effect("verifies the remote without ever emitting it", () =>
+    Effect.gen(function* () {
+      yield* clone(SCHEDULED_AUTH);
+
+      const verify = execCommands().find((c) => c.includes("remote.origin.url")) as string;
+      // Captured by a shell assignment and matched in-shell; only an exit code
+      // crosses back.
+      expect(verify).toContain("url=$(");
+      expect(verify).toContain("case");
+      expect(verify).toContain("exit 4");
+      // Never a bare read that puts the URL on stdout.
+      expect(verify).not.toMatch(/^git -C .* --get remote\.origin\.url$/);
+    }),
+  );
+
+  // A URL an App token cannot authenticate must never be blocked on — or fail
+  // on — an installation lookup about it.
+  it.effect("skips the installation lookup entirely for a non-github.com URL", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.gitClone({ repo: "https://gitlab.example.com/group/repo.git", sha: "deadbee" }),
+      ).pipe(Effect.provide(cloneLayer(SCHEDULED_AUTH)), Effect.exit);
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(resolveCloneToken).not.toHaveBeenCalled();
+      expect(execCommands().some((c) => c.includes("remote set-url"))).toBe(false);
+    }),
+  );
+
+  // `repoUrl` passes a URL-shaped `repo` straight through, and every run input
+  // but `runs/check.ts` declares `repo` as an unconstrained `Schema.String`.
+  // `GET /repos/{owner}/{repo}/installation` takes the SLUG — looking up the
+  // raw URL 404s and fails a clone of a repo that HAS an installation.
+  it.effect("looks up the slug, not the raw input, for a full github.com URL", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.gitClone({ repo: "https://github.com/acme/hakiri.git", sha: "deadbee" }),
+      ).pipe(Effect.provide(cloneLayer(SCHEDULED_AUTH)), Effect.exit);
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(resolveCloneToken).toHaveBeenCalledWith(SCHEDULED_AUTH, "acme/hakiri");
+    }),
+  );
+
+  // A scrub failure on the failure path must not REPLACE the git diagnosis —
+  // but it must not vanish either: the container is reused, so a surviving
+  // token is readable by whatever runs next.
+  it.effect("keeps the git diagnosis when the post-failure scrub also fails", () =>
+    Effect.gen(function* () {
+      currentBox.gitCheckout = vi.fn(async () => {
+        const e = new Error(`GitError: failed to clone ${AUTHED_URL}`);
+        e.name = "GitError";
+        throw e;
+      });
+      currentBox.exec = vi.fn(async (command: string) =>
+        command.includes("remote set-url")
+          ? { exitCode: 1, duration: 0, stdout: "", stderr: "git: not found" }
+          : { exitCode: 0, duration: 0, stdout: "", stderr: "" },
+      );
+
+      const exit = yield* clone(SCHEDULED_AUTH);
+
+      const cause = failureOf<{ cause: unknown }>(exit)?.cause as Error;
+      // The real diagnosis survives, redacted…
+      expect(cause.message).toContain("failed to clone");
+      expect(cause.message).not.toContain(TOKEN);
+      // …and the scrub failure is surfaced rather than swallowed.
+      expect(cause.message).toContain("credential scrub ALSO failed");
+    }),
+  );
+
+  // `redactCloneFailure` deliberately drops the original error instead of
+  // attaching it — the original still holds the raw, unredacted token.
+  it.effect("does not attach the unredacted original as the error's cause", () =>
+    Effect.gen(function* () {
+      currentBox.gitCheckout = vi.fn(async () => {
+        throw new Error(`GitError: failed to clone ${AUTHED_URL}`);
+      });
+
+      const exit = yield* clone(SCHEDULED_AUTH);
+
+      const cause = failureOf<{ cause: unknown }>(exit)?.cause as Error;
+      expect(cause.cause).toBeUndefined();
+    }),
+  );
+
+  // `repo` is an unconstrained `Schema.String` in every run but `runs/check.ts`,
+  // and the scrub interpolates values derived from it into a shell command.
+  it.effect("shell-quotes the values it interpolates into the scrub", () =>
+    Effect.gen(function* () {
+      yield* Effect.flatMap(SandboxTag, (s) =>
+        s.gitClone({ repo: "acme/ha'kiri", sha: "deadbee" }),
+      ).pipe(Effect.provide(cloneLayer(SCHEDULED_AUTH)), Effect.exit);
+
+      const setUrl = execCommands().find((c) => c.includes("remote set-url")) as string;
+      // The quote is escaped, so it cannot end the quoted word and let the rest
+      // of the value be parsed as shell.
+      expect(setUrl).toContain(`'/workspace/ha'\\''kiri'`);
+    }),
+  );
+
+  it.effect("an unconfigured deploy still clones public repos unauthenticated", () =>
+    Effect.gen(function* () {
+      // No App secrets (local dev): there is no credential to resolve, so the
+      // public-repo path is exactly what it was — and nothing to scrub.
+      const exit = yield* clone(undefined);
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(resolveCloneToken).not.toHaveBeenCalled();
+      expect(currentBox.gitCheckout).toHaveBeenCalledWith("https://github.com/acme/hakiri.git", {
+        targetDir: "/workspace/hakiri",
+      });
+      expect(execCommands().some((c) => c.includes("remote set-url"))).toBe(false);
     }),
   );
 });

@@ -30,6 +30,11 @@ export {
   type SendEmailBinding,
 } from "./email-cf";
 export { makeSandboxCloudflareLive } from "./sandbox-cf";
+// `SandboxGithubAuth` only — it is param 4 of the exported
+// `makeSandboxCloudflareLive`, so a consumer needs the type to call it.
+// `resolveCloneToken` stays internal: its only caller is `sandbox-cf.ts`, in
+// this package.
+export type { SandboxGithubAuth } from "./sandbox-clone-auth";
 export {
   describeRefusal,
   makeSandboxFacadeLive,

@@ -128,8 +128,16 @@ export type ResolveRepoInstallationOptions = {
   readonly fetchImpl?: typeof fetch;
 };
 
-/** Process-memory repo→installation-id cache (installations are stable). */
+/**
+ * Process-memory repo→installation-id cache (installations are stable).
+ *
+ * Keyed on the LOWERCASED slug: GitHub preserves the case an owner typed but
+ * routes case-insensitively, so `Acme/Hakiri` and `acme/hakiri` are one repo and
+ * must not cost two lookups (nor disagree about which installation covers them).
+ */
 const repoInstallationCache = new Map<string, number>();
+
+const cacheKey = (repo: string): string => repo.toLowerCase();
 
 /** Test-only: drop the repo→installation cache. */
 export const __clearRepoInstallationCache = (): void => repoInstallationCache.clear();
@@ -145,7 +153,7 @@ export const __clearRepoInstallationCache = (): void => repoInstallationCache.cl
 export const resolveRepoInstallationId = async (
   opts: ResolveRepoInstallationOptions,
 ): Promise<number> => {
-  const cached = repoInstallationCache.get(opts.repo);
+  const cached = repoInstallationCache.get(cacheKey(opts.repo));
   if (cached !== undefined) return cached;
 
   const { apiBase, doFetch } = resolveClient(opts);
@@ -164,6 +172,6 @@ export const resolveRepoInstallationId = async (
   await assertOk(res, `repo installation lookup failed for ${opts.repo}`);
 
   const body = (await res.json()) as { readonly id: number };
-  repoInstallationCache.set(opts.repo, body.id);
+  repoInstallationCache.set(cacheKey(opts.repo), body.id);
   return body.id;
 };

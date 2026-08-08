@@ -58,10 +58,14 @@ import {
   type SandboxService,
   flattenCommand,
 } from "@fractalboxdev/flare-dispatch-core";
-import { getInstallationToken } from "@fractalboxdev/flare-dispatch-github-app";
-import type { ChecksGithubConfig } from "./checks-github";
 import { previewSafeSandboxId } from "./preview-sandbox-id";
-import { authenticateCloneUrl, repoUrl } from "./sandbox-clone-url";
+import { resolveCloneToken, type SandboxGithubAuth } from "./sandbox-clone-auth";
+import {
+  authenticateCloneUrl,
+  installationLookupSlug,
+  repoUrl,
+  shellQuote,
+} from "./sandbox-clone-url";
 
 /** Normalise a `command` (string | array) to a single shell string. */
 const asCommand = flattenCommand;
@@ -99,6 +103,25 @@ const redact = (text: string, values?: readonly string[]): string => {
     out = out.split(value).join("***");
   }
   return out;
+};
+
+/**
+ * Re-raise a clone failure with the installation token scrubbed out of its
+ * message.
+ *
+ * The authenticated clone URL carries the token in its userinfo, and git puts
+ * the URL it failed on straight into its error text — which becomes
+ * `CheckoutFailed.cause` and is persisted by Workflows as the attempt record.
+ * ADR-0006 puts installation tokens on the substrate's never-log list, so the
+ * message is rewritten rather than the original error re-thrown. The original
+ * is deliberately NOT attached as `cause`: it still holds the raw text, and
+ * attaching it would put the token right back into the record. The error's
+ * `name` is preserved so a `GitError` still reads as one.
+ */
+const redactCloneFailure = (cause: unknown, token: string): Error => {
+  const err = new Error(redact(cause instanceof Error ? cause.message : String(cause), [token]));
+  if (cause instanceof Error) err.name = cause.name;
+  return err;
 };
 
 /**
@@ -243,11 +266,15 @@ const execToResult = async (
  * @param ns           the `RUNS_SANDBOX` DurableObjectNamespace<Sandbox>.
  * @param bucket       the R2 binding — exec log NDJSON sink.
  * @param executionId  the current execution; the sandbox id + R2 log prefix.
- * @param githubAuth   GitHub App credentials + installation id. When present,
- *                     `gitClone` authenticates the GitHub HTTPS clone URL with
- *                     a short-lived installation token so private repositories
- *                     are reachable. When absent, clones are unauthenticated
- *                     — the public-repo path is unchanged.
+ * @param githubAuth   GitHub App credentials, plus the dispatch's installation
+ *                     id when there was one. When present, `gitClone`
+ *                     authenticates the GitHub HTTPS clone URL with a
+ *                     short-lived installation token so private repositories
+ *                     are reachable — resolving the installation for the repo
+ *                     being cloned when the dispatch did not already name one
+ *                     (see `sandbox-clone-auth.ts`). Absent only when the App
+ *                     secrets are unconfigured (local dev): clones then go out
+ *                     unauthenticated, reaching public repos only.
  * @param previewHostname  the Worker's public domain (e.g.
  *                     `flare-dispatch.<account>.workers.dev`) the SDK uses to
  *                     construct container preview URLs in `exposePort`. A
@@ -260,7 +287,7 @@ export const makeSandboxCloudflareLive = (
   ns: DurableObjectNamespace<Sandbox>,
   bucket: R2Bucket,
   executionId: string,
-  githubAuth?: ChecksGithubConfig,
+  githubAuth?: SandboxGithubAuth,
   previewHostname?: string,
   /**
    * The tokened log-viewer base URL for this execution
@@ -343,6 +370,82 @@ export const makeSandboxCloudflareLive = (
       }
     });
 
+  /**
+   * Rewrite a checkout's `origin` back to its credential-free URL, so the
+   * installation token the clone authenticated with does not outlive the clone.
+   *
+   * `git clone https://x-access-token:<token>@github.com/o/n.git` persists the
+   * whole URL — token included — in `.git/config` as `remote.origin.url`, where
+   * it is readable by every command the run afterwards executes INSIDE the
+   * container, and by anything that captures the workspace. That is exactly the
+   * "no long-lived credential reachable from inside a container, on the
+   * filesystem" case ADR-0006 closes, and it now matters on this path for every
+   * run rather than only the ones a webhook handed an installation id.
+   *
+   * `remote set-url` rather than unsetting: a remote with no URL breaks every
+   * later `git fetch` the workload runs. The clean URL is the one derived from
+   * the slug, never parsed back out of the dirty one — the layer already knows
+   * what the remote should say. The `extraheader` and `credential` clauses cover
+   * the other two documented ways a token gets persisted.
+   *
+   * THREE execs, not one chained string, and the split is the whole point. The
+   * substrate's equivalent (`apps/substrate/src/engine/git-scrub.ts`) ends every
+   * clause in `|| true` because it is deliberately best-effort. Chaining the
+   * same shape here and then gating on the compound's exit code does not make it
+   * load-bearing — it makes the gate DEAD: `a || true; b || true` exits with the
+   * status of the last `|| true`, i.e. always 0, so a `remote set-url` that
+   * really failed would report success and hand the workload a `.git/config`
+   * still holding a live installation token.
+   *
+   * So: the rewrite runs alone and ungated-by-`|| true` (its exit code is the
+   * signal); the two `config` clauses stay tolerant, because the section/key
+   * being absent IS the desired end state; and the result is then VERIFIED
+   * in-shell, without the URL ever being emitted (see below).
+   */
+  const scrubCloneCredential = async (targetDir: string, originUrl: string): Promise<void> => {
+    const dir = shellQuote(targetDir);
+    const url = shellQuote(originUrl);
+
+    const setUrl = await box.exec(`git -C ${dir} remote set-url origin ${url}`);
+    if (setUrl.exitCode !== 0) {
+      throw new Error(
+        `clone-credential scrub of ${targetDir} failed: 'git remote set-url' exited ${setUrl.exitCode} — refusing to hand the workload a checkout still holding an installation token: ${setUrl.stderr}`,
+      );
+    }
+
+    // Tolerant by design: these no-op when the section/key was never written.
+    await box.exec(
+      [
+        `git -C ${dir} config --local --remove-section credential || true`,
+        `git -C ${dir} config --local --unset-all http.https://github.com/.extraheader || true`,
+      ].join("; "),
+    );
+
+    // Verify what the remote actually says now — "the command exited 0" is a
+    // weaker claim than "the remote no longer carries userinfo".
+    //
+    // The test runs INSIDE the shell and emits nothing. Reading the URL out to
+    // stdout and inspecting it here would mean that, in exactly the case this
+    // guard exists to catch (the scrub failed, the remote is still
+    // authenticated), the token is what gets printed — into an `exec` result the
+    // SDK may retain and any future capture of the container could reach. A
+    // credential must not be emitted to prove it was removed. So the URL is
+    // captured by a shell assignment, matched by `case`, and only an exit code
+    // crosses back: 3 = could not read the remote, 4 = a credential survived.
+    const verify = await box.exec(
+      `url=$(git -C ${dir} config --local --get remote.origin.url) || exit 3; case "$url" in *@*) exit 4;; esac`,
+    );
+    if (verify.exitCode !== 0) {
+      throw new Error(
+        `clone-credential scrub of ${targetDir} could not be verified (exit ${verify.exitCode}: ${
+          verify.exitCode === 4
+            ? "remote.origin.url still carries an embedded credential"
+            : "could not read remote.origin.url back"
+        }) — refusing to hand the workload the checkout`,
+      );
+    }
+  };
+
   const service: SandboxService = {
     // No explicit acquire in the SDK — the container is provisioned lazily.
     // V0 = one container per execution; the handle is the normalised sandbox
@@ -354,17 +457,35 @@ export const makeSandboxCloudflareLive = (
       Effect.tryPromise({
         try: async () => {
           const targetDir = `/workspace/${repo.split("/").pop() ?? "repo"}`;
-          // Authenticate the clone URL when GitHub App credentials are wired
-          // (private-repo case). The token is short-lived (~1h) and never
-          // leaves the Worker — it is embedded in the URL passed to the
-          // sandbox's `gitCheckout`, which uses it once for the initial
-          // fetch. Public repos and operator-supplied custom URLs skip the
-          // rewrite (see `authenticateCloneUrl`).
-          let cloneUrl = repoUrl(repo);
-          if (githubAuth !== undefined) {
-            const token = await getInstallationToken(githubAuth);
-            cloneUrl = authenticateCloneUrl(cloneUrl, token);
-          }
+          const originUrl = repoUrl(repo);
+          // Authenticate the clone URL whenever GitHub App credentials are
+          // wired — which is every deploy that has the App secrets, INCLUDING
+          // the Schedule path. The installation is resolved for THIS repo when
+          // the dispatch did not already name one, because a run clones repos
+          // the dispatch never named (an estate sweep) and an installation
+          // covers one account. `resolveCloneToken` raises rather than return
+          // nothing, so there is no path from "no installation" to a quiet
+          // unauthenticated clone that 404s as a bare git error.
+          //
+          // The token is short-lived (~1h) and never leaves the Worker: it is
+          // embedded in the URL handed to the sandbox's `gitCheckout`, used
+          // once for the initial fetch, and scrubbed back out of the remote
+          // below. Operator-supplied custom URLs and SSH remotes skip the whole
+          // path (see `installationLookupSlug`) — an App token cannot
+          // authenticate them, so a clone of one is never blocked on a lookup.
+          //
+          // The lookup key is derived from the canonical clone URL, NOT from the
+          // raw `repo`: a run may name its target as a full `https://github.com/…`
+          // URL (`repoUrl` passes those through), and
+          // `GET /repos/{owner}/{repo}/installation` takes the SLUG — handed a
+          // URL it 404s, failing a clone of a repo that does have an
+          // installation.
+          const lookupRepo = installationLookupSlug(originUrl);
+          const token =
+            githubAuth !== undefined && lookupRepo !== undefined
+              ? await resolveCloneToken(githubAuth, lookupRepo)
+              : undefined;
+          const cloneUrl = token === undefined ? originUrl : authenticateCloneUrl(originUrl, token);
           // Clear the target BEFORE cloning: `targetDir` is derived from the
           // repo name, so it is the same path for every execution of a repo,
           // and a container whose filesystem is not fresh still has the last
@@ -391,14 +512,54 @@ export const makeSandboxCloudflareLive = (
           if (clear.exitCode !== 0) {
             throw new Error(`rm -rf ${targetDir} exited ${clear.exitCode}: ${clear.stderr}`);
           }
-          await box.gitCheckout(cloneUrl, { targetDir });
-          // `gitCheckout` clones a branch tip; pin the exact SHA so the run is
-          // reproducible. A bare clone leaves the repo at the default branch.
-          const checkout = await box.exec(`git checkout ${sha}`, {
-            cwd: targetDir,
-          });
-          if (checkout.exitCode !== 0) {
-            throw new Error(`git checkout ${sha} exited ${checkout.exitCode}: ${checkout.stderr}`);
+          try {
+            await box.gitCheckout(cloneUrl, { targetDir });
+            // `gitCheckout` clones a branch tip; pin the exact SHA so the run is
+            // reproducible. A bare clone leaves the repo at the default branch.
+            const checkout = await box.exec(`git checkout ${sha}`, {
+              cwd: targetDir,
+            });
+            if (checkout.exitCode !== 0) {
+              throw new Error(
+                `git checkout ${sha} exited ${checkout.exitCode}: ${checkout.stderr}`,
+              );
+            }
+          } catch (cause) {
+            // A failed clone can still have left a `.git` holding the
+            // authenticated remote, so scrub before re-raising. The scrub must
+            // not REPLACE the real diagnosis — but it must not vanish either:
+            // container filesystems are reused across executions (see the
+            // `rm -rf` note above), so a scrub that failed here leaves a live
+            // token readable by whatever runs in this container next. Swallowing
+            // that silently is the same class of quiet failure this PR exists to
+            // remove, so it is appended to the (redacted) error instead.
+            if (token !== undefined) {
+              const scrubFailure = await scrubCloneCredential(targetDir, originUrl).then(
+                () => undefined,
+                (e: unknown) => (e instanceof Error ? e.message : String(e)),
+              );
+              const err = redactCloneFailure(cause, token);
+              if (scrubFailure !== undefined) {
+                err.message = `${err.message}\n[post-failure credential scrub ALSO failed: ${redact(
+                  scrubFailure,
+                  [token],
+                )} — this container may still hold an installation token in ${targetDir}/.git/config]`;
+              }
+              throw err;
+            }
+            throw cause;
+          }
+          // On the success path the scrub is load-bearing, not best effort: the
+          // workload is about to run in this container, and it must not find a
+          // live installation token in `.git/config`. A scrub that could not run
+          // fails the checkout. Redacted like any other clone failure — this
+          // throw becomes `CheckoutFailed.cause`, which Workflows persists.
+          if (token !== undefined) {
+            try {
+              await scrubCloneCredential(targetDir, originUrl);
+            } catch (cause) {
+              throw redactCloneFailure(cause, token);
+            }
           }
           return targetDir;
         },
