@@ -310,13 +310,9 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
     if (!(await this.tryRestore(recipe, handles))) {
       await this.cleanRebuild(recipe);
     }
-    // Fatal, but as a REFUSAL rather than a throw. Without this mount every
-    // command exits 1 having run nothing (see `mountArtifacts`), so continuing
-    // would hand back a container that cannot work. Throwing instead would
-    // leave the fence at `exec-fence.ts`'s `if (!ensured.ok)` untaken and the
-    // reason reduced to a raw SDK string by the facade's outer catch — which
-    // `SandboxUnavailable` exists to prevent: "Infrastructure failure surfaced
-    // as a typed fact, never a naked throw."
+    // A REFUSAL rather than a throw: throwing leaves `exec-fence.ts`'s
+    // `if (!ensured.ok)` untaken and lets the facade's outer catch reduce the
+    // cause to a raw SDK string, which `SandboxUnavailable` exists to prevent.
     try {
       await this.mountArtifacts();
     } catch (err) {
@@ -461,25 +457,13 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
 
   /**
    * `/artifacts` is where exec streams its logs, so it has to exist before any
-   * command runs. Prefixed per container: one bucket, and two executions must
-   * not be able to read or overwrite each other's output.
+   * command runs.
    *
-   * The prefix is ABSOLUTE. `validatePrefix` in the SDK rejects anything that
-   * does not start with `/`, in 0.10.1 and 0.12.4 alike, so a relative prefix
-   * is not a degraded mount — it is a mount that never happens, on every boot,
-   * deterministically.
-   *
-   * A failure here is FATAL, and the swallowing `catch` this replaces was
-   * reasoned from a premise the code does not hold up: it said a missing mount
-   * "costs logs, not correctness — the receipt still carries its tail inline".
-   * The tail is not inline. `run` redirects the whole command into a file under
-   * this mount and `readLogTail` reads it back from there, so an unmounted
-   * `/artifacts` fails the redirect and the command never executes: `sh` exits
-   * 1 in ~100ms, having run nothing, and the empty tail is indistinguishable
-   * from a command that produced no output. That is what took the deploy canary
-   * from a verdict about egress to `inconclusive`, and blocked every deploy
-   * from #68 onward. Refusing at `ensure()` gives the caller a boot refusal
-   * naming the cause instead of a green-looking exec that ran no code.
+   * A failure here is fatal, not degraded: `run` redirects the whole command
+   * into a file under this mount and `readLogTail` reads it back from there, so
+   * without it the redirect fails and the command never executes — `sh` exits 1
+   * having run nothing, with an empty tail indistinguishable from a command
+   * that produced none. `runEnsure` turns that into a refusal.
    */
   private async mountArtifacts(): Promise<void> {
     await this.mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, {

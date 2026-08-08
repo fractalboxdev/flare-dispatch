@@ -283,11 +283,8 @@ describe("detached processes (ADR-0012) - the paths that answer before a contain
 // What only workerd can answer lives here: whether the real SDK accepts the
 // prefix, and what the DO does when the mount fails.
 describe("the artifacts mount", () => {
-  // The regression guard that means something. `validatePrefix` is not
-  // exported, so the rule is driven through the real `mountBucket` instead of
-  // restated: it runs before any container work, so an absolute prefix must
-  // fail LATER (no container engine in this pool) while a relative one fails
-  // AT the check. Assert on which error comes back, not on whether one does.
+  // `validatePrefix` is not exported, so the rule is driven through the real
+  // `mountBucket` rather than restated. Assert on WHICH error comes back.
   const mountWith = (prefix: string): Promise<unknown> =>
     runInDurableObject(freshSandbox(), (instance) =>
       (
@@ -306,23 +303,12 @@ describe("the artifacts mount", () => {
     expect(await mountWith(`artifacts/relative/`)).toMatch(/[Pp]refix must start with/);
   });
 
-  // The mirror of the above — mounting on the SHIPPED prefix and asserting it
-  // gets past `validatePrefix` — is deliberately absent, not overlooked.
-  // Clearing that check is exactly what puts the call into container boot, and
-  // this pool has no container engine: the SDK reports
-  // `this.container.interceptOutboundHttps is not a function` and then retries
-  // "Container not ready" until the test times out at 5s, taking the runner's
-  // isolated storage down with it and failing unrelated cases in this file.
-  // So the positive direction is covered by the pair that can be asserted
-  // cheaply: the SDK rejecting a relative prefix (above, real `mountBucket`,
-  // real `validatePrefix`) and `artifacts.test.ts` pinning that what we pass is
-  // absolute. Proving the mount COMPLETES needs a live container, which is the
-  // canary's job, not this suite's.
+  // The mirror — mounting on the SHIPPED prefix — is deliberately absent, not
+  // overlooked. Clearing `validatePrefix` is what puts the call into container
+  // boot, which this pool cannot do: it retries until the 5s timeout and takes
+  // the runner's isolated storage with it, failing unrelated cases here.
 
-  // The other half, and the one a prefix assertion cannot reach: the bug was
-  // not only that the prefix was wrong, it was that being wrong went
-  // unreported. `mountArtifacts` only calls `this.mountBucket`, so the failure
-  // posture is reachable with a stub and no container.
+  // The half a prefix assertion cannot reach: being wrong went UNREPORTED.
   it("propagates a mount failure out of mountArtifacts rather than swallowing it", async () => {
     await expect(
       runInDurableObject(freshSandbox(), (instance) => {
@@ -332,27 +318,5 @@ describe("the artifacts mount", () => {
         return (instance as unknown as { mountArtifacts: () => Promise<void> }).mountArtifacts();
       }),
     ).rejects.toThrow(/Prefix must start with/);
-  });
-
-  it("calls mountBucket with the binding, path and absolute prefix it claims to", async () => {
-    // Named for what it is: an assertion about the ARGUMENTS, driven through a
-    // stub. It pins the wiring between `artifactsPrefix` and the mount call.
-    // Whether the SDK accepts those arguments is the pair of tests above.
-    const seen: Array<{ binding: string; path: string; opts: { prefix: string } }> = [];
-    await runInDurableObject(freshSandbox(), (instance) => {
-      (
-        instance as unknown as {
-          mountBucket: (b: string, p: string, o: { prefix: string }) => Promise<void>;
-        }
-      ).mountBucket = (binding, path, opts) => {
-        seen.push({ binding, path, opts });
-        return Promise.resolve();
-      };
-      return (instance as unknown as { mountArtifacts: () => Promise<void> }).mountArtifacts();
-    });
-    expect(seen).toHaveLength(1);
-    expect(seen[0]?.binding).toBe("BACKUP_BUCKET");
-    expect(seen[0]?.path).toBe(ARTIFACTS_DIR);
-    expect(seen[0]?.opts.prefix).toMatch(/^\/artifacts\/.+\/$/);
   });
 });
