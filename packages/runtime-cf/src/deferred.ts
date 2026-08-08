@@ -5,10 +5,27 @@
 // Per specs/pm/plan.md § 1 ("All other DSL surface stubbed to `Effect.die`")
 // an unbacked capability fails loudly rather than silently mis-behaving.
 //
+// --- This file is where a `die` belongs, and the only place -------------------
+//
+// A dying stub is honest HERE and lethal in a live Layer, and the difference is
+// which question the Layer's selection already answered. This file is chosen
+// because the deploy has no such binding, so "not configured" is information
+// the operator has; a live Layer is chosen because the deploy IS configured, so
+// a caller has every reason to expect the method works and finds out otherwise
+// in production, on a line that type-checked and reviewed clean.
+//
+// So: an unbuildable method in a LIVE Layer gets implemented or deleted from
+// the service interface — never parked on a `die`. `browser.newPage` was one of
+// those and is gone. Two remain below on this branch — `github.repositories`
+// and `openPullRequests`, which also die in `github-live.ts`; they are deleted
+// in flare-dispatch#96, which is not merged yet. The convention is written up
+// in AGENTS.md § Conventions.
+//
 // Live as of PR8: `Cache` (R2-backed, see cache-r2.ts — always wired) and
 // `Config` (KV-backed, see config-kv.ts — wired when the `CONFIG_KV` binding
 // is present, else `ConfigDeferred` below). `Checks` went live in PR6.
-// `Browser` is the last V0 stub — Browser Rendering lands in V2 (PR9).
+// `Browser` went live in V2 (PR9) as `makeBrowserRenderingLive`; this Layer is
+// the answer for a deploy with no Browser Rendering configured.
 //
 // Spec: specs/03-dsl.md § Layers, specs/pm/plan.md § PR4 + § PR6 + § PR8.
 
@@ -37,12 +54,6 @@ import {
 export const BrowserDeferred: Layer.Layer<Browser> = Layer.succeed(
   Browser,
   ((): BrowserService => ({
-    newPage: () =>
-      Effect.fail(
-        new BrowserUnavailable({
-          reason: "transient",
-        }),
-      ),
     newCDPSession: () =>
       Effect.fail(
         new BrowserUnavailable({

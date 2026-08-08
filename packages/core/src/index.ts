@@ -100,13 +100,7 @@ export {
   type ExecOpts,
   type ExposeResult,
 } from "./services/sandbox";
-export {
-  browser,
-  Browser,
-  type BrowserService,
-  type Page,
-  type CDPSession,
-} from "./services/browser";
+export { browser, Browser, type BrowserService, type CDPSession } from "./services/browser";
 export { cache, Cache, type CacheService } from "./services/cache";
 export { artifact, Artifact, type ArtifactService, type ArtifactInfo } from "./services/artifact";
 export { io, IO, type IOService, type LogLevel, type PriorExecution } from "./services/io";

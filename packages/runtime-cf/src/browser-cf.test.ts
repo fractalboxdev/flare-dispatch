@@ -58,14 +58,4 @@ describe("makeBrowserRenderingLive — newCDPSession", () => {
     );
     expect(ws.wsEndpoint).toBe("wss://browser.cf/connect?token=tkn");
   });
-
-  it("newPage dies — REST mode is not implemented in this Layer", async () => {
-    const layer = makeBrowserRenderingLive({
-      connectUrl: "wss://browser.cf/connect",
-    });
-    const exit = await Effect.runPromiseExit(
-      Effect.flatMap(Browser, (b) => b.newPage()).pipe(Effect.provide(layer)),
-    );
-    expect(exit._tag).toBe("Failure");
-  });
 });

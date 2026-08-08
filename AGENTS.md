@@ -38,3 +38,14 @@ Single-tenant BYOC — no multi-tenant SaaS. Deploy with `wrangler deploy` into 
 ## Conventions
 
 Effect-TS is the core programming model here — follow the Effect-TS rules in the workspace instructions (`Match`/`catchTag` over `._tag`, `Schema.TaggedError` over `throw`, generators over `.flatMap` chains, Layer composition). Prefer `wrangler` CLI over the Cloudflare dashboard for all Cloudflare state changes so infra stays in git and replayable.
+
+### A `die` belongs in a deferred Layer, never in a live one
+
+`RunContext` is the union of every capability service, so each Tag needs a Layer method whether or not this deploy can back it. That makes it easy to satisfy the compiler with `Effect.die("not implemented")` — and where you put that decides whether it is honest or lethal.
+
+- **Deferred / no-op Layer — a `die` is honest.** The Layer is *selected* by "this deploy has no such binding", so the operator has already been told. `config.get` on a deploy with no `CONFIG_KV` dying loudly beats it returning `undefined` and letting a run mis-behave quietly.
+- **Live Layer — a `die` is a landmine.** The Layer is selected because the deploy *is* configured, so the caller has every reason to expect it works. It type-checks, it reviews clean, and it takes the run down the first time anything reaches for it. Whoever finds it finds it in production.
+
+So in a live Layer, an unbuildable method has exactly two honest endings: **implement it, or delete it from the service interface.** Prefer deleting when nothing calls it — a capability nobody can use safely is not a capability, and *implemented reads as wired* to the next person who opens the interface. Add it back at the moment a caller exists, so the authority gets reviewed when it is real rather than in advance.
+
+Degrading is the third option, and only where the degraded answer cannot be mistaken for data: a *write* may degrade to a logged no-op (reporting must not fail a run), but a *read* whose empty answer would read as a fact must fail instead — see `github-live.ts`, where `pullRequestHistory` fails uncredentialed because an empty history reading as "never proposed" would decide suppression on a lie.
