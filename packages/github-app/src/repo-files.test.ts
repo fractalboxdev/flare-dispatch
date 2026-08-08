@@ -54,6 +54,27 @@ describe("repoContentsUrl (pure)", () => {
       "https://api.github.com/repos/owner/name/contents/a.md",
     );
   });
+
+  it("rejects a path that would escape the repo", () => {
+    // `encodeURIComponent` leaves `.` alone, so `..` reaches the URL parser
+    // intact and gets resolved away — silently retargeting the token. Proven
+    // rather than asserted: this is what the unguarded URL would collapse to.
+    expect(
+      new URL("https://api.github.com/repos/owner/name/contents/../../../user/repos").href,
+    ).toBe("https://api.github.com/repos/user/repos");
+
+    for (const path of ["../../../user/repos", "a/../../b", "./a.md", "maintenance/../../x"]) {
+      expect(() => repoContentsUrl({ repo: "owner/name", path })).toThrow(GithubApiError);
+    }
+  });
+
+  it("leaves a literal percent-encoded dot alone — it is a filename, not a segment", () => {
+    // `%2e%2e` is double-encoded rather than rejected: it names a file, and the
+    // URL parser never resolves it as a segment.
+    expect(repoContentsUrl({ repo: "owner/name", path: "%2e%2e/a.md" })).toBe(
+      "https://api.github.com/repos/owner/name/contents/%252e%252e/a.md",
+    );
+  });
 });
 
 describe("readRepoTextFile", () => {
@@ -87,5 +108,19 @@ describe("readRepoTextFile", () => {
     await expect(
       readRepoTextFile({ token: "t", repo: "owner/name", path: "a.jsonl" }),
     ).rejects.toBeInstanceOf(GithubApiError);
+  });
+
+  it("refuses an oversized body before reading it into the isolate", async () => {
+    respond = () => HttpResponse.text("x", { headers: { "content-length": "999999999" } });
+    await expect(
+      readRepoTextFile({ token: "t", repo: "owner/name", path: "huge.jsonl", maxBytes: 1024 }),
+    ).rejects.toBeInstanceOf(GithubApiError);
+  });
+
+  it("reads a body within the cap normally", async () => {
+    respond = () => HttpResponse.text("small", { headers: { "content-length": "5" } });
+    await expect(
+      readRepoTextFile({ token: "t", repo: "owner/name", path: "a.jsonl", maxBytes: 1024 }),
+    ).resolves.toEqual({ found: true, content: "small" });
   });
 });

@@ -22,6 +22,7 @@
 // never an App JWT, never a PAT; the ledger repo is private. Provider-neutral
 // plain `async`; the Effect Layer (`makeGithubLive`) wraps it.
 
+import { GithubApiError } from "./errors";
 import { assertOk, API_BASE_DEFAULT, ghHeaders, resolveClient, splitRepo } from "./http";
 
 export type ReadRepoTextFileOptions = {
@@ -37,7 +38,21 @@ export type ReadRepoTextFileOptions = {
   readonly apiBase?: string;
   /** `fetch` override — defaults to the global `fetch`. */
   readonly fetchImpl?: typeof fetch;
+  /** Refuse a body larger than this — defaults to {@link MAX_BYTES_DEFAULT}. */
+  readonly maxBytes?: number;
 };
+
+/**
+ * The largest body this read will accept.
+ *
+ * The raw media type serves files up to 100 MB, and a Worker isolate has 128 MB
+ * total — so one oversized file read into a string, then split into lines and a
+ * Map by `parseDeclinedLedger`, is three copies of an OOM. Nothing this reader
+ * targets is prose measured in megabytes, so the cap is generous and the
+ * failure is a `GithubApiError`, which `checkSuppression` degrades on loudly
+ * rather than silently truncating.
+ */
+const MAX_BYTES_DEFAULT = 4 * 1024 * 1024;
 
 /** A file's contents, or the clean "there is no such file" answer. */
 export type ReadRepoTextFileResult =
@@ -54,11 +69,20 @@ export const repoContentsUrl = (opts: {
   const { owner, name } = splitRepo(opts.repo);
   const base = opts.apiBase ?? API_BASE_DEFAULT;
   // Encode each segment, not the whole path — the slashes are structural.
-  const path = opts.path
-    .split("/")
-    .filter((s) => s.length > 0)
-    .map(encodeURIComponent)
-    .join("/");
+  //
+  // `encodeURIComponent` leaves `.` untouched, so a `..` segment survives
+  // encoding intact and the URL parser then resolves it away at fetch time:
+  // `path: "../../../user/repos"` turns `…/repos/{o}/{n}/contents/…` into
+  // `https://api.github.com/repos/user/repos`, pointing an installation token
+  // at an endpoint the caller never named. Dot segments are therefore rejected
+  // rather than encoded — this read is one file in one repo, and no legitimate
+  // repo-relative path needs them.
+  const segments = opts.path.split("/").filter((s) => s.length > 0);
+  const escaping = segments.find((s) => s === "." || s === "..");
+  if (escaping !== undefined) {
+    throw new GithubApiError(`path "${opts.path}" escapes the repo (segment "${escaping}")`, 0, "");
+  }
+  const path = segments.map(encodeURIComponent).join("/");
   const query = opts.ref !== undefined ? `?ref=${encodeURIComponent(opts.ref)}` : "";
   return `${base}/repos/${owner}/${name}/contents/${path}${query}`;
 };
@@ -84,6 +108,19 @@ export const readRepoTextFile = async (
   // file → the same answer as absent, rather than a second error taxonomy.
   if ((res.headers.get("content-type") ?? "").includes("application/json")) {
     return { found: false };
+  }
+  // Check the declared size BEFORE `res.text()` allocates it. A chunked
+  // response carries no `Content-Length` and so slips past this — GitHub sends
+  // one for raw contents, so the realistic case is covered, and the line cap in
+  // `parseDeclinedLedger` bounds what a caller builds out of the text either way.
+  const maxBytes = opts.maxBytes ?? MAX_BYTES_DEFAULT;
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new GithubApiError(
+      `contents read for ${opts.repo}:${opts.path} is ${declared} bytes, over the ${maxBytes} cap`,
+      0,
+      "",
+    );
   }
   return { found: true, content: await res.text() };
 };

@@ -187,7 +187,7 @@ describe("makeGithubFake — pullRequestHistory() / readTextFile()", () => {
     ...over,
   });
 
-  it("filters by repo, state, head-branch prefix, and the update window", async () => {
+  it("filters by repo, state, and head-branch prefix", async () => {
     const { layer, state } = makeGithubFake({
       now: NOW,
       pullRequestHistory: [
@@ -208,8 +208,106 @@ describe("makeGithubFake — pullRequestHistory() / readTextFile()", () => {
         }),
       ).pipe(Effect.provide(layer)),
     );
-    expect(result.map((p) => p.number)).toEqual([1]);
+    // #4 is outside the 30-day window but still returned: `updatedWithinDays`
+    // is a pagination bound, and the live read only stops FETCHING at it — the
+    // out-of-window rows sharing a page with in-window ones come back. A fake
+    // that filtered them would be stricter than production.
+    expect(result.map((p) => p.number)).toEqual([1, 4]);
     expect(state.pullRequestHistoryCalls).toHaveLength(1);
+  });
+
+  it("returns newest-updated first, matching the live sort", async () => {
+    const { layer } = makeGithubFake({
+      now: NOW,
+      // Seeded oldest-first, so insertion order and the contract disagree.
+      pullRequestHistory: [
+        history({ number: 1, updatedAt: NOW - 20 * DAY }),
+        history({ number: 2, updatedAt: NOW - 1 * DAY }),
+        history({ number: 3, updatedAt: NOW - 10 * DAY }),
+      ],
+    });
+    const result = await Effect.runPromise(
+      Effect.flatMap(Github, (g) => g.pullRequestHistory({ repo: "owner/control" })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+    expect(result.map((p) => p.number)).toEqual([2, 3, 1]);
+  });
+
+  it("stops at maxPages, dropping the rows past the cap", async () => {
+    const { layer } = makeGithubFake({
+      now: NOW,
+      historyPageSize: 2,
+      pullRequestHistory: [
+        history({ number: 1, updatedAt: NOW - 1 * DAY }),
+        history({ number: 2, updatedAt: NOW - 2 * DAY }),
+        history({ number: 3, updatedAt: NOW - 3 * DAY }),
+        history({ number: 4, updatedAt: NOW - 4 * DAY }),
+        history({ number: 5, updatedAt: NOW - 5 * DAY }),
+      ],
+    });
+    const result = await Effect.runPromise(
+      Effect.flatMap(Github, (g) =>
+        g.pullRequestHistory({ repo: "owner/control", maxPages: 2 }),
+      ).pipe(Effect.provide(layer)),
+    );
+    // Two pages of two — #5 is past the cap and never fetched, which is exactly
+    // how a repo with more history than the cap loses its oldest rows in prod.
+    expect(result.map((p) => p.number)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("stops paginating once a page runs past the update window", async () => {
+    const { layer } = makeGithubFake({
+      now: NOW,
+      historyPageSize: 2,
+      pullRequestHistory: [
+        history({ number: 1, updatedAt: NOW - 1 * DAY }),
+        history({ number: 2, updatedAt: NOW - 90 * DAY }),
+        history({ number: 3, updatedAt: NOW - 91 * DAY }),
+      ],
+    });
+    const result = await Effect.runPromise(
+      Effect.flatMap(Github, (g) =>
+        g.pullRequestHistory({ repo: "owner/control", updatedWithinDays: 30, maxPages: 5 }),
+      ).pipe(Effect.provide(layer)),
+    );
+    // Page 1 is [#1, #2]; its oldest predates the cutoff, so page 2 is never
+    // fetched and #3 never appears — the cap is not what stopped it.
+    expect(result.map((p) => p.number)).toEqual([1, 2]);
+  });
+
+  it("answers a ref-pinned file when the caller names that ref", async () => {
+    const { layer, state } = makeGithubFake({
+      files: {
+        "owner/control:maintenance/declined.jsonl": "default-branch",
+        "owner/control@release/2026-08:maintenance/declined.jsonl": "on-the-release-branch",
+      },
+    });
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const g = yield* Github;
+        return [
+          yield* g.readTextFile({
+            repo: "owner/control",
+            path: "maintenance/declined.jsonl",
+            ref: "release/2026-08",
+          }),
+          // An unseeded ref falls back to the bare key — what most tests want.
+          yield* g.readTextFile({
+            repo: "owner/control",
+            path: "maintenance/declined.jsonl",
+            ref: "some-other-branch",
+          }),
+          yield* g.readTextFile({ repo: "owner/control", path: "maintenance/declined.jsonl" }),
+        ];
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(result).toEqual([
+      { found: true, content: "on-the-release-branch" },
+      { found: true, content: "default-branch" },
+      { found: true, content: "default-branch" },
+    ]);
+    expect(state.readTextFileCalls[0]?.ref).toBe("release/2026-08");
   });
 
   it("answers a seeded file, and found:false for anything else", async () => {
