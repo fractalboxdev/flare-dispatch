@@ -296,9 +296,28 @@ describe("the artifacts mount", () => {
   it("is rejected by the SDK on a relative prefix — the bug, reproduced", async () => {
     expect(await mountWith(`artifacts/relative/`)).toMatch(/[Pp]refix must start with/);
   });
+  // No mirror case for the shipped prefix: clearing `validatePrefix` advances
+  // into container boot, which hangs this pool to a 5s timeout and breaks its
+  // isolated storage.
 
-  // No mirror case: clearing `validatePrefix` advances into container boot,
-  // which hangs this pool to a 5s timeout and breaks its isolated storage.
+  // The only thing binding `mountArtifacts` to `artifactsPrefix`. Without it a
+  // relative literal inlined here passes every other test in the tree.
+  it("mounts on the absolute prefix rather than a literal of its own", async () => {
+    let seen: string | undefined;
+    await runInDurableObject(freshSandbox(), (instance) => {
+      (
+        instance as unknown as {
+          mountBucket: (b: string, p: string, o: { prefix: string }) => Promise<void>;
+        }
+      ).mountBucket = (_b, _p, opts) => {
+        seen = opts.prefix;
+        return Promise.resolve();
+      };
+      return (instance as unknown as { mountArtifacts: () => Promise<void> }).mountArtifacts();
+    });
+    expect(seen).toMatch(/^\/artifacts\/.+\/$/);
+  });
+
   it("propagates a mount failure out of mountArtifacts rather than swallowing it", async () => {
     await expect(
       runInDurableObject(freshSandbox(), (instance) => {

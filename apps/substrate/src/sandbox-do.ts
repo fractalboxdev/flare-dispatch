@@ -454,9 +454,10 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
   }
 
   /**
-   * Fatal, not degraded: `run` redirects the command into a file under this
-   * mount, so without it the redirect fails and nothing executes — `sh` exits 1
-   * with an empty tail, indistinguishable from a command that printed nothing.
+   * Fatal, not degraded: `executeCommand` and `startDetached` both redirect
+   * into a file under this mount, so without it the redirect fails and nothing
+   * executes — `sh` exits 1 with an empty tail, indistinguishable from a
+   * command that printed nothing.
    */
   private async mountArtifacts(): Promise<void> {
     await this.mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, {
