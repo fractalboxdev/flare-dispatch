@@ -17,6 +17,7 @@ import type { ApprovalAttestation } from "@fractalboxdev/flare-dispatch-substrat
 import { recordDenialD1 } from "./admission/denials-d1";
 import { mintTicket, TICKET_TTL_MS } from "./admission/ticket";
 import { sha256Hex } from "./engine/approval";
+import { ARTIFACTS_DIR } from "./artifacts";
 import type { SubstrateSandboxBase } from "./sandbox-do";
 
 const SECRET = "substrate-test-ticket-secret";
@@ -274,5 +275,57 @@ describe("detached processes (ADR-0012) - the paths that answer before a contain
         instance.stopDetached("sub-detached-nothing"),
       ),
     ).toEqual({ stopped: false });
+  });
+});
+
+describe("the artifacts mount", () => {
+  const mountWith = (prefix: string): Promise<unknown> =>
+    runInDurableObject(freshSandbox(), (instance) =>
+      (
+        instance as unknown as {
+          mountBucket: (b: string, p: string, o: { prefix: string }) => Promise<void>;
+        }
+      )
+        .mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, { prefix })
+        .then(
+          () => "mounted",
+          (err: unknown) => (err instanceof Error ? err.message : String(err)),
+        ),
+    );
+
+  it("is rejected by the SDK on a relative prefix — the bug, reproduced", async () => {
+    expect(await mountWith(`artifacts/relative/`)).toMatch(/[Pp]refix must start with/);
+  });
+  // No mirror case for the shipped prefix: clearing `validatePrefix` advances
+  // into container boot, which hangs this pool to a 5s timeout and breaks its
+  // isolated storage.
+
+  // The only thing binding `mountArtifacts` to `artifactsPrefix`. Without it a
+  // relative literal inlined here passes every other test in the tree.
+  it("mounts on the absolute prefix rather than a literal of its own", async () => {
+    let seen: string | undefined;
+    await runInDurableObject(freshSandbox(), (instance) => {
+      (
+        instance as unknown as {
+          mountBucket: (b: string, p: string, o: { prefix: string }) => Promise<void>;
+        }
+      ).mountBucket = (_b, _p, opts) => {
+        seen = opts.prefix;
+        return Promise.resolve();
+      };
+      return (instance as unknown as { mountArtifacts: () => Promise<void> }).mountArtifacts();
+    });
+    expect(seen).toMatch(/^\/artifacts\/.+\/$/);
+  });
+
+  it("propagates a mount failure out of mountArtifacts rather than swallowing it", async () => {
+    await expect(
+      runInDurableObject(freshSandbox(), (instance) => {
+        const boom = new Error("Prefix must start with '/': \"artifacts/abc/\"");
+        (instance as unknown as { mountBucket: () => Promise<void> }).mountBucket = () =>
+          Promise.reject(boom);
+        return (instance as unknown as { mountArtifacts: () => Promise<void> }).mountArtifacts();
+      }),
+    ).rejects.toThrow(/Prefix must start with/);
   });
 });

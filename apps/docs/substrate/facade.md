@@ -79,6 +79,9 @@ const ensured = await env.SUBSTRATE.ensureSandbox(key, recipe, { mode: "refuse" 
 if (!ensured.ok) return render(ensured.refusal);  // admission-refused carries pool, busy, cap
 ```
 
+`ensureSandbox` refuses on more than admission: a boot that cannot give the container a working
+filesystem refuses with `sandbox-unavailable`. Match on `kind`.
+
 **Batch work queues in the consumer's own durable machinery.** `ensureSandbox` never blocks on a
 queue in either mode — the consumer drives the line and hibernates between attempts, so a wait costs
 a durable step rather than a held request:

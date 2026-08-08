@@ -37,6 +37,7 @@ import type {
 import { repoSlug } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import { denialsFor, recordDenialD1 } from "./admission/denials-d1";
 import { verifyTicket } from "./admission/ticket";
+import { ARTIFACTS_DIR, artifactsPrefix } from "./artifacts";
 import { attestationUseKey, decideAttestationUse, type AttestationUse } from "./engine/approval";
 import {
   fencedKillSet,
@@ -91,7 +92,6 @@ const TAIL_READ_TIMEOUT_MS = 15_000;
 const SCRUB_TIMEOUT_MS = 60_000;
 
 const WORKSPACE_DIR = "/workspace";
-const ARTIFACTS_DIR = "/artifacts";
 
 /**
  * Matches the SDK default. The TTL deletes nothing — it only makes
@@ -310,7 +310,20 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
     if (!(await this.tryRestore(recipe, handles))) {
       await this.cleanRebuild(recipe);
     }
-    await this.mountArtifacts();
+    // Refusal, not throw: a throw skips `exec-fence.ts`'s `if (!ensured.ok)`.
+    try {
+      await this.mountArtifacts();
+    } catch (err) {
+      return {
+        ok: false,
+        refusal: {
+          kind: "sandbox-unavailable",
+          reason: `artifacts mount failed, so no command could produce output: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        },
+      };
+    }
 
     // Record the version this tree was built to, so the fast path above can
     // recognise a live container on the next call — and so a later snapshot
@@ -441,21 +454,15 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
   }
 
   /**
-   * `/artifacts` is where exec streams its logs, so it has to exist before any
-   * command runs. Prefixed per container: one bucket, and two executions must
-   * not be able to read or overwrite each other's output.
+   * Fatal, not degraded: `executeCommand` and `startDetached` both redirect
+   * into a file under this mount, so without it the redirect fails and nothing
+   * executes — `sh` exits 1 with an empty tail, indistinguishable from a
+   * command that printed nothing.
    */
   private async mountArtifacts(): Promise<void> {
-    try {
-      await this.mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, {
-        prefix: `artifacts/${this.ctx.id.toString()}/`,
-      });
-    } catch (err) {
-      // A missing artifacts mount costs logs, not correctness — the receipt
-      // still carries its tail inline. Failing ensure() here would turn a
-      // degraded log path into a dead execution.
-      console.error("artifacts mount failed; logs will not persist", err);
-    }
+    await this.mountBucket("BACKUP_BUCKET", ARTIFACTS_DIR, {
+      prefix: artifactsPrefix(this.ctx.id.toString()),
+    });
   }
 
   // -------------------------------------------------------------------------
