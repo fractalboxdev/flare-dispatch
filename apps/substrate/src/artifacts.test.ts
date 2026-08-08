@@ -1,5 +1,3 @@
-// Here rather than beside the code because `pnpm test` never runs the Workers
-// pool. The workers suite drives the real SDK call.
 import { describe, expect, it } from "vitest";
 import { artifactsPrefix } from "./artifacts";
 
