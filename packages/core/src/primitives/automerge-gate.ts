@@ -199,6 +199,16 @@ export const loadAutomergeConfig = (opts: {
         `automerge: ${path} in ${opts.repo} is ${malformed} — refusing every auto-merge this tick`,
       );
     }
+    // Not fatal — an inert rule cannot make the gate more permissive than the
+    // rest of the conjunction already allows — but it is silently not doing the
+    // job it was added to do, and that is worth saying out loud every tick.
+    const inert = config.sensitivePaths.filter(isUnsupportedPathPattern);
+    if (inert.length > 0) {
+      yield* io.log(
+        "warn",
+        `automerge: ${path} in ${opts.repo} has sensitivePaths entries that match nothing (${inert.join(", ")}) — supported shapes are "dir/", "*substring*", and an exact filename`,
+      );
+    }
     return config;
   });
 
@@ -222,6 +232,16 @@ export type MergeCandidate = {
    * GitHub, not from the body.
    */
   readonly producedByRun?: string;
+  /**
+   * Every run the body names, when it carries more than one marker. Defaults to
+   * just {@link MergeCandidate.producedByRun}.
+   *
+   * A body can hold any number of markers, and taking only the first would let
+   * a prepended `<!-- flare-dispatch: something-harmless -->` shadow the real
+   * one and slip a never-eligible run past the check below. Every claim is
+   * matched, so a second marker can only ever add a reason to refuse.
+   */
+  readonly claimedRuns?: readonly string[];
   /** The declared change class (`dependency-patch`, `formatting-only`, …). */
   readonly changeClass?: string;
   /** Repo-relative paths the diff touches. */
@@ -259,6 +279,22 @@ export type MergeVerdict =
  * substring (`*secret*`), anything else is an exact filename match at any depth
  * (`CODEOWNERS`, `wrangler.jsonc`).
  */
+/**
+ * Does a pattern use a `*` in a position {@link matchesSensitivePath} does not
+ * understand?
+ *
+ * The matcher supports exactly three shapes, and anything else falls through to
+ * the exact-filename branch — where a `*` can never match, because no path
+ * contains one. So `*.env`, `.github/workflows/*` and `src/**` are not errors
+ * that fail loudly; they are rules that read as protection and match nothing.
+ * `loadAutomergeConfig` warns on these rather than silently accepting them.
+ */
+export const isUnsupportedPathPattern = (pattern: string): boolean => {
+  if (!pattern.includes("*")) return false;
+  const substring = pattern.startsWith("*") && pattern.endsWith("*") && pattern.length > 2;
+  return !substring;
+};
+
 export const matchesSensitivePath = (path: string, pattern: string): boolean => {
   if (pattern.endsWith("/")) return path === pattern.slice(0, -1) || path.startsWith(pattern);
   if (pattern.startsWith("*") && pattern.endsWith("*") && pattern.length > 2) {
@@ -266,6 +302,13 @@ export const matchesSensitivePath = (path: string, pattern: string): boolean => 
   }
   return path === pattern || path.endsWith(`/${pattern}`);
 };
+
+/**
+ * Every run a candidate's body claims — the explicit list when the caller found
+ * more than one marker, otherwise the single one, otherwise nothing.
+ */
+const claimedRuns = (candidate: MergeCandidate): readonly string[] =>
+  candidate.claimedRuns ?? (candidate.producedByRun !== undefined ? [candidate.producedByRun] : []);
 
 /**
  * Evaluate one candidate against the allowlist — pure.
@@ -292,14 +335,16 @@ export const evaluateAutomerge = (
   // A run named in `neverEligibleRuns` is refused before the class is even
   // considered: §5 makes these ineligible "in any class on any repo", so a
   // class opt-in must not be able to reach past it.
-  if (
-    candidate.producedByRun !== undefined &&
-    config.neverEligibleRuns.includes(candidate.producedByRun)
-  ) {
+  // EVERY claim is checked, not just the first: one marker must not be able to
+  // shadow another. Anyone who can edit a PR body can prepend a second marker,
+  // and reading only the leading one would turn that into a way to hide a
+  // never-eligible run behind a harmless name.
+  const banned = claimedRuns(candidate).find((run) => config.neverEligibleRuns.includes(run));
+  if (banned !== undefined) {
     return {
       permitted: false,
       reason: "never-eligible-run",
-      detail: `${candidate.producedByRun} is never auto-mergeable — its diff is loop-authored prose`,
+      detail: `${banned} is never auto-mergeable — its diff is loop-authored prose`,
     };
   }
   if (candidate.changeClass === undefined || !config.classes.includes(candidate.changeClass)) {

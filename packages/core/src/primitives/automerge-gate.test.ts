@@ -18,6 +18,7 @@ import {
   type AutomergeConfig,
   describeVerdict,
   evaluateAutomerge,
+  isUnsupportedPathPattern,
   loadAutomergeConfig,
   matchesSensitivePath,
   type MergeCandidate,
@@ -135,6 +136,22 @@ describe("matchesSensitivePath", () => {
     expect(matchesSensitivePath("CODEOWNERS", "CODEOWNERS")).toBe(true);
     expect(matchesSensitivePath(".github/CODEOWNERS", "CODEOWNERS")).toBe(true);
     expect(matchesSensitivePath("docs/CODEOWNERS.md", "CODEOWNERS")).toBe(false);
+  });
+});
+
+describe("isUnsupportedPathPattern", () => {
+  it("flags the glob shapes that look like protection and match nothing", () => {
+    for (const pattern of ["*.env", ".github/workflows/*", "src/**", "*secret", "pkg/*/dist"]) {
+      expect(`${pattern}:${isUnsupportedPathPattern(pattern)}`).toBe(`${pattern}:true`);
+      // The point of flagging them: they really do match nothing.
+      expect(matchesSensitivePath("src/app.env", pattern)).toBe(false);
+    }
+  });
+
+  it("accepts the three shapes the matcher actually implements", () => {
+    for (const pattern of ["specs/", "*secret*", "CODEOWNERS", "wrangler.jsonc"]) {
+      expect(`${pattern}:${isUnsupportedPathPattern(pattern)}`).toBe(`${pattern}:false`);
+    }
   });
 });
 
@@ -305,6 +322,36 @@ describe("evaluateAutomerge — a self-declared run marker is not authorship", (
       candidate({ author: "flare-dispatch[bot]", producedByRun: "spec-drift-pr" }),
     );
     expect(verdict).toMatchObject({ permitted: false, reason: "never-eligible-run" });
+  });
+
+  it("checks every claimed run, so a prepended marker cannot shadow a banned one", () => {
+    // Anyone who can edit a PR body can put a second marker above the real one.
+    // If only the first were read, this would launder a `spec-drift-pr` PR into
+    // an eligible one.
+    const verdict = evaluateAutomerge(
+      PERMISSIVE,
+      candidate({
+        author: "flare-dispatch[bot]",
+        producedByRun: "refresh-fixtures",
+        claimedRuns: ["refresh-fixtures", "spec-drift-pr"],
+      }),
+    );
+    expect(verdict).toMatchObject({ permitted: false, reason: "never-eligible-run" });
+    expect(verdict.permitted === false && verdict.detail).toContain("spec-drift-pr");
+  });
+
+  it("names the banned run, wherever in the list it sits", () => {
+    for (const claims of [
+      ["org-spec-audit", "refresh-fixtures"],
+      ["refresh-fixtures", "org-spec-audit"],
+      ["a", "b", "org-spec-audit"],
+    ]) {
+      const verdict = evaluateAutomerge(
+        PERMISSIVE,
+        candidate({ author: "flare-dispatch[bot]", claimedRuns: claims }),
+      );
+      expect(verdict).toMatchObject({ permitted: false, reason: "never-eligible-run" });
+    }
   });
 
   it("cannot be opened by a marker when no author is vouched for at all", () => {

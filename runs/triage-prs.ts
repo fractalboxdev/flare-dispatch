@@ -134,7 +134,40 @@ const EXIT_HEADING: Record<Exit, string> = {
  * checks it unconditionally — see `automerge-gate`. Never treat a match here as
  * evidence that the loop wrote the PR.
  */
-const RUN_MARKER = /<!--\s*flare-dispatch:\s*([a-z0-9-]+)\s*-->/;
+const RUN_MARKER = /<!--\s*flare-dispatch:\s*([a-z0-9-]+)\s*-->/g;
+
+/**
+ * Every run a PR body claims, in order.
+ *
+ * All of them, not just the first: a body can carry any number of markers, and
+ * whoever edits it chooses the order. Taking only the leading match would let a
+ * prepended harmless name shadow a real `neverEligibleRuns` entry, so the gate
+ * is handed the whole list and refuses if any of them is banned.
+ */
+export const claimedRuns = (body: string): readonly string[] =>
+  [...body.matchAll(RUN_MARKER)].map((m) => m[1] as string);
+
+/**
+ * Flatten untrusted PR prose to one line that cannot act inside the digest.
+ *
+ * PR titles are written by whoever opened the PR and land verbatim in a
+ * markdown file and a PR body the loop then publishes. Four things have to go:
+ * newlines (they break the list item), backticks and pipes (they escape inline
+ * code and table cells), `<!--`/`-->` (a title carrying a marker would be read
+ * back as a run claim on the next tick), and `@` (GitHub turns it into a real
+ * notification the moment the digest is posted).
+ */
+export const flattenTitle = (raw: string, max = 160): string =>
+  raw
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[`|]/g, "")
+    .replace(/<!--|-->/g, "")
+    // U+200B after the `@` — reads identically, mentions nobody. Written as an
+    // escape on purpose: an invisible character pasted into source is a bug
+    // nobody can see.
+    .replace(/@/g, "@\u200B")
+    .trim()
+    .slice(0, max);
 
 const Input = Schema.Struct({ firedAt: Schema.Number });
 
@@ -207,6 +240,9 @@ export const triagePrs = defineRun({
 
       // 3. Read each repo's open PRs and its recent CI. One repo's failure is
       //    logged and skipped — a partial digest still beats none.
+      // A repo that failed reports `null`, not `[]` — an empty array is a repo
+      // with no open PRs, and conflating the two made a sweep that read half
+      // the estate report full coverage.
       const swept = yield* Effect.forEach(
         repos,
         (repo) =>
@@ -214,18 +250,20 @@ export const triagePrs = defineRun({
             Effect.catchAll((err) =>
               io
                 .log("warn", `triage-prs: skipped ${repo} — ${describeError(err)}`)
-                .pipe(Effect.as([] as readonly RoutedPr[])),
+                .pipe(Effect.as(null)),
             ),
           ),
         { concurrency: 2 },
       );
-      const routed = swept.flat();
+      const readRepos = swept.filter((r): r is readonly RoutedPr[] => r !== null);
+      const reposSwept = readRepos.length;
+      const routed = readRepos.flat();
 
       // 4. Empty means silent — a digest that fires with no news is one people
       //    learn to skip (§5, inherited from the activity digest).
       if (routed.length === 0) {
-        yield* io.log("info", `triage-prs: ${repos.length} repo(s) swept, no open PRs to route`);
-        return { ...emptyOutput(), reposSwept: repos.length };
+        yield* io.log("info", `triage-prs: ${reposSwept} repo(s) swept, no open PRs to route`);
+        return { ...emptyOutput(), reposSwept };
       }
 
       // 5. Suppression. A digest line a human already declined is not re-raised;
@@ -247,9 +285,12 @@ export const triagePrs = defineRun({
           "info",
           `triage-prs: ${routed.length} routed, all suppressed — no digest opened`,
         );
+        // `tally(proposed)` here as well as below, so `prsRouted` means the same
+        // thing on every exit: what reached the digest. `digestSuppressed`
+        // carries what did not.
         return {
-          ...tally(routed),
-          reposSwept: repos.length,
+          ...tally(proposed),
+          reposSwept,
           digestSuppressed: suppression.suppressed.length,
           prOpened: false,
         };
@@ -271,12 +312,12 @@ export const triagePrs = defineRun({
 
       yield* io.log(
         "info",
-        `triage-prs: ${proposed.length} PR(s) routed across ${repos.length} repo(s) (${suppression.suppressed.length} suppressed) — ${result.created ? "opened" : "updated"} PR #${result.number}`,
+        `triage-prs: ${proposed.length} PR(s) routed across ${reposSwept} repo(s) (${suppression.suppressed.length} suppressed) — ${result.created ? "opened" : "updated"} PR #${result.number}`,
       );
 
       return {
         ...tally(proposed),
-        reposSwept: repos.length,
+        reposSwept,
         digestSuppressed: suppression.suppressed.length,
         prOpened: result.created,
       };
@@ -352,11 +393,14 @@ export const routePr = (
   },
 ): RoutedPr => {
   const ci = ciHealth(pr, runs);
-  const producedByRun = RUN_MARKER.exec(pr.body)?.[1];
+  const claims = claimedRuns(pr.body);
+  const producedByRun = claims[0];
   const base = {
     repo: pr.repo,
     number: pr.number,
-    title: pr.title,
+    // Flattened here, once, at the boundary — every renderer downstream reads
+    // `RoutedPr.title` and none of them should have to remember to escape it.
+    title: flattenTitle(pr.title),
     url: pr.url,
     author: pr.author,
   } as const;
@@ -373,6 +417,7 @@ export const routePr = (
       number: pr.number,
       author: pr.author,
       producedByRun,
+      claimedRuns: claims,
       // The change class and the diff's paths are not on the list endpoint.
       // Both absent read as "undeclared" and "unknown", and the gate refuses on
       // an undeclared class before it ever asks about paths — so an unknown
@@ -423,16 +468,57 @@ export const routePr = (
 const describeError = (err: StepFailed | GitHubApiError): string =>
   err._tag === "GitHubApiError" ? `GitHub API ${err.status} (${err.reason})` : `${err.step} failed`;
 
-/** CI verdict for a PR's head sha, from the repo's recent workflow runs. */
+/**
+ * Conclusions that mean the run failed and somebody has to do something.
+ * `action_required` and `stale` are red for the same reason `failure` is: the
+ * check will not go green on its own.
+ */
+const RED_CONCLUSIONS = new Set(["failure", "timed_out", "action_required", "stale"]);
+
+/**
+ * Conclusions that carry no signal either way. A path-filtered workflow
+ * reporting `skipped` is routine, and counting it as not-success used to make
+ * `green` false for a perfectly green PR — which sent it to `ask` reading "no
+ * CI result yet" and made `nudge` almost unreachable.
+ */
+const INERT_CONCLUSIONS = new Set(["skipped", "neutral", "cancelled"]);
+
+/**
+ * CI verdict for a PR's head sha, from the repo's recent workflow runs.
+ *
+ * The sweep asks for 14 days of runs per repo, so the filter has to be precise
+ * about *which* of them describe this PR as it stands now. Runs matching the
+ * head sha are the answer whenever any exist. The branch is only a fallback for
+ * when none do, and it is a lossy one — a branch accumulates a run per push, so
+ * an old red run sits alongside the new green one, and two forks can both call
+ * a branch `patch-1`. So the fallback keeps just the newest run per check name,
+ * which is what "the current state of this branch" means; without that, one
+ * failure two weeks ago pinned a since-fixed PR to `unstick` forever.
+ */
 const ciHealth = (
   pr: PullRequestHistoryRef,
   runs: readonly WorkflowRunRef[],
 ): { green: boolean; red: boolean; failingCheck?: string } => {
-  const mine = runs.filter((r) => r.headSha === pr.headSha || r.headBranch === pr.headBranch);
-  if (mine.length === 0) return { green: false, red: false };
-  const failing = mine.find((r) => r.conclusion === "failure" || r.conclusion === "timed_out");
+  const bySha = runs.filter((r) => r.headSha === pr.headSha);
+  const mine =
+    bySha.length > 0 ? bySha : newestPerCheck(runs.filter((r) => r.headBranch === pr.headBranch));
+
+  const decisive = mine.filter((r) => !INERT_CONCLUSIONS.has(r.conclusion ?? ""));
+  if (decisive.length === 0) return { green: false, red: false };
+
+  const failing = decisive.find((r) => RED_CONCLUSIONS.has(r.conclusion ?? ""));
   if (failing !== undefined) return { green: false, red: true, failingCheck: failing.name };
-  return { green: mine.every((r) => r.conclusion === "success"), red: false };
+  return { green: decisive.every((r) => r.conclusion === "success"), red: false };
+};
+
+/** The most recent run for each distinct check name. */
+const newestPerCheck = (runs: readonly WorkflowRunRef[]): readonly WorkflowRunRef[] => {
+  const newest = new Map<string, WorkflowRunRef>();
+  for (const run of runs) {
+    const seen = newest.get(run.name);
+    if (seen === undefined || run.createdAt > seen.createdAt) newest.set(run.name, run);
+  }
+  return [...newest.values()];
 };
 
 /** The suppression key for a routed PR — stable across ticks, per PR. */

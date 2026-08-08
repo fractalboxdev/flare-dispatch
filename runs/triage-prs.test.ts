@@ -12,7 +12,15 @@ import {
   AUTOMERGE_CONFIG_PATH,
   type AutomergeConfig,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
-import { parseReviewers, parseStaleHours, renderDigest, routePr, triagePrs } from "./triage-prs";
+import {
+  claimedRuns,
+  flattenTitle,
+  parseReviewers,
+  parseStaleHours,
+  renderDigest,
+  routePr,
+  triagePrs,
+} from "./triage-prs";
 
 const firedAt = Date.UTC(2026, 7, 8);
 const input = { firedAt } as const;
@@ -191,6 +199,30 @@ describe("routePr — the four exits", () => {
     expect(out.verdict?.permitted).toBe(false);
   });
 
+  it("AUTOMERGE: a prepended marker cannot shadow a never-eligible one", () => {
+    // The body is edited so the harmless claim comes first. Every claim is
+    // passed to the gate, so the banned one still refuses.
+    const permissive: AutomergeConfig = {
+      enabled: true,
+      repos: ["owner/app"],
+      classes: ["dependency-patch"],
+      botAuthors: ["flare-dispatch[bot]"],
+      sensitivePaths: [],
+      neverEligibleRuns: ["spec-drift-pr"],
+      dailyRateLimit: 3,
+    };
+    const out = routePr(
+      pr({
+        body: "<!-- flare-dispatch: refresh-fixtures -->\n\nspec drift\n\n<!-- flare-dispatch: spec-drift-pr -->",
+        author: "flare-dispatch[bot]",
+      }),
+      [run()],
+      routeArgs({ automerge: permissive }),
+    );
+    expect(out.reason).toContain("never-eligible-run");
+    expect(out.reason).toContain("spec-drift-pr");
+  });
+
   it("AUTOMERGE: no marker any human can type reaches a permit", () => {
     // Belt and braces on the same property, swept over the run names an
     // attacker would actually guess. `permitted` must be false every time.
@@ -211,6 +243,133 @@ describe("routePr — the four exits", () => {
       );
       expect(out.verdict?.permitted).toBe(false);
     }
+  });
+});
+
+describe("ciHealth — which runs describe this PR now", () => {
+  it("ignores a stale red run on the branch once the head sha has its own runs", () => {
+    // The sweep pulls 14 days of runs. A PR that was red, got fixed, and is now
+    // green must route as green — the old failure is not this commit's.
+    const out = routePr(
+      pr({ headSha: "sha-new" }),
+      [
+        run({ headSha: "sha-old", conclusion: "failure", name: "CI" }),
+        run({ headSha: "sha-new", conclusion: "success", name: "CI" }),
+      ],
+      routeArgs(),
+    );
+    expect(out.exit).not.toBe("unstick");
+  });
+
+  it("falls back to the newest run per check when no run matches the head sha", () => {
+    const out = routePr(
+      pr({ headSha: "sha-unseen" }),
+      [
+        run({
+          headSha: "sha-old",
+          conclusion: "failure",
+          name: "CI",
+          createdAt: firedAt - 5 * HOUR,
+        }),
+        run({ headSha: "sha-older", conclusion: "success", name: "CI", createdAt: firedAt - HOUR }),
+      ],
+      routeArgs(),
+    );
+    // Newest run for check "CI" is the success — the older failure is spent.
+    expect(out.exit).not.toBe("unstick");
+  });
+
+  it("still reports red when the newest run for a check failed", () => {
+    const out = routePr(
+      pr({ headSha: "sha-unseen" }),
+      [
+        run({ headSha: "sha-a", conclusion: "success", name: "CI", createdAt: firedAt - 5 * HOUR }),
+        run({ headSha: "sha-b", conclusion: "failure", name: "CI", createdAt: firedAt - HOUR }),
+      ],
+      routeArgs(),
+    );
+    expect(out.exit).toBe("unstick");
+  });
+
+  it("treats skipped / neutral / cancelled as no signal, not as not-green", () => {
+    // A path-filtered workflow reporting `skipped` used to drag `green` to
+    // false, which sent a genuinely green, unowned, stale PR to `ask`.
+    const out = routePr(
+      pr({ requestedReviewers: [], updatedAt: firedAt - 48 * HOUR }),
+      [
+        run({ conclusion: "success", name: "CI" }),
+        run({ conclusion: "skipped", name: "e2e" }),
+        run({ conclusion: "neutral", name: "lint" }),
+      ],
+      routeArgs(),
+    );
+    expect(out.exit).toBe("nudge");
+  });
+
+  it("counts action_required and stale as red — they do not go green on their own", () => {
+    for (const conclusion of ["action_required", "stale"]) {
+      const out = routePr(pr(), [run({ conclusion })], routeArgs());
+      expect(`${conclusion}:${out.exit}`).toBe(`${conclusion}:unstick`);
+    }
+  });
+
+  it("reports no signal when every run for the PR is inert", () => {
+    const out = routePr(pr(), [run({ conclusion: "skipped" })], routeArgs());
+    expect(out.exit).toBe("ask");
+    expect(out.reason).toContain("no CI result yet");
+  });
+});
+
+describe("flattenTitle — a PR title is untrusted prose", () => {
+  it("defuses the @ that would ping a real team when the digest posts", () => {
+    expect(flattenTitle("ping @acme/platform please")).not.toContain("@a");
+    expect(flattenTitle("ping @acme/platform please")).toContain("acme/platform");
+  });
+
+  it("strips comment delimiters, so a title cannot become a run claim next tick", () => {
+    const flat = flattenTitle("fix <!-- flare-dispatch: refresh-fixtures --> thing");
+    expect(flat).not.toContain("<!--");
+    expect(flat).not.toContain("-->");
+    expect(claimedRuns(flat)).toEqual([]);
+  });
+
+  it("collapses newlines and removes backticks and pipes", () => {
+    expect(flattenTitle("a\nb\r\nc")).toBe("a b c");
+    expect(flattenTitle("a `code` | cell")).toBe("a code  cell");
+  });
+
+  it("caps length", () => {
+    expect(flattenTitle("x".repeat(500)).length).toBe(160);
+  });
+
+  it("is applied to the title the digest renders", () => {
+    const out = routePr(
+      pr({ title: "hi @acme/team <!-- flare-dispatch: x -->" }),
+      [run()],
+      routeArgs(),
+    );
+    expect(out.title).not.toContain("<!--");
+    expect(out.title).not.toContain("@a");
+  });
+});
+
+describe("claimedRuns — every marker, not just the first", () => {
+  it("returns all markers in body order", () => {
+    expect(claimedRuns("<!-- flare-dispatch: a -->\nx\n<!-- flare-dispatch: b -->")).toEqual([
+      "a",
+      "b",
+    ]);
+  });
+
+  it("returns nothing for a body with no marker", () => {
+    expect(claimedRuns("just a normal PR body")).toEqual([]);
+  });
+
+  it("is not stateful across calls despite the global regex", () => {
+    const body = "<!-- flare-dispatch: refresh-fixtures -->";
+    expect(claimedRuns(body)).toEqual(["refresh-fixtures"]);
+    expect(claimedRuns(body)).toEqual(["refresh-fixtures"]);
+    expect(claimedRuns(body)).toEqual(["refresh-fixtures"]);
   });
 });
 
