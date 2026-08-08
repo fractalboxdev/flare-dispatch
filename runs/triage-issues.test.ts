@@ -10,13 +10,20 @@ import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import type { IssueRef } from "@fractalboxdev/flare-dispatch-core";
+import type { IssueRef, StepFailed } from "@fractalboxdev/flare-dispatch-core";
 import {
   ARMING_LABEL,
   DECLINED_LEDGER_PATH,
+  NEVER_WRITTEN,
   TRIAGE_LABELS,
+  WRITEABLE_LABELS,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
-import { assertInEstate, issueMaintenanceKey, triageIssues } from "./triage-issues";
+import {
+  assertInEstate,
+  assertWriteableLabels,
+  issueMaintenanceKey,
+  triageIssues,
+} from "./triage-issues";
 
 const firedAt = Date.UTC(2026, 7, 8);
 const input = { firedAt } as const;
@@ -154,14 +161,55 @@ describe("triage-issues — each verdict's writes reach GitHub", () => {
 // §9 — "No writes into client repos. Read for context where the pack lists it;
 // never open a PR, never apply a label."
 describe("triage-issues — the estate is the write boundary", () => {
-  it("assertInEstate refuses a repo nobody configured", () => {
-    const estate = new Set([ESTATE]);
-    expect(() => assertInEstate(ESTATE, estate)).not.toThrow();
-    expect(() => assertInEstate("acme-client/private-app", estate)).toThrow(
-      /refusing to write to acme-client\/private-app/,
+  /**
+   * The refusal reason, or `"WROTE"` if the guard let the write through.
+   *
+   * `catchTag` rather than an `Exit`/`Cause` walk on purpose: it only catches a
+   * *typed* `StepFailed`, so a guard that reverted to `throw` would fail this
+   * test as a defect instead of quietly passing. That the refusal is typed is
+   * half of what is being asserted.
+   */
+  const refusal = (guard: Effect.Effect<void, StepFailed>) =>
+    guard.pipe(
+      Effect.as("WROTE"),
+      Effect.catchTag("StepFailed", (e) => Effect.succeed(String(e.cause))),
     );
-    expect(() => assertInEstate("acme-client/private-app", estate)).toThrow(/§9/);
+
+  it.effect("assertInEstate refuses a repo nobody configured", () => {
+    const estate = new Set([ESTATE]);
+    return Effect.gen(function* () {
+      expect(yield* refusal(assertInEstate(ESTATE, estate))).toBe("WROTE");
+
+      const why = yield* refusal(assertInEstate("acme-client/private-app", estate));
+      expect(why).toMatch(/refusing to write to acme-client\/private-app/);
+      expect(why).toMatch(/§9/);
+    });
   });
+
+  // The allowlist is asserted over `decideIssueActions`' output in
+  // `issue-triage.test.ts`; this asserts it over the actual write, so a label
+  // that reaches the boundary from anywhere else is still refused.
+  it.effect("assertWriteableLabels refuses any label outside the allowlist", () =>
+    Effect.gen(function* () {
+      // Everything `decideIssueActions` can emit passes.
+      expect(yield* refusal(assertWriteableLabels(ESTATE, [...WRITEABLE_LABELS]))).toBe("WROTE");
+
+      // Nothing a human owns does — the arming label above all, because the
+      // loop applying it would turn a captured repro into an authorized one.
+      for (const label of NEVER_WRITTEN) {
+        expect(yield* refusal(assertWriteableLabels(ESTATE, [label]))).not.toBe("WROTE");
+      }
+
+      const why = yield* refusal(assertWriteableLabels(ESTATE, [ARMING_LABEL]));
+      expect(why).toMatch(/not in WRITEABLE_LABELS/);
+      expect(why).toMatch(/applied by a human/);
+
+      // One bad label in an otherwise-fine batch refuses the whole batch.
+      expect(
+        yield* refusal(assertWriteableLabels(ESTATE, [TRIAGE_LABELS.needsRepro, ARMING_LABEL])),
+      ).not.toBe("WROTE");
+    }),
+  );
 
   it.effect("an issue from outside the estate is never read, so never written", () => {
     // The client repo's issue is seeded into the fake, but the run only asks

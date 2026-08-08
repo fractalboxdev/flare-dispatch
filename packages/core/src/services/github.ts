@@ -224,11 +224,13 @@ export type TextFileResult =
  * **including closed ones**, and carrying the two timestamps that date a
  * decision.
  *
- * Distinct from {@link PullRequestRef} (the open-PR sweep's unit of work)
- * because the questions differ: a sweep asks "what is in flight", history asks
- * "was this proposed before, and what happened to it". History therefore
- * carries `body` (where a proposal's `maintenance-key` lines live) and
- * `closedAt`, and `PullRequestRef` carries the head/base shas a review needs.
+ * This is now the ONLY pull-request shape on the service. It used to sit beside
+ * a `PullRequestRef` carrying head/base shas for an installation-wide open-PR
+ * sweep; that type and its two enumeration methods are gone (see the note on
+ * {@link GithubService}), so history answers both questions: "what is in
+ * flight" via `state: "open"`, and "was this proposed before, and what happened
+ * to it" via `body` (where a proposal's `maintenance-key` lines live) and
+ * `closedAt`.
  */
 export type PullRequestHistoryRef = {
   /** "owner/name". */
@@ -468,8 +470,8 @@ export class Github extends Context.Tag("@fractalboxdev/flare-dispatch-core/Gith
 
 /**
  * The `github` accessor namespace. Each function reads the Github service
- * from context and delegates — so a run writes `github.openPullRequests(...)`
- * rather than `Effect.flatMap(Github, (g) => g.openPullRequests(...))`.
+ * from context and delegates — so a run writes `github.issues({ repo })`
+ * rather than `Effect.flatMap(Github, (g) => g.issues({ repo }))`.
  */
 export const github = {
   actionRuns: (

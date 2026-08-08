@@ -5,11 +5,13 @@
 // for a short-lived installation token (cached in Worker memory), and that
 // token authenticates `POST /repos/{o}/{r}/pulls/{n}/reviews`.
 //
-// The installation-wide *enumeration* surface (`repositories` /
-// `openPullRequests`) is still V3 work — this Layer leaves both as the dying
-// stubs from `GithubDeferred`. Everything a run points at a **named** repo is
-// wired: `actionRuns`, `pullRequestHistory`, `readTextFile`, and the three
-// writes.
+// There is no installation-wide *enumeration* surface. `repositories` and
+// `openPullRequests` used to sit here as `Effect.die` stubs — correct in a
+// deferred Layer, a landmine in a live one — and are now deleted rather than
+// implemented: nothing called them, and a surface whose natural output is
+// "every repo the App can see" hands every caller a list it must remember to
+// filter. Every method is pointed at a **named** repo: `actionRuns`,
+// `pullRequestHistory`, `readTextFile`, `issues`, and the writes.
 //
 // --- Graceful degradation ----------------------------------------------------
 //

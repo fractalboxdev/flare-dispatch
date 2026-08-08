@@ -203,8 +203,15 @@ export type CapturedRepro = {
 /** Longest repro we carry into a digest; beyond this it is a link, not a quote. */
 const REPRO_MAX_CHARS = 500;
 
-/** Shell-ish fenced blocks — the shape §5's "command repro" means. */
-const COMMAND_FENCE = /```(?:sh|bash|zsh|shell|console)?\s*\n([\s\S]*?)```/g;
+/**
+ * Shell-ish fenced blocks — the shape §5's "command repro" means.
+ *
+ * Deliberately NOT `/g`: a global regex carries `lastIndex` as module-level
+ * mutable state, so where the *next* call starts searching depends on what the
+ * previous call matched. Only the first match is ever wanted here, and a
+ * stateless regex cannot have its result depend on the issue triaged before it.
+ */
+const COMMAND_FENCE = /```(?:sh|bash|zsh|shell|console)?\s*\n([\s\S]*?)```/;
 
 /**
  * Extract the first command-shaped fenced block, if any.
@@ -215,7 +222,6 @@ const COMMAND_FENCE = /```(?:sh|bash|zsh|shell|console)?\s*\n([\s\S]*?)```/g;
  * later decide whether to run, so it is quoted verbatim and never normalized.
  */
 export const extractCommandRepro = (issue: IssueRef): CapturedRepro | undefined => {
-  COMMAND_FENCE.lastIndex = 0;
   const match = COMMAND_FENCE.exec(issue.body);
   const command = match?.[1]?.trim();
   if (command === undefined || command.length === 0) return undefined;

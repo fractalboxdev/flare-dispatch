@@ -49,10 +49,13 @@
 //   * A repro earns `triage:fix-pending` — a RECORD that one exists, not an
 //     authorization to run it.
 //   * `ARMING_LABEL` (`triage:run-repro`) is the human signal, and this loop
-//     never applies it (`NEVER_WRITTEN`, asserted by test). Whoever builds the
-//     dispatch must key on THAT label and never on `fix-pending`, which the
-//     loop applies automatically — a dispatch wired to `fix-pending` re-opens
-//     the path silently while every test still passes.
+//     never applies it. That is enforced, not merely intended: every label a
+//     plan would write is checked against `WRITEABLE_LABELS` at the write
+//     boundary (`assertWriteableLabels`), and `NEVER_WRITTEN` — which contains
+//     the arming label — is asserted against every verdict's plan by test.
+//     Whoever builds the dispatch must key on THAT label and never on
+//     `fix-pending`, which the loop applies automatically — a dispatch wired to
+//     `fix-pending` re-opens the path silently while every test still passes.
 //   * The captured command is recorded as quoted evidence with its source
 //     issue, its author, and the author's standing, indented rather than fenced
 //     so nothing it contains can restructure the digest around it. A reader
@@ -61,9 +64,11 @@
 //
 // --- Three properties a reviewer should check, in one place each -------------
 //
-//   1. **Estate scoping.** `github.issues` is per-repo and the repo list comes
-//      from CONFIG_KV, so a client repo cannot arrive by enumeration. Belt and
-//      braces: `assertInEstate` re-checks at the write boundary, so a repo that
+//   1. **Estate scoping and the label allowlist.** `github.issues` is per-repo
+//      and the repo list comes from CONFIG_KV, so a client repo cannot arrive by
+//      enumeration. Belt and braces: `assertInEstate` re-checks at the write
+//      boundary, and `assertWriteableLabels` refuses any label outside
+//      `WRITEABLE_LABELS`, so a repo that
 //      reached an action some other way still cannot be written to (§9 — "never
 //      open a PR, never apply a label" in a client repo).
 //   2. **Suppression runs BEFORE any write.** A `maintenance:declined` label or
@@ -98,6 +103,7 @@ import {
   github,
   io,
   modelGateway,
+  StepFailed,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
 import type { GitHubApiError, IssueRef } from "@fractalboxdev/flare-dispatch-core";
@@ -117,6 +123,8 @@ import {
   ARMING_LABEL,
   CLASSIFIER_SYSTEM,
   DECLINED_LABEL,
+  NEVER_WRITTEN,
+  WRITEABLE_LABELS,
   type IssueAction,
   type IssueDecision,
   type SuppressionReport,
@@ -174,14 +182,66 @@ export const issueMaintenanceKey = (issue: IssueRef): string =>
  * comes from config — so this can only fire on a bug. That is exactly why it
  * exists: the failure it prevents is a label appearing on a client's issue,
  * which is not a thing to discover in production.
+ *
+ * Fails with a typed {@link StepFailed} rather than throwing. A `throw` inside
+ * `Effect.gen` becomes a *defect*, which is untyped, invisible in the error
+ * channel and reported as a crash — the wrong shape for a guardrail that is
+ * supposed to be a deliberate refusal. §9 refusing a write is a decision the
+ * run made, so it travels as a failure the run's error boundary can name.
  */
-export const assertInEstate = (repo: string, estate: ReadonlySet<string>): void => {
-  if (!estate.has(repo)) {
-    throw new Error(
-      `triage-issues: refusing to write to ${repo} — not in ${REPOS_KEY}. ` +
-        "§9: no writes into client repos.",
-    );
-  }
+export const assertInEstate = (
+  repo: string,
+  estate: ReadonlySet<string>,
+): Effect.Effect<void, StepFailed> =>
+  estate.has(repo)
+    ? Effect.void
+    : Effect.fail(
+        new StepFailed({
+          step: "apply-actions",
+          cause:
+            `triage-issues: refusing to write to ${repo} — not in ${REPOS_KEY}. ` +
+            "§9: no writes into client repos.",
+        }),
+      );
+
+/**
+ * The second half of the write boundary: **no label outside
+ * {@link WRITEABLE_LABELS} ever reaches GitHub.**
+ *
+ * `issue-triage.test.ts` already asserts this over `decideIssueActions`'
+ * *output*, for every verdict against every issue shape. That is the stronger
+ * check of the two and it stays. What it cannot cover is a label that reaches
+ * this function without coming from `decideIssueActions` — a second action
+ * producer, a plan assembled in the run, a merge that widens the union. The
+ * property those tests establish is about one pure function; this is the same
+ * property asserted about the actual write, so it holds no matter where the
+ * plan came from.
+ *
+ * Like {@link assertInEstate}, it can only fire on a bug today, and that is the
+ * point: the failure it prevents is the loop applying a label a human owns.
+ *
+ * {@link NEVER_WRITTEN} is a subset of "not in the allowlist" and needs no
+ * separate check; it is named in the failure so the reason is obvious when a
+ * human meets it. `triage:run-repro` is the one that matters — it is the human
+ * arming signal for executing a stranger's command repro, and the loop applying
+ * it would turn a captured repro into an authorized one.
+ */
+export const assertWriteableLabels = (
+  repo: string,
+  labels: readonly string[],
+): Effect.Effect<void, StepFailed> => {
+  const forbidden = labels.filter((l) => !WRITEABLE_LABELS.includes(l));
+  if (forbidden.length === 0) return Effect.void;
+  const armed = forbidden.filter((l) => NEVER_WRITTEN.includes(l));
+  return Effect.fail(
+    new StepFailed({
+      step: "apply-actions",
+      cause:
+        `triage-issues: refusing to apply ${forbidden.join(", ")} to ${repo} — ` +
+        `not in WRITEABLE_LABELS.` +
+        (armed.length > 0 ? ` ${armed.join(", ")} is applied by a human, never by this loop.` : ""),
+    }),
+  );
 };
 
 const emptyOutput = () => ({
@@ -412,16 +472,25 @@ type Applied = { labelled: number; commented: number; closed: number };
 /**
  * Execute one decision's actions.
  *
- * `assertInEstate` runs once per issue before anything is written, so every
- * action below is already inside the configured estate. The close is last by
- * construction — `decideIssueActions` emits the comment before it, so a
- * reporter reading the closed issue finds the reason at the bottom rather than
- * a bare close.
+ * Both halves of the write boundary run once per issue, before anything is
+ * written: {@link assertInEstate} (the repo is one the operator configured) and
+ * {@link assertWriteableLabels} over every label the plan would apply (each is
+ * one the loop is authorized to apply). Checking the labels here rather than
+ * per-action means a plan that would write a forbidden label writes *nothing* —
+ * not the forbidden label last, after its comment already went out.
+ *
+ * The close is last by construction — `decideIssueActions` emits the comment
+ * before it, so a reporter reading the closed issue finds the reason at the
+ * bottom rather than a bare close.
  */
 const applyActions = (decision: IssueDecision, estate: ReadonlySet<string>) =>
   Effect.gen(function* () {
     const { issue, actions } = decision;
-    assertInEstate(issue.repo, estate);
+    yield* assertInEstate(issue.repo, estate);
+    yield* assertWriteableLabels(
+      issue.repo,
+      actions.flatMap((a) => (a.kind === "add-labels" ? a.labels : [])),
+    );
 
     const applied: Applied = { labelled: 0, commented: 0, closed: 0 };
     for (const action of actions) {
