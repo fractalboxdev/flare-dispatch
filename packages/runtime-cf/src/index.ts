@@ -30,6 +30,7 @@ export {
   type SendEmailBinding,
 } from "./email-cf";
 export { makeSandboxCloudflareLive } from "./sandbox-cf";
+export { resolveCloneToken, type SandboxGithubAuth } from "./sandbox-clone-auth";
 export {
   describeRefusal,
   makeSandboxFacadeLive,

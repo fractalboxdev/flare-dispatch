@@ -5,7 +5,23 @@
 // out of the unit suite (see the PR4-RISK header in `sandbox-cf.ts`).
 
 import { describe, expect, it } from "vitest";
-import { authenticateCloneUrl } from "./sandbox-clone-url";
+import { acceptsInstallationToken, authenticateCloneUrl } from "./sandbox-clone-url";
+
+describe("acceptsInstallationToken", () => {
+  it("is true exactly for the HTTPS github.com URLs the token shape fits", () => {
+    expect(acceptsInstallationToken("https://github.com/owner/repo.git")).toBe(true);
+  });
+
+  it("is false for URLs an App token could never authenticate", () => {
+    // The clone path asks this BEFORE resolving an installation, so a URL the
+    // token cannot help must never block the clone on a lookup about it.
+    expect(acceptsInstallationToken("https://gitlab.example.com/group/repo.git")).toBe(false);
+    expect(acceptsInstallationToken("git@github.com:owner/repo.git")).toBe(false);
+    expect(acceptsInstallationToken("https://github.enterprise.example/owner/repo.git")).toBe(
+      false,
+    );
+  });
+});
 
 describe("authenticateCloneUrl", () => {
   it("embeds the token in a github.com HTTPS URL using x-access-token basic auth", () => {
