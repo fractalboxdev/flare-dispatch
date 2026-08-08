@@ -65,7 +65,7 @@ afterAll(() => server.close());
 beforeEach(() => {
   recorded = {
     installations: new Map([
-      ["acme/hakiri", 111],
+      ["acme/beacon", 111],
       ["acme/flare-dispatch", 111],
       ["other-org/widget", 222],
     ]),
@@ -92,39 +92,39 @@ const DISPATCHED: SandboxGithubAuth = {
 
 describe("resolveCloneToken — Schedule mode (no installation id)", () => {
   it("resolves the installation for the repo being cloned and mints its token", async () => {
-    const token = await resolveCloneToken(SCHEDULED, "acme/hakiri");
+    const token = await resolveCloneToken(SCHEDULED, "acme/beacon");
 
     expect(token).toBe("ghs_token_for_111");
-    expect(recorded.lookups).toEqual(["acme/hakiri"]);
+    expect(recorded.lookups).toEqual(["acme/beacon"]);
     expect(recorded.mints).toEqual([111]);
   });
 
   it("resolves per clone target across an estate sweep", async () => {
     // The shape `spec-drift-pr` / an org-wide audit takes: one execution, many
     // repos, and the repos need not share an installation.
-    await resolveCloneToken(SCHEDULED, "acme/hakiri");
+    await resolveCloneToken(SCHEDULED, "acme/beacon");
     await resolveCloneToken(SCHEDULED, "other-org/widget");
 
-    expect(recorded.lookups).toEqual(["acme/hakiri", "other-org/widget"]);
+    expect(recorded.lookups).toEqual(["acme/beacon", "other-org/widget"]);
     expect(recorded.mints).toEqual([111, 222]);
   });
 
   it("caches the repo→installation lookup — a re-clone of the same repo costs nothing", async () => {
-    await resolveCloneToken(SCHEDULED, "acme/hakiri");
-    await resolveCloneToken(SCHEDULED, "acme/hakiri");
+    await resolveCloneToken(SCHEDULED, "acme/beacon");
+    await resolveCloneToken(SCHEDULED, "acme/beacon");
 
     // One lookup, and one mint (the token cache absorbs the second too).
-    expect(recorded.lookups).toEqual(["acme/hakiri"]);
+    expect(recorded.lookups).toEqual(["acme/beacon"]);
     expect(recorded.mints).toEqual([111]);
   });
 
   it("shares one installation's token across two repos that resolve to it", async () => {
-    await resolveCloneToken(SCHEDULED, "acme/hakiri");
+    await resolveCloneToken(SCHEDULED, "acme/beacon");
     await resolveCloneToken(SCHEDULED, "acme/flare-dispatch");
 
     // Two repos → two lookups, but both land on installation 111, so the
     // token cache serves the second mint.
-    expect(recorded.lookups).toEqual(["acme/hakiri", "acme/flare-dispatch"]);
+    expect(recorded.lookups).toEqual(["acme/beacon", "acme/flare-dispatch"]);
     expect(recorded.mints).toEqual([111]);
   });
 });
@@ -169,12 +169,12 @@ describe("resolveCloneToken — dispatch mode (payload installation id)", () => 
 
   it("keys the repo→installation cache case-insensitively", async () => {
     // The cache lives in `resolveRepoInstallationId`. Keyed on the raw slug,
-    // `Acme/Hakiri` and `acme/hakiri` would be two entries and two round trips
+    // `Acme/Beacon` and `acme/beacon` would be two entries and two round trips
     // for one repo — and could disagree about which installation covers it.
-    await resolveCloneToken(SCHEDULED, "acme/hakiri");
-    await resolveCloneToken(SCHEDULED, "Acme/Hakiri");
+    await resolveCloneToken(SCHEDULED, "acme/beacon");
+    await resolveCloneToken(SCHEDULED, "Acme/Beacon");
 
-    expect(recorded.lookups).toEqual(["acme/hakiri"]);
+    expect(recorded.lookups).toEqual(["acme/beacon"]);
   });
 });
 
@@ -195,8 +195,8 @@ describe("resolveCloneToken — honest failure", () => {
       ),
     );
 
-    await expect(resolveCloneToken(SCHEDULED, "acme/hakiri")).rejects.toThrow(
-      "GitHub App installation lookup failed for acme/hakiri",
+    await expect(resolveCloneToken(SCHEDULED, "acme/beacon")).rejects.toThrow(
+      "GitHub App installation lookup failed for acme/beacon",
     );
   });
 });

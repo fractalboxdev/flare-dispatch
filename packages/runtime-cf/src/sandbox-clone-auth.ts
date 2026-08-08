@@ -125,8 +125,8 @@ export const resolveAppCredentials = (opts: {
 
 /**
  * Compare two `owner/name` slugs. GitHub preserves the case an owner typed but
- * routes case-insensitively, so a payload's `Fractalboxdev/hakiri` and a run
- * input's `fractalboxdev/hakiri` are the same repo and must not take different
+ * routes case-insensitively, so a payload's `Fractalboxdev/beacon` and a run
+ * input's `fractalboxdev/beacon` are the same repo and must not take different
  * credential paths.
  */
 const isSameRepo = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();

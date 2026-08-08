@@ -513,7 +513,7 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
   /** App credentials with no installation id — the Schedule-mode shape. */
   const SCHEDULED_AUTH = { appId: "42", privateKeyPem: "-----BEGIN PRIVATE KEY-----" };
   const TOKEN = "ghs_clone_token";
-  const AUTHED_URL = `https://x-access-token:${TOKEN}@github.com/acme/hakiri.git`;
+  const AUTHED_URL = `https://x-access-token:${TOKEN}@github.com/acme/beacon.git`;
 
   /**
    * Every command string the Layer ran, in order. The fake `exec` declares no
@@ -527,7 +527,7 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
     makeSandboxCloudflareLive(ns, makeBucket().bucket, "exec-1", auth);
 
   const clone = (auth?: typeof SCHEDULED_AUTH) =>
-    Effect.flatMap(SandboxTag, (s) => s.gitClone({ repo: "acme/hakiri", sha: "deadbee" })).pipe(
+    Effect.flatMap(SandboxTag, (s) => s.gitClone({ repo: "acme/beacon", sha: "deadbee" })).pipe(
       Effect.provide(cloneLayer(auth)),
       Effect.exit,
     );
@@ -545,9 +545,9 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
       expect(Exit.isSuccess(exit)).toBe(true);
       // The installation is resolved for the repo being CLONED — not for the
       // dispatch payload's repo, which a scheduled run does not have.
-      expect(resolveCloneToken).toHaveBeenCalledWith(SCHEDULED_AUTH, "acme/hakiri");
+      expect(resolveCloneToken).toHaveBeenCalledWith(SCHEDULED_AUTH, "acme/beacon");
       expect(currentBox.gitCheckout).toHaveBeenCalledWith(AUTHED_URL, {
-        targetDir: "/workspace/hakiri",
+        targetDir: "/workspace/beacon",
       });
     }),
   );
@@ -559,8 +559,8 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
       // `.git/config` would otherwise hold the authenticated URL for the life
       // of the container, readable by every command the run afterwards issues.
       const scrub = execCommands().find((c) => c.includes("remote set-url"));
-      expect(scrub).toContain("git -C '/workspace/hakiri' remote set-url origin");
-      expect(scrub).toContain("'https://github.com/acme/hakiri.git'");
+      expect(scrub).toContain("git -C '/workspace/beacon' remote set-url origin");
+      expect(scrub).toContain("'https://github.com/acme/beacon.git'");
       expect(scrub).not.toContain(TOKEN);
       // …and it runs after the checkout, not before it.
       expect(execCommands().indexOf(scrub as string)).toBeGreaterThan(
@@ -572,7 +572,7 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
   it.effect("fails, naming the repo, when no installation covers it", () =>
     Effect.gen(function* () {
       resolveCloneToken.mockRejectedValue(
-        new Error("no GitHub App installation for acme/hakiri — install the GitHub App"),
+        new Error("no GitHub App installation for acme/beacon — install the GitHub App"),
       );
 
       const exit = yield* clone(SCHEDULED_AUTH);
@@ -580,7 +580,7 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
       const err = failureOf<{ _tag: string; cause: unknown }>(exit);
       expect(err?._tag).toBe("CheckoutFailed");
       const cause = err?.cause as Error;
-      expect(cause.message).toContain("no GitHub App installation for acme/hakiri");
+      expect(cause.message).toContain("no GitHub App installation for acme/beacon");
       // The whole point: no silent degrade to an unauthenticated clone that
       // 404s and reports it as a git problem.
       expect(currentBox.gitCheckout).not.toHaveBeenCalled();
@@ -709,11 +709,11 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
   it.effect("looks up the slug, not the raw input, for a full github.com URL", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.flatMap(SandboxTag, (s) =>
-        s.gitClone({ repo: "https://github.com/acme/hakiri.git", sha: "deadbee" }),
+        s.gitClone({ repo: "https://github.com/acme/beacon.git", sha: "deadbee" }),
       ).pipe(Effect.provide(cloneLayer(SCHEDULED_AUTH)), Effect.exit);
 
       expect(Exit.isSuccess(exit)).toBe(true);
-      expect(resolveCloneToken).toHaveBeenCalledWith(SCHEDULED_AUTH, "acme/hakiri");
+      expect(resolveCloneToken).toHaveBeenCalledWith(SCHEDULED_AUTH, "acme/beacon");
     }),
   );
 
@@ -782,8 +782,8 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
 
       expect(Exit.isSuccess(exit)).toBe(true);
       expect(resolveCloneToken).not.toHaveBeenCalled();
-      expect(currentBox.gitCheckout).toHaveBeenCalledWith("https://github.com/acme/hakiri.git", {
-        targetDir: "/workspace/hakiri",
+      expect(currentBox.gitCheckout).toHaveBeenCalledWith("https://github.com/acme/beacon.git", {
+        targetDir: "/workspace/beacon",
       });
       expect(execCommands().some((c) => c.includes("remote set-url"))).toBe(false);
     }),
