@@ -21,7 +21,7 @@ import { assertInEstate, issueMaintenanceKey, triageIssues } from "./triage-issu
 const firedAt = Date.UTC(2026, 7, 8);
 const input = { firedAt } as const;
 const ESTATE = "fractalboxdev/flare-dispatch";
-const CONTROL = "fractalboxdev/org";
+const CONTROL = "owner/control";
 
 const issue = (over: Partial<IssueRef> = {}): IssueRef => ({
   repo: ESTATE,
@@ -322,6 +322,51 @@ describe("triage-issues — the captured repro reaches the digest as evidence", 
       );
       // The captured text is indented evidence, never a heading of its own.
       expect(digest).not.toMatch(/^## Injected$/m);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("triage-issues — the control plane is config", () => {
+  // Same rule as `org-spec-audit` and `triage-prs`: no default control repo,
+  // because a default is a repository somebody else's deployment writes to.
+  it.effect("fails when no control repo is configured, before reading anything", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { "triage-issues.repos": ESTATE },
+      github: { now: firedAt, issues: [issue()], pullRequestHistory: [], files: {} },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(triageIssues.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("triage-issues.control-repo");
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("writes the digest where `digest-dir` says", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "bug" },
+      config: { "triage-issues.digest-dir": "infra/loop/issues/" },
+    });
+
+    return Effect.gen(function* () {
+      yield* triageIssues.run(input);
+      const files = handles.github.openDraftPullRequestCalls[0]!.files;
+      expect(files[0]!.path).toBe("infra/loop/issues/2026-08-08.md");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses a digest-dir that escapes the repo root", () => {
+    const { layer, handles } = drive({
+      verdict: { kind: "bug" },
+      config: { "triage-issues.digest-dir": "../../etc" },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(triageIssues.run(input));
+      expect(exit._tag).toBe("Failure");
+      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 });
