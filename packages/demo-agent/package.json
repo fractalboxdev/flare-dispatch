@@ -1,0 +1,40 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-demo-agent",
+  "version": "0.0.1",
+  "private": true,
+  "description": "AI-driven demo agent CLI baked into the sandbox image (infra/Dockerfile.sandbox WITH_DEMO_AGENT). Powers the product-demo run.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "demo-agent": "./src/main.ts"
+  },
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "scripts": {
+    "demo-agent": "tsx src/main.ts",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/ai": "^0.35.0",
+    "@effect/cli": "^0.75.1",
+    "@effect/platform": "^0.96.0",
+    "@effect/platform-node": "^0.106.0",
+    "@fractalboxdev/flare-dispatch-bedrock-sigv4": "workspace:*",
+    "effect": "^3.21.0",
+    "gifenc": "^1.0.3",
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^24.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "@types/pngjs": "^6.0.5",
+    "tsdown": "0.22.3",
+    "tsx": "^4.22.3",
+    "typescript": "^5.6.3",
+    "unrun": "^0.3.1",
+    "vitest": "^3.2.0"
+  }
+}

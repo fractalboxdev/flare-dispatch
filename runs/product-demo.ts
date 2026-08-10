@@ -16,8 +16,9 @@
 //
 // No checkout — the target is a deployed URL, not the repo. The run only
 // attaches to Browser Run over CDP and shells out to the bundled
-// `demo-agent` CLI (baked into the `flare-dispatch-demo:latest` image, the
-// same shape as `review-agent` in recipes/ai-code-review). The agent owns
+// `demo-agent` CLI, baked into `infra/Dockerfile.sandbox` behind the
+// `WITH_DEMO_AGENT` build arg (the same shape as review-agent). The agent
+// owns
 // the model loop and CDP action application; the platform owns recording
 // (Browser Run records rrweb DOM events at the session level when the CDP
 // connect URL carries `?recording=true`); this run only orchestrates:
@@ -419,9 +420,11 @@ export const productDemo = defineRun({
   // `wrangler.jsonc`) MUST include the `demo-agent` binary on PATH — model
   // loop, CDP-driver glue, and the Browser Run recording REST client.
   // No `image:` field here: FlareDispatch has one container binding per
-  // Worker; the image is pinned by `infra/Dockerfile.sandbox`. Drop the
-  // `demo-agent` layer from `recipes/product-demo/Dockerfile.example` into
-  // your own `Dockerfile.sandbox` to enable this run.
+  // Worker; the image is pinned by `infra/Dockerfile.sandbox`. The
+  // `demo-agent` layer is baked behind that file's `WITH_DEMO_AGENT` build
+  // arg — the class this run acquires (RunSandbox, the default image) flips
+  // it in `wrangler.jsonc` `image_vars`. Flip it on the class a dispatch
+  // lands on to enable this run.
   inputs: Input,
   outputs: Output,
   // Stories run IN PARALLEL, each on its own Browser Run CDP session (own
