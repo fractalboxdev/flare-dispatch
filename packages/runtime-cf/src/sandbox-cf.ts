@@ -17,15 +17,20 @@
 //
 //   * `clone` + `exec` — the V0-critical surface — ARE fully implemented
 //     against the current `@cloudflare/sandbox` (0.10.x) API. `exec` maps
-//     1:1 to `sandbox.exec(command, { cwd, env, timeout })`; `git.clone` maps
-//     to `sandbox.gitCheckout(url, { targetDir })` followed by a SHA checkout
-//     `exec`. The narrow `SandboxService` Tag (clone, exec) is exactly the
-//     small surface the plan's mitigation asked for.
+//     1:1 to `sandbox.exec(command, { cwd, env, timeout })`; `git.clone` is
+//     three `exec`s of its own — clone, SHA checkout, credential scrub. The
+//     narrow `SandboxService` Tag (clone, exec) is exactly the small surface
+//     the plan's mitigation asked for.
+//
+//     The SDK's `gitCheckout` is deliberately unused: it owns the clone's
+//     object filter, and a filtered clone leaves a checkout that needs the
+//     network — which this container, by design, can no longer reach once the
+//     token is scrubbed. See `cloneCommand` in `sandbox-clone-url.ts`.
 //
 //   * `acquire` is a no-op handle — the SDK has no explicit "acquire a
 //     container" step: `getSandbox(ns, id)` lazily provisions the container on
-//     the first `exec`/`gitCheckout`. The V0 model is one container per
-//     execution (`id = executionId`), so `acquire` just returns that handle.
+//     the first `exec`. The V0 model is one container per execution
+//     (`id = executionId`), so `acquire` just returns that handle.
 //
 //   * `runDetached` / `waitForExit` / `waitForPort` — the detached-mode
 //     surface `bootApp` rides on — landed in PR9, mapped onto the SDK's
@@ -62,6 +67,8 @@ import { previewSafeSandboxId } from "./preview-sandbox-id";
 import { resolveCloneToken, type SandboxGithubAuth } from "./sandbox-clone-auth";
 import {
   authenticateCloneUrl,
+  CLONE_TIMEOUT_SEC,
+  cloneCommand,
   installationLookupSlug,
   repoUrl,
   shellQuote,
@@ -468,11 +475,12 @@ export const makeSandboxCloudflareLive = (
           // unauthenticated clone that 404s as a bare git error.
           //
           // The token is short-lived (~1h) and never leaves the Worker: it is
-          // embedded in the URL handed to the sandbox's `gitCheckout`, used
-          // once for the initial fetch, and scrubbed back out of the remote
-          // below. Operator-supplied custom URLs and SSH remotes skip the whole
-          // path (see `installationLookupSlug`) — an App token cannot
-          // authenticate them, so a clone of one is never blocked on a lookup.
+          // embedded in the clone URL, used once for that fetch, and scrubbed
+          // back out of the remote below — which is exactly why the clone has to
+          // bring down everything the run will ever need (see `cloneCommand`).
+          // Operator-supplied custom URLs and SSH remotes skip the whole path
+          // (see `installationLookupSlug`) — an App token cannot authenticate
+          // them, so a clone of one is never blocked on a lookup.
           //
           // The lookup key is derived from the canonical clone URL, NOT from the
           // raw `repo`: a run may name its target as a full `https://github.com/…`
@@ -513,9 +521,20 @@ export const makeSandboxCloudflareLive = (
             throw new Error(`rm -rf ${targetDir} exited ${clear.exitCode}: ${clear.stderr}`);
           }
           try {
-            await box.gitCheckout(cloneUrl, { targetDir });
-            // `gitCheckout` clones a branch tip; pin the exact SHA so the run is
-            // reproducible. A bare clone leaves the repo at the default branch.
+            // Plain `git clone`, not the SDK's `gitCheckout`: the SDK owns the
+            // clone's flags and offers no way to turn its object filter off, and
+            // this checkout has to survive with no credential (see
+            // `cloneCommand`). The URL's userinfo is stripped by the SDK's own
+            // log sanitizer before any command string reaches a log, the same
+            // protection `gitCheckout` got.
+            const cloned = await box.exec(cloneCommand(cloneUrl, targetDir), {
+              timeout: CLONE_TIMEOUT_SEC * 1000,
+            });
+            if (cloned.exitCode !== 0) {
+              throw new Error(`git clone exited ${cloned.exitCode}: ${cloned.stderr}`);
+            }
+            // The clone lands on the default branch; pin the exact SHA so the
+            // run is reproducible.
             const checkout = await box.exec(`git checkout ${sha}`, {
               cwd: targetDir,
             });

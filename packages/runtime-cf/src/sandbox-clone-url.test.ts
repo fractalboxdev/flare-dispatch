@@ -8,9 +8,39 @@ import { describe, expect, it } from "vitest";
 import {
   acceptsInstallationToken,
   authenticateCloneUrl,
+  cloneCommand,
   installationLookupSlug,
   shellQuote,
 } from "./sandbox-clone-url";
+
+describe("cloneCommand", () => {
+  // The clone is the container's only authenticated reach at GitHub — the
+  // credential scrub runs the moment the checkout lands. Any flag that defers
+  // object transfer (`--filter`, `--depth`, `--single-branch`) leaves git with
+  // something to fetch later and no way to pay for it: `pr-review`'s three-dot
+  // `git diff base...head` reads merge-base blobs that belong to neither the
+  // default-branch tree the clone lands on nor the head `git checkout` moves to,
+  // and the promisor fetch died on `could not read Username for github.com`.
+  it("transfers every object up front — no filter, depth, or branch narrowing", () => {
+    const cmd = cloneCommand("https://github.com/owner/repo.git", "/workspace/repo");
+    expect(cmd).toBe(`git clone --quiet 'https://github.com/owner/repo.git' '/workspace/repo'`);
+    for (const flag of ["--filter", "--depth", "--single-branch", "--bare", "--sparse"]) {
+      expect(cmd).not.toContain(flag);
+    }
+  });
+
+  it("shell-quotes both operands, so a repo name cannot escape the command", () => {
+    // `repo` is an unconstrained `Schema.String` in every run but `runs/check.ts`,
+    // and `targetDir` is derived from it.
+    const cmd = cloneCommand("https://github.com/o/n.git", "/workspace/ha'kiri");
+    expect(cmd).toContain(`'/workspace/ha'\\''kiri'`);
+  });
+
+  it("passes the authenticated URL through verbatim", () => {
+    const url = authenticateCloneUrl("https://github.com/owner/repo.git", "ghs_abc123");
+    expect(cloneCommand(url, "/workspace/repo")).toContain(`'${url}'`);
+  });
+});
 
 describe("acceptsInstallationToken", () => {
   it("is true exactly for the HTTPS github.com URLs the token shape fits", () => {

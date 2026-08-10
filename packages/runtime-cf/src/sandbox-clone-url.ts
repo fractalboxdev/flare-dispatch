@@ -70,6 +70,41 @@ export const installationLookupSlug = (url: string): string | undefined => {
 export const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
 /**
+ * Wall-clock budget for the clone, in seconds. Matches the value the SDK's
+ * `gitCheckout` applied to the clone it used to own, so replacing it does not
+ * quietly change how long a big repo is allowed to take.
+ */
+export const CLONE_TIMEOUT_SEC = 600;
+
+/**
+ * How the workspace clones — deliberately COMPLETE: no `--filter`, no
+ * `--depth`, no `--single-branch`.
+ *
+ * The clone is the container's ONLY authenticated reach at GitHub. The
+ * installation token is rewritten back out of `.git/config` the moment the
+ * checkout lands (ADR-0006, see `scrubCloneCredential`), so a repository that
+ * still needs the network to answer a question about its own history has no way
+ * to ask: git falls back to the promisor remote, finds no credential, and dies
+ * on `could not read Username for 'https://github.com'` → `unable to read
+ * <oid>`.
+ *
+ * `pr-review` is where that bit. Its three-dot `git diff <base>...<head>` reads
+ * the MERGE-BASE blobs, which belong to neither of the two trees a clone
+ * materialises — the default-branch tip it lands on, and the head `git checkout`
+ * moves to. Under a blob-filtered clone those blobs are absent, so the step
+ * spent five minutes on two credential prompts and then failed. Intermittently,
+ * which is why it read as flakiness: it only bit when a merge-base blob differed
+ * from both trees on disk, i.e. when the PR sat behind its base by a commit that
+ * touched the same file.
+ *
+ * Completeness is therefore a property of this primitive, not of any one recipe.
+ * Anything cheaper needs a credential that outlives the clone, and that trade is
+ * already decided the other way.
+ */
+export const cloneCommand = (url: string, targetDir: string): string =>
+  `git clone --quiet ${shellQuote(url)} ${shellQuote(targetDir)}`;
+
+/**
  * Embed a GitHub App installation token into an HTTPS GitHub clone URL using
  * the documented `x-access-token` basic-auth shape:
  *
