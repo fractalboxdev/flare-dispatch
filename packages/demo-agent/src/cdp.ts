@@ -101,6 +101,23 @@ export const redactWsEndpoint = (wsEndpoint: string): string => {
 const scrubWsUrls = (message: string): string =>
   message.replace(/wss?:\/\/[^\s"'<>]+/g, (match) => redactWsEndpoint(match));
 
+/**
+ * Strip query + fragment from a URL for log lines. The play/record `--url`
+ * can carry a capability token in its query string (the run's `?t=` gate
+ * material), and the exchange URL reuses it verbatim — so it must never be
+ * logged whole. Origin + path keep the diagnostic readable.
+ */
+const redactUrlForLog = (url: string): string => {
+  try {
+    const u = new URL(url);
+    u.search = "";
+    u.hash = "";
+    return u.toString();
+  } catch {
+    return url;
+  }
+};
+
 const wrapCmd = <T>(
   method: string,
   thunk: () => Promise<T>,
@@ -275,7 +292,7 @@ export const attachCdp = (
               const token = cfAuthorizationFromSetCookie(setCookies);
               if (token === null) {
                 console.error(
-                  `cf-access: no CF_Authorization cookie from ${exchangeUrl} (status ${res.status}) — path may not be Access-gated`,
+                  `cf-access: no CF_Authorization cookie from ${redactUrlForLog(exchangeUrl)} (status ${res.status}) — path may not be Access-gated`,
                 );
                 return;
               }

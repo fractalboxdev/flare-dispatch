@@ -20,6 +20,12 @@
 # old `recipes/product-demo/Dockerfile.example` sparse-cloned the upstream
 # GitHub URL and that must not come along into an in-repo build.
 #
+# REQUIRES the repo root as the docker build context: the class that builds
+# from this file must set `containers[].image_build_context` to `"."` in
+# wrangler.jsonc — wrangler's container build defaults the context to the
+# Dockerfile's own directory, and every COPY below resolves against the
+# context, not against the checkout.
+#
 # The COPY set is the minimal workspace slice the filtered frozen install
 # needs (root manifests + the two packages). `packages/bedrock-sigv4` MUST be
 # included: it is the agent's `workspace:*` dependency, and pnpm can only
