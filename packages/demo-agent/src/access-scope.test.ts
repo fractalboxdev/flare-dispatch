@@ -93,6 +93,14 @@ describe("exchangeUrlForHost", () => {
       "https://app.pages.dev/",
     );
   });
+
+  it("NEVER exchanges over plaintext — an http appUrl falls back to the https root", () => {
+    // The service-token pair is the deployment credential; an http target
+    // would put it on the wire unencrypted.
+    expect(
+      exchangeUrlForHost("app.example.com", "http://app.example.com/login"),
+    ).toBe("https://app.example.com/");
+  });
 });
 
 describe("cfAuthorizationFromSetCookie", () => {

@@ -69,6 +69,38 @@ const classifyAttachError = (e: unknown): CdpAttachFailed["reason"] => {
   return "unknown";
 };
 
+/**
+ * Strip credentials from a CDP WebSocket endpoint before it reaches an error
+ * object or a log line. Browser Rendering endpoints routinely carry bearer
+ * credentials in the query string (the `?browser_session=` re-attach URLs)
+ * and can carry userinfo; the FULL endpoint must never be persisted or
+ * printed. Drops userinfo, query, and fragment, keeping scheme/host/port/path
+ * so the redacted form still identifies the target.
+ */
+export const redactWsEndpoint = (wsEndpoint: string): string => {
+  try {
+    const u = new URL(wsEndpoint);
+    u.username = "";
+    u.password = "";
+    u.search = "";
+    u.hash = "";
+    return u.toString();
+  } catch {
+    // Unparseable — best-effort: keep only the part before any `?`/`#`
+    // (the credential would live in the query).
+    return wsEndpoint.split(/[?#]/, 1)[0] ?? "";
+  }
+};
+
+/**
+ * Scrub every ws/wss URL out of an error message. Underlying errors (URL
+ * validation, puppeteer connect failures) can embed the endpoint verbatim,
+ * so redacting the `CdpAttachFailed.wsEndpoint` field alone would still leak
+ * the credential through the message text.
+ */
+const scrubWsUrls = (message: string): string =>
+  message.replace(/wss?:\/\/[^\s"'<>]+/g, (match) => redactWsEndpoint(match));
+
 const wrapCmd = <T>(
   method: string,
   thunk: () => Promise<T>,
@@ -133,9 +165,9 @@ export const attachCdp = (
     if (!/^wss?:\/\//.test(wsEndpoint)) {
       return yield* Effect.fail(
         new CdpAttachFailed({
-          wsEndpoint,
+          wsEndpoint: redactWsEndpoint(wsEndpoint),
           reason: "invalid-url",
-          message: `--cdp-ws must start with ws:// or wss:// (got: ${wsEndpoint})`,
+          message: `--cdp-ws must start with ws:// or wss:// (got: ${redactWsEndpoint(wsEndpoint)})`,
         }),
       );
     }
@@ -148,9 +180,9 @@ export const attachCdp = (
         }),
       catch: (e) =>
         new CdpAttachFailed({
-          wsEndpoint,
+          wsEndpoint: redactWsEndpoint(wsEndpoint),
           reason: classifyAttachError(e),
-          message: e instanceof Error ? e.message : String(e),
+          message: scrubWsUrls(e instanceof Error ? e.message : String(e)),
         }),
     }).pipe(
       // Bound the connect — `puppeteer.connect` to a Browser Run re-attach
@@ -161,7 +193,7 @@ export const attachCdp = (
         duration: "30 seconds",
         onTimeout: () =>
           new CdpAttachFailed({
-            wsEndpoint,
+            wsEndpoint: redactWsEndpoint(wsEndpoint),
             reason: "timeout",
             message: "puppeteer.connect timed out after 30s",
           }),
@@ -177,9 +209,9 @@ export const attachCdp = (
       },
       catch: (e) =>
         new CdpAttachFailed({
-          wsEndpoint,
+          wsEndpoint: redactWsEndpoint(wsEndpoint),
           reason: "unknown",
-          message: e instanceof Error ? e.message : String(e),
+          message: scrubWsUrls(e instanceof Error ? e.message : String(e)),
         }),
     });
 
@@ -273,9 +305,9 @@ export const attachCdp = (
         },
         catch: (e) =>
           new CdpAttachFailed({
-            wsEndpoint,
+            wsEndpoint: redactWsEndpoint(wsEndpoint),
             reason: "unknown",
-            message: e instanceof Error ? e.message : String(e),
+            message: scrubWsUrls(e instanceof Error ? e.message : String(e)),
           }),
       });
     }
@@ -366,7 +398,7 @@ export const attachCdp = (
       duration: "50 seconds",
       onTimeout: () =>
         new CdpAttachFailed({
-          wsEndpoint,
+          wsEndpoint: redactWsEndpoint(wsEndpoint),
           reason: "timeout",
           message: "attachCdp timed out after 50s",
         }),

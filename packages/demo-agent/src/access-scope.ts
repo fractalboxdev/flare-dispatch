@@ -102,11 +102,16 @@ export const accessHosts = (
  * but NOT `/`, which must stay un-gated so CI/webhooks reach the Worker). So
  * exchanging against the bare host root would yield NO cookie for such an app.
  *
- * When the host is the app-under-test's own host, exchange against the full
- * `appUrl` (the `--url` the run drives) — that path is gated by construction, so
- * the cookie is always issued. For any OTHER host (a `CF_ACCESS_HOSTS` extra),
- * the gated path is unknown, so fall back to the root and rely on apps that
- * cover `/*`.
+ * When the host is the app-under-test's own host AND the app URL is HTTPS,
+ * exchange against the full `appUrl` (the `--url` the run drives) — that path
+ * is gated by construction, so the cookie is always issued. For any OTHER host
+ * (a `CF_ACCESS_HOSTS` extra), the gated path is unknown, so fall back to the
+ * root and rely on apps that cover `/*`.
+ *
+ * The service-token pair is the deployment's credential: it is NEVER sent
+ * over plaintext. An `http://` appUrl (a misconfiguration for an Access-gated
+ * target) is therefore not used for the exchange — the https root is, where
+ * the browser will hit the same login wall an http target would.
  */
 export const exchangeUrlForHost = (
   host: string,
@@ -114,7 +119,8 @@ export const exchangeUrlForHost = (
 ): string => {
   if (appUrl !== undefined) {
     try {
-      if (new URL(appUrl).host === host) return appUrl;
+      const parsed = new URL(appUrl);
+      if (parsed.host === host && parsed.protocol === "https:") return appUrl;
     } catch {
       // unparseable appUrl — fall back to the host root below.
     }
