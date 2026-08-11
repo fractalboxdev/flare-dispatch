@@ -55,8 +55,6 @@ export interface CdpSession {
     string,
     CdpCommandFailed
   >;
-  /** Browser Rendering session id — what the recording REST API keys on. */
-  readonly sessionId: () => Effect.Effect<string, CdpCommandFailed>;
   /** Close the page + disconnect the browser. */
   readonly close: () => Effect.Effect<void, never>;
 }
@@ -200,8 +198,14 @@ export const attachCdp = (
     // cookie on the browser — domain-scoped by the browser itself, riding on
     // every same-host request, surviving process hand-offs. Best-effort per
     // host: a host that returns no cookie (not Access-gated) just gets none.
-    // The legacy global-header path remains only when the caller passed no
-    // `--url` (nothing to exchange against).
+    //
+    // The host list is validated BEFORE any exchange (`accessHosts` throws
+    // on a malformed `CF_ACCESS_HOSTS` entry): the service-token pair is the
+    // deployment's credential and must never be sent to a host that failed
+    // the bare-hostname check. No fallback when the list is empty — with no
+    // host information there is nothing to authenticate against, so no
+    // credential leaves the process (a gated target then shows its login
+    // wall, which is the honest failure).
     const cfAccessId = process.env["CF_ACCESS_CLIENT_ID"];
     const cfAccessSecret = process.env["CF_ACCESS_CLIENT_SECRET"];
     if (cfAccessId !== undefined && cfAccessSecret !== undefined) {
@@ -209,61 +213,63 @@ export const attachCdp = (
         "CF-Access-Client-Id": cfAccessId,
         "CF-Access-Client-Secret": cfAccessSecret,
       };
-      const hosts = accessHosts(appUrl, process.env["CF_ACCESS_HOSTS"]);
       yield* Effect.tryPromise({
         try: async () => {
-          if (hosts.length === 0) {
-            await page.setExtraHTTPHeaders(accessHeaders);
-            return;
-          }
-          for (const host of hosts) {
-            // Exchange against a GATED path — a path-scoped Access app (our
-            // viewer app fronts `/logs` etc., NOT `/`) issues no cookie on the
-            // bare root, so use the target `appUrl` for its own host.
-            const exchangeUrl = exchangeUrlForHost(host, appUrl);
-            // `redirect: "manual"` — Access sets the cookie on the FIRST
-            // authenticated response; following a redirect would drop its
-            // Set-Cookie header on the floor. (The cookie rides even a 403 from
-            // a downstream capability-token gate, so a `?t=` in appUrl is fine.)
-            const res = await fetch(exchangeUrl, {
-              headers: accessHeaders,
-              redirect: "manual",
-            });
-            const setCookies =
-              typeof res.headers.getSetCookie === "function"
-                ? res.headers.getSetCookie()
-                : [res.headers.get("set-cookie") ?? ""].filter(
-                    (s) => s !== "",
-                  );
-            const token = cfAuthorizationFromSetCookie(setCookies);
-            if (token === null) {
+          // Throws before any fetch when an entry is invalid — fail closed.
+          const hosts = accessHosts(appUrl, process.env["CF_ACCESS_HOSTS"]);
+          // Independent per-host exchanges — run them concurrently; each
+          // host's cookie is set by its own exchange, so the attach latency
+          // no longer grows linearly with the host count.
+          await Promise.all(
+            hosts.map(async (host) => {
+              // Exchange against a GATED path — a path-scoped Access app (our
+              // viewer app fronts `/logs` etc., NOT `/`) issues no cookie on the
+              // bare root, so use the target `appUrl` for its own host.
+              const exchangeUrl = exchangeUrlForHost(host, appUrl);
+              // `redirect: "manual"` — Access sets the cookie on the FIRST
+              // authenticated response; following a redirect would drop its
+              // Set-Cookie header on the floor. (The cookie rides even a 403 from
+              // a downstream capability-token gate, so a `?t=` in appUrl is fine.)
+              const res = await fetch(exchangeUrl, {
+                headers: accessHeaders,
+                redirect: "manual",
+              });
+              const setCookies =
+                typeof res.headers.getSetCookie === "function"
+                  ? res.headers.getSetCookie()
+                  : [res.headers.get("set-cookie") ?? ""].filter(
+                      (s) => s !== "",
+                    );
+              const token = cfAuthorizationFromSetCookie(setCookies);
+              if (token === null) {
+                console.error(
+                  `cf-access: no CF_Authorization cookie from ${exchangeUrl} (status ${res.status}) — path may not be Access-gated`,
+                );
+                return;
+              }
+              // Set the cookie by `url`, NOT bare `domain`. The persistent Browser
+              // Rendering page is on `about:blank` when this short-lived attach
+              // runs (`newCDPSession` does not navigate), so a `{domain}` cookie
+              // for an origin the page has never visited is silently dropped by
+              // Chrome's CDP `Network.setCookie` — the browser then loads the app
+              // with no cookie and hits the Access login wall (every chapter
+              // "gated behind Cloudflare Access", with no error). The `url` form
+              // supplies the origin explicitly, so the cookie is accepted before
+              // the first navigation. `sameSite: "None"` + `secure: true` matches
+              // what Access itself sets (24h, cross-site).
+              await page.setCookie({
+                name: "CF_Authorization",
+                value: token,
+                url: `https://${host}/`,
+                path: "/",
+                secure: true,
+                sameSite: "None",
+              });
               console.error(
-                `cf-access: no CF_Authorization cookie from ${exchangeUrl} (status ${res.status}) — path may not be Access-gated`,
+                `cf-access: set CF_Authorization for https://${host}/ (service-token exchange ok)`,
               );
-              continue;
-            }
-            // Set the cookie by `url`, NOT bare `domain`. The persistent Browser
-            // Rendering page is on `about:blank` when this short-lived attach
-            // runs (`newCDPSession` does not navigate), so a `{domain}` cookie
-            // for an origin the page has never visited is silently dropped by
-            // Chrome's CDP `Network.setCookie` — the browser then loads the app
-            // with no cookie and hits the Access login wall (every chapter
-            // "gated behind Cloudflare Access", with no error). The `url` form
-            // supplies the origin explicitly, so the cookie is accepted before
-            // the first navigation. `sameSite: "None"` + `secure: true` matches
-            // what Access itself sets (24h, cross-site).
-            await page.setCookie({
-              name: "CF_Authorization",
-              value: token,
-              url: `https://${host}/`,
-              path: "/",
-              secure: true,
-              sameSite: "None",
-            });
-            console.error(
-              `cf-access: set CF_Authorization for https://${host}/ (service-token exchange ok)`,
-            );
-          }
+            }),
+          );
         },
         catch: (e) =>
           new CdpAttachFailed({
@@ -332,17 +338,6 @@ export const attachCdp = (
         wrapCmd("Accessibility.getFullAXTree", async () => {
           const tree = await page.accessibility.snapshot({ interestingOnly: true });
           return JSON.stringify(tree ?? { role: "WebArea", children: [] });
-        }),
-      sessionId: () =>
-        wrapCmd("Browser.sessionId", async () => {
-          // Browser Rendering exposes the session id via the target's
-          // `_session._sessionId` on the default page. Puppeteer abstracts
-          // this; we read it through CDPSession.id() on the page's primary
-          // CDP session.
-          const cdp = await page.createCDPSession();
-          const id = cdp.id();
-          await cdp.detach();
-          return id;
         }),
       close: () =>
         Effect.tryPromise({

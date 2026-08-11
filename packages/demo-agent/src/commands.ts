@@ -93,9 +93,8 @@ const urlOption = Options.text("url").pipe(
 
 const explicitSessionIdOption = Options.text("session-id").pipe(
   Options.withDescription(
-    "Optional: the REAL Browser Run session id (from the dispatcher's recording pre-acquire). When given, `record start` writes it verbatim and `record stop` fetches the recording by it — the CDP-derived fallback id is NOT recognised by the Session Recording REST API.",
+    "REQUIRED: the REAL Browser Run session id (from the dispatcher's recording pre-acquire). `record start` writes it verbatim and `record stop` fetches the recording by it — the CDP-derived fallback id is NOT recognised by the Session Recording REST API, so persisting it would write a session id no recording can ever be fetched by.",
   ),
-  Options.optional,
 );
 
 // ---------------------------------------------------------------------------
@@ -110,7 +109,7 @@ const recordStart = Command.make(
     url: urlOption,
     sessionId: explicitSessionIdOption,
   },
-  ({ cdpWs, viewport, sessionIdOut, url, sessionId: sessionIdOpt }) =>
+  ({ cdpWs, viewport, sessionIdOut, url, sessionId }) =>
     Effect.gen(function* () {
       const { session, page } = yield* attachCdp(
         cdpWs,
@@ -126,14 +125,13 @@ const recordStart = Command.make(
       if (Option.isSome(url)) {
         yield* session.goto(url.value);
       }
-      // Prefer the REAL Browser Run session id (the dispatcher's recording
-      // pre-acquire passes it via --session-id) — it is the key the Session
-      // Recording REST API is fetched by. The CDP-derived fallback is a legacy
-      // guess the recording API does NOT recognise.
-      const sessionId = yield* Option.match(sessionIdOpt, {
-        onNone: () => session.sessionId(),
-        onSome: (v) => Effect.succeed(v),
-      });
+      // The REAL Browser Run session id is REQUIRED (`--session-id`, from the
+      // dispatcher's recording pre-acquire) — it is the key the Session
+      // Recording REST API is fetched by. There is deliberately no CDP-side
+      // fallback: the id Puppeteer/CDP can hand out is a different namespace
+      // the recording API does not recognise, and persisting it would make
+      // `record stop` fetch a recording that can never exist. Fail loudly
+      // here instead; the run recovers by re-acquiring a fresh session.
       yield* writeFile(sessionIdOut, sessionId);
       // `record start` does NOT disconnect — the WebSocket would close
       // server-side and finalize the recording prematurely. The platform

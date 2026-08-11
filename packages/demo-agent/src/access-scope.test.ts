@@ -30,9 +30,42 @@ describe("accessHosts", () => {
     ]);
   });
 
-  it("returns empty when no host information exists — caller falls back to global headers", () => {
+  it("returns empty when no host information exists — caller authenticates nowhere", () => {
     expect(accessHosts(undefined, undefined)).toEqual([]);
     expect(accessHosts("not a url", " , ")).toEqual([]);
+  });
+});
+
+describe("accessHosts — fail-closed validation of CF_ACCESS_HOSTS", () => {
+  it("accepts bare hostnames, incl. case variants and trailing-dot FQDNs", () => {
+    expect(accessHosts(undefined, "API.Example.com")).toEqual([
+      "API.Example.com",
+    ]);
+    expect(accessHosts(undefined, "example.com.")).toEqual(["example.com."]);
+    expect(accessHosts(undefined, "1.2.3.4")).toEqual(["1.2.3.4"]);
+  });
+
+  it.each([
+    "https://evil.example.com",
+    "http://evil.example.com",
+    "evil.example.com/path",
+    "evil.example.com:8443",
+    "user@evil.example.com",
+    "*.example.com",
+    "a b.example.com",
+    "-x.example.com",
+    "x-.example.com",
+    "a..b",
+  ])("throws on a non-bare-hostname entry (%s) — the service token must never leave for an unvalidated origin", (entry) => {
+    expect(() => accessHosts("https://app.example.com", entry)).toThrow(
+      /invalid CF_ACCESS_HOSTS entry/,
+    );
+  });
+
+  it("throws before ANY host is returned when one entry is invalid (fail closed, not a silent subset)", () => {
+    expect(() =>
+      accessHosts("https://app.example.com", "good.example.com, evil.com/path"),
+    ).toThrow(/evil\.com\/path/);
   });
 });
 

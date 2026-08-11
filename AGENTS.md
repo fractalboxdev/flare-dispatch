@@ -4,9 +4,9 @@ BYOC CI/CD that offloads the expensive half of GitHub Actions onto a Cloudflare 
 
 ## Status
 
-Early-stage repo. Only `LICENSE` and `README.md` are committed — no application scaffolding, `package.json`, `wrangler` config, or source yet. There are no build/lint/test commands to run at this stage; add them here as the toolchain lands.
+Working monorepo: Effect-TS DSL (`packages/core`), capability layers (`packages/runtime-cf`), run definitions (`runs/`), the dispatcher Worker (`apps/dispatcher`), the substrate (`apps/substrate`), and the bundled CLIs (`packages/demo-agent`, `packages/review-agent`). Deployed via `wrangler deploy` with container images built in-repo (`infra/Dockerfile.sandbox*`); CI runs `pnpm lint && pnpm typecheck && pnpm test` (`deploy.yml`).
 
-## Architecture (intended)
+## Architecture
 
 Runs are **typed Effect-TS programs**, not YAML — composable steps, tagged errors, exhaustive matching — written against a layered DSL:
 

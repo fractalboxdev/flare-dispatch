@@ -29,11 +29,45 @@
 // fetch + `page.setCookie` wiring lives in `cdp.ts`.
 
 /**
+ * True when `host` is a bare, valid DNS hostname — the only shape the
+ * exchange + cookie code can target safely. Anything else (scheme, port,
+ * path, userinfo, wildcard, whitespace) is REJECTED: an entry like
+ * `evil.com/path` would otherwise steer the service-token pair (the
+ * `CF-Access-Client-*` secret) at an origin the operator never meant,
+ * because `fetch("https://" + host)` is built by string concatenation.
+ * The service token is the deployment's credential, so this is fail-closed
+ * input validation at the trust boundary, not a lint.
+ */
+export const isValidAccessHost = (host: string): boolean => {
+  if (host.length === 0 || host.length > 253) return false;
+  const withoutTrailingDot = host.endsWith(".") ? host.slice(0, -1) : host;
+  if (withoutTrailingDot.length === 0) return false;
+  if (
+    !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i.test(
+      withoutTrailingDot,
+    )
+  ) {
+    return false;
+  }
+  try {
+    // Round-trip through URL parsing: guarantees the concatenated exchange
+    // URL `https://<host>/` actually targets exactly this host.
+    return new URL(`https://${host}/`).hostname === host.toLowerCase();
+  } catch {
+    return false;
+  }
+};
+
+/**
  * The hosts to authenticate against: the app-under-test's own host (derived
  * from the `--url` the caller already passes) plus any extra hosts named in
  * `CF_ACCESS_HOSTS` (comma-separated, e.g. a separately-gated API origin).
- * Empty when no host information exists — the caller then falls back to the
- * legacy global-header behaviour rather than silently authing nowhere.
+ * Empty when no host information exists — the caller then authenticates
+ * nowhere rather than leaking the service token (see cdp.ts).
+ *
+ * Throws on the FIRST invalid `CF_ACCESS_HOSTS` entry: the credential must
+ * never be sent to a host that failed validation, and a misconfigured list
+ * is a loud attach failure, not a silently half-authenticated demo.
  */
 export const accessHosts = (
   appUrl: string | undefined,
@@ -49,7 +83,13 @@ export const accessHosts = (
   }
   for (const raw of (extraHostsCsv ?? "").split(",")) {
     const host = raw.trim();
-    if (host !== "") hosts.add(host);
+    if (host === "") continue;
+    if (!isValidAccessHost(host)) {
+      throw new Error(
+        `invalid CF_ACCESS_HOSTS entry "${host}": expected a bare hostname (no scheme, port, path, or wildcard)`,
+      );
+    }
+    hosts.add(host);
   }
   return [...hosts];
 };

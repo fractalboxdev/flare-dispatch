@@ -63,7 +63,6 @@ const makeFakeSession = (): FakeCdpSession => {
       }),
     accessibilitySnapshot: () =>
       Effect.sync(() => log("ax", [], '{"role":"WebArea"}')),
-    sessionId: () => Effect.sync(() => "fake-session"),
     close: () => Effect.void,
   };
 };
