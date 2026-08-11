@@ -9,7 +9,7 @@ export const repoUrl = (repo: string): string =>
 
 /**
  * Whether a GitHub App installation token can authenticate this URL at all —
- * i.e. whether {@link authenticateCloneUrl} would rewrite it.
+ * i.e. whether the clone should carry one.
  *
  * The clone path asks this BEFORE resolving an installation, so a URL an App
  * token could never help (an operator-supplied mirror or GHE host, an SSH
@@ -80,13 +80,12 @@ export const CLONE_TIMEOUT_SEC = 600;
  * How the workspace clones — deliberately COMPLETE: no `--filter`, no
  * `--depth`, no `--single-branch`.
  *
- * The clone is the container's ONLY authenticated reach at GitHub. The
- * installation token is rewritten back out of `.git/config` the moment the
- * checkout lands (ADR-0006, see `scrubCloneCredential`), so a repository that
- * still needs the network to answer a question about its own history has no way
- * to ask: git falls back to the promisor remote, finds no credential, and dies
- * on `could not read Username for 'https://github.com'` → `unable to read
- * <oid>`.
+ * The clone is the container's ONLY authenticated reach at GitHub: the
+ * credential lives on that one `exec` and nothing after it holds one (ADR-0006,
+ * see {@link CREDENTIAL_HELPER_ARGS}). So a repository that still needs the
+ * network to answer a question about its own history has no way to ask — git
+ * falls back to the promisor remote, finds no credential, and dies on `could not
+ * read Username for 'https://github.com'` → `unable to read <oid>`.
  *
  * `pr-review` is where that bit. Its three-dot `git diff <base>...<head>` reads
  * the MERGE-BASE blobs, which belong to neither of the two trees a clone
@@ -101,21 +100,50 @@ export const CLONE_TIMEOUT_SEC = 600;
  * Anything cheaper needs a credential that outlives the clone, and that trade is
  * already decided the other way.
  */
-export const cloneCommand = (url: string, targetDir: string): string =>
-  `git clone --quiet ${shellQuote(url)} ${shellQuote(targetDir)}`;
+export const cloneCommand = (url: string, targetDir: string, authenticated = false): string => {
+  const auth = authenticated ? `${CREDENTIAL_HELPER_ARGS} ` : "";
+  return `git ${auth}clone --quiet ${shellQuote(url)} ${shellQuote(targetDir)}`;
+};
 
 /**
- * Embed a GitHub App installation token into an HTTPS GitHub clone URL using
- * the documented `x-access-token` basic-auth shape:
- *
- *   https://x-access-token:<token>@github.com/<owner>/<name>.git
- *
- * Only HTTPS `github.com` URLs are rewritten — a custom http(s) URL the caller
- * passed directly (mirror, GHE host, etc.) is returned unchanged so the auth
- * shape never silently overrides an operator-supplied URL. SSH URLs are also
- * left alone: they authenticate via key, not via an App token.
+ * The environment variable the clone's credential helper reads the installation
+ * token out of. Set on the clone `exec` and nothing else.
  */
-export const authenticateCloneUrl = (url: string, token: string): string =>
-  acceptsInstallationToken(url)
-    ? url.replace("https://github.com/", `https://x-access-token:${token}@github.com/`)
-    : url;
+export const CLONE_TOKEN_ENV = "FLARE_DISPATCH_CLONE_TOKEN";
+
+/**
+ * `git -c` arguments that answer GitHub's auth challenge from
+ * {@link CLONE_TOKEN_ENV}, using the documented `x-access-token` basic-auth
+ * identity.
+ *
+ * The token is deliberately NOT embedded in the clone URL
+ * (`https://x-access-token:<token>@github.com/…`), which is the obvious way to
+ * do this and the way this layer used to. A URL carrying its own credential
+ * leaks by three routes at once, and each one needs its own guard:
+ *
+ *   * the COMMAND STRING, which the SDK hands to its logger — redacted today by
+ *     `redactCommand` inside `@cloudflare/sandbox`, i.e. by an internal of a
+ *     pinned dependency. ADR-0011 is about exactly that: an SDK pin is a
+ *     security surface, and a guarantee held up by one is a guarantee that can
+ *     be revoked by a version bump nobody reads as a security change.
+ *   * git's own STDERR, which quotes the remote it failed on — the reason
+ *     `redactCloneFailure` exists.
+ *   * `.git/config`, where `git clone` persists the whole URL — the reason
+ *     `scrubCloneCredential` exists.
+ *
+ * Reading the token from the environment closes all three at the source rather
+ * than filtering each: the command carries only the variable's NAME, git only
+ * ever sees the credential-free URL (so nothing it prints can contain a token),
+ * and no credential is written to `.git/config` in the first place. Both guards
+ * stay, now as backstops against a token that arrives by some route this
+ * reasoning did not anticipate, rather than as the only thing between an
+ * installation token and the workload.
+ *
+ * The leading empty `credential.helper` resets any inherited helper list, so the
+ * container's git configuration cannot prepend one that answers first.
+ */
+const CREDENTIAL_HELPER = `!f() { echo username=x-access-token; echo "password=$${CLONE_TOKEN_ENV}"; }; f`;
+
+const CREDENTIAL_HELPER_ARGS = `-c credential.helper= -c ${shellQuote(
+  `credential.helper=${CREDENTIAL_HELPER}`,
+)}`;

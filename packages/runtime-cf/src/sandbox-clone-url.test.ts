@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   acceptsInstallationToken,
-  authenticateCloneUrl,
+  CLONE_TOKEN_ENV,
   cloneCommand,
   installationLookupSlug,
   shellQuote,
@@ -36,9 +36,34 @@ describe("cloneCommand", () => {
     expect(cmd).toContain(`'/workspace/ha'\\''kiri'`);
   });
 
-  it("passes the authenticated URL through verbatim", () => {
-    const url = authenticateCloneUrl("https://github.com/owner/repo.git", "ghs_abc123");
-    expect(cloneCommand(url, "/workspace/repo")).toContain(`'${url}'`);
+  // A URL carrying its own credential leaks by three routes at once — the
+  // command string (redacted today only by an internal of the pinned
+  // `@cloudflare/sandbox`, which ADR-0011 says is not a guarantee to lean on),
+  // git's stderr, and `.git/config`. Reading the token from the environment
+  // closes all three at the source instead of filtering each.
+  it("authenticates through the environment, never through the URL", () => {
+    const cmd = cloneCommand("https://github.com/owner/repo.git", "/workspace/repo", true);
+    // The clone URL stays credential-free…
+    expect(cmd).toContain(`clone --quiet 'https://github.com/owner/repo.git'`);
+    expect(cmd).not.toContain("x-access-token:");
+    // …and the command names the variable rather than carrying its value.
+    expect(cmd).toContain(`$${CLONE_TOKEN_ENV}`);
+    expect(cmd).toContain("username=x-access-token");
+  });
+
+  it("resets any inherited credential helper before installing its own", () => {
+    // A helper the container's git configuration prepended would answer first.
+    const cmd = cloneCommand("https://github.com/owner/repo.git", "/workspace/repo", true);
+    expect(cmd.indexOf("-c credential.helper= ")).toBeLessThan(
+      cmd.indexOf("-c 'credential.helper=!f()"),
+    );
+  });
+
+  it("leaves the command bare when there is no credential to offer", () => {
+    // Public repo / unconfigured deploy: no helper, nothing to reset.
+    expect(cloneCommand("https://github.com/owner/repo.git", "/workspace/repo")).not.toContain(
+      "credential.helper",
+    );
   });
 });
 
@@ -55,37 +80,6 @@ describe("acceptsInstallationToken", () => {
     expect(acceptsInstallationToken("https://github.enterprise.example/owner/repo.git")).toBe(
       false,
     );
-  });
-});
-
-describe("authenticateCloneUrl", () => {
-  it("embeds the token in a github.com HTTPS URL using x-access-token basic auth", () => {
-    const url = "https://github.com/owner/repo.git";
-    const out = authenticateCloneUrl(url, "ghs_abc123");
-    expect(out).toBe("https://x-access-token:ghs_abc123@github.com/owner/repo.git");
-  });
-
-  it("preserves the path + .git suffix exactly", () => {
-    const url = "https://github.com/org-with-dashes/repo.name.git";
-    const out = authenticateCloneUrl(url, "ghs_xyz");
-    expect(out).toBe("https://x-access-token:ghs_xyz@github.com/org-with-dashes/repo.name.git");
-  });
-
-  it("leaves a non-github.com URL alone — never rewrites operator-supplied custom URLs", () => {
-    const url = "https://gitlab.example.com/group/repo.git";
-    expect(authenticateCloneUrl(url, "ghs_should_not_appear")).toBe(url);
-  });
-
-  it("leaves a github.com URL alone when it's not HTTPS", () => {
-    // The auth shape is HTTPS-only — SSH / git+ssh URLs use key auth, not
-    // App tokens, so we must not silently rewrite them.
-    const url = "git@github.com:owner/repo.git";
-    expect(authenticateCloneUrl(url, "ghs_irrelevant")).toBe(url);
-  });
-
-  it("does not rewrite a github.com URL with a different subdomain (api.github.com etc.)", () => {
-    const url = "https://api.github.com/repos/owner/repo";
-    expect(authenticateCloneUrl(url, "ghs_irrelevant")).toBe(url);
   });
 });
 

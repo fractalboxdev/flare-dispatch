@@ -66,8 +66,8 @@ import {
 import { previewSafeSandboxId } from "./preview-sandbox-id";
 import { resolveCloneToken, type SandboxGithubAuth } from "./sandbox-clone-auth";
 import {
-  authenticateCloneUrl,
   CLONE_TIMEOUT_SEC,
+  CLONE_TOKEN_ENV,
   cloneCommand,
   installationLookupSlug,
   repoUrl,
@@ -116,11 +116,14 @@ const redact = (text: string, values?: readonly string[]): string => {
  * Re-raise a clone failure with the installation token scrubbed out of its
  * message.
  *
- * The authenticated clone URL carries the token in its userinfo, and git puts
- * the URL it failed on straight into its error text — which becomes
- * `CheckoutFailed.cause` and is persisted by Workflows as the attempt record.
- * ADR-0006 puts installation tokens on the substrate's never-log list, so the
- * message is rewritten rather than the original error re-thrown. The original
+ * A BACKSTOP, not the primary guard. The token no longer travels in the clone
+ * URL (see `CREDENTIAL_HELPER_ARGS`), so git has nothing to quote into the error
+ * text it produces — but that text becomes `CheckoutFailed.cause` and is
+ * persisted by Workflows as the attempt record, ADR-0006 puts installation
+ * tokens on the substrate's never-log list, and a helper script's own stderr is
+ * not something this layer authors. So the message is rewritten rather than the
+ * original error re-thrown, for a token that arrives by a route the credential
+ * design did not anticipate. The original
  * is deliberately NOT attached as `cause`: it still holds the raw text, and
  * attaching it would put the token right back into the record. The error's
  * `name` is preserved so a `GitError` still reads as one.
@@ -474,13 +477,16 @@ export const makeSandboxCloudflareLive = (
           // nothing, so there is no path from "no installation" to a quiet
           // unauthenticated clone that 404s as a bare git error.
           //
-          // The token is short-lived (~1h) and never leaves the Worker: it is
-          // embedded in the clone URL, used once for that fetch, and scrubbed
-          // back out of the remote below — which is exactly why the clone has to
-          // bring down everything the run will ever need (see `cloneCommand`).
-          // Operator-supplied custom URLs and SSH remotes skip the whole path
-          // (see `installationLookupSlug`) — an App token cannot authenticate
-          // them, so a clone of one is never blocked on a lookup.
+          // The token is short-lived (~1h) and reaches the container only as an
+          // environment variable on the clone `exec`, which a git credential
+          // helper reads to answer GitHub's challenge (see
+          // `CREDENTIAL_HELPER_ARGS`). It is never embedded in the clone URL, so
+          // it is in neither the command string, git's stderr, nor
+          // `.git/config`. It buys exactly one fetch — which is why that fetch
+          // has to bring down everything the run will ever need (see
+          // `cloneCommand`). Operator-supplied custom URLs and SSH remotes skip
+          // the whole path (see `installationLookupSlug`) — an App token cannot
+          // authenticate them, so a clone of one is never blocked on a lookup.
           //
           // The lookup key is derived from the canonical clone URL, NOT from the
           // raw `repo`: a run may name its target as a full `https://github.com/…`
@@ -493,7 +499,6 @@ export const makeSandboxCloudflareLive = (
             githubAuth !== undefined && lookupRepo !== undefined
               ? await resolveCloneToken(githubAuth, lookupRepo)
               : undefined;
-          const cloneUrl = token === undefined ? originUrl : authenticateCloneUrl(originUrl, token);
           // Clear the target BEFORE cloning: `targetDir` is derived from the
           // repo name, so it is the same path for every execution of a repo,
           // and a container whose filesystem is not fresh still has the last
@@ -523,12 +528,13 @@ export const makeSandboxCloudflareLive = (
           try {
             // Plain `git clone`, not the SDK's `gitCheckout`: the SDK owns the
             // clone's flags and offers no way to turn its object filter off, and
-            // this checkout has to survive with no credential (see
-            // `cloneCommand`). The URL's userinfo is stripped by the SDK's own
-            // log sanitizer before any command string reaches a log, the same
-            // protection `gitCheckout` got.
-            const cloned = await box.exec(cloneCommand(cloneUrl, targetDir), {
+            // this checkout has to survive with no credential afterwards (see
+            // `cloneCommand`). The URL git is given is the credential-free one;
+            // the token rides in `env` and is read back by the credential
+            // helper, so the command string holds only the variable's name.
+            const cloned = await box.exec(cloneCommand(originUrl, targetDir, token !== undefined), {
               timeout: CLONE_TIMEOUT_SEC * 1000,
+              ...(token !== undefined ? { env: { [CLONE_TOKEN_ENV]: token } } : {}),
             });
             if (cloned.exitCode !== 0) {
               throw new Error(`git clone exited ${cloned.exitCode}: ${cloned.stderr}`);
