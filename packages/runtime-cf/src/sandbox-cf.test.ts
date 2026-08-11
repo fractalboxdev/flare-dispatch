@@ -53,7 +53,9 @@ const makeFakeBox = (opts: {
       stdout: "",
       stderr: "",
     })),
-    gitCheckout: vi.fn(async () => ({ success: true })),
+    // No `gitCheckout`: the Layer clones with `exec` (the SDK's checkout owns an
+    // object filter it does not expose). Its absence is the assertion — a Layer
+    // that reached for it again would fail here rather than quietly regress.
     getProcess: vi.fn(async () => proc),
     exposePort: vi.fn(
       opts.exposePort ??
@@ -506,13 +508,15 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
 // therefore no `installation_id`, so the clone used to go out unauthenticated
 // and 404 on every private repo — reported as a bare `Failed to clone
 // repository`. The Layer now authenticates whenever App credentials exist and
-// resolves the installation for the repo it is cloning; the token is embedded
-// for exactly one fetch, scrubbed back out of the remote, and never persisted
-// into a failure record (ADR-0006).
+// resolves the installation for the repo it is cloning; the token buys exactly
+// one fetch, reaches git only through the clone `exec`'s environment, and is
+// never persisted into a failure record (ADR-0006).
 describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
   /** App credentials with no installation id — the Schedule-mode shape. */
   const SCHEDULED_AUTH = { appId: "42", privateKeyPem: "-----BEGIN PRIVATE KEY-----" };
   const TOKEN = "ghs_clone_token";
+  const CLONE_URL = "https://github.com/acme/beacon.git";
+  /** The shape this layer must NOT use — a URL carrying its own credential. */
   const AUTHED_URL = `https://x-access-token:${TOKEN}@github.com/acme/beacon.git`;
 
   /**
@@ -522,6 +526,24 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
    */
   const execCommands = (): string[] =>
     (currentBox.exec.mock.calls as unknown as unknown[][]).map((call) => String(call[0]));
+
+  /** The options object the Layer passed alongside the `git clone`. */
+  const cloneOpts = (): { env?: Record<string, string>; timeout?: number } | undefined =>
+    (currentBox.exec.mock.calls as unknown as unknown[][]).find((call) =>
+      String(call[0]).startsWith("git "),
+    )?.[1] as { env?: Record<string, string>; timeout?: number } | undefined;
+
+  /** The `git clone` the Layer issued, or `undefined` if it never cloned. */
+  const cloneExec = (): string | undefined =>
+    execCommands().find((c) => c.includes("clone --quiet"));
+
+  /** An `exec` fake that fails only the commands matching `pattern`. */
+  const execFailing = (pattern: RegExp, stderr: string) =>
+    vi.fn(async (command: string) =>
+      pattern.test(command)
+        ? { exitCode: 1, duration: 0, stdout: "", stderr }
+        : { exitCode: 0, duration: 0, stdout: "", stderr: "" },
+    );
 
   const cloneLayer = (auth?: typeof SCHEDULED_AUTH) =>
     makeSandboxCloudflareLive(ns, makeBucket().bucket, "exec-1", auth);
@@ -546,9 +568,70 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
       // The installation is resolved for the repo being CLONED — not for the
       // dispatch payload's repo, which a scheduled run does not have.
       expect(resolveCloneToken).toHaveBeenCalledWith(SCHEDULED_AUTH, "acme/beacon");
-      expect(currentBox.gitCheckout).toHaveBeenCalledWith(AUTHED_URL, {
-        targetDir: "/workspace/beacon",
-      });
+      expect(cloneExec()).toContain(`clone --quiet '${CLONE_URL}' '/workspace/beacon'`);
+    }),
+  );
+
+  // The token reaches git through the environment, read back by a credential
+  // helper — never through the URL. A URL carrying its own credential would put
+  // it in the command string (redacted today only by an internal of the pinned
+  // `@cloudflare/sandbox`, which ADR-0011 says is not a guarantee to lean on),
+  // in git's stderr, and in `.git/config`. This closes all three at the source.
+  it.effect("passes the token in the environment, never in the command or the URL", () =>
+    Effect.gen(function* () {
+      yield* clone(SCHEDULED_AUTH);
+
+      const cmd = cloneExec() as string;
+      expect(cmd).not.toContain(TOKEN);
+      expect(cmd).not.toContain(AUTHED_URL);
+      expect(cmd).not.toContain("x-access-token:");
+      // The command names the variable; the value rides in `env`.
+      expect(cmd).toContain("$FLARE_DISPATCH_CLONE_TOKEN");
+      expect(cloneOpts()?.env).toEqual({ FLARE_DISPATCH_CLONE_TOKEN: TOKEN });
+      // No other exec is handed the token.
+      const withToken = (currentBox.exec.mock.calls as unknown as unknown[][]).filter((call) =>
+        JSON.stringify(call[1] ?? {}).includes(TOKEN),
+      );
+      expect(withToken.length).toBe(1);
+    }),
+  );
+
+  // A helper the container's own git configuration prepended would answer first.
+  it.effect("resets any inherited credential helper before installing its own", () =>
+    Effect.gen(function* () {
+      yield* clone(SCHEDULED_AUTH);
+
+      expect(cloneExec()).toContain("-c credential.helper= -c ");
+    }),
+  );
+
+  // The container's ONE authenticated reach at GitHub is this clone — the scrub
+  // below takes the credential away immediately. A `--filter`/`--depth` clone
+  // leaves objects to fetch later, and there is nothing left to fetch them with:
+  // `pr-review`'s three-dot diff reads merge-base blobs that are in neither the
+  // default-branch tree the clone lands on nor the head `git checkout` moves to,
+  // so git reached for the promisor remote and died on `could not read Username`.
+  it.effect("clones completely — no object filter, no depth, no single-branch", () =>
+    Effect.gen(function* () {
+      yield* clone(SCHEDULED_AUTH);
+
+      const cmd = cloneExec() as string;
+      expect(cmd).not.toMatch(/--filter/);
+      expect(cmd).not.toMatch(/--depth/);
+      expect(cmd).not.toMatch(/--single-branch/);
+      expect(cmd).not.toMatch(/--bare|--mirror|--sparse/);
+    }),
+  );
+
+  it.effect("fails the checkout when the clone itself exits non-zero", () =>
+    Effect.gen(function* () {
+      currentBox.exec = execFailing(/clone --quiet/, "fatal: repository not found");
+
+      const exit = yield* clone(SCHEDULED_AUTH);
+
+      const cause = failureOf<{ _tag: string; cause: unknown }>(exit)?.cause as Error;
+      expect(cause.message).toContain("git clone exited 1");
+      expect(cause.message).toContain("repository not found");
     }),
   );
 
@@ -556,8 +639,8 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
     Effect.gen(function* () {
       yield* clone(SCHEDULED_AUTH);
 
-      // `.git/config` would otherwise hold the authenticated URL for the life
-      // of the container, readable by every command the run afterwards issues.
+      // The credential helper means `.git/config` never receives a token; the
+      // scrub stays as the backstop that PROVES the remote is credential-free.
       const scrub = execCommands().find((c) => c.includes("remote set-url"));
       expect(scrub).toContain("git -C '/workspace/beacon' remote set-url origin");
       expect(scrub).toContain("'https://github.com/acme/beacon.git'");
@@ -583,17 +666,20 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
       expect(cause.message).toContain("no GitHub App installation for acme/beacon");
       // The whole point: no silent degrade to an unauthenticated clone that
       // 404s and reports it as a git problem.
-      expect(currentBox.gitCheckout).not.toHaveBeenCalled();
+      expect(cloneExec()).toBeUndefined();
     }),
   );
 
   it.effect("keeps the token out of a clone failure, which Workflows persists", () =>
     Effect.gen(function* () {
       // git puts the URL it failed on straight into its error text.
-      currentBox.gitCheckout = vi.fn(async () => {
-        const e = new Error(`GitError: failed to clone ${AUTHED_URL}`);
-        e.name = "GitError";
-        throw e;
+      currentBox.exec = vi.fn(async (command: string) => {
+        if (command.includes("clone --quiet")) {
+          const e = new Error(`GitError: failed to clone ${AUTHED_URL}`);
+          e.name = "GitError";
+          throw e;
+        }
+        return { exitCode: 0, duration: 0, stdout: "", stderr: "" };
       });
 
       const exit = yield* clone(SCHEDULED_AUTH);
@@ -722,16 +808,16 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
   // token is readable by whatever runs next.
   it.effect("keeps the git diagnosis when the post-failure scrub also fails", () =>
     Effect.gen(function* () {
-      currentBox.gitCheckout = vi.fn(async () => {
-        const e = new Error(`GitError: failed to clone ${AUTHED_URL}`);
-        e.name = "GitError";
-        throw e;
-      });
-      currentBox.exec = vi.fn(async (command: string) =>
-        command.includes("remote set-url")
+      currentBox.exec = vi.fn(async (command: string) => {
+        if (command.includes("clone --quiet")) {
+          const e = new Error(`GitError: failed to clone ${AUTHED_URL}`);
+          e.name = "GitError";
+          throw e;
+        }
+        return command.includes("remote set-url")
           ? { exitCode: 1, duration: 0, stdout: "", stderr: "git: not found" }
-          : { exitCode: 0, duration: 0, stdout: "", stderr: "" },
-      );
+          : { exitCode: 0, duration: 0, stdout: "", stderr: "" };
+      });
 
       const exit = yield* clone(SCHEDULED_AUTH);
 
@@ -748,8 +834,11 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
   // attaching it — the original still holds the raw, unredacted token.
   it.effect("does not attach the unredacted original as the error's cause", () =>
     Effect.gen(function* () {
-      currentBox.gitCheckout = vi.fn(async () => {
-        throw new Error(`GitError: failed to clone ${AUTHED_URL}`);
+      currentBox.exec = vi.fn(async (command: string) => {
+        if (command.includes("clone --quiet")) {
+          throw new Error(`GitError: failed to clone ${AUTHED_URL}`);
+        }
+        return { exitCode: 0, duration: 0, stdout: "", stderr: "" };
       });
 
       const exit = yield* clone(SCHEDULED_AUTH);
@@ -782,9 +871,9 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
 
       expect(Exit.isSuccess(exit)).toBe(true);
       expect(resolveCloneToken).not.toHaveBeenCalled();
-      expect(currentBox.gitCheckout).toHaveBeenCalledWith("https://github.com/acme/beacon.git", {
-        targetDir: "/workspace/beacon",
-      });
+      // No credential helper, and no environment carrying one.
+      expect(cloneExec()).toBe(`git clone --quiet '${CLONE_URL}' '/workspace/beacon'`);
+      expect(cloneOpts()?.env).toBeUndefined();
       expect(execCommands().some((c) => c.includes("remote set-url"))).toBe(false);
     }),
   );
