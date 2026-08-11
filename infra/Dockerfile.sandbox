@@ -7,8 +7,11 @@
 # needs (git checkout + `git diff`). Pin the tag to @cloudflare/sandbox in
 # package.json and bump both together.
 #
-# NOTE: the full image (demo-agent / flare-agent CLIs, chromium + agent build
-# variants) is reintroduced when those packages are ported in the parity phase.
+# LEAN BY CONSTRUCTION: the optional layers live in separate opt-in files, so
+# a class that builds from this file never pulls their builder stages. The
+# demo-agent layer (the `product-demo` run's CLI) is `infra/Dockerfile.sandbox-demo`;
+# the chromium / flare-agent variants return when those packages are ported in
+# the parity phase.
 FROM docker.io/cloudflare/sandbox:0.10.1
 
 # Corepack is the standard bootstrap for repos that pin `"packageManager"`.

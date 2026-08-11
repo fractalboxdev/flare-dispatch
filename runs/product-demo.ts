@@ -16,8 +16,9 @@
 //
 // No checkout — the target is a deployed URL, not the repo. The run only
 // attaches to Browser Run over CDP and shells out to the bundled
-// `demo-agent` CLI (baked into the `flare-dispatch-demo:latest` image, the
-// same shape as `review-agent` in recipes/ai-code-review). The agent owns
+// `demo-agent` CLI, baked into `infra/Dockerfile.sandbox-demo` (the image
+// the RunSandbox class builds from; the lean classes build from
+// `infra/Dockerfile.sandbox`). The agent owns
 // the model loop and CDP action application; the platform owns recording
 // (Browser Run records rrweb DOM events at the session level when the CDP
 // connect URL carries `?recording=true`); this run only orchestrates:
@@ -419,9 +420,11 @@ export const productDemo = defineRun({
   // `wrangler.jsonc`) MUST include the `demo-agent` binary on PATH — model
   // loop, CDP-driver glue, and the Browser Run recording REST client.
   // No `image:` field here: FlareDispatch has one container binding per
-  // Worker; the image is pinned by `infra/Dockerfile.sandbox`. Drop the
-  // `demo-agent` layer from `recipes/product-demo/Dockerfile.example` into
-  // your own `Dockerfile.sandbox` to enable this run.
+  // Worker; the image is pinned by `infra/Dockerfile.sandbox-demo` (the
+  // full variant with the `demo-agent` layer — the class this run acquires,
+  // RunSandbox, is the DEFAULT image class and builds from it; see
+  // `wrangler.jsonc` `containers`). Point the acquired class at that file to
+  // enable this run.
   inputs: Input,
   outputs: Output,
   // Stories run IN PARALLEL, each on its own Browser Run CDP session (own
@@ -825,13 +828,15 @@ export const productDemo = defineRun({
           let activeWs = attached.wsEndpoint;
           let activeSessionId = attached.sessionId;
 
-          // record-start — navigate to the app + persist the REAL session id
-          // (passed through; the CDP-derived fallback is not recognised by the
-          // recording REST API). Runs DETACHED + bounded (`runAgent`): as a
-          // blocking exec this was the run's worst wedge — the navigation to a
-          // heavy app page can hang the agent, and a hung exec connection rode
-          // the step to the Workflows step cap, killing the session and the
-          // chapter with it.
+          // record-start — navigate to the app + persist the REAL session id.
+          // The agent REQUIRES `--session-id` (the CDP-derived fallback id is
+          // not recognised by the recording REST API — the agent fails loudly
+          // without it rather than persist an unusable one; the recovery below
+          // is that loud failure's path). Runs DETACHED + bounded
+          // (`runAgent`): as a blocking exec this was the run's worst wedge —
+          // the navigation to a heavy app page can hang the agent, and a hung
+          // exec connection rode the step to the Workflows step cap, killing
+          // the session and the chapter with it.
           const recordStartArgv = (ws: string, sid: string) => [
             "demo-agent",
             "record",

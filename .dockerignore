@@ -1,0 +1,20 @@
+# Build context for infra/Dockerfile.sandbox (built in-repo by `wrangler
+# deploy`). The demo-agent builder stage COPYs a minimal workspace subset —
+# these exclusions keep the context transfer small (node_modules alone is
+# ~1GB) so every container-class build doesn't ship the dev tree.
+.git
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.wrangler
+.tmp
+.worktrees
+.claude
+.vscode
+.zed
+.cursor
+apps/docs
+apps/dashboard
+actions
+pnpm-debug.log*
