@@ -134,6 +134,15 @@
   // node builder stage or ships the bundle, and a dispatch that lands on the
   // wrong class still fails honestly at exec ("No such file or directory").
   //
+  // `image_build_context: "."` on RunSandbox is REQUIRED, not cosmetic:
+  // wrangler's container build defaults the context to the Dockerfile's own
+  // directory (`infra/`), and the demo builder stage COPYs the workspace
+  // slice (`packages/demo-agent`, `packages/bedrock-sigv4`, root manifests)
+  // from the context — with the default context those paths don't exist and
+  // the image build fails at the first COPY. `.` resolves against the
+  // wrangler config's directory (the repo root); `.dockerignore` keeps the
+  // transfer lean.
+  //
   // RunSandbox (the offload-test/check executor + the `product-demo` run's
   // default acquisition — `sandbox.acquire({})` gets the DEFAULT image
   // class) bakes the native toolchain + Rust: webhook-mode runs have no
@@ -144,6 +153,7 @@
     {
       "class_name": "RunSandbox",
       "image": "./infra/Dockerfile.sandbox-demo",
+      "image_build_context": ".",
       "image_vars": { "WITH_BUILD_TOOLS": "true", "WITH_RUST": "true" },
       "instance_type": "standard-4",
       "max_instances": 16,
