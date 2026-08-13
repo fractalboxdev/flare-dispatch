@@ -15,6 +15,7 @@ export type RestoreFn = (opts: {
   key: string;
   container: Container;
   dir?: string;
+  base?: string;
 }) => Effect.Effect<boolean, CacheError>;
 
 /** Pack container paths into an archive and persist it. */
@@ -23,6 +24,7 @@ export type SaveFn = (opts: {
   paths: readonly string[];
   container: Container;
   dir?: string;
+  base?: string;
 }) => Effect.Effect<void, CacheError>;
 
 /**
@@ -47,6 +49,7 @@ export const composeRestoreOr =
     paths: readonly string[];
     container: Container;
     dir?: string;
+    base?: string;
     onMiss: () => Effect.Effect<A, E, R>;
   }): Effect.Effect<void, E | CacheError, R> =>
     restore(opts).pipe(

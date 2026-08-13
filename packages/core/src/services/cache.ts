@@ -27,6 +27,13 @@ export interface CacheService {
      * Optional: omit to treat `paths` as relative to the container's default cwd.
      */
     dir?: string;
+    /**
+     * Base the `paths` are packed and extracted from, when that is not the
+     * checkout. A tool whose home lives outside the repo — cargo's registry,
+     * an npm cache — is otherwise uncacheable: `paths` are tarred relative to
+     * `dir`, and an absolute path cannot be named there. Defaults to `dir`.
+     */
+    base?: string;
     onMiss: () => Effect.Effect<A, E, R>;
   }) => Effect.Effect<void, E | CacheError, R>;
   readonly save: (opts: {
@@ -35,6 +42,8 @@ export interface CacheService {
     container: Container;
     /** Directory the `paths` are relative to — see `restoreOr`. */
     dir?: string;
+    /** Base to pack from — see `restoreOr`. Defaults to `dir`. */
+    base?: string;
   }) => Effect.Effect<void, CacheError>;
 }
 
@@ -49,8 +58,14 @@ export const cache = {
     paths: readonly string[];
     container: Container;
     dir?: string;
+    base?: string;
     onMiss: () => Effect.Effect<A, E, R>;
   }) => Effect.flatMap(Cache, (c) => c.restoreOr(opts)),
-  save: (opts: { key: string; paths: readonly string[]; container: Container; dir?: string }) =>
-    Effect.flatMap(Cache, (c) => c.save(opts)),
+  save: (opts: {
+    key: string;
+    paths: readonly string[];
+    container: Container;
+    dir?: string;
+    base?: string;
+  }) => Effect.flatMap(Cache, (c) => c.save(opts)),
 } as const;
