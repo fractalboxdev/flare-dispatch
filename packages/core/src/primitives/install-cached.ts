@@ -48,7 +48,9 @@ export const TOOLS = {
   pnpm: {
     lockfile: "pnpm-lock.yaml",
     install: "pnpm install --frozen-lockfile",
-    paths: ["node_modules", ".pnpm-store"],
+    // NOT `.pnpm-store`: nothing creates one in a checkout, and `tar czf` exits
+    // 2 on a missing member — listing it disabled the whole pnpm save.
+    paths: ["node_modules"],
   },
   npm: { lockfile: "package-lock.json", install: "npm ci", paths: ["node_modules"] },
   cargo: {

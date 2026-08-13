@@ -89,9 +89,13 @@ describe("installCached", () => {
     expect(TOOLS.cargo.paths).toEqual([".cargo-registry"]);
     // The controls: every other tool's paths ARE its install's output, so this
     // test fails on a real regression rather than on the cargo entry alone.
-    expect(TOOLS.pnpm.paths).toEqual(["node_modules", ".pnpm-store"]);
+    expect(TOOLS.pnpm.paths).toEqual(["node_modules"]);
     expect(TOOLS.npm.paths).toEqual(["node_modules"]);
     expect(TOOLS.uv.paths).toEqual([".venv"]);
+    // One absent path exits tar 2 and disables the tool's whole save.
+    for (const [tool, spec] of Object.entries(TOOLS)) {
+      expect(spec.paths, `${tool} declares an out-of-checkout path`).not.toContain(".pnpm-store");
+    }
     // Nothing anywhere caches a build directory.
     for (const [tool, spec] of Object.entries(TOOLS)) {
       expect(spec.paths, `${tool} caches a build directory`).not.toContain("target");
