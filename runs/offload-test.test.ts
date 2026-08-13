@@ -117,6 +117,32 @@ describe("offload-test", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("a platform ExecFailed is retried", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "pnpm test": { fail: "ExecFailed", stderrTail: "internal error; reference = abc123" },
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.exit(offloadTest.run(baseInput));
+      const attempts = handles.sandbox.execs.filter((e) => e.command.includes("pnpm test"));
+      expect(attempts).toHaveLength(2);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("an ExecTimeout is NOT retried", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "pnpm test": { fail: "ExecTimeout", timeoutSec: 600 } },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.exit(offloadTest.run(baseInput));
+      const attempts = handles.sandbox.execs.filter((e) => e.command.includes("pnpm test"));
+      expect(attempts).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("durationMs is the checkpointed exec ExecResult's durationMs", () => {
     // The run reports `result.durationMs` straight from the `exec` step's
     // `ExecResult` — the replay-safe source, since only step results are
@@ -213,7 +239,7 @@ describe("offload-test", () => {
         // because the step died rather than the command. The assertion above
         // passed throughout: it only ever proved the inner half.
         const execStep = handles.executions.steps.find((s) => s.name === "exec");
-        expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 + 120);
+        expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 * 2 + 120);
 
         // ...and the step must NOT be replayed on failure: CF's default
         // `limit: 5` turns one wedged 30-minute exec into six attempts over
@@ -701,7 +727,7 @@ describe("offload-test staged mode", () => {
         // Every stage step carries its derived ceiling + headroom and
         // `retries: 0` — same contract as the single exec.
         const execWorkspace = handles.executions.steps.find((s) => s.name === "exec-workspace");
-        expect(execWorkspace?.metadata?.["stepOpts.timeoutSec"]).toBe(900 + 120);
+        expect(execWorkspace?.metadata?.["stepOpts.timeoutSec"]).toBe(900 * 2 + 120);
         expect(execWorkspace?.metadata?.["stepOpts.retries"]).toBe(0);
         // The suspicious labelled-key-missing fallback is recorded on the
         // stage's step metadata — `workspace` resolved its own key, so only
@@ -709,7 +735,7 @@ describe("offload-test staged mode", () => {
         expect(execWorkspace?.metadata?.["offload-test.commandFallback"]).toBeUndefined();
         const execFeatures = handles.executions.steps.find((s) => s.name === "exec-features");
         expect(execFeatures?.metadata?.["offload-test.commandFallback"]).toBe(true);
-        expect(execFeatures?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 + 120);
+        expect(execFeatures?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 * 2 + 120);
 
         // Per-stage artifact names.
         expect(handles.artifact.uploads.map((u) => u.name)).toEqual([
