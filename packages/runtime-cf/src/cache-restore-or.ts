@@ -29,10 +29,16 @@ export type SaveFn = (opts: {
  * The pure `restoreOr` orchestration, factored out of any binding so it is
  * unit-testable with fake `restore` / `save`. Best-effort by construction:
  *
- *   - a restore error is swallowed (`orElseSucceed(false)`) → treated as a miss;
+ *   - a restore error is degraded to a miss;
  *   - on a hit, `onMiss` is skipped and the Effect completes with `void`;
- *   - on a miss, `onMiss` runs, then `save` runs but its failure is swallowed
- *     (`Effect.ignore`) — the `onMiss` work already succeeded.
+ *   - on a miss, `onMiss` runs, then `save` runs and a save failure does not
+ *     fail the Effect — the `onMiss` work already succeeded.
+ *
+ * Best-effort, but never SILENT. Both failures are logged with the
+ * `CacheError`'s own message (phase, key, rendered cause). A discarded save is
+ * indistinguishable from a working cache from the outside: the run reports
+ * green, the entry never lands, and every later run pays the full install
+ * again — so the only signal that the cache does nothing is this line.
  *
  * Returns `void`: on a cache hit there is no `onMiss` value, so `restoreOr`
  * cannot honestly yield an `A`. Consumers (`installCached`) discard it anyway.
@@ -47,12 +53,14 @@ export const composeRestoreOr =
     onMiss: () => Effect.Effect<A, E, R>;
   }): Effect.Effect<void, E | CacheError, R> =>
     restore(opts).pipe(
-      Effect.orElseSucceed(() => false),
+      Effect.catchAll((e) => Effect.as(Effect.logWarning(e.message), false)),
       Effect.flatMap((hit) =>
         hit
           ? Effect.void
           : opts.onMiss().pipe(
-              Effect.tap(() => Effect.ignore(save(opts))),
+              Effect.tap(() =>
+                save(opts).pipe(Effect.catchAll((e) => Effect.logWarning(e.message))),
+              ),
               Effect.asVoid,
             ),
       ),

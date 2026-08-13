@@ -5,7 +5,7 @@
 // a miss runs `onMiss` then `save`, a restore error degrades to a miss, a
 // `save` failure is swallowed, and an `onMiss` failure propagates.
 
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Logger, LogLevel } from "effect";
 import { describe, expect, it } from "vitest";
 import { CacheError } from "@fractalboxdev/flare-dispatch-core";
 import { composeRestoreOr } from "./cache-restore-or";
@@ -87,6 +87,53 @@ describe("composeRestoreOr", () => {
       restoreOr({ ...baseOpts, onMiss: () => Effect.succeed(42) }),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
+  });
+
+  // A discarded save looks identical to a working cache from outside: the run
+  // is green, the entry never lands, and every later run pays the install
+  // again. The log line is the only signal that the cache does nothing.
+  it("a swallowed save failure is logged, not discarded silently", async () => {
+    const lines: string[] = [];
+    const restoreOr = composeRestoreOr(
+      () => Effect.succeed(false),
+      () => Effect.fail(new CacheError({ phase: "save", key: "k", cause: "tar czf exited 2" })),
+    );
+    const exit = await Effect.runPromiseExit(
+      restoreOr({ ...baseOpts, onMiss: () => Effect.succeed(42) }).pipe(
+        Effect.provide(
+          Logger.replace(
+            Logger.defaultLogger,
+            Logger.make(({ message }) => lines.push(String(message))),
+          ),
+        ),
+        Logger.withMinimumLogLevel(LogLevel.Warning),
+      ),
+    );
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(lines.join("\n")).toContain("tar czf exited 2");
+    expect(lines.join("\n")).toContain("save");
+  });
+
+  it("a swallowed restore failure is logged too", async () => {
+    const lines: string[] = [];
+    const restoreOr = composeRestoreOr(
+      () => Effect.fail(new CacheError({ phase: "restore", key: "k", cause: "r2 unreachable" })),
+      () => Effect.void,
+    );
+    await Effect.runPromiseExit(
+      restoreOr({ ...baseOpts, onMiss: () => Effect.succeed(1) }).pipe(
+        Effect.provide(
+          Logger.replace(
+            Logger.defaultLogger,
+            Logger.make(({ message }) => lines.push(String(message))),
+          ),
+        ),
+        Logger.withMinimumLogLevel(LogLevel.Warning),
+      ),
+    );
+
+    expect(lines.join("\n")).toContain("r2 unreachable");
   });
 
   it("an onMiss failure propagates", async () => {
