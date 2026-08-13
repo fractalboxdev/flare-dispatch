@@ -89,9 +89,6 @@ describe("composeRestoreOr", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
   });
 
-  // A discarded save looks identical to a working cache from outside: the run
-  // is green, the entry never lands, and every later run pays the install
-  // again. The log line is the only signal that the cache does nothing.
   it("a swallowed save failure is logged, not discarded silently", async () => {
     const lines: string[] = [];
     const restoreOr = composeRestoreOr(

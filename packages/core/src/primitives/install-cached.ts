@@ -48,11 +48,8 @@ export const TOOLS = {
   pnpm: {
     lockfile: "pnpm-lock.yaml",
     install: "pnpm install --frozen-lockfile",
-    // NOT `.pnpm-store`: nothing creates one in a checkout. The image sets
-    // `PNPM_HOME=/pnpm` (infra/Dockerfile.sandbox-demo), which is the binary
-    // home, and a project store only exists where a repo sets `store-dir`.
-    // `tar czf` exits 2 on the missing member, so listing it disabled the whole
-    // pnpm save rather than adding to it.
+    // NOT `.pnpm-store`: nothing creates one in a checkout, and `tar czf` exits
+    // 2 on a missing member — listing it disabled the whole pnpm save.
     paths: ["node_modules"],
   },
   npm: { lockfile: "package-lock.json", install: "npm ci", paths: ["node_modules"] },

@@ -92,9 +92,7 @@ describe("installCached", () => {
     expect(TOOLS.pnpm.paths).toEqual(["node_modules"]);
     expect(TOOLS.npm.paths).toEqual(["node_modules"]);
     expect(TOOLS.uv.paths).toEqual([".venv"]);
-    // A path the install never creates is worse than a missing entry: `tar czf`
-    // exits 2 on the first absent member, so one bad path disables the tool's
-    // whole save. `.pnpm-store` was exactly that.
+    // One absent path exits tar 2 and disables the tool's whole save.
     for (const [tool, spec] of Object.entries(TOOLS)) {
       expect(spec.paths, `${tool} declares an out-of-checkout path`).not.toContain(".pnpm-store");
     }

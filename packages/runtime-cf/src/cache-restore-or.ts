@@ -34,11 +34,8 @@ export type SaveFn = (opts: {
  *   - on a miss, `onMiss` runs, then `save` runs and a save failure does not
  *     fail the Effect — the `onMiss` work already succeeded.
  *
- * Best-effort, but never SILENT. Both failures are logged with the
- * `CacheError`'s own message (phase, key, rendered cause). A discarded save is
- * indistinguishable from a working cache from the outside: the run reports
- * green, the entry never lands, and every later run pays the full install
- * again — so the only signal that the cache does nothing is this line.
+ * Best-effort, never silent: both failures are logged. A discarded save is
+ * otherwise indistinguishable from a working cache.
  *
  * Returns `void`: on a cache hit there is no `onMiss` value, so `restoreOr`
  * cannot honestly yield an `A`. Consumers (`installCached`) discard it anyway.
