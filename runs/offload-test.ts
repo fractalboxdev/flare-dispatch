@@ -116,6 +116,8 @@
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 import {
   AcceptanceFailed,
+  type ExecFailed,
+  type ExecTimeout,
   artifact,
   commandFailureToIncident,
   config,
@@ -212,6 +214,16 @@ const TIMEOUT_SEC_DEFAULT = 600;
  * this exists to prevent.
  */
 const STEP_TIMEOUT_HEADROOM_SEC = 120;
+
+const PLATFORM_RETRIES = 1;
+
+/**
+ * The STEP deadline must cover every attempt, or a retry after a late failure
+ * is killed by the step instead of finishing — surfacing as a timeout and
+ * hiding the platform fault that caused it.
+ */
+const stepTimeoutFor = (execTimeoutSec: number): number =>
+  execTimeoutSec * (PLATFORM_RETRIES + 1) + STEP_TIMEOUT_HEADROOM_SEC;
 
 /**
  * CONFIG_KV keys the run body resolves the command from when a dispatch carries
@@ -320,6 +332,27 @@ const parseIntConfig = (raw: string | undefined): number | undefined => {
   const n = Number(raw?.trim());
   return Number.isInteger(n) && n > 0 ? n : undefined;
 };
+
+/**
+ * `ExecTimeout` is excluded deliberately: the command already spent its whole
+ * deadline, and re-running it burns another under the contention that caused
+ * it (issue #39). A non-zero exit never reaches here — it is a normal
+ * `ExecResult`, not a failure.
+ */
+const retryPlatformFailure = <A, R>(
+  exec: Effect.Effect<A, ExecFailed | ExecTimeout, R>,
+): Effect.Effect<A, ExecFailed | ExecTimeout, R> =>
+  exec.pipe(
+    Effect.tapError((e) =>
+      // Never the tail: `diagnosticTail` carries up to 4KB of the command's own
+      // stdout/stderr, which is where injected secrets would surface. The
+      // detail is already on the step record, through the redacting path.
+      e._tag === "ExecFailed"
+        ? Effect.logWarning("exec failed on the platform, retrying")
+        : Effect.void,
+    ),
+    Effect.retry({ times: PLATFORM_RETRIES, while: (e) => e._tag === "ExecFailed" }),
+  );
 
 export const offloadTest = defineRun({
   name: "offload-test",
@@ -623,15 +656,17 @@ export const offloadTest = defineRun({
             step(
               `exec-${stage.label}`,
               () =>
-                sandbox.exec({
-                  cwd: dir,
-                  container,
-                  command: stage.command,
-                  env: { ...secretEnv, ...input.env },
-                  timeoutSec: stageTimeoutSec,
-                }),
+                retryPlatformFailure(
+                  sandbox.exec({
+                    cwd: dir,
+                    container,
+                    command: stage.command,
+                    env: { ...secretEnv, ...input.env },
+                    timeoutSec: stageTimeoutSec,
+                  }),
+                ),
               {
-                timeoutSec: stageTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
+                timeoutSec: stepTimeoutFor(stageTimeoutSec),
                 retries: 0,
                 // Surface the suspicious labelled-key-missing fallback (see
                 // ResolvedStage.commandFellBack) on the step record, where an
@@ -813,26 +848,24 @@ export const offloadTest = defineRun({
       // bug in it — with `STEP_TIMEOUT_HEADROOM_SEC` on top so the exec's
       // deadline is the one that fires (see the constant's doc).
       //
-      // `retries: 0` because a command that fails or times out should report
-      // that once — not be replayed to CF's default `limit: 5` (six attempts
-      // over hours on a long `timeoutSec`). A gate is not a transient: the
-      // same tree re-runs to the same result, and each platform-level replay
-      // re-enters the run body from the top (see pr-review's cap for the same
-      // reasoning). Genuine infra flakes re-run via a fresh dispatch, which
-      // also records a fresh attempt instead of silently swallowing this one.
+      // Step-level `retries: 0` because a platform replay re-enters the run
+      // body from the top. Platform faults are retried in place instead —
+      // `retryPlatformFailure`.
       const result = yield* step(
         "exec",
         () =>
-          sandbox.exec({
-            cwd: dir,
-            container,
-            command: soleCommand,
-            // Per-dispatch `env` wins over a same-named config-store secret —
-            // the more specific source overrides the global one.
-            env: { ...secretEnv, ...input.env },
-            timeoutSec,
-          }),
-        { timeoutSec: timeoutSec + STEP_TIMEOUT_HEADROOM_SEC, retries: 0 },
+          retryPlatformFailure(
+            sandbox.exec({
+              cwd: dir,
+              container,
+              command: soleCommand,
+              // Per-dispatch `env` wins over a same-named config-store secret —
+              // the more specific source overrides the global one.
+              env: { ...secretEnv, ...input.env },
+              timeoutSec,
+            }),
+          ),
+        { timeoutSec: stepTimeoutFor(timeoutSec), retries: 0 },
       );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.
