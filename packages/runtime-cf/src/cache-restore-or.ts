@@ -34,7 +34,7 @@ export type SaveFn = (opts: {
  *   - on a miss, `onMiss` runs, then `save` runs and a save failure does not
  *     fail the Effect — the `onMiss` work already succeeded.
  *
- * Best-effort, never silent: both failures are logged. A discarded save is
+ * Never silent, though: both failures are logged. A discarded save is
  * otherwise indistinguishable from a working cache.
  *
  * Returns `void`: on a cache hit there is no `onMiss` value, so `restoreOr`
