@@ -66,7 +66,7 @@ export const makeCacheR2Live = (
       try: async () => {
         const box = getSandbox(ns, opts.container.id);
         const tar = await box.exec(`tar czf ${TARBALL_PATH} ${opts.paths.join(" ")}`, {
-          cwd: opts.dir,
+          cwd: opts.base ?? opts.dir,
         });
         if (tar.exitCode !== 0) {
           throw new Error(`tar czf exited ${tar.exitCode}: ${tar.stderr}`);
@@ -93,7 +93,7 @@ export const makeCacheR2Live = (
         const box = getSandbox(ns, opts.container.id);
         await box.writeFile(TARBALL_PATH, archive.body);
         const untar = await box.exec(`tar xzf ${TARBALL_PATH}`, {
-          cwd: opts.dir,
+          cwd: opts.base ?? opts.dir,
         });
         if (untar.exitCode !== 0) {
           throw new Error(`tar xzf exited ${untar.exitCode}: ${untar.stderr}`);

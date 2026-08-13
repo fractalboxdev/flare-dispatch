@@ -81,12 +81,10 @@ describe("installCached", () => {
   // never reaches the sandbox: it is handed to `cache.restoreOr` / `cache.save`,
   // so nothing a run executes would reveal a regression here.
   it("caches only directories the tool's own install command populates", () => {
-    // `cargo fetch` downloads sources into CARGO_HOME; it never writes `target`.
-    // The entry is inert today — the sandbox sets CARGO_HOME outside the
-    // checkout, so this path does not exist and nothing is cached. Asserted
-    // anyway: it pins that cargo caches NO build directory, which is the
-    // property that matters.
-    expect(TOOLS.cargo.paths).toEqual([".cargo-registry"]);
+    // Cached from CARGO_HOME, not the checkout. `registry/src` is never
+    // cached: the full home holds every source twice, compressed and extracted.
+    expect(TOOLS.cargo.base).toBe("/usr/local/cargo");
+    expect(TOOLS.cargo.paths).toEqual(["registry/cache", "registry/index"]);
     // The controls: every other tool's paths ARE its install's output, so this
     // test fails on a real regression rather than on the cargo entry alone.
     expect(TOOLS.pnpm.paths).toEqual(["node_modules"]);

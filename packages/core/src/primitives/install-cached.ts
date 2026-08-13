@@ -20,7 +20,8 @@ import { sandbox, type Container } from "../services/sandbox";
 // poisoning) — see @fractalboxdev/flare-dispatch-runtime-cf cache-r2.ts.
 //
 // INVARIANT: `paths` are the directories the tool's own `install` command
-// POPULATES, relative to the checkout — nothing else. `pnpm install` writes
+// POPULATES — relative to the checkout, or to `base` when the tool's home lives
+// outside it. Never a build output. `pnpm install` writes
 // `node_modules` + the store, `npm ci` writes `node_modules`, `uv sync` writes
 // `.venv`. Caching anything else stores a BUILD OUTPUT under a dependency key,
 // and build outputs have neither of the two properties that make this cache
@@ -40,6 +41,14 @@ import { sandbox, type Container } from "../services/sandbox";
 // Build caching is a real want, but it needs its own key (toolchain + profile +
 // feature set), its own eviction, and a size ceiling checked before restore. It
 // is not this primitive.
+type ToolSpec = {
+  readonly lockfile: string;
+  readonly install: string;
+  readonly paths: readonly string[];
+  /** Base the `paths` are packed from, when the tool's home is not the checkout. */
+  readonly base?: string;
+};
+
 // Exported so the invariant above is assertable. It is the contract this
 // primitive makes with every consumer's disk, and the failure it prevents is
 // silent (a run that dies at 100% full names neither the cache nor the disk),
@@ -56,27 +65,18 @@ export const TOOLS = {
   cargo: {
     lockfile: "Cargo.lock",
     install: "cargo fetch --locked",
-    // NOT `target` — see the invariant above. `cargo fetch` downloads sources;
-    // it never writes `target`, so caching it was always storing something the
-    // install step did not produce.
-    //
-    // Which leaves cargo with NOTHING CACHEABLE TODAY, and that is stated
-    // rather than papered over: `.cargo-registry` does not exist in a checkout.
-    // The sandbox image sets `CARGO_HOME=/usr/local/cargo` (infra/Dockerfile.sandbox),
-    // so `cargo fetch` populates `/usr/local/cargo/registry`, while `save`/`restore`
-    // tar these paths with `cwd` at the checkout — an absolute path outside it
-    // cannot be named here. So this entry is inert: a Rust consumer re-downloads
-    // its registry every run.
-    //
-    // That is a deliberate trade, not an oversight. Inert costs a download;
-    // caching `target` cost every run outright. Making the registry genuinely
-    // cacheable needs `CARGO_HOME` pointed inside the checkout for the install
-    // AND for the run command that follows it — a change to how execs carry
-    // env, not to this table.
-    paths: [".cargo-registry"],
+    // Cached from CARGO_HOME, which the image puts outside the checkout
+    // (infra/Dockerfile.sandbox). `registry/src` is excluded on the Cargo
+    // Book's CI advice — the full home stores every source twice, once as a
+    // `.crate` and once extracted, and cargo re-extracts it on the next build.
+    // The Book's `git/db` / `bin` / `.crates.toml` / `.crates2.json` are absent
+    // after a registry-only fetch, and `tar czf` exits 2 on a missing member,
+    // which would disable the whole save.
+    base: "/usr/local/cargo",
+    paths: ["registry/cache", "registry/index"],
   },
   uv: { lockfile: "uv.lock", install: "uv sync --frozen", paths: [".venv"] },
-} as const;
+} as const satisfies Record<string, ToolSpec>;
 
 type Tool = keyof typeof TOOLS;
 
@@ -106,7 +106,8 @@ export const installCached = (opts: {
       yield* io.log("info", "installCached: no lockfile detected, skipping");
       return;
     }
-    const { lockfile, install, paths } = TOOLS[tool];
+    const spec: ToolSpec = TOOLS[tool];
+    const { lockfile, install, paths, base } = spec;
 
     // Hash the lockfile inside the container to key the R2 cache entry.
     const hash = yield* sandbox.exec({
@@ -121,6 +122,7 @@ export const installCached = (opts: {
     yield* cache.restoreOr({
       key,
       paths,
+      base,
       container: opts.container,
       dir: opts.dir,
       onMiss: () => sandbox.exec({ cwd: opts.dir, container: opts.container, command: install }),

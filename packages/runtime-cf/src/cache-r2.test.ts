@@ -133,6 +133,31 @@ describe("composeRestoreOr", () => {
     expect(lines.join("\n")).toContain("r2 unreachable");
   });
 
+  // `base` is what makes a home outside the checkout cacheable at all — the
+  // tar runs there instead of in the repo, so an absolute path is expressible.
+  it("base reaches both restore and save", async () => {
+    const seen: (string | undefined)[] = [];
+    const restoreOr = composeRestoreOr(
+      (o) => {
+        seen.push(o.base);
+        return Effect.succeed(false);
+      },
+      (o) => {
+        seen.push(o.base);
+        return Effect.void;
+      },
+    );
+    await Effect.runPromise(
+      restoreOr({
+        ...baseOpts,
+        base: "/usr/local/cargo",
+        dir: "/workspace/repo",
+        onMiss: () => Effect.succeed(1),
+      }),
+    );
+    expect(seen).toEqual(["/usr/local/cargo", "/usr/local/cargo"]);
+  });
+
   it("an onMiss failure propagates", async () => {
     const restoreOr = composeRestoreOr(
       () => Effect.succeed(false),
