@@ -140,7 +140,7 @@ const redactCloneFailure = (cause: unknown, token: string): Error => {
  * Prefer stdout/stderr when the thrown error carries them; else the message.
  */
 const STDERR_TAIL_MAX = 4 * 1024;
-const diagnosticTail = (cause: unknown): string => {
+const diagnosticTail = (cause: unknown, redactValues?: readonly string[]): string => {
   let raw: string;
   if (cause instanceof Error) {
     const streams = cause as Error & { stdout?: unknown; stderr?: unknown };
@@ -151,6 +151,7 @@ const diagnosticTail = (cause: unknown): string => {
   } else {
     raw = String(cause);
   }
+  raw = redact(raw, redactValues);
   return raw.length <= STDERR_TAIL_MAX
     ? raw
     : `…[${raw.length - STDERR_TAIL_MAX} chars truncated]…\n${raw.slice(-STDERR_TAIL_MAX)}`;
@@ -650,7 +651,7 @@ export const makeSandboxCloudflareLive = (
           }
           return new ExecFailed({
             exitCode: -1,
-            stderrTail: redact(diagnosticTail(cause), redactValues),
+            stderrTail: diagnosticTail(cause, redactValues),
           });
         },
       });

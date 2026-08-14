@@ -353,6 +353,32 @@ describe("logs", () => {
     expect(Exit.isSuccess(exit) && exit.value.stdout).toContain("***");
   });
 
+  it("scrubs them from a structured substrate refusal too", async () => {
+    const f = facade({
+      execUnderGrant: async () => {
+        throw {
+          kind: "attestation-rejected",
+          reason: "bad attestation for token cf-tok-secret",
+        };
+      },
+    });
+    const r2 = bucket();
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(
+        Effect.flatMap(SandboxTag, (s) =>
+          s.exec({ command: "wrangler deploy", redactValues: ["cf-tok-secret"] }),
+        ),
+        layerFor(f.api, r2.binding),
+      ),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    const rendered = JSON.stringify(exit);
+    expect(rendered).toContain("attestation");
+    expect(rendered).not.toContain("cf-tok-secret");
+    expect(rendered).toContain("***");
+  });
+
   it("scrubs them from a thrown error's diagnostic as well", async () => {
     const f = facade({
       execUnderGrant: async () => {
