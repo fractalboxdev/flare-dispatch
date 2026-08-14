@@ -42,7 +42,7 @@
 //     command — the labelled-rung ladder `check` v1.1.0 introduced) and its own
 //     timeout (`offload-test.timeoutSec:<repo>:<label>` ?? the dispatch
 //     `timeoutSec` ?? the unlabelled rung ?? default), step timeout derived
-//     with the same headroom, `retries: 0`;
+//     with the same headroom and the same platform-retry policy;
 //   * each stage's log uploads as `step-<label>.log` IMMEDIATELY after the
 //     stage, so a later stage dying cannot take an earlier stage's log with it;
 //   * a stage that exits non-zero stops the sequence (later stages are
@@ -116,8 +116,6 @@
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 import {
   AcceptanceFailed,
-  type ExecFailed,
-  type ExecTimeout,
   artifact,
   commandFailureToIncident,
   config,
@@ -217,13 +215,10 @@ const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
 const PLATFORM_RETRIES = 1;
 
-/**
- * The STEP deadline must cover every attempt, or a retry after a late failure
- * is killed by the step instead of finishing — surfacing as a timeout and
- * hiding the platform fault that caused it.
- */
+const RETRY_ON = ["ExecFailed"] as const;
+
 const stepTimeoutFor = (execTimeoutSec: number): number =>
-  execTimeoutSec * (PLATFORM_RETRIES + 1) + STEP_TIMEOUT_HEADROOM_SEC;
+  execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC;
 
 /**
  * CONFIG_KV keys the run body resolves the command from when a dispatch carries
@@ -332,27 +327,6 @@ const parseIntConfig = (raw: string | undefined): number | undefined => {
   const n = Number(raw?.trim());
   return Number.isInteger(n) && n > 0 ? n : undefined;
 };
-
-/**
- * `ExecTimeout` is excluded deliberately: the command already spent its whole
- * deadline, and re-running it burns another under the contention that caused
- * it (issue #39). A non-zero exit never reaches here — it is a normal
- * `ExecResult`, not a failure.
- */
-const retryPlatformFailure = <A, R>(
-  exec: Effect.Effect<A, ExecFailed | ExecTimeout, R>,
-): Effect.Effect<A, ExecFailed | ExecTimeout, R> =>
-  exec.pipe(
-    Effect.tapError((e) =>
-      // Never the tail: `diagnosticTail` carries up to 4KB of the command's own
-      // stdout/stderr, which is where injected secrets would surface. The
-      // detail is already on the step record, through the redacting path.
-      e._tag === "ExecFailed"
-        ? Effect.logWarning("exec failed on the platform, retrying")
-        : Effect.void,
-    ),
-    Effect.retry({ times: PLATFORM_RETRIES, while: (e) => e._tag === "ExecFailed" }),
-  );
 
 export const offloadTest = defineRun({
   name: "offload-test",
@@ -649,25 +623,24 @@ export const offloadTest = defineRun({
           // harmless (header note 2 applies to output-bearing values).
           const stageStartMs = yield* io.now;
 
-          // Same two-timeout derivation + `retries: 0` as the single exec below
-          // (see its comment): the exec's own deadline must fire before the
-          // step's, and a red stage is not a transient.
+          // Same two-timeout derivation and retry policy as the single exec
+          // below (see its comment): the exec's own deadline must fire before
+          // the step's.
           const exit = yield* Effect.exit(
             step(
               `exec-${stage.label}`,
               () =>
-                retryPlatformFailure(
-                  sandbox.exec({
-                    cwd: dir,
-                    container,
-                    command: stage.command,
-                    env: { ...secretEnv, ...input.env },
-                    timeoutSec: stageTimeoutSec,
-                  }),
-                ),
+                sandbox.exec({
+                  cwd: dir,
+                  container,
+                  command: stage.command,
+                  env: { ...secretEnv, ...input.env },
+                  timeoutSec: stageTimeoutSec,
+                }),
               {
                 timeoutSec: stepTimeoutFor(stageTimeoutSec),
-                retries: 0,
+                retries: PLATFORM_RETRIES,
+                retryOn: RETRY_ON,
                 // Surface the suspicious labelled-key-missing fallback (see
                 // ResolvedStage.commandFellBack) on the step record, where an
                 // operator reading the step table will actually see it.
@@ -846,26 +819,20 @@ export const offloadTest = defineRun({
       // So the step timeout is DERIVED from the exec timeout rather than
       // configured beside it — two knobs that must agree are one knob with a
       // bug in it — with `STEP_TIMEOUT_HEADROOM_SEC` on top so the exec's
-      // deadline is the one that fires (see the constant's doc).
-      //
-      // Step-level `retries: 0` because a platform replay re-enters the run
-      // body from the top. Platform faults are retried in place instead —
-      // `retryPlatformFailure`.
+      // deadline is the one that fires.
       const result = yield* step(
         "exec",
         () =>
-          retryPlatformFailure(
-            sandbox.exec({
-              cwd: dir,
-              container,
-              command: soleCommand,
-              // Per-dispatch `env` wins over a same-named config-store secret —
-              // the more specific source overrides the global one.
-              env: { ...secretEnv, ...input.env },
-              timeoutSec,
-            }),
-          ),
-        { timeoutSec: stepTimeoutFor(timeoutSec), retries: 0 },
+          sandbox.exec({
+            cwd: dir,
+            container,
+            command: soleCommand,
+            // Per-dispatch `env` wins over a same-named config-store secret —
+            // the more specific source overrides the global one.
+            env: { ...secretEnv, ...input.env },
+            timeoutSec,
+          }),
+        { timeoutSec: stepTimeoutFor(timeoutSec), retries: PLATFORM_RETRIES, retryOn: RETRY_ON },
       );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.

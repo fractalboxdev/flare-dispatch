@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 // runtime-cf default (Node) project. Most integration tests drive real D1 / R2
@@ -10,6 +11,15 @@ import { defineConfig } from "vitest/config";
 // are owned by `vitest.workers.config.ts` (registered separately in the root
 // workspace), so they are excluded here to avoid double-running them in Node.
 export default defineConfig({
+  resolve: {
+    alias: {
+      // `cloudflare:workflows` is a workerd built-in with no Node resolution.
+      // These suites run in Node, so point it at a stub with the same surface.
+      "cloudflare:workflows": fileURLToPath(
+        new URL("./test-stubs/cloudflare-workflows.ts", import.meta.url),
+      ),
+    },
+  },
   test: {
     include: ["src/**/*.test.ts"],
     exclude: ["src/**/*.workers.test.ts"],

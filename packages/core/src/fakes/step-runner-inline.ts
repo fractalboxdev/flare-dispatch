@@ -153,11 +153,12 @@ export const makeStepRunnerInline = (
               // whatever the run put there. The real runner carries these to
               // `WorkflowStep.do`'s config instead (step-runner-cf.ts).
               metadata:
-                stepOpts?.timeoutSec !== undefined || stepOpts?.retries !== undefined
+                stepOpts?.timeoutSec !== undefined || stepOpts?.retries !== undefined || stepOpts?.retryOn !== undefined
                   ? {
                       ...stepOpts?.metadata,
                       "stepOpts.timeoutSec": stepOpts?.timeoutSec,
                       "stepOpts.retries": stepOpts?.retries,
+                      "stepOpts.retryOn": stepOpts?.retryOn,
                     }
                   : stepOpts?.metadata,
             });
