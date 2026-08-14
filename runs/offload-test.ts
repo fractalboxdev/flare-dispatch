@@ -218,8 +218,15 @@ const PLATFORM_RETRIES = 1;
 const RETRY_ON = ["ExecFailed"] as const;
 
 const stepTimeoutFor = (execTimeoutSec: number): number =>
-  execTimeoutSec * (PLATFORM_RETRIES + 1) + STEP_TIMEOUT_HEADROOM_SEC;
+  execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC;
 
+/**
+ * CONFIG_KV keys the run body resolves the command from when a dispatch carries
+ * no `command` (webhook mode — the `pull_request` trigger's `inputs` is a sync,
+ * payload-only callback that can't read config). The per-repo key wins over the
+ * dispatcher-wide default, so one dispatcher serves repos with different test
+ * commands: `wrangler kv key put --binding=CONFIG_KV "offload-test.command:owner/repo" "cargo test --workspace"`.
+ */
 const COMMAND_KEY = "offload-test.command";
 const repoCommandKey = (repo: string): string => `offload-test.command:${repo}`;
 
@@ -812,8 +819,7 @@ export const offloadTest = defineRun({
       // So the step timeout is DERIVED from the exec timeout rather than
       // configured beside it — two knobs that must agree are one knob with a
       // bug in it — with `STEP_TIMEOUT_HEADROOM_SEC` on top so the exec's
-      // deadline is the one that fires (see the constant's doc).
-      //
+      // deadline is the one that fires.
       const result = yield* step(
         "exec",
         () =>
