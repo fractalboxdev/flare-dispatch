@@ -158,6 +158,7 @@ export const makeStepRunnerInline = (
                       ...stepOpts?.metadata,
                       "stepOpts.timeoutSec": stepOpts?.timeoutSec,
                       "stepOpts.retries": stepOpts?.retries,
+                      "stepOpts.retryOn": stepOpts?.retryOn,
                     }
                   : stepOpts?.metadata,
             });

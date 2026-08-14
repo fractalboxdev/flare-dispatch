@@ -33,6 +33,7 @@
 // Spec: specs/03-dsl.md § step + § The runEffect boundary shim, plan § PR4.
 
 import { ApprovalTimedOut, EventPayloadInvalid } from "@fractalboxdev/flare-dispatch-core";
+import { NonRetryableError } from "cloudflare:workflows";
 import { Cause, Duration, Effect, Exit, Layer, Option, Schema } from "effect";
 import {
   Executions,
@@ -113,6 +114,20 @@ export const buildStepConfig = (opts?: StepOpts): WorkflowStepConfigLike | undef
   return config.timeout === undefined && config.retries === undefined ? undefined : config;
 };
 
+/** Workflows retries any thrown Error; `NonRetryableError` is how a step opts out. */
+export const rethrowForRetryPolicy = (error: unknown, retryOn?: readonly string[]): unknown => {
+  if (retryOn === undefined) return error;
+  const tag = errorTagOf(causeOf(error));
+  return tag !== undefined && retryOn.includes(tag) ? error : asNonRetryable(error);
+};
+
+const asNonRetryable = (error: unknown): unknown => {
+  const message = error instanceof Error ? error.message : String(error);
+  const wrapped = new NonRetryableError(message) as Error & { cause?: unknown };
+  wrapped.cause = (error as CausalError)?.cause;
+  return wrapped;
+};
+
 /** A thrown error carrying an Effect `Cause` — produced by `runEffect`. */
 type CausalError = { readonly cause?: unknown };
 
@@ -180,7 +195,11 @@ export const makeStepRunnerCloudflare = (
             // defaults (notably the 10-minute step timeout). A long step like
             // the acceptance suite raises its ceiling via `StepOpts.timeoutSec`.
             const stepConfig = buildStepConfig(stepOpts);
-            const runBody = () => runEffect(Effect.provide(body(), context));
+            const retryOn = stepOpts?.retryOn;
+            const runBody = () =>
+              runEffect(Effect.provide(body(), context)).catch((error: unknown) => {
+                throw rethrowForRetryPolicy(error, retryOn);
+              });
             // `WorkflowStepLike` models only the no-config `do` overload; the
             // real CF `step.do` also accepts `(name, config, callback)`. Bridge
             // to it via `DoWithConfig` when a step set a timeout/retries.

@@ -3,8 +3,19 @@
 // is exercised in runtime.test.ts against real bindings; this file covers only
 // the config derivation, which has no I/O.
 
+import { Cause, Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { buildStepConfig } from "./step-runner-cf";
+import { ExecFailed, ExecTimeout, runEffect } from "@fractalboxdev/flare-dispatch-core";
+import { buildStepConfig, rethrowForRetryPolicy } from "./step-runner-cf";
+
+const thrownFor = async (failure: ExecFailed | ExecTimeout): Promise<unknown> => {
+  try {
+    await runEffect(Effect.fail(failure));
+    throw new Error("expected a throw");
+  } catch (error) {
+    return error;
+  }
+};
 
 describe("buildStepConfig", () => {
   it("returns undefined when no opts are given (bare do(name, cb))", () => {
@@ -38,5 +49,26 @@ describe("buildStepConfig", () => {
     // 0 !== undefined, so it is honored — a run that asks for 0 gets "0 seconds"
     // rather than silently falling back to CF's default.
     expect(buildStepConfig({ timeoutSec: 0 })).toEqual({ timeout: "0 seconds" });
+  });
+});
+
+describe("rethrowForRetryPolicy", () => {
+  it("passes a listed tag through, so the platform retries it", async () => {
+    const thrown = await thrownFor(new ExecFailed({ exitCode: -1, stderrTail: "boom" }));
+    expect(rethrowForRetryPolicy(thrown, ["ExecFailed"])).toBe(thrown);
+  });
+
+  it("marks an unlisted tag non-retryable, preserving the Cause", async () => {
+    const thrown = await thrownFor(new ExecTimeout({ timeoutSec: 600, command: "pnpm test" }));
+    const out = rethrowForRetryPolicy(thrown, ["ExecFailed"]) as Error & { cause?: unknown };
+
+    expect(out).not.toBe(thrown);
+    expect(out.name).toBe("NonRetryableError");
+    expect(Cause.isCause(out.cause)).toBe(true);
+  });
+
+  it("without retryOn every failure stays retryable — the platform default", async () => {
+    const thrown = await thrownFor(new ExecTimeout({ timeoutSec: 600, command: "pnpm test" }));
+    expect(rethrowForRetryPolicy(thrown, undefined)).toBe(thrown);
   });
 });
