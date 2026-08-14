@@ -101,7 +101,8 @@ const { resolveCloneToken } = vi.hoisted(() => ({ resolveCloneToken: vi.fn() }))
 vi.mock("./sandbox-clone-auth", () => ({ resolveCloneToken }));
 
 // Imported AFTER the mock is registered so the Layer binds the mocked SDK.
-const { makeSandboxCloudflareLive, isWorkingDirFailure } = await import("./sandbox-cf");
+const { makeSandboxCloudflareLive, isWorkingDirFailure, STDERR_TAIL_MAX } =
+  await import("./sandbox-cf");
 
 /** A minimal R2 stub that records `put` calls. */
 const makeBucket = () => {
@@ -500,6 +501,62 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       }
       const logBody = puts.map((p) => String(p.body)).join("");
       expect(logBody).not.toContain("super-secret");
+    }),
+  );
+
+  it.effect("redacts before truncating, so a secret on the 4KB cut leaves no fragment", () =>
+    Effect.gen(function* () {
+      const secret = "SECRET_TOKEN_VALUE";
+      const discardedPrefix = "x".repeat(100);
+      const trailThatPutsTheCutMidSecret = "y".repeat(
+        STDERR_TAIL_MAX - Math.floor(secret.length / 2),
+      );
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => {
+        throw Object.assign(new Error("boom"), {
+          stderr: `${discardedPrefix}${secret}${trailThatPutsTheCutMidSecret}`,
+        });
+      });
+      const { bucket } = makeBucket();
+      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({ command: "wrangler deploy", cwd: "/w", env: {}, redactValues: [secret] }),
+      ).pipe(Effect.provide(layer), Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      const rendered = JSON.stringify(exit);
+      expect(rendered).not.toContain(secret);
+      const FRAGMENT = 8;
+      for (let i = 0; i + FRAGMENT <= secret.length; i++) {
+        expect(rendered).not.toContain(secret.slice(i, i + FRAGMENT));
+      }
+    }),
+  );
+
+  it.effect("redactValues scrubs a thrown error's diagnostic too", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      const thrown = Object.assign(new Error("launch failed"), {
+        stderr: "fatal: token super-secret rejected",
+      });
+      currentBox.exec = vi.fn(async () => {
+        throw thrown;
+      });
+      const { bucket } = makeBucket();
+      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({
+          command: "wrangler deploy",
+          cwd: "/w",
+          env: {},
+          redactValues: ["super-secret"],
+        }),
+      ).pipe(Effect.provide(layer), Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      const rendered = JSON.stringify(exit);
+      expect(rendered).not.toContain("super-secret");
+      expect(rendered).toContain("***");
     }),
   );
 });

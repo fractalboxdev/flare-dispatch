@@ -338,11 +338,14 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
               const refusal = cause as SubstrateRefusal;
               return new ExecFailed({
                 exitCode: -1,
-                stderrTail: refusal?.kind
-                  ? describeRefusal(refusal)
-                  : cause instanceof Error
-                    ? cause.message
-                    : String(cause),
+                stderrTail: redact(
+                  refusal?.kind
+                    ? describeRefusal(refusal)
+                    : cause instanceof Error
+                      ? cause.message
+                      : String(cause),
+                  redactValues,
+                ),
               });
             },
           }),
