@@ -42,7 +42,7 @@
 //     command — the labelled-rung ladder `check` v1.1.0 introduced) and its own
 //     timeout (`offload-test.timeoutSec:<repo>:<label>` ?? the dispatch
 //     `timeoutSec` ?? the unlabelled rung ?? default), step timeout derived
-//     with the same headroom, `retries: 0`;
+//     with the same headroom and the same platform-retry policy;
 //   * each stage's log uploads as `step-<label>.log` IMMEDIATELY after the
 //     stage, so a later stage dying cannot take an earlier stage's log with it;
 //   * a stage that exits non-zero stops the sequence (later stages are
@@ -623,9 +623,9 @@ export const offloadTest = defineRun({
           // harmless (header note 2 applies to output-bearing values).
           const stageStartMs = yield* io.now;
 
-          // Same two-timeout derivation + `retries: 0` as the single exec below
-          // (see its comment): the exec's own deadline must fire before the
-          // step's, and a red stage is not a transient.
+          // Same two-timeout derivation and retry policy as the single exec
+          // below (see its comment): the exec's own deadline must fire before
+          // the step's.
           const exit = yield* Effect.exit(
             step(
               `exec-${stage.label}`,

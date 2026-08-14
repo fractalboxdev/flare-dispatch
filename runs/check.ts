@@ -337,9 +337,8 @@ export const check = defineRun({
       // with a bug in it: leave the step's unset and its 600s default silently
       // wins over a configured `check.timeoutSec`, surfacing as
       // `WorkflowTimeoutError` from a limit the repo's config never mentions.
-      // `retries: 0` for the same reason as offload-test: a check is not a
-      // transient, and CF's default `limit: 5` replays the run body from the
-      // top on every attempt.
+      // `retries: 0` because a red check is not a transient, and CF's default
+      // `limit: 5` replays the run body from the top on every attempt.
       const effectiveTimeoutSec = timeoutSec ?? DEFAULT_TIMEOUT_SEC;
       const result = yield* step(
         "exec",
