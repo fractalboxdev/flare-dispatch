@@ -338,9 +338,7 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
               const refusal = cause as SubstrateRefusal;
               return new ExecFailed({
                 exitCode: -1,
-                // Redacted like the success tail above: this text is persisted
-                // (`steps.error_message`) and served from the execution API, and
-                // a thrown error can carry the command's own output.
+                // Same reason as the success tail above.
                 stderrTail: redact(
                   refusal?.kind
                     ? describeRefusal(refusal)

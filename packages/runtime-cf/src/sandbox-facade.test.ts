@@ -353,8 +353,6 @@ describe("logs", () => {
     expect(Exit.isSuccess(exit) && exit.value.stdout).toContain("***");
   });
 
-  // The failure path persists too: `ExecFailed.stderrTail` reaches the Workflow
-  // record and `steps.error_message`, and is served from the execution API.
   it("scrubs them from a thrown error's diagnostic as well", async () => {
     const f = facade({
       execUnderGrant: async () => {

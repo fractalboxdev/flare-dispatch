@@ -503,9 +503,6 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
     }),
   );
 
-  // The success path redacted; the FAILURE path did not. A thrown SDK error can
-  // carry the command's own stdout/stderr, and that message is persisted — it
-  // reaches the Workflow record and the `steps` row.
   it.effect("redactValues scrubs a thrown error's diagnostic too", () =>
     Effect.gen(function* () {
       currentBox = makeFakeBox({ proc: null });
