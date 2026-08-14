@@ -76,6 +76,15 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      # wrangler.jsonc names code that no TypeScript gate checks: entrypoints,
+      # and Durable Object classes the entrypoint must export. Rename a class
+      # without its binding and lint, typecheck and test all stay green — the
+      # first failure is the deploy below, after migrations have been applied.
+      # `--containers-rollout none` keeps this to the bundle: without it a dry
+      # run still builds every container image, which the deploy jobs then
+      # build again.
+      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none
+      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none -c apps/substrate/wrangler.jsonc
 
   # The substrate deploys BEFORE the dispatcher, and its own job rather than a
   # step in `deploy`, because the ordering is a real constraint and not a
