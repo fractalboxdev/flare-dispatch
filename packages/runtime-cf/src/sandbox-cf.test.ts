@@ -429,6 +429,44 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       }),
   );
 
+  it.effect("a missing working dir sets workspaceMissing so the caller can rebuild", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => ({
+        exitCode: 1,
+        duration: 0,
+        stdout: "",
+        stderr: "Failed to change directory to '/workspace/repo'",
+      }));
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({ command: "cargo test", cwd: "/workspace/repo", env: {} }),
+      ).pipe(Effect.provide(execLayer()), Effect.exit);
+      const err = failureOf<{ _tag: string; workspaceMissing?: boolean }>(exit);
+      expect(err?._tag).toBe("ExecFailed");
+      expect(err?.workspaceMissing).toBe(true);
+    }),
+  );
+
+  it.effect("a repo path containing 'timeout' is still classified as a missing workspace", () =>
+    Effect.gen(function* () {
+      // The marked throw embeds `cwd`, so classifying by message first would
+      // call this an ExecTimeout and silently disable the rebuild.
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => ({
+        exitCode: 1,
+        duration: 0,
+        stdout: "",
+        stderr: "Failed to change directory to '/workspace/request-timeout'",
+      }));
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({ command: "cargo test", cwd: "/workspace/request-timeout", env: {} }),
+      ).pipe(Effect.provide(execLayer()), Effect.exit);
+      const err = failureOf<{ _tag: string; workspaceMissing?: boolean }>(exit);
+      expect(err?._tag).toBe("ExecFailed");
+      expect(err?.workspaceMissing).toBe(true);
+    }),
+  );
+
   it("isWorkingDirFailure — fires only on a cwd-set, non-zero, no-stdout, cd-error result", () => {
     const cd = (over: Record<string, unknown> = {}) => ({
       exitCode: 1,

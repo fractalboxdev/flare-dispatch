@@ -44,6 +44,7 @@ The split keeps the layer boundary visible at the top of every recipe file. The 
 | Primitive                                           | Does                                                           | Built from                 | Used by                    |
 | --------------------------------------------------- | -------------------------------------------------------------- | -------------------------- | -------------------------- |
 | [`workspace`](src/primitives/workspace.ts)          | Acquire a container + clone a repo (+ optional cached install) | `sandbox`, `installCached` | every recipe               |
+| [`execInWorkspace`](src/primitives/exec-in-workspace.ts) | Run a command in a workspace, rebuilding the checkout if the container lost it | `sandbox`, `workspace` | any recipe that execs against a clone |
 | [`installCached`](src/primitives/install-cached.ts) | R2-backed dependency install, keyed on the lockfile hash       | `cache`, `sandbox`         | `workspace`, browser-tests |
 | [`sharded`](src/primitives/sharded.ts)              | Count-and-index parallel fan-out                               | `Effect.forEach`           | test-matrix, browser-tests |
 | [`bootApp`](src/primitives/boot-app.ts)             | Start a detached process and wait for its port                 | `sandbox`                  | cdp-acceptance             |

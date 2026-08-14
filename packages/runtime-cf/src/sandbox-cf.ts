@@ -185,6 +185,16 @@ interface RawExecResult {
  * keeps the container warm across the inter-step gap so this rarely fires; this
  * is the honesty backstop for the residual eviction/replay cases.)
  */
+/**
+ * Marks the throw raised for a vanished working directory so the `catch` below
+ * can set `ExecFailed.workspaceMissing` without re-parsing the message it just
+ * wrote. A symbol, so it cannot collide with an SDK error's own properties.
+ */
+const WORKSPACE_MISSING: unique symbol = Symbol("workspaceMissing");
+
+const isWorkspaceMissingThrow = (cause: unknown): boolean =>
+  typeof cause === "object" && cause !== null && WORKSPACE_MISSING in cause;
+
 export const isWorkingDirFailure = (
   r: { readonly exitCode: number; readonly stdout: string; readonly stderr: string },
   cwd: string | undefined,
@@ -618,8 +628,11 @@ export const makeSandboxCloudflareLive = (
           // as a lint/test verdict (see `isWorkingDirFailure`). The throw is
           // classified by the `catch` below.
           if (isWorkingDirFailure(result, cwd)) {
-            throw new Error(
-              `working directory '${cwd}' was missing at exec time — the checkout did not survive to this step (container recycled). stderr: ${stderr.slice(0, 200)}`,
+            throw Object.assign(
+              new Error(
+                `working directory '${cwd}' was missing at exec time — the checkout did not survive to this step (container recycled). stderr: ${stderr.slice(0, 200)}`,
+              ),
+              { [WORKSPACE_MISSING]: true },
             );
           }
           // Only a bounded TAIL is inlined in the step's return value, so the
@@ -641,6 +654,16 @@ export const makeSandboxCloudflareLive = (
           // generic launch failure. Prefer any stdout/stderr the throw carried
           // (some SDK errors attach them); else the Error message — this is
           // what Workflows persists via ExecFailed.message (#88).
+          // Before the message regex: the marked throw embeds `cwd` and 200
+          // chars of stderr, so a repo path containing "timeout" would classify
+          // as ExecTimeout and silently disable the rebuild.
+          if (isWorkspaceMissingThrow(cause)) {
+            return new ExecFailed({
+              exitCode: -1,
+              stderrTail: diagnosticTail(cause, redactValues),
+              workspaceMissing: true,
+            });
+          }
           const message = cause instanceof Error ? cause.message : String(cause);
           if (/timed?\s*out|timeout/i.test(message)) {
             return new ExecTimeout({

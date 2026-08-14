@@ -126,7 +126,11 @@ import {
   StepFailed,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
-import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  execInWorkspace,
+  loadSecrets,
+  workspace,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — specs/02-runs.md § 1. */
 const OffloadTestInput = Schema.Struct({
@@ -215,7 +219,7 @@ const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
 const PLATFORM_RETRIES = 3;
 
-const RETRY_ON = ["ExecFailed"] as const;
+const RETRY_ON = ["ExecFailed", "CheckoutFailed"] as const;
 
 const stepTimeoutFor = (execTimeoutSec: number): number =>
   execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC;
@@ -528,7 +532,7 @@ export const offloadTest = defineRun({
       // checkout — acquire a container (honouring the `image` override), clone
       // the repo at the requested SHA, and optionally run the R2-cached
       // dependency install. One primitive, same opening move as cdp-acceptance.
-      const { container, dir } = yield* step("checkout", () =>
+      const ws = yield* step("checkout", () =>
         workspace({
           repo: input.repo,
           sha: input.sha,
@@ -630,9 +634,7 @@ export const offloadTest = defineRun({
             step(
               `exec-${stage.label}`,
               () =>
-                sandbox.exec({
-                  cwd: dir,
-                  container,
+                execInWorkspace(ws, {
                   command: stage.command,
                   env: { ...secretEnv, ...input.env },
                   timeoutSec: stageTimeoutSec,
@@ -695,7 +697,7 @@ export const offloadTest = defineRun({
               () =>
                 sandbox
                   .exec({
-                    container,
+                    container: ws.container,
                     command: `printf '%s\\n' '${markerLine}'`,
                     timeoutSec: 30,
                   })
@@ -823,9 +825,7 @@ export const offloadTest = defineRun({
       const result = yield* step(
         "exec",
         () =>
-          sandbox.exec({
-            cwd: dir,
-            container,
+          execInWorkspace(ws, {
             command: soleCommand,
             // Per-dispatch `env` wins over a same-named config-store secret —
             // the more specific source overrides the global one.

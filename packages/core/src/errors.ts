@@ -18,6 +18,8 @@ export class CheckoutFailed extends Schema.TaggedError<CheckoutFailed>()("Checko
 export class ExecFailed extends Schema.TaggedError<ExecFailed>()("ExecFailed", {
   exitCode: Schema.Number,
   stderrTail: Schema.String,
+  /** The command never ran: its working directory was gone. `execInWorkspace` repairs this. */
+  workspaceMissing: Schema.optional(Schema.Boolean),
 }) {
   // Read by `runEffect` (step.ts) and folded into the own-property message of
   // the Error thrown at the Workflow boundary — a prototype getter does not

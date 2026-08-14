@@ -59,13 +59,27 @@ Three repo facts the decision has to account for:
   we name instances, not of anything inside the run.
 - **Replay re-executes anything not inside a completed step.** `self-heal-pr.ts:186-202`
   uses `runDetached` + `waitForExit` rather than one long `exec` precisely so a Worker
-  eviction mid-agent does not re-spawn the agent and double-spend the model budget. The
-  container's `sleepAfter = "10m"` (`apps/dispatcher/src/sandbox.ts:60`) exists for the
-  same reason: the container filesystem is shared state *across* durable steps.
+  eviction mid-agent does not re-spawn the agent and double-spend the model budget.
+- **The container filesystem is not durable, and no setting makes it durable.**
+  Cloudflare states it plainly: "All disk is ephemeral. When a Container instance goes to
+  sleep, the next time it is started, it will have a fresh disk as defined by its
+  container image." The platform also guarantees no minimum runtime, restarts an instance
+  that exhausts its memory, and can terminate one when its host restarts. A checkout is
+  therefore an ephemeral SIDE EFFECT of a step whose RESULT is memoized: replay or a
+  container replacement leaves a valid checkpoint pointing at a directory that no longer
+  exists, and the step that would restore it has already "succeeded" so it never re-runs.
+  The container's `sleepAfter = "10m"` (`apps/dispatcher/src/sandbox.ts:60`) narrows the
+  window by keeping an idle container warm between steps; it does not close it, and it
+  does nothing at all when the container dies mid-exec.
+
+  This was observed, not deduced. An `exec` step failed with `HTTP error! status: 500`
+  after 34m51s; its replay reached a fresh, empty container and failed with
+  `working directory '<dir>' was missing at exec time`, as did every attempt after it.
+  Rule 3 below is the response.
 
 ## Decision
 
-Four rules govern how runs use Workflows.
+Five rules govern how runs use Workflows.
 
 **1. One dispatch, one instance, and the instance id is the semantic idempotency key.**
 Every entry point (webhook, Action, schedule, child spawn) names its instance from the
@@ -79,18 +93,38 @@ existing PR/comment before creating it) or structured so replay observes rather 
 repeats (`runDetached` then `waitForExit`, never one indivisible long `exec`). Step
 results are capped at 1 MiB: large outputs go to R2 and the step returns a key.
 
-**3. Hibernation is reserved for bounded human decisions with a named decider and a
+**3. A command whose inputs are fully determined by the workspace spec runs through
+`execInWorkspace`, never a bare `sandbox.exec`.** The workspace has to be rebuildable
+from data that rides the checkpoint, because the directory itself does not survive one.
+`workspace()` returns a `spec` for exactly this, and `execInWorkspace` rebuilds from it
+inside the step that finds the tree gone, then runs the command once more. A step retry
+alone cannot fix this — it re-runs one callback, and the callback is not the one that
+clones.
+
+The qualifier is load-bearing. A re-clone restores the tree the SPEC describes, which is
+the right tree only for a command that reads what was cloned — a test suite, a lint, a
+build. A step that reads a tree an earlier step MUTATED must not use it: re-cloning hands
+`self-heal-pr`'s verify step a clean checkout, so it passes on unmodified code, and hands
+a writeback step nothing to stage. That converts an infra failure into a wrong green,
+which is worse than the red it replaces. Those steps need captured bytes restored, not a
+fresh clone — the `FileRef` capture chokepoint in REWRITE.md — and until that lands they
+carry the exposure knowingly.
+
+`isWorkingDirFailure` (`packages/runtime-cf/src/sandbox-cf.ts`) stays as the backstop for
+both cases: a lost workspace never renders as a phantom lint or test verdict.
+
+**4. Hibernation is reserved for bounded human decisions with a named decider and a
 declared timeout.** `step.waitForEvent` and long sleeps are legitimate when a specific
 person owes a specific answer inside a stated window — release approval is the shape.
 They are not a mechanism for waiting on the world in general.
 
-**4. Long-lived entity lifecycles keep their state in the system of record, and get a
+**5. Long-lived entity lifecycles keep their state in the system of record, and get a
 fresh instance per event.** When the thing being tracked is an external entity that
 humans also act on — a GitHub issue, a PR, a deployment — the authoritative state is
 that entity's own status field (labels, PR state, deployment status), and each webhook
 event starts a short instance that reads state, acts, and writes state back.
 
-Corollary to rules 3 and 4: wall-clock bounds must be written explicitly (`timeoutSec`
+Corollary to rules 4 and 5: wall-clock bounds must be written explicitly (`timeoutSec`
 on exec, `Effect.timeoutFail` around waits, as `waitForPort` already does at
 `sandbox-cf.ts:565-577`). Declaring `maxDurationSec` is documentation, not enforcement,
 until that changes.
@@ -112,7 +146,7 @@ the code the durable design was supposed to remove.
 **Re-entry restarts the work anyway.** Issue retriage re-runs the whole
 reproduce→diagnose→verify→fix pipeline when a comment adds new information. Inside a
 hibernating instance that is either a loop back to the top — an explicit state machine
-again — or killing the instance and starting another, which is rule 4 with extra
+again — or killing the instance and starting another, which is rule 5 with extra
 bookkeeping.
 
 **External state must be authoritative because humans edit it.** Maintainers read and
@@ -145,7 +179,7 @@ anyway.
 - Observability loses "one instance = one entity" — the dashboard groups executions by
   entity instead, and an operator tracing an issue reads its thread plus D1 rows, not one
   instance timeline.
-- `release-notes` stays exactly as it is, and is the reference implementation for rule 3.
+- `release-notes` stays exactly as it is, and is the reference implementation for rule 4.
   Any new hibernating run cites this ADR and names its decider and timeout.
 - Step count and step-result size become design constraints runs are expected to respect,
   not incidental limits discovered in production.

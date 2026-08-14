@@ -102,6 +102,15 @@ export const makeSandboxFake = (
    * exercised. Each matched key is counted down independently across calls.
    */
   launchFailures: Record<string, number> = {},
+  /**
+   * Transient lost-workspace failures, keyed by command-substring → number of
+   * leading `exec` attempts to reject with `ExecFailed.workspaceMissing`.
+   * Models the container being replaced after the checkout step completed:
+   * Cloudflare container disk does not survive a restart, so the tree the run
+   * checkpointed is simply gone. Counted down per key, like `launchFailures`,
+   * so a caller's rebuild-and-retry can be exercised.
+   */
+  workspaceLosses: Record<string, number> = {},
 ): { layer: Layer.Layer<Sandbox>; state: SandboxFakeState } => {
   const state: SandboxFakeState = {
     acquired: [],
@@ -114,6 +123,7 @@ export const makeSandboxFake = (
   const detachedCommands = new Map<string, string>();
   // Mutable per-key countdown of remaining transient launch failures.
   const remainingLaunchFailures = new Map<string, number>(Object.entries(launchFailures));
+  const remainingWorkspaceLosses = new Map<string, number>(Object.entries(workspaceLosses));
 
   const resolve = (command: string): CannedExec | undefined => {
     const key = Object.keys(program).find((k) => command.includes(k));
@@ -136,6 +146,21 @@ export const makeSandboxFake = (
 
     exec: (opts: ExecOpts) => {
       const command = normalizeCommand(opts.command);
+      const lostKey = Object.keys(workspaceLosses).find((k) => command.includes(k));
+      if (lostKey !== undefined) {
+        const remaining = remainingWorkspaceLosses.get(lostKey) ?? 0;
+        if (remaining > 0) {
+          remainingWorkspaceLosses.set(lostKey, remaining - 1);
+          state.execs.push({ command, cwd: opts.cwd, env: opts.env, timeoutSec: opts.timeoutSec });
+          return Effect.fail(
+            new ExecFailed({
+              exitCode: -1,
+              stderrTail: `working directory '${opts.cwd ?? ""}' was missing at exec time`,
+              workspaceMissing: true,
+            }),
+          );
+        }
+      }
       const entry: SandboxFakeState["execs"][number] = {
         command,
         cwd: opts.cwd,

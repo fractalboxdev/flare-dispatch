@@ -263,3 +263,6 @@ Staged mode is webhook-only: a dispatch that passes `command` skips the config
 read and stays single-exec. Stages run sequentially inside one workflow
 instance posting one check-run — they are ordered dependents of one checkout,
 not the parallel independent gates `matrix-fanout` + labelled `check` serve.
+The checkout each stage depends on is rebuilt if the container lost it between
+stages: stages exec through `execInWorkspace`, because container disk does not
+survive a restart (specs/adr/0001-cloudflare-workflows-scope.md rule 3).

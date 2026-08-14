@@ -33,13 +33,22 @@ import type { Env } from "./env";
  * paid a 10-minute idle tail after its last command. Across a CI-shaped
  * workload (hundreds of short runs a day) that tail was ~45% of total spend.
  *
- * `isActivityExpired()` never fires while a request is in-flight (a long quiet
- * `exec` keeps the container awake regardless), and the window restarts when
- * the last request completes — so this only trims the *idle* tail. The primary
+ * `isActivityExpired()` never fires while a request is in-flight — it renews
+ * and returns false while `inflightRequests > 0` (`@cloudflare/containers`
+ * `dist/lib/container.js`), and `containerFetch` increments that before
+ * proxying, so a long quiet `exec` keeps the container awake regardless. The
+ * window restarts when the last request completes, so this only trims the
+ * *idle* tail. The primary
  * teardown is the explicit `destroy()` at the workflow's finalize boundary
  * (workflow.ts), which fires on success/failure/defect/interrupt; this idle
  * window is only the backstop for paths that die before reaching it (Worker
  * eviction, deploy mid-run).
+ *
+ * What this window does NOT do is make the filesystem durable. Cloudflare gives
+ * a container no durable disk, no minimum runtime, and restarts one that runs
+ * out of memory, so the tree can vanish while the container is BUSY — which no
+ * idle setting reaches. `execInWorkspace` is what recovers that; this window
+ * only narrows the idle case below. See ADR-0001 rule 3.
  *
  * Why 10m, not the 2m a cost pass once set: a run's container filesystem is the
  * SHARED state across its durable steps — `step("checkout")` clones into it, a
@@ -52,7 +61,7 @@ import type { Env } from "./env";
  * `offload-test`) then mis-rendered as a red lint/test verdict. Because
  * `destroy()` is the real teardown, a longer idle window costs extra ONLY on the
  * rare paths that skip finalize, so 10m (the SDK default, and the `LEASE_TTL_MS`
- * run-scale) buys durability across normal inter-step gaps at negligible cost.
+ * run-scale) covers normal inter-step gaps at negligible cost.
  * `sandbox-cf.ts` `isWorkingDirFailure` is the honesty backstop for the residual
  * (eviction / replay beyond this window): it re-classifies a lost-workspace exec
  * as a retryable `ExecFailed`, never a phantom finding.
