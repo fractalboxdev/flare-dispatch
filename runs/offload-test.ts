@@ -213,7 +213,7 @@ const TIMEOUT_SEC_DEFAULT = 600;
  */
 const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
-const PLATFORM_RETRIES = 1;
+const PLATFORM_RETRIES = 3;
 
 const RETRY_ON = ["ExecFailed"] as const;
 

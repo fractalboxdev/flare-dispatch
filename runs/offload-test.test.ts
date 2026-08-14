@@ -125,7 +125,7 @@ describe("offload-test", () => {
     return Effect.gen(function* () {
       yield* offloadTest.run(baseInput);
       const execStep = handles.executions.steps.find((st) => st.name === "exec");
-      expect(execStep?.metadata?.["stepOpts.retries"]).toBe(1);
+      expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
       expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
     }).pipe(Effect.provide(layer));
   });
@@ -228,10 +228,10 @@ describe("offload-test", () => {
         const execStep = handles.executions.steps.find((s) => s.name === "exec");
         expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 + 120);
 
-        // One platform retry, and only for `ExecFailed`. A step-level timeout
-        // is raised by the engine, so `retryOn` cannot gate it: a wedged exec
-        // is replayed once. CF's default `limit: 5` would replay it five times.
-        expect(execStep?.metadata?.["stepOpts.retries"]).toBe(1);
+        // Platform retries, and only for `ExecFailed`. A step-level timeout is
+        // raised by the engine, so `retryOn` cannot gate it: a wedged exec is
+        // replayed for the whole budget.
+        expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
         expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
       }).pipe(Effect.provide(layer));
     },
@@ -716,7 +716,7 @@ describe("offload-test staged mode", () => {
         // retry contract as the single exec.
         const execWorkspace = handles.executions.steps.find((s) => s.name === "exec-workspace");
         expect(execWorkspace?.metadata?.["stepOpts.timeoutSec"]).toBe(900 + 120);
-        expect(execWorkspace?.metadata?.["stepOpts.retries"]).toBe(1);
+        expect(execWorkspace?.metadata?.["stepOpts.retries"]).toBe(3);
         expect(execWorkspace?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
         // The suspicious labelled-key-missing fallback is recorded on the
         // stage's step metadata — `workspace` resolved its own key, so only
