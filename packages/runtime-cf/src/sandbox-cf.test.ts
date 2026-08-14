@@ -101,7 +101,8 @@ const { resolveCloneToken } = vi.hoisted(() => ({ resolveCloneToken: vi.fn() }))
 vi.mock("./sandbox-clone-auth", () => ({ resolveCloneToken }));
 
 // Imported AFTER the mock is registered so the Layer binds the mocked SDK.
-const { makeSandboxCloudflareLive, isWorkingDirFailure } = await import("./sandbox-cf");
+const { makeSandboxCloudflareLive, isWorkingDirFailure, STDERR_TAIL_MAX } =
+  await import("./sandbox-cf");
 
 /** A minimal R2 stub that records `put` calls. */
 const makeBucket = () => {
@@ -506,16 +507,15 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
   it.effect("redacts before truncating, so a secret on the 4KB cut leaves no fragment", () =>
     Effect.gen(function* () {
       const secret = "SECRET_TOKEN_VALUE";
-      // Land the secret across the last-4096-char boundary: everything before
-      // the cut is discarded, so a clip-then-redact order leaves its suffix.
-      // The cut keeps the last 4096 chars, so it lands inside the secret only
-      // when the text AFTER it is just under 4096. Half the secret is then in
-      // the discarded prefix and half survives.
-      const lead = "x".repeat(100);
-      const trail = "y".repeat(4 * 1024 - Math.floor(secret.length / 2));
+      const discardedPrefix = "x".repeat(100);
+      const trailThatPutsTheCutMidSecret = "y".repeat(
+        STDERR_TAIL_MAX - Math.floor(secret.length / 2),
+      );
       currentBox = makeFakeBox({ proc: null });
       currentBox.exec = vi.fn(async () => {
-        throw Object.assign(new Error("boom"), { stderr: `${lead}${secret}${trail}` });
+        throw Object.assign(new Error("boom"), {
+          stderr: `${discardedPrefix}${secret}${trailThatPutsTheCutMidSecret}`,
+        });
       });
       const { bucket } = makeBucket();
       const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
@@ -526,11 +526,9 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       expect(Exit.isFailure(exit)).toBe(true);
       const rendered = JSON.stringify(exit);
       expect(rendered).not.toContain(secret);
-      // Any run of 8+ chars of the secret — a clip-then-redact order leaves
-      // its suffix, which is what this is looking for.
-      const MIN = 8;
-      for (let i = 0; i + MIN <= secret.length; i++) {
-        expect(rendered).not.toContain(secret.slice(i, i + MIN));
+      const FRAGMENT = 8;
+      for (let i = 0; i + FRAGMENT <= secret.length; i++) {
+        expect(rendered).not.toContain(secret.slice(i, i + FRAGMENT));
       }
     }),
   );

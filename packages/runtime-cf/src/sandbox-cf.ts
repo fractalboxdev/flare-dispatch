@@ -97,10 +97,9 @@ const inlineTail = (s: string, viewerUrl?: string): string =>
       }]…\n${s.slice(s.length - INLINE_TAIL_CHARS)}`;
 
 /**
- * Scrub `ExecOpts.redactValues` from captured text — applied to BOTH the full
- * R2 log and the inline checkpoint tail, before either is written, so an
- * injected credential a command echoes never reaches a persisted log. Exact-
- * substring match; empty/omitted values is a no-op.
+ * Scrub `ExecOpts.redactValues` from captured text before it is persisted, so
+ * an injected credential a command echoes never reaches a durable surface.
+ * Exact-substring match; empty/omitted values is a no-op.
  */
 const redact = (text: string, values?: readonly string[]): string => {
   if (values === undefined || values.length === 0) return text;
@@ -139,7 +138,7 @@ const redactCloneFailure = (cause: unknown, token: string): Error => {
  * on `ExecFailed.message`, which Workflows persists as the attempt record).
  * Prefer stdout/stderr when the thrown error carries them; else the message.
  */
-const STDERR_TAIL_MAX = 4 * 1024;
+export const STDERR_TAIL_MAX = 4 * 1024;
 const diagnosticTail = (cause: unknown, redactValues?: readonly string[]): string => {
   let raw: string;
   if (cause instanceof Error) {
