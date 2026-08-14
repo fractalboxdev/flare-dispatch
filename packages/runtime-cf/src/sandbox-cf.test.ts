@@ -502,6 +502,36 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       expect(logBody).not.toContain("super-secret");
     }),
   );
+
+  // The success path redacted; the FAILURE path did not. A thrown SDK error can
+  // carry the command's own stdout/stderr, and that message is persisted — it
+  // reaches the Workflow record and the `steps` row.
+  it.effect("redactValues scrubs a thrown error's diagnostic too", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      const thrown = Object.assign(new Error("launch failed"), {
+        stderr: "fatal: token super-secret rejected",
+      });
+      currentBox.exec = vi.fn(async () => {
+        throw thrown;
+      });
+      const { bucket } = makeBucket();
+      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({
+          command: "wrangler deploy",
+          cwd: "/w",
+          env: {},
+          redactValues: ["super-secret"],
+        }),
+      ).pipe(Effect.provide(layer), Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      const rendered = JSON.stringify(exit);
+      expect(rendered).not.toContain("super-secret");
+      expect(rendered).toContain("***");
+    }),
+  );
 });
 
 // (E) gitClone credential handling. A cron tick carries no GitHub payload and

@@ -352,6 +352,30 @@ describe("logs", () => {
     expect(r2.puts[0]?.body).not.toContain("cf-tok-secret");
     expect(Exit.isSuccess(exit) && exit.value.stdout).toContain("***");
   });
+
+  // The failure path persists too: `ExecFailed.stderrTail` reaches the Workflow
+  // record and `steps.error_message`, and is served from the execution API.
+  it("scrubs them from a thrown error's diagnostic as well", async () => {
+    const f = facade({
+      execUnderGrant: async () => {
+        throw new Error("deploy failed: token cf-tok-secret rejected");
+      },
+    });
+    const r2 = bucket();
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(
+        Effect.flatMap(SandboxTag, (s) =>
+          s.exec({ command: "wrangler deploy", redactValues: ["cf-tok-secret"] }),
+        ),
+        layerFor(f.api, r2.binding),
+      ),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    const rendered = JSON.stringify(exit);
+    expect(rendered).not.toContain("cf-tok-secret");
+    expect(rendered).toContain("***");
+  });
 });
 
 describe("the surfaces the facade does not serve", () => {

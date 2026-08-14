@@ -650,7 +650,10 @@ export const makeSandboxCloudflareLive = (
           }
           return new ExecFailed({
             exitCode: -1,
-            stderrTail: diagnosticTail(cause),
+            // Redacted like the success path (see above): a thrown SDK error
+            // can carry the command's own stdout/stderr, which is where an
+            // injected secret would be.
+            stderrTail: redact(diagnosticTail(cause), redactValues),
           });
         },
       });
