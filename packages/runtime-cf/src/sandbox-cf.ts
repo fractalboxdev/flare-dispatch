@@ -650,8 +650,6 @@ export const makeSandboxCloudflareLive = (
           }
           return new ExecFailed({
             exitCode: -1,
-            // `diagnosticTail` joins the command's own stdout/stderr, and
-            // `execFailedMd` publishes this to the check-run summary.
             stderrTail: redact(diagnosticTail(cause), redactValues),
           });
         },
