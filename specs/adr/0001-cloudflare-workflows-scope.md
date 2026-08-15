@@ -60,12 +60,13 @@ Three repo facts the decision has to account for:
 - **Replay re-executes anything not inside a completed step.** `self-heal-pr.ts:186-202`
   uses `runDetached` + `waitForExit` rather than one long `exec` precisely so a Worker
   eviction mid-agent does not re-spawn the agent and double-spend the model budget. The
-  container's `sleepAfter = "10m"` (`apps/dispatcher/src/sandbox.ts:60`) exists for the
-  same reason: the container filesystem is shared state *across* durable steps.
+  container's `sleepAfter = "10m"` (`apps/dispatcher/src/sandbox.ts:60`) narrows the idle
+  window in which a container is reclaimed between steps. It does not make the container
+  filesystem durable, and nothing does — see rule 5.
 
 ## Decision
 
-Four rules govern how runs use Workflows.
+Five rules govern how runs use Workflows.
 
 **1. One dispatch, one instance, and the instance id is the semantic idempotency key.**
 Every entry point (webhook, Action, schedule, child spawn) names its instance from the
@@ -89,6 +90,24 @@ fresh instance per event.** When the thing being tracked is an external entity t
 humans also act on — a GitHub issue, a PR, a deployment — the authoritative state is
 that entity's own status field (labels, PR state, deployment status), and each webhook
 event starts a short instance that reads state, acts, and writes state back.
+
+**5. Container disk is not durable state, so a step re-establishes what it needs.** A
+checkout does not survive between durable steps by right. Cloudflare states the
+mechanism plainly: "All disk is ephemeral. When a Container instance goes to sleep, the
+next time it is started, it will have a fresh disk as defined by its container image"
+([Containers FAQ](https://developers.cloudflare.com/containers/faq/)). The same pages
+give no guaranteed minimum runtime, restart an out-of-memory instance, and terminate
+instances on host restarts. A `checkout` step that already completed is never re-run by
+replay, so every attempt after a container swap hits an empty disk. `ensureWorkspace`
+(`packages/core/src/primitives/workspace.ts`) is the repair, and it belongs INSIDE the
+retryable step — a rebuild the retry does not re-run is not a rebuild.
+
+Scoped deliberately. A re-clone restores the tree the *spec* describes, which is right
+for a suite, a lint or a build, and wrong for a step that reads a tree an earlier step
+mutated. Applied to `self-heal-pr`'s verify step it would hand back a clean checkout and
+pass on unmodified code, turning an infra failure into a wrong green — worse than the red
+it replaces. Those steps need captured bytes restored, which is the `FileRef` chokepoint
+still open in `REWRITE.md`.
 
 Corollary to rules 3 and 4: wall-clock bounds must be written explicitly (`timeoutSec`
 on exec, `Effect.timeoutFail` around waits, as `waitForPort` already does at

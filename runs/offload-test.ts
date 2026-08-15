@@ -258,9 +258,9 @@ const PLATFORM_RETRIES = 3;
  * the one that was missing, and its absence made the whole retry policy inert
  * on the failure it was written for.
  *
- * A step body here can fail in exactly two typed ways — `ExecFailed` and
- * `ExecTimeout` — because a command that RUNS and exits non-zero comes back as a
- * normal `ExecResult`. When the platform kills the step outright, no Effect
+ * A step body here fails in three typed ways — `ExecFailed`, `ExecTimeout` and
+ * `CheckoutFailed` — because a command that RUNS and exits non-zero comes back as
+ * a normal `ExecResult`. When the platform kills the step outright, no Effect
  * `Cause` survives the Workflow boundary, `errorTagOf` falls back to
  * `"StepFailed"`, and a `retryOn` listing only `ExecFailed` classified that as
  * non-retryable — so the one failure mode that is purely the platform's was the
@@ -271,11 +271,23 @@ const PLATFORM_RETRIES = 3;
  * consumer's heaviest stage peaks at 2.2 GiB of 11.9 GiB with 8.4 GB of disk
  * free, so this is not resource pressure being papered over.
  *
+ * `CheckoutFailed` is the third because `ensureWorkspace` now re-clones INSIDE
+ * this step. The clone runs in exactly the weather that made the rebuild
+ * necessary — a container the platform just replaced — so its own transient
+ * failure would otherwise end the step non-retryably, one call short of the
+ * recovery it was invoked to perform.
+ *
  * `ExecTimeout` stays OUT, deliberately. Its tag survives the boundary intact
  * whenever there is a Cause to read, so it lands here as itself rather than as
  * `StepFailed` — and a command that outran its ceiling will outrun it again.
+ *
+ * `ContainerLaunchFailed` and `ContainerBusy` also reach here from
+ * `ensureWorkspace`'s `sandbox.acquire`, and stay OUT for now: `acquire` already
+ * waits to the layer's ceiling before raising `ContainerBusy`, so retrying it
+ * here stacks a second wait on top of admission control rather than recovering
+ * anything. That coupling deserves its own change, not a line in this one.
  */
-const RETRY_ON = ["ExecFailed", "StepFailed"] as const;
+const RETRY_ON = ["ExecFailed", "StepFailed", "CheckoutFailed"] as const;
 
 const stepTimeoutFor = (execTimeoutSec: number): number =>
   execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC;
