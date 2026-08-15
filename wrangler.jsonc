@@ -88,6 +88,13 @@
     // Per-run egress rollout position is a SEPARATE decision, in
     // apps/dispatcher/src/grant-catalog.ts.
     "SUBSTRATE_BACKEND": "off",
+
+    // `"off"` stops the container-stop records (apps/dispatcher/src/container-stop.ts)
+    // being written to R2; the log line is unaffected. Declared here rather than
+    // left to default so the switch is greppable and diffable — turning it off
+    // is still a deploy, so what this buys is a reviewed one-line config change
+    // instead of a code revert.
+    "CONTAINER_STOP_RECORDS": "on",
   },
 
   // The substrate facade (apps/substrate/specs/adr/0003-facade-only-consumption.md).
