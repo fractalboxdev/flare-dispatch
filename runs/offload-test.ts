@@ -251,16 +251,15 @@ const STEP_TIMEOUT_HEADROOM_SEC = 120;
 const PLATFORM_RETRIES = 3;
 
 /**
- * The classes a stage step retries — both of which are the PLATFORM, never a
+ * The classes a stage step retries — all of which are the PLATFORM, never a
  * verdict.
  *
  * `ExecFailed` is the obvious one: the command could not run. `StepFailed` is
  * the one that was missing, and its absence made the whole retry policy inert
  * on the failure it was written for.
  *
- * A step body here fails in three typed ways — `ExecFailed`, `ExecTimeout` and
- * `CheckoutFailed` — because a command that RUNS and exits non-zero comes back as
- * a normal `ExecResult`. When the platform kills the step outright, no Effect
+ * A command that RUNS and exits non-zero comes back as a normal `ExecResult`, so
+ * no tag listed here can carry one. When the platform kills the step outright, no Effect
  * `Cause` survives the Workflow boundary, `errorTagOf` falls back to
  * `"StepFailed"`, and a `retryOn` listing only `ExecFailed` classified that as
  * non-retryable — so the one failure mode that is purely the platform's was the
@@ -276,6 +275,16 @@ const PLATFORM_RETRIES = 3;
  * necessary — a container the platform just replaced — so its own transient
  * failure would otherwise end the step non-retryably, one call short of the
  * recovery it was invoked to perform.
+ *
+ * `CheckoutFailed` is a catch-all over the whole clone body, and several of the
+ * failures it wraps are deterministic: a bad sha, a repo that is gone, the
+ * facade's pinned-recipe mismatch (`sandbox-facade.ts:277-287`). Retrying those
+ * would be four attempts at something that cannot succeed. What keeps that off
+ * this step is the sequence, not the tag: the only clone reachable from here is
+ * `ensureWorkspace` re-cloning the SAME repo and sha that the `checkout` step
+ * already cloned successfully earlier in this run. A deterministic clone failure
+ * would have ended the run at `checkout`, before any of this. What survives that
+ * filter is transient, plus a credential that expired mid-run.
  *
  * `ExecTimeout` stays OUT, deliberately. Its tag survives the boundary intact
  * whenever there is a Cause to read, so it lands here as itself rather than as
@@ -856,7 +865,8 @@ export const offloadTest = defineRun({
               // `printf '%s\n' '<line>'`, so free vendor text could close the
               // quote. A `[A-Za-z0-9_-]` id and a signed integer cannot.
               const rendered = Option.match(Cause.failureOption(exit.cause), {
-                onSome: (f) => `${String((f as { cause?: unknown }).cause ?? "")} ${String((f as { message?: unknown }).message ?? "")}`,
+                onSome: (f) =>
+                  `${String((f as { cause?: unknown }).cause ?? "")} ${String((f as { message?: unknown }).message ?? "")}`,
                 onNone: () => "",
               });
               const reference = /reference\s*=\s*([A-Za-z0-9_-]{1,64})/.exec(rendered)?.[1];

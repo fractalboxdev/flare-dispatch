@@ -168,6 +168,14 @@ anyway.
   Any new hibernating run cites this ADR and names its decider and timeout.
 - Step count and step-result size become design constraints runs are expected to respect,
   not incidental limits discovered in production.
+- Rule 5 costs one `test -d` probe per retryable step on the happy path, and a clone plus
+  install when the probe misses. `CheckoutFailed` joins the retried set in those steps,
+  because the repair's own clone must survive the weather that made it necessary.
+- Rule 5 is not yet repo-wide. `check`, `oxlint` and `offload-test` call `ensureWorkspace`;
+  `cdp-acceptance`, `matrix-fanout`, `playwright-e2e`, `playwright-demo`, `pr-review`,
+  `refresh-fixtures`, `spec-drift-pr`, `worker-deploy`, `org-spec-audit` and
+  `release-notes` still call `workspace()` bare. Each is either mechanically portable or
+  in the mutated-tree class the rule excludes, and that call is per run.
 
 ## Revisit triggers
 
@@ -182,3 +190,8 @@ anyway.
   to keep entity state.
 - `maxDurationSec` becomes enforced, or Workflows introduces an instance-level wall-clock
   bound, changing what rule 2's corollary has to do by hand.
+- The `FileRef` capture-and-restore chokepoint lands, making the mutated-tree case
+  serviceable. Rule 5's exclusion exists only because a re-clone is the wrong repair
+  there, and restoring captured bytes would let those steps recover too.
+- Containers gain durable or reattachable disk, which would retire rule 5 rather than
+  extend it.

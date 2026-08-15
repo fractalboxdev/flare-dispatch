@@ -185,16 +185,6 @@ interface RawExecResult {
  * keeps the container warm across the inter-step gap so this rarely fires; this
  * is the honesty backstop for the residual eviction/replay cases.)
  */
-/**
- * Marks the throw raised for a vanished working directory, so the `catch` below
- * classifies it without re-reading the message it just wrote. A symbol, so it
- * cannot collide with a property an SDK error carries.
- */
-const WORKSPACE_MISSING: unique symbol = Symbol("workspaceMissing");
-
-const isWorkspaceMissingThrow = (cause: unknown): boolean =>
-  typeof cause === "object" && cause !== null && WORKSPACE_MISSING in cause;
-
 export const isWorkingDirFailure = (
   r: { readonly exitCode: number; readonly stdout: string; readonly stderr: string },
   cwd: string | undefined,
@@ -627,13 +617,22 @@ export const makeSandboxCloudflareLive = (
           // fold a phantom non-zero result a `failOnNonZeroExit` run would render
           // as a lint/test verdict (see `isWorkingDirFailure`). The throw is
           // classified by the `catch` below.
+          // Classified HERE rather than in the `catch`, which reads the message
+          // and would see the `cwd` this one embeds: a checkout under a path
+          // like `/workspace/request-timeout` matches its timeout regex and
+          // lands as `ExecTimeout`, a class `RETRY_ON` excludes on purpose — so
+          // the step would die unretried and `ensureWorkspace` never get its
+          // second chance.
           if (isWorkingDirFailure(result, cwd)) {
-            throw Object.assign(
-              new Error(
-                `working directory '${cwd}' was missing at exec time — the checkout did not survive to this step (container recycled). stderr: ${stderr.slice(0, 200)}`,
+            throw new ExecFailed({
+              exitCode: -1,
+              stderrTail: diagnosticTail(
+                new Error(
+                  `working directory '${cwd}' was missing at exec time — the checkout did not survive to this step (container recycled). stderr: ${stderr.slice(0, 200)}`,
+                ),
+                redactValues,
               ),
-              { [WORKSPACE_MISSING]: true },
-            );
+            });
           }
           // Only a bounded TAIL is inlined in the step's return value, so the
           // Workflow checkpoint stays small (see `inlineTail`). When a viewer
@@ -654,17 +653,8 @@ export const makeSandboxCloudflareLive = (
           // generic launch failure. Prefer any stdout/stderr the throw carried
           // (some SDK errors attach them); else the Error message — this is
           // what Workflows persists via ExecFailed.message (#88).
-          // Ahead of the message regex. The marked throw embeds `cwd` and 200
-          // chars of stderr, so a checkout under a path like
-          // `/workspace/request-timeout` matches that regex and lands as
-          // `ExecTimeout` — which `RETRY_ON` deliberately excludes, so the step
-          // dies unretried and `ensureWorkspace` never gets its second chance.
-          if (isWorkspaceMissingThrow(cause)) {
-            return new ExecFailed({
-              exitCode: -1,
-              stderrTail: diagnosticTail(cause, redactValues),
-            });
-          }
+          // Already classified at the throw site, message-independent.
+          if (cause instanceof ExecFailed) return cause;
           const message = cause instanceof Error ? cause.message : String(cause);
           if (/timed?\s*out|timeout/i.test(message)) {
             return new ExecTimeout({

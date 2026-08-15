@@ -107,7 +107,15 @@ const TIMEOUT_SEC_DEFAULT = 300;
  * `CheckoutFailed` is included because `ensureWorkspace` re-clones inside this
  * step, in the same weather that destroyed the checkout. A transient clone
  * failure there would end the step non-retryably, one call short of the
- * recovery it was invoked to perform.
+ * recovery it was invoked to perform. It is a catch-all that also wraps
+ * deterministic failures, and what keeps those off this step is the sequence
+ * rather than the tag — see the longer note in `offload-test.ts`.
+ *
+ * `ContainerLaunchFailed` and `ContainerBusy` reach here too, from
+ * `ensureWorkspace`'s `sandbox.acquire`, and stay OUT: `acquire` already waits
+ * to the layer's ceiling before raising `ContainerBusy`, so retrying it here
+ * stacks a second wait on top of admission control rather than recovering
+ * anything.
  */
 const PLATFORM_RETRIES = 3;
 const RETRY_ON = ["ExecFailed", "StepFailed", "CheckoutFailed"] as const;
