@@ -251,8 +251,7 @@ const STEP_TIMEOUT_HEADROOM_SEC = 120;
 const PLATFORM_RETRIES = 3;
 
 /**
- * The classes a stage step retries — all of which are the PLATFORM, never a
- * verdict.
+ * The classes a stage step retries — never a verdict.
  *
  * `ExecFailed` is the obvious one: the command could not run. `StepFailed` is
  * the one that was missing, and its absence made the whole retry policy inert
@@ -280,7 +279,8 @@ const PLATFORM_RETRIES = 3;
  * failures ride it too — a bad sha, a repo that is gone. On the isolated path a
  * stage's clone is the run's FIRST, with no earlier `checkout` to have caught
  * those, so this knowingly spends the retry budget on some failures that cannot
- * succeed. The cost is bounded by the backoff; the alternative loses the repair.
+ * succeed — four clone attempts plus backoff, times the stages running at once.
+ * The alternative loses the repair on every path, so it is the worse trade.
  *
  * `ExecTimeout` stays OUT, deliberately. Its tag survives the boundary intact
  * whenever there is a Cause to read, so it lands here as itself rather than as
