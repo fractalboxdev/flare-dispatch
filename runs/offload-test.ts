@@ -632,6 +632,13 @@ export const offloadTest = defineRun({
             "warn",
             `offload-test: the checkout at ${current.dir} is gone — the container was recycled between steps. Re-cloning before the stage runs.`,
           );
+          // The rebuilt workspace is returned, not written back over `shared`.
+          // On this runtime it is value-identical — `acquire` hands back the
+          // per-execution sandbox id and the clone lands at the same
+          // `/workspace/<repo>` — so there is nothing to carry forward, and the
+          // next stage's probe passes because the checkout is there again.
+          // Threading a mutable workspace through concurrent stages would buy
+          // nothing here and cost a shared cell to synchronise.
           return yield* acquireWorkspace();
         });
 
