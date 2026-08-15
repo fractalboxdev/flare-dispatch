@@ -622,14 +622,20 @@ export const offloadTest = defineRun({
       // SKIPPED for isolated stages: each acquires its own workspace inside its
       // own retryable step, so a shared one here would be a container paid for
       // and never used.
-      const acquireWorkspace = () =>
+      // `key` is what makes isolated stages actually isolated. Without it every
+      // stage's `workspace()` resolved to the execution's single container and
+      // they raced to wipe each other's checkout — `git clone` clears its target
+      // directory first, so five stages produced five `CheckoutFailed`s in under
+      // five seconds. Unkeyed (the shared-container mode) is unchanged.
+      const acquireWorkspace = (key?: string) =>
         workspace({
           repo: input.repo,
           sha: input.sha,
           image: input.image,
           install,
+          ...(key !== undefined ? { key } : {}),
         });
-      const shared = isolatedStages ? undefined : yield* step("checkout", acquireWorkspace);
+      const shared = isolatedStages ? undefined : yield* step("checkout", () => acquireWorkspace());
 
       // load-secrets — resolve the named credentials from the config store
       // into the env injected below. Called INLINE, not in a `step`: secrets
@@ -736,6 +742,31 @@ export const offloadTest = defineRun({
               readonly errorClass: string;
             };
 
+        // Give a keyed container back as soon as its stage is finished.
+        //
+        // `acquire` derives an id and provisions nothing, so re-deriving it here
+        // is free and replay-safe — no handle has to survive the step boundary.
+        // Best-effort: a destroy that fails costs the `sleepAfter` window, and
+        // must never become the stage's verdict.
+        //
+        // Isolated stages only. The shared container is the execution's own and
+        // the dispatcher's end-of-run teardown owns it; destroying it here would
+        // take the next stage's checkout with it.
+        const reapStageContainer = (label: string) =>
+          isolatedStages
+            ? sandbox
+                .acquire({ key: label })
+                .pipe(
+                  Effect.flatMap((container) => sandbox.destroy({ container })),
+                  Effect.catchAllCause((cause) =>
+                    io.log(
+                      "warn",
+                      `offload-test: could not destroy stage \`${label}\`'s container (sleepAfter reaps) — ${Cause.pretty(cause).slice(0, 200)}`,
+                    ),
+                  ),
+                )
+            : Effect.void;
+
         const runStage = (stage: ResolvedStage) =>
           Effect.gen(function* () {
             // Labelled rung ?? dispatch value ?? unlabelled rung ?? default. The
@@ -771,7 +802,7 @@ export const offloadTest = defineRun({
                     // here for the same reason — see `ensureWorkspace`.
                     const ws =
                       shared === undefined
-                        ? yield* acquireWorkspace()
+                        ? yield* acquireWorkspace(stage.label)
                         : yield* ensureWorkspace({
                             current: shared,
                             repo: input.repo,
@@ -959,7 +990,18 @@ export const offloadTest = defineRun({
               logUri,
               line: `- ✓ \`${stage.label}\` — ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
             } as const;
-          });
+          }).pipe(
+            // On EVERY exit — each of the four outcomes, an interrupt when a
+            // peer fails, a defect. Enumerating the return paths worked and was
+            // the wrong shape: it is correct only for as long as nobody adds a
+            // fifth outcome, and the cost of forgetting is a container idling
+            // out `sleepAfter` on the bill. A finalizer cannot be forgotten.
+            //
+            // After the outcome, not before: everything the outcome carries is
+            // already in R2 by then, so the container is genuinely finished
+            // with.
+            Effect.ensuring(reapStageContainer(stage.label)),
+          );
 
         const deadFailure = (
           outcome: Extract<StageOutcome, { kind: "dead" }>,

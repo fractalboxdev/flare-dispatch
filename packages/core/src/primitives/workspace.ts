@@ -23,9 +23,24 @@ export const workspace = (opts: {
   sha: string;
   image?: string; // container image override
   install?: boolean; // run installCached after the clone
+  /**
+   * Put this workspace in a container of its own, named by this key.
+   *
+   * Omitted, the checkout lands in the execution's single container, which is
+   * what one workspace per run wants. Named, it lands in a second container —
+   * the difference between two workspaces and two names for one, since
+   * `git clone` clears its target directory and a shared container means the
+   * second checkout deletes the first.
+   *
+   * The container is the caller's to `destroy`; see `sandbox.acquire`.
+   */
+  key?: string;
 }) =>
   Effect.gen(function* () {
-    const container = yield* sandbox.acquire({ image: opts.image });
+    const container = yield* sandbox.acquire({
+      ...(opts.image !== undefined ? { image: opts.image } : {}),
+      ...(opts.key !== undefined ? { key: opts.key } : {}),
+    });
     const dir = yield* sandbox.git.clone({
       repo: opts.repo,
       sha: opts.sha,
@@ -64,6 +79,7 @@ export const ensureWorkspace = (opts: {
   sha: string;
   image?: string;
   install?: boolean;
+  key?: string;
 }) =>
   Effect.gen(function* () {
     const probe = yield* sandbox.exec({

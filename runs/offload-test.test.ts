@@ -1142,11 +1142,21 @@ describe("offload-test isolated stages", () => {
         expect(stepNames).toContain("exec-a");
         expect(stepNames).toContain("exec-b");
 
-        // One acquire + one clone PER STAGE, both inside the stage's own
-        // retryable step. That placement is the point: a platform retry after a
-        // container death re-runs the acquire and the clone, so the command
-        // does not land on a fresh disk with no checkout.
-        expect(handles.sandbox.acquired).toHaveLength(2);
+        // One container PER STAGE, named by the stage — and the clone inside the
+        // stage's own retryable step. That placement is the point: a platform
+        // retry after a container death re-runs the acquire and the clone, so
+        // the command does not land on a fresh disk with no checkout.
+        //
+        // Counted by DISTINCT KEY rather than by call: `acquire` derives an id
+        // and provisions nothing, so the reaper re-deriving it to destroy it is
+        // a second call to the same container, not a second container.
+        expect(new Set(handles.sandbox.acquired.map((x) => x.key))).toEqual(
+          new Set(["a", "b"]),
+        );
+        // And each one is given back rather than left to idle out `sleepAfter`.
+        expect(new Set(handles.sandbox.destroyed)).toEqual(
+          new Set(["fake-container:a", "fake-container:b"]),
+        );
         expect(handles.sandbox.clones).toEqual([
           { repo: "owner/name", sha: "abc123" },
           { repo: "owner/name", sha: "abc123" },
@@ -1166,6 +1176,30 @@ describe("offload-test isolated stages", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it.effect("a stage whose workspace never comes up still gives its container back", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        // The stage dies before it ever runs its command — the shape a failed
+        // acquire/clone/install takes. Enumerated cleanup would have missed it.
+        "run-a": { fail: "ExecFailed", exitCode: -1, stderrTail: "container died" },
+        "run-b": { exitCode: 0 },
+      },
+      config: {
+        // Two stages, because concurrency is clamped to the stage count — one
+        // stage is never isolated however high the knob goes.
+        "offload-test.stages:owner/name": "a,b",
+        "offload-test.command:owner/name:a": "run-a",
+        "offload-test.command:owner/name:b": "run-b",
+        "offload-test.stageConcurrency:owner/name": "2",
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.exit(offloadTest.run(webhookInput));
+      expect(handles.sandbox.destroyed).toContain("fake-container:a");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("a red stage does not skip its peers — every stage runs, then the run reports", () => {
     const { layer, handles } = makeCFRuntimeTest({
@@ -1334,7 +1368,7 @@ describe("offload-test isolated stages", () => {
       yield* offloadTest.run(webhookInput);
       // Two stages can never need more than two containers; asking for 16 is a
       // typo, and honouring it would be a bill rather than a speed-up.
-      expect(handles.sandbox.acquired).toHaveLength(2);
+      expect(new Set(handles.sandbox.acquired.map((x) => x.key))).toEqual(new Set(["a", "b"]));
     }).pipe(Effect.provide(layer));
   });
 });

@@ -319,10 +319,24 @@ export const makeSandboxCloudflareLive = (
   // keys keep the raw `executionId` for traceability. See preview-sandbox-id.ts.
   const sandboxId = previewSafeSandboxId(executionId);
 
-  // The per-execution sandbox client. `getSandbox` is cheap — the container is
-  // provisioned lazily on first use — so resolving it once per Layer build is
-  // correct (one container per execution).
-  const box = getSandbox(ns, sandboxId);
+  // The client for a given handle — the execution's own container when a caller
+  // names none.
+  //
+  // This used to be one client resolved at Layer build, on the reasoning that
+  // there is one container per execution. That reasoning was circular: `exec`
+  // ignored the `container` handle it was passed, so a run COULD not have two
+  // containers, so one client was enough. A run that acquired twice got the
+  // same id back and its two acquisitions raced for one filesystem —
+  // `git clone` wipes its target directory first, so five "isolated" stages
+  // wiped each other's checkout and all five died `CheckoutFailed` in seconds.
+  //
+  // `getSandbox` is cheap (the container is provisioned lazily on first use),
+  // so resolving per call costs nothing and makes the handle mean what every
+  // signature in `SandboxService` already said it meant. The cache and artifact
+  // layers have always routed by `container.id`; this brings the sandbox layer
+  // in line with them.
+  const boxFor = (container?: Container): Sandbox => getSandbox(ns, container?.id ?? sandboxId);
+
 
   // `exec` log keys are unique within a run: the first exec is `exec.ndjson`
   // (the name the plan's acceptance pins), subsequent execs `exec-2.ndjson`, …
@@ -366,10 +380,13 @@ export const makeSandboxCloudflareLive = (
    * already vanished) — a capture failure must never mask the original error,
    * so every step is swallowed.
    */
-  const captureDetachedLog = (handleId: string): Effect.Effect<string | undefined> =>
+  const captureDetachedLog = (
+    handleId: string,
+    container?: Container,
+  ): Effect.Effect<string | undefined> =>
     Effect.promise(async () => {
       try {
-        const proc = await box.getProcess(handleId);
+        const proc = await boxFor(container).getProcess(handleId);
         if (proc === null) return undefined;
         const logs = await proc.getLogs();
         const logPath = nextLogKey();
@@ -412,11 +429,19 @@ export const makeSandboxCloudflareLive = (
    * being absent IS the desired end state; and the result is then VERIFIED
    * in-shell, without the URL ever being emitted (see below).
    */
-  const scrubCloneCredential = async (targetDir: string, originUrl: string): Promise<void> => {
+  const scrubCloneCredential = async (
+    targetDir: string,
+    originUrl: string,
+    // The container holding the checkout being scrubbed. A scrub that ran
+    // against the execution's own container while the clone landed in a keyed
+    // one would report success having removed nothing.
+    container?: Container,
+  ): Promise<void> => {
     const dir = shellQuote(targetDir);
     const url = shellQuote(originUrl);
+    const target = boxFor(container);
 
-    const setUrl = await box.exec(`git -C ${dir} remote set-url origin ${url}`);
+    const setUrl = await target.exec(`git -C ${dir} remote set-url origin ${url}`);
     if (setUrl.exitCode !== 0) {
       throw new Error(
         `clone-credential scrub of ${targetDir} failed: 'git remote set-url' exited ${setUrl.exitCode} — refusing to hand the workload a checkout still holding an installation token: ${setUrl.stderr}`,
@@ -424,7 +449,7 @@ export const makeSandboxCloudflareLive = (
     }
 
     // Tolerant by design: these no-op when the section/key was never written.
-    await box.exec(
+    await target.exec(
       [
         `git -C ${dir} config --local --remove-section credential || true`,
         `git -C ${dir} config --local --unset-all http.https://github.com/.extraheader || true`,
@@ -442,7 +467,7 @@ export const makeSandboxCloudflareLive = (
     // credential must not be emitted to prove it was removed. So the URL is
     // captured by a shell assignment, matched by `case`, and only an exit code
     // crosses back: 3 = could not read the remote, 4 = a credential survived.
-    const verify = await box.exec(
+    const verify = await target.exec(
       `url=$(git -C ${dir} config --local --get remote.origin.url) || exit 3; case "$url" in *@*) exit 4;; esac`,
     );
     if (verify.exitCode !== 0) {
@@ -458,12 +483,44 @@ export const makeSandboxCloudflareLive = (
 
   const service: SandboxService = {
     // No explicit acquire in the SDK — the container is provisioned lazily.
-    // V0 = one container per execution; the handle is the normalised sandbox
-    // id (NOT the raw executionId) so the cache + artifact layers, which call
-    // `getSandbox(ns, container.id)`, route to the same DO as `box` above.
-    acquire: () => Effect.succeed({ id: sandboxId } satisfies Container),
+    //
+    // Unkeyed, this is the execution's own container: the normalised sandbox id
+    // (NOT the raw executionId) so the cache + artifact layers, which call
+    // `getSandbox(ns, container.id)`, route to the same DO.
+    //
+    // Keyed, it is a SECOND container for the same execution. The id runs
+    // through the same normalisation, over `<executionId>:<key>`, so it
+    // inherits the whole budget: DNS-safe, ≤ 40 chars, and digested rather than
+    // truncated when it does not fit — which is what keeps two keys of one
+    // execution, and the same key of two executions, from colliding onto one
+    // filesystem. See preview-sandbox-id.ts for what tail-truncation cost when
+    // that was got wrong.
+    //
+    // Nothing here provisions or leases: a keyed container costs nothing until
+    // something execs in it, and it is the caller's to `destroy` — the
+    // dispatcher's end-of-run teardown knows the execution's own id and cannot
+    // know what a run named.
+    acquire: (opts) =>
+      Effect.succeed({
+        id:
+          opts.key === undefined
+            ? sandboxId
+            : previewSafeSandboxId(`${executionId}:${opts.key}`),
+      } satisfies Container),
 
-    gitClone: ({ repo, sha }) =>
+    // Best-effort and idempotent — destroying a container that was never
+    // provisioned, or is already gone, is a success. A teardown failure must
+    // never become the run's verdict; `sleepAfter` is the backstop.
+    destroy: ({ container }) =>
+      Effect.promise(async () => {
+        try {
+          await boxFor(container).destroy();
+        } catch {
+          /* already gone, or never provisioned */
+        }
+      }),
+
+    gitClone: ({ repo, sha, container }) =>
       Effect.tryPromise({
         try: async () => {
           const targetDir = `/workspace/${repo.split("/").pop() ?? "repo"}`;
@@ -521,7 +578,7 @@ export const makeSandboxCloudflareLive = (
           // `git clone` into a non-empty directory fails rather than merging,
           // so this is also what keeps a reused container from erroring on
           // checkout instead of running.
-          const clear = await box.exec(`rm -rf ${targetDir}`);
+          const clear = await boxFor(container).exec(`rm -rf ${targetDir}`);
           if (clear.exitCode !== 0) {
             throw new Error(`rm -rf ${targetDir} exited ${clear.exitCode}: ${clear.stderr}`);
           }
@@ -532,7 +589,7 @@ export const makeSandboxCloudflareLive = (
             // `cloneCommand`). The URL git is given is the credential-free one;
             // the token rides in `env` and is read back by the credential
             // helper, so the command string holds only the variable's name.
-            const cloned = await box.exec(cloneCommand(originUrl, targetDir, token !== undefined), {
+            const cloned = await boxFor(container).exec(cloneCommand(originUrl, targetDir, token !== undefined), {
               timeout: CLONE_TIMEOUT_SEC * 1000,
               ...(token !== undefined ? { env: { [CLONE_TOKEN_ENV]: token } } : {}),
             });
@@ -541,7 +598,7 @@ export const makeSandboxCloudflareLive = (
             }
             // The clone lands on the default branch; pin the exact SHA so the
             // run is reproducible.
-            const checkout = await box.exec(`git checkout ${sha}`, {
+            const checkout = await boxFor(container).exec(`git checkout ${sha}`, {
               cwd: targetDir,
             });
             if (checkout.exitCode !== 0) {
@@ -559,7 +616,7 @@ export const makeSandboxCloudflareLive = (
             // that silently is the same class of quiet failure this PR exists to
             // remove, so it is appended to the (redacted) error instead.
             if (token !== undefined) {
-              const scrubFailure = await scrubCloneCredential(targetDir, originUrl).then(
+              const scrubFailure = await scrubCloneCredential(targetDir, originUrl, container).then(
                 () => undefined,
                 (e: unknown) => (e instanceof Error ? e.message : String(e)),
               );
@@ -581,7 +638,7 @@ export const makeSandboxCloudflareLive = (
           // throw becomes `CheckoutFailed.cause`, which Workflows persists.
           if (token !== undefined) {
             try {
-              await scrubCloneCredential(targetDir, originUrl);
+              await scrubCloneCredential(targetDir, originUrl, container);
             } catch (cause) {
               throw redactCloneFailure(cause, token);
             }
@@ -591,7 +648,7 @@ export const makeSandboxCloudflareLive = (
         catch: (cause) => new CheckoutFailed({ repo, sha, cause }),
       }),
 
-    exec: ({ command, cwd, env, timeoutSec, redactValues }) => {
+    exec: ({ command, cwd, env, timeoutSec, redactValues, container }) => {
       const cmd = asCommand(command);
       return Effect.tryPromise({
         // `tryPromise` failure path is `ExecFailed | ExecTimeout` — a command
@@ -600,7 +657,7 @@ export const makeSandboxCloudflareLive = (
         // folded back from the SDK's CommandError/SessionTerminatedError by
         // `execToResult` so a failing demo still uploads its report + log.
         try: async () => {
-          const result = await execToResult(box, cmd, { cwd, env, timeoutSec });
+          const result = await execToResult(boxFor(container), cmd, { cwd, env, timeoutSec });
           // Scrub any injected secret VALUES before either persisted form
           // (the full R2 log below, and the inline tail further down) is
           // written — see `ExecOpts.redactValues`.
@@ -662,10 +719,10 @@ export const makeSandboxCloudflareLive = (
     // text (a big `git diff --output`) arrives intact. The result is NOT
     // checkpointed here — bounding what flows into a Workflow checkpoint is
     // the CALLER's job (e.g. pr-review caps the diff inside its step).
-    readFile: ({ path }) =>
+    readFile: ({ path, container }) =>
       Effect.tryPromise({
         try: async () => {
-          const result = await box.readFile(path);
+          const result = await boxFor(container).readFile(path);
           if (!result.success) {
             throw new Error(`readFile ${path} reported success=false`);
           }
@@ -681,11 +738,11 @@ export const makeSandboxCloudflareLive = (
     // Detached execution (PR9) — `bootApp`'s "start the app, return at once"
     // path. `startProcess` launches a long-running process; the run later
     // recovers it by id via `getProcess` to wait on its port / its exit.
-    runDetached: ({ command, cwd, env, timeoutSec }) => {
+    runDetached: ({ command, cwd, env, timeoutSec, container }) => {
       const cmd = asCommand(command);
       return Effect.tryPromise({
         try: async () => {
-          const proc = await box.startProcess(cmd, {
+          const proc = await boxFor(container).startProcess(cmd, {
             cwd,
             env,
             timeout: timeoutSec === undefined ? undefined : timeoutSec * 1000,
@@ -705,7 +762,7 @@ export const makeSandboxCloudflareLive = (
       Effect.tryPromise({
         try: async (): Promise<ExecResult> => {
           const startedAt = Date.now();
-          const proc = await box.getProcess(handle.id);
+          const proc = await boxFor(handle.container).getProcess(handle.id);
           if (proc === null) {
             throw new Error(`detached process ${handle.id} not found`);
           }
@@ -740,7 +797,7 @@ export const makeSandboxCloudflareLive = (
       // regardless of SDK behavior.
       const sdkWait = Effect.tryPromise({
         try: async () => {
-          const proc = await box.getProcess(handle.id);
+          const proc = await boxFor(handle.container).getProcess(handle.id);
           if (proc === null) {
             throw new Error(`detached process ${handle.id} not found`);
           }
@@ -769,7 +826,7 @@ export const makeSandboxCloudflareLive = (
       // attached — the only diagnostic a failed detached boot leaves behind.
       return bounded.pipe(
         Effect.catchTag("PortNeverOpened", (err) =>
-          captureDetachedLog(handle.id).pipe(
+          captureDetachedLog(handle.id, handle.container).pipe(
             Effect.flatMap((logPath) =>
               Effect.fail(
                 new PortNeverOpened({
@@ -784,7 +841,7 @@ export const makeSandboxCloudflareLive = (
       );
     },
 
-    exposePort: ({ port, name }) =>
+    exposePort: ({ port, name, container }) =>
       previewHostname === undefined
         ? Effect.fail(
             new ExposePortFailed({
@@ -797,7 +854,7 @@ export const makeSandboxCloudflareLive = (
               // The SDK builds the preview URL from the Worker's domain
               // (`hostname`) + the port; the process bound to the container's
               // `localhost:<port>` becomes reachable at the returned URL.
-              const { url } = await box.exposePort(port, {
+              const { url } = await boxFor(container).exposePort(port, {
                 hostname: previewHostname,
                 name,
               });

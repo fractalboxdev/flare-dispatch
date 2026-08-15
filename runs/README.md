@@ -294,7 +294,21 @@ wrangler kv key put --binding=CONFIG_KV \
 ```
 
 Absent or `1` is the shared-container sequential mode above, byte for byte.
-Above 1, each stage acquires its **own** workspace and up to N run at once.
+Above 1, each stage acquires its **own** container — `acquire({ key: <label> })`
+— and up to N run at once.
+
+The key is what makes that true. Until the runtime routed by the handle, a
+second `acquire` returned the execution's one container and the stages raced to
+wipe each other's checkout (`git clone` clears its target directory first): five
+stages, five `CheckoutFailed`s, in under five seconds. Each keyed container is
+destroyed as its stage finishes rather than idling out `sleepAfter` — the
+dispatcher's end-of-run teardown owns the execution's own id and cannot know
+what a run named.
+
+**Not available on the substrate backend**, which namespaces one sandbox per
+consumer execution. `acquire({ key })` there fails `ContainerLaunchFailed`
+rather than quietly handing back the first container, because quietly handing it
+back is the defect this option exists to fix.
 
 The reason is the retry, not the speed. A stage step carries `retries: 3` on
 `ExecFailed`, and with a shared container that guarantee is empty: container

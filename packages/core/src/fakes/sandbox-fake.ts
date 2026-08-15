@@ -29,7 +29,9 @@ export type CannedProgram = Record<string, CannedExec>;
 
 /** Inspectable record of every call made to the fake. */
 export type SandboxFakeState = {
-  readonly acquired: { image?: string }[];
+  readonly acquired: { image?: string; key?: string }[];
+  /** Container ids a run destroyed explicitly, in order. */
+  readonly destroyed: string[];
   readonly clones: { repo: string; sha: string }[];
   /** every `exec` / `runDetached` call — `env` lets tests assert injection. */
   readonly execs: {
@@ -105,6 +107,7 @@ export const makeSandboxFake = (
 ): { layer: Layer.Layer<Sandbox>; state: SandboxFakeState } => {
   const state: SandboxFakeState = {
     acquired: [],
+    destroyed: [],
     clones: [],
     execs: [],
     exposed: [],
@@ -121,11 +124,29 @@ export const makeSandboxFake = (
   };
 
   const service: SandboxService = {
+    // One container per execution, a DISTINCT one per `key` — the live layer's
+    // rule, mirrored here because the two used to disagree about exactly that.
+    //
+    // This fake minted a fresh id on every `acquire`, so a run that acquired
+    // twice appeared to get two containers; the CF layer returned the
+    // execution's single id both times and the two acquisitions raced for one
+    // filesystem. A suite written against this fake could not have caught it,
+    // and did not: five isolated stages went green here and died in production
+    // with `CheckoutFailed`, having wiped each other's checkout.
     acquire: (opts) =>
       Effect.sync(() => {
-        state.acquired.push({ image: opts.image });
-        containerSeq += 1;
-        return { id: `fake-container-${containerSeq}` } satisfies Container;
+        state.acquired.push({
+          image: opts.image,
+          ...(opts.key !== undefined ? { key: opts.key } : {}),
+        });
+        return {
+          id: opts.key === undefined ? "fake-container" : `fake-container:${opts.key}`,
+        } satisfies Container;
+      }),
+
+    destroy: ({ container }) =>
+      Effect.sync(() => {
+        state.destroyed.push(container.id);
       }),
 
     gitClone: ({ repo, sha }) =>
@@ -206,7 +227,11 @@ export const makeSandboxFake = (
         detachedCommands.set(id, command);
         return Effect.succeed({
           id,
-          container: { id: `fake-container-${containerSeq}` },
+          // The container the process runs IN — the caller's when it named one,
+          // else this execution's. Not a fresh id per launch: a detached
+          // process does not get its own container, and pretending it did was
+          // the same fiction `acquire` used to tell.
+          container: opts.container ?? { id: "fake-container" },
         } satisfies DetachedHandle);
       }),
 
