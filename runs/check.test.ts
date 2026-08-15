@@ -170,6 +170,7 @@ describe("check", () => {
         });
         expect(result.exitCode).toBe(0);
         expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+          "test -d /workspace/name/.git",
           "shellcheck scripts/deploy.sh",
         ]);
       }).pipe(Effect.provide(layer));
@@ -520,4 +521,37 @@ describe("check source determinism", () => {
       expect(code).not.toMatch(/\bMath\s*\.\s*random\b/);
     }),
   );
+
+  it.effect("a recycled container is re-cloned rather than retried into", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        // The probe answers non-zero: the container was recycled between
+        // durable steps and took the checkout with it. This is what the runtime
+        // reports as `working directory … was missing at exec time`.
+        "test -d /workspace/name/.git": { exitCode: 1 },
+        "pnpm lint": { exitCode: 0 },
+      },
+      config: { "check.command:owner/name": "pnpm lint" },
+    });
+
+    return Effect.gen(function* () {
+      const result = yield* check.run({
+        repo: "owner/name",
+        sha: "abc123",
+        install: false,
+        secrets: [],
+        failOnNonZeroExit: true,
+      });
+
+      // TWO clones: the run's own checkout, then the rebuild inside the exec
+      // step. Without it the command runs in a directory that is not there,
+      // fails as `ExecFailed`, and is retried into the same absence three times
+      // — reporting a missing directory as the repo's verdict.
+      expect(handles.sandbox.clones).toEqual([
+        { repo: "owner/name", sha: "abc123" },
+        { repo: "owner/name", sha: "abc123" },
+      ]);
+      expect(result.exitCode).toBe(0);
+    }).pipe(Effect.provide(layer));
+  });
 });

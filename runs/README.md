@@ -276,13 +276,14 @@ command in the same missing directory three times and reported a failure about a
 missing directory rather than anything about the code. The retry could never
 have worked: the thing it needed was the thing that was gone.
 
-So a **shared-container** stage probes for its checkout (`test -d <dir>/.git`)
-inside its own retryable step and re-clones when the probe fails. On the happy
-path that is one extra exec of about a second; on a recycled container it is a
-clone and an install, which is what the stage was going to need anyway.
+So **every** PR run — `offload-test`'s shared-container stages, `check`, and
+`oxlint` — calls the `ensureWorkspace` primitive inside its retryable step: it
+probes `test -d <dir>/.git` and re-clones when the probe fails. On the happy path
+that is one extra exec of about a second; on a recycled container it is a clone
+and an install, which is what the step was going to need anyway.
 
-Isolated stages (below) need no probe: they acquire a workspace inside the
-retryable step already, so a retry rebuilds it by construction.
+Isolated stages need no probe: they acquire a workspace inside the retryable
+step already, so a retry rebuilds it by construction.
 
 ### Isolated stages (`offload-test.stageConcurrency:<repo>`)
 

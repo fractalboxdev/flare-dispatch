@@ -9,7 +9,7 @@
 //
 // See specs/03-dsl.md § Primitives and ./README.md.
 
-export { workspace, type Workspace } from "./workspace";
+export { ensureWorkspace, workspace, type Workspace } from "./workspace";
 export { installCached } from "./install-cached";
 export { sharded, type Shard } from "./sharded";
 export { fanOut, type FanOutShard } from "./fan-out";

@@ -157,7 +157,11 @@ import {
   StepFailed,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
-import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  ensureWorkspace,
+  loadSecrets,
+  workspace,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — specs/02-runs.md § 1. */
 const OffloadTestInput = Schema.Struct({
@@ -602,46 +606,6 @@ export const offloadTest = defineRun({
         });
       const shared = isolatedStages ? undefined : yield* step("checkout", acquireWorkspace);
 
-      // A checkout does not survive across durable steps by right.
-      //
-      // The runtime says so in its own words: an exec whose working directory
-      // is missing raises `working directory '<dir>' was missing at exec time —
-      // the checkout did not survive to this step (container recycled)`.
-      // Container disk is ephemeral, and a staged run spanning forty minutes of
-      // durable steps is long enough for the instance behind it to be recycled.
-      //
-      // That failure arrives as `ExecFailed`, which is precisely what `retryOn`
-      // retries — so the platform dutifully re-ran the same command in the same
-      // missing directory, three times, and reported a failure about a missing
-      // directory rather than anything about the code. The retry could never
-      // have worked: the thing it needed was the thing that was gone.
-      //
-      // So a stage does not assume its workspace. It checks, and rebuilds when
-      // the check fails. On the happy path that is one `test -d`; on a recycled
-      // container it is a clone and an install, which is what the stage was
-      // going to need anyway.
-      const ensureWorkspace = (current: NonNullable<typeof shared>) =>
-        Effect.gen(function* () {
-          const probe = yield* sandbox.exec({
-            container: current.container,
-            command: ["test", "-d", `${current.dir}/.git`],
-            timeoutSec: 30,
-          });
-          if (probe.exitCode === 0) return current;
-          yield* io.log(
-            "warn",
-            `offload-test: the checkout at ${current.dir} is gone — the container was recycled between steps. Re-cloning before the stage runs.`,
-          );
-          // The rebuilt workspace is returned, not written back over `shared`.
-          // On this runtime it is value-identical — `acquire` hands back the
-          // per-execution sandbox id and the clone lands at the same
-          // `/workspace/<repo>` — so there is nothing to carry forward, and the
-          // next stage's probe passes because the checkout is there again.
-          // Threading a mutable workspace through concurrent stages would buy
-          // nothing here and cost a shared cell to synchronise.
-          return yield* acquireWorkspace();
-        });
-
       // load-secrets — resolve the named credentials from the config store
       // into the env injected below. Called INLINE, not in a `step`: secrets
       // must not land in a durable Workflow checkpoint (see header note 3).
@@ -783,7 +747,13 @@ export const offloadTest = defineRun({
                     const ws =
                       shared === undefined
                         ? yield* acquireWorkspace()
-                        : yield* ensureWorkspace(shared);
+                        : yield* ensureWorkspace({
+                            current: shared,
+                            repo: input.repo,
+                            sha: input.sha,
+                            ...(input.image !== undefined ? { image: input.image } : {}),
+                            install,
+                          });
                     return yield* sandbox.exec({
                       cwd: ws.dir,
                       container: ws.container,

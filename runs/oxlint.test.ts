@@ -54,7 +54,13 @@ describe("oxlint", () => {
         "exec",
         "upload-log",
       ]);
-      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([CMD_DEFAULT]);
+      // The probe precedes the command: the checkout is re-established inside
+      // the retryable step, so a container recycled between steps is rebuilt
+      // rather than retried into.
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+        "test -d /workspace/name/.git",
+        CMD_DEFAULT,
+      ]);
       expect(handles.sandbox.execs.map((e) => e.command).some((c) => c.includes("install"))).toBe(
         false,
       );
@@ -197,7 +203,10 @@ describe("oxlint", () => {
       expect(result.exitCode).toBe(0);
       // durationMs is the checkpointed exec result's value (replay-safe).
       expect(result.durationMs).toBe(1234);
-      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([command]);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+        "test -d /workspace/name/.git",
+        command,
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
