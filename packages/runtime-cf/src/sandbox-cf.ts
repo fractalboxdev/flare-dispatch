@@ -615,14 +615,9 @@ export const makeSandboxCloudflareLive = (
           // never ran — the checkout did not survive to this exec (container
           // recycled between durable steps). Raise a real ExecFailed rather than
           // fold a phantom non-zero result a `failOnNonZeroExit` run would render
-          // as a lint/test verdict (see `isWorkingDirFailure`). The throw is
-          // classified by the `catch` below.
-          // Classified HERE rather than in the `catch`, which reads the message
-          // and would see the `cwd` this one embeds: a checkout under a path
-          // like `/workspace/request-timeout` matches its timeout regex and
-          // lands as `ExecTimeout`, a class `RETRY_ON` excludes on purpose — so
-          // the step would die unretried and `ensureWorkspace` never get its
-          // second chance.
+          // as a lint/test verdict (see `isWorkingDirFailure`). Built HERE, not
+          // in the `catch`, which reads the message and would see the `cwd` this
+          // one embeds — pinned by "a checkout path containing 'timeout'".
           if (isWorkingDirFailure(result, cwd)) {
             throw new ExecFailed({
               exitCode: -1,

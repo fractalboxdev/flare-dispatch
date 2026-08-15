@@ -98,9 +98,11 @@ next time it is started, it will have a fresh disk as defined by its container i
 ([Containers FAQ](https://developers.cloudflare.com/containers/faq/)). The same pages
 give no guaranteed minimum runtime, restart an out-of-memory instance, and terminate
 instances on host restarts. A `checkout` step that already completed is never re-run by
-replay, so every attempt after a container swap hits an empty disk. `ensureWorkspace`
-(`packages/core/src/primitives/workspace.ts`) is the repair, and it belongs INSIDE the
-retryable step — a rebuild the retry does not re-run is not a rebuild.
+replay, so on the container backend every attempt after a container swap hits an empty
+disk. `ensureWorkspace` (`packages/core/src/primitives/workspace.ts`) is the repair, and
+it belongs INSIDE the retryable step — a rebuild the retry does not re-run is not a
+rebuild. On the substrate backend (`SUBSTRATE_BACKEND=on`) the facade restores the tree
+inside the exec fence, so the probe is redundant there rather than wrong.
 
 Scoped deliberately. A re-clone restores the tree the *spec* describes, which is right
 for a suite, a lint or a build, and wrong for a step that reads a tree an earlier step
@@ -173,9 +175,10 @@ anyway.
   because the repair's own clone must survive the weather that made it necessary.
 - Rule 5 is not yet repo-wide. `check`, `oxlint` and `offload-test` call `ensureWorkspace`;
   `cdp-acceptance`, `matrix-fanout`, `playwright-e2e`, `playwright-demo`, `pr-review`,
-  `refresh-fixtures`, `spec-drift-pr`, `worker-deploy`, `org-spec-audit` and
-  `release-notes` still call `workspace()` bare. Each is either mechanically portable or
-  in the mutated-tree class the rule excludes, and that call is per run.
+  `refresh-fixtures`, `spec-drift-pr`, `worker-deploy`, `org-spec-audit`, `vitest-shard`
+  and `release-notes` still call `workspace()` bare, as does `self-heal-pr`, which is in
+  the mutated-tree class the rule excludes. Each remaining one is either mechanically
+  portable or excluded, and that call is per run.
 
 ## Revisit triggers
 

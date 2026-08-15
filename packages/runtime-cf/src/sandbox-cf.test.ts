@@ -431,10 +431,6 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
 
   it.effect("a checkout path containing 'timeout' still fails as ExecFailed, not ExecTimeout", () =>
     Effect.gen(function* () {
-      // The throw embeds `cwd`, and the `catch` also matches /timeout/i to spot
-      // an SDK timeout. Classify by message first and this lands as ExecTimeout
-      // — which RETRY_ON excludes on purpose, so the step dies unretried and the
-      // rebuild never runs.
       currentBox = makeFakeBox({ proc: null });
       currentBox.exec = vi.fn(async () => ({
         exitCode: 1,

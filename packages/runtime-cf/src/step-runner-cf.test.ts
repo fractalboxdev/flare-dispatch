@@ -5,10 +5,15 @@
 
 import { Cause, Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { ExecFailed, ExecTimeout, runEffect } from "@fractalboxdev/flare-dispatch-core";
+import {
+  CheckoutFailed,
+  ExecFailed,
+  ExecTimeout,
+  runEffect,
+} from "@fractalboxdev/flare-dispatch-core";
 import { buildStepConfig, rethrowForRetryPolicy } from "./step-runner-cf";
 
-const thrownFor = async (failure: ExecFailed | ExecTimeout): Promise<unknown> => {
+const thrownFor = async (failure: ExecFailed | ExecTimeout | CheckoutFailed): Promise<unknown> => {
   try {
     await runEffect(Effect.fail(failure));
     throw new Error("expected a throw");
@@ -65,6 +70,20 @@ describe("rethrowForRetryPolicy", () => {
     expect(out).not.toBe(thrown);
     expect(out.name).toBe("NonRetryableError");
     expect(Cause.isCause(out.cause)).toBe(true);
+  });
+
+  it("CheckoutFailed passes through under the runs' policy, so the rebuild's own clone retries", async () => {
+    const thrown = await thrownFor(new CheckoutFailed({ repo: "o/r", sha: "abc", cause: "flake" }));
+    expect(rethrowForRetryPolicy(thrown, ["ExecFailed", "StepFailed", "CheckoutFailed"])).toBe(
+      thrown,
+    );
+  });
+
+  it("CheckoutFailed is non-retryable under a policy that omits it", async () => {
+    const thrown = await thrownFor(new CheckoutFailed({ repo: "o/r", sha: "abc", cause: "flake" }));
+    const out = rethrowForRetryPolicy(thrown, ["ExecFailed", "StepFailed"]) as Error;
+    expect(out).not.toBe(thrown);
+    expect(out.name).toBe("NonRetryableError");
   });
 
   it("without retryOn every failure stays retryable — the platform default", async () => {

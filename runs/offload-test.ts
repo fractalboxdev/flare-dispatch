@@ -276,25 +276,15 @@ const PLATFORM_RETRIES = 3;
  * failure would otherwise end the step non-retryably, one call short of the
  * recovery it was invoked to perform.
  *
- * `CheckoutFailed` is a catch-all over the whole clone body, and several of the
- * failures it wraps are deterministic: a bad sha, a repo that is gone, the
- * facade's pinned-recipe mismatch (`sandbox-facade.ts:277-287`). Retrying those
- * would be four attempts at something that cannot succeed. What keeps that off
- * this step is the sequence, not the tag: the only clone reachable from here is
- * `ensureWorkspace` re-cloning the SAME repo and sha that the `checkout` step
- * already cloned successfully earlier in this run. A deterministic clone failure
- * would have ended the run at `checkout`, before any of this. What survives that
- * filter is transient, plus a credential that expired mid-run.
+ * `CheckoutFailed` is a catch-all over the whole clone body, so deterministic
+ * failures ride it too — a bad sha, a repo that is gone. On the isolated path a
+ * stage's clone is the run's FIRST, with no earlier `checkout` to have caught
+ * those, so this knowingly spends the retry budget on some failures that cannot
+ * succeed. The cost is bounded by the backoff; the alternative loses the repair.
  *
  * `ExecTimeout` stays OUT, deliberately. Its tag survives the boundary intact
  * whenever there is a Cause to read, so it lands here as itself rather than as
  * `StepFailed` — and a command that outran its ceiling will outrun it again.
- *
- * `ContainerLaunchFailed` and `ContainerBusy` also reach here from
- * `ensureWorkspace`'s `sandbox.acquire`, and stay OUT for now: `acquire` already
- * waits to the layer's ceiling before raising `ContainerBusy`, so retrying it
- * here stacks a second wait on top of admission control rather than recovering
- * anything. That coupling deserves its own change, not a line in this one.
  */
 const RETRY_ON = ["ExecFailed", "StepFailed", "CheckoutFailed"] as const;
 
