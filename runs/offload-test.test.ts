@@ -627,6 +627,102 @@ describe("offload-test", () => {
     },
   );
 
+  it.effect("does NOT dispatch self-heal when the failing command inlines a secret value", () => {
+    // Neither version of such a command can honestly reach the healer: raw, it
+    // smuggles a live credential into the credential-free agent sandbox and
+    // into a pack an injection-steerable LLM reads; scrubbed, its `***` makes
+    // the verify re-run fail after the agent spend is already paid.
+    const { layer, handles } = makeCFRuntimeTest({
+      secrets: { DEPLOY_TOKEN: "tok-abc123" },
+      sandboxProgram: {
+        "curl -H 'Authorization: Bearer tok-abc123' https://x": { exitCode: 7 },
+      },
+      config: { "self-heal.ci.enabled": "true" },
+    });
+    return Effect.gen(function* () {
+      yield* Effect.exit(
+        offloadTest.run({
+          ...baseInput,
+          command: "curl -H 'Authorization: Bearer tok-abc123' https://x",
+          secrets: ["DEPLOY_TOKEN"],
+        }),
+      );
+      expect(handles.childRuns.spawned).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("scrubs the value the container actually received, not the shadowed store value", () => {
+    // Per-dispatch `env` wins over a same-named store secret. Scrubbing
+    // `Object.values(secretEnv)` alone would keep the LIVE credential in the
+    // rendered summary and redact a string that was never printed.
+    const { layer } = makeCFRuntimeTest({
+      secrets: { DEPLOY_TOKEN: "shadowed-store-value" },
+      sandboxProgram: {
+        "deploy --token live-dispatch-value": { exitCode: 3 },
+      },
+      config: {
+        "offload-test.stages:owner/name": "a",
+        "offload-test.command:owner/name:a": "deploy --token live-dispatch-value",
+      },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        offloadTest.run({
+          repo: "owner/name",
+          sha: "abc123",
+          failOnNonZeroExit: true,
+          secrets: ["DEPLOY_TOKEN"],
+          env: { DEPLOY_TOKEN: "live-dispatch-value" },
+        }),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      const rendered = `${(failure as { summaryMd?: string })?.summaryMd ?? ""} ${
+        (failure as { cause?: unknown })?.cause ?? ""
+      }`;
+      expect(rendered).not.toContain("live-dispatch-value");
+      expect(rendered).toContain("***");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("the shadowed store value stays scrubbed too — it is still a live credential", () => {
+    // The mirror image of the shadow case: env overrides the key, but the
+    // command inlines the STORE value. Scrubbing only the effective value would
+    // put a live store credential in the rendered summary.
+    const { layer } = makeCFRuntimeTest({
+      secrets: { DEPLOY_TOKEN: "store-secret-value" },
+      sandboxProgram: {
+        "deploy --token store-secret-value": { exitCode: 3 },
+      },
+      config: {
+        "offload-test.stages:owner/name": "a",
+        "offload-test.command:owner/name:a": "deploy --token store-secret-value",
+      },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        offloadTest.run({
+          repo: "owner/name",
+          sha: "abc123",
+          failOnNonZeroExit: true,
+          secrets: ["DEPLOY_TOKEN"],
+          env: { DEPLOY_TOKEN: "override-value" },
+        }),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      const rendered = `${(failure as { summaryMd?: string })?.summaryMd ?? ""} ${
+        (failure as { cause?: unknown })?.cause ?? ""
+      }`;
+      expect(rendered).not.toContain("store-secret-value");
+      expect(rendered).toContain("***");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("does NOT dispatch self-heal when the gate is unset", () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: { "pnpm test": { exitCode: 1 } },

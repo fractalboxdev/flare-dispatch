@@ -662,7 +662,24 @@ export const offloadTest = defineRun({
        * times already (sandbox-cf, sandbox-facade, sandbox-fake) and unifying
        * them is its own change. This is the narrow version, for one job.
        */
-      const secretValues = Object.values(secretEnv).filter((v) => v.length > 0);
+      //
+      // The values scrubbed are BOTH the store value and the one the container
+      // actually receives for each secret-designated key. Per-dispatch `env`
+      // wins over a same-named store secret, so `Object.values(secretEnv)`
+      // alone holds the shadowed value on a collision — the log would keep the
+      // live credential and scrub a string that was never printed. The shadowed
+      // store value stays in the list too: it is still a live credential, and
+      // a command can inline it even while the env carries the override.
+      // Non-secret `input.env` keys are deliberately NOT in this list: dispatch
+      // inputs are documented non-sensitive (header note 3), and scrubbing a
+      // value like "production" or "1" from every log line trades a contract
+      // violation nobody has made for garbled logs everybody reads.
+      const effectiveEnv: Record<string, string> = { ...secretEnv, ...input.env };
+      const secretValues = [
+        ...new Set(
+          Object.keys(secretEnv).flatMap((key) => [secretEnv[key] ?? "", effectiveEnv[key] ?? ""]),
+        ),
+      ].filter((v) => v.length > 0);
       const renderable = (command: string): string =>
         secretValues.reduce((out, value) => out.split(value).join("***"), command);
 
@@ -686,6 +703,20 @@ export const offloadTest = defineRun({
         Effect.gen(function* () {
           if (execResult.exitCode === 0) return;
           if ((yield* config.get("self-heal.ci.enabled")) !== "true") return;
+          // A command whose rendering CHANGED had a secret value inlined in it,
+          // and neither version of it can honestly go to the healer. The raw
+          // command would smuggle a live credential into the credential-free
+          // agent sandbox and into a pack an injection-steerable LLM reads
+          // (ci-incident.ts header); the scrubbed one carries `***` where the
+          // verify step's re-run needs the value, so the heal can only fail
+          // after the agent spend is already paid. Skip, and say why.
+          if (renderable(failedCommand) !== failedCommand) {
+            yield* io.log(
+              "warn",
+              `offload-test: skipping self-heal — the failing command inlines a secret value, so no honest repro can be handed to the healer`,
+            );
+            return;
+          }
           const incident = commandFailureToIncident({
             repo: input.repo,
             sha: input.sha,
@@ -839,7 +870,7 @@ export const offloadTest = defineRun({
                       // do: this run executes the CONSUMER's own command, where
                       // `set -x` and a stray `env` are ordinary rather than
                       // exceptional, and the captured log is durable and signed.
-                      redactValues: Object.values(secretEnv),
+                      redactValues: secretValues,
                       timeoutSec: stageTimeoutSec,
                     });
                   }),
@@ -1091,7 +1122,7 @@ export const offloadTest = defineRun({
           for (const outcome of outcomes) {
             if (outcome.kind === "red") {
               yield* maybeDispatchSelfHeal(
-                renderable(outcome.stage.command),
+                outcome.stage.command,
                 { exitCode: outcome.exitCode, stdout: outcome.stdout },
                 outcome.logUri,
               );
@@ -1157,7 +1188,7 @@ export const offloadTest = defineRun({
           if (outcome.kind === "red") {
             lines.push(...skippedLines(i + 1));
             yield* maybeDispatchSelfHeal(
-              renderable(outcome.stage.command),
+              outcome.stage.command,
               { exitCode: outcome.exitCode, stdout: outcome.stdout },
               logUri,
             );
@@ -1258,7 +1289,7 @@ export const offloadTest = defineRun({
                 // — the more specific source overrides the global one.
                 env: { ...secretEnv, ...input.env },
                 // Same scrub as the staged path above and as `check` does.
-                redactValues: Object.values(secretEnv),
+                redactValues: secretValues,
                 timeoutSec,
               }),
             ),
