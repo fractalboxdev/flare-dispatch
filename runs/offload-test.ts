@@ -1163,15 +1163,37 @@ export const offloadTest = defineRun({
       const result = yield* step(
         "exec",
         () =>
-          sandbox.exec({
-            cwd: soleWorkspace.dir,
-            container: soleWorkspace.container,
-            command: soleCommand,
-            // Per-dispatch `env` wins over a same-named config-store secret —
-            // the more specific source overrides the global one.
-            env: { ...secretEnv, ...input.env },
-            timeoutSec,
-          }),
+          // The checkout is re-established INSIDE the retryable step, for the
+          // same reason the staged path does it: a container recycled between
+          // `checkout` and here takes the checkout with it, and the retry would
+          // otherwise re-run the command in a directory that is gone.
+          //
+          // #128 left this path alone, reasoning that a single-exec run's
+          // "exposure is one step rather than five". That was wrong twice over.
+          // A container can be recycled between ANY two durable steps, and
+          // `checkout` is a step earlier than this one by construction — so the
+          // exposure is one BOUNDARY, which every run has. This repo's own gate
+          // then died exactly that way: `working directory
+          // '/workspace/<repo>' was missing at exec time`.
+          ensureWorkspace({
+            current: soleWorkspace,
+            repo: input.repo,
+            sha: input.sha,
+            ...(input.image !== undefined ? { image: input.image } : {}),
+            install,
+          }).pipe(
+            Effect.flatMap((ws) =>
+              sandbox.exec({
+                cwd: ws.dir,
+                container: ws.container,
+                command: soleCommand,
+                // Per-dispatch `env` wins over a same-named config-store secret
+                // — the more specific source overrides the global one.
+                env: { ...secretEnv, ...input.env },
+                timeoutSec,
+              }),
+            ),
+          ),
         { timeoutSec: stepTimeoutFor(timeoutSec), retries: PLATFORM_RETRIES, retryOn: RETRY_ON },
       );
 
