@@ -1142,11 +1142,21 @@ describe("offload-test isolated stages", () => {
         expect(stepNames).toContain("exec-a");
         expect(stepNames).toContain("exec-b");
 
-        // One acquire + one clone PER STAGE, both inside the stage's own
-        // retryable step. That placement is the point: a platform retry after a
-        // container death re-runs the acquire and the clone, so the command
-        // does not land on a fresh disk with no checkout.
-        expect(handles.sandbox.acquired).toHaveLength(2);
+        // One container PER STAGE, named by the stage — and the clone inside the
+        // stage's own retryable step. That placement is the point: a platform
+        // retry after a container death re-runs the acquire and the clone, so
+        // the command does not land on a fresh disk with no checkout.
+        //
+        // Counted by DISTINCT KEY rather than by call: `acquire` derives an id
+        // and provisions nothing, so the reaper re-deriving it to destroy it is
+        // a second call to the same container, not a second container.
+        expect(new Set(handles.sandbox.acquired.map((x) => x.key))).toEqual(
+          new Set(["a", "b"]),
+        );
+        // And each one is given back rather than left to idle out `sleepAfter`.
+        expect(new Set(handles.sandbox.destroyed)).toEqual(
+          new Set(["fake-container:a", "fake-container:b"]),
+        );
         expect(handles.sandbox.clones).toEqual([
           { repo: "owner/name", sha: "abc123" },
           { repo: "owner/name", sha: "abc123" },
@@ -1334,7 +1344,7 @@ describe("offload-test isolated stages", () => {
       yield* offloadTest.run(webhookInput);
       // Two stages can never need more than two containers; asking for 16 is a
       // typo, and honouring it would be a bill rather than a speed-up.
-      expect(handles.sandbox.acquired).toHaveLength(2);
+      expect(new Set(handles.sandbox.acquired.map((x) => x.key))).toEqual(new Set(["a", "b"]));
     }).pipe(Effect.provide(layer));
   });
 });

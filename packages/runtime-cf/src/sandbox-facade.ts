@@ -246,14 +246,30 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
   const service: SandboxService = {
     // The container is provisioned by the substrate on ensure; the handle is
     // the sandbox key, which is also what the facade namespaces per consumer.
-    acquire: () =>
+    //
+    // A `key` is REFUSED rather than ignored. The substrate namespaces one
+    // sandbox per consumer execution, so there is no second container to hand
+    // back — and silently returning the first would recreate exactly the defect
+    // this option exists to fix: two acquisitions sharing one filesystem, with
+    // `git clone` wiping its target directory out from under the other. A run
+    // that needs isolated containers has to know it is not getting them.
+    acquire: (acquireOpts) =>
       Effect.tryPromise({
         try: async () => {
+          if (acquireOpts.key !== undefined) {
+            throw new ContainerLaunchFailed({
+              image: "substrate",
+              cause: `the substrate backend has one sandbox per execution — \`acquire({ key: "${acquireOpts.key}" })\` cannot be honoured here`,
+            });
+          }
           const outcome = await opts.facade.ensureSandbox(key, recipe, { mode: "refuse" });
           if (!outcome.ok) throw outcome.refusal;
           return { id: key } satisfies Container;
         },
         catch: (cause): ContainerLaunchFailed | ContainerBusy => {
+          // The keyed-acquire refusal above is already the typed error; pass it
+          // through rather than re-describing it as a substrate refusal.
+          if (cause instanceof ContainerLaunchFailed) return cause;
           const refusal = cause as SubstrateRefusal;
           // A full pool is a wait, not a broken container — `ContainerBusy` is
           // the error the Workflow already renders as an infra wait rather
@@ -270,6 +286,13 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
           });
         },
       }),
+
+    // The substrate owns this sandbox's lifecycle — the dispatcher's teardown
+    // on this path is `abort(key)`, which kills and stops and releases the
+    // admission slot with it. A per-container destroy would be a second, weaker
+    // opinion about when that happens, so this is deliberately a no-op rather
+    // than a partial imitation.
+    destroy: () => Effect.void,
 
     // No clone command is sent: `ensureSandbox` restores or rebuilds the tree
     // the recipe describes, and the recipe already names the repo and the sha.

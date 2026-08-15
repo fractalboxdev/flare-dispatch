@@ -7,6 +7,7 @@
 // covers `workspace`, `installCached`, `sharded`, `bootApp`, `probeHttp`.
 
 import { Effect } from "effect";
+import { sandbox } from "../services/sandbox";
 import { describe, expect, it } from "vitest";
 import { bootApp } from "./boot-app";
 import { installCached, TOOLS } from "./install-cached";
@@ -16,6 +17,27 @@ import { makeCFRuntimeTest } from "../testing";
 import { workspace } from "./workspace";
 
 describe("workspace", () => {
+  it("a keyed acquire is a DIFFERENT container; an unkeyed one is always the same", async () => {
+    const { layer, handles } = makeCFRuntimeTest();
+
+    const [a, b, c] = await Effect.runPromise(
+      Effect.all([
+        sandbox.acquire({}),
+        sandbox.acquire({}),
+        sandbox.acquire({ key: "features" }),
+      ]).pipe(Effect.provide(layer)),
+    );
+
+    // The property the live layer enforces and this fake used to contradict:
+    // unkeyed is the execution's own container, every time. A fake that minted
+    // a fresh id per call let a run look isolated here and share one filesystem
+    // in production.
+    expect(a.id).toBe(b.id);
+    expect(c.id).not.toBe(a.id);
+    expect(handles.sandbox.acquired.map((x) => x.key)).toEqual([undefined, undefined, "features"]);
+  });
+
+
   it("acquires a container, clones the repo, returns { container, dir }", async () => {
     const { layer, handles } = makeCFRuntimeTest();
 
@@ -23,7 +45,7 @@ describe("workspace", () => {
       workspace({ repo: "owner/myrepo", sha: "abc123" }).pipe(Effect.provide(layer)),
     );
 
-    expect(out.container.id).toMatch(/^fake-container-/);
+    expect(out.container.id).toBe("fake-container");
     expect(out.dir).toBe("/workspace/myrepo");
     expect(handles.sandbox.acquired).toHaveLength(1);
     expect(handles.sandbox.clones).toEqual([{ repo: "owner/myrepo", sha: "abc123" }]);
