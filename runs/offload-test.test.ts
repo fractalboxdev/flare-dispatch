@@ -787,6 +787,36 @@ describe("offload-test staged mode", () => {
     },
   );
 
+  it.effect("a dead stage's marker keeps the platform's own incident id", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        // What a dying container actually reports. The class is the half a
+        // consumer can already infer; the reference is the half only the
+        // platform's operator can act on, and it used to be dropped.
+        "run-a": {
+          fail: "ExecFailed",
+          exitCode: -1,
+          stderrTail: "exec failed (exit -1): internal error; reference = aggq3f5m407e2vb2ht76l2vf",
+        },
+      },
+      config: {
+        "offload-test.stages:owner/name": "a",
+        "offload-test.command:owner/name:a": "run-a",
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.exit(offloadTest.run(webhookInput));
+      const markerWrite = handles.sandbox.execs.find((e) => e.command.includes("stage=a"));
+      expect(markerWrite?.command).toContain("reference=aggq3f5m407e2vb2ht76l2vf");
+      // Shell-safe by construction: whatever lands after `reference=` is drawn
+      // from `[A-Za-z0-9_-]` only, so no vendor text can close the quote the
+      // marker is printed inside.
+      const id = /reference=([^\s']*)/.exec(markerWrite?.command ?? "")?.[1];
+      expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect(
     "an Action dispatch that passes `command` stays single-exec even with stages set",
     () => {

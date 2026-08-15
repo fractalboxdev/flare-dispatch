@@ -805,9 +805,29 @@ export const offloadTest = defineRun({
               });
               const elapsedMs = (yield* io.now) - stageStartMs;
               const elapsedS = Math.round(elapsedMs / 1000);
-              // Label (STAGE_LABEL_RE), tag, and number only — shell-quote-safe
-              // by construction.
-              const markerLine = `stage=${stage.label} error=${errorClass} elapsedMs=${elapsedMs}`;
+              // Label (STAGE_LABEL_RE), tag, numbers, and — when the platform
+              // supplied one — its own incident id.
+              //
+              // `ExecFailed: exec failed (exit -1): internal error; reference =
+              // aggq3f5m407e2vb2ht76l2vf` is what a dying container reports, and
+              // that reference is the only thing that identifies the incident to
+              // the platform's operator. The marker used to record the CLASS and
+              // drop the id, which is the half a consumer can already infer from
+              // the fact that their stage died.
+              //
+              // EXTRACTED, not interpolated: the marker is shell-quoted into a
+              // `printf '%s\n' '<line>'`, so free vendor text could close the
+              // quote. A `[A-Za-z0-9_-]` id and a signed integer cannot.
+              const rendered = Option.match(Cause.failureOption(exit.cause), {
+                onSome: (f) => `${String((f as { cause?: unknown }).cause ?? "")} ${String((f as { message?: unknown }).message ?? "")}`,
+                onNone: () => "",
+              });
+              const reference = /reference\s*=\s*([A-Za-z0-9_-]{1,64})/.exec(rendered)?.[1];
+              const platformExit = /exit\s+(-?\d{1,5})\)/.exec(rendered)?.[1];
+              const markerLine =
+                `stage=${stage.label} error=${errorClass} elapsedMs=${elapsedMs}` +
+                (platformExit !== undefined ? ` exit=${platformExit}` : "") +
+                (reference !== undefined ? ` reference=${reference}` : "");
               // The marker rides the marker exec's OWN log stream: `sandbox.exec`
               // streams stdout to an R2 log key and returns it as `logPath`, so
               // uploading THAT key in R2-source mode (no `container` — same mode
