@@ -250,7 +250,32 @@ const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
 const PLATFORM_RETRIES = 3;
 
-const RETRY_ON = ["ExecFailed"] as const;
+/**
+ * The classes a stage step retries — both of which are the PLATFORM, never a
+ * verdict.
+ *
+ * `ExecFailed` is the obvious one: the command could not run. `StepFailed` is
+ * the one that was missing, and its absence made the whole retry policy inert
+ * on the failure it was written for.
+ *
+ * A step body here can fail in exactly two typed ways — `ExecFailed` and
+ * `ExecTimeout` — because a command that RUNS and exits non-zero comes back as a
+ * normal `ExecResult`. When the platform kills the step outright, no Effect
+ * `Cause` survives the Workflow boundary, `errorTagOf` falls back to
+ * `"StepFailed"`, and a `retryOn` listing only `ExecFailed` classified that as
+ * non-retryable — so the one failure mode that is purely the platform's was the
+ * one the platform was never asked to retry.
+ *
+ * Observed: a 70-second TypeScript stage died as `StepFailed` after ~80s with
+ * `check` and `oxlint` green beside it, and no retry was attempted. The same
+ * consumer's heaviest stage peaks at 2.2 GiB of 11.9 GiB with 8.4 GB of disk
+ * free, so this is not resource pressure being papered over.
+ *
+ * `ExecTimeout` stays OUT, deliberately. Its tag survives the boundary intact
+ * whenever there is a Cause to read, so it lands here as itself rather than as
+ * `StepFailed` — and a command that outran its ceiling will outrun it again.
+ */
+const RETRY_ON = ["ExecFailed", "StepFailed"] as const;
 
 const stepTimeoutFor = (execTimeoutSec: number): number =>
   execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC;

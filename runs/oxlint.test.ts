@@ -289,7 +289,7 @@ describe("oxlint source determinism", () => {
       // oxlint exiting non-zero is a normal ExecResult decided by the run body,
       // so `retryOn: ExecFailed` can only ever cover the container.
       expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
-      expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
+      expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
     }).pipe(Effect.provide(layer));
   });
 });

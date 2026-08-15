@@ -162,9 +162,17 @@ const DEFAULT_TIMEOUT_SEC = 600;
  */
 const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
-/** Platform-failure retries — see the `exec` step. A verdict is never retried. */
+/**
+ * Platform-failure retries — see the `exec` step. A verdict is never retried:
+ * a command that runs and exits non-zero is a normal `ExecResult`, so neither
+ * class here can reach one.
+ *
+ * `StepFailed` is included because a platform kill leaves no Effect `Cause` to
+ * read a tag from, and the runner falls back to that name — so listing only
+ * `ExecFailed` left the purely-platform failure as the one thing not retried.
+ */
 const PLATFORM_RETRIES = 3;
-const RETRY_ON = ["ExecFailed"] as const;
+const RETRY_ON = ["ExecFailed", "StepFailed"] as const;
 
 /** CONFIG_KV key — strictly per-repo (see header: no global fallback). */
 const commandKey = (repo: string): string => `check.command:${repo}`;

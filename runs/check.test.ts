@@ -121,7 +121,7 @@ describe("check", () => {
         const execStep = handles.executions.steps.find((s) => s.name === "exec");
         expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 + 120);
         expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
-        expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
+        expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
       }).pipe(Effect.provide(layer));
     },
   );
