@@ -4,7 +4,7 @@ BYOC CI/CD that offloads the expensive half of GitHub Actions onto a Cloudflare 
 
 ## Status
 
-Working monorepo: Effect-TS DSL (`packages/core`), capability layers (`packages/runtime-cf`), run definitions (`runs/`), the dispatcher Worker (`apps/dispatcher`), the substrate (`apps/substrate`), and the bundled CLIs (`packages/demo-agent`, `packages/review-agent`). Deployed via `wrangler deploy` with container images built in-repo (`infra/Dockerfile.sandbox*`); CI runs `pnpm lint && pnpm typecheck && pnpm test`, then `wrangler deploy --dry-run` for both workers so a Worker config that names missing code fails before anything deploys (`deploy.yml`).
+Working monorepo: Effect-TS DSL (`packages/core`), capability layers (`packages/runtime-cf`), run definitions (`runs/`), the dispatcher Worker (`apps/dispatcher`), the substrate (`apps/substrate`), and the bundled CLIs (`packages/demo-agent`, `packages/review-agent`). Deployed via `wrangler deploy` with container images built in-repo (`infra/Dockerfile.sandbox*`); CI runs `pnpm lint && pnpm typecheck`, then `wrangler deploy --dry-run` for both workers — so a Worker config that names missing code fails before anything deploys — then `pnpm test` (`deploy.yml`).
 
 ## Architecture
 
