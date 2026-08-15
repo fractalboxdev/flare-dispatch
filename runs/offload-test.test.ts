@@ -702,15 +702,23 @@ describe("offload-test staged mode", () => {
           "exec-features",
           "upload-log-features",
         ]);
+        // Each stage probes for its checkout before running its command — the
+        // container can be recycled between durable steps, and a stage that
+        // assumed its workspace would retry into a directory that is gone.
         expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+          "test -d /workspace/name/.git",
           "pnpm run workspace",
+          "test -d /workspace/name/.git",
           "pnpm fallback",
         ]);
 
         // Documented timeout precedence: labelled rung ?? dispatch ??
         // unlabelled rung ?? default.
-        expect(handles.sandbox.execs[0]?.timeoutSec).toBe(900);
-        expect(handles.sandbox.execs[1]?.timeoutSec).toBe(1800);
+        // Indexes 1 and 3 — 0 and 2 are the per-stage checkout probes, which
+        // carry their own short ceiling rather than the stage's.
+        expect(handles.sandbox.execs[1]?.timeoutSec).toBe(900);
+        expect(handles.sandbox.execs[3]?.timeoutSec).toBe(1800);
+        expect(handles.sandbox.execs[0]?.timeoutSec).toBe(30);
 
         // Every stage step carries its derived ceiling + headroom and the same
         // retry contract as the single exec.
@@ -737,6 +745,44 @@ describe("offload-test staged mode", () => {
         expect(result.exitCode).toBe(0);
         expect(result.durationMs).toBe(1500);
         expect(result.logUri).toBe(handles.artifact.urls.get("step-features.log"));
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "a stage whose checkout is gone re-clones before running, instead of retrying into nothing",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          // The probe answers non-zero: the container was recycled between
+          // durable steps and took the checkout with it. This is the shape the
+          // runtime reports as `working directory … was missing at exec time`.
+          "test -d /workspace/name/.git": { exitCode: 1 },
+          "run-a": { exitCode: 0 },
+        },
+        config: {
+          "offload-test.stages:owner/name": "a",
+          "offload-test.command:owner/name:a": "run-a",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* offloadTest.run(webhookInput);
+
+        // TWO clones: the run's own checkout, then the stage's rebuild. Without
+        // the rebuild the command would run in a directory that is not there,
+        // fail as `ExecFailed`, and be retried into the same absence three
+        // times — a retry that could never work, reporting a missing directory
+        // instead of anything about the code.
+        expect(handles.sandbox.clones).toEqual([
+          { repo: "owner/name", sha: "abc123" },
+          { repo: "owner/name", sha: "abc123" },
+        ]);
+        expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+          "test -d /workspace/name/.git",
+          "run-a",
+        ]);
+        expect(result.exitCode).toBe(0);
       }).pipe(Effect.provide(layer));
     },
   );
@@ -801,7 +847,12 @@ describe("offload-test staged mode", () => {
 
         // `c` never ran; `a` and `b` both have their logs already uploaded —
         // the failing stage cannot orphan the earlier ones.
-        expect(handles.sandbox.execs.map((e) => e.command)).toEqual(["run-a", "run-b"]);
+        expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+          "test -d /workspace/name/.git",
+          "run-a",
+          "test -d /workspace/name/.git",
+          "run-b",
+        ]);
         expect(handles.artifact.uploads.map((u) => u.name)).toEqual(["step-a.log", "step-b.log"]);
       }).pipe(Effect.provide(layer));
     },
@@ -890,7 +941,10 @@ describe("offload-test staged mode", () => {
         const result = yield* offloadTest.run({ ...webhookInput, failOnNonZeroExit: false });
         expect(result.exitCode).toBe(3);
         expect(result.durationMs).toBe(700);
-        expect(handles.sandbox.execs.map((e) => e.command)).toEqual(["run-a"]);
+        expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+          "test -d /workspace/name/.git",
+          "run-a",
+        ]);
         expect(handles.artifact.uploads.map((u) => u.name)).toEqual(["step-a.log"]);
       }).pipe(Effect.provide(layer));
     },
@@ -938,7 +992,12 @@ describe("offload-test staged mode", () => {
 
     return Effect.gen(function* () {
       yield* Effect.exit(offloadTest.run(webhookInput));
-      expect(handles.sandbox.execs.map((e) => e.command)).toEqual(["pnpm test", "pnpm test"]);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([
+        "test -d /workspace/name/.git",
+        "pnpm test",
+        "test -d /workspace/name/.git",
+        "pnpm test",
+      ]);
       expect(handles.artifact.uploads.map((u) => u.name)).toEqual([
         "step-quick.log",
         "step-slow.log",
