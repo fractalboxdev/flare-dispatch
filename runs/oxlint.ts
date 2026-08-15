@@ -38,7 +38,11 @@ import {
   sandbox,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
-import { isNothingToLint, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  ensureWorkspace,
+  isNothingToLint,
+  workspace,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
 
 /** Input contract — repo/sha plus oxlint knobs. */
 const OxlintInput = Schema.Struct({
@@ -160,12 +164,25 @@ export const oxlint = defineRun({
       const result = yield* step(
         "exec",
         () =>
-          sandbox.exec({
-            cwd: dir,
-            container,
-            command,
-            timeoutSec: TIMEOUT_SEC_DEFAULT,
-          }),
+          // Re-established INSIDE the retryable step: a container recycled
+          // between steps takes the checkout with it, and the retry would
+          // otherwise re-run `npx` in a directory that is gone — three times,
+          // reporting the missing directory as the repo's lint verdict.
+          ensureWorkspace({
+            current: { container, dir },
+            repo: input.repo,
+            sha: input.sha,
+            install: false,
+          }).pipe(
+            Effect.flatMap((ws) =>
+              sandbox.exec({
+                cwd: ws.dir,
+                container: ws.container,
+                command,
+                timeoutSec: TIMEOUT_SEC_DEFAULT,
+              }),
+            ),
+          ),
         { retries: PLATFORM_RETRIES, retryOn: RETRY_ON },
       );
 

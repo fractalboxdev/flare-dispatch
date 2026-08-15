@@ -56,7 +56,11 @@ import {
   sandbox,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
-import { loadSecrets, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
+import {
+  ensureWorkspace,
+  loadSecrets,
+  workspace,
+} from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const CheckInput = Schema.Struct({
   /**
@@ -361,17 +365,32 @@ export const check = defineRun({
       const result = yield* step(
         "exec",
         () =>
-          sandbox.exec({
-            cwd: dir,
-            container,
-            command,
-            // Per-dispatch `env` wins over a same-named Worker secret.
-            env: { ...secretEnv, ...input.env },
-            // Defense in depth (header): scrub secret VALUES from the captured
-            // log before it's persisted, in case the command echoes its env.
-            redactValues: Object.values(secretEnv),
-            timeoutSec: effectiveTimeoutSec,
-          }),
+          // The checkout is re-established INSIDE the retryable step, because a
+          // container recycled between steps takes it with it and the retry
+          // would otherwise re-run the command in a directory that is gone —
+          // three times, reporting the missing directory as the repo's verdict.
+          ensureWorkspace({
+            current: { container, dir },
+            repo: input.repo,
+            sha: input.sha,
+            ...(input.image !== undefined ? { image: input.image } : {}),
+            install: input.install,
+          }).pipe(
+            Effect.flatMap((ws) =>
+              sandbox.exec({
+                cwd: ws.dir,
+                container: ws.container,
+                command,
+                // Per-dispatch `env` wins over a same-named Worker secret.
+                env: { ...secretEnv, ...input.env },
+                // Defense in depth (header): scrub secret VALUES from the
+                // captured log before it's persisted, in case the command
+                // echoes its env.
+                redactValues: Object.values(secretEnv),
+                timeoutSec: effectiveTimeoutSec,
+              }),
+            ),
+          ),
         {
           timeoutSec: effectiveTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
           retries: PLATFORM_RETRIES,
