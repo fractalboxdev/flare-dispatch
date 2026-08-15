@@ -95,9 +95,17 @@ const OxlintOutput = Schema.Struct({
 /** Default `exec` timeout — lint is fast, so a tighter ceiling than tests. */
 const TIMEOUT_SEC_DEFAULT = 300;
 
-/** Platform-failure retries — see the `exec` step. A verdict is never retried. */
+/**
+ * Platform-failure retries — see the `exec` step. A verdict is never retried:
+ * a command that runs and exits non-zero is a normal `ExecResult`, so neither
+ * class here can reach one.
+ *
+ * `StepFailed` is included because a platform kill leaves no Effect `Cause` to
+ * read a tag from, and the runner falls back to that name — so listing only
+ * `ExecFailed` left the purely-platform failure as the one thing not retried.
+ */
 const PLATFORM_RETRIES = 3;
-const RETRY_ON = ["ExecFailed"] as const;
+const RETRY_ON = ["ExecFailed", "StepFailed"] as const;
 
 export const oxlint = defineRun({
   name: "oxlint",

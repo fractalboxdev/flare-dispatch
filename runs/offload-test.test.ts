@@ -126,7 +126,7 @@ describe("offload-test", () => {
       yield* offloadTest.run(baseInput);
       const execStep = handles.executions.steps.find((st) => st.name === "exec");
       expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
-      expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
+      expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
     }).pipe(Effect.provide(layer));
   });
 
@@ -232,7 +232,7 @@ describe("offload-test", () => {
         // raised by the engine, so `retryOn` cannot gate it: a wedged exec is
         // replayed for the whole budget.
         expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
-        expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
+        expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
       }).pipe(Effect.provide(layer));
     },
   );
@@ -658,6 +658,32 @@ describe("offload-test", () => {
 // earlier stage's log; a stage step that dies gets a one-line marker uploaded
 // under its log name. ABSENT key → the 1.1.0 behaviour, byte-identical — the
 // unstaged tests above are the pin for that.
+describe("offload-test single-exec", () => {
+  it.effect("a recycled container is re-cloned rather than retried into", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        // The probe answers non-zero: the container was recycled between
+        // `checkout` and `exec`, which is one boundary every run has.
+        "test -d /workspace/name/.git": { exitCode: 1 },
+        "pnpm test": { exitCode: 0 },
+      },
+    });
+
+    return Effect.gen(function* () {
+      const result = yield* offloadTest.run(baseInput);
+
+      // TWO clones: the run's own checkout, then the rebuild inside the exec
+      // step. #128 left this path uncovered on the grounds that its "exposure
+      // is one step"; the exposure is one BOUNDARY, and every run has one.
+      expect(handles.sandbox.clones).toEqual([
+        { repo: "owner/name", sha: "abc123" },
+        { repo: "owner/name", sha: "abc123" },
+      ]);
+      expect(result.exitCode).toBe(0);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
 describe("offload-test staged mode", () => {
   // Webhook-shaped input — staged mode only exists on the path that omits
   // `command` (the resolve step is where the stages key is read).
@@ -725,7 +751,7 @@ describe("offload-test staged mode", () => {
         const execWorkspace = handles.executions.steps.find((s) => s.name === "exec-workspace");
         expect(execWorkspace?.metadata?.["stepOpts.timeoutSec"]).toBe(900 + 120);
         expect(execWorkspace?.metadata?.["stepOpts.retries"]).toBe(3);
-        expect(execWorkspace?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
+        expect(execWorkspace?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
         // The suspicious labelled-key-missing fallback is recorded on the
         // stage's step metadata — `workspace` resolved its own key, so only
         // `features` is flagged.
@@ -1129,7 +1155,7 @@ describe("offload-test isolated stages", () => {
         // The retry contract is unchanged — it is the UNIT that changed.
         const execA = handles.executions.steps.find((s) => s.name === "exec-a");
         expect(execA?.metadata?.["stepOpts.retries"]).toBe(3);
-        expect(execA?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
+        expect(execA?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
 
         expect(result.exitCode).toBe(0);
         expect(result.durationMs).toBe(300);

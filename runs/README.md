@@ -276,8 +276,9 @@ command in the same missing directory three times and reported a failure about a
 missing directory rather than anything about the code. The retry could never
 have worked: the thing it needed was the thing that was gone.
 
-So **every** PR run — `offload-test`'s shared-container stages, `check`, and
-`oxlint` — calls the `ensureWorkspace` primitive inside its retryable step: it
+So **every** PR run and every path within it — `offload-test` staged and
+single-exec, `check`, and `oxlint` — calls the `ensureWorkspace` primitive
+inside its retryable step: it
 probes `test -d <dir>/.git` and re-clones when the probe fails. On the happy path
 that is one extra exec of about a second; on a recycled container it is a clone
 and an install, which is what the step was going to need anyway.
