@@ -113,13 +113,15 @@ describe("check", () => {
         expect(exec).toBeDefined();
         expect(exec?.timeoutSec).toBe(1800);
 
-        // The STEP wrapping the exec carries that ceiling plus headroom (the
-        // exec's own deadline must fire first, yielding a log), and must not
-        // be replayed on failure — CF's default `limit: 5` replays the run
-        // body from the top on every attempt.
+        // The STEP wrapping the exec carries that ceiling plus headroom — the
+        // exec's own deadline must fire first, yielding a log — and retries
+        // ONLY the platform. A command that runs and exits non-zero is a normal
+        // `ExecResult`, so `retryOn: ExecFailed` cannot replay a verdict; it
+        // covers the case where the container failed the command never ran.
         const execStep = handles.executions.steps.find((s) => s.name === "exec");
         expect(execStep?.metadata?.["stepOpts.timeoutSec"]).toBe(1800 + 120);
-        expect(execStep?.metadata?.["stepOpts.retries"]).toBe(0);
+        expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
+        expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
       }).pipe(Effect.provide(layer));
     },
   );

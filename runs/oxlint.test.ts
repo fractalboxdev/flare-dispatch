@@ -269,4 +269,18 @@ describe("oxlint source determinism", () => {
       expect(code).not.toMatch(/\bMath\s*\.\s*random\b/);
     }),
   );
+
+  it.effect("the exec step retries the platform, never a lint verdict", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "npx --yes oxlint@1.42.0 --format github": { exitCode: 0 } },
+    });
+    return Effect.gen(function* () {
+      yield* oxlint.run({ repo: "owner/name", sha: "abc123", failOnNonZeroExit: false });
+      const execStep = handles.executions.steps.find((s) => s.name === "exec");
+      // oxlint exiting non-zero is a normal ExecResult decided by the run body,
+      // so `retryOn: ExecFailed` can only ever cover the container.
+      expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
+      expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
+    }).pipe(Effect.provide(layer));
+  });
 });

@@ -91,6 +91,10 @@ const OxlintOutput = Schema.Struct({
 /** Default `exec` timeout — lint is fast, so a tighter ceiling than tests. */
 const TIMEOUT_SEC_DEFAULT = 300;
 
+/** Platform-failure retries — see the `exec` step. A verdict is never retried. */
+const PLATFORM_RETRIES = 3;
+const RETRY_ON = ["ExecFailed"] as const;
+
 export const oxlint = defineRun({
   name: "oxlint",
   version: "1.1.0",
@@ -149,13 +153,20 @@ export const oxlint = defineRun({
       // exec — fetch + run oxlint via `npx`. The args are appended verbatim;
       // the `.trim()` collapses the trailing space when `args` is empty.
       const command = `npx --yes oxlint@${input.version} ${input.args}`.trim();
-      const result = yield* step("exec", () =>
-        sandbox.exec({
-          cwd: dir,
-          container,
-          command,
-          timeoutSec: TIMEOUT_SEC_DEFAULT,
-        }),
+      // Retries cover the PLATFORM, never the verdict. oxlint exiting non-zero
+      // is a normal `ExecResult` decided below; only `ExecFailed` fails the
+      // Effect, and that is the container rather than the code (observed
+      // elsewhere as `exec failed (exit -1): HTTP error! status: 500`).
+      const result = yield* step(
+        "exec",
+        () =>
+          sandbox.exec({
+            cwd: dir,
+            container,
+            command,
+            timeoutSec: TIMEOUT_SEC_DEFAULT,
+          }),
+        { retries: PLATFORM_RETRIES, retryOn: RETRY_ON },
       );
 
       // upload-log — push the oxlint output to R2, get a signed URL.
