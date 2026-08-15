@@ -260,6 +260,41 @@ wall time. Each stage still runs under its own exec ceiling, and those per-exec
 ceilings are the only runtime enforcement — size them to the suite.
 
 Staged mode is webhook-only: a dispatch that passes `command` skips the config
-read and stays single-exec. Stages run sequentially inside one workflow
-instance posting one check-run — they are ordered dependents of one checkout,
-not the parallel independent gates `matrix-fanout` + labelled `check` serve.
+read and stays single-exec. Stages run inside one workflow instance posting one
+check-run — sequentially by default, concurrently when the next rung says so.
+
+### Isolated stages (`offload-test.stageConcurrency:<repo>`)
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.stageConcurrency:owner/repo"      "4"
+```
+
+Absent or `1` is the shared-container sequential mode above, byte for byte.
+Above 1, each stage acquires its **own** workspace and up to N run at once.
+
+The reason is the retry, not the speed. A stage step carries `retries: 3` on
+`ExecFailed`, and with a shared container that guarantee is empty: container
+disk is ephemeral, so when an instance dies the next one starts with no
+checkout, and the retry re-runs the command against a directory that no longer
+exists — failing in seconds for a reason unrelated to the original, which is
+what the run then reports. Isolated, the retryable step is
+`workspace` + `exec` as one unit, so a retry re-acquires, re-clones and
+re-installs before running the command. A retry whose precondition the failure
+destroyed is not a retry.
+
+Two semantics follow from independence rather than from choice:
+
+- **Every stage runs.** Sequential mode stops at the first red because later
+  stages share its container and are treated as dependents; isolated stages have
+  no such relationship, and stopping would discard results already paid for. All
+  of them report, and the run fails if any failed. No `⊘ skipped` line can
+  appear.
+- **Each stage pays its own checkout and `install`.** On a repo whose install is
+  a large cold download that is N times the bytes — overlapping in time, so it
+  costs bandwidth rather than wall clock.
+
+Use it when the stages are independent (different feature unifications of one
+tree, say). Leave it at 1 when a later stage consumes an earlier one's output,
+which sharing a container is the only way to express. A value above the stage
+count is clamped to it.
