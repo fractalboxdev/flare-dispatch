@@ -1130,6 +1130,53 @@ describe("offload-test isolated stages", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("one stage's failed log upload does not cancel its peers", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "run-a": { exitCode: 0 },
+        "run-b": { exitCode: 0 },
+        "run-c": { exitCode: 0 },
+      },
+      config: {
+        "offload-test.stages:owner/name": "a,b,c",
+        "offload-test.command:owner/name:a": "run-a",
+        "offload-test.command:owner/name:b": "run-b",
+        "offload-test.command:owner/name:c": "run-c",
+        "offload-test.stageConcurrency:owner/name": "3",
+      },
+      artifactUploadFailures: ["step-b.log"],
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+
+      // Every stage still RAN. Letting the upload failure escape would have
+      // interrupted the concurrent peers, so one R2 hiccup would take down
+      // stages that had nothing to do with it.
+      expect(handles.sandbox.execs.map((e) => e.command).sort()).toEqual([
+        "run-a",
+        "run-b",
+        "run-c",
+      ]);
+      expect(handles.artifact.uploads.map((u) => u.name).sort()).toEqual([
+        "step-a.log",
+        "step-c.log",
+      ]);
+
+      // And it still fails the run — naming the upload step, not calling the
+      // stage dead: it ran to a verdict, and only the log is missing.
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
+      expect((failure as { step?: string })?.step).toBe("upload-log-b");
+      const summaryMd = (failure as { summaryMd?: string })?.summaryMd ?? "";
+      expect(summaryMd).toContain("did not upload");
+      expect(summaryMd).not.toContain("died");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("concurrency of 1 keeps the shared container and the dependent semantics", () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: { "run-a": { exitCode: 0 }, "run-b": { exitCode: 0 } },

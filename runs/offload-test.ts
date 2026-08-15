@@ -694,6 +694,17 @@ export const offloadTest = defineRun({
               readonly stage: ResolvedStage;
               readonly errorClass: string;
               readonly elapsedS: number;
+            }
+          // The stage ran to a verdict and its LOG did not land. Its own kind
+          // rather than a `dead`, because the two need different words: this
+          // stage has an exit code and no artifact, and telling an operator it
+          // "died" would send them looking for a marker that describes a death
+          // that did not happen.
+          | {
+              readonly kind: "unreported";
+              readonly line: string;
+              readonly stage: ResolvedStage;
+              readonly errorClass: string;
             };
 
         const runStage = (stage: ResolvedStage) =>
@@ -845,13 +856,38 @@ export const offloadTest = defineRun({
 
             const result = exit.value;
             // upload NOW, before the next stage runs — the whole point of staging.
-            const logUri = yield* step(`upload-log-${stage.label}`, () =>
-              artifact.upload({
-                name: `step-${stage.label}.log`,
-                path: result.logPath,
-                signedUrlTTL: "30 days",
-              }),
+            //
+            // CAUGHT rather than propagated. Let it escape and, in isolated
+            // mode, `Effect.forEach` interrupts every peer still running — so
+            // one R2 hiccup would take down stages that had nothing to do with
+            // it, and "every stage runs" would quietly stop being true. It
+            // still fails the run; it just does so as this stage's own outcome,
+            // after the peers have reported.
+            const uploaded = yield* Effect.exit(
+              step(`upload-log-${stage.label}`, () =>
+                artifact.upload({
+                  name: `step-${stage.label}.log`,
+                  path: result.logPath,
+                  signedUrlTTL: "30 days",
+                }),
+              ),
             );
+            if (Exit.isFailure(uploaded)) {
+              const errorClass = Option.match(Cause.failureOption(uploaded.cause), {
+                onSome: (f) => {
+                  const tag = (f as { _tag?: unknown })._tag;
+                  return typeof tag === "string" ? tag : "UnknownError";
+                },
+                onNone: () => "Defect",
+              });
+              return {
+                kind: "unreported",
+                stage,
+                errorClass,
+                line: `- ✗ \`${stage.label}\` — exit \`${result.exitCode}\` in ${(result.durationMs / 1000).toFixed(1)}s, but its log did not upload (\`${errorClass}\`)`,
+              } as const;
+            }
+            const logUri = uploaded.value;
 
             if (result.exitCode !== 0) {
               return {
@@ -895,6 +931,21 @@ export const offloadTest = defineRun({
             ].join("\n"),
           });
 
+        const unreportedFailure = (
+          outcome: Extract<StageOutcome, { kind: "unreported" }>,
+          lines: readonly string[],
+        ) =>
+          new StepFailed({
+            step: `upload-log-${outcome.stage.label}`,
+            cause: `stage \`${outcome.stage.label}\` ran, but its log upload failed: ${outcome.errorClass}`,
+            summaryMd: [
+              `Stage \`${outcome.stage.label}\` — \`${outcome.stage.command}\` — ran to a verdict, but \`step-${outcome.stage.label}.log\` did not upload (\`${outcome.errorClass}\`). ` +
+                `The verdict is in the rundown below; the log is not retrievable.`,
+              "",
+              ...lines,
+            ].join("\n"),
+          });
+
         // --- Isolated stages: every stage runs, then the run reports -----------
         if (isolatedStages) {
           // No `⊘ skipped` line is possible here and none is wanted: nothing is
@@ -907,11 +958,11 @@ export const offloadTest = defineRun({
           // not the wall clock, which concurrency makes smaller than the work
           // performed. `logUri` is the last stage that produced one.
           const durationTotalMs = outcomes.reduce(
-            (total, o) => (o.kind === "dead" ? total : total + o.durationMs),
+            (total, o) => (o.kind === "ok" || o.kind === "red" ? total + o.durationMs : total),
             0,
           );
           const logUri = outcomes.reduce(
-            (last, o) => (o.kind === "dead" ? last : o.logUri),
+            (last, o) => (o.kind === "ok" || o.kind === "red" ? o.logUri : last),
             "",
           );
 
@@ -929,6 +980,13 @@ export const offloadTest = defineRun({
 
           const dead = outcomes.find((o) => o.kind === "dead");
           if (dead !== undefined) return yield* Effect.fail(deadFailure(dead, lines));
+
+          // Ahead of the red check: a stage whose log did not upload has a
+          // verdict nobody can read, and reporting the OTHER stage's exit code
+          // as the run's would bury that.
+          const unreported = outcomes.find((o) => o.kind === "unreported");
+          if (unreported !== undefined)
+            return yield* Effect.fail(unreportedFailure(unreported, lines));
 
           const red = outcomes.find((o) => o.kind === "red");
           if (red !== undefined) {
@@ -966,6 +1024,11 @@ export const offloadTest = defineRun({
           if (outcome.kind === "dead") {
             lines.push(...skippedLines(i + 1));
             return yield* Effect.fail(deadFailure(outcome, lines));
+          }
+
+          if (outcome.kind === "unreported") {
+            lines.push(...skippedLines(i + 1));
+            return yield* Effect.fail(unreportedFailure(outcome, lines));
           }
 
           durationTotalMs += outcome.durationMs;

@@ -235,6 +235,13 @@ export type CFRuntimeTestOptions = {
    * `handles.eventQueue` so a test can inject AFTER constructing the runtime.
    */
   readonly eventQueue?: import("./fakes/step-runner-inline").InlineEventQueue;
+
+  /**
+   * Artifact names whose upload fails with `ArtifactUploadFailed`. Storage is
+   * the one dependency a run cannot make succeed by retrying, so a run that
+   * fans work out has to be pinned on what one failed upload does to the rest.
+   */
+  readonly artifactUploadFailures?: readonly string[];
 };
 
 /**
@@ -251,7 +258,11 @@ export const makeCFRuntimeTest = (
     opts.sandboxLaunchFailures,
   );
   const browser = makeBrowserFake(opts.browser);
-  const artifact = makeArtifactFake();
+  const artifact = makeArtifactFake(
+    opts.artifactUploadFailures === undefined
+      ? undefined
+      : { failUploads: opts.artifactUploadFailures },
+  );
   // One execution id shared by the step runner AND `io.executionId`, so a run
   // that addresses itself (e.g. the release-PR marker) sees the same id its
   // steps record under.

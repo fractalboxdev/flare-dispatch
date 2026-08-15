@@ -7,6 +7,7 @@
 // Spec: specs/pm/plan.md § 3 (fakes/), specs/03-dsl.md § artifact.
 
 import { Effect, Layer } from "effect";
+import { ArtifactUploadFailed } from "../errors";
 import { Artifact, type ArtifactInfo, type ArtifactService } from "../services/artifact";
 
 /** Inspectable in-memory artifact store. */
@@ -21,26 +22,39 @@ export type ArtifactFakeState = {
   readonly uploads: { name: string; path: string; contentType?: string; container?: string }[];
 };
 
-/** Build an Artifact fake plus an inspectable handle. */
-export const makeArtifactFake = (): {
+/**
+ * Build an Artifact fake plus an inspectable handle.
+ *
+ * `failUploads` names artifacts whose upload fails with `ArtifactUploadFailed`.
+ * Storage is the one dependency a run cannot make succeed by trying harder, so
+ * a run that fans work out concurrently has to be pinned on what ONE upload
+ * failing does to the others — a fake that can only succeed cannot express the
+ * question.
+ */
+export const makeArtifactFake = (opts?: {
+  readonly failUploads?: readonly string[];
+}): {
   layer: Layer.Layer<Artifact>;
   state: ArtifactFakeState;
 } => {
   const state: ArtifactFakeState = { urls: new Map(), uploads: [] };
+  const failUploads = new Set(opts?.failUploads ?? []);
 
   const service: ArtifactService = {
     upload: ({ name, path, contentType, container }) =>
-      Effect.sync(() => {
-        state.uploads.push({
-          name,
-          path,
-          ...(contentType !== undefined ? { contentType } : {}),
-          ...(container !== undefined ? { container: container.id } : {}),
-        });
-        const url = `https://fake-r2.local/${encodeURIComponent(name)}`;
-        state.urls.set(name, url);
-        return url;
-      }),
+      failUploads.has(name)
+        ? Effect.fail(new ArtifactUploadFailed({ name, cause: "artifact fake: forced failure" }))
+        : Effect.sync(() => {
+            state.uploads.push({
+              name,
+              path,
+              ...(contentType !== undefined ? { contentType } : {}),
+              ...(container !== undefined ? { container: container.id } : {}),
+            });
+            const url = `https://fake-r2.local/${encodeURIComponent(name)}`;
+            state.urls.set(name, url);
+            return url;
+          }),
 
     list: () =>
       Effect.sync(() =>
