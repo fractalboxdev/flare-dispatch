@@ -257,8 +257,9 @@ const PLATFORM_RETRIES = 3;
  * the one that was missing, and its absence made the whole retry policy inert
  * on the failure it was written for.
  *
- * A command that RUNS and exits non-zero comes back as a normal `ExecResult`, so
- * no tag listed here can carry one. When the platform kills the step outright, no Effect
+ * A command that RUNS and exits non-zero comes back as a normal `ExecResult`,
+ * so no tag listed here can carry one. When the platform kills the step
+ * outright, no Effect
  * `Cause` survives the Workflow boundary, `errorTagOf` falls back to
  * `"StepFailed"`, and a `retryOn` listing only `ExecFailed` classified that as
  * non-retryable — so the one failure mode that is purely the platform's was the
@@ -276,11 +277,13 @@ const PLATFORM_RETRIES = 3;
  * recovery it was invoked to perform.
  *
  * `CheckoutFailed` is a catch-all over the whole clone body, so deterministic
- * failures ride it too — a bad sha, a repo that is gone. On the isolated path a
- * stage's clone is the run's FIRST, with no earlier `checkout` to have caught
- * those, so this knowingly spends the retry budget on some failures that cannot
- * succeed — four clone attempts plus backoff, times the stages running at once.
- * The alternative loses the repair on every path, so it is the worse trade.
+ * failures ride it too — a bad sha, a repo that is gone, and on the substrate
+ * backend the recipe-pin mismatch. On the isolated path a stage's clone is the
+ * run's FIRST, with no earlier `checkout` to have caught those, so this
+ * knowingly spends the retry budget on some failures that cannot succeed: four
+ * clone attempts plus backoff, times the stages running at once. Each attempt
+ * also mints its own installation token. The alternative loses the repair on
+ * every path, so it is the worse trade.
  *
  * `ExecTimeout` stays OUT, deliberately. Its tag survives the boundary intact
  * whenever there is a Cause to read, so it lands here as itself rather than as

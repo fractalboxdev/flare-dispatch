@@ -101,8 +101,12 @@ instances on host restarts. A `checkout` step that already completed is never re
 replay, so on the container backend every attempt after a container swap hits an empty
 disk. `ensureWorkspace` (`packages/core/src/primitives/workspace.ts`) is the repair, and
 it belongs INSIDE the retryable step — a rebuild the retry does not re-run is not a
-rebuild. On the substrate backend (`SUBSTRATE_BACKEND=on`) the facade restores the tree
-inside the exec fence, so the probe is redundant there rather than wrong.
+rebuild. On the substrate backend (`SUBSTRATE_BACKEND=on`, `wrangler.jsonc` is `"off"`
+today) `execUnderGrant` rebuilds inside the fence (`apps/substrate/src/facade.ts:210-212`),
+so the probe is redundant there rather than wrong — but not free, and not a no-op: that
+deploy still pays one fenced exec per retryable step, gains a retry on pool-admission
+refusals, and pays a retried recipe-pin mismatch, because
+`packages/runtime-cf/src/sandbox-facade.ts:274-287` folds both into `CheckoutFailed`.
 
 Scoped deliberately. A re-clone restores the tree the *spec* describes, which is right
 for a suite, a lint or a build, and wrong for a step that reads a tree an earlier step

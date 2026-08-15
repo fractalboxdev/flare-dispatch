@@ -53,7 +53,9 @@ export const workspace = (opts: {
  * precondition the failure destroyed is not a retry.
  *
  * Call this INSIDE the retryable step, not before it. That placement is the
- * whole point: the rebuild has to be part of what a retry re-runs.
+ * whole point: the rebuild has to be part of what a retry re-runs. That step's
+ * `retryOn` must list `CheckoutFailed` too, or a clone that flakes mid-rebuild
+ * ends the step one call short of the repair.
  *
  * Costs one `test -d` on the happy path. On a recycled container it is a clone
  * and an install — which is what the step was about to need anyway.
