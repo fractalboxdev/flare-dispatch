@@ -929,7 +929,6 @@ export const offloadTest = defineRun({
                   ),
                 ),
               );
-              yield* reapStageContainer(stage.label);
               return {
                 kind: "dead",
                 stage,
@@ -965,7 +964,6 @@ export const offloadTest = defineRun({
                 },
                 onNone: () => "Defect",
               });
-              yield* reapStageContainer(stage.label);
               return {
                 kind: "unreported",
                 stage,
@@ -976,7 +974,6 @@ export const offloadTest = defineRun({
             const logUri = uploaded.value;
 
             if (result.exitCode !== 0) {
-              yield* reapStageContainer(stage.label);
               return {
                 kind: "red",
                 stage,
@@ -987,14 +984,24 @@ export const offloadTest = defineRun({
                 line: `- ✗ \`${stage.label}\` — exit \`${result.exitCode}\` in ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
               } as const;
             }
-            yield* reapStageContainer(stage.label);
             return {
               kind: "ok",
               durationMs: result.durationMs,
               logUri,
               line: `- ✓ \`${stage.label}\` — ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
             } as const;
-          });
+          }).pipe(
+            // On EVERY exit — each of the four outcomes, an interrupt when a
+            // peer fails, a defect. Enumerating the return paths worked and was
+            // the wrong shape: it is correct only for as long as nobody adds a
+            // fifth outcome, and the cost of forgetting is a container idling
+            // out `sleepAfter` on the bill. A finalizer cannot be forgotten.
+            //
+            // After the outcome, not before: everything the outcome carries is
+            // already in R2 by then, so the container is genuinely finished
+            // with.
+            Effect.ensuring(reapStageContainer(stage.label)),
+          );
 
         const deadFailure = (
           outcome: Extract<StageOutcome, { kind: "dead" }>,

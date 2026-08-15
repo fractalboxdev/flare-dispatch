@@ -1177,6 +1177,30 @@ describe("offload-test isolated stages", () => {
     },
   );
 
+  it.effect("a stage whose workspace never comes up still gives its container back", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        // The stage dies before it ever runs its command — the shape a failed
+        // acquire/clone/install takes. Enumerated cleanup would have missed it.
+        "run-a": { fail: "ExecFailed", exitCode: -1, stderrTail: "container died" },
+        "run-b": { exitCode: 0 },
+      },
+      config: {
+        // Two stages, because concurrency is clamped to the stage count — one
+        // stage is never isolated however high the knob goes.
+        "offload-test.stages:owner/name": "a,b",
+        "offload-test.command:owner/name:a": "run-a",
+        "offload-test.command:owner/name:b": "run-b",
+        "offload-test.stageConcurrency:owner/name": "2",
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.exit(offloadTest.run(webhookInput));
+      expect(handles.sandbox.destroyed).toContain("fake-container:a");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("a red stage does not skip its peers — every stage runs, then the run reports", () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: {
