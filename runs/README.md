@@ -263,6 +263,27 @@ Staged mode is webhook-only: a dispatch that passes `command` skips the config
 read and stays single-exec. Stages run inside one workflow instance posting one
 check-run — sequentially by default, concurrently when the next rung says so.
 
+### A stage does not assume its checkout
+
+Container disk is ephemeral, and a staged run spanning forty minutes of durable
+steps is long enough for the instance behind it to be recycled. The runtime
+reports that as `working directory '<dir>' was missing at exec time — the
+checkout did not survive to this step (container recycled)`, raised as
+`ExecFailed`.
+
+`ExecFailed` is exactly what `retryOn` retries, so the platform re-ran the same
+command in the same missing directory three times and reported a failure about a
+missing directory rather than anything about the code. The retry could never
+have worked: the thing it needed was the thing that was gone.
+
+So a **shared-container** stage probes for its checkout (`test -d <dir>/.git`)
+inside its own retryable step and re-clones when the probe fails. On the happy
+path that is one extra exec of about a second; on a recycled container it is a
+clone and an install, which is what the stage was going to need anyway.
+
+Isolated stages (below) need no probe: they acquire a workspace inside the
+retryable step already, so a retry rebuilds it by construction.
+
 ### Isolated stages (`offload-test.stageConcurrency:<repo>`)
 
 ```bash
