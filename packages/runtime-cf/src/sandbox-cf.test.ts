@@ -570,6 +570,59 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
     }),
   );
 
+  it.effect("the COMMAND is scrubbed before it lands in the R2 meta line", () =>
+    Effect.gen(function* () {
+      // `writeLog` writes `{stream:"meta", command}` into the durable log. A
+      // command that inlines a credential reached R2 in the clear, beside the
+      // streams that had just been scrubbed.
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => ({
+        exitCode: 0,
+        duration: 1,
+        stdout: "",
+        stderr: "",
+      }));
+      const { bucket, puts } = makeBucket();
+      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+      yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({
+          command: 'curl -H "Authorization: Bearer tok-abc123" https://api.example.com',
+          cwd: "/w",
+          env: {},
+          redactValues: ["tok-abc123"],
+        }),
+      ).pipe(Effect.provide(layer));
+      const logBody = puts.map((p) => String(p.body)).join("");
+      expect(logBody).not.toContain("tok-abc123");
+      expect(logBody).toContain("***");
+    }),
+  );
+
+  it.effect("a timed-out exec does not carry its raw command into the Workflow record", () =>
+    Effect.gen(function* () {
+      // `ExecTimeout.message` inlines the command, and Workflows persists that
+      // as the attempt record — a second durable surface beside the R2 log.
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => {
+        throw new Error("Command timeout after 30000ms");
+      });
+      const { bucket } = makeBucket();
+      const layer = makeSandboxCloudflareLive(ns, bucket, "exec-1");
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({
+          command: 'curl -H "Authorization: Bearer tok-abc123" https://api.example.com',
+          cwd: "/w",
+          env: {},
+          timeoutSec: 30,
+          redactValues: ["tok-abc123"],
+        }),
+      ).pipe(Effect.provide(layer), Effect.exit);
+      const failure = failureOf(exit);
+      expect(failure?._tag).toBe("ExecTimeout");
+      expect(JSON.stringify(failure)).not.toContain("tok-abc123");
+    }),
+  );
+
   it.effect("redacts before truncating, so a secret on the 4KB cut leaves no fragment", () =>
     Effect.gen(function* () {
       const secret = "SECRET_TOKEN_VALUE";

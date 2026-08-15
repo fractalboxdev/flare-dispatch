@@ -866,6 +866,71 @@ describe("offload-test staged mode", () => {
     },
   );
 
+  it.effect("a secret inlined in a stage command never reaches the check-run summary", () => {
+    // `redactValues` on the exec covers what the sandbox layer persists. It
+    // does not reach the command string this run embeds in `summaryMd`, which
+    // `stepFailedMd` renders as UNFENCED markdown into the GitHub check-run
+    // summary — public on a public repo, and the loudest of the three surfaces.
+    const { layer } = makeCFRuntimeTest({
+      secrets: { DEPLOY_TOKEN: "tok-abc123" },
+      sandboxProgram: {
+        "curl -H 'Authorization: Bearer tok-abc123' https://x": { exitCode: 3 },
+      },
+      config: {
+        "offload-test.stages:owner/name": "a",
+        "offload-test.command:owner/name:a": "curl -H 'Authorization: Bearer tok-abc123' https://x",
+      },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        offloadTest.run({ ...webhookInput, secrets: ["DEPLOY_TOKEN"] }),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      const rendered = `${(failure as { summaryMd?: string })?.summaryMd ?? ""} ${
+        (failure as { cause?: unknown })?.cause ?? ""
+      }`;
+      expect(rendered).not.toContain("tok-abc123");
+      expect(rendered).toContain("***");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a DYING stage's command is scrubbed too — the path that skips ExecTimeout", () => {
+    // The non-obvious half, and the one the red-path test above does not reach.
+    // A stage that dies is caught and replaced by `deadFailure`, so the raw
+    // `ExecTimeout` (whose `command` the sandbox layer scrubs) never surfaces —
+    // the run renders `stage.command` itself into `cause` and `summaryMd`.
+    const { layer } = makeCFRuntimeTest({
+      secrets: { DEPLOY_TOKEN: "tok-abc123" },
+      sandboxProgram: {
+        "deploy --token tok-abc123": { fail: "ExecTimeout", timeoutSec: 600 },
+      },
+      config: {
+        "offload-test.stages:owner/name": "a",
+        "offload-test.command:owner/name:a": "deploy --token tok-abc123",
+      },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        offloadTest.run({ ...webhookInput, secrets: ["DEPLOY_TOKEN"] }),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
+      const rendered = `${(failure as { summaryMd?: string })?.summaryMd ?? ""} ${
+        (failure as { cause?: unknown })?.cause ?? ""
+      }`;
+      expect(rendered).not.toContain("tok-abc123");
+      expect(rendered).toContain("***");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect(
     "a non-zero stage stops the sequence — later stages skipped, failure names the stage, earlier logs uploaded",
     () => {

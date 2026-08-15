@@ -667,7 +667,12 @@ export const makeSandboxCloudflareLive = (
           // FULL output → R2 (the durable log the artifact step promotes). Kept
           // even on the working-dir-missing path below, so the failure is
           // diagnosable from the log viewer.
-          await writeLog(logPath, cmd, stdout, stderr);
+          // The command rides the meta line into R2, so it is a persisted
+          // surface too. Scrubbing the streams beside it and leaving it in the
+          // clear only holds while no command inlines a credential, and
+          // `curl -H "Authorization: Bearer …"` is an ordinary thing for a
+          // consumer's own CI to run (adr/0006 § never-log list).
+          await writeLog(logPath, redact(cmd, redactValues), stdout, stderr);
           // A command whose shell could not even enter its working directory
           // never ran — the checkout did not survive to this exec (container
           // recycled between durable steps). Raise a real ExecFailed rather than
@@ -700,9 +705,12 @@ export const makeSandboxCloudflareLive = (
           // what Workflows persists via ExecFailed.message (#88).
           const message = cause instanceof Error ? cause.message : String(cause);
           if (/timed?\s*out|timeout/i.test(message)) {
+            // `ExecTimeout.message` inlines the command and Workflows persists
+            // that as the attempt record — a second durable surface, so it
+            // takes the same scrub as the R2 log.
             return new ExecTimeout({
               timeoutSec: timeoutSec ?? 0,
-              command: cmd,
+              command: redact(cmd, redactValues),
             });
           }
           return new ExecFailed({
