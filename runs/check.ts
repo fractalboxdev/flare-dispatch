@@ -158,6 +158,10 @@ const DEFAULT_TIMEOUT_SEC = 600;
  */
 const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
+/** Platform-failure retries — see the `exec` step. A verdict is never retried. */
+const PLATFORM_RETRIES = 3;
+const RETRY_ON = ["ExecFailed"] as const;
+
 /** CONFIG_KV key — strictly per-repo (see header: no global fallback). */
 const commandKey = (repo: string): string => `check.command:${repo}`;
 
@@ -337,8 +341,22 @@ export const check = defineRun({
       // with a bug in it: leave the step's unset and its 600s default silently
       // wins over a configured `check.timeoutSec`, surfacing as
       // `WorkflowTimeoutError` from a limit the repo's config never mentions.
-      // `retries: 0` because a red check is not a transient, and CF's default
-      // `limit: 5` replays the run body from the top on every attempt.
+      // A red check is not a transient — but a PLATFORM failure is, and the two
+      // are different channels here. A command that runs and exits non-zero
+      // comes back as a normal `ExecResult` and is decided below; only
+      // `ExecFailed` / `ExecTimeout` fail the Effect. So `retryOn: ExecFailed`
+      // cannot retry a verdict, by construction: it retries the case where the
+      // command never ran.
+      //
+      // Which is not hypothetical. Observed on a consumer's PR: a 40-second
+      // check reported `ExecFailed: exec failed (exit -1): HTTP error! status:
+      // 500` — the container, not the code — and reported it as the repo's
+      // verdict. `retries: 0` made a platform hiccup indistinguishable from a
+      // lint error, on the run whose whole job is to be believed.
+      //
+      // `ExecTimeout` is deliberately NOT retryable: a command that outran its
+      // ceiling will outrun it again, and three more attempts cost the ceiling
+      // three more times.
       const effectiveTimeoutSec = timeoutSec ?? DEFAULT_TIMEOUT_SEC;
       const result = yield* step(
         "exec",
@@ -354,7 +372,11 @@ export const check = defineRun({
             redactValues: Object.values(secretEnv),
             timeoutSec: effectiveTimeoutSec,
           }),
-        { timeoutSec: effectiveTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC, retries: 0 },
+        {
+          timeoutSec: effectiveTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
+          retries: PLATFORM_RETRIES,
+          retryOn: RETRY_ON,
+        },
       );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.
