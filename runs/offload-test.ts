@@ -281,9 +281,9 @@ const PLATFORM_RETRIES = 3;
  * backend the recipe-pin mismatch. On the isolated path a stage's clone is the
  * run's FIRST, with no earlier `checkout` to have caught those, so this
  * knowingly spends the retry budget on some failures that cannot succeed: four
- * clone attempts plus backoff, times the stages running at once. Each attempt
- * also mints its own installation token. The alternative loses the repair on
- * every path, so it is the worse trade.
+ * clone attempts plus backoff, times the stages running at once, each minting
+ * its own installation token on the container backend. The alternative loses
+ * the repair on every path, so it is the worse trade.
  *
  * `ExecTimeout` stays OUT, deliberately. Its tag survives the boundary intact
  * whenever there is a Cause to read, so it lands here as itself rather than as
