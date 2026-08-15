@@ -60,6 +60,37 @@
 // definition time and never read again at runtime. Size the stage ceilings to
 // the suite; staging alone does not stretch them.
 //
+// --- Isolated stages (`offload-test.stageConcurrency:<repo>` > 1) -------------
+//
+// Staged mode above still shares ONE container across every stage, and that is
+// what makes its retry policy a lie. A stage step carries `retries: 3` on
+// `ExecFailed`, but a container's disk is EPHEMERAL — when the instance dies,
+// the next one starts with a fresh disk and no checkout. So the retry re-execs
+// `<command>` in a directory that no longer exists, fails in seconds for a
+// reason unrelated to the original, and the run reports THAT. A retry whose
+// precondition the failure destroyed is not a retry.
+//
+// Setting `offload-test.stageConcurrency:<repo>` above 1 makes each stage
+// acquire its own workspace INSIDE its retryable step — `workspace` + `exec` as
+// one unit — so a retry re-acquires a container, re-clones, and re-installs
+// before running the command. That is the property; concurrency is what it
+// costs nothing extra to add once stages no longer share a container.
+//
+// Two semantics change with it, both consequences of independence rather than
+// choices:
+//
+//   * EVERY stage runs. Sequential mode stops at the first red because later
+//     stages share its container and are treated as dependents. Isolated stages
+//     have no such relationship, and stopping would throw away results already
+//     paid for — so all of them report, and the run fails if any failed.
+//   * Each stage pays its own checkout and `install`. On a repo whose install
+//     is a large cold download that is N times the bytes; they overlap in time,
+//     so it costs bandwidth rather than wall clock.
+//
+// Use it when the stages are independent — different feature unifications of
+// the same tree, say. Leave it at 1 when a later stage genuinely consumes an
+// earlier one's output, which sharing a container is the only way to express.
+//
 // Why sequential stages in ONE instance, not `matrix-fanout` + labelled
 // `check` (separate instances, independent timeouts, parallel)? The stages
 // are ordered dependents sharing one checkout — later stages assume earlier
@@ -268,6 +299,18 @@ const stageCommandKey = (repo: string, label: string): string => `${repoCommandK
 const stageTimeoutKey = (repo: string, label: string): string => `${repoTimeoutKey(repo)}:${label}`;
 
 /**
+ * How many stages run at once, and — inseparably — whether each gets its own
+ * container:
+ *
+ *   wrangler kv key put --binding=CONFIG_KV "offload-test.stageConcurrency:owner/repo" "4"
+ *
+ * Absent or `1` is the shared-container sequential mode described above, byte
+ * for byte. Above 1, every stage acquires its OWN workspace and up to N run
+ * concurrently — see header § Isolated stages for why the two are one knob.
+ */
+const repoStageConcurrencyKey = (repo: string): string => `offload-test.stageConcurrency:${repo}`;
+
+/**
  * Legal stage label — same charset `check` enforces on `checkLabel`, for the
  * same reason: the label becomes a step name (`exec-<label>`) and a CONFIG_KV
  * key segment, so a stray `:`/space/emoji would produce keys and step names
@@ -330,9 +373,10 @@ const parseIntConfig = (raw: string | undefined): number | undefined => {
 
 export const offloadTest = defineRun({
   name: "offload-test",
-  // 1.2.0 — additive: staged mode (`offload-test.stages:<repo>` + the labelled
-  // command/timeout rungs). No stages key → the 1.1.0 behaviour, byte-identical.
-  version: "1.2.0",
+  // 1.3.0 — additive: isolated stages (`offload-test.stageConcurrency:<repo>`).
+  // Absent or 1 → the 1.2.0 staged behaviour, byte-identical; no stages key →
+  // the 1.1.0 single-exec behaviour, likewise.
+  version: "1.3.0",
 
   // Webhook-mode trigger — the zero-GHA test path (specs/04-gha-integration.md
   // § Pure webhook mode). Fires the repo's suite on every PR push; the run body
@@ -404,6 +448,7 @@ export const offloadTest = defineRun({
         install: boolean | undefined;
         timeoutSec: number | undefined;
         stages?: readonly ResolvedStage[] | undefined;
+        stageConcurrency?: number | undefined;
       } =
         input.command === undefined
           ? yield* step("resolve-command", () =>
@@ -495,7 +540,13 @@ export const offloadTest = defineRun({
                     commandFellBack,
                   });
                 }
-                return { command, install, timeoutSec, stages };
+                // Read in the same step as the stages it governs — it is
+                // meaningless without them, and a second config read on the
+                // Action path (which never gets here) would be pure cost.
+                const stageConcurrency = parseIntConfig(
+                  yield* config.get(repoStageConcurrencyKey(input.repo)),
+                );
+                return { command, install, timeoutSec, stages, stageConcurrency };
               }),
             )
           : {
@@ -525,17 +576,31 @@ export const offloadTest = defineRun({
       const install = input.install ?? resolved.install ?? false;
       const timeoutSec = input.timeoutSec ?? resolved.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
 
+      // How many stages run at once — and therefore whether they share a
+      // container at all (header § Isolated stages). Clamped at the stage count
+      // because asking for more concurrency than there is work is a config typo,
+      // not a request for more containers.
+      const stageConcurrency =
+        stages === undefined
+          ? 1
+          : Math.min(Math.max(resolved.stageConcurrency ?? 1, 1), stages.length);
+      const isolatedStages = stages !== undefined && stageConcurrency > 1;
+
       // checkout — acquire a container (honouring the `image` override), clone
       // the repo at the requested SHA, and optionally run the R2-cached
       // dependency install. One primitive, same opening move as cdp-acceptance.
-      const { container, dir } = yield* step("checkout", () =>
+      //
+      // SKIPPED for isolated stages: each acquires its own workspace inside its
+      // own retryable step, so a shared one here would be a container paid for
+      // and never used.
+      const acquireWorkspace = () =>
         workspace({
           repo: input.repo,
           sha: input.sha,
           image: input.image,
           install,
-        }),
-      );
+        });
+      const shared = isolatedStages ? undefined : yield* step("checkout", acquireWorkspace);
 
       // load-secrets — resolve the named credentials from the config store
       // into the env injected below. Called INLINE, not in a `step`: secrets
@@ -599,6 +664,292 @@ export const offloadTest = defineRun({
 
       // --- Staged mode (semantics: header § Staged mode) ----------------------
       if (stages !== undefined) {
+        // What one stage did, as data.
+        //
+        // The two drivers below produce exactly these and differ only in how
+        // they schedule them and what they do with a failure — which is the
+        // whole difference between "later stages are dependents" and "later
+        // stages are peers". Keeping the per-stage work in one place is what
+        // makes that difference a handful of lines rather than a second copy
+        // of the exec/upload/marker sequence.
+        type StageOutcome =
+          | {
+              readonly kind: "ok";
+              readonly line: string;
+              readonly durationMs: number;
+              readonly logUri: string;
+            }
+          | {
+              readonly kind: "red";
+              readonly line: string;
+              readonly stage: ResolvedStage;
+              readonly exitCode: number;
+              readonly stdout: string;
+              readonly durationMs: number;
+              readonly logUri: string;
+            }
+          | {
+              readonly kind: "dead";
+              readonly line: string;
+              readonly stage: ResolvedStage;
+              readonly errorClass: string;
+              readonly elapsedS: number;
+            };
+
+        const runStage = (stage: ResolvedStage) =>
+          Effect.gen(function* () {
+            // Labelled rung ?? dispatch value ?? unlabelled rung ?? default. The
+            // labelled rung outranks the dispatch value deliberately: staged mode
+            // only exists when the dispatch omitted `command` (webhook mode), so
+            // a `timeoutSec` riding such a dispatch is a coarse whole-run knob,
+            // not a per-stage choice — the stage-specific key is more specific.
+            const stageTimeoutSec =
+              stage.timeoutSec ?? input.timeoutSec ?? resolved.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
+
+            // Inline (non-step) clock read — feeds ONLY the dead-stage marker +
+            // summary below, never the run output, so replay re-reads are
+            // harmless (header note 2 applies to output-bearing values).
+            const stageStartMs = yield* io.now;
+
+            // Same two-timeout derivation and retry policy as the single exec
+            // below (see its comment): the exec's own deadline must fire before
+            // the step's.
+            const exit = yield* Effect.exit(
+              step(
+                `exec-${stage.label}`,
+                () =>
+                  // THE RETRYABLE UNIT, and the reason isolation exists. With a
+                  // shared container it is the exec alone, which is only sound
+                  // while that container survives. Isolated, it is
+                  // acquire → clone → install → exec, so a platform retry
+                  // rebuilds the workspace the death took with it rather than
+                  // re-running the command against a disk that no longer holds
+                  // a checkout (header § Isolated stages).
+                  shared === undefined
+                    ? Effect.gen(function* () {
+                        const ws = yield* acquireWorkspace();
+                        return yield* sandbox.exec({
+                          cwd: ws.dir,
+                          container: ws.container,
+                          command: stage.command,
+                          env: { ...secretEnv, ...input.env },
+                          timeoutSec: stageTimeoutSec,
+                        });
+                      })
+                    : sandbox.exec({
+                        cwd: shared.dir,
+                        container: shared.container,
+                        command: stage.command,
+                        env: { ...secretEnv, ...input.env },
+                        timeoutSec: stageTimeoutSec,
+                      }),
+                {
+                  timeoutSec: stepTimeoutFor(stageTimeoutSec),
+                  retries: PLATFORM_RETRIES,
+                  retryOn: RETRY_ON,
+                  // Surface the suspicious labelled-key-missing fallback (see
+                  // ResolvedStage.commandFellBack) on the step record, where an
+                  // operator reading the step table will actually see it.
+                  ...(stage.commandFellBack
+                    ? { metadata: { "offload-test.commandFallback": true } }
+                    : {}),
+                },
+              ),
+            );
+
+            if (Exit.isFailure(exit)) {
+              // The stage step DIED — ExecTimeout / ExecFailed / platform kill —
+              // and its real log is unavailable. Upload a one-line marker under
+              // the stage's own log name so the artifact endpoint never 404s
+              // (issue #39's "marker artifact on timeout"). Marker is
+              // BEST-EFFORT: the container may be as dead as the step, and a
+              // marker fault must not mask the stage failure. Elapsed comes
+              // from `io.now` — diagnostic only, never in the run OUTPUT, so
+              // replay determinism is unaffected.
+              const errorClass = Option.match(Cause.failureOption(exit.cause), {
+                onSome: (f) => {
+                  const tag = (f as { _tag?: unknown })._tag;
+                  if (typeof tag !== "string") return "UnknownError";
+                  if (tag !== "StepFailed") return tag;
+                  // The typed tag usually survives the Workflow boundary (the
+                  // CF step runner re-fails with the surviving Cause). When no
+                  // Cause survives, the runner re-fails as a bare StepFailed
+                  // (step-runner-cf) and the class is usually still recoverable
+                  // from the rendered cause text — recover it there so the
+                  // marker and rundown can say ExecTimeout vs ExecFailed. A
+                  // pure platform error (WorkflowInternalError) carries no exec
+                  // vocabulary to recover; it stays StepFailed, honestly.
+                  const rendered = String((f as { cause?: unknown }).cause ?? "");
+                  return INNER_EXEC_ERROR_RE.exec(rendered)?.[1] ?? tag;
+                },
+                onNone: () => "Defect",
+              });
+              const elapsedMs = (yield* io.now) - stageStartMs;
+              const elapsedS = Math.round(elapsedMs / 1000);
+              // Label (STAGE_LABEL_RE), tag, and number only — shell-quote-safe
+              // by construction.
+              const markerLine = `stage=${stage.label} error=${errorClass} elapsedMs=${elapsedMs}`;
+              // The marker rides the marker exec's OWN log stream: `sandbox.exec`
+              // streams stdout to an R2 log key and returns it as `logPath`, so
+              // uploading THAT key in R2-source mode (no `container` — same mode
+              // as the green-stage upload above) works on both sandbox backends.
+              // Container-mode upload (`artifact.upload({ container })`) throws
+              // on the facade backend, where no Sandbox namespace is wired
+              // (runtime-cf/artifact-r2.ts) — the marker never landed there.
+              yield* step(
+                `upload-log-${stage.label}`,
+                () =>
+                  Effect.gen(function* () {
+                    // A dead ISOLATED stage leaves no container behind — its own
+                    // was the thing that died and no other stage's is reachable
+                    // from here. So the marker acquires one. That is a container
+                    // spent on a failure path, which is exactly the path where
+                    // `step-<label>.log` resolving instead of 404-ing is worth
+                    // something.
+                    const box =
+                      shared === undefined
+                        ? yield* sandbox.acquire({ image: input.image })
+                        : shared.container;
+                    const marker = yield* sandbox.exec({
+                      container: box,
+                      command: `printf '%s\\n' '${markerLine}'`,
+                      timeoutSec: 30,
+                    });
+                    return yield* artifact.upload({
+                      name: `step-${stage.label}.log`,
+                      path: marker.logPath,
+                      contentType: "text/plain",
+                      signedUrlTTL: "30 days",
+                    });
+                  }),
+                // Best-effort against a possibly-dead container: never inherit
+                // the platform's default retries/timeout for work whose failure
+                // is already tolerated by the catch below.
+                { timeoutSec: 60, retries: 0 },
+              ).pipe(
+                Effect.catchAllCause((cause) =>
+                  io.log(
+                    "warn",
+                    `offload-test: marker upload for dead stage \`${stage.label}\` failed (best-effort) — ${Cause.pretty(cause).slice(0, 400)}`,
+                  ),
+                ),
+              );
+              return {
+                kind: "dead",
+                stage,
+                errorClass,
+                elapsedS,
+                line: `- ✗ \`${stage.label}\` — died (\`${errorClass}\`) after ~${elapsedS}s`,
+              } as const;
+            }
+
+            const result = exit.value;
+            // upload NOW, before the next stage runs — the whole point of staging.
+            const logUri = yield* step(`upload-log-${stage.label}`, () =>
+              artifact.upload({
+                name: `step-${stage.label}.log`,
+                path: result.logPath,
+                signedUrlTTL: "30 days",
+              }),
+            );
+
+            if (result.exitCode !== 0) {
+              return {
+                kind: "red",
+                stage,
+                exitCode: result.exitCode,
+                stdout: result.stdout,
+                durationMs: result.durationMs,
+                logUri,
+                line: `- ✗ \`${stage.label}\` — exit \`${result.exitCode}\` in ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
+              } as const;
+            }
+            return {
+              kind: "ok",
+              durationMs: result.durationMs,
+              logUri,
+              line: `- ✓ \`${stage.label}\` — ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
+            } as const;
+          });
+
+        const deadFailure = (
+          outcome: Extract<StageOutcome, { kind: "dead" }>,
+          lines: readonly string[],
+        ) =>
+          // The rundown rides `summaryMd` — the run-authored-markdown channel
+          // `AcceptanceFailed` already uses for the red-stage path — so the
+          // check-run renders the ✓/✗/⊘ lines and log links as real markdown
+          // instead of fencing them inside `stepFailedMd`'s code block.
+          // `AcceptanceFailed` itself does not fit here: its required
+          // `exitCode` means "the command ran to completion", and a dead stage
+          // produced no exit code to report. `cause` stays a plain one-liner
+          // for the Workflow error record.
+          new StepFailed({
+            step: `exec-${outcome.stage.label}`,
+            cause: `stage \`${outcome.stage.label}\` (\`${outcome.stage.command}\`) died: ${outcome.errorClass} after ~${outcome.elapsedS}s`,
+            summaryMd: [
+              `Stage \`${outcome.stage.label}\` — \`${outcome.stage.command}\` — died (\`${outcome.errorClass}\`) after ~${outcome.elapsedS}s. ` +
+                `Earlier stage logs are already uploaded; this stage's log is the marker artifact \`step-${outcome.stage.label}.log\`.`,
+              "",
+              ...lines,
+            ].join("\n"),
+          });
+
+        // --- Isolated stages: every stage runs, then the run reports -----------
+        if (isolatedStages) {
+          // No `⊘ skipped` line is possible here and none is wanted: nothing is
+          // skipped, because nothing was waiting on anything.
+          const outcomes = yield* Effect.forEach(stages, runStage, {
+            concurrency: stageConcurrency,
+          });
+          const lines = outcomes.map((o) => o.line);
+          // SUM, as in sequential mode — the same quantity, and deliberately
+          // not the wall clock, which concurrency makes smaller than the work
+          // performed. `logUri` is the last stage that produced one.
+          const durationTotalMs = outcomes.reduce(
+            (total, o) => (o.kind === "dead" ? total : total + o.durationMs),
+            0,
+          );
+          const logUri = outcomes.reduce(
+            (last, o) => (o.kind === "dead" ? last : o.logUri),
+            "",
+          );
+
+          // Every red stage is its own deterministic oracle, so each escalates.
+          // Dead stages do not: there is no ExecResult to hand the healer.
+          for (const outcome of outcomes) {
+            if (outcome.kind === "red") {
+              yield* maybeDispatchSelfHeal(
+                outcome.stage.command,
+                { exitCode: outcome.exitCode, stdout: outcome.stdout },
+                outcome.logUri,
+              );
+            }
+          }
+
+          const dead = outcomes.find((o) => o.kind === "dead");
+          if (dead !== undefined) return yield* Effect.fail(deadFailure(dead, lines));
+
+          const red = outcomes.find((o) => o.kind === "red");
+          if (red !== undefined) {
+            if (input.failOnNonZeroExit) {
+              return yield* Effect.fail(
+                new AcceptanceFailed({
+                  exitCode: red.exitCode,
+                  summaryMd: [
+                    `Stage \`${red.stage.label}\` — \`${red.stage.command}\` — exited \`${red.exitCode}\`. Every stage ran; they are independent.`,
+                    "",
+                    ...lines,
+                  ].join("\n"),
+                }),
+              );
+            }
+            return { exitCode: red.exitCode, durationMs: durationTotalMs, logUri };
+          }
+          return { exitCode: 0, durationMs: durationTotalMs, logUri };
+        }
+
+        // --- Shared container, sequential: later stages are dependents --------
         // Summary ledger — every stage lands here as a ✓/✗/⊘ line, and the
         // failure summary carries the whole list so the check names the stage
         // without the operator opening a single log.
@@ -609,165 +960,30 @@ export const offloadTest = defineRun({
         let logUri = "";
 
         for (let i = 0; i < stages.length; i++) {
-          const stage = stages[i]!;
-          // Labelled rung ?? dispatch value ?? unlabelled rung ?? default. The
-          // labelled rung outranks the dispatch value deliberately: staged mode
-          // only exists when the dispatch omitted `command` (webhook mode), so
-          // a `timeoutSec` riding such a dispatch is a coarse whole-run knob,
-          // not a per-stage choice — the stage-specific key is more specific.
-          const stageTimeoutSec =
-            stage.timeoutSec ?? input.timeoutSec ?? resolved.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
+          const outcome = yield* runStage(stages[i]!);
+          lines.push(outcome.line);
 
-          // Inline (non-step) clock read — feeds ONLY the dead-stage marker +
-          // summary below, never the run output, so replay re-reads are
-          // harmless (header note 2 applies to output-bearing values).
-          const stageStartMs = yield* io.now;
-
-          // Same two-timeout derivation and retry policy as the single exec
-          // below (see its comment): the exec's own deadline must fire before
-          // the step's.
-          const exit = yield* Effect.exit(
-            step(
-              `exec-${stage.label}`,
-              () =>
-                sandbox.exec({
-                  cwd: dir,
-                  container,
-                  command: stage.command,
-                  env: { ...secretEnv, ...input.env },
-                  timeoutSec: stageTimeoutSec,
-                }),
-              {
-                timeoutSec: stepTimeoutFor(stageTimeoutSec),
-                retries: PLATFORM_RETRIES,
-                retryOn: RETRY_ON,
-                // Surface the suspicious labelled-key-missing fallback (see
-                // ResolvedStage.commandFellBack) on the step record, where an
-                // operator reading the step table will actually see it.
-                ...(stage.commandFellBack
-                  ? { metadata: { "offload-test.commandFallback": true } }
-                  : {}),
-              },
-            ),
-          );
-
-          if (Exit.isFailure(exit)) {
-            // The stage step DIED — ExecTimeout / ExecFailed / platform kill —
-            // and its real log is unavailable. Upload a one-line marker under
-            // the stage's own log name so the artifact endpoint never 404s
-            // (issue #39's "marker artifact on timeout"), then fail the run
-            // naming the stage. Marker is BEST-EFFORT: the container may be as
-            // dead as the step, and a marker fault must not mask the stage
-            // failure. Elapsed comes from `io.now` — diagnostic only, never in
-            // the run OUTPUT, so replay determinism is unaffected.
-            const errorClass = Option.match(Cause.failureOption(exit.cause), {
-              onSome: (f) => {
-                const tag = (f as { _tag?: unknown })._tag;
-                if (typeof tag !== "string") return "UnknownError";
-                if (tag !== "StepFailed") return tag;
-                // The typed tag usually survives the Workflow boundary (the
-                // CF step runner re-fails with the surviving Cause). When no
-                // Cause survives, the runner re-fails as a bare StepFailed
-                // (step-runner-cf) and the class is usually still recoverable
-                // from the rendered cause text — recover it there so the
-                // marker and rundown can say ExecTimeout vs ExecFailed. A
-                // pure platform error (WorkflowInternalError) carries no exec
-                // vocabulary to recover; it stays StepFailed, honestly.
-                const rendered = String((f as { cause?: unknown }).cause ?? "");
-                return INNER_EXEC_ERROR_RE.exec(rendered)?.[1] ?? tag;
-              },
-              onNone: () => "Defect",
-            });
-            const elapsedMs = (yield* io.now) - stageStartMs;
-            const elapsedS = Math.round(elapsedMs / 1000);
-            // Label (STAGE_LABEL_RE), tag, and number only — shell-quote-safe
-            // by construction.
-            const markerLine = `stage=${stage.label} error=${errorClass} elapsedMs=${elapsedMs}`;
-            // The marker rides the marker exec's OWN log stream: `sandbox.exec`
-            // streams stdout to an R2 log key and returns it as `logPath`, so
-            // uploading THAT key in R2-source mode (no `container` — same mode
-            // as the green-stage upload above) works on both sandbox backends.
-            // Container-mode upload (`artifact.upload({ container })`) throws
-            // on the facade backend, where no Sandbox namespace is wired
-            // (runtime-cf/artifact-r2.ts) — the marker never landed there.
-            yield* step(
-              `upload-log-${stage.label}`,
-              () =>
-                sandbox
-                  .exec({
-                    container,
-                    command: `printf '%s\\n' '${markerLine}'`,
-                    timeoutSec: 30,
-                  })
-                  .pipe(
-                    Effect.flatMap((marker) =>
-                      artifact.upload({
-                        name: `step-${stage.label}.log`,
-                        path: marker.logPath,
-                        contentType: "text/plain",
-                        signedUrlTTL: "30 days",
-                      }),
-                    ),
-                  ),
-              // Best-effort against a possibly-dead container: never inherit
-              // the platform's default retries/timeout for work whose failure
-              // is already tolerated by the catch below.
-              { timeoutSec: 60, retries: 0 },
-            ).pipe(
-              Effect.catchAllCause((cause) =>
-                io.log(
-                  "warn",
-                  `offload-test: marker upload for dead stage \`${stage.label}\` failed (best-effort) — ${Cause.pretty(cause).slice(0, 400)}`,
-                ),
-              ),
-            );
-            lines.push(`- ✗ \`${stage.label}\` — died (\`${errorClass}\`) after ~${elapsedS}s`);
+          if (outcome.kind === "dead") {
             lines.push(...skippedLines(i + 1));
-            // The rundown rides `summaryMd` — the run-authored-markdown channel
-            // `AcceptanceFailed` already uses for the red-stage path — so the
-            // check-run renders the ✓/✗/⊘ lines and log links as real
-            // markdown instead of fencing them inside `stepFailedMd`'s code
-            // block. `AcceptanceFailed` itself does not fit here: its required
-            // `exitCode` means "the command ran to completion", and a dead
-            // stage produced no exit code to report. `cause` stays a plain
-            // one-liner for the Workflow error record.
-            return yield* Effect.fail(
-              new StepFailed({
-                step: `exec-${stage.label}`,
-                cause: `stage \`${stage.label}\` (\`${stage.command}\`) died: ${errorClass} after ~${elapsedS}s`,
-                summaryMd: [
-                  `Stage \`${stage.label}\` — \`${stage.command}\` — died (\`${errorClass}\`) after ~${elapsedS}s. ` +
-                    `Earlier stage logs are already uploaded; this stage's log is the marker artifact \`step-${stage.label}.log\`.`,
-                  "",
-                  ...lines,
-                ].join("\n"),
-              }),
-            );
+            return yield* Effect.fail(deadFailure(outcome, lines));
           }
 
-          const result = exit.value;
-          durationTotalMs += result.durationMs;
-          // upload NOW, before the next stage runs — the whole point of staging.
-          logUri = yield* step(`upload-log-${stage.label}`, () =>
-            artifact.upload({
-              name: `step-${stage.label}.log`,
-              path: result.logPath,
-              signedUrlTTL: "30 days",
-            }),
-          );
+          durationTotalMs += outcome.durationMs;
+          logUri = outcome.logUri;
 
-          if (result.exitCode !== 0) {
-            lines.push(
-              `- ✗ \`${stage.label}\` — exit \`${result.exitCode}\` in ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
-            );
+          if (outcome.kind === "red") {
             lines.push(...skippedLines(i + 1));
-            yield* maybeDispatchSelfHeal(stage.command, result, logUri);
+            yield* maybeDispatchSelfHeal(
+              outcome.stage.command,
+              { exitCode: outcome.exitCode, stdout: outcome.stdout },
+              logUri,
+            );
             if (input.failOnNonZeroExit) {
               return yield* Effect.fail(
                 new AcceptanceFailed({
-                  exitCode: result.exitCode,
+                  exitCode: outcome.exitCode,
                   summaryMd: [
-                    `Stage \`${stage.label}\` — \`${stage.command}\` — exited \`${result.exitCode}\`; later stages skipped.`,
+                    `Stage \`${outcome.stage.label}\` — \`${outcome.stage.command}\` — exited \`${outcome.exitCode}\`; later stages skipped.`,
                     "",
                     ...lines,
                   ].join("\n"),
@@ -777,11 +993,8 @@ export const offloadTest = defineRun({
             // failOnNonZeroExit off: `set -e` semantics — the failing stage's
             // exit code becomes the run's, later stages don't run (they are
             // dependents of the one that just went red).
-            return { exitCode: result.exitCode, durationMs: durationTotalMs, logUri };
+            return { exitCode: outcome.exitCode, durationMs: durationTotalMs, logUri };
           }
-          lines.push(
-            `- ✓ \`${stage.label}\` — ${(result.durationMs / 1000).toFixed(1)}s ([log ↗](${logUri}))`,
-          );
         }
 
         // All stages green. Output mirrors the single-exec contract: exit 0,
@@ -799,6 +1012,17 @@ export const offloadTest = defineRun({
           new StepFailed({
             step: "resolve-command",
             cause: "unreachable: command presence checked before checkout",
+          }),
+        ));
+      // Isolation only exists with stages, and stages never reach here — so a
+      // single-exec run always took the shared checkout. Same shape as the
+      // guard above: TS cannot see it, the fail arm is unreachable.
+      const soleWorkspace =
+        shared ??
+        (yield* Effect.fail(
+          new StepFailed({
+            step: "checkout",
+            cause: "unreachable: a single-exec run always takes the shared checkout",
           }),
         ));
 
@@ -824,8 +1048,8 @@ export const offloadTest = defineRun({
         "exec",
         () =>
           sandbox.exec({
-            cwd: dir,
-            container,
+            cwd: soleWorkspace.dir,
+            container: soleWorkspace.container,
             command: soleCommand,
             // Per-dispatch `env` wins over a same-named config-store secret —
             // the more specific source overrides the global one.

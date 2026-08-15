@@ -992,6 +992,191 @@ describe("offload-test staged mode", () => {
   );
 });
 
+describe("offload-test isolated stages", () => {
+  const webhookInput = {
+    repo: "owner/name",
+    sha: "abc123",
+    secrets: [] as readonly string[],
+    failOnNonZeroExit: true,
+  };
+
+  it.effect(
+    "each stage acquires its OWN workspace inside its retryable step — no shared checkout",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          "run-a": { exitCode: 0, durationMs: 100 },
+          "run-b": { exitCode: 0, durationMs: 200 },
+        },
+        config: {
+          "offload-test.stages:owner/name": "a,b",
+          "offload-test.command:owner/name:a": "run-a",
+          "offload-test.command:owner/name:b": "run-b",
+          "offload-test.stageConcurrency:owner/name": "2",
+          "offload-test.install:owner/name": "true",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* offloadTest.run(webhookInput);
+
+        // No `checkout` step at all — a shared container would be one acquired
+        // and never used.
+        const stepNames = handles.executions.steps.map((s) => s.name);
+        expect(stepNames).not.toContain("checkout");
+        expect(stepNames).toContain("exec-a");
+        expect(stepNames).toContain("exec-b");
+
+        // One acquire + one clone PER STAGE, both inside the stage's own
+        // retryable step. That placement is the point: a platform retry after a
+        // container death re-runs the acquire and the clone, so the command
+        // does not land on a fresh disk with no checkout.
+        expect(handles.sandbox.acquired).toHaveLength(2);
+        expect(handles.sandbox.clones).toEqual([
+          { repo: "owner/name", sha: "abc123" },
+          { repo: "owner/name", sha: "abc123" },
+        ]);
+
+        // The retry contract is unchanged — it is the UNIT that changed.
+        const execA = handles.executions.steps.find((s) => s.name === "exec-a");
+        expect(execA?.metadata?.["stepOpts.retries"]).toBe(3);
+        expect(execA?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed"]);
+
+        expect(result.exitCode).toBe(0);
+        expect(result.durationMs).toBe(300);
+        expect(handles.artifact.uploads.map((u) => u.name).sort()).toEqual([
+          "step-a.log",
+          "step-b.log",
+        ]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a red stage does not skip its peers — every stage runs, then the run reports", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "run-a": { exitCode: 0 },
+        "run-b": { exitCode: 2 },
+        "run-c": { exitCode: 0 },
+      },
+      config: {
+        "offload-test.stages:owner/name": "a,b,c",
+        "offload-test.command:owner/name:a": "run-a",
+        "offload-test.command:owner/name:b": "run-b",
+        "offload-test.command:owner/name:c": "run-c",
+        "offload-test.stageConcurrency:owner/name": "3",
+      },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      expect((failure as { _tag?: string })?._tag).toBe("AcceptanceFailed");
+      expect((failure as { exitCode?: number })?.exitCode).toBe(2);
+
+      // `c` RAN — it is not a dependent of `b`, and the whole reason for its
+      // own container is that it never was. Sequential mode's `⊘ skipped` has
+      // no meaning here and must not appear.
+      expect(handles.sandbox.execs.map((e) => e.command).sort()).toEqual([
+        "run-a",
+        "run-b",
+        "run-c",
+      ]);
+      const summaryMd = (failure as { summaryMd?: string })?.summaryMd ?? "";
+      expect(summaryMd).toContain("✓ `a`");
+      expect(summaryMd).toContain("✗ `b`");
+      expect(summaryMd).toContain("✓ `c`");
+      expect(summaryMd).not.toContain("⊘");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a dead isolated stage still lands a marker under its own log name", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "run-a": { exitCode: 0 },
+        "run-b": { fail: "ExecTimeout", timeoutSec: 600 },
+      },
+      config: {
+        "offload-test.stages:owner/name": "a,b",
+        "offload-test.command:owner/name:a": "run-a",
+        "offload-test.command:owner/name:b": "run-b",
+        "offload-test.stageConcurrency:owner/name": "2",
+      },
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      expect((failure as { _tag?: string })?._tag).toBe("StepFailed");
+      expect((failure as { step?: string })?.step).toBe("exec-b");
+
+      // The dead stage's own container went with it and no peer's is reachable
+      // from here, so the marker acquires one of its own — `step-b.log` has to
+      // resolve, because a death is exactly when someone opens it.
+      const markerWrite = handles.sandbox.execs.find((e) => e.command.includes("stage=b"));
+      expect(markerWrite?.command).toMatch(/stage=b error=ExecTimeout elapsedMs=\d+/);
+      expect(handles.artifact.uploads.map((u) => u.name).sort()).toEqual([
+        "step-a.log",
+        "step-b.log",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("concurrency of 1 keeps the shared container and the dependent semantics", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "run-a": { exitCode: 0 }, "run-b": { exitCode: 0 } },
+      config: {
+        "offload-test.stages:owner/name": "a,b",
+        "offload-test.command:owner/name:a": "run-a",
+        "offload-test.command:owner/name:b": "run-b",
+        "offload-test.stageConcurrency:owner/name": "1",
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* offloadTest.run(webhookInput);
+      // One checkout, one container, shared — the pre-isolation behaviour, and
+      // the default an absent key resolves to.
+      expect(handles.executions.steps.map((s) => s.name)).toEqual([
+        "resolve-command",
+        "checkout",
+        "exec-a",
+        "upload-log-a",
+        "exec-b",
+        "upload-log-b",
+      ]);
+      expect(handles.sandbox.acquired).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("concurrency above the stage count is clamped, not honoured as written", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "run-a": { exitCode: 0 }, "run-b": { exitCode: 0 } },
+      config: {
+        "offload-test.stages:owner/name": "a,b",
+        "offload-test.command:owner/name:a": "run-a",
+        "offload-test.command:owner/name:b": "run-b",
+        "offload-test.stageConcurrency:owner/name": "16",
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* offloadTest.run(webhookInput);
+      // Two stages can never need more than two containers; asking for 16 is a
+      // typo, and honouring it would be a bill rather than a speed-up.
+      expect(handles.sandbox.acquired).toHaveLength(2);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
 // --- Source guard: no direct Date.now() / crypto.randomUUID() in the run -----
 // A grep guard per specs/pm/plan.md § 6 — the run body must not introduce
 // non-determinism; replay-sensitive values come from checkpointed step results
