@@ -75,6 +75,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      # wrangler.jsonc names code that no TypeScript gate checks: entrypoints,
+      # and Durable Object classes the entrypoint must export. Rename a class
+      # without its binding and lint, typecheck and test all stay green — the
+      # first failure is the deploy below, after migrations have been applied.
+      # `--containers-rollout none` keeps this to the bundle: without it a dry
+      # run still builds every container image, which the deploy jobs then
+      # build again. BEFORE `pnpm test`, deliberately: these cost seconds and
+      # the suite costs minutes, so on the main-push run a config that names
+      # missing code reds this job without waiting out the suite. After
+      # `typecheck`, also deliberately: a real code error should fail with the
+      # typechecker's message, not esbuild's.
+      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none
+      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none -c apps/substrate/wrangler.jsonc
       - run: pnpm test
 
   # The substrate deploys BEFORE the dispatcher, and its own job rather than a
