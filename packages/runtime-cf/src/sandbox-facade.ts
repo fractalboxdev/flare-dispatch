@@ -343,7 +343,11 @@ export const makeSandboxFacadeLive = (opts: SandboxFacadeOptions): Layer.Layer<S
 
               const tail = redact(outcome.receipt.tail, redactValues);
               const logPath = nextLogKey();
-              await writeLog(logPath, cmd, tail);
+              // Scrubbed for the same reason the tail above is: the meta line
+              // is a persisted R2 surface. Note this is the LOG's copy — the
+              // command handed to `execUnderGrant` above stays verbatim,
+              // because that one has to run.
+              await writeLog(logPath, redact(cmd, redactValues), tail);
               const file = logPath.slice(logPath.lastIndexOf("/") + 1);
               const viewerUrl =
                 opts.logsViewerBase !== undefined ? `${opts.logsViewerBase}#${file}` : undefined;

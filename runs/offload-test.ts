@@ -646,6 +646,43 @@ export const offloadTest = defineRun({
         required: true,
       });
 
+      /**
+       * The command, safe to RENDER.
+       *
+       * `redactValues` on the exec covers what the sandbox layer persists — the
+       * R2 log and `ExecTimeout.message`. It does not reach the command string
+       * this run then embeds itself, and those surfaces are the loud ones:
+       * `summaryMd` is rendered as unfenced markdown straight into the GitHub
+       * check-run summary, which on a public repo is public, and the self-heal
+       * path carries the command into a child execution's `input_json`. A dying
+       * stage also never reaches `ExecTimeout` — it is caught and replaced by
+       * `deadFailure` — so the layer-level scrub does not apply there at all.
+       *
+       * Duplicated logic rather than a shared import: `redact` exists three
+       * times already (sandbox-cf, sandbox-facade, sandbox-fake) and unifying
+       * them is its own change. This is the narrow version, for one job.
+       */
+      //
+      // The values scrubbed are BOTH the store value and the one the container
+      // actually receives for each secret-designated key. Per-dispatch `env`
+      // wins over a same-named store secret, so `Object.values(secretEnv)`
+      // alone holds the shadowed value on a collision — the log would keep the
+      // live credential and scrub a string that was never printed. The shadowed
+      // store value stays in the list too: it is still a live credential, and
+      // a command can inline it even while the env carries the override.
+      // Non-secret `input.env` keys are deliberately NOT in this list: dispatch
+      // inputs are documented non-sensitive (header note 3), and scrubbing a
+      // value like "production" or "1" from every log line trades a contract
+      // violation nobody has made for garbled logs everybody reads.
+      const effectiveEnv: Record<string, string> = { ...secretEnv, ...input.env };
+      const secretValues = [
+        ...new Set(
+          Object.keys(secretEnv).flatMap((key) => [secretEnv[key] ?? "", effectiveEnv[key] ?? ""]),
+        ),
+      ].filter((v) => v.length > 0);
+      const renderable = (command: string): string =>
+        secretValues.reduce((out, value) => out.split(value).join("***"), command);
+
       // self-heal — (gated, OFF unless `self-heal.ci.enabled=true`) auto-dispatch
       // a fix for a DETERMINISTIC CI failure. Unlike the LLM-driven demo verdict
       // (which needs k-of-n confirmation), a non-zero exit IS ground truth — the
@@ -666,6 +703,20 @@ export const offloadTest = defineRun({
         Effect.gen(function* () {
           if (execResult.exitCode === 0) return;
           if ((yield* config.get("self-heal.ci.enabled")) !== "true") return;
+          // A command whose rendering CHANGED had a secret value inlined in it,
+          // and neither version of it can honestly go to the healer. The raw
+          // command would smuggle a live credential into the credential-free
+          // agent sandbox and into a pack an injection-steerable LLM reads
+          // (ci-incident.ts header); the scrubbed one carries `***` where the
+          // verify step's re-run needs the value, so the heal can only fail
+          // after the agent spend is already paid. Skip, and say why.
+          if (renderable(failedCommand) !== failedCommand) {
+            yield* io.log(
+              "warn",
+              `offload-test: skipping self-heal — the failing command inlines a secret value, so no honest repro can be handed to the healer`,
+            );
+            return;
+          }
           const incident = commandFailureToIncident({
             repo: input.repo,
             sha: input.sha,
@@ -815,6 +866,11 @@ export const offloadTest = defineRun({
                       container: ws.container,
                       command: stage.command,
                       env: { ...secretEnv, ...input.env },
+                      // Defense in depth, as `check` and `worker-deploy` already
+                      // do: this run executes the CONSUMER's own command, where
+                      // `set -x` and a stray `env` are ordinary rather than
+                      // exceptional, and the captured log is durable and signed.
+                      redactValues: secretValues,
                       timeoutSec: stageTimeoutSec,
                     });
                   }),
@@ -1017,9 +1073,9 @@ export const offloadTest = defineRun({
           // for the Workflow error record.
           new StepFailed({
             step: `exec-${outcome.stage.label}`,
-            cause: `stage \`${outcome.stage.label}\` (\`${outcome.stage.command}\`) died: ${outcome.errorClass} after ~${outcome.elapsedS}s`,
+            cause: `stage \`${outcome.stage.label}\` (\`${renderable(outcome.stage.command)}\`) died: ${outcome.errorClass} after ~${outcome.elapsedS}s`,
             summaryMd: [
-              `Stage \`${outcome.stage.label}\` — \`${outcome.stage.command}\` — died (\`${outcome.errorClass}\`) after ~${outcome.elapsedS}s. ` +
+              `Stage \`${outcome.stage.label}\` — \`${renderable(outcome.stage.command)}\` — died (\`${outcome.errorClass}\`) after ~${outcome.elapsedS}s. ` +
                 `Earlier stage logs are already uploaded; this stage's log is the marker artifact \`step-${outcome.stage.label}.log\`.`,
               "",
               ...lines,
@@ -1034,7 +1090,7 @@ export const offloadTest = defineRun({
             step: `upload-log-${outcome.stage.label}`,
             cause: `stage \`${outcome.stage.label}\` ran, but its log upload failed: ${outcome.errorClass}`,
             summaryMd: [
-              `Stage \`${outcome.stage.label}\` — \`${outcome.stage.command}\` — ran to a verdict, but \`step-${outcome.stage.label}.log\` did not upload (\`${outcome.errorClass}\`). ` +
+              `Stage \`${outcome.stage.label}\` — \`${renderable(outcome.stage.command)}\` — ran to a verdict, but \`step-${outcome.stage.label}.log\` did not upload (\`${outcome.errorClass}\`). ` +
                 `The verdict is in the rundown below; the log is not retrievable.`,
               "",
               ...lines,
@@ -1141,7 +1197,7 @@ export const offloadTest = defineRun({
                 new AcceptanceFailed({
                   exitCode: outcome.exitCode,
                   summaryMd: [
-                    `Stage \`${outcome.stage.label}\` — \`${outcome.stage.command}\` — exited \`${outcome.exitCode}\`; later stages skipped.`,
+                    `Stage \`${outcome.stage.label}\` — \`${renderable(outcome.stage.command)}\` — exited \`${outcome.exitCode}\`; later stages skipped.`,
                     "",
                     ...lines,
                   ].join("\n"),
@@ -1232,6 +1288,8 @@ export const offloadTest = defineRun({
                 // Per-dispatch `env` wins over a same-named config-store secret
                 // — the more specific source overrides the global one.
                 env: { ...secretEnv, ...input.env },
+                // Same scrub as the staged path above and as `check` does.
+                redactValues: secretValues,
                 timeoutSec,
               }),
             ),
