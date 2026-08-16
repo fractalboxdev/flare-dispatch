@@ -65,10 +65,19 @@ const makeFakeBox = (opts: {
           name: undefined,
         })),
     ),
+    // The SDK's per-container transport pin. Recorded rather than stubbed away:
+    // which containers got which transport is the whole assertion for the
+    // canary knob.
+    setTransport: vi.fn(async (t: string) => {
+      transportCalls.push(t);
+    }),
     _getLogs: getLogs,
     _waitForPort: waitForPort,
   };
 };
+
+/** Every `setTransport` the Layer issued, in order. */
+const transportCalls: string[] = [];
 
 // A stand-in for the SDK's `SessionTerminatedError` (thrown when a command's
 // shell exits). `vi.hoisted` so it exists before the hoisted `vi.mock` factory
@@ -311,6 +320,63 @@ describe("makeSandboxCloudflareLive — container routing", () => {
         expect(c.id).toMatch(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/);
         expect(c.id.length).toBeLessThanOrEqual(40);
       }
+    }),
+  );
+
+  it.effect("no transport option leaves the container on the Worker-wide default", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      transportCalls.length = 0;
+      yield* Effect.flatMap(SandboxTag, (s) => s.acquire({})).pipe(
+        Effect.provide(makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-2")),
+      );
+      // Untouched: the default is whatever `SANDBOX_TRANSPORT` says, and a
+      // Layer that pinned it unasked would silently change every consumer.
+      expect(transportCalls).toEqual([]);
+    }),
+  );
+
+  it.effect("a transport option pins EVERY container the execution acquires", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      transportCalls.length = 0;
+      yield* Effect.flatMap(SandboxTag, (s) =>
+        Effect.all([s.acquire({}), s.acquire({ key: "features" })]),
+      ).pipe(
+        Effect.provide(
+          makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-3", undefined, undefined, undefined, "rpc"),
+        ),
+      );
+      // Per CONTAINER, not per Layer: a keyed container is a different DO and
+      // carries its own transport, so pinning the first would leave the stage
+      // containers on the compatibility client — which is where the streaming
+      // file APIs do not exist.
+      expect(transportCalls).toEqual(["rpc", "rpc"]);
+    }),
+  );
+
+  it.effect("re-acquiring a container does not re-pin it", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      transportCalls.length = 0;
+      yield* Effect.flatMap(SandboxTag, (s) =>
+        // Three acquires, two containers. `acquire` is also how a caller derives
+        // an id without provisioning — `ensureWorkspace` on a rebuild, and the
+        // stage reaper naming the container it is about to destroy. Each of
+        // those would otherwise wake a Durable Object to re-assert a setting it
+        // already has.
+        Effect.all([
+          s.acquire({}),
+          s.acquire({}),
+          s.acquire({ key: "features" }),
+          s.acquire({ key: "features" }),
+        ]),
+      ).pipe(
+        Effect.provide(
+          makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-4", undefined, undefined, undefined, "rpc"),
+        ),
+      );
+      expect(transportCalls).toEqual(["rpc", "rpc"]);
     }),
   );
 

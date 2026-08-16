@@ -263,6 +263,37 @@ Staged mode is webhook-only: a dispatch that passes `command` skips the config
 read and stays single-exec. Stages run inside one workflow instance posting one
 check-run — sequentially by default, concurrently when the next rung says so.
 
+### Container transport (`sandbox.transport:<repo>`)
+
+```bash
+wrangler kv key put --binding=CONFIG_KV "sandbox.transport:owner/repo" "rpc"
+```
+
+Pins every container that repo's executions acquire to one of `http` (the
+default), `websocket`, or `rpc`. **Any other value is dropped by the dispatcher
+before it reaches the SDK** — silently, and the run proceeds on the default. A
+typo therefore degrades rather than breaks, but it also says nothing: check the
+key back if a transport change appears to have had no effect.
+
+**Why it exists.** The SDK's streaming file APIs live only on its `rpc` client —
+its own comment calls `rpc` the "primary container-control client" and
+`http`/`websocket` the "route-based compatibility client", and `writeFileStream`
+is a bare `throw` off `rpc`. That is why the R2 dependency cache misses on every
+run: `installCached`'s restore hands `writeFile` a `ReadableStream`, the SDK
+routes any stream to `writeFileStream`, it raises, and `composeRestoreOr`
+records a miss.
+
+`SANDBOX_TRANSPORT=rpc` as a Worker var fixes that in one line — and changes the
+control path for every repo this dispatcher serves, at once. This key is the
+same choice scoped to one consumer, so a change with that blast radius can be
+proved before it is taken.
+
+**It is sticky.** `setTransport` persists to the container's Durable Object
+storage, and the SDK prefers a stored transport over the env-derived default on
+cold start. A container pinned here keeps that transport for its lifetime;
+since ids are per execution, the pin is re-applied per run and costs one DO call
+at acquire.
+
 ### A stage does not assume its checkout
 
 Container disk is ephemeral, and a staged run spanning forty minutes of durable

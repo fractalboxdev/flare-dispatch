@@ -308,6 +308,31 @@ export const makeSandboxCloudflareLive = (
    * historical message. Built by the dispatcher (it owns the token secret).
    */
   logsViewerBase?: string,
+  /**
+   * Pin every container this execution acquires to a transport, rather than
+   * taking the Worker-wide `SANDBOX_TRANSPORT` default.
+   *
+   * WHY THIS EXISTS, and why it is per-execution. The SDK's streaming file APIs
+   * live only on the `rpc` client — its own comment calls `rpc` the "primary
+   * container-control client" and `http`/`websocket` the "route-based
+   * compatibility client". `writeFileStream` is a bare `throw` off `rpc`, which
+   * is why the R2 dependency cache has missed on every run since it was added:
+   * the restore hands `writeFile` a `ReadableStream`, the SDK routes any stream
+   * to `writeFileStream`, and it raises.
+   *
+   * `SANDBOX_TRANSPORT=rpc` as a Worker var would fix that in one line and
+   * change the control path for EVERY repo this dispatcher serves at once.
+   * This threads the same choice per execution instead, so one consumer can
+   * prove it before the rest follow. That is the whole difference between a
+   * rollout and a flip.
+   *
+   * Note the precedence the SDK applies on cold start: a transport written to
+   * the DO's storage WINS over the env-derived default. `setTransport` persists,
+   * so a container pinned here stays pinned for its lifetime regardless of what
+   * the var says — which is what makes this safe to scope, and what would make
+   * it sticky if it were ever pointed at the wrong value.
+   */
+  transport?: "http" | "websocket" | "rpc",
 ): Layer.Layer<SandboxTag> => {
   // The Durable Object / sandbox id. `getSandbox` routes the DO by this id AND
   // the SDK embeds it in the `exposePort` preview URL's DNS label, which must
@@ -336,6 +361,9 @@ export const makeSandboxCloudflareLive = (
   // layers have always routed by `container.id`; this brings the sandbox layer
   // in line with them.
   const boxFor = (container?: Container): Sandbox => getSandbox(ns, container?.id ?? sandboxId);
+
+  /** Container ids whose transport this Layer has already pinned — see `acquire`. */
+  const pinned = new Set<string>();
 
 
   // `exec` log keys are unique within a run: the first exec is `exec.ndjson`
@@ -501,12 +529,37 @@ export const makeSandboxCloudflareLive = (
     // dispatcher's end-of-run teardown knows the execution's own id and cannot
     // know what a run named.
     acquire: (opts) =>
-      Effect.succeed({
-        id:
+      Effect.gen(function* () {
+        const id =
           opts.key === undefined
             ? sandboxId
-            : previewSafeSandboxId(`${executionId}:${opts.key}`),
-      } satisfies Container),
+            : previewSafeSandboxId(`${executionId}:${opts.key}`);
+        // Pin the container's transport before anything runs in it, when the
+        // caller asked for one. See `transport` in this Layer's options for why
+        // this is per-container rather than a Worker-wide env var.
+        //
+        // ONCE PER CONTAINER, not once per acquire. `acquire` is also how a
+        // caller derives an id without provisioning anything — `ensureWorkspace`
+        // re-acquires on a rebuild, and `offload-test`'s stage reaper acquires
+        // purely to name the container it is about to destroy. Without this memo
+        // each of those would wake a Durable Object to re-assert a setting it
+        // already has.
+        //
+        // Best-effort: a container that stays on the default transport works,
+        // it just cannot stream a file. Failing acquisition over a transport
+        // preference would trade a slow cache for a dead run.
+        if (transport !== undefined && !pinned.has(id)) {
+          pinned.add(id);
+          yield* Effect.promise(async () => {
+            try {
+              await getSandbox(ns, id).setTransport(transport);
+            } catch (cause) {
+              console.warn(`setTransport(${transport}) failed for ${id} — staying on the default: ${String(cause)}`);
+            }
+          });
+        }
+        return { id } satisfies Container;
+      }),
 
     // Best-effort and idempotent — destroying a container that was never
     // provisioned, or is already gone, is a success. A teardown failure must
