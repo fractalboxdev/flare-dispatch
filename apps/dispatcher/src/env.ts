@@ -38,6 +38,17 @@ export interface Env {
   readonly SUBSTRATE_BACKEND?: string;
 
   /**
+   * `"off"` stops the container-stop records being written to R2 (the log line
+   * is unaffected). Anything else, including absent, leaves them on.
+   *
+   * A `vars` entry rather than a code path because the deploy that carries the
+   * sandbox DO classes also rebuilds three container images, so backing the
+   * feature out would otherwise be an image-rebuilding redeploy rather than a
+   * config edit. See `apps/dispatcher/src/container-stop.ts`.
+   */
+  readonly CONTAINER_STOP_RECORDS?: string;
+
+  /**
    * Shared HMAC-SHA256 secret — verifies inbound `POST /v1/dispatch/:run`
    * request bodies (specs/05-byoc.md § Secrets). A Worker secret, set via
    * `wrangler secret put HMAC_SECRET`.
