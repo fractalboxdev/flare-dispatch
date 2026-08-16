@@ -251,16 +251,15 @@ const STEP_TIMEOUT_HEADROOM_SEC = 120;
 const PLATFORM_RETRIES = 3;
 
 /**
- * The classes a stage step retries — both of which are the PLATFORM, never a
- * verdict.
+ * The classes a stage step retries — never a verdict.
  *
  * `ExecFailed` is the obvious one: the command could not run. `StepFailed` is
  * the one that was missing, and its absence made the whole retry policy inert
  * on the failure it was written for.
  *
- * A step body here can fail in exactly two typed ways — `ExecFailed` and
- * `ExecTimeout` — because a command that RUNS and exits non-zero comes back as a
- * normal `ExecResult`. When the platform kills the step outright, no Effect
+ * A command that RUNS and exits non-zero comes back as a normal `ExecResult`,
+ * so no tag listed here can carry one. When the platform kills the step
+ * outright, no Effect
  * `Cause` survives the Workflow boundary, `errorTagOf` falls back to
  * `"StepFailed"`, and a `retryOn` listing only `ExecFailed` classified that as
  * non-retryable — so the one failure mode that is purely the platform's was the
@@ -271,11 +270,26 @@ const PLATFORM_RETRIES = 3;
  * consumer's heaviest stage peaks at 2.2 GiB of 11.9 GiB with 8.4 GB of disk
  * free, so this is not resource pressure being papered over.
  *
+ * `CheckoutFailed` is the third because `ensureWorkspace` now re-clones INSIDE
+ * this step. The clone runs in exactly the weather that made the rebuild
+ * necessary — a container the platform just replaced — so its own transient
+ * failure would otherwise end the step non-retryably, one call short of the
+ * recovery it was invoked to perform.
+ *
+ * `CheckoutFailed` is a catch-all over the whole clone body, so deterministic
+ * failures ride it too — a bad sha, a repo that is gone, and on the substrate
+ * backend the recipe-pin mismatch. On the isolated path a stage's clone is the
+ * run's FIRST, with no earlier `checkout` to have caught those, so this
+ * knowingly spends the retry budget on some failures that cannot succeed: four
+ * clone attempts plus backoff, times the stages running at once, each minting
+ * its own installation token on the container backend. The alternative loses
+ * the repair on every path, so it is the worse trade.
+ *
  * `ExecTimeout` stays OUT, deliberately. Its tag survives the boundary intact
  * whenever there is a Cause to read, so it lands here as itself rather than as
  * `StepFailed` — and a command that outran its ceiling will outrun it again.
  */
-const RETRY_ON = ["ExecFailed", "StepFailed"] as const;
+const RETRY_ON = ["ExecFailed", "StepFailed", "CheckoutFailed"] as const;
 
 const stepTimeoutFor = (execTimeoutSec: number): number =>
   execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC;
@@ -875,7 +889,8 @@ export const offloadTest = defineRun({
               // `printf '%s\n' '<line>'`, so free vendor text could close the
               // quote. A `[A-Za-z0-9_-]` id and a signed integer cannot.
               const rendered = Option.match(Cause.failureOption(exit.cause), {
-                onSome: (f) => `${String((f as { cause?: unknown }).cause ?? "")} ${String((f as { message?: unknown }).message ?? "")}`,
+                onSome: (f) =>
+                  `${String((f as { cause?: unknown }).cause ?? "")} ${String((f as { message?: unknown }).message ?? "")}`,
                 onNone: () => "",
               });
               const reference = /reference\s*=\s*([A-Za-z0-9_-]{1,64})/.exec(rendered)?.[1];

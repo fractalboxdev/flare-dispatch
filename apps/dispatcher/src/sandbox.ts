@@ -52,7 +52,11 @@ import type { Env } from "./env";
  * `offload-test`) then mis-rendered as a red lint/test verdict. Because
  * `destroy()` is the real teardown, a longer idle window costs extra ONLY on the
  * rare paths that skip finalize, so 10m (the SDK default, and the `LEASE_TTL_MS`
- * run-scale) buys durability across normal inter-step gaps at negligible cost.
+ * run-scale) is close to free. It is a grace period, not a durability
+ * mechanism: it EXTENDS how long an idle container stays awake, and it
+ * guarantees nothing — container disk is ephemeral on every path (ADR-0001
+ * rule 5), so a run that needs its checkout between steps re-establishes it
+ * with `ensureWorkspace`.
  * `sandbox-cf.ts` `isWorkingDirFailure` is the honesty backstop for the residual
  * (eviction / replay beyond this window): it re-classifies a lost-workspace exec
  * as a retryable `ExecFailed`, never a phantom finding.

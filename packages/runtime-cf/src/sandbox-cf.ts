@@ -675,6 +675,13 @@ export const makeSandboxCloudflareLive = (
               );
               const err = redactCloneFailure(cause, token);
               if (scrubFailure !== undefined) {
+                // Logged as well as appended: `CheckoutFailed` is retryable in
+                // the runs that call `ensureWorkspace`, so an attempt that fails
+                // here and a later one that succeeds would carry this notice out
+                // of the run's final result and into per-attempt history alone.
+                console.warn(
+                  `sandbox.clone: credential scrub failed for ${targetDir} — a token may remain in .git/config until the next attempt clears it`,
+                );
                 err.message = `${err.message}\n[post-failure credential scrub ALSO failed: ${redact(
                   scrubFailure,
                   [token],
@@ -725,12 +732,19 @@ export const makeSandboxCloudflareLive = (
           // never ran — the checkout did not survive to this exec (container
           // recycled between durable steps). Raise a real ExecFailed rather than
           // fold a phantom non-zero result a `failOnNonZeroExit` run would render
-          // as a lint/test verdict (see `isWorkingDirFailure`). The throw is
-          // classified by the `catch` below.
+          // as a lint/test verdict (see `isWorkingDirFailure`). Built here
+          // rather than in the `catch`, whose timeout regex would match the
+          // `cwd` this message embeds.
           if (isWorkingDirFailure(result, cwd)) {
-            throw new Error(
-              `working directory '${cwd}' was missing at exec time — the checkout did not survive to this step (container recycled). stderr: ${stderr.slice(0, 200)}`,
-            );
+            throw new ExecFailed({
+              exitCode: -1,
+              stderrTail: diagnosticTail(
+                new Error(
+                  `working directory '${cwd}' was missing at exec time — the checkout did not survive to this step (container recycled). stderr: ${stderr.slice(0, 200)}`,
+                ),
+                redactValues,
+              ),
+            });
           }
           // Only a bounded TAIL is inlined in the step's return value, so the
           // Workflow checkpoint stays small (see `inlineTail`). When a viewer
@@ -751,6 +765,7 @@ export const makeSandboxCloudflareLive = (
           // generic launch failure. Prefer any stdout/stderr the throw carried
           // (some SDK errors attach them); else the Error message — this is
           // what Workflows persists via ExecFailed.message (#88).
+          if (cause instanceof ExecFailed) return cause;
           const message = cause instanceof Error ? cause.message : String(cause);
           if (/timed?\s*out|timeout/i.test(message)) {
             return new ExecTimeout({

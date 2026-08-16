@@ -307,12 +307,22 @@ command in the same missing directory three times and reported a failure about a
 missing directory rather than anything about the code. The retry could never
 have worked: the thing it needed was the thing that was gone.
 
+That classification is made where the failure is raised, not by reading the
+message afterwards. The message embeds the missing `cwd`, and the runtime also
+matches `/timeout/i` on it to spot an SDK timeout — so a checkout under a path
+like `/workspace/request-timeout` used to land as `ExecTimeout`, which `retryOn`
+excludes on purpose, and the step died without ever retrying.
+
 So **every** PR run and every path within it — `offload-test` staged and
 single-exec, `check`, and `oxlint` — calls the `ensureWorkspace` primitive
 inside its retryable step: it
 probes `test -d <dir>/.git` and re-clones when the probe fails. On the happy path
 that is one extra exec of about a second; on a recycled container it is a clone
 and an install, which is what the step was going to need anyway.
+
+Because that re-clone runs inside the step, `retryOn` covers `CheckoutFailed`
+alongside `ExecFailed` and `StepFailed`: a clone that flakes mid-recovery would
+otherwise end the step one call short of the repair it was there to perform.
 
 Isolated stages need no probe: they acquire a workspace inside the retryable
 step already, so a retry rebuilds it by construction.

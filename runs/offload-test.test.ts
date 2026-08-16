@@ -126,7 +126,11 @@ describe("offload-test", () => {
       yield* offloadTest.run(baseInput);
       const execStep = handles.executions.steps.find((st) => st.name === "exec");
       expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
-      expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
+      expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual([
+        "ExecFailed",
+        "StepFailed",
+        "CheckoutFailed",
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
@@ -232,7 +236,11 @@ describe("offload-test", () => {
         // raised by the engine, so `retryOn` cannot gate it: a wedged exec is
         // replayed for the whole budget.
         expect(execStep?.metadata?.["stepOpts.retries"]).toBe(3);
-        expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
+        expect(execStep?.metadata?.["stepOpts.retryOn"]).toEqual([
+          "ExecFailed",
+          "StepFailed",
+          "CheckoutFailed",
+        ]);
       }).pipe(Effect.provide(layer));
     },
   );
@@ -751,7 +759,11 @@ describe("offload-test staged mode", () => {
         const execWorkspace = handles.executions.steps.find((s) => s.name === "exec-workspace");
         expect(execWorkspace?.metadata?.["stepOpts.timeoutSec"]).toBe(900 + 120);
         expect(execWorkspace?.metadata?.["stepOpts.retries"]).toBe(3);
-        expect(execWorkspace?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
+        expect(execWorkspace?.metadata?.["stepOpts.retryOn"]).toEqual([
+          "ExecFailed",
+          "StepFailed",
+          "CheckoutFailed",
+        ]);
         // The suspicious labelled-key-missing fallback is recorded on the
         // stage's step metadata — `workspace` resolved its own key, so only
         // `features` is flagged.
@@ -1165,7 +1177,11 @@ describe("offload-test isolated stages", () => {
         // The retry contract is unchanged — it is the UNIT that changed.
         const execA = handles.executions.steps.find((s) => s.name === "exec-a");
         expect(execA?.metadata?.["stepOpts.retries"]).toBe(3);
-        expect(execA?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed"]);
+        expect(execA?.metadata?.["stepOpts.retryOn"]).toEqual([
+          "ExecFailed",
+          "StepFailed",
+          "CheckoutFailed",
+        ]);
 
         expect(result.exitCode).toBe(0);
         expect(result.durationMs).toBe(300);

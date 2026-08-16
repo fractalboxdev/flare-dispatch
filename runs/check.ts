@@ -164,15 +164,20 @@ const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
 /**
  * Platform-failure retries — see the `exec` step. A verdict is never retried:
- * a command that runs and exits non-zero is a normal `ExecResult`, so neither
- * class here can reach one.
+ * a command that runs and exits non-zero is a normal `ExecResult`, so no class
+ * here can reach one.
  *
  * `StepFailed` is included because a platform kill leaves no Effect `Cause` to
  * read a tag from, and the runner falls back to that name — so listing only
  * `ExecFailed` left the purely-platform failure as the one thing not retried.
+ *
+ * `CheckoutFailed` is included because `ensureWorkspace` re-clones inside this
+ * step, in the same weather that destroyed the checkout. A transient clone
+ * failure there would end the step non-retryably, one call short of the
+ * recovery it was invoked to perform.
  */
 const PLATFORM_RETRIES = 3;
-const RETRY_ON = ["ExecFailed", "StepFailed"] as const;
+const RETRY_ON = ["ExecFailed", "StepFailed", "CheckoutFailed"] as const;
 
 /** CONFIG_KV key — strictly per-repo (see header: no global fallback). */
 const commandKey = (repo: string): string => `check.command:${repo}`;
