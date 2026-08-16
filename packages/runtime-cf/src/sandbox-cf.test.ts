@@ -355,6 +355,31 @@ describe("makeSandboxCloudflareLive — container routing", () => {
     }),
   );
 
+  it.effect("re-acquiring a container does not re-pin it", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      transportCalls.length = 0;
+      yield* Effect.flatMap(SandboxTag, (s) =>
+        // Three acquires, two containers. `acquire` is also how a caller derives
+        // an id without provisioning — `ensureWorkspace` on a rebuild, and the
+        // stage reaper naming the container it is about to destroy. Each of
+        // those would otherwise wake a Durable Object to re-assert a setting it
+        // already has.
+        Effect.all([
+          s.acquire({}),
+          s.acquire({}),
+          s.acquire({ key: "features" }),
+          s.acquire({ key: "features" }),
+        ]),
+      ).pipe(
+        Effect.provide(
+          makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-4", undefined, undefined, undefined, "rpc"),
+        ),
+      );
+      expect(transportCalls).toEqual(["rpc", "rpc"]);
+    }),
+  );
+
   it.effect("exec routes by the handle it is given, not by the execution", () =>
     Effect.gen(function* () {
       currentBox = makeFakeBox({ proc: null });

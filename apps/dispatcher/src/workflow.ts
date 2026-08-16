@@ -455,9 +455,12 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     //
     // A value the SDK does not recognise is ignored by it with a warning, so a
     // typo degrades to the default rather than breaking the run.
-    const sandboxTransport = await this.env.CONFIG_KV?.get(
-      `sandbox.transport:${payload.github.repo}`,
-    );
+    // Container path only — the substrate owns its own transport, so a run
+    // there should not pay a KV read to be told about one it cannot use.
+    const sandboxTransport =
+      substrateFacade === undefined
+        ? await this.env.CONFIG_KV?.get(`sandbox.transport:${payload.github.repo}`)
+        : undefined;
 
     const runtime = makeCFRuntimeLive({
       db,

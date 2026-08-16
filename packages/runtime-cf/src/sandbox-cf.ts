@@ -362,6 +362,9 @@ export const makeSandboxCloudflareLive = (
   // in line with them.
   const boxFor = (container?: Container): Sandbox => getSandbox(ns, container?.id ?? sandboxId);
 
+  /** Container ids whose transport this Layer has already pinned — see `acquire`. */
+  const pinned = new Set<string>();
+
 
   // `exec` log keys are unique within a run: the first exec is `exec.ndjson`
   // (the name the plan's acceptance pins), subsequent execs `exec-2.ndjson`, …
@@ -535,10 +538,18 @@ export const makeSandboxCloudflareLive = (
         // caller asked for one. See `transport` in this Layer's options for why
         // this is per-container rather than a Worker-wide env var.
         //
+        // ONCE PER CONTAINER, not once per acquire. `acquire` is also how a
+        // caller derives an id without provisioning anything — `ensureWorkspace`
+        // re-acquires on a rebuild, and `offload-test`'s stage reaper acquires
+        // purely to name the container it is about to destroy. Without this memo
+        // each of those would wake a Durable Object to re-assert a setting it
+        // already has.
+        //
         // Best-effort: a container that stays on the default transport works,
         // it just cannot stream a file. Failing acquisition over a transport
         // preference would trade a slow cache for a dead run.
-        if (transport !== undefined) {
+        if (transport !== undefined && !pinned.has(id)) {
+          pinned.add(id);
           yield* Effect.promise(async () => {
             try {
               await getSandbox(ns, id).setTransport(transport);

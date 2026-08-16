@@ -270,8 +270,10 @@ wrangler kv key put --binding=CONFIG_KV "sandbox.transport:owner/repo" "rpc"
 ```
 
 Pins every container that repo's executions acquire to one of `http` (the
-default), `websocket`, or `rpc`. Anything else is ignored with a warning by the
-SDK, so a typo degrades rather than breaks.
+default), `websocket`, or `rpc`. **Any other value is dropped by the dispatcher
+before it reaches the SDK** — silently, and the run proceeds on the default. A
+typo therefore degrades rather than breaks, but it also says nothing: check the
+key back if a transport change appears to have had no effect.
 
 **Why it exists.** The SDK's streaming file APIs live only on its `rpc` client —
 its own comment calls `rpc` the "primary container-control client" and
