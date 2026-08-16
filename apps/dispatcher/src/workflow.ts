@@ -444,6 +444,21 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       }
     }
 
+    // Per-repo container transport — the canary knob for `rpc`.
+    //
+    // The SDK's streaming file APIs exist only on its `rpc` client (`http` is
+    // the "route-based compatibility" path), which is why the R2 dependency
+    // cache misses on every run: its restore hands `writeFile` a stream, the SDK
+    // routes any stream to `writeFileStream`, and that raises off `rpc`.
+    // `SANDBOX_TRANSPORT=rpc` as a Worker var would fix it for every repo at
+    // once; this lets one prove it first.
+    //
+    // A value the SDK does not recognise is ignored by it with a warning, so a
+    // typo degrades to the default rather than breaking the run.
+    const sandboxTransport = await this.env.CONFIG_KV?.get(
+      `sandbox.transport:${payload.github.repo}`,
+    );
+
     const runtime = makeCFRuntimeLive({
       db,
       bucket: this.env.RUNS_STORAGE,
@@ -542,6 +557,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         ? { aiGatewayAuthToken: this.env.AI_GATEWAY_AUTH_TOKEN }
         : {}),
       sandboxPreviewHostname: this.env.SANDBOX_PREVIEW_HOSTNAME,
+      ...(sandboxTransport === "rpc" ||
+      sandboxTransport === "websocket" ||
+      sandboxTransport === "http"
+        ? { sandboxTransport }
+        : {}),
       ...(publicOrigin !== undefined ? { publicOrigin } : {}),
       ...(logsBaseUrl !== undefined ? { logsViewerBase: logsBaseUrl } : {}),
       // Wire the live OIDC signing Layer when both the JWK + issuer URL are
