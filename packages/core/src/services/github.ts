@@ -64,7 +64,11 @@ export type IssueRef = {
 /** The outcome of {@link GithubService.openIssue}. */
 export type IssueCreated = {
   readonly number: number;
-  /** The issue's web URL — what a notice links, so it is never empty on success. */
+  /**
+   * The issue's web URL. Never empty: a caller announces the issue by linking
+   * it, so a create that came back without one fails rather than publishing a
+   * link to nowhere.
+   */
   readonly url: string;
 };
 

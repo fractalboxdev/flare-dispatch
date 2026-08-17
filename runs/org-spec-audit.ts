@@ -196,6 +196,21 @@ const LANE_LABEL_PREFIX_DEFAULT = "question:";
  */
 const MAX_NEW_QUESTIONS_DEFAULT = 5;
 
+/**
+ * Page ceiling for the ledger read — 2,000 label-filtered issues.
+ *
+ * Well above the library's default of 5 pages, because this read is `strict` and
+ * a strict read that outgrows its ceiling fails EVERY tick until someone raises
+ * it. It costs nothing until the set is that large: pagination stops on the first
+ * short page, so today it is one request.
+ *
+ * Read the number as a canary rather than a limit. Two thousand questions asked
+ * and never closed is not a pagination problem — it is [§8]'s failure mode
+ * arrived, the loop having asked more than the team answers, and a run going red
+ * there is closer to correct than a run quietly deciding on the first 500.
+ */
+const LEDGER_MAX_PAGES = 20;
+
 /** The `maintenance-key` namespace every question is suppressed by. */
 const MAINTENANCE_SOURCE = "org-spec-audit";
 
@@ -515,6 +530,7 @@ export const orgSpecAudit = defineRun({
           state: "all",
           labels: [questionsLabel],
           strict: true,
+          maxPages: LEDGER_MAX_PAGES,
         }),
       );
       const filed = indexFiledQuestions(onFile);

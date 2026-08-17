@@ -255,10 +255,17 @@ export const listIssues = async (opts: ListIssuesOptions): Promise<IssueListItem
 
   // Status 0 — the same convention `splitRepo` uses for a caller-side fault, so
   // the Effect Layer above maps it without learning a second error type.
+  //
+  // The message names the remedy because this failure is permanent once reached:
+  // a strict caller whose set has outgrown its ceiling fails every tick until
+  // someone raises it. That is the intended behaviour — the alternative is a
+  // caller silently deciding on a partial list — but a red run that does not say
+  // what to change is a red run people learn to ignore.
   if (!exhausted && opts.strict === true) {
     throw new GithubApiError(
-      `issue list for ${opts.repo} hit the ${maxPages}-page ceiling with more to read; ` +
-        `a strict caller cannot use a partial list`,
+      `issue list for ${opts.repo} hit the ${maxPages}-page ceiling (${maxPages * PER_PAGE} ` +
+        `issues) with more to read, and a strict caller cannot decide on a partial list — ` +
+        `raise \`maxPages\` or narrow the label filter`,
       0,
       "",
     );
@@ -314,7 +321,18 @@ export const createIssue = async (opts: CreateIssueOptions): Promise<CreateIssue
       "",
     );
   }
-  return { number: created.number, url: str(created.html_url) };
+  // The URL is validated too, not just the number: a caller announces this issue
+  // by linking it, so `""` would publish a broken link rather than fail. Both
+  // fields are checked because both are load-bearing for the same caller.
+  const url = str(created.html_url);
+  if (url === "") {
+    throw new GithubApiError(
+      `issue create for ${opts.repo} returned no html_url (issue #${created.number} exists)`,
+      res.status,
+      "",
+    );
+  }
+  return { number: created.number, url };
 };
 
 /** The number identifying one issue, on every write below. */

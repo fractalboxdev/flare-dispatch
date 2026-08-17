@@ -50,6 +50,7 @@ export type GithubFakeState = {
     state: "open" | "closed" | "all";
     labels?: readonly string[];
     updatedWithinDays?: number;
+    maxPages?: number;
     /**
      * Recorded, never simulated — the fake holds one page, so it can never
      * truncate. A dedup read's correctness depends on ASKING for `strict`, and
@@ -168,9 +169,9 @@ export const makeGithubFake = (
   const openedBranches = new Set<string>();
 
   const service: GithubService = {
-    issues: ({ repo, state: want = "open", labels, updatedWithinDays, strict }) =>
+    issues: ({ repo, state: want = "open", labels, updatedWithinDays, maxPages, strict }) =>
       Effect.sync(() => {
-        state.issuesCalls.push({ repo, state: want, labels, updatedWithinDays, strict });
+        state.issuesCalls.push({ repo, state: want, labels, updatedWithinDays, maxPages, strict });
         const need = labels === undefined ? undefined : new Set(labels);
         return state.issues.filter((i) => {
           if (i.repo !== repo) return false;

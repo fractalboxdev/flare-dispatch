@@ -272,6 +272,15 @@ describe("createIssue", () => {
     );
   });
 
+  it("fails when the create returns no url — a notice would link nowhere", async () => {
+    server.use(
+      http.post("https://api.github.com/repos/:owner/:repo/issues", () =>
+        HttpResponse.json({ number: 41 }, { status: 201 }),
+      ),
+    );
+    await expect(createIssue({ ...base, title: "t", body: "b" })).rejects.toThrow(/no html_url/);
+  });
+
   it("surfaces a non-2xx", async () => {
     server.use(
       http.post("https://api.github.com/repos/:owner/:repo/issues", () =>

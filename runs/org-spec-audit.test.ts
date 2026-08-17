@@ -211,6 +211,9 @@ describe("org-spec-audit", () => {
       expect(call).toMatchObject({ repo: "owner/control", state: "all", strict: true });
       expect(call!.labels).toEqual([LABEL]);
       expect(call!.updatedWithinDays).toBeUndefined();
+      // And a ceiling far above the library default, because `strict` turns an
+      // outgrown ceiling into a permanent failure rather than a short list.
+      expect(call!.maxPages).toBeGreaterThanOrEqual(20);
     }).pipe(Effect.provide(layer));
   });
 
