@@ -50,6 +50,26 @@ export type IssueRef = {
   readonly createdAt: number;
   /** epoch ms. */
   readonly updatedAt: number;
+  /**
+   * epoch ms when the issue was closed, or `undefined` while it is open.
+   *
+   * `updatedAt` cannot stand in: any touch resets it, so a window dated from it
+   * never expires. This is the column the org store's `pulls` table lacks and
+   * `issues` has — the whole reason an issue-shaped ledger needs no workaround
+   * where a PR-shaped one needed a file in git.
+   */
+  readonly closedAt?: number;
+};
+
+/** The outcome of {@link GithubService.openIssue}. */
+export type IssueCreated = {
+  readonly number: number;
+  /**
+   * The issue's web URL. Never empty: a caller announces the issue by linking
+   * it, so a create that came back without one fails rather than publishing a
+   * link to nowhere.
+   */
+  readonly url: string;
 };
 
 /**
@@ -394,8 +414,42 @@ export interface GithubService {
     labels?: readonly string[];
     updatedWithinDays?: number;
     maxPages?: number;
+    /**
+     * Fail rather than return a list the page ceiling cut short.
+     *
+     * A triage pass wants the default: the 500 most recently updated issues are
+     * the tick's work and a longer backlog waits. A **deduplication** read
+     * cannot — it asks "have I filed this already?", and a truncated list says
+     * "no" for every issue it did not reach, so the caller duplicates whatever
+     * fell off the end. Set it wherever an absent row is read as a fact.
+     */
+    strict?: boolean;
     installationId?: number;
   }) => Effect.Effect<readonly IssueRef[], GitHubApiError>;
+
+  /**
+   * Open one issue — the write the spec-audit sweep files an open question with.
+   *
+   * **Fails rather than degrading to a logged no-op**, which is the opposite of
+   * `openDraftPullRequest` below, and the difference is what the artifact is. A
+   * PR write that no-ops loses nothing: the branch is idempotent and the content
+   * is a file that still exists in the commit the next tick will re-derive. Here
+   * the issue *is* the question — there is no file, no branch, and no second
+   * copy — so a silent no-op drops it, and the loop then has no record that it
+   * ever had something to ask.
+   *
+   * Narrow on purpose: a title, a body, and labels. No assignee, no milestone,
+   * no template. What bounds it is the caller — the sweep files into one control
+   * repo resolved from config, and never files a question it did not first fail
+   * to find among that repo's existing issues.
+   */
+  readonly openIssue: (req: {
+    repo: string;
+    title: string;
+    body: string;
+    labels?: readonly string[];
+    installationId?: number;
+  }) => Effect.Effect<IssueCreated, GitHubApiError>;
 
   /** Add labels to an issue — the state machine's write (§5). */
   readonly addIssueLabels: (req: {
@@ -497,8 +551,16 @@ export const github = {
     labels?: readonly string[];
     updatedWithinDays?: number;
     maxPages?: number;
+    strict?: boolean;
     installationId?: number;
   }) => Effect.flatMap(Github, (g) => g.issues(opts)),
+  openIssue: (req: {
+    repo: string;
+    title: string;
+    body: string;
+    labels?: readonly string[];
+    installationId?: number;
+  }) => Effect.flatMap(Github, (g) => g.openIssue(req)),
   addIssueLabels: (req: {
     repo: string;
     issue: number;

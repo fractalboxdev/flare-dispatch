@@ -296,6 +296,7 @@ describe("decideSuppression", () => {
 /** A `GithubService` with every method stubbed, overridable per test. */
 const githubService = (over: Partial<GithubService>): GithubService => ({
   issues: () => Effect.succeed([]),
+  openIssue: () => Effect.succeed({ number: 1, url: "" }),
   addIssueLabels: () => Effect.void,
   removeIssueLabel: () => Effect.void,
   commentOnIssue: () => Effect.void,

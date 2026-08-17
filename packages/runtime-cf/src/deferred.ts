@@ -126,6 +126,11 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
     // `issues` is the same class: an empty list reads as "nothing to triage",
     // which a scheduled run would act on by reporting a clean estate.
     issues: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    // `openIssue` is the one WRITE in the fail class, because the issue it opens
+    // is the artifact and not a report of one. A logged skip here discards the
+    // question with nothing left holding it — no branch, no file, no second
+    // copy — and the run would report a clean sweep having asked nothing.
+    openIssue: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     // The state-machine writes degrade to a logged no-op, like `pullReview`.
     addIssueLabels: ({ repo, issue }) =>
       Effect.logInfo(

@@ -153,6 +153,7 @@ export {
   github,
   Github,
   type GithubService,
+  type IssueCreated,
   type IssueRef,
   type PullRequestHistoryRef,
   type ReadTextFileRequest,
