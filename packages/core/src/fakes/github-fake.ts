@@ -50,6 +50,13 @@ export type GithubFakeState = {
     state: "open" | "closed" | "all";
     labels?: readonly string[];
     updatedWithinDays?: number;
+    /**
+     * Recorded, never simulated — the fake holds one page, so it can never
+     * truncate. A dedup read's correctness depends on ASKING for `strict`, and
+     * that is the half a test can pin here; the truncation itself is pinned
+     * against the wire in `issues.test.ts`.
+     */
+    strict?: boolean;
   }>;
   /** Every `actionRuns` call, in order. */
   readonly actionRunsCalls: Array<{
@@ -72,6 +79,20 @@ export type GithubFakeState = {
   readonly pullReviewCalls: PullReviewRequest[];
   /** Every `openDraftPullRequest` call, in order. */
   readonly openDraftPullRequestCalls: OpenDraftPullRequest[];
+  /**
+   * Every `openIssue` call, in order — and each one also lands in `issues`.
+   *
+   * That second half is the point. A run whose whole job is "do not file what I
+   * already filed" can only be tested if a filed issue is visible to the next
+   * read, so the fake appends it rather than merely recording the call. Without
+   * that, every test would pass against a run that dedups against nothing.
+   */
+  readonly openIssueCalls: Array<{
+    repo: string;
+    title: string;
+    body: string;
+    labels?: readonly string[];
+  }>;
   /** Every `createRelease` call, in order — lets a test assert a release published. */
   readonly createReleaseCalls: CreateRelease[];
   /** Every label ADD, in order. */
@@ -133,6 +154,7 @@ export const makeGithubFake = (
     readTextFileCalls: [],
     pullReviewCalls: [],
     openDraftPullRequestCalls: [],
+    openIssueCalls: [],
     createReleaseCalls: [],
     addIssueLabelsCalls: [],
     removeIssueLabelCalls: [],
@@ -146,9 +168,9 @@ export const makeGithubFake = (
   const openedBranches = new Set<string>();
 
   const service: GithubService = {
-    issues: ({ repo, state: want = "open", labels, updatedWithinDays }) =>
+    issues: ({ repo, state: want = "open", labels, updatedWithinDays, strict }) =>
       Effect.sync(() => {
-        state.issuesCalls.push({ repo, state: want, labels, updatedWithinDays });
+        state.issuesCalls.push({ repo, state: want, labels, updatedWithinDays, strict });
         const need = labels === undefined ? undefined : new Set(labels);
         return state.issues.filter((i) => {
           if (i.repo !== repo) return false;
@@ -162,6 +184,34 @@ export const makeGithubFake = (
           }
           return true;
         });
+      }),
+
+    openIssue: ({ repo, title, body, labels }) =>
+      Effect.sync(() => {
+        state.openIssueCalls.push({ repo, title, body, labels });
+        // Numbered above every issue the fake knows about, in this repo or any
+        // other, because GitHub's numbering is per repo but a test asserting on
+        // `#3` should not have it mean two different issues.
+        const number = state.issues.reduce((max, i) => Math.max(max, i.number), 0) + 1;
+        const url = `https://github.com/${repo}/issues/${number}`;
+        state.issues = [
+          ...state.issues,
+          {
+            repo,
+            number,
+            title,
+            body,
+            state: "open" as const,
+            labels: [...(labels ?? [])],
+            author: "flare-dispatch[bot]",
+            authorAssociation: "OWNER",
+            url,
+            commentCount: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ];
+        return { number, url };
       }),
 
     // The writes record and mutate the seeded issue, so a test can assert both
@@ -195,7 +245,9 @@ export const makeGithubFake = (
       Effect.sync(() => {
         state.closeIssueAsDuplicateCalls.push({ repo, issue, duplicateOf });
         state.issues = state.issues.map((i) =>
-          i.repo === repo && i.number === issue ? { ...i, state: "closed" as const } : i,
+          i.repo === repo && i.number === issue
+            ? { ...i, state: "closed" as const, closedAt: now }
+            : i,
         );
       }),
 

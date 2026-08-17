@@ -70,6 +70,7 @@ export {
 export {
   addIssueLabels,
   closeIssueAsDuplicate,
+  createIssue,
   createIssueComment,
   listIssues,
   removeIssueLabel,
@@ -77,6 +78,8 @@ export {
   type AuthorAssociation,
   type CloseIssueAsDuplicateOptions,
   type CreateIssueCommentOptions,
+  type CreateIssueOptions,
+  type CreateIssueResult,
   type IssueListItem,
   type ListIssuesOptions,
   type RemoveIssueLabelOptions,

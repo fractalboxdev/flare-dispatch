@@ -3,9 +3,8 @@
 // A Schedule-mode run that sweeps every configured repo, reads each one's
 // `specs/` against its tree, and collects the divergences that CANNOT be
 // reconciled automatically — the ones where *which side is right* is a
-// judgment nobody has made yet. It deduplicates them across the estate, groups
-// them by the answer that unblocks them, and opens ONE draft PR against the
-// control repo carrying the grouped list as a dated markdown file.
+// judgment nobody has made yet. It deduplicates them across the estate and
+// files each one as ONE GITHUB ISSUE in the control repo.
 //
 // --- Why this is a separate run from `spec-drift-pr` -------------------------
 //
@@ -19,52 +18,90 @@
 // quarters, two specs in different repos that disagree. Per repo those die in
 // a PR body. Across an estate the same question is usually raised in three
 // repos, and answering it once closes all three. That merge is the entire
-// reason this sweeps instead of running per repo, and it is why the output is
-// ONE PR against the control repo rather than one per repo.
+// reason this sweeps instead of running per repo, and it is why every question
+// lands in ONE control repo rather than in the repo that raised it.
 //
-// --- Delivery: the file is the record, the notice is the announcement --------
+// --- One question, one issue — and why it is not a daily file ---------------
+//
+// This run shipped filing a dated `<date>.md` in a draft PR: every question it
+// found that day, rendered fresh. Two sweeps two days apart then asked three of
+// the same questions twice, two of them under a BYTE-IDENTICAL
+// `maintenance-key` (`org#147`, `org#148`).
+//
+// An identical key that re-proposes rules out the obvious cause and leaves the
+// real one. The ledger only ever remembered *no*: both suppression rules key
+// off a TERMINATED proposal — a decline recorded in the ledger, or a PR closed
+// unmerged — and the first PR was neither. It was open, unanswered, sitting in
+// the queue, which the design read as no signal at all.
+//
+// So the unit is now the question, and the artifact is a GitHub issue:
+//
+//   open    — asked, unanswered → this run writes NOTHING. Silence is correct.
+//   closed  — answered, or declined → never filed again, and never reopened.
+//   absent  — new → filed.
+//
+// That collapses the whole apparatus into one field. `open` is a first-class
+// answer to "have I raised this?", which no ledger of declines could express,
+// and a decline stops needing a second file a human maintains by hand.
+//
+// Two rules follow, and both are load-bearing:
+//
+//   * NEVER reopen and never re-announce. A run that reopens an issue argues
+//     with the person who closed it, and a daily "still open" comment is the
+//     daily file again in miniature. How long a decision has gone unmade is
+//     already legible from the issue's own age.
+//   * The dedup read fails CLOSED (below), inverting the suppression
+//     primitive's posture on purpose.
+//
+// --- Delivery: the issue is the record, the notice is the announcement -------
 //
 // This run does not post to Slack, and must not be given a way to. Slack bot
 // tokens live with the Slack ingress and stay there (see
 // `apps/dispatcher/src/slack-notify.ts`) — a cron run holding a workspace-write
 // credential is how a token ends up somewhere nobody meant it to be.
 //
-// So it does two things with one rendering. The PR carries the message as a
-// dated markdown file: that is the durable artifact and the reviewed record,
-// and answering in its thread is how the questions get closed. Then
-// `notice.publish` hands the SAME text to the `notice` capability, which names
+// The issues are the durable record; answering in a thread and closing is how a
+// question ends. `notice.publish` then announces the DELTA — filed today, how
+// many stand open, what the cap held — to the `notice` capability, which names
 // a use case and nothing else; the Slack ingress resolves that to a room and
-// posts it with the token it already holds. One direction of trust, no new
-// credential here, and no second wording to drift from the first.
+// posts it with the token it already holds.
 //
-// Both halves are best-effort in the one direction that matters: a notice that
-// did not land is a logged line, never a verdict. The questions are already in
-// git, which is the copy that has to survive.
+// The delta matters as much as the medium. The old message was the day's whole
+// file, so its length tracked the sweep rather than the news and a reader who
+// had already seen eleven questions was shown eleven questions again. Now most
+// days say nothing, and "nothing" means nothing CHANGED rather than nothing
+// found — with the open-question count one GitHub query away for anyone who
+// wants to tell those apart.
 //
-// --- Suppression: the loop's memory ------------------------------------------
+// --- Suppression: two reads, and only one may fail open ----------------------
 //
-// Before it proposes anything, the run asks the `suppression` primitive which
-// of today's questions it has already been told no to. A key in the control
-// repo's declines ledger is never proposed again; a
-// question whose proposal a human closed unmerged waits out a 30-day cooldown
-// dated from `closed_at`. Every proposed question carries its own
-// `maintenance-key: org-spec-audit/<question-key>` line in the PR body — that
-// line is what both halves match on.
+// The issue set is the memory. Before filing, the run reads every issue in the
+// control repo carrying the questions label, in ANY state, and matches on the
+// `maintenance-key: org-spec-audit/<question-key>` line in each body.
 //
-// The suppressed count and the reason for each appear in the PR body AND in the
-// message file, because a silently shorter list reads as "fewer problems",
-// which is the opposite of what it means. Both reads fail open: if the ledger
-// or the PR history cannot be read, the run proposes anyway and prints the
-// warning, since a duplicate PR is a nuisance and a silently disabled loop is
-// the failure the mechanism exists to prevent.
+// That read **fails closed**, which reverses what this run used to do. When one
+// PR a day carried every question, an unreadable ledger cost one duplicate PR,
+// so failing open was right and failing closed would have silenced the loop.
+// Now an unreadable issue set costs a duplicate of EVERY question at once — so
+// a sweep that cannot enumerate what it has already asked files nothing. It
+// loses a day and no facts, because the questions are re-derived tomorrow.
+// Same reason the read is `state: "all"`, un-windowed, and `strict` (a list the
+// page ceiling cut short answers "not filed" for everything it never reached).
+//
+// The declines ledger (`declined.jsonl`) is the PRE-EMPTIVE half and still
+// fails open: a key there is never filed at all, and if the file cannot be read
+// the run files anyway, because the cost is one issue a human closes — and that
+// close then suppresses it permanently, which is a better end state than a loop
+// silently disabled by an unreachable file. The PR-history half retires with
+// the PR: this run opens none, so no cooldown is computed from one.
 //
 // --- CONFIG the operator sets (out of band) ---------------------------------
 //
 // Every value that names an operator's own estate is a key, not a constant.
-// This run is generic machinery — which repos it reads, which repo it writes
-// to, and where in that repo the file lands are the operator's business and
-// live in their config, never in this file. A default that names somebody's
-// repo is a default that files a PR against it.
+// This run is generic machinery — which repos it reads, which repo it files
+// into, and what it labels the issues are the operator's business and live in
+// their config, never in this file. A default that names somebody's repo is a
+// default that opens issues on it.
 //
 // Unset keys are not uniform, and the split is deliberate. An unset `repos` is
 // a run nobody has pointed at anything yet: it warns and no-ops, because on a
@@ -73,16 +110,18 @@
 // opposite — the sweep would do all its work with nowhere to put the answer —
 // so that one fails the run loudly.
 //
-//   CONFIG_KV  org-spec-audit.repos          comma/space-separated `owner/name` estate to sweep (optional — unset disables the sweep)
-//   CONFIG_KV  org-spec-audit.base           base branch to read (default "main")
-//   CONFIG_KV  org-spec-audit.control-repo   `owner/name` the questions PR lands in (REQUIRED — no default)
-//   CONFIG_KV  org-spec-audit.questions-dir  repo-relative dir for `<date>.md` (default "maintenance/questions")
-//   CONFIG_KV  org-spec-audit.declined-path  repo-relative declines ledger (default "maintenance/declined.jsonl")
-//   CONFIG_KV  org-spec-audit.window-hours   skip a repo with no commits in this window (default "26")
-//   CONFIG_KV  org-spec-audit.backend        "workers-ai" | "anthropic" | "bedrock" (default workers-ai)
-//   CONFIG_KV  org-spec-audit.prompt         (optional) override the question-detection system prompt
-//   CONFIG_KV  org-spec-audit.workers-ai.model  model id
-//   CONFIG_KV  org-spec-audit.workers-ai.mode   "tools" | "json" (default "tools")
+//   CONFIG_KV  org-spec-audit.repos              comma/space-separated `owner/name` estate to sweep (optional — unset disables the sweep)
+//   CONFIG_KV  org-spec-audit.base               base branch to read (default "main")
+//   CONFIG_KV  org-spec-audit.control-repo       `owner/name` the question issues land in (REQUIRED — no default)
+//   CONFIG_KV  org-spec-audit.questions-label    label marking a question issue (default "maintenance:open-question")
+//   CONFIG_KV  org-spec-audit.lane-label-prefix  prefix + group → the lane label (default "question:")
+//   CONFIG_KV  org-spec-audit.max-new-questions  issues filed per sweep; the rest are counted (default 5)
+//   CONFIG_KV  org-spec-audit.declined-path      repo-relative declines ledger (default "maintenance/declined.jsonl")
+//   CONFIG_KV  org-spec-audit.window-hours       skip a repo with no commits in this window (default "26")
+//   CONFIG_KV  org-spec-audit.backend            "workers-ai" | "anthropic" | "bedrock" (default workers-ai)
+//   CONFIG_KV  org-spec-audit.prompt             (optional) override the question-detection system prompt
+//   CONFIG_KV  org-spec-audit.workers-ai.model   model id
+//   CONFIG_KV  org-spec-audit.workers-ai.mode    "tools" | "json" (default "tools")
 //
 // Mode: Schedule mode — specs/04-gha-integration.md § Schedule mode. The cron
 // MUST also be in wrangler.jsonc `triggers.crons`.
@@ -99,7 +138,7 @@ import {
   step,
   type Container,
 } from "@fractalboxdev/flare-dispatch-core";
-import type { CheckoutFailed, GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
+import type { CheckoutFailed, GitHubApiError, IssueRef } from "@fractalboxdev/flare-dispatch-core";
 import {
   checkSuppression,
   DECLINED_LEDGER_PATH,
@@ -129,29 +168,36 @@ const key = namespacedKey(NAMESPACE);
 const REPOS_KEY = key("repos");
 const BASE_KEY = key("base");
 const CONTROL_REPO_KEY = key("control-repo");
-const QUESTIONS_DIR_KEY = key("questions-dir");
+const QUESTIONS_LABEL_KEY = key("questions-label");
+const LANE_LABEL_PREFIX_KEY = key("lane-label-prefix");
+const MAX_NEW_QUESTIONS_KEY = key("max-new-questions");
 const DECLINED_PATH_KEY = key("declined-path");
 const WINDOW_HOURS_KEY = key("window-hours");
 
 /**
- * Where the dated questions file lands inside the control repo.
+ * The label every question issue carries — the ledger's INDEX.
  *
- * A directory, not a template: the run appends `<date>.md`, so there is no
- * placeholder syntax to get wrong and no way for config to name a single file
- * that every day overwrites.
+ * Machine state, not a human affordance: the dedup read filters on it to find
+ * every question this run has ever asked, so a question whose label someone
+ * removes becomes fileable again. The lane labels below are the opposite —
+ * nothing matches on them, so they are safe to retriage by hand.
  */
-const QUESTIONS_DIR_DEFAULT = "maintenance/questions";
+const QUESTIONS_LABEL_DEFAULT = "maintenance:open-question";
+const LANE_LABEL_PREFIX_DEFAULT = "question:";
 
 /**
- * The `maintenance-key` namespace and the branch prefix every proposal shares.
+ * How many issues one sweep may open.
  *
- * Both are load-bearing for suppression: the key is what the ledger matches on,
- * and the prefix is how a later tick finds the PRs a human already closed
- * (each day's proposal gets its own dated branch, so the prefix is all they
- * have in common).
+ * A first sweep of a widened estate can find twenty, and twenty new issues at
+ * 05:45 is a wall rather than a digest. What the cap holds back is counted and
+ * named in the notice — never dropped silently, because a shorter list that
+ * does not say it is shorter reads as fewer problems — and files on the next
+ * sweep, which finds it un-filed and therefore fresh.
  */
+const MAX_NEW_QUESTIONS_DEFAULT = 5;
+
+/** The `maintenance-key` namespace every question is suppressed by. */
 const MAINTENANCE_SOURCE = "org-spec-audit";
-const BRANCH_PREFIX = "flare-dispatch/spec-audit-questions-";
 
 /** The stable, repo-independent id a question is suppressed by. */
 const maintenanceKey = (questionKey: string): string => `${MAINTENANCE_SOURCE}/${questionKey}`;
@@ -172,8 +218,10 @@ const MAX_SPECS_CHARS = 40_000;
 const MAX_TREE_CHARS = 12_000;
 const QUESTIONS_MAX_TOKENS = 2048;
 
-/** How many questions per group reach the message. The rest are counted, not dropped silently. */
-const PER_GROUP_CAP = 5;
+// A per-group rendering cap used to live here, because the message carried every
+// standing question and a long group buried the rest. The notice now lists only
+// what was FILED this tick, which `max-new-questions` already bounds — one cap
+// instead of two, and the one that bounds the writes is the one that matters.
 
 /**
  * The four groups, in message order.
@@ -211,11 +259,60 @@ const AuditQuestions = Schema.Struct({
        * A stable, repo-INDEPENDENT slug of the underlying question. Two repos
        * asking the same thing must produce the same key or the cross-repo
        * merge — the reason this run sweeps at all — silently does nothing.
+       *
+       * Stable across DAYS as well as repos, which is the harder half and was
+       * once wrong here: the same question arrived as `authorize-pipeline-dags`
+       * one day and `adopt-pipeline-dags` the next, matching nothing. The prompt
+       * asks for a noun phrase for that reason, and `reconcileKeys` catches what
+       * prompt discipline misses — a rule with no mechanism behind it is a rule
+       * that holds until the model rephrases.
        */
       key: Schema.String,
     }),
   ),
 });
+
+/**
+ * One verdict per newly-minted key: the key already on file that it means the
+ * same question as, or `""` for none.
+ *
+ * Deliberately not "is this a duplicate, yes/no" — the model has to NAME the
+ * question it thinks this duplicates, and that name is then checked against the
+ * set actually read from the control repo. A key it invents matches nothing and
+ * the question gets filed, which is the safe direction: the cost of a missed
+ * match is one duplicate issue a human closes, and the cost of an accepted
+ * hallucination is a question silently never asked.
+ */
+const KeyReconciliation = Schema.Struct({
+  matches: Schema.Array(
+    Schema.Struct({
+      /** The key this sweep minted, echoed back so the mapping is unambiguous. */
+      minted: Schema.String,
+      /** An existing key from the list given, or `""` when this question is new. */
+      existing: Schema.String,
+    }),
+  ),
+});
+
+const RECONCILE_PROMPT = `You are matching newly-raised questions against questions already on file.
+
+For each NEW question you are given, decide whether it is THE SAME QUESTION as
+one of the questions already on file — the same decision, needing the same
+answer, however differently it is worded. Wording, framing and the verb used
+carry no weight; the subject and the decision it needs are what matter.
+
+Rules:
+- Answer with the existing key when it is the same question, and "" when it is
+  not. Every new key you were given gets exactly one row.
+- Only ever answer with a key from the on-file list, verbatim. Never invent one,
+  never adjust one, and never answer with a new key.
+- Narrower or broader is NOT the same question. "Should we support DAGs" and
+  "should we deprecate the linear model" need different answers; keep them apart.
+- When you are unsure, answer "". A duplicate question costs a human one click;
+  a question wrongly matched away is never asked again.`;
+
+const RECONCILE_JSON_CONTRACT = `{"matches":[{"minted":string,"existing":string}]}`;
+const RECONCILE_MAX_TOKENS = 1024;
 
 /** The question-detection prompt (operator-overridable). */
 const QUESTIONS_PROMPT_DEFAULT = `You read a project's specs/ against its file tree and recent commits, and you
@@ -236,8 +333,12 @@ Rules, each of which drops a finding when broken:
   evidence, no question.
 - State the assumption we should make if nobody answers. A question without one
   waits for a meeting.
-- The key is a short lowercase slug of the UNDERLYING question, with no repo
-  name in it, so the same question asked in two repos merges into one line.
+- The key is a short lowercase slug NAMING THE SUBJECT of the question, as a
+  noun phrase and never a verb phrase: "pipeline-dags", not
+  "adopt-pipeline-dags", "authorize-pipeline-dags" or "should-we-adopt-dags". A
+  verb encodes the action being proposed, which changes with how you phrase it;
+  the subject of the question does not. No repo name in it, so the same question
+  asked in two repos merges into one line.
 - Report nothing rather than padding. An empty array is a good answer.`;
 
 const Input = Schema.Struct({
@@ -249,9 +350,20 @@ const Output = Schema.Struct({
   reposSkipped: Schema.Number,
   questionsRaised: Schema.Number,
   questionsAfterMerge: Schema.Number,
-  /** Merged questions the ledger or a cooldown kept out of the proposal. */
+  /**
+   * Merged questions that already have an issue, in any state.
+   *
+   * The number this whole design exists to make non-zero on a steady estate: on
+   * a quiet week every question the sweep raises is one already on file, and the
+   * correct output is no writes at all.
+   */
+  questionsAlreadyFiled: Schema.Number,
+  /** Merged questions the declines ledger kept from being filed. */
   questionsSuppressed: Schema.Number,
-  prOpened: Schema.Boolean,
+  /** Issues actually opened this tick. */
+  questionsFiled: Schema.Number,
+  /** Fresh questions the per-sweep cap held back — they file on the next tick. */
+  questionsHeldByCap: Schema.Number,
 });
 
 export const orgSpecAudit = defineRun({
@@ -309,8 +421,10 @@ export const orgSpecAudit = defineRun({
           reposSkipped: 0,
           questionsRaised: 0,
           questionsAfterMerge: 0,
+          questionsAlreadyFiled: 0,
           questionsSuppressed: 0,
-          prOpened: false,
+          questionsFiled: 0,
+          questionsHeldByCap: 0,
         };
       }
 
@@ -341,11 +455,73 @@ export const orgSpecAudit = defineRun({
       // model calls whose output has nowhere to go. See
       // `primitives/control-plane` for the rule and the failure text.
       const controlRepo = yield* resolveControlRepo(CONTROL_REPO_KEY);
-      const questionsDir = yield* resolveRepoRelativePath(QUESTIONS_DIR_KEY, QUESTIONS_DIR_DEFAULT);
       const declinedPath = yield* resolveRepoRelativePath(DECLINED_PATH_KEY, DECLINED_LEDGER_PATH);
+
+      // Set-and-unusable fails; unset takes the default. A label that cannot be
+      // both filtered on and applied would break dedup silently — see
+      // `parseLabel`.
+      const questionsLabel = parseLabel(
+        yield* step("resolve-questions-label", () => config.get(QUESTIONS_LABEL_KEY)),
+        QUESTIONS_LABEL_DEFAULT,
+      );
+      if (questionsLabel === undefined) {
+        return yield* Effect.fail(
+          new StepFailed({
+            step: "resolve-questions-label",
+            cause: `${QUESTIONS_LABEL_KEY} is not a usable GitHub label (no comma, max ${LABEL_MAX_CHARS} chars)`,
+          }),
+        );
+      }
+      const lanePrefix = parseLabel(
+        yield* step("resolve-lane-prefix", () => config.get(LANE_LABEL_PREFIX_KEY)),
+        LANE_LABEL_PREFIX_DEFAULT,
+      );
+      if (lanePrefix === undefined) {
+        return yield* Effect.fail(
+          new StepFailed({
+            step: "resolve-lane-prefix",
+            cause: `${LANE_LABEL_PREFIX_KEY} is not a usable GitHub label prefix (no comma, max ${LABEL_MAX_CHARS} chars)`,
+          }),
+        );
+      }
+      const maxNew = parsePositiveInt(
+        yield* step("resolve-max-new", () => config.get(MAX_NEW_QUESTIONS_KEY)),
+        MAX_NEW_QUESTIONS_DEFAULT,
+      );
 
       const windowHours = parseWindowHours(
         yield* step("resolve-window", () => config.get(WINDOW_HOURS_KEY)),
+      );
+
+      // 1b. The ledger read — BEFORE the sweep, not after.
+      //
+      //     It is one cheap call whose failure ends the tick, so it belongs
+      //     where the other deterministic exits are (§7). Reading it after the
+      //     sweep would mean paying for an estate's worth of model calls and
+      //     then discarding every one of them.
+      //
+      //     `state: "all"` because a question answered a year ago must still
+      //     suppress; un-windowed for the same reason; `strict` because a list
+      //     the page ceiling cut short answers "not filed" for everything it
+      //     never reached, and this read's answer to that question is what
+      //     decides whether anything is written.
+      //
+      //     No `catchAll`. A failure here fails the run, which is the whole
+      //     inversion: better a day with no questions filed than a day that
+      //     files a duplicate of every question on file.
+      const onFile = yield* step("read-question-ledger", () =>
+        github.issues({
+          repo: controlRepo,
+          state: "all",
+          labels: [questionsLabel],
+          strict: true,
+        }),
+      );
+      const filed = indexFiledQuestions(onFile);
+      yield* io.log(
+        "info",
+        `org-spec-audit: ${filed.size} question(s) already on file in ${controlRepo} ` +
+          `(${onFile.filter((i) => i.state === "open").length} open)`,
       );
 
       // 2. The backend, under THIS run's namespace. A misconfigured backend
@@ -390,7 +566,7 @@ export const orgSpecAudit = defineRun({
       const swept = outcomes.filter((o) => !o.skipped).length;
       const skipped = outcomes.filter((o) => o.skipped).length;
 
-      // 4. Empty means silent — no PR and, now, no notice. A digest that fires
+      // 4. Empty means silent — no issue and no notice. A digest that fires
       //    whether or not there is news is one people learn to skip, and that
       //    is far more expensive in a channel than in a repo: the day it does
       //    have something to say, nobody is reading.
@@ -401,108 +577,156 @@ export const orgSpecAudit = defineRun({
           reposSkipped: skipped,
           questionsRaised: raised.length,
           questionsAfterMerge: 0,
+          questionsAlreadyFiled: 0,
           questionsSuppressed: 0,
-          prOpened: false,
+          questionsFiled: 0,
+          questionsHeldByCap: 0,
         };
       }
 
-      // 5. Suppression, BEFORE anything is proposed. A question the ledger
-      //    declined is never asked again; one whose proposal a human closed
-      //    unmerged waits out a cooldown dated from the close. Both reads fail
-      //    OPEN and say so — a duplicate PR is a nuisance, a silently disabled
-      //    loop is the failure this whole mechanism exists to prevent.
+      // 5. Which of today's questions are already on file? Exact keys first,
+      //    deterministically and for free — a matching key IS the same question
+      //    and needs nothing to confirm it.
+      const exact = merged.filter((q) => filed.has(maintenanceKey(q.key)));
+      const residue = merged.filter((q) => !filed.has(maintenanceKey(q.key)));
+
+      // 6. Then reconcile the residue, ONCE, for the whole batch. A key is
+      //    minted from prose, so two sweeps can name one question twice —
+      //    `authorize-pipeline-dags` and `adopt-pipeline-dags` were the same
+      //    question on consecutive days. Asking a model to MATCH against what is
+      //    on file is far more stable than asking it to invent the same slug
+      //    twice, and it is one call for the batch rather than one per question.
+      //
+      //    Skipped entirely when there is nothing on file to match against —
+      //    on a fresh control repo every question is new by construction.
+      const matchRows =
+        residue.length > 0 && filed.size > 0
+          ? yield* step("reconcile-keys", () =>
+              reconcileKeys({
+                residue,
+                onFile: [...filed.values()],
+                resolved,
+              }),
+            ).pipe(
+              // A model that cannot answer must not be able to file duplicates
+              // OR to suppress questions: falling back to "nothing matched"
+              // files the residue, which is the direction whose worst case is a
+              // human closing an issue.
+              Effect.catchAll((err) =>
+                io
+                  .log(
+                    "warn",
+                    `org-spec-audit: key reconciliation failed (${describe(err)}) — treating all ${residue.length} as new`,
+                  )
+                  .pipe(Effect.as([] as readonly KeyMatch[])),
+              ),
+            )
+          : ([] as readonly KeyMatch[]);
+      const reconciled = new Map(matchRows.map((m) => [m.minted, m.existing]));
+
+      const alreadyFiled = [...exact, ...residue.filter((q) => reconciled.has(q.key))];
+      const unfiled = residue.filter((q) => !reconciled.has(q.key));
+
+      for (const q of residue) {
+        const match = reconciled.get(q.key);
+        if (match !== undefined) {
+          yield* io.log(
+            "info",
+            `org-spec-audit: "${q.key}" reconciled onto ${match} — already asked, not re-filed`,
+          );
+        }
+      }
+
+      // 7. The declines ledger — the pre-emptive half, and the only read here
+      //    that still fails OPEN. A key in it is never filed at all; if the file
+      //    cannot be read the run files anyway, because the cost is one issue a
+      //    human closes and that close then suppresses it for good.
+      //
+      //    No `headBranchPrefix`: this run opens no PRs, so there is no PR
+      //    history to date a cooldown from. The issue's own state is the memory.
       const suppression = yield* step("check-suppression", () =>
         checkSuppression({
-          keys: merged.map((q) => maintenanceKey(q.key)),
-          // The ledger and the proposals live in the same control repo, so one
-          // installation covers both reads.
+          keys: unfiled.map((q) => maintenanceKey(q.key)),
           ledgerRepo: controlRepo,
           ledgerPath: declinedPath,
-          headBranchPrefix: BRANCH_PREFIX,
           nowMs: input.firedAt,
         }),
       );
       const allowed = new Set(suppression.allowed);
-      const proposed = merged.filter((q) => allowed.has(maintenanceKey(q.key)));
+      const fresh = unfiled.filter((q) => allowed.has(maintenanceKey(q.key)));
 
-      // Every question suppressed is a *good* tick, and a silent one — there is
-      // nothing new to ask. The count still lands in the output so a digest can
-      // say "0 new, 3 suppressed" rather than implying a quiet estate.
-      if (proposed.length === 0) {
+      // 8. Nothing fresh is the STEADY STATE, not a failure — every question
+      //    the sweep raised is one somebody has already been asked. It is also
+      //    the tick that used to open a duplicate PR, so the log line says which
+      //    of the two reasons produced the silence.
+      if (fresh.length === 0) {
         yield* io.log(
           "info",
-          `org-spec-audit: ${merged.length} question(s), all suppressed — no PR opened`,
+          `org-spec-audit: ${merged.length} question(s), ${alreadyFiled.length} already on file, ` +
+            `${suppression.suppressed.length} declined — nothing to file`,
         );
         return {
           reposSwept: swept,
           reposSkipped: skipped,
           questionsRaised: raised.length,
           questionsAfterMerge: merged.length,
+          questionsAlreadyFiled: alreadyFiled.length,
           questionsSuppressed: suppression.suppressed.length,
-          prOpened: false,
+          questionsFiled: 0,
+          questionsHeldByCap: 0,
         };
       }
 
-      // 6. One control-plane PR against the configured control repo. The file
-      //    it carries is the durable record — and the same text is what gets
-      //    announced.
-      const message = renderMessage({
+      // 9. File. One issue per question, capped, sequentially — this is a write
+      //    of at most `maxNew`, and a stable order makes the notice's issue
+      //    numbers read in the same order as its lines.
+      const toFile = fresh.slice(0, maxNew);
+      const heldByCap = fresh.length - toFile.length;
+
+      const opened = yield* Effect.forEach(
+        toFile,
+        (q) =>
+          step(`file-${q.key}`, () =>
+            github.openIssue({
+              repo: controlRepo,
+              title: issueTitle(q),
+              body: renderIssueBody({ question: q, day, declinedPath }),
+              labels: [questionsLabel, `${lanePrefix}${q.group}`],
+            }),
+          ).pipe(Effect.map((created) => ({ question: q, ...created }))),
+        { concurrency: 1 },
+      );
+
+      // 10. Say what CHANGED. Not the standing list — a reader who has already
+      //     seen eleven questions is not helped by being shown eleven questions,
+      //     and a message whose length tracks the sweep rather than the news is
+      //     one people stop opening.
+      const openOnFile = onFile.filter((i) => i.state === "open").length + opened.length;
+      const notice_ = renderNotice({
         day,
-        merged: proposed,
+        opened,
+        openOnFile,
+        heldByCap,
+        alreadyFiled: alreadyFiled.length,
         outcomes,
         raised: raised.length,
         suppression,
       });
-      const result = yield* step("open-questions-pr", () =>
-        github.openDraftPullRequest({
-          repo: controlRepo,
-          baseBranch,
-          headBranch: `${BRANCH_PREFIX}${day}`,
-          title: `docs(maintenance): open questions from the spec audit sweep (${day})`,
-          body: renderPrBody({
-            day,
-            merged: proposed,
-            outcomes,
-            raised: raised.length,
-            suppression,
-            message,
-            declinedPath,
-          }),
-          commitMessage: `docs(maintenance): spec audit open questions (${day})\n\nGenerated by flare-dispatch org-spec-audit.`,
-          files: [
-            {
-              path: `${questionsDir}/${day}.md`,
-              content: message,
-            },
-          ],
-        }),
-      );
 
-      // 7. Say it out loud. The same `message`, verbatim — the file and the
-      //    announcement are one rendering on purpose, so nobody has to ask
-      //    which of two wordings is the real one. It is the SUPPRESSION-FILTERED
-      //    rendering, so a tick that proposes nothing new announces nothing new
-      //    either. No markup is built here:
-      //    `text` is data the receiver escapes, and the PR link rides in the
-      //    typed `links` field precisely because markup inside `text` would be
-      //    escaped along with everything else.
-      //
-      //    `dedupeKey` is the day, which is also this run's schedule
-      //    idempotency key. Deterministic per (run, day) and free of any clock
-      //    read, so a retried step re-sends bytes the receiver has already
-      //    claimed and gets a 409 instead of posting the digest twice.
       yield* step("publish-notice", () =>
         notice.publish({
           useCase: NOTICE_USE_CASE,
           dedupeKey: day,
-          text: message,
-          links: [{ url: result.url, label: "the questions PR" }],
+          text: notice_,
+          links: opened.map((o) => ({ url: o.url, label: `#${o.number}` })),
         }),
       );
 
       yield* io.log(
         "info",
-        `org-spec-audit: ${proposed.length} question(s) from ${raised.length} raised (${suppression.suppressed.length} suppressed) — ${result.created ? "opened" : "updated"} PR #${result.number}`,
+        `org-spec-audit: filed ${opened.length} question(s) (${opened.map((o) => `#${o.number}`).join(", ")}) ` +
+          `from ${raised.length} raised — ${alreadyFiled.length} already on file, ` +
+          `${suppression.suppressed.length} declined, ${heldByCap} held by the cap`,
       );
 
       return {
@@ -510,8 +734,10 @@ export const orgSpecAudit = defineRun({
         reposSkipped: skipped,
         questionsRaised: raised.length,
         questionsAfterMerge: merged.length,
+        questionsAlreadyFiled: alreadyFiled.length,
         questionsSuppressed: suppression.suppressed.length,
-        prOpened: result.created,
+        questionsFiled: opened.length,
+        questionsHeldByCap: heldByCap,
       };
     }),
 });
@@ -722,8 +948,7 @@ const INVISIBLE =
  * Collapsing rather than escaping keeps the digest readable and costs nothing
  * real: the prompt already contracts each of these fields to a single sentence.
  */
-const oneLine = (raw: string): string =>
-  raw.replace(INVISIBLE, "").replace(/\s+/g, " ").trim();
+const oneLine = (raw: string): string => raw.replace(INVISIBLE, "").replace(/\s+/g, " ").trim();
 
 /**
  * The longest question-key that survives the round trip.
@@ -761,6 +986,166 @@ const normalizeKey = (key: string, question: string): string => {
 export const parseWindowHours = (raw: string | undefined | null): number => {
   const n = Number.parseInt(raw ?? "", 10);
   return Number.isFinite(n) && n > 0 ? n : WINDOW_HOURS_DEFAULT;
+};
+
+/** GitHub's own limit. A longer name is rejected at the API, not truncated here. */
+const LABEL_MAX_CHARS = 50;
+
+/**
+ * A label from config. Unset takes the default; **set-and-unusable is
+ * `undefined`**, which the caller turns into a failed run.
+ *
+ * Falling back on a bad value would be the worse of the two behaviours, and not
+ * by a little: this label is BOTH the filter the dedup read applies and the
+ * label the write applies. A comma makes those two different things — GitHub's
+ * list query joins labels on commas, so the read would filter on two labels
+ * while the write applied one — and the symptom is every question re-filing
+ * forever with nothing anywhere erroring. Same reasoning as the base ref.
+ */
+export const parseLabel = (
+  raw: string | undefined | null,
+  fallback: string,
+): string | undefined => {
+  if (raw === undefined || raw === null || raw.trim() === "") return fallback;
+  const v = raw.trim();
+  if (v.includes(",") || v.length > LABEL_MAX_CHARS) return undefined;
+  return v;
+};
+
+/** A positive-integer config value, falling back when unset or unparseable. */
+export const parsePositiveInt = (raw: string | undefined | null, fallback: number): number => {
+  const n = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+/**
+ * The FIRST `maintenance-key` line in an issue body, or `undefined`.
+ *
+ * First, not last, and not all of them: an issue body carries model prose
+ * derived from a swept repo, so a spec can contain a line that looks exactly
+ * like a trailer. `renderIssueBody` emits the authentic key as the body's first
+ * line for precisely this reason, so first-match is what makes a spoofed key
+ * inert rather than authoritative.
+ */
+export const firstMaintenanceKey = (body: string): string | undefined => {
+  for (const line of body.split("\n")) {
+    const m = /^maintenance-key:\s*(\S+)\s*$/.exec(line.trim());
+    if (m?.[1] !== undefined) return m[1];
+  }
+  return undefined;
+};
+
+/**
+ * Index the questions already on file, by `maintenance-key`.
+ *
+ * Keys outside this run's namespace are ignored, so another consumer sharing the
+ * questions label cannot make this run believe it has already asked something.
+ * An issue with no key at all is ignored too — a human-opened issue that happens
+ * to carry the label is a question this run did not ask and cannot match.
+ *
+ * On a duplicate key the first wins, which is the most recently updated (GitHub
+ * lists `sort=updated&direction=desc`). Which one wins does not matter to the
+ * caller — presence is the whole answer — but it should be deterministic.
+ */
+export const indexFiledQuestions = (issues: readonly IssueRef[]): Map<string, IssueRef> => {
+  const byKey = new Map<string, IssueRef>();
+  for (const issue of issues) {
+    const key = firstMaintenanceKey(issue.body);
+    if (key === undefined || !key.startsWith(`${MAINTENANCE_SOURCE}/`)) continue;
+    if (!byKey.has(key)) byKey.set(key, issue);
+  }
+  return byKey;
+};
+
+/** Strip the `org-spec-audit/` namespace — the reconcile prompt speaks bare keys. */
+const bareKey = (namespaced: string): string => namespaced.slice(MAINTENANCE_SOURCE.length + 1);
+
+type ReconcileArgs = {
+  /** Today's questions with no exact key match — the only ones worth asking about. */
+  readonly residue: readonly MergedQuestion[];
+  readonly onFile: readonly IssueRef[];
+  readonly resolved: { backend: string; model: string; mode: "tools" | "json" };
+};
+
+/** One accepted match, as a plain row — see `reconcileKeys` on why not a Map. */
+type KeyMatch = { readonly minted: string; readonly existing: string };
+
+/**
+ * Match today's un-filed questions against the ones already on file, returning
+ * one row per question that duplicates one.
+ *
+ * A plain array rather than a `Map`, because this runs inside `step()` and a
+ * step's result is checkpointed as JSON — a `Map` serializes to `{}`, which
+ * would silently mean "nothing matched" on a replay. The caller indexes it.
+ *
+ * **Every answer is checked against the set actually read from the control
+ * repo.** A model fully talked into "this duplicates `org-spec-audit/whatever`"
+ * produces no match, because `whatever` was never in the list — the same
+ * containment `closeIssueAsDuplicate`'s `knownNumbers` uses. The failure
+ * direction is deliberate: an unmatched duplicate costs a human one click, and
+ * an accepted hallucination is a question that is never asked again.
+ */
+const reconcileKeys = (args: ReconcileArgs) =>
+  Effect.gen(function* () {
+    const known = new Map<string, string>();
+    for (const issue of args.onFile) {
+      const key = firstMaintenanceKey(issue.body);
+      if (key !== undefined) known.set(bareKey(key), key);
+    }
+    const minted = new Set(args.residue.map((q) => q.key));
+
+    const result = yield* completeStructured({
+      backend: args.resolved.backend,
+      model: args.resolved.model,
+      mode: args.resolved.mode,
+      system: RECONCILE_PROMPT,
+      userBody: renderReconcileBody({ residue: args.residue, onFile: args.onFile }),
+      jsonContract: RECONCILE_JSON_CONTRACT,
+      schema: KeyReconciliation,
+      toolName: "report_key_matches",
+      toolDescription: 'For each newly-raised key, the on-file key it duplicates, or "".',
+      surface: "org-spec-audit",
+      maxTokens: RECONCILE_MAX_TOKENS,
+    });
+
+    const matches: KeyMatch[] = [];
+    const seen = new Set<string>();
+    for (const m of result.matches) {
+      const from = m.minted.trim();
+      const onto = m.existing.trim();
+      // A row about a key we did not ask about, or an on-file key that does not
+      // exist, decides nothing. Both are dropped silently rather than logged per
+      // row: a model listing a stale key is ordinary, and the interesting event
+      // (a question NOT filed because it matched) is logged by the caller.
+      if (onto === "" || !minted.has(from) || seen.has(from)) continue;
+      const resolvedKey = known.get(onto) ?? known.get(bareKey(onto));
+      if (resolvedKey === undefined) continue;
+      seen.add(from);
+      matches.push({ minted: from, existing: resolvedKey });
+    }
+    return matches;
+  });
+
+/** The reconcile call's data half: what is on file, and what was just raised. */
+const renderReconcileBody = (args: {
+  readonly residue: readonly MergedQuestion[];
+  readonly onFile: readonly IssueRef[];
+}): string => {
+  const filed = args.onFile.flatMap((issue) => {
+    const key = firstMaintenanceKey(issue.body);
+    if (key === undefined) return [];
+    return [
+      `- key: ${bareKey(key)}\n  question: ${oneLine(issue.title)}\n  status: ${issue.state}`,
+    ];
+  });
+
+  return [
+    "## Questions already on file",
+    filed.length > 0 ? filed.join("\n") : "(none)",
+    "",
+    "## Questions raised just now",
+    args.residue.map((q) => `- key: ${q.key}\n  question: ${q.question}`).join("\n"),
+  ].join("\n");
 };
 
 // --- In-container gather scripts (plain `git`, no extra CLI) -----------------
@@ -828,38 +1213,101 @@ const renderUserBody = (ctx: {
 
 const MARKER = "<!-- flare-dispatch: org-spec-audit -->";
 
-type RenderArgs = {
+/** GitHub truncates a longer title in its own UI; cut it where we can see it. */
+const MAX_TITLE_CHARS = 240;
+
+/** The issue title — the question as asked, which is what a reader scans. */
+export const issueTitle = (q: MergedQuestion): string =>
+  q.question.length > MAX_TITLE_CHARS ? `${q.question.slice(0, MAX_TITLE_CHARS - 1)}…` : q.question;
+
+/**
+ * One question's issue body.
+ *
+ * **The trailer block comes first, and that order is load-bearing.** Everything
+ * below it is model output derived from the contents of a swept repo, so a spec
+ * crafted to make the model emit `maintenance-key: org-spec-audit/something`
+ * would — with the trailer last — put a spoofed key ahead of the real one for
+ * any reader that takes the first match. `indexFiledQuestions` takes exactly
+ * that first match, so emitting the authentic key first makes anything the model
+ * echoes inert text further down.
+ */
+export const renderIssueBody = (args: {
+  readonly question: MergedQuestion;
   readonly day: string;
-  /** The questions actually being proposed — suppressed ones are already out. */
-  readonly merged: readonly MergedQuestion[];
+  readonly declinedPath: string;
+}): string => {
+  const q = args.question;
+  return (
+    [
+      `maintenance-key: ${maintenanceKey(q.key)}`,
+      MARKER,
+      "",
+      `> 🤖 Filed by \`flare-dispatch/org-spec-audit\` on ${args.day} — a divergence where` +
+        ` *which side is right* is a judgment nobody has made yet, not drift (\`spec-drift-pr\`` +
+        ` proposes those).`,
+      "",
+      `> **Answer in the thread and close this.** Closing is the record: a later sweep that` +
+        ` finds this question still unsettled will not re-file it and will never reopen it.` +
+        ` To keep it from ever being asked again, add its key to \`${args.declinedPath}\`.`,
+      "",
+      `**If nobody answers:** ${q.assumption}`,
+      "",
+      q.evidence,
+      "",
+      `Raised by: ${q.sources.map((s) => `\`${s.repo}\` (${s.specPath})`).join(" · ")}`,
+    ].join("\n") + "\n"
+  );
+};
+
+/** One filed issue, as the notice reports it. */
+type OpenedQuestion = {
+  readonly question: MergedQuestion;
+  readonly number: number;
+  readonly url: string;
+};
+
+type NoticeArgs = {
+  readonly day: string;
+  /** Filed this tick — the news, and the only questions the notice lists. */
+  readonly opened: readonly OpenedQuestion[];
+  /** Open questions carrying the label after this tick, filed ones included. */
+  readonly openOnFile: number;
+  readonly heldByCap: number;
+  readonly alreadyFiled: number;
   readonly outcomes: readonly RepoOutcome[];
   readonly raised: number;
-  /** What suppression kept out, and whether either read degraded. */
   readonly suppression: SuppressionReport;
 };
 
 /**
- * The file the PR carries — and the message a Slack consumer posts, verbatim.
+ * The announcement — the DELTA, not the standing list.
  *
- * Written as GitHub markdown, not Slack mrkdwn: the canonical artifact is the
- * reviewed file in git, and the Slack twin is derived at send time by whoever
- * holds the token.
+ * The old rendering was the day's whole file, so its length tracked the sweep
+ * rather than the news and a reader who had already seen eleven questions was
+ * shown eleven questions again. This lists what was filed, counts what stands,
+ * and says what the cap held.
+ *
+ * Written as GitHub markdown, not Slack mrkdwn: the receiver holds the token and
+ * converts at send time, which is where escaping already lives.
  */
-export const renderMessage = (args: RenderArgs): string => {
+export const renderNotice = (args: NoticeArgs): string => {
   const swept = args.outcomes.filter((o) => !o.skipped).map((o) => o.repo);
   const failed = args.outcomes.filter((o) => o.failure !== undefined);
   const quiet = args.outcomes
     .filter((o) => o.skipped && o.failure === undefined)
     .map((o) => o.repo);
-  const dropped = countDropped(args.merged);
 
   const lines: string[] = [
     `# Spec audit — ${args.day}`,
     "",
-    `${swept.length} repo(s) swept · ${quiet.length} unchanged or without specs · ` +
-      `${failed.length} failed · ${args.merged.length} question(s) from ${args.raised} raised` +
+    `${args.opened.length} new question(s) · ${args.openOnFile} open · ` +
+      // The swept / unchanged / failed split stays in the headline: a failure
+      // counted as "unchanged" turns an outage into a quiet week, which is the
+      // sentence a reader is least likely to question.
+      `${swept.length} repo(s) swept · ${quiet.length} unchanged or without specs · ` +
+      `${failed.length} failed · ${args.raised} raised, ${args.alreadyFiled} already on file` +
       (args.suppression.suppressed.length > 0
-        ? ` · ${args.suppression.suppressed.length} suppressed`
+        ? ` · ${args.suppression.suppressed.length} declined`
         : ""),
     "",
     // Immediately after the headline count, not in a footer: a reader who sees
@@ -879,20 +1327,16 @@ export const renderMessage = (args: RenderArgs): string => {
   }
 
   for (const group of GROUPS) {
-    const inGroup = args.merged.filter((q) => q.group === group);
+    const inGroup = args.opened.filter((o) => o.question.group === group);
     if (inGroup.length === 0) continue;
 
     lines.push(`## ${GROUP_HEADING[group]} (${inGroup.length})`, "");
-    for (const q of inGroup.slice(0, PER_GROUP_CAP)) {
+    for (const o of inGroup) {
       lines.push(
-        `- **${q.question}**`,
-        `  - ${q.evidence}`,
-        `  - raised by: ${q.sources.map((s) => `\`${s.repo}\` (${s.specPath})`).join(" · ")}`,
-        `  - if nobody answers: ${q.assumption}`,
+        `- **${o.question.question}** (#${o.number})`,
+        `  - raised by: ${o.question.sources.map((s) => `\`${s.repo}\` (${s.specPath})`).join(" · ")}`,
+        `  - if nobody answers: ${o.question.assumption}`,
       );
-    }
-    if (inGroup.length > PER_GROUP_CAP) {
-      lines.push(`- _${inGroup.length - PER_GROUP_CAP} more in this group, not shown._`);
     }
     lines.push("");
   }
@@ -903,59 +1347,14 @@ export const renderMessage = (args: RenderArgs): string => {
     `Swept: ${swept.length > 0 ? swept.map((r) => `\`${r}\``).join(" · ") : "none"}`,
     `Unchanged or no \`specs/\`: ${quiet.length > 0 ? quiet.map((r) => `\`${r}\``).join(" · ") : "none"}`,
     `Failed: ${failed.length > 0 ? failed.map((o) => `\`${o.repo}\` (${o.failure})`).join(" · ") : "none"}`,
-    dropped > 0 ? `Below the per-group cap: ${dropped}` : "Nothing dropped by the cap.",
+    // Named, never silent: a list the cap shortened reads as fewer problems.
+    args.heldByCap > 0
+      ? `Held by the per-sweep cap: ${args.heldByCap} — they file on the next sweep.`
+      : "Nothing held by the cap.",
   );
 
   return `${lines.join("\n")}\n`;
 };
-
-/** How many merged questions the per-group cap keeps out of the message. */
-const countDropped = (merged: readonly MergedQuestion[]): number =>
-  GROUPS.reduce((total, group) => {
-    const n = merged.filter((q) => q.group === group).length;
-    return total + Math.max(0, n - PER_GROUP_CAP);
-  }, 0);
-
-/**
- * The PR body. Carries the loop's machine-readable lines plus the message
- * itself, so a reviewer decides without opening the diff.
- *
- * **One `maintenance-key` line per question, not one per PR.** The key is what
- * a later tick matches against the ledger and against this PR once it is
- * closed, so it has to name the thing a human declines — a question. A dated
- * per-PR key would be unique every day and suppress nothing, ever.
- */
-const renderPrBody = (
-  args: RenderArgs & { message: string; declinedPath: string },
-): string =>
-  [
-    "### Spec audit — the questions the sweep could not answer",
-    "",
-    "> 🤖 Draft opened by `flare-dispatch/org-spec-audit`. These are divergences where *which side is right* is a judgment nobody has made yet — not drift (`spec-drift-pr` proposes those). Answer in the thread or edit the file; merging records the answers.",
-    "",
-    `> Closing this unmerged suppresses every key below for 30 days. To suppress one permanently, add its key to \`${args.declinedPath}\` with a reason.`,
-    "",
-    // The trailers precede the message, and that order is load-bearing. Every
-    // line of `message` below is model output derived from the contents of the
-    // swept repos, so a spec crafted to make the model emit `auto-merge: yes`
-    // would, with the trailers last, put a spoofed value ahead of the real one
-    // for any consumer that reads the first match. Emitted first, the authentic
-    // trailers win and anything the model echoes is inert text further down.
-    ...args.merged.map((q) => `maintenance-key: ${maintenanceKey(q.key)}`),
-    `swept: ${
-      args.outcomes
-        .filter((o) => !o.skipped)
-        .map((o) => o.repo)
-        .join(", ") || "none"
-    }`,
-    `suppressed: ${args.suppression.suppressed.length}`,
-    "auto-merge: never (specs are a sensitive path)",
-    MARKER,
-    "",
-    "---",
-    "",
-    args.message,
-  ].join("\n");
 
 /** The errors `sweepRepo`'s `catchAll` knows how to describe precisely. */
 type CaughtError =

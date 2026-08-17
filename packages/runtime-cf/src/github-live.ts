@@ -27,6 +27,7 @@
 import {
   addIssueLabels,
   closeIssueAsDuplicate,
+  createIssue,
   createIssueComment,
   createPullReview,
   createRelease,
@@ -46,6 +47,7 @@ import {
   Github,
   GitHubApiError,
   type GithubService,
+  type IssueCreated,
   type IssueRef,
   type PullRequestHistoryRef,
   type ReleaseResult,
@@ -267,7 +269,7 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
         );
       }),
 
-    issues: ({ repo, state, labels, updatedWithinDays, maxPages, installationId }) =>
+    issues: ({ repo, state, labels, updatedWithinDays, maxPages, strict, installationId }) =>
       Effect.gen(function* () {
         if (config === undefined) return yield* readNeedsCredentials<readonly IssueRef[]>();
         const token = yield* mintToken(config, repo, installationId);
@@ -281,22 +283,51 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
               ? { updatedSince: Date.now() - updatedWithinDays * 86_400_000 }
               : {}),
             ...(maxPages !== undefined ? { maxPages } : {}),
+            ...(strict === true ? { strict: true } : {}),
           }),
         );
-        return raw.map((i): IssueRef => ({
-          repo,
-          number: i.number,
-          title: i.title,
-          body: i.body,
-          state: i.state,
-          labels: i.labels,
-          author: i.author,
-          authorAssociation: i.authorAssociation,
-          url: i.url,
-          commentCount: i.commentCount,
-          createdAt: Date.parse(i.createdAt) || 0,
-          updatedAt: Date.parse(i.updatedAt) || 0,
-        }));
+        return raw.map((i): IssueRef => {
+          // `closed_at` is absent on an open issue and unparseable on a malformed
+          // one; both leave the field off rather than dating a close at the
+          // epoch, which would read as "closed in 1970" to anything computing a
+          // window from it.
+          const closedAt = i.closedAt === "" ? Number.NaN : Date.parse(i.closedAt);
+          return {
+            repo,
+            number: i.number,
+            title: i.title,
+            body: i.body,
+            state: i.state,
+            labels: i.labels,
+            author: i.author,
+            authorAssociation: i.authorAssociation,
+            url: i.url,
+            commentCount: i.commentCount,
+            createdAt: Date.parse(i.createdAt) || 0,
+            updatedAt: Date.parse(i.updatedAt) || 0,
+            ...(Number.isFinite(closedAt) ? { closedAt } : {}),
+          };
+        });
+      }),
+
+    // `openIssue` is the exception to the paragraph below: it FAILS without
+    // credentials rather than logging a skip. The state-machine writes annotate
+    // an issue that exists whether or not the write lands, and the PR write
+    // leaves its content in git — but this one *is* the artifact, so a no-op
+    // discards the question and leaves the loop with no record it had one.
+    openIssue: ({ repo, title, body, labels, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* readNeedsCredentials<IssueCreated>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() =>
+          createIssue({
+            token,
+            repo,
+            title,
+            body,
+            ...(labels !== undefined && labels.length > 0 ? { labels } : {}),
+          }),
+        );
       }),
 
     // The four state-machine writes + the one close. Each degrades to a logged

@@ -1,6 +1,11 @@
 // Run-level unit tests for `org-spec-audit` — drive the run against the
 // in-memory test runtime (`makeCFRuntimeTest`) with seeded config + sandbox +
 // model fakes. No CF, no Docker, no model provider.
+//
+// The property most of this file exists to pin: **a question already on file is
+// not filed again.** The `github` fake appends every `openIssue` to the same
+// list `issues` reads back, so "the second sweep sees the first sweep's issue"
+// is expressible here rather than only in production.
 
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
@@ -9,15 +14,25 @@ import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import {
   Github,
   GitHubApiError,
+  type IssueRef,
   type ModelCompletionResult,
-  type PullRequestHistoryRef,
 } from "@fractalboxdev/flare-dispatch-core";
 import type { SuppressionReport } from "@fractalboxdev/flare-dispatch-core/primitives";
-import { mergeAcrossRepos, orgSpecAudit, parseWindowHours, renderMessage } from "./org-spec-audit";
+import {
+  firstMaintenanceKey,
+  indexFiledQuestions,
+  issueTitle,
+  mergeAcrossRepos,
+  orgSpecAudit,
+  parseLabel,
+  parsePositiveInt,
+  parseWindowHours,
+  renderIssueBody,
+  renderNotice,
+} from "./org-spec-audit";
 
 const firedAt = Date.UTC(2026, 7, 8); // 2026-08-08
 const input = { firedAt } as const;
-const DAY = 86_400_000;
 
 /** Nothing suppressed, nothing broken — the shape most render tests want. */
 const noSuppression: SuppressionReport = { allowed: [], suppressed: [], degraded: [] };
@@ -25,6 +40,12 @@ const noSuppression: SuppressionReport = { allowed: [], suppressed: [], degraded
 /** A tools-mode model result returning the `report_open_questions` payload. */
 const reported = (questions: unknown[]): ModelCompletionResult => ({
   toolCalls: [{ name: "report_open_questions", arguments: { questions } }],
+  text: "",
+});
+
+/** A tools-mode result for the reconcile call — minted key → on-file key. */
+const matched = (matches: Array<{ minted: string; existing: string }>): ModelCompletionResult => ({
+  toolCalls: [{ name: "report_key_matches", arguments: { matches } }],
   text: "",
 });
 
@@ -37,6 +58,30 @@ const question = (over: Record<string, unknown> = {}) => ({
   key: "per-run-spend-caps",
   ...over,
 });
+
+const KEY = "org-spec-audit/per-run-spend-caps";
+const LABEL = "maintenance:open-question";
+
+/** A question already on file in the control repo — the ledger, seeded. */
+const filedIssue = (over: Partial<IssueRef> & { key?: string } = {}): IssueRef => {
+  const { key = KEY, ...rest } = over;
+  return {
+    repo: "owner/control",
+    number: 41,
+    title: "Does the dispatcher still commit to per-run spend caps?",
+    // The key on the FIRST line, which is where `renderIssueBody` puts it.
+    body: `maintenance-key: ${key}\n<!-- flare-dispatch: org-spec-audit -->\n\nprose`,
+    state: "open" as const,
+    labels: [LABEL, "question:decide"],
+    author: "flare-dispatch[bot]",
+    authorAssociation: "OWNER",
+    url: "https://github.com/owner/control/issues/41",
+    commentCount: 0,
+    createdAt: firedAt - 86_400_000,
+    updatedAt: firedAt - 86_400_000,
+    ...rest,
+  };
+};
 
 const baseConfig = {
   "org-spec-audit.repos": "owner/alpha owner/beta",
@@ -65,12 +110,12 @@ describe("org-spec-audit", () => {
     return Effect.gen(function* () {
       const out = yield* orgSpecAudit.run(input);
       expect(out.reposSwept).toBe(0);
-      expect(out.prOpened).toBe(false);
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(out.questionsFiled).toBe(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("merges the same question across repos into one control-plane PR", () => {
+  it.effect("merges the same question across repos into ONE issue", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: baseConfig,
       sandboxProgram: activeSandbox,
@@ -78,6 +123,7 @@ describe("org-spec-audit", () => {
         // Both repos raise the same key — the merge is the point of sweeping.
         responses: [reported([question()]), reported([question()])],
       },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
@@ -85,25 +131,148 @@ describe("org-spec-audit", () => {
       expect(out.reposSwept).toBe(2);
       expect(out.questionsRaised).toBe(2);
       expect(out.questionsAfterMerge).toBe(1);
+      expect(out.questionsFiled).toBe(1);
 
-      const calls = handles.github.openDraftPullRequestCalls;
+      const calls = handles.github.openIssueCalls;
       expect(calls).toHaveLength(1);
       expect(calls[0]!.repo).toBe("owner/control");
-      expect(calls[0]!.headBranch).toBe("flare-dispatch/spec-audit-questions-2026-08-08");
-      // The neutral default — `questions-dir` is unset in `baseConfig`, and no
-      // value in this repo names any particular operator's layout.
-      expect(calls[0]!.files[0]!.path).toBe("maintenance/questions/2026-08-08.md");
-      // Both repos are named as sources on the single merged line.
-      expect(calls[0]!.files[0]!.content).toContain("owner/alpha");
-      expect(calls[0]!.files[0]!.content).toContain("owner/beta");
-      expect(calls[0]!.body).toContain("auto-merge: never");
+      expect(calls[0]!.title).toBe("Does the dispatcher still commit to per-run spend caps?");
+      // Both repos are named as sources on the single merged issue.
+      expect(calls[0]!.body).toContain("owner/alpha");
+      expect(calls[0]!.body).toContain("owner/beta");
+      // The index label and the lane label, from the defaults.
+      expect(calls[0]!.labels).toEqual([LABEL, "question:decide"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  // The property the whole redesign exists for. #147 and #148 asked three of the
+  // same questions two days apart, two of them under a byte-identical key,
+  // because nothing read the key back against a question that was merely OPEN.
+  it.effect("files nothing when every question is already on file", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt, issues: [filedIssue()] },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsAfterMerge).toBe(1);
+      expect(out.questionsAlreadyFiled).toBe(1);
+      expect(out.questionsFiled).toBe(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
+      // Silent in the channel too: re-announcing a standing question is the
+      // daily file again, one line long.
+      expect(handles.notice.published).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("never re-files or reopens a question that was answered and closed", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: {
+        now: firedAt,
+        issues: [filedIssue({ state: "closed", closedAt: firedAt - 200 * 86_400_000 })],
+      },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      // Closed means decided. Not a cooldown, not a 30-day window — a question
+      // answered 200 days ago is still answered.
+      expect(out.questionsAlreadyFiled).toBe(1);
+      expect(out.questionsFiled).toBe(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
+      // And nothing reopens it: the run has no reopen, and does not comment.
+      expect(handles.github.addIssueLabelsCalls).toHaveLength(0);
+      expect(handles.github.commentOnIssueCalls).toHaveLength(0);
+      expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("asks for every state, un-windowed, strictly, under the questions label", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      const [call] = handles.github.issuesCalls;
+      // Each of these is one edit away from silently breaking dedup: `open` would
+      // re-file every answered question, a window would resurrect the old ones,
+      // and a non-strict read answers "not filed" for whatever the page ceiling
+      // cut off.
+      expect(call).toMatchObject({ repo: "owner/control", state: "all", strict: true });
+      expect(call!.labels).toEqual([LABEL]);
+      expect(call!.updatedWithinDays).toBeUndefined();
+    }).pipe(Effect.provide(layer));
+  });
+
+  // The inversion. With one PR a day an unreadable ledger cost one duplicate PR,
+  // so failing open was right. An unreadable ISSUE SET costs a duplicate of
+  // every question at once.
+  it.effect("files nothing at all when it cannot read what it already asked", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
+    });
+
+    return Effect.gen(function* () {
+      const fake = yield* Github;
+      const exit = yield* Effect.exit(
+        orgSpecAudit.run(input).pipe(
+          Effect.provideService(Github, {
+            ...fake,
+            issues: () => Effect.fail(new GitHubApiError({ status: 500, reason: "transient" })),
+          }),
+        ),
+      );
+
+      expect(exit._tag).toBe("Failure");
+      expect(handles.github.openIssueCalls).toHaveLength(0);
+      // It loses a day and no facts: the questions are re-derived tomorrow.
+      expect(handles.notice.published).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  // The read is deliberately ahead of the sweep: it is one cheap call whose
+  // failure ends the tick, and reading it afterwards would mean paying for an
+  // estate of model calls and discarding every one.
+  it.effect("reads the ledger before spending a single model call", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
+    });
+
+    return Effect.gen(function* () {
+      const fake = yield* Github;
+      yield* Effect.exit(
+        orgSpecAudit.run(input).pipe(
+          Effect.provideService(Github, {
+            ...fake,
+            issues: () => Effect.fail(new GitHubApiError({ status: 500, reason: "transient" })),
+          }),
+        ),
+      );
+      expect(handles.modelGateway.requests).toHaveLength(0);
+      expect(handles.sandbox.clones).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
   // The run holds no default control repo on purpose: a default is a repo
-  // somebody else's deployment files pull requests against. Unset must stop the
-  // run, and stop it BEFORE the sweep — an hour of model calls whose output has
-  // nowhere to go is the expensive way to learn a key is missing.
+  // somebody else's deployment files issues on. Unset must stop the run, and
+  // stop it BEFORE the sweep — an hour of model calls whose output has nowhere
+  // to go is the expensive way to learn a key is missing.
   it.effect("fails when no control repo is configured, before sweeping anything", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: withoutKey(baseConfig, "org-spec-audit.control-repo"),
@@ -115,30 +284,43 @@ describe("org-spec-audit", () => {
       const exit = yield* Effect.exit(orgSpecAudit.run(input));
       expect(exit._tag).toBe("Failure");
       expect(JSON.stringify(exit)).toContain("org-spec-audit.control-repo");
-      // Nothing was cloned, nothing was executed, nothing was proposed.
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      // Nothing was cloned, nothing was executed, nothing was filed.
+      expect(handles.github.openIssueCalls).toHaveLength(0);
       expect(handles.sandbox.clones).toHaveLength(0);
       expect(handles.sandbox.execs).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("writes where `questions-dir` says, not where the run was born", () => {
+  it.effect("labels issues the way config says, not the way the run was born", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      config: { ...baseConfig, "org-spec-audit.questions-dir": "infra/loop/open-questions/" },
+      config: {
+        ...baseConfig,
+        "org-spec-audit.questions-label": "loop:question",
+        "org-spec-audit.lane-label-prefix": "answer-by-",
+      },
       sandboxProgram: activeSandbox,
       modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
       yield* orgSpecAudit.run(input);
-      const calls = handles.github.openDraftPullRequestCalls;
-      expect(calls[0]!.files[0]!.path).toBe("infra/loop/open-questions/2026-08-08.md");
+      expect(handles.github.openIssueCalls[0]!.labels).toEqual([
+        "loop:question",
+        "answer-by-decide",
+      ]);
+      // The read filters on the same label it writes — the two being one value
+      // is what makes dedup work at all.
+      expect(handles.github.issuesCalls[0]!.labels).toEqual(["loop:question"]);
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("refuses a questions-dir that escapes the repo root", () => {
+  // A comma makes the filter and the write two different things: GitHub's list
+  // query joins labels on commas, so the read would filter on two labels while
+  // the write applied one — and every question would re-file forever, silently.
+  it.effect("refuses a questions label carrying a comma, before reading anything", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      config: { ...baseConfig, "org-spec-audit.questions-dir": "../../etc" },
+      config: { ...baseConfig, "org-spec-audit.questions-label": "loop:question,bug" },
       sandboxProgram: activeSandbox,
       modelGateway: { responses: [reported([question()])] },
     });
@@ -146,36 +328,36 @@ describe("org-spec-audit", () => {
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(orgSpecAudit.run(input));
       expect(exit._tag).toBe("Failure");
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(JSON.stringify(exit)).toContain("org-spec-audit.questions-label");
+      expect(handles.github.issuesCalls).toHaveLength(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("announces the same text it committed, under a use case", () => {
+  it.effect("announces the delta, links each issue, and names no channel", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: baseConfig,
       sandboxProgram: activeSandbox,
       modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
       yield* orgSpecAudit.run(input);
 
       const [notice] = handles.notice.published;
-      const file = handles.github.openDraftPullRequestCalls[0]!.files[0]!;
       if (notice === undefined) throw new Error("no notice was published");
 
-      // One rendering, two destinations. A second wording would be a second
-      // thing to keep true, and the first question a reader asks about a
-      // digest is which copy is the real one.
-      expect(notice.text).toBe(file.content);
+      expect(notice.text).toContain("1 new question(s)");
+      expect(notice.text).toContain("1 open");
       // A KIND of message, never a room. The receiver maps this to a channel
       // from its own config; nothing here can name one.
       expect(notice.useCase).toBe("org-spec-audit");
       expect(JSON.stringify(notice)).not.toMatch(/channel/i);
-      // The PR link rides as a typed entry, because markup inside `text` would
-      // be escaped by the receiver along with everything else.
+      // Issue links ride as typed entries, because markup inside `text` would be
+      // escaped by the receiver along with everything else.
       expect(notice.links).toEqual([
-        { url: "https://github.com/owner/control/pull/1", label: "the questions PR" },
+        { url: "https://github.com/owner/control/issues/1", label: "#1" },
       ]);
     }).pipe(Effect.provide(layer));
   });
@@ -188,6 +370,7 @@ describe("org-spec-audit", () => {
       config: baseConfig,
       sandboxProgram: activeSandbox,
       modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
@@ -199,21 +382,21 @@ describe("org-spec-audit", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("keeps the file and the verdict when the notice does not land", () => {
-    // The digest is already in git, which is the copy that has to survive. An
-    // announcement that failed must not retroactively make the sweep a failure.
+  it.effect("keeps the issues and the verdict when the notice does not land", () => {
+    // The questions are already on GitHub, which is the copy that has to
+    // survive. An announcement that failed must not make the sweep a failure.
     const { layer, handles } = makeCFRuntimeTest({
       config: baseConfig,
       sandboxProgram: activeSandbox,
       modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
       notice: { outcome: "failed" },
     });
 
     return Effect.gen(function* () {
       const out = yield* orgSpecAudit.run(input);
-      expect(out.prOpened).toBe(true);
-      expect(out.questionsAfterMerge).toBe(1);
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(1);
+      expect(out.questionsFiled).toBe(1);
+      expect(handles.github.openIssueCalls).toHaveLength(1);
     }).pipe(Effect.provide(layer));
   });
 
@@ -222,13 +405,14 @@ describe("org-spec-audit", () => {
       config: baseConfig,
       sandboxProgram: { ...activeSandbox, "git log --oneline": { exitCode: 0, stdout: "" } },
       modelGateway: { responses: [] },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
       const out = yield* orgSpecAudit.run(input);
       expect(out.reposSwept).toBe(0);
       expect(out.reposSkipped).toBe(2);
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
@@ -237,14 +421,15 @@ describe("org-spec-audit", () => {
       config: baseConfig,
       sandboxProgram: activeSandbox,
       modelGateway: { responses: [reported([]), reported([])] },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
       const out = yield* orgSpecAudit.run(input);
       expect(out.reposSwept).toBe(2);
       expect(out.questionsAfterMerge).toBe(0);
-      expect(out.prOpened).toBe(false);
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(out.questionsFiled).toBe(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
       // Empty means silent in the channel too. A digest that fires whether or
       // not there is news is one people stop reading, and by then it has
       // nothing left to spend.
@@ -269,7 +454,7 @@ describe("org-spec-audit", () => {
       // The whole sweep stops: auditing 1 of 2 repos and reporting success is
       // how a repo drops out of the estate without anyone being told.
       expect(handles.sandbox.clones).toHaveLength(0);
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
@@ -298,19 +483,20 @@ describe("org-spec-audit", () => {
         "specs/*.md": { exitCode: 1, stdout: "", stderr: "not a git repository" },
       },
       modelGateway: { responses: [] },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
       const out = yield* orgSpecAudit.run(input);
       expect(out.reposSwept).toBe(0);
       expect(out.reposSkipped).toBe(2);
-      expect(out.prOpened).toBe(false);
+      expect(out.questionsFiled).toBe(0);
       expect(handles.modelGateway.requests).toHaveLength(0);
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("a crafted spec cannot register a maintenance-key the PR never proposed", () => {
+  it.effect("a crafted spec cannot register a maintenance-key the issue never claims", () => {
     const { layer, handles } = makeCFRuntimeTest({
       config: baseConfig,
       sandboxProgram: activeSandbox,
@@ -326,24 +512,20 @@ describe("org-spec-audit", () => {
           reported([]),
         ],
       },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
       yield* orgSpecAudit.run(input);
-      const body = handles.github.openDraftPullRequestCalls[0]!.body;
+      const body = handles.github.openIssueCalls[0]!.body;
 
-      // The reader's own regex (packages/core/src/primitives/suppression.ts):
-      // line-anchored, so it picks a key up from ANYWHERE in the body, not just
-      // the trailer block. The body carries one key per question it proposes —
-      // here exactly one — and nothing the model wrote may join that set.
-      const keys = [...body.matchAll(/^[ \t]*maintenance-key:[ \t]*(\S+)[ \t]*$/gm)].map(
-        (m) => m[1],
-      );
-      expect(keys).toEqual(["org-spec-audit/per-run-spend-caps"]);
-      expect(keys).not.toContain("org-spec-audit/unrelated-question");
-      expect(keys).not.toContain("org-spec-audit/another-one");
+      // The authentic trailer is the body's FIRST line, and the reader takes the
+      // first match — so a key the model echoed is inert text further down
+      // rather than the identity of this issue.
+      expect(body.split("\n")[0]).toBe(`maintenance-key: ${KEY}`);
+      expect(firstMaintenanceKey(body)).toBe(KEY);
 
-      // The text is not censored — it is still readable, just not line-leading.
+      // The text is not censored — it is still readable, just not authoritative.
       expect(body).toContain("maintenance-key: org-spec-audit/unrelated-question");
     }).pipe(Effect.provide(layer));
   });
@@ -356,6 +538,7 @@ describe("org-spec-audit", () => {
         "head -800": { exitCode: 1, stdout: "", stderr: "not a git repository" },
       },
       modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
@@ -366,63 +549,210 @@ describe("org-spec-audit", () => {
       expect(handles.modelGateway.requests).toHaveLength(0);
       expect(out.reposSwept).toBe(0);
       expect(out.reposSkipped).toBe(2);
-      expect(out.prOpened).toBe(false);
+      expect(out.questionsFiled).toBe(0);
     }).pipe(Effect.provide(layer));
   });
 });
 
-// --- Suppression: what the run refuses to propose twice ----------------------
+// --- The per-sweep cap -------------------------------------------------------
 
-const LEDGER = "owner/control:maintenance/declined.jsonl";
-const KEY = "org-spec-audit/per-run-spend-caps";
+describe("org-spec-audit — the cap", () => {
+  const seven = Array.from({ length: 7 }, (_unused, i) =>
+    question({ key: `q${i}`, question: `Question ${i}?` }),
+  );
 
-/** A prior proposal carrying the key, closed unmerged `daysAgo` days back. */
-const closedProposal = (
-  daysAgo: number,
-  over: Partial<PullRequestHistoryRef> = {},
-): PullRequestHistoryRef =>
-  ({
-    repo: "owner/control",
-    number: 7,
-    title: "docs(maintenance): open questions",
-    body: `maintenance-key: ${KEY}`,
-    headBranch: `flare-dispatch/spec-audit-questions-2026-06-0${daysAgo % 9}`,
-    headSha: "abc123",
-    state: "closed",
-    draft: true,
-    labels: [],
-    author: "flare-dispatch[bot]",
-    requestedReviewers: [],
-    url: "https://github.com/owner/control/pull/7",
-    createdAt: firedAt - (daysAgo + 5) * DAY,
-    // Touched today on purpose: a cooldown dated from `updated_at` would never
-    // expire, which is the whole reason `closed_at` is the field that counts.
-    updatedAt: firedAt,
-    closedAt: firedAt - daysAgo * DAY,
-    ...over,
-  }) satisfies PullRequestHistoryRef;
+  it.effect("files up to the cap and says what it held, never truncating silently", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.max-new-questions": "2" },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported(seven), reported([])] },
+      github: { now: firedAt },
+    });
 
-/** The runtime the suppression tests share — one question, one control repo. */
-const suppressionRuntime = (
-  github: NonNullable<Parameters<typeof makeCFRuntimeTest>[0]>["github"],
-) =>
-  makeCFRuntimeTest({
-    config: baseConfig,
-    sandboxProgram: activeSandbox,
-    modelGateway: { responses: [reported([question()]), reported([question()])] },
-    github: { now: firedAt, ...github },
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsAfterMerge).toBe(7);
+      expect(out.questionsFiled).toBe(2);
+      expect(out.questionsHeldByCap).toBe(5);
+      expect(handles.github.openIssueCalls).toHaveLength(2);
+      // A shorter list that does not say it is shorter reads as fewer problems.
+      expect(handles.notice.published[0]!.text).toContain("Held by the per-sweep cap: 5");
+    }).pipe(Effect.provide(layer));
   });
 
+  it.effect("files the held-back questions on the next sweep, since none are on file", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.max-new-questions": "2" },
+      sandboxProgram: activeSandbox,
+      // Two ticks: sweeps for run 1, sweeps for run 2, then run 2's reconcile.
+      // The fake repeats its last entry, so `matched([])` covers that and after.
+      modelGateway: {
+        responses: [reported(seven), reported([]), reported(seven), reported([]), matched([])],
+      },
+      github: { now: firedAt },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      expect(handles.github.openIssueCalls).toHaveLength(2);
+      // Second tick: the two filed are found on file, the other five are not.
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsAlreadyFiled).toBe(2);
+      expect(out.questionsFiled).toBe(2);
+      expect(handles.github.openIssueCalls).toHaveLength(4);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("defaults the cap when the value is nonsense", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.max-new-questions": "-3" },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported(seven), reported([])] },
+      github: { now: firedAt },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsFiled).toBe(5);
+      expect(handles.github.openIssueCalls).toHaveLength(5);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+// --- Key reconciliation: the same question, worded differently ---------------
+
+describe("org-spec-audit — key reconciliation", () => {
+  /** The same question as `filedIssue()`, minted under a different verb. */
+  const rephrased = question({
+    key: "spend-caps-per-run",
+    question: "Are per-run spend caps still committed to?",
+  });
+
+  it.effect("does not re-file a question the model matches onto one on file", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: {
+        responses: [
+          reported([rephrased]),
+          reported([]),
+          matched([{ minted: "spend-caps-per-run", existing: "per-run-spend-caps" }]),
+        ],
+      },
+      github: { now: firedAt, issues: [filedIssue()] },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsAlreadyFiled).toBe(1);
+      expect(out.questionsFiled).toBe(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
+      expect(
+        handles.io.logs.some((l) => l.msg.includes("reconciled onto") && l.msg.includes(KEY)),
+      ).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  // The containment: an answer naming a key that was never read decides nothing.
+  // A missed match costs a human one click; an accepted hallucination is a
+  // question that is never asked again.
+  it.effect("files anyway when the model matches onto a key nobody has on file", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: {
+        responses: [
+          reported([rephrased]),
+          reported([]),
+          matched([{ minted: "spend-caps-per-run", existing: "a-question-nobody-asked" }]),
+        ],
+      },
+      github: { now: firedAt, issues: [filedIssue()] },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsFiled).toBe(1);
+      expect(handles.github.openIssueCalls).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("files anyway when the reconcile call fails", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      // The third call returns a sweep payload, which cannot parse as a
+      // reconciliation — the same shape a model failure takes here.
+      modelGateway: { responses: [reported([rephrased]), reported([]), reported([])] },
+      github: { now: firedAt, issues: [filedIssue()] },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsFiled).toBe(1);
+      expect(
+        handles.io.logs.some((l) => l.level === "warn" && l.msg.includes("all 1 as new")),
+      ).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("spends nothing on reconciliation when nothing is on file", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([])] },
+      github: { now: firedAt },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      // Two sweeps, no third call: on a fresh control repo every question is new
+      // by construction and there is nothing to match against.
+      expect(handles.modelGateway.requests).toHaveLength(2);
+      expect(
+        handles.modelGateway.requests.some((r) => JSON.stringify(r).includes("report_key_matches")),
+      ).toBe(false);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("skips reconciliation for a question whose key already matches exactly", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([])] },
+      github: { now: firedAt, issues: [filedIssue()] },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* orgSpecAudit.run(input);
+      expect(out.questionsAlreadyFiled).toBe(1);
+      // An exact key match IS the same question. Paying a model to confirm it
+      // would be spend with no decision attached.
+      expect(handles.modelGateway.requests).toHaveLength(2);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+// --- Suppression: the pre-emptive half, and the half that retired ------------
+
+const LEDGER = "owner/control:maintenance/declined.jsonl";
+
 describe("org-spec-audit — suppression", () => {
-  it.effect("never re-proposes a question the ledger declined", () => {
-    const { layer, handles } = suppressionRuntime({
-      files: {
-        [LEDGER]: JSON.stringify({
-          key: KEY,
-          reason: "answered in ADR-0011; the spec is right",
-          by: "@ada",
-          at: "2026-08-01",
-        }),
+  it.effect("never files a question the ledger declined", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: {
+        now: firedAt,
+        files: {
+          [LEDGER]: JSON.stringify({
+            key: KEY,
+            reason: "answered in ADR-0011; the spec is right",
+            by: "@ada",
+            at: "2026-08-01",
+          }),
+        },
       },
     });
 
@@ -430,85 +760,63 @@ describe("org-spec-audit — suppression", () => {
       const out = yield* orgSpecAudit.run(input);
       expect(out.questionsAfterMerge).toBe(1);
       expect(out.questionsSuppressed).toBe(1);
-      expect(out.prOpened).toBe(false);
-      // Nothing left to ask ⇒ no PR at all, and the count still reports why.
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
+      expect(out.questionsFiled).toBe(0);
+      expect(handles.github.openIssueCalls).toHaveLength(0);
+      // Nothing announced either: re-broadcasting a declined question into a
+      // channel is the louder half of re-proposing it, and the one nobody can
+      // close.
+      expect(handles.notice.published).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });
 
-  // The ledger's location is the operator's, like the questions dir. The
-  // default this repo ships is a placeholder, and an operator who moves the
-  // file must have the run follow it — including in the sentence the PR body
-  // prints telling a reviewer where to record a permanent decline.
-  it.effect("reads the ledger where `declined-path` says, and says so in the body", () => {
+  // No PRs ⇒ no PR history ⇒ no cooldown. A prefix matching nothing would answer
+  // "no prior proposals" every tick, for a reason no reader could tell apart
+  // from the feature being off.
+  it.effect("reads no PR history at all", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      config: { ...baseConfig, "org-spec-audit.declined-path": "infra/loop/declined.jsonl" },
+      config: baseConfig,
       sandboxProgram: activeSandbox,
       modelGateway: { responses: [reported([question()]), reported([question()])] },
-      github: {
-        now: firedAt,
-        files: { "owner/control:infra/loop/declined.jsonl": "" },
-      },
+      github: { now: firedAt },
     });
 
     return Effect.gen(function* () {
       yield* orgSpecAudit.run(input);
-      const calls = handles.github.openDraftPullRequestCalls;
+      expect(handles.github.pullRequestHistoryCalls).toHaveLength(0);
+      expect(handles.github.openIssueCalls).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("reads the ledger where `declined-path` says, and says so in the issue", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...baseConfig, "org-spec-audit.declined-path": "infra/loop/declined.jsonl" },
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt, files: { "owner/control:infra/loop/declined.jsonl": "" } },
+    });
+
+    return Effect.gen(function* () {
+      yield* orgSpecAudit.run(input);
+      const calls = handles.github.openIssueCalls;
       expect(calls).toHaveLength(1);
       expect(calls[0]!.body).toContain("`infra/loop/declined.jsonl`");
       expect(calls[0]!.body).not.toContain("maintenance/declined.jsonl");
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("honours a cooldown dated from when the proposal was closed", () => {
-    const { layer, handles } = suppressionRuntime({
-      pullRequestHistory: [closedProposal(5)],
-    });
-
-    return Effect.gen(function* () {
-      const out = yield* orgSpecAudit.run(input);
-      expect(out.questionsSuppressed).toBe(1);
-      expect(out.prOpened).toBe(false);
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
-      // And nothing is announced either. Suppression runs BEFORE the notice, so
-      // a question a human declined is not re-broadcast into a channel — which
-      // is the louder half of re-proposing it, and the one nobody can close.
-      expect(handles.notice.published).toHaveLength(0);
-    }).pipe(Effect.provide(layer));
-  });
-
-  it.effect("asks again once the cooldown has expired", () => {
-    const { layer, handles } = suppressionRuntime({
-      pullRequestHistory: [closedProposal(45, { updatedAt: firedAt - 45 * DAY })],
-    });
-
-    return Effect.gen(function* () {
-      const out = yield* orgSpecAudit.run(input);
-      expect(out.questionsSuppressed).toBe(0);
-      expect(out.prOpened).toBe(true);
-      expect(handles.github.openDraftPullRequestCalls).toHaveLength(1);
-    }).pipe(Effect.provide(layer));
-  });
-
-  it.effect("does not suppress on a proposal that was merged", () => {
-    const { layer } = suppressionRuntime({
-      pullRequestHistory: [closedProposal(5, { mergedAt: firedAt - 5 * DAY })],
-    });
-
-    return Effect.gen(function* () {
-      const out = yield* orgSpecAudit.run(input);
-      expect(out.questionsSuppressed).toBe(0);
-      expect(out.prOpened).toBe(true);
-    }).pipe(Effect.provide(layer));
-  });
-
   it.effect("skips a malformed ledger line and honours the rest", () => {
-    const { layer, handles } = suppressionRuntime({
-      files: {
-        [LEDGER]: [
-          "}}} not json at all",
-          JSON.stringify({ key: KEY, reason: "settled", by: "@ada", at: "2026-08-01" }),
-        ].join("\n"),
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: {
+        now: firedAt,
+        files: {
+          [LEDGER]: [
+            "}}} not json at all",
+            JSON.stringify({ key: KEY, reason: "settled", by: "@ada", at: "2026-08-01" }),
+          ].join("\n"),
+        },
       },
     });
 
@@ -521,12 +829,17 @@ describe("org-spec-audit — suppression", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("proposes anyway — and says so — when the ledger cannot be read", () => {
-    const { layer, handles } = suppressionRuntime({});
+  // The ledger read still fails OPEN, and the asymmetry with the issue read is
+  // the point: one issue a human closes, versus a duplicate of everything.
+  it.effect("files anyway — and says so — when the ledger cannot be read", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
+    });
 
     return Effect.gen(function* () {
-      // Wrap the fake so only the ledger read fails; every other `github` call
-      // (notably the draft-PR write this test asserts on) still records.
       const fake = yield* Github;
       const out = yield* orgSpecAudit.run(input).pipe(
         Effect.provideService(Github, {
@@ -536,20 +849,18 @@ describe("org-spec-audit — suppression", () => {
       );
 
       expect(out.questionsSuppressed).toBe(0);
-      expect(out.prOpened).toBe(true);
-      const calls = handles.github.openDraftPullRequestCalls;
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.body).toContain("Suppression degraded");
+      expect(out.questionsFiled).toBe(1);
+      expect(handles.notice.published[0]!.text).toContain("Suppression degraded");
       expect(handles.io.logs.some((l) => l.level === "warn" && l.msg.includes("unreadable"))).toBe(
         true,
       );
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("reports the suppressed count and reason in the PR body and the file", () => {
-    // Two questions: one declined, one still open — so a PR is opened AND has
-    // something to explain. A shorter list with no explanation reads as "fewer
-    // problems", which is the opposite of true.
+  it.effect("reports the suppressed count and reason in the notice", () => {
+    // Two questions: one declined, one still open — so something is filed AND
+    // there is something to explain. A shorter list with no explanation reads as
+    // "fewer problems", which is the opposite of true.
     const { layer, handles } = makeCFRuntimeTest({
       config: baseConfig,
       sandboxProgram: activeSandbox,
@@ -579,128 +890,74 @@ describe("org-spec-audit — suppression", () => {
       const out = yield* orgSpecAudit.run(input);
       expect(out.questionsAfterMerge).toBe(2);
       expect(out.questionsSuppressed).toBe(1);
-      expect(out.prOpened).toBe(true);
+      expect(out.questionsFiled).toBe(1);
 
-      const call = handles.github.openDraftPullRequestCalls[0]!;
-      expect(call.body).toContain("**Suppressed: 1**");
-      expect(call.body).toContain("answered in ADR-0011");
-      expect(call.body).toContain("suppressed: 1");
-      // The message file IS the digest FractalBOT posts — it must say it too.
-      expect(call.files[0]!.content).toContain("**Suppressed: 1**");
-      expect(call.files[0]!.content).toContain("1 suppressed");
+      const text = handles.notice.published[0]!.text;
+      expect(text).toContain("**Suppressed: 1**");
+      expect(text).toContain("answered in ADR-0011");
+      expect(text).toContain("1 declined");
       // The surviving question is still asked; the declined one is gone.
-      expect(call.files[0]!.content).toContain("Who owns egress?");
-      expect(call.files[0]!.content).not.toContain("Does the dispatcher still commit");
+      expect(text).toContain("Who owns egress?");
+      expect(text).not.toContain("Does the dispatcher still commit");
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("carries one maintenance-key per question, not one per PR", () => {
-    // A dated per-PR key would be unique every day and suppress nothing, ever.
-    const { layer, handles } = suppressionRuntime({});
+  it.effect("carries one maintenance-key per issue, keyed on the question", () => {
+    // A dated key would be unique every day and match nothing, ever.
+    const { layer, handles } = makeCFRuntimeTest({
+      config: baseConfig,
+      sandboxProgram: activeSandbox,
+      modelGateway: { responses: [reported([question()]), reported([question()])] },
+      github: { now: firedAt },
+    });
 
     return Effect.gen(function* () {
       yield* orgSpecAudit.run(input);
-      const body = handles.github.openDraftPullRequestCalls[0]!.body;
+      const body = handles.github.openIssueCalls[0]!.body;
       expect(body).toContain(`maintenance-key: ${KEY}`);
       expect(body).not.toContain("maintenance-key: org-spec-audit/2026-08-08");
-    }).pipe(Effect.provide(layer));
-  });
-
-  it.effect("asks about exactly the branch prefix its own proposals use", () => {
-    const { layer, handles } = suppressionRuntime({});
-
-    return Effect.gen(function* () {
-      yield* orgSpecAudit.run(input);
-      const [call] = handles.github.pullRequestHistoryCalls;
-      expect(call).toMatchObject({
-        repo: "owner/control",
-        headBranchPrefix: "flare-dispatch/spec-audit-questions-",
-        state: "all",
-      });
-      expect(handles.github.openDraftPullRequestCalls[0]!.headBranch).toMatch(
-        new RegExp(`^${call!.headBranchPrefix}`),
-      );
     }).pipe(Effect.provide(layer));
   });
 });
 
 describe("mergeAcrossRepos", () => {
-  const raised = (over: Record<string, unknown>) =>
-    ({ ...question(), ...over }) as Parameters<typeof mergeAcrossRepos>[0][number];
+  const raised = (over: Record<string, unknown> = {}) =>
+    ({
+      repo: "o/a",
+      group: "decide" as const,
+      question: "Does X still commit to Y?",
+      evidence: "spec says A, tree says B",
+      specPath: "specs/x.md",
+      assumption: "assume nothing changes",
+      key: "x-commits-to-y",
+      ...over,
+    }) as Parameters<typeof mergeAcrossRepos>[0][number];
 
-  it("merges on a normalized key regardless of the model's punctuation", () => {
-    const out = mergeAcrossRepos([
-      raised({ repo: "o/a", key: "Per-Run Spend Caps" }),
-      raised({ repo: "o/b", key: "per_run_spend_caps" }),
-    ]);
+  it("merges one key raised by two repos into one question with two sources", () => {
+    const out = mergeAcrossRepos([raised(), raised({ repo: "o/b" })]);
     expect(out).toHaveLength(1);
     expect(out[0]!.sources.map((s) => s.repo)).toEqual(["o/a", "o/b"]);
   });
 
-  it("counts one repo raising the same key twice as one question", () => {
-    const out = mergeAcrossRepos([raised({ repo: "o/a" }), raised({ repo: "o/a" })]);
+  it("keeps one repo raising the same key twice as one question", () => {
+    const out = mergeAcrossRepos([raised(), raised()]);
     expect(out).toHaveLength(1);
     expect(out[0]!.sources).toHaveLength(1);
   });
 
-  it("ranks the most-shared question first", () => {
+  it("ranks by DISTINCT repos, not by source count", () => {
+    // One repo raising a question from two specs is still one repo asking.
     const out = mergeAcrossRepos([
-      raised({ repo: "o/a", key: "lonely" }),
-      raised({ repo: "o/b", key: "shared" }),
-      raised({ repo: "o/c", key: "shared" }),
+      raised({ key: "twice-in-one-repo", specPath: "specs/a.md" }),
+      raised({ key: "twice-in-one-repo", specPath: "specs/b.md" }),
+      raised({ key: "shared", repo: "o/a" }),
+      raised({ key: "shared", repo: "o/b" }),
     ]);
     expect(out[0]!.key).toBe("shared");
   });
 
-  it("ranks by distinct repos, so one repo's two specs can't outrank two repos", () => {
-    const out = mergeAcrossRepos([
-      raised({ repo: "o/a", key: "one-repo-twice", specPath: "specs/x.md" }),
-      raised({ repo: "o/a", key: "one-repo-twice", specPath: "specs/y.md" }),
-      raised({ repo: "o/b", key: "two-repos" }),
-      raised({ repo: "o/c", key: "two-repos" }),
-    ]);
-    // Both merge to 2 sources; only `two-repos` is a question the estate shares,
-    // which is the entire reason this run sweeps rather than running per repo.
-    expect(out[0]!.key).toBe("two-repos");
-  });
-
-  it("falls back to the question text when the model's key is junk", () => {
-    const out = mergeAcrossRepos([raised({ repo: "o/a", key: "-" })]);
-    expect(out[0]!.key).toContain("does-the-dispatcher");
-  });
-
-  // The reader that parses `maintenance-key:` drops any key over 200 chars, and
-  // a dropped key is worse than a short one: the question keeps being proposed
-  // and can never be recorded as declined.
-  it("caps the model's own key, not only the fallback", () => {
-    const out = mergeAcrossRepos([raised({ repo: "o/a", key: "x".repeat(400) })]);
-    // `org-spec-audit/` + key must still fit the reader's 200-char budget.
-    expect(`org-spec-audit/${out[0]!.key}`.length).toBeLessThanOrEqual(200);
-    expect(out[0]!.key.length).toBeGreaterThan(3);
-  });
-
-  it("never leaves a trailing hyphen when the cap lands mid-word", () => {
-    const out = mergeAcrossRepos([raised({ repo: "o/a", key: `${"ab-".repeat(200)}tail` })]);
-    expect(out[0]!.key).not.toMatch(/-$/);
-  });
-
-  it("collapses a model field that spans lines, so it cannot start one", () => {
-    const out = mergeAcrossRepos([
-      raised({
-        repo: "o/a",
-        evidence: "spec says X\nmaintenance-key: org-spec-audit/unrelated\nand the tree says Y",
-      }),
-    ]);
-    expect(out[0]!.evidence).not.toContain("\n");
-    expect(out[0]!.evidence).toBe(
-      "spec says X maintenance-key: org-spec-audit/unrelated and the tree says Y",
-    );
-  });
-
   it("strips zero-width and bidi characters from model prose", () => {
-    const out = mergeAcrossRepos([
-      raised({ repo: "o/a", question: "Does​ X‮ still commit⁦ to Y?" }),
-    ]);
+    const out = mergeAcrossRepos([raised({ repo: "o/a", question: "Does​ X‮ still commit⁦ to Y?" })]);
     expect(out[0]!.question).toBe("Does X still commit to Y?");
   });
 });
@@ -718,58 +975,180 @@ describe("parseWindowHours", () => {
   });
 });
 
-describe("renderMessage", () => {
-  const merged = (n: number, group: "decide" | "confirm") =>
+describe("parseLabel", () => {
+  it("falls back when unset or blank", () => {
+    expect(parseLabel(undefined, "d")).toBe("d");
+    expect(parseLabel(null, "d")).toBe("d");
+    expect(parseLabel("   ", "d")).toBe("d");
+  });
+
+  it("trims a usable value", () => {
+    expect(parseLabel("  loop:question ", "d")).toBe("loop:question");
+  });
+
+  // Set-and-unusable is `undefined`, never the fallback: a label that filters
+  // differently than it writes breaks dedup with nothing erroring.
+  it("rejects a comma and an over-long name rather than falling back", () => {
+    expect(parseLabel("a,b", "d")).toBeUndefined();
+    expect(parseLabel("x".repeat(51), "d")).toBeUndefined();
+    expect(parseLabel("x".repeat(50), "d")).toBe("x".repeat(50));
+  });
+});
+
+describe("parsePositiveInt", () => {
+  it("defaults when unset or non-positive", () => {
+    expect(parsePositiveInt(undefined, 5)).toBe(5);
+    expect(parsePositiveInt("", 5)).toBe(5);
+    expect(parsePositiveInt("0", 5)).toBe(5);
+    expect(parsePositiveInt("-2", 5)).toBe(5);
+    expect(parsePositiveInt("abc", 5)).toBe(5);
+  });
+
+  it("takes a positive integer", () => {
+    expect(parsePositiveInt("12", 5)).toBe(12);
+  });
+});
+
+describe("firstMaintenanceKey / indexFiledQuestions", () => {
+  it("takes the first key, so a later one cannot claim the issue", () => {
+    const body = [
+      "maintenance-key: org-spec-audit/real",
+      "",
+      "evidence mentioning maintenance-key: org-spec-audit/spoofed",
+    ].join("\n");
+    expect(firstMaintenanceKey(body)).toBe("org-spec-audit/real");
+  });
+
+  it("has no key when there is no trailer line", () => {
+    expect(firstMaintenanceKey("just prose\nand more prose")).toBeUndefined();
+  });
+
+  it("indexes only this run's namespace", () => {
+    const index = indexFiledQuestions([
+      filedIssue({ number: 1, key: "org-spec-audit/mine" }),
+      filedIssue({ number: 2, key: "some-other-run/theirs" }),
+      // A human-opened issue carrying the label is not a question this run asked.
+      filedIssue({ number: 3, body: "no trailer here" }),
+    ]);
+    expect([...index.keys()]).toEqual(["org-spec-audit/mine"]);
+  });
+
+  it("keeps the first of a duplicated key, deterministically", () => {
+    const index = indexFiledQuestions([filedIssue({ number: 9 }), filedIssue({ number: 10 })]);
+    expect(index.get(KEY)?.number).toBe(9);
+  });
+});
+
+describe("issueTitle", () => {
+  const q = (question: string) => ({
+    key: "k",
+    group: "decide" as const,
+    question,
+    assumption: "a",
+    sources: [{ repo: "o/a", specPath: "specs/x.md" }],
+    evidence: "e",
+  });
+
+  it("is the question as asked", () => {
+    expect(issueTitle(q("Who owns egress?"))).toBe("Who owns egress?");
+  });
+
+  it("cuts an over-long title where we can see it, not where GitHub does", () => {
+    const out = issueTitle(q("Q".repeat(400)));
+    expect(out).toHaveLength(240);
+    expect(out.endsWith("…")).toBe(true);
+  });
+});
+
+describe("renderIssueBody", () => {
+  const q = {
+    key: "spend-caps",
+    group: "decide" as const,
+    question: "Who owns egress?",
+    assumption: "assume nothing changes",
+    sources: [{ repo: "o/a", specPath: "specs/x.md" }],
+    evidence: "spec says A, tree says B",
+  };
+
+  it("puts the trailer first, then the answer-if-nobody-does and the evidence", () => {
+    const out = renderIssueBody({
+      question: q,
+      day: "2026-08-08",
+      declinedPath: "infra/declined.jsonl",
+    });
+    expect(out.split("\n")[0]).toBe("maintenance-key: org-spec-audit/spend-caps");
+    expect(out).toContain("**If nobody answers:** assume nothing changes");
+    expect(out).toContain("spec says A, tree says B");
+    expect(out).toContain("`o/a` (specs/x.md)");
+    expect(out).toContain("`infra/declined.jsonl`");
+  });
+
+  it("tells the reader that closing is the record and nothing reopens it", () => {
+    const out = renderIssueBody({ question: q, day: "2026-08-08", declinedPath: "d.jsonl" });
+    expect(out).toContain("Closing is the record");
+    expect(out).toContain("never reopen");
+  });
+});
+
+describe("renderNotice", () => {
+  const opened = (n: number, group: "decide" | "confirm") =>
     Array.from({ length: n }, (_unused, i) => ({
-      key: `k${i}`,
-      group,
-      question: `Q${i}?`,
-      assumption: "assume nothing changes",
-      sources: [{ repo: "o/a", specPath: "specs/x.md" }],
-      evidence: "spec says X, tree says Y",
+      number: 100 + i,
+      url: `https://github.com/o/c/issues/${100 + i}`,
+      question: {
+        key: `k${i}`,
+        group,
+        question: `Q${i}?`,
+        assumption: "assume nothing changes",
+        sources: [{ repo: "o/a", specPath: "specs/x.md" }],
+        evidence: "spec says X, tree says Y",
+      },
     }));
 
-  it("states what the per-group cap kept out rather than truncating silently", () => {
-    const out = renderMessage({
-      day: "2026-08-08",
-      merged: merged(7, "decide"),
+  const base = {
+    day: "2026-08-08",
+    openOnFile: 3,
+    heldByCap: 0,
+    alreadyFiled: 0,
+    raised: 1,
+    suppression: noSuppression,
+  };
+
+  it("leads with the delta, and links each new question by number", () => {
+    const out = renderNotice({
+      ...base,
+      opened: opened(2, "decide"),
       outcomes: [{ repo: "o/a", skipped: false, questions: [] }],
-      raised: 7,
-      suppression: noSuppression,
     });
-    expect(out).toContain("2 more in this group, not shown");
-    expect(out).toContain("Below the per-group cap: 2");
+    expect(out).toContain("2 new question(s) · 3 open");
+    expect(out).toContain("(#100)");
+    expect(out).toContain("(#101)");
   });
 
   it("names the repos it swept and the ones it skipped", () => {
-    const out = renderMessage({
-      day: "2026-08-08",
-      merged: merged(1, "confirm"),
+    const out = renderNotice({
+      ...base,
+      opened: opened(1, "confirm"),
       outcomes: [
         { repo: "o/a", skipped: false, questions: [] },
         { repo: "o/dormant", skipped: true, questions: [] },
       ],
-      raised: 1,
-      suppression: noSuppression,
     });
     expect(out).toContain("Swept: `o/a`");
     expect(out).toContain("`o/dormant`");
   });
 
   it("separates a repo that failed from one that was quiet", () => {
-    const out = renderMessage({
-      day: "2026-08-08",
-      merged: merged(1, "confirm"),
+    const out = renderNotice({
+      ...base,
+      opened: opened(1, "confirm"),
       outcomes: [
         { repo: "o/a", skipped: false, questions: [] },
         { repo: "o/dormant", skipped: true, questions: [] },
         { repo: "o/broken", skipped: true, failure: "model call failed (429)", questions: [] },
       ],
-      raised: 1,
-      suppression: noSuppression,
     });
     // A failure counted as "unchanged" turns an outage into good news.
-    expect(out).toContain("1 unchanged or without specs");
     expect(out).toContain("1 failed");
     expect(out).toContain("Failed: `o/broken` (model call failed (429))");
     expect(out).not.toContain("Failed: none");
@@ -777,15 +1156,24 @@ describe("renderMessage", () => {
     expect(out.indexOf("could not be swept")).toBeLessThan(out.indexOf("## Confirm"));
   });
 
-  it("says so explicitly when nothing failed", () => {
-    const out = renderMessage({
-      day: "2026-08-08",
-      merged: merged(1, "confirm"),
+  it("says so explicitly when nothing failed and nothing was held", () => {
+    const out = renderNotice({
+      ...base,
+      opened: opened(1, "confirm"),
       outcomes: [{ repo: "o/a", skipped: false, questions: [] }],
-      raised: 1,
-      suppression: noSuppression,
     });
     expect(out).toContain("Failed: none");
+    expect(out).toContain("Nothing held by the cap.");
     expect(out).not.toContain("could not be swept");
+  });
+
+  it("names what the cap held rather than shortening the list in silence", () => {
+    const out = renderNotice({
+      ...base,
+      opened: opened(2, "decide"),
+      heldByCap: 5,
+      outcomes: [{ repo: "o/a", skipped: false, questions: [] }],
+    });
+    expect(out).toContain("Held by the per-sweep cap: 5");
   });
 });
