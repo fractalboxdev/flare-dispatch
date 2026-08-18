@@ -14,9 +14,10 @@
 //
 // Contract mirrors `offload-test` (specs/02-runs.md § 1, specs/03-dsl.md
 // § Top-level shape) — the only differences are the baked-in command (oxlint,
-// resolved from the catalog via `npx`, no per-repo CONFIG_KV lookup) and that
-// `failOnNonZeroExit` defaults ON: a lint finding has no other pass/fail
-// signal, so a non-zero exit must turn the check red in every mode.
+// resolved from the catalog via `npx`, with one optional per-repo CONFIG_KV
+// key, `oxlint.version:<repo>`) and that `failOnNonZeroExit` defaults ON: a
+// lint finding has no other pass/fail signal, so a non-zero exit must turn the
+// check red in every mode.
 //
 // Because it installs nothing and configures nothing, the gate is droppable on
 // ANY repo — including one that never adopted oxlint (no `.oxlintrc.json`, no
@@ -34,6 +35,7 @@ import { Effect, Schema } from "effect";
 import {
   AcceptanceFailed,
   artifact,
+  config,
   defineRun,
   sandbox,
   step,
@@ -55,10 +57,16 @@ const OxlintInput = Schema.Struct({
    */
   args: Schema.optionalWith(Schema.String, { default: () => "" }),
   /**
-   * npm dist-tag / version of oxlint to fetch via `npx`. Defaults to the major
-   * line `"1"` so a consumer tracks oxlint 1.x without redeploying this run.
+   * Exact oxlint version to fetch via `npx`. OPTIONAL: a webhook dispatch omits
+   * it and the run body resolves it from CONFIG_KV, falling back to
+   * `VERSION_DEFAULT` — see `repoVersionKey`.
+   *
+   * A range or dist-tag (`"1"`, `"^1.74.0"`, `"latest"`) is accepted and
+   * defeats the point: `npx` re-resolves it on every run, so what this gate
+   * enforces becomes whatever the registry served that minute. Pass an exact
+   * version. See `VERSION_DEFAULT` for what that costs when it is not.
    */
-  version: Schema.optionalWith(Schema.String, { default: () => "1" }),
+  version: Schema.optional(Schema.String),
   /**
    * Fail the run Effect (→ red `flare-dispatch/oxlint` check) on a non-zero
    * exit. Defaults ON — unlike `offload-test`, a lint run has no GHA step that
@@ -96,6 +104,45 @@ const OxlintOutput = Schema.Struct({
 const TIMEOUT_SEC_DEFAULT = 300;
 
 /**
+ * The oxlint version this gate runs when nothing overrides it — an EXACT
+ * version, never a range or a dist-tag.
+ *
+ * It was the major line `"1"` until 2026-08-18, which handed the registry the
+ * power to change what this gate enforces with no commit, no PR and no review
+ * on either side. oxlint selects rules by CATEGORY, and a minor release may
+ * move a rule into `correctness`: 1.79.0 moved five React rules in, and every
+ * consumer tracking `@1` went red within the hour — on every open PR at once,
+ * for findings that predated all of them. Nothing in those PRs caused it, and
+ * nothing in those repos could fix it, because the version lived here.
+ *
+ * A consumer's own lint step runs its PINNED devDependency, so a floating gate
+ * also means the two lanes enforce different rule sets, with no signal of the
+ * divergence until the day they disagree.
+ *
+ * Bumping this is a deliberate, reviewed change here — and a change that can
+ * turn consumers red, so it belongs in its own PR. A consumer needing a
+ * different version pins it per-repo (`repoVersionKey`) without waiting on a
+ * release.
+ */
+export const VERSION_DEFAULT = "1.79.0";
+
+/**
+ * CONFIG_KV keys the run body resolves `version` from when a dispatch omits it
+ * (webhook mode — the `pull_request` trigger's `inputs` is a sync,
+ * payload-only callback that cannot read config). Per-repo wins over the
+ * dispatcher-wide key, which wins over `VERSION_DEFAULT`:
+ *
+ *   wrangler kv key put --binding=CONFIG_KV "oxlint.version:owner/repo" "1.74.0"
+ *
+ * This is the whole of oxlint's per-repo config. The run still needs no
+ * command, no install and no `.oxlintrc.json`, so it stays droppable on any
+ * repo; the key exists so a consumer that a bump breaks can pin itself out of
+ * it in one command instead of waiting on a deploy here.
+ */
+const VERSION_KEY = "oxlint.version";
+const repoVersionKey = (repo: string): string => `${VERSION_KEY}:${repo}`;
+
+/**
  * Platform-failure retries — see the `exec` step. A verdict is never retried:
  * a command that runs and exits non-zero is a normal `ExecResult`, so neither
  * class here can reach one.
@@ -109,7 +156,7 @@ const RETRY_ON = ["ExecFailed", "StepFailed"] as const;
 
 export const oxlint = defineRun({
   name: "oxlint",
-  version: "1.1.0",
+  version: "1.2.0",
 
   // Webhook-mode trigger — the zero-GHA lint gate. Fires on every PR push; the
   // run resolves oxlint from `npx`, so the sync, payload-only callback carries
@@ -127,13 +174,19 @@ export const oxlint = defineRun({
       gate: ({ payload }) =>
         payload.pull_request?.draft !== true &&
         payload.pull_request?.user?.login !== "dependabot[bot]",
-      inputs: ({ payload }) => ({
+      // The return type is pinned to the schema's Type: with `version` omitted,
+      // an unannotated object literal is also a valid candidate for the run's
+      // input type, and TS infers the NARROWER one — which then drops `version`
+      // from the `run` body's `input`.
+      inputs: ({ payload }): typeof OxlintInput.Type => ({
         repo: String(payload.repository?.full_name ?? "unknown/unknown"),
         sha: String(payload.pull_request?.head?.sha ?? ""),
         // The decoded input type carries these (their schema defaults); the
         // trigger restates them since `inputs` returns the decoded shape.
         args: "",
-        version: "1",
+        // `version` stays OMITTED so the run body resolves it from CONFIG_KV.
+        // Restating a literal here would pin every repo the dispatcher serves
+        // to one version again, unreachable from any of them.
         failOnNonZeroExit: true,
       }),
     },
@@ -150,6 +203,28 @@ export const oxlint = defineRun({
 
   run: (input) =>
     Effect.gen(function* () {
+      // resolve-version — a webhook dispatch omits `version` (its trigger
+      // callback is sync and cannot read config), so resolve it here:
+      // `oxlint.version:<repo>` → the dispatcher-wide `oxlint.version` →
+      // `VERSION_DEFAULT`. Unlike `offload-test`'s command, an unresolvable
+      // version is not a failure — the default always answers, so the gate
+      // never needs configuring to work.
+      //
+      // The step is SKIPPED when the dispatch carried a version (the `??`
+      // short-circuits before the `yield*`), so an Action-mode caller keeps the
+      // historical `checkout → exec → upload-log` step shape.
+      const version =
+        input.version ??
+        (yield* step("resolve-version", () =>
+          Effect.gen(function* () {
+            const perRepo = (yield* config.get(repoVersionKey(input.repo)))?.trim();
+            if (perRepo !== undefined && perRepo.length > 0) return perRepo;
+            const dispatcherWide = (yield* config.get(VERSION_KEY))?.trim();
+            if (dispatcherWide !== undefined && dispatcherWide.length > 0) return dispatcherWide;
+            return VERSION_DEFAULT;
+          }),
+        ));
+
       // checkout — acquire a container (default lean image; oxlint needs only
       // Node for `npx`), clone at the SHA. NO install: oxlint lints source
       // directly, so `node_modules` is never needed (the whole point — a
@@ -164,7 +239,7 @@ export const oxlint = defineRun({
 
       // exec — fetch + run oxlint via `npx`. The args are appended verbatim;
       // the `.trim()` collapses the trailing space when `args` is empty.
-      const command = `npx --yes oxlint@${input.version} ${input.args}`.trim();
+      const command = `npx --yes oxlint@${version} ${input.args}`.trim();
       // Retries cover the PLATFORM, never the verdict. oxlint exiting non-zero
       // is a normal `ExecResult` decided below; only `ExecFailed` fails the
       // Effect, and that is the container rather than the code (observed
