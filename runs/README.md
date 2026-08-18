@@ -188,6 +188,40 @@ command needs `node_modules` / a lockfile install.
       }
 ```
 
+## `oxlint` — install-free Oxc gate, on a version pinned in the run
+
+Clone → `npx --yes oxlint@<version>` → upload log → green/red
+`flare-dispatch/oxlint`. No install, no per-repo command, no `.oxlintrc.json`
+required, so it is droppable on any repo.
+
+The version is an **exact pin** in [`oxlint.ts`](./oxlint.ts) (`VERSION_DEFAULT`),
+not a range and not a dist-tag. It was the major line `1` until 2026-08-18, when
+oxlint 1.79.0 moved five React rules into the `correctness` category: because
+oxlint selects rules by category, every consumer tracking `@1` went red within
+the hour, on every open PR at once, for findings that predated all of them —
+and no consumer could fix it, because the version lives here. The same release
+left each repo's own `pnpm lint` green, since that runs the repo's pinned
+devDependency; a floating gate means the two lanes enforce different rule sets
+and nothing says so until they disagree.
+
+Bumping `VERSION_DEFAULT` can turn consumers red, so it belongs in its own PR.
+
+### Pinning one repo (`oxlint.version:<repo>`)
+
+A repo that a bump breaks — or one that wants a newer oxlint before the default
+moves — sets its own version without waiting on a deploy:
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "oxlint.version:owner/repo" "1.74.0"
+```
+
+Resolution is dispatch input → `oxlint.version:<repo>` → the dispatcher-wide
+`oxlint.version` → `VERSION_DEFAULT`. An Action-mode dispatch that passes
+`version` skips the lookup entirely (and the `resolve-version` step with it).
+Set an exact version: a range here re-resolves on every run and reinstates the
+same problem one repo at a time.
+
 ## `offload-test` — webhook mode needs two CONFIG_KV keys to run a real suite
 
 `offload-test`'s `pull_request` trigger can only pass what it computes from the

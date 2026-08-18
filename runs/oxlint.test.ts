@@ -9,7 +9,10 @@
 //                     Effect *fails* with `AcceptanceFailed` carrying the exit
 //   (c) advisory    — `failOnNonZeroExit: false` → exit 1 is a successful Effect
 //   (d) command     — `version` + `args` compose the `npx oxlint@<v> <args>` line
-//   (e) webhook trig — the pull_request payload maps to inputs; gate skips
+//   (e) version     — resolution ladder: dispatch → per-repo CONFIG_KV →
+//                     dispatcher-wide CONFIG_KV → the pinned default, and the
+//                     default is an EXACT version, never a range
+//   (f) webhook trig — the pull_request payload maps to inputs; gate skips
 //                     drafts/dependabot
 //
 // Spec: specs/03-dsl.md § Unit-testing runs.
@@ -20,19 +23,32 @@ import { it } from "@effect/vitest";
 import { Cause, Effect, Exit, Option } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import { oxlint } from "./oxlint";
+import { oxlint, VERSION_DEFAULT } from "./oxlint";
 
-/** Default decoded input — version "1", empty args, fail-on-nonzero ON. */
+/**
+ * Default decoded input — an EXPLICIT version, empty args, fail-on-nonzero ON.
+ * Carrying the version keeps these cases on the three-step Action-mode shape;
+ * the resolution ladder that webhook mode walks has its own block below.
+ */
 const baseInput = {
   repo: "owner/name",
   sha: "abc123",
   args: "",
-  version: "1",
+  version: "1.74.0",
   failOnNonZeroExit: true,
 } as const;
 
 /** The command the default input produces. */
-const CMD_DEFAULT = "npx --yes oxlint@1";
+const CMD_DEFAULT = "npx --yes oxlint@1.74.0";
+
+/** The command a version-less dispatch produces with nothing in CONFIG_KV. */
+const CMD_PINNED = `npx --yes oxlint@${VERSION_DEFAULT}`;
+
+/**
+ * `ensureWorkspace`'s checkout probe, which precedes the oxlint command in
+ * every run — the version cases assert on the command that follows it.
+ */
+const PROBE = "test -d /workspace/name/.git";
 
 describe("oxlint", () => {
   it.effect("green path — oxlint exits 0, no install, three steps", () => {
@@ -210,6 +226,98 @@ describe("oxlint", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  // --- Version resolution ----------------------------------------------------
+  //
+  // The gate's rule set is decided by which oxlint it fetches, so the version
+  // must never be a moving target: oxlint selects rules by CATEGORY, and a
+  // minor release that moves a rule into `correctness` turns every consumer on
+  // a floating range red at once, for findings that predated all of them.
+
+  it("the default is an exact version — never a range or a dist-tag", () => {
+    expect(VERSION_DEFAULT).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it.effect("no version anywhere — the run uses the pinned default", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [CMD_PINNED]: { exitCode: 0 } },
+    });
+    const { version: _omitted, ...input } = baseInput;
+
+    return Effect.gen(function* () {
+      const result = yield* oxlint.run(input);
+      expect(result.exitCode).toBe(0);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([PROBE, CMD_PINNED]);
+      // Resolution is its own checkpointed step in webhook mode.
+      expect(handles.executions.steps.map((s) => s.name)).toEqual([
+        "resolve-version",
+        "checkout",
+        "exec",
+        "upload-log",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("per-repo CONFIG_KV pins the version, beating the dispatcher-wide key", () => {
+    const command = "npx --yes oxlint@1.74.0";
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [command]: { exitCode: 0 } },
+      config: {
+        "oxlint.version:owner/name": "1.74.0",
+        "oxlint.version": "1.78.0",
+      },
+    });
+    const { version: _omitted, ...input } = baseInput;
+
+    return Effect.gen(function* () {
+      yield* oxlint.run(input);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([PROBE, command]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("dispatcher-wide CONFIG_KV applies when no per-repo key is set", () => {
+    const command = "npx --yes oxlint@1.78.0";
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [command]: { exitCode: 0 } },
+      config: { "oxlint.version": "1.78.0" },
+    });
+    const { version: _omitted, ...input } = baseInput;
+
+    return Effect.gen(function* () {
+      yield* oxlint.run(input);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([PROBE, command]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a dispatched version wins over both keys, and skips the resolve step", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [CMD_DEFAULT]: { exitCode: 0 } },
+      config: { "oxlint.version:owner/name": "1.78.0", "oxlint.version": "1.77.0" },
+    });
+
+    return Effect.gen(function* () {
+      yield* oxlint.run(baseInput);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([PROBE, CMD_DEFAULT]);
+      expect(handles.executions.steps.map((s) => s.name)).toEqual([
+        "checkout",
+        "exec",
+        "upload-log",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a blank CONFIG_KV value falls through rather than producing `oxlint@`", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [CMD_PINNED]: { exitCode: 0 } },
+      config: { "oxlint.version:owner/name": "   ", "oxlint.version": "" },
+    });
+    const { version: _omitted, ...input } = baseInput;
+
+    return Effect.gen(function* () {
+      yield* oxlint.run(input);
+      expect(handles.sandbox.execs.map((e) => e.command)).toEqual([PROBE, CMD_PINNED]);
+    }).pipe(Effect.provide(layer));
+  });
+
   // --- Webhook trigger -------------------------------------------------------
 
   const prPayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -233,9 +341,11 @@ describe("oxlint", () => {
       repo: "owner/name",
       sha: "abcdef0123456789cafe",
       args: "",
-      version: "1",
       failOnNonZeroExit: true,
     });
+    // The version is deliberately ABSENT — pinning it here would pin every
+    // repo the dispatcher serves, unreachable from any of them.
+    expect(trigger?.inputs(ctx)).not.toHaveProperty("version");
     expect(trigger?.idempotencyKey(ctx)).toBe("oxlint:owner_name:abcdef012345");
   });
 

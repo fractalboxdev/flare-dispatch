@@ -101,6 +101,7 @@ import {
   type StructuredOutputInvalid,
   type Tier,
 } from "@fractalboxdev/flare-dispatch-review-agent";
+import { VERSION_DEFAULT as OXLINT_VERSION_DEFAULT } from "./oxlint";
 
 // Local helper — true if the PR carries the given label.
 const hasLabel = (payload: WebhookPayload, name: string): boolean =>
@@ -183,8 +184,15 @@ const DIFF_FILE = "/tmp/pr-review.diff";
 
 /** Where the oxlint run writes its findings inside the container. */
 const OXLINT_FILE = "/tmp/pr-review.oxlint.txt";
-/** oxlint version line fetched via `npx` — tracks the 1.x major. */
-const OXLINT_VERSION = "1";
+/**
+ * oxlint version fetched via `npx` for the grounding block — the SAME exact
+ * pin the `oxlint` gate runs, so the findings quoted to the reviewer are the
+ * findings that decide the check. Tracked the `1.x` major until 2026-08-18,
+ * when a minor release moved five rules into `correctness` and changed what
+ * every consumer's gate enforced overnight; see `VERSION_DEFAULT` in
+ * `runs/oxlint.ts` for the full account.
+ */
+const OXLINT_VERSION = OXLINT_VERSION_DEFAULT;
 /** Cap the changed-file list passed to oxlint (bounds the command line). */
 const OXLINT_MAX_FILES = 60;
 /** Cap the grounding block prepended to the model context. */
