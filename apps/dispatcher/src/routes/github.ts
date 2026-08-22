@@ -85,8 +85,21 @@ export const MANIFEST_TEMPLATE = {
   public: false,
   default_permissions: {
     checks: "write",
-    contents: "read",
+    // `write`, not `read`: every run whose output is a pull request has to
+    // create a branch and commit files, and that is `contents:write` — the
+    // `pull_requests` grant below only covers opening the PR once a branch
+    // exists. Held at `read` this reads as a sane least-privilege default and
+    // is in fact the difference between a run that proposes and a run that
+    // cannot: `openDraftPullRequest` 403s, and because a failed notice or PR is
+    // never fatal, the run still reports green. That combination — a write the
+    // App can never do, on a path that never turns red — is why this went
+    // eight days without anyone noticing on the live install.
+    contents: "write",
     deployments: "read",
+    // `org-spec-audit` files one issue per open question, and the triage desk's
+    // issue half needs the label writes. `issues` was absent entirely, so a
+    // fresh install could not file a question at all.
+    issues: "write",
     metadata: "read",
     // `write`, not `read`: the check-run callback (workflow.ts) creates/updates
     // check-runs AND the `pr-review` run posts a PR review comment — both need
