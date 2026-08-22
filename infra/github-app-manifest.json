@@ -9,10 +9,16 @@
   "public": false,
   "default_permissions": {
     "checks": "write",
-    "contents": "read",
+    "contents": "write",
     "deployments": "read",
+    "issues": "write",
     "metadata": "read",
     "pull_requests": "write"
   },
-  "default_events": ["check_run", "check_suite", "deployment_status", "pull_request"]
+  "default_events": [
+    "check_run",
+    "check_suite",
+    "deployment_status",
+    "pull_request"
+  ]
 }
