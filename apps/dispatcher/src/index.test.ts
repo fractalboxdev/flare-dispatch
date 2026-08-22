@@ -111,6 +111,7 @@ describe("GET /health", () => {
         "deploy-smoke",
         "email-otp-login",
         "finops-audit",
+        "improve-pr",
         "matrix-fanout",
         "offload-test",
         "org-spec-audit",
