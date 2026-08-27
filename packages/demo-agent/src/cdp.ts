@@ -31,37 +31,80 @@ export type AxNode = {
   readonly role?: string;
   readonly name?: string;
   readonly children?: readonly AxNode[];
-  readonly [prop: string]: unknown;
 };
 
-/** Node ceiling for one snapshot. See `serializeAxTree`. */
+/**
+ * Node ceiling for one snapshot. 3,000 keeps the marker off the median chapter
+ * snapshot (far below it) while capping the largest observed single call
+ * (~76,300 tokens on a table-heavy page), which is the case the budget exists
+ * for.
+ */
 export const AX_NODE_BUDGET = 3_000;
 
 /**
- * Render an accessibility tree as indented `role "name" [prop=value]` lines.
+ * Per-name character cap. The node budget counts nodes, so ~200
+ * paragraph-length `StaticText` names cost more than 3,000 buttons and never
+ * trip the marker; this bounds the per-node cost the node budget cannot see.
+ * 280 chars is well past any real label, button or heading.
+ */
+export const AX_NAME_CHAR_CAP = 280;
+
+/**
+ * Keys never rendered as a `prop=value`. `role`/`name`/`children` have their
+ * own place in the line; `backendNodeId` and `loaderId` are set by puppeteer's
+ * `serialize()` on EVERY node and mean nothing to the model — ~45 chars of
+ * per-line noise (~135KB on a 3,000-node page) that is exactly the repetition
+ * this encoding exists to delete.
+ */
+const EXCLUDED_PROPS = new Set(["role", "name", "children", "backendNodeId", "loaderId"]);
+
+/**
+ * Properties whose `false` is information. Puppeteer's `serialize()` emits
+ * `checked`/`pressed` only when the node actually has that state, so dropping
+ * `false` would make an unchecked checkbox indistinguishable from one with no
+ * checked state at all. Every other boolean's `false` IS the default the model
+ * already assumes, and stays dropped.
+ */
+const TRISTATE_PROPS = new Set(["checked", "pressed"]);
+
+/**
+ * Escape a string for embedding in one line, WITHOUT the surrounding quotes.
+ * `JSON.stringify` does not escape U+2028, U+2029 or U+0085, and this format
+ * makes the newline structural — page content is attacker-influenceable, so an
+ * unescaped one lets a crafted accessible name forge a node line.
+ */
+const escapeInline = (s: string): string =>
+  JSON.stringify(s)
+    .slice(1, -1)
+    .replace(
+      /[\u2028\u2029\u0085]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+
+/** `escapeInline` plus the quotes the name/string-value form carries. */
+const quoteInline = (s: string): string => `"${escapeInline(s)}"`;
+
+/** Cap an unbounded string (a name, a textbox `value`) with an ellipsis. */
+const capText = (s: string): string =>
+  s.length > AX_NAME_CHAR_CAP ? `${s.slice(0, AX_NAME_CHAR_CAP)}…` : s;
+
+/**
+ * The truncation marker's prefix, chosen so no node line can forge it: it sits
+ * at column 0 (node lines below the root are indented) and opens with a LONE
+ * backslash, which `escapeInline` doubles in every role and name it renders.
+ */
+const TRUNCATION_MARKER_PREFIX = "\\ ";
+
+/**
+ * Render an accessibility tree as indented `role "name" [prop=value]` lines —
+ * the same facts as `JSON.stringify` of the tree in ~56% of the characters,
+ * which matters because the snapshot is the bulk of the agent's token spend.
  *
- * This exists because `JSON.stringify` of the same tree was 73-77% of every
- * token the agent spent — one measured run put 706,900 of its 1,013,992 input
- * tokens here. The waste is structural, not semantic: JSON repeats the keys
- * `"role"`, `"name"` and `"children"` on every one of thousands of nodes, and
- * spends braces and quotes on nodes whose entire content is two short strings.
- * The line form carries the same facts in 55.9% of the characters — measured on
- * an app-shaped tree (nav, a 40-row table, a form): 11,438 chars of JSON became
- * 6,399.
- *
- * Every scalar property survives, so this is a re-encoding and not a filter —
- * a node's `value`, `disabled`, `checked`, `expanded` and the rest still reach
- * the model, because the play loop's prompt asks it to reason about exactly
- * those (a disabled submit button, a checkbox's state, a textbox's contents).
- *
- * Depth-first with a node budget, and the budget cuts at a node boundary: a
- * `slice(0, n)` on the old JSON produced an unparseable string, which is worse
- * than a smaller tree. When the budget runs out the remaining count is stated
- * so the model knows the page is larger than what it can see, rather than
- * silently believing it has the whole page. At 3,000 nodes the marker fires
- * only on pathological pages — the median chapter snapshot is far below it,
- * and the largest observed single call (~76,300 tokens) is the case it exists
- * for.
+ * Depth-first with a node budget that cuts at a node boundary (a `slice` on
+ * the old JSON produced an unparseable string) and states the remainder.
+ * Caveat: because it is depth-first, one wide early subtree can consume the
+ * whole budget and hide the region the model needs — the remainder count is
+ * the only signal that happened.
  */
 export const serializeAxTree = (root: AxNode | null | undefined): string => {
   if (root === null || root === undefined) return 'WebArea ""';
@@ -72,6 +115,9 @@ export const serializeAxTree = (root: AxNode | null | undefined): string => {
   const countNodes = (node: AxNode): number =>
     1 + (node.children ?? []).reduce((n, child) => n + countNodes(child), 0);
 
+  const renderValue = (v: string | number | boolean): string =>
+    typeof v === "string" ? quoteInline(capText(v)) : String(v);
+
   const walk = (node: AxNode, depth: number): void => {
     if (budget <= 0) {
       dropped += countNodes(node);
@@ -81,26 +127,25 @@ export const serializeAxTree = (root: AxNode | null | undefined): string => {
     const indent = "  ".repeat(depth);
     const role = typeof node.role === "string" ? node.role : "node";
     const name = typeof node.name === "string" ? node.name : "";
-    // Everything that is not role/name/children and not an empty-ish value.
-    // Booleans that are `false` are dropped the way puppeteer's own serializer
-    // drops them; `false` on an absent property is the default the model
-    // already assumes.
-    const props = Object.entries(node)
+    const props = Object.entries(node as Record<string, unknown>)
       .filter(([k, v]) => {
-        if (k === "role" || k === "name" || k === "children") return false;
-        if (v === undefined || v === null || v === false || v === "") return false;
+        if (EXCLUDED_PROPS.has(k)) return false;
+        if (v === undefined || v === null || v === "") return false;
+        if (v === false) return TRISTATE_PROPS.has(k);
         return typeof v === "string" || typeof v === "number" || typeof v === "boolean";
       })
-      .map(([k, v]) => (v === true ? ` ${k}` : ` ${k}=${JSON.stringify(v)}`))
+      .map(([k, v]) =>
+        v === true ? ` ${k}` : ` ${k}=${renderValue(v as string | number | boolean)}`,
+      )
       .join("");
-    lines.push(`${indent}${role} ${JSON.stringify(name)}${props}`);
+    lines.push(`${indent}${escapeInline(role)} ${quoteInline(capText(name))}${props}`);
     for (const child of node.children ?? []) walk(child, depth + 1);
   };
 
   walk(root, 0);
   if (dropped > 0) {
     lines.push(
-      `  …truncated: ${dropped} more nodes not shown (page exceeds the ${AX_NODE_BUDGET}-node snapshot budget)`,
+      `${TRUNCATION_MARKER_PREFIX}…truncated: ${dropped} more nodes not shown (page exceeds the ${AX_NODE_BUDGET}-node snapshot budget)`,
     );
   }
   return lines.join("\n");
@@ -471,7 +516,7 @@ export const attachCdp = (
       accessibilitySnapshot: () =>
         wrapCmd("Accessibility.getFullAXTree", async () => {
           const tree = await page.accessibility.snapshot({ interestingOnly: true });
-          return serializeAxTree(tree as AxNode | null);
+          return serializeAxTree(tree);
         }),
       close: () =>
         Effect.tryPromise({

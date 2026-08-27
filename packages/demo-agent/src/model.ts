@@ -132,10 +132,10 @@ const WaitTool = Tool.make("wait", {
 // frame that play.ts's unconditional final capture (play.ts § "Always take a
 // final screenshot") already produces for free. In 8 of the 10 chapters the
 // prose reached for it immediately before `done`, so the fallback frame and
-// the chosen frame were the same picture. `ModelAction`'s `screenshot` variant
-// and play.ts's handling of it survive as an inert path: nothing emits one now,
-// and keeping them costs no tokens while leaving the capability one tool
-// definition away.
+// the chosen frame were the same picture. `ModelAction` has no `screenshot`
+// variant either — `toolCallToAction` maps the legacy tool NAME to a 0ms wait
+// so prose that still asks for it degrades to a no-op instead of failing the
+// chapter.
 
 const DoneTool = Tool.make("done", {
   description:
@@ -810,7 +810,7 @@ export const pickNextAction = (
     return toolCallToAction(call);
   });
 
-const toolCallToAction = (call: {
+export const toolCallToAction = (call: {
   readonly name: string;
   readonly params: unknown;
 }): ModelAction => {
@@ -846,6 +846,12 @@ const toolCallToAction = (call: {
       narrative: p["narrative"] as string,
       status: p["status"] as "passed" | "failed",
     })),
+    // Compatibility shim for the removed `screenshot` tool: consumer story
+    // prose still says "capture a screenshot", and a cached prompt can still
+    // name it, so a model that calls it must not sink the chapter. Map it to a
+    // benign no-op — play.ts's unconditional final capture already produces
+    // the key frame. A genuinely unknown tool still fails loudly via orElse.
+    Match.when("screenshot", () => ({ type: "wait" as const, ms: 0 })),
     Match.orElse(
       () =>
         ({

@@ -5,8 +5,7 @@
 //   * a CDP error inside the loop produces `{ status: "failed" }` (the story
 //     fails, the run does not);
 //   * a model error inside the loop produces `{ status: "failed" }`;
-//   * the final screenshot fallback is captured when the model never emits
-//     `screenshot` explicitly;
+//   * the final screenshot — the only key-frame source — is always captured;
 //   * `chapterStartMs` / `chapterEndMs` are measured relative to `attachedAtMs`.
 //
 // The real CDP + `LanguageModel` are mocked — we inject a fake `CdpSession`
@@ -76,7 +75,7 @@ describe("runPlayLoop", () => {
     const scripted: ModelAction[] = [
       { type: "nav", url: "https://staging.example.com" },
       { type: "click", target: "button[name='Sign in']" },
-      { type: "screenshot" },
+      { type: "wait", ms: 0 },
       {
         type: "done",
         narrative: "Signed in and landed on the dashboard.",
@@ -114,7 +113,9 @@ describe("runPlayLoop", () => {
     );
     expect(result.status).toBe("passed");
     expect(result.narrative).toContain("dashboard");
-    expect(result.keyScreenshotPath).toMatch(/sign-in\.png$/);
+    // The key frame is always the loop's final capture — the model has no
+    // say in which frame it is.
+    expect(result.keyScreenshotPath).toMatch(/sign-in\.final\.png$/);
     expect(result.chapterStartMs).toBeGreaterThan(0);
     expect(result.chapterEndMs).toBeGreaterThanOrEqual(result.chapterStartMs);
     // 4 actions × 1 cycle each (ax + apply) → expect at least 4 ax snapshots.
@@ -161,7 +162,7 @@ describe("runPlayLoop", () => {
     expect(result.narrative).toMatch(/click failed/);
   });
 
-  it("falls back to a final screenshot when the model never emits one", async () => {
+  it("always captures the final screenshot as the key frame", async () => {
     const session = makeFakeSession();
     const scripted: ModelAction[] = [
       { type: "click", target: "x" },

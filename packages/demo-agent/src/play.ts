@@ -9,7 +9,7 @@
 //     ask the model (via @effect/ai's LanguageModel): next action?
 //     apply via CDP
 //     append to history (oldest first)
-//     if the model said "screenshot", save it as the key screenshot path
+//   capture the final frame — the story's key screenshot
 //   record chapterEndMs
 //   emit one JSON line on stdout (PlayOutput shape)
 //
@@ -129,7 +129,6 @@ export const runPlayLoop = (
     yield* captureFrame();
 
     const history: string[] = [];
-    let keyScreenshotPath: string | undefined;
     let narrative = "";
     let status: PlayOutput["status"] = "failed";
     let terminated: "done" | "max-actions" | "max-sec" | "error" =
@@ -171,10 +170,9 @@ export const runPlayLoop = (
 
       // 3. Apply the action. `done` exits the loop; other actions go through
       //    the CDP session and append to history.
-      const applyResult = yield* applyAction(action, deps.session, {
-        screenshotsDir: input.screenshotsDir,
-        storyName: input.name,
-      }).pipe(Effect.either);
+      const applyResult = yield* applyAction(action, deps.session).pipe(
+        Effect.either,
+      );
 
       if (applyResult._tag === "Left") {
         const tag = (applyResult.left as { _tag?: string })._tag ?? "AgentError";
@@ -183,10 +181,6 @@ export const runPlayLoop = (
         break;
       }
 
-      const applied = applyResult.right;
-      if (applied.kind === "screenshot") {
-        keyScreenshotPath = applied.path;
-      }
       history.push(describeAction(action));
 
       // Capture the post-action page state as a GIF frame (best-effort).
@@ -200,20 +194,16 @@ export const runPlayLoop = (
       }
     }
 
-    // 4. Always take a final screenshot — if the model never emitted one
-    //    explicitly, this becomes the key-screenshot fallback.
-    if (keyScreenshotPath === undefined) {
-      const fallback = path.join(
-        input.screenshotsDir,
-        `${input.name}.${FINAL_KEY_SCREENSHOT_FALLBACK}`,
-      );
-      const sc = yield* deps.session.screenshot(fallback).pipe(Effect.either);
-      if (sc._tag === "Right") {
-        keyScreenshotPath = fallback;
-      } else {
-        keyScreenshotPath = "";
-      }
-    }
+    // 4. Always take a final screenshot. This is the ONLY key-frame source —
+    //    the model does not pick one (see model.ts § "no `screenshot` tool").
+    const finalFrame = path.join(
+      input.screenshotsDir,
+      `${input.name}.${FINAL_KEY_SCREENSHOT_FALLBACK}`,
+    );
+    const finalCapture = yield* deps.session
+      .screenshot(finalFrame)
+      .pipe(Effect.either);
+    const keyScreenshotPath = finalCapture._tag === "Right" ? finalFrame : "";
 
     const endNow = now();
     const chapterEndMs = endNow - input.attachedAtMs;
@@ -235,15 +225,11 @@ export const runPlayLoop = (
     };
   });
 
-type Applied =
-  | { kind: "applied" }
-  | { kind: "screenshot"; path: string }
-  | { kind: "done" };
+type Applied = { kind: "applied" } | { kind: "done" };
 
 const applyAction = (
   action: ModelAction,
   session: CdpSession,
-  ctx: { readonly screenshotsDir: string; readonly storyName: string },
 ): Effect.Effect<Applied, AgentError> =>
   Match.value(action).pipe(
     Match.discriminatorsExhaustive("type")({
@@ -259,12 +245,6 @@ const applyAction = (
         session.key(key).pipe(Effect.as({ kind: "applied" as const })),
       wait: ({ ms }) =>
         session.wait(ms).pipe(Effect.as({ kind: "applied" as const })),
-      screenshot: () => {
-        const target = path.join(ctx.screenshotsDir, `${ctx.storyName}.png`);
-        return session
-          .screenshot(target)
-          .pipe(Effect.as({ kind: "screenshot" as const, path: target }));
-      },
       done: () => Effect.succeed({ kind: "done" as const }),
     }),
   );
@@ -278,7 +258,6 @@ const describeAction = (action: ModelAction): string =>
       nav: ({ url }) => `nav ${url}`,
       key: ({ key }) => `key ${key}`,
       wait: ({ ms }) => `wait ${ms}ms`,
-      screenshot: () => "screenshot (key frame)",
       done: ({ status }) => `done (${status})`,
     }),
   );
