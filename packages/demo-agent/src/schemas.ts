@@ -48,35 +48,33 @@ export const ModelAction = Schema.Union(
     type: Schema.Literal("click"),
     /** Accessibility-tree node ID (preferred) or CSS selector fallback. */
     target: Schema.String,
+    /**
+     * In-argument chain-of-thought only — nothing downstream reads it. It
+     * exists so the model states its reason inside the tool call it is already
+     * making, rather than spending a separate turn on it.
+     */
     rationale: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("type"),
     target: Schema.String,
     text: Schema.String,
+    /** In-argument chain-of-thought only — see `click.rationale`. */
     rationale: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("nav"),
     url: Schema.String,
-    rationale: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("key"),
     /** CDP key code, e.g. "Enter", "Tab", "Escape". */
     key: Schema.String,
-    rationale: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("wait"),
     /** Milliseconds (clamped 0–5000 by the loop). */
     ms: Schema.Number,
-    rationale: Schema.optional(Schema.String),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("screenshot"),
-    /** Marks this frame as the story's "key screenshot". */
-    rationale: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("done"),
