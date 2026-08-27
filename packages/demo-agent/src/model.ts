@@ -104,7 +104,6 @@ const NavTool = Tool.make("nav", {
     url: Schema.String.annotations({
       description: "Absolute URL to navigate to.",
     }),
-    rationale: Schema.optional(Schema.String),
   },
 });
 
@@ -115,7 +114,6 @@ const KeyTool = Tool.make("key", {
     key: Schema.String.annotations({
       description: "CDP key name (Enter, Tab, Escape, ArrowDown, ...).",
     }),
-    rationale: Schema.optional(Schema.String),
   },
 });
 
@@ -126,20 +124,18 @@ const WaitTool = Tool.make("wait", {
     ms: Schema.Number.annotations({
       description: "Milliseconds to wait (will be clamped to 0..5000).",
     }),
-    rationale: Schema.optional(Schema.String),
   },
 });
 
-const ScreenshotTool = Tool.make("screenshot", {
-  description:
-    "Mark the current frame as the story's KEY screenshot. Use exactly once per story at the moment that best captures the outcome.",
-  parameters: {
-    rationale: Schema.optional(Schema.String).annotations({
-      description:
-        "Why this frame is the key moment for the story (one short sentence).",
-    }),
-  },
-});
+// NOTE: there is deliberately no `screenshot` tool. It cost one whole model
+// round-trip per story — ~9k input tokens to decide a frame — to pick a key
+// frame that play.ts's unconditional final capture (play.ts § "Always take a
+// final screenshot") already produces for free. In 8 of the 10 chapters the
+// prose reached for it immediately before `done`, so the fallback frame and
+// the chosen frame were the same picture. `ModelAction`'s `screenshot` variant
+// and play.ts's handling of it survive as an inert path: nothing emits one now,
+// and keeping them costs no tokens while leaving the capability one tool
+// definition away.
 
 const DoneTool = Tool.make("done", {
   description:
@@ -161,7 +157,6 @@ const ActionToolkit = Toolkit.make(
   NavTool,
   KeyTool,
   WaitTool,
-  ScreenshotTool,
   DoneTool,
 );
 
@@ -177,7 +172,6 @@ const ActionToolkitHandlersLayer = ActionToolkit.toLayer({
   nav: () => Effect.void,
   key: () => Effect.void,
   wait: () => Effect.void,
-  screenshot: () => Effect.void,
   done: () => Effect.void,
 });
 
@@ -838,21 +832,14 @@ const toolCallToAction = (call: {
     Match.when("nav", () => ({
       type: "nav" as const,
       url: p["url"] as string,
-      ...(p["rationale"] !== undefined ? { rationale: p["rationale"] as string } : {}),
     })),
     Match.when("key", () => ({
       type: "key" as const,
       key: p["key"] as string,
-      ...(p["rationale"] !== undefined ? { rationale: p["rationale"] as string } : {}),
     })),
     Match.when("wait", () => ({
       type: "wait" as const,
       ms: p["ms"] as number,
-      ...(p["rationale"] !== undefined ? { rationale: p["rationale"] as string } : {}),
-    })),
-    Match.when("screenshot", () => ({
-      type: "screenshot" as const,
-      ...(p["rationale"] !== undefined ? { rationale: p["rationale"] as string } : {}),
     })),
     Match.when("done", () => ({
       type: "done" as const,
@@ -905,9 +892,12 @@ export const summarizeStories = (
 const ACTION_SYSTEM_PROMPT_NOTE = `You drive a web app through one user story.
 
 You will see the story prose, the page's accessibility tree, and the history
-of actions you have already applied. Pick ONE next action by calling exactly
-one of the registered tools (click | type | nav | key | wait | screenshot |
-done). Do NOT respond with prose — the tool call IS the action.
+of actions you have already applied. The tree is one node per line, indented by
+depth, as \`role "accessible name"\` followed by any set properties
+(\`value="..."\`, \`disabled\`, \`checked\`, …). A trailing "…truncated" line means
+the page has more nodes than the snapshot budget shows. Pick ONE next action by calling exactly
+one of the registered tools (click | type | nav | key | wait | done). Do NOT
+respond with prose — the tool call IS the action.
 
 THE TARGET APP IS ALREADY LOADED in the browser — the accessibility snapshot you
 see IS the app under test. Operate it directly with click/type/key. Do NOT
@@ -931,8 +921,6 @@ Rules:
   saying what was missing. Never wait more than ~3 times total in a story, and
   never invent a CSS selector. Each action costs time — keep moving toward the
   success condition; do not re-snapshot idly.
-- Emit ONE \`screenshot\` per story, at the moment that best captures the
-  outcome.
 - Stop ASAP. The MOMENT the story's success condition is visible in the
   snapshot, call \`done\` with status=passed — do not take extra confirming
   actions. Lingering past the success state wastes the action budget and is a
