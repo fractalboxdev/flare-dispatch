@@ -50,6 +50,15 @@ export const AX_NODE_BUDGET = 3_000;
 export const AX_NAME_CHAR_CAP = 280;
 
 /**
+ * Ceiling on how many omitted nodes the truncation marker counts. The count
+ * exists to tell the model the page is bigger than what it can see; past this
+ * many, the exact figure carries nothing the word "more" does not, and paying
+ * a full traversal of the omitted subtree to compute it would defeat the node
+ * budget it is reporting on. Beyond the cap the marker says "at least".
+ */
+export const AX_REMAINDER_COUNT_CAP = 50_000;
+
+/**
  * Keys never rendered as a `prop=value`. `role`/`name`/`children` have their
  * own place in the line; `backendNodeId` and `loaderId` are set by puppeteer's
  * `serialize()` on EVERY node and mean nothing to the model — ~45 chars of
@@ -112,15 +121,32 @@ export const serializeAxTree = (root: AxNode | null | undefined): string => {
   let budget = AX_NODE_BUDGET;
   let dropped = 0;
 
-  const countNodes = (node: AxNode): number =>
-    1 + (node.children ?? []).reduce((n, child) => n + countNodes(child), 0);
+  // Counting the omitted subtree must not cost more than rendering it would
+  // have. Recursion here would walk every remaining node — unbounded work, and
+  // a stack proportional to tree depth — to produce a number that only tells
+  // the model "there is more". Iterative, and capped: past the cap the exact
+  // figure stops mattering, so report it as "at least".
+  const countNodes = (node: AxNode, limit: number): number => {
+    let n = 0;
+    const stack: AxNode[] = [node];
+    while (stack.length > 0 && n < limit) {
+      const next = stack.pop() as AxNode;
+      n += 1;
+      for (const child of next.children ?? []) stack.push(child);
+    }
+    return n;
+  };
 
   const renderValue = (v: string | number | boolean): string =>
     typeof v === "string" ? quoteInline(capText(v)) : String(v);
 
   const walk = (node: AxNode, depth: number): void => {
     if (budget <= 0) {
-      dropped += countNodes(node);
+      // The cap is on the TOTAL remainder, not per omitted sibling — otherwise
+      // a page with many omitted top-level nodes pays cap × siblings.
+      if (dropped < AX_REMAINDER_COUNT_CAP) {
+        dropped += countNodes(node, AX_REMAINDER_COUNT_CAP - dropped);
+      }
       return;
     }
     budget -= 1;
@@ -144,8 +170,11 @@ export const serializeAxTree = (root: AxNode | null | undefined): string => {
 
   walk(root, 0);
   if (dropped > 0) {
+    // `dropped` saturates at the count cap — say "at least" rather than state a
+    // ceiling as if it were the true remainder.
+    const count = dropped >= AX_REMAINDER_COUNT_CAP ? `at least ${dropped}` : `${dropped}`;
     lines.push(
-      `${TRUNCATION_MARKER_PREFIX}…truncated: ${dropped} more nodes not shown (page exceeds the ${AX_NODE_BUDGET}-node snapshot budget)`,
+      `${TRUNCATION_MARKER_PREFIX}…truncated: ${count} more nodes not shown (page exceeds the ${AX_NODE_BUDGET}-node snapshot budget)`,
     );
   }
   return lines.join("\n");

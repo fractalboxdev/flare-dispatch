@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   AX_NAME_CHAR_CAP,
   AX_NODE_BUDGET,
+  AX_REMAINDER_COUNT_CAP,
   serializeAxTree,
   redactWsEndpoint,
   type AxNode,
@@ -217,5 +218,39 @@ describe("serializeAxTree", () => {
   it("survives an empty snapshot", () => {
     expect(serializeAxTree(null)).toBe('WebArea ""');
     expect(serializeAxTree(undefined)).toBe('WebArea ""');
+  });
+});
+
+describe("serializeAxTree remainder counting", () => {
+  it("counts the omitted subtree without recursing, so depth cannot overflow the stack", () => {
+    // A chain far deeper than the JS stack would tolerate under recursion.
+    let deep: Record<string, unknown> = { role: "text", name: "leaf" };
+    for (let i = 0; i < 60_000; i++) deep = { role: "group", name: "", children: [deep] };
+    const tree = {
+      role: "WebArea",
+      name: "Deep",
+      children: [...Array.from({ length: AX_NODE_BUDGET }, () => ({ role: "button", name: "b" })), deep],
+    };
+    const out = serializeAxTree(tree as never);
+    expect(out).toContain("…truncated:");
+  });
+
+  it("says 'at least' once the remainder count saturates", () => {
+    const wide = {
+      role: "WebArea",
+      name: "Huge",
+      children: [
+        ...Array.from({ length: AX_NODE_BUDGET }, () => ({ role: "button", name: "b" })),
+        {
+          role: "group",
+          name: "rest",
+          children: Array.from({ length: AX_REMAINDER_COUNT_CAP + 10 }, () => ({ role: "text", name: "x" })),
+        },
+      ],
+    };
+    // The exact figure is deliberately not asserted — it saturates at the cap
+    // and the property that matters is that the marker stops claiming precision.
+    expect(serializeAxTree(wide as never)).toMatch(/at least \d+ more nodes not shown/);
+    expect(serializeAxTree(wide as never)).toContain(`${AX_REMAINDER_COUNT_CAP}`);
   });
 });
