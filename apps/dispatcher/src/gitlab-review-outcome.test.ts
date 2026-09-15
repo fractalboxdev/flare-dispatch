@@ -11,6 +11,7 @@ import {
   reviewOutcome,
   reviewStepFailedOutcome,
   skippedQuotaNoteBody,
+  supersededNoteBody,
   withTimingFooter,
   type ReviewOutcome,
 } from "./gitlab-review-outcome";
@@ -150,6 +151,16 @@ describe("skippedQuotaNoteBody", () => {
     expect(body).toContain("review skipped");
     expect(body).toContain("model quota exhausted");
     expect(body).toContain("request-ai-review");
+    expect(body).toContain("<!-- flare-dispatch: mr-review -->");
+  });
+});
+
+describe("supersededNoteBody", () => {
+  it("names the 12-char new head and carries the marker", () => {
+    const body = supersededNoteBody({ newHeadSha: "0123456789abcdef0123456789abcdef01234567" });
+    expect(body).toContain("review superseded");
+    expect(body).toContain("`0123456789ab`");
+    expect(body).not.toContain("0123456789abcdef");
     expect(body).toContain("<!-- flare-dispatch: mr-review -->");
   });
 });

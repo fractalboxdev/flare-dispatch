@@ -6,6 +6,8 @@
 // trigger-evaluation machinery — this route dispatches the single `mr-review`
 // Workflow directly.
 //
+// A newer head cancels the MR's running review of an older head (supersede).
+//
 // --- Strict opt-in (byte-parity with the GitHub route's posture) -------------
 //
 // GitLab mode is OFF by default: a deploy without `GITLAB_WEBHOOK_SECRET`
@@ -35,7 +37,8 @@
 import type { Env } from "../env";
 import { toInstanceId } from "../instance-id";
 import { mrInputsFromPayload } from "@fractalboxdev/flare-dispatch-runs/mr-review";
-import { postMergeRequestNote } from "@fractalboxdev/flare-dispatch-gitlab-app";
+import { postMergeRequestNote, updateMergeRequestNote } from "@fractalboxdev/flare-dispatch-gitlab-app";
+import { supersededNoteBody } from "../gitlab-review-outcome";
 import { gitlabScmConfig } from "../gitlab-scm-config";
 
 /** GitLab's webhook secret-token header. */
@@ -179,6 +182,101 @@ type GitlabMrPayload = {
     work_in_progress?: boolean;
   };
 };
+
+/**
+ * Cancel this MR's still-running review of an OLDER head, after a newer head
+ * has already been dispatched.
+ *
+ * Why: two pushes inside one minute each created their own instance, left two
+ * "review started" placeholder notes on the MR, and paid for two full reviews.
+ * The newer head's review supersedes the older one. The new review already
+ * exists when this runs, so every D1 / network call below is best-effort:
+ * each has its own try/catch that `console.warn`s and continues, and this
+ * function NEVER throws.
+ *
+ * `terminate()` stops the old instance but does NO cleanup of its own: the
+ * instance's `executions` row still says `running` and its "review started"
+ * placeholder note still sits on the MR. This function does both — it marks
+ * the row `superseded` and rewrites the placeholder to name the winning head.
+ *
+ * The race where the old instance finishes between the status read and the
+ * terminate call is covered by the workflow's own post-review guard: the
+ * workflow checks for a newer instance before it posts, so a lost race costs
+ * a wasted review, never a stale comment.
+ */
+async function supersedeRunningReviews(
+  env: Env,
+  args: { projectId: number; iid: number; newHeadSha: string; newInstanceId: string },
+): Promise<void> {
+  const newHead12 = args.newHeadSha.slice(0, 12);
+  let rows: Array<{ id: string; sha: string; summary_json: string | null }> = [];
+  try {
+    const res = await env.RUNS_METADATA.prepare(
+      "SELECT id, sha, summary_json FROM executions WHERE status = ? AND id LIKE ? ESCAPE '\\' AND id != ?",
+    )
+      .bind("running", `mr-review\\_${args.projectId}\\_${args.iid}\\_%`, args.newInstanceId)
+      .all<{ id: string; sha: string; summary_json: string | null }>();
+    rows = res.results;
+  } catch (e) {
+    console.warn(`[webhook-gitlab] supersede query failed: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  for (const row of rows) {
+    // A re-run of the SAME commit (`_r<seconds>`) is not superseded. A row with
+    // no usable sha (legacy/malformed) is treated as another head.
+    if (typeof row.sha === "string" && row.sha.startsWith(newHead12)) continue;
+    let live = false;
+    try {
+      const inst = await env.GITLAB_REVIEW_WORKFLOW!.get(row.id);
+      const st = await inst.status();
+      live = ["queued", "running", "paused", "waiting", "waitingForPause"].includes(st.status);
+      if (live) await inst.terminate();
+    } catch (e) {
+      // Not terminated → not superseded: the row keeps `running` so the run can
+      // still finish and post; the next push retries the cancel.
+      console.warn(`[webhook-gitlab] supersede terminate failed id="${row.id}": ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    // Not live (already complete/errored/terminated) — leave the row alone.
+    if (!live) continue;
+    try {
+      await env.RUNS_METADATA.prepare(
+        "UPDATE executions SET status = 'superseded', completed_at = ?, summary_json = json_set(coalesce(summary_json, '{}'), '$.supersededBy', ?) WHERE id = ? AND status = 'running'",
+      )
+        .bind(Date.now(), newHead12, row.id)
+        .run();
+    } catch (e) {
+      console.warn(`[webhook-gitlab] supersede update failed id="${row.id}": ${e instanceof Error ? e.message : String(e)}`);
+    }
+    let noteId: string | undefined;
+    try {
+      const parsed = JSON.parse(row.summary_json ?? "{}") as { placeholderNoteId?: unknown };
+      const raw = parsed.placeholderNoteId;
+      if (typeof raw === "string") noteId = raw;
+      else if (typeof raw === "number" && Number.isFinite(raw)) noteId = String(raw);
+    } catch (e) {
+      console.warn(`[webhook-gitlab] supersede summary parse failed id="${row.id}": ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (noteId !== undefined) {
+      const scmCfg = gitlabScmConfig(env);
+      if (scmCfg.token !== undefined) {
+        try {
+          await updateMergeRequestNote({
+            token: scmCfg.token,
+            projectId: args.projectId,
+            iid: args.iid,
+            noteId,
+            body: supersededNoteBody({ newHeadSha: args.newHeadSha }),
+            ...(scmCfg.baseUrl !== undefined ? { apiBase: scmCfg.baseUrl } : {}),
+          });
+        } catch (e) {
+          console.warn(`[webhook-gitlab] supersede note failed id="${row.id}": ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
+    console.log(JSON.stringify({ event: "mr-review.superseded", projectId: args.projectId, iid: args.iid, superseded: row.id, by: args.newInstanceId }));
+  }
+}
 
 /** Handle `POST /v1/webhooks/gitlab`. */
 export const handleGitlabWebhook = async (
@@ -481,6 +579,13 @@ export const handleGitlabWebhook = async (
       return json({ error: "dispatch_failed", detail: message }, 500);
     }
     duplicated = true;
+  }
+  // 9. Supersede — a newer head cancels the MR's running review of an older
+  //    head. The new instance already exists; the old one (if still live) is
+  //    terminated and its row + placeholder note are updated. Best-effort,
+  //    never throws.
+  if (!duplicated) {
+    await supersedeRunningReviews(env, { projectId, iid, newHeadSha: input.headSha, newInstanceId: id });
   }
   // The delivery-UUID marker is written ONLY once dispatch actually succeeded
   // or was itself the duplicate-create path — never on the 500 branch above,

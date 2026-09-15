@@ -27,11 +27,17 @@ export interface FakeWorkflow {
   readonly binding: Env["RUNS_WORKFLOW"];
   readonly calls: WorkflowCreateCall[];
   readonly events: WorkflowSendEventCall[];
+  readonly terminated: string[];
 }
 
 export const makeFakeWorkflow = (
   opts: {
     rejectSendEventFor?: ReadonlySet<string>;
+    /**
+     * Per-id status the fake `get(id).status()` returns. Defaults to
+     * "running" so every existing caller keeps its current behaviour.
+     */
+    instanceStatus?: (id: string) => string;
     /**
      * Ids that `create` should reject with the same shape CF Workflows
      * raises on duplicate-id creates: `Error: (instance.already_exists)
@@ -50,6 +56,7 @@ export const makeFakeWorkflow = (
 ): FakeWorkflow => {
   const calls: WorkflowCreateCall[] = [];
   const events: WorkflowSendEventCall[] = [];
+  const terminated: string[] = [];
   const reject = opts.rejectSendEventFor ?? new Set<string>();
   const alreadyExists = opts.throwAlreadyExistsFor ?? new Set<string>();
   const binding = {
@@ -72,16 +79,19 @@ export const makeFakeWorkflow = (
     },
     get: (id: string) => ({
       id,
-      status: async () => ({ status: "running" }),
+      status: async () => ({ status: opts.instanceStatus?.(id) ?? "running" }),
       sendEvent: async (e: { type: string; payload: unknown }) => {
         if (reject.has(id)) {
           throw new Error(`unknown_instance: ${id}`);
         }
         events.push({ wfId: id, type: e.type, payload: e.payload });
       },
+      terminate: async () => {
+        terminated.push(id);
+      },
     }),
   } as unknown as Env["RUNS_WORKFLOW"];
-  return { binding, calls, events };
+  return { binding, calls, events, terminated };
 };
 
 /** A stored object in the fake R2 bucket. */
@@ -139,14 +149,18 @@ export interface FakeD1 {
   readonly binding: Env["RUNS_METADATA"];
   readonly executions: Record<string, unknown>[];
   readonly steps: Record<string, unknown>[];
+  readonly statements: { sql: string; binds: unknown[] }[];
 }
 
 /**
  * A minimal `D1Database` fake for the executions/logs read routes. It does not
- * parse arbitrary SQL — it interprets the handful of statement shapes
- * `executions-read.ts` emits: a `WHERE col = ?` / `col < ?` chain (binds in
- * column order) plus an optional trailing `LIMIT ?`. Seed rows with snake_case
- * columns matching the schema.
+ * parse arbitrary SQL — it interprets the handful of statement shapes the
+ * routes emit: a `WHERE col = ?` / `col != ?` / `col < ?` / `col LIKE ?` chain
+ * (binds in column order, each `?` consumes one bind) plus an optional trailing
+ * `LIMIT ?`. `LIKE` translates the SQL pattern to an anchored RegExp where
+ * `\_`/`\%` are literal, `_` is `.` and `%` is `.*`. `UPDATE` statements do
+ * not mutate rows — every `all`/`first`/`run` call is recorded on
+ * `statements` instead. Seed rows with snake_case columns matching the schema.
  */
 export const makeFakeD1 = (seed?: {
   executions?: Record<string, unknown>[];
@@ -154,6 +168,29 @@ export const makeFakeD1 = (seed?: {
 }): FakeD1 => {
   const executions = seed?.executions ?? [];
   const steps = seed?.steps ?? [];
+  const statements: { sql: string; binds: unknown[] }[] = [];
+
+  const likeToRegExp = (pattern: string): string => {
+    let out = "";
+    for (let i = 0; i < pattern.length; i++) {
+      const ch = pattern[i]!;
+      if (ch === "\\" && i + 1 < pattern.length) {
+        out += pattern[i + 1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        i += 1;
+        continue;
+      }
+      if (ch === "_") {
+        out += ".";
+        continue;
+      }
+      if (ch === "%") {
+        out += ".*";
+        continue;
+      }
+      out += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    return `^${out}$`;
+  };
 
   const matches = (
     row: Record<string, unknown>,
@@ -163,7 +200,9 @@ export const makeFakeD1 = (seed?: {
   ): boolean => {
     const cell = row[col];
     if (op === "=") return String(cell) === String(val);
+    if (op === "!=") return String(cell) !== String(val);
     if (op === "<") return cell != null && Number(cell) < Number(val);
+    if (op === "LIKE") return new RegExp(likeToRegExp(String(val))).test(String(cell));
     return true;
   };
 
@@ -179,7 +218,7 @@ export const makeFakeD1 = (seed?: {
     const conditions: { col: string; op: string; bind: unknown }[] = [];
     let bindIdx = 0;
     let compositeBinds: unknown[] | null = null;
-    for (const m of sql.matchAll(/(\w+)\s*(=|<)\s*\?/g)) {
+    for (const m of sql.matchAll(/(\w+)\s*(!=|=|<|LIKE)\s*\?/gi)) {
       if (composite !== null && (m.index ?? 0) >= composite.index) {
         if (compositeBinds === null) compositeBinds = binds.slice(bindIdx, bindIdx + 3);
         bindIdx += 3;
@@ -211,14 +250,23 @@ export const makeFakeD1 = (seed?: {
   const binding = {
     prepare: (sql: string) => ({
       bind: (...binds: unknown[]) => ({
-        all: async () => ({ results: query(sql, binds), success: true }),
-        first: async () => query(sql, binds)[0] ?? null,
-        run: async () => ({ success: true }),
+        all: async () => {
+          statements.push({ sql, binds });
+          return { results: query(sql, binds), success: true };
+        },
+        first: async () => {
+          statements.push({ sql, binds });
+          return query(sql, binds)[0] ?? null;
+        },
+        run: async () => {
+          statements.push({ sql, binds });
+          return { success: true };
+        },
       }),
     }),
   } as unknown as Env["RUNS_METADATA"];
 
-  return { binding, executions, steps };
+  return { binding, executions, steps, statements };
 };
 
 /** A fake KV namespace backed by an in-memory Map — get/put/delete only. */

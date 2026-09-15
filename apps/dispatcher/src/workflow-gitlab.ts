@@ -23,14 +23,18 @@
 //                         placeholder id, the placeholder was deleted, or the
 //                         update failed for any other reason) — its OWN step,
 //                         so a mid-flight replay re-runs neither the model
-//                         fan-out NOR the post/update twice.
+//                         fan-out NOR the post/update twice. When the row is
+//                         already `superseded` (a newer head cancelled this
+//                         run), it posts nothing and reports `superseded: true`.
 //   6. notify-failure   — on a `failure` / `skipped-quota` outcome, or a
 //                         `success` whose MR note never posted, an optional
 //                         Slack alert (SLACK_WEBHOOK_URL) — best-effort, never
 //                         fails the Workflow. Always runs as a step (a no-op
 //                         when there is nothing to notify), so it always
 //                         counts toward `stepsRun`.
-//   7. finalize         — update the row's terminal status + summary.
+//   7. finalize         — update the row's terminal status + summary. A
+//                         `superseded` run keeps the status the route wrote and
+//                         only stamps `completed_at`.
 //
 // Each step is idempotent: a Workflow resume replays the memoized result rather
 // than re-running the body. NO container / browser imports live here — a
@@ -164,6 +168,11 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
     //    response never arrived) would post a duplicate placeholder that
     //    nothing ever updates, while a transient failure just means no
     //    placeholder — `post-review` creates a fresh note when noteId is null.
+    //    The id is ALSO written to the row's `summary_json`
+    //    (`$.placeholderNoteId`, no schema change) once it is known, so the
+    //    webhook route can find the note and rewrite it when a newer head
+    //    supersedes this run. `finalize` merges its summary in with `json_patch`,
+    //    so the field survives the terminal update.
     const placeholder = await stepDoWith("post-placeholder", { retries: { limit: 0, delay: "1 second", backoff: "constant" } }, async () => {
       const body = placeholderNoteBody({ headSha: input.headSha, postedAtMs: Date.now() });
       const noteId = await Effect.runPromise(
@@ -177,6 +186,18 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
           ),
         ),
       );
+      if (noteId !== null) {
+        try {
+          await db
+            .prepare(
+              "UPDATE executions SET summary_json = json_set(coalesce(summary_json, '{}'), '$.placeholderNoteId', ?) WHERE id = ?",
+            )
+            .bind(noteId, executionId)
+            .run();
+        } catch (e) {
+          console.warn(`[gitlab-review] placeholder note id not persisted — ${String(e)}`);
+        }
+      }
       return { noteId };
     });
 
@@ -267,7 +288,14 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
     //    second note next to the placeholder.
     const postResult = await stepDo("post-review", async () => {
       const rawBody = outcome.noteBody ?? (outcome.status === "skipped-quota" ? skippedQuotaNoteBody() : null);
-      if (rawBody === null) return { posted: false, noteId: placeholder.noteId };
+      if (rawBody === null) return { posted: false, noteId: placeholder.noteId, superseded: false };
+      // The webhook route already cancelled this run when a newer head
+      // superseded it — a race can still reach this step, and posting now
+      // would put a stale review next to the newer head's note.
+      const row = await db.prepare("SELECT status FROM executions WHERE id = ?").bind(executionId).first<{ status: string }>();
+      if (row?.status === "superseded") {
+        return { posted: false, noteId: placeholder.noteId, superseded: true };
+      }
       // A `failure` outcome's `calls: 0` can be a LOST count (a retry-exhausted
       // step's usage never made it out), not a true zero — render "unknown"
       // rather than asserting a number the review never actually confirmed.
@@ -309,7 +337,7 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
       // Layer resolves with `noteId: null` and must count as NOT posted
       // (finalize downgrades the row, notify-failure alerts), and GitLab's notes
       // API always returns an `id`, so a successful POST is never misread here.
-      return { posted: noteId !== null, noteId };
+      return { posted: noteId !== null, noteId, superseded: false };
     });
 
     // 5. Alert the operator on Slack — when the review degraded OR finished
@@ -320,6 +348,10 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
     //    never fail the Workflow.
     const slackWebhookUrl = this.env.SLACK_WEBHOOK_URL;
     await stepDo("notify-failure", async () => {
+      // A `superseded` run was cancelled by a newer head — not an incident.
+      if (postResult.superseded) {
+        return { notified: false };
+      }
       // `success` here can still mean the MR never got the note: finalize's
       // `reconcilePostedStatus` downgrades that row to `failure`, but without
       // this branch Slack stays silent, which defeats the alert.
@@ -363,6 +395,8 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
     //    `reconcilePostedStatus` downgrades a `success` whose note never made
     //    it out (post-review's `posted: false`) to `failure` — the row must
     //    not claim success for a note nobody saw.
+    //    A `superseded` run keeps the status the route already wrote and only
+    //    stamps `completed_at`; its summary still carries elapsedMs/calls.
     await stepDo("finalize", async () => {
       const prevSummary = outcome.summaryJson !== null
         ? (JSON.parse(outcome.summaryJson) as Record<string, unknown>)
@@ -379,13 +413,28 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
         // the note itself refuses to assert.
         calls: outcome.status === "failure" ? null : outcome.calls,
       });
+      // `json_patch` MERGES into the column instead of replacing it: keys other
+      // steps and the webhook route wrote there (`$.placeholderNoteId` from
+      // post-placeholder, `$.supersededBy` from the route) survive the terminal
+      // update — `summaryJson` here is built from the in-memory outcome and
+      // knows nothing about them.
+      if (postResult.superseded) {
+        // The route already set `status = 'superseded'`; never overwrite it.
+        await db
+          .prepare(
+            `UPDATE executions SET completed_at = ?, summary_json = json_patch(coalesce(summary_json, '{}'), ?) WHERE id = ?`,
+          )
+          .bind(Date.now(), summaryJson, executionId)
+          .run();
+        return { finalized: true, superseded: true };
+      }
       await db
         .prepare(
-          `UPDATE executions SET status = ?, completed_at = ?, summary_json = ? WHERE id = ?`,
+          `UPDATE executions SET status = ?, completed_at = ?, summary_json = json_patch(coalesce(summary_json, '{}'), ?) WHERE id = ?`,
         )
         .bind(finalStatus, Date.now(), summaryJson, executionId)
         .run();
-      return { finalized: true };
+      return { finalized: true, superseded: false };
     });
   }
 }

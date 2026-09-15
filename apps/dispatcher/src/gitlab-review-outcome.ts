@@ -75,6 +75,16 @@ export const skippedQuotaNoteBody = (): string =>
   `⏸ review skipped: model quota exhausted; nothing was posted by the reviewer. Re-run with the request-ai-review label later.\n\n${MR_REVIEW_MARKER}`;
 
 /**
+ * What the `post-review` step would post when the run was CANCELLED because a
+ * newer head superseded it — the webhook route already rewrote the placeholder
+ * when it terminated this instance, so without this the note would read
+ * "review started" forever. Carries the SAME marker as every other rendered
+ * note body.
+ */
+export const supersededNoteBody = (info: { newHeadSha: string }): string =>
+  `⏭️ **flare-dispatch review superseded** · a newer head \`${info.newHeadSha.slice(0, 12)}\` arrived, so this review was cancelled; its results replace this note on the new head\n\n${MR_REVIEW_MARKER}`;
+
+/**
  * Estimate the Workers/Workflows infra cost of one review — PURE, no
  * bindings, so the dollar figure is unit-testable. Workers Paid list prices,
  * read 2026-09-14:
