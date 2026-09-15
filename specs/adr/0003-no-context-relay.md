@@ -31,15 +31,15 @@ So two of the four are trivial, and two cost a fan-out against the 5,000/hour in
 limit with self-managed high-water marks.
 
 Separately, and unaffected by any of that, a layer of what we know never reaches GitHub in a
-retrievable form at all. `Finding` is a structured object — `path`, `startLine`/`endLine`,
-`level`, `title`, `message` (`packages/review-agent/src/schemas.ts:24-31`) — that GitHub only
-ever sees rendered, as a check annotation and as prose inside a review comment. Fetching that
-comment back recovers the prose, not the structure, nor the risk tier that selected which
-reviewers ran, nor the coordinator's verdict, nor the model and backend used, token spend,
-admission queue time, or container timings. Our outcome taxonomy is lossy on the way out too: a
-`RunSkipped` for `context-overflow` renders as a neutral check indistinguishable from any other
-neutral, and the distinction exists only in our D1 row. `AcceptanceFailed.summaryMd`,
-`incident/v1` packs, and writeback manifests have no GitHub representation whatsoever.
+retrievable form at all. `Finding` is a structured object (see
+`packages/review-agent/src/schemas.ts`) that GitHub only ever sees rendered, as a check
+annotation and as prose inside a review comment. Fetching that comment back recovers the prose,
+not the structure, nor the risk tier that selected which reviewers ran, nor the coordinator's
+verdict, nor the model and backend used, token spend, admission queue time, or container
+timings. Our outcome taxonomy is lossy on the way out too: a `RunSkipped` for
+`context-overflow` renders as a neutral check indistinguishable from any other neutral, and the
+distinction exists only in our D1 row. `AcceptanceFailed.summaryMd`, `incident/v1` packs, and
+writeback manifests have no GitHub representation whatsoever.
 
 ## Decision
 
