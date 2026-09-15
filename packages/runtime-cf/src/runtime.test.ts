@@ -46,6 +46,7 @@ import {
   GithubDeferred,
   ModelGatewayDeferred,
   OidcDeferred,
+  ScmDeferred,
 } from "./deferred";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
 import { makeEmailCloudflareLive } from "./email-cf";
@@ -108,6 +109,7 @@ const makeRuntimeUnderTest = (
     GithubDeferred,
     CloudflareDeferred,
     ModelGatewayDeferred,
+    ScmDeferred,
     OidcDeferred,
     // No App credentials in this Miniflare suite → the no-op `Checks` Layer.
     makeChecksGithubLive(undefined),

@@ -86,6 +86,8 @@ import {
   capDiff,
   composeSystemPrompt,
   coordinate as engineCoordinate,
+  encodeFindingPath,
+  findingLoc,
   NAMESPACE_DEFAULT,
   REVIEW_SYSTEM_PROMPT_DEFAULT,
   type Finding,
@@ -97,8 +99,11 @@ import {
   reviewDomain,
   riskTier,
   ReviewOutputSchema,
+  sanitizeModelText,
+  SANITIZE_MAX_MESSAGE,
   stripDiffNoise,
   type StructuredOutputInvalid,
+  tableCell,
   type Tier,
 } from "@fractalboxdev/flare-dispatch-review-agent";
 import { VERSION_DEFAULT as OXLINT_VERSION_DEFAULT } from "./oxlint";
@@ -940,56 +945,13 @@ const describeError = (err: unknown): string =>
     Match.orElse(() => (err instanceof Error ? err.message : JSON.stringify(err))),
   );
 
-/**
- * Neutralize model-authored text before it renders in the public PR comment.
- * The diff is attacker-controllable on a hostile PR and feeds the model, so a
- * finding's `title`/`message`/`path` could carry `@mention` pings, raw HTML, or
- * code-fence/backtick break-outs. Collapse to one line, drop angle brackets,
- * defang `@` and backticks, and bound the length. (Control flow is already safe
- * — the verdict derives only from the schema-constrained `level`.)
- */
-const SANITIZE_MAX = 500;
-/**
- * Cap for a finding's `message` in the detailed layout. The schema already
- * bounds `message` at 2 000 chars, but every field shared the title-sized 500,
- * which cut the body of a finding off mid-word — "…since neither can starve"
- * with no marker, reading as a model that failed to finish its sentence rather
- * than as text the renderer clipped. Titles, paths, and table cells keep 500.
- */
-const SANITIZE_MAX_MESSAGE = 2_000;
-// U+200B zero-width space — inserted after `@` it breaks GitHub's @mention
-// autolink without visibly altering the text. Built from a code point so the
-// source stays ASCII-only.
-const ZWSP = String.fromCharCode(0x200b);
-/**
- * Clip at a word boundary and mark the cut with an ellipsis, so truncated text
- * reads as truncated. Falls back to a hard cut when the tail has no space near
- * the limit (a long URL, a minified line).
- */
-const clip = (s: string, max: number): string => {
-  if (s.length <= max) return s;
-  const cut = s.slice(0, max - 1);
-  const space = cut.lastIndexOf(" ");
-  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
-};
-const sanitizeModelText = (s: string, max: number = SANITIZE_MAX): string =>
-  clip(
-    s
-      .replace(/[\r\n]+/g, " ")
-      .replace(/[<>]/g, "")
-      .replace(/`/g, "'")
-      // Defuse markdown link/image syntax `[text](url)` / `![](url)`. Both
-      // require the square brackets, so stripping `[` and `]` neutralises a
-      // disguised link (a leaked-token phishing anchor) AND an auto-loading
-      // image beacon (a zero-click tracking pixel) — model text is steerable by
-      // a hostile fork PR's diff, and this text is posted under the App's
-      // identity. A bare URL survives as visible, un-disguised text (GitHub
-      // autolinks it, but the destination is no longer hidden behind anchor
-      // text).
-      .replace(/[[\]]/g, "")
-      .replace(/@(?=[\w-])/g, `@${ZWSP}`),
-    max,
-  );
+// `sanitizeModelText` / `encodeFindingPath` / `findingLoc` / `tableCell` /
+// `SANITIZE_MAX_MESSAGE` are imported from `@fractalboxdev/flare-dispatch-review-agent`
+// — the ONE audited implementation shared with the GitLab path
+// (`runs/mr-review.ts`); this file used to keep byte-identical private
+// copies, folded onto the shared module so a fix (bidi/invisible-control
+// stripping, code-point-safe clipping, the message-vs-title clip length, …)
+// lands once for both providers instead of drifting between two copies.
 
 /** One domain reviewer's engagement — how many findings it reported, or
  *  `errored: true` when its model call failed and it was skipped (count 0). */
@@ -1013,40 +975,61 @@ const severityBadge = (level: Finding["level"]): string =>
   );
 
 /**
- * GitHub blob URL for a finding — `https://github.com/<repo>/blob/<sha>/<path>#L<n>`.
- * `repo`/`sha` come from the trusted webhook input; `path` is model-authored, so
- * each segment is sanitized then URL-encoded (plus manual paren-encoding —
- * `encodeURIComponent` leaves `()` alone, and a bare `)` would terminate the
- * markdown link). The line fragment is dropped when the model's line numbers
- * are nonsense (≤ 0), leaving a plain file link.
+ * `true` iff `repo` looks like a genuine GitHub "owner/name" slug — letters,
+ * digits, dots, hyphens, underscores on each side of exactly one `/`, the
+ * shape GitHub itself enforces on repo names. Guards against interpolating
+ * an attacker-shaped value into a link posted under the App's identity —
+ * mirrors the GitLab path's `isSafeProjectWebUrl`.
  */
-const findingUrl = (repo: string, sha: string, f: Finding): string => {
-  const encodedPath = sanitizeModelText(f.path)
-    .replace(/^\/+/, "")
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/")
-    .replace(/\(/g, "%28")
-    .replace(/\)/g, "%29");
+const isSafeRepoSlug = (repo: string): boolean =>
+  /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo);
+
+/**
+ * `true` iff `sha` is hex-only, 4-64 characters — the shape of a real git
+ * commit sha (short or full). Mirrors the GitLab path's `isSafeHeadSha`,
+ * calibrated to git's own historical minimum abbreviation length (4) rather
+ * than GitLab's 7 — the length floor here is a plausibility check, not a
+ * security boundary: a hex-only string is inherently safe to interpolate
+ * into a URL at ANY length, since 0-9a-f never needs escaping.
+ */
+const isSafeCommitSha = (sha: string): boolean => /^[0-9a-f]{4,64}$/i.test(sha);
+
+/**
+ * GitHub blob URL for a finding — `https://github.com/<repo>/blob/<sha>/<path>#L<n>`
+ * — or `null` when `repo`/`sha` don't look like trustworthy values (see
+ * {@link isSafeRepoSlug} / {@link isSafeCommitSha}): the raw values are NEVER
+ * interpolated into a public comment on an untrustworthy input; the caller
+ * falls back to plain `path:line` text, mirroring the GitLab path's own
+ * `findingUrl`. `repo`/`sha` come from the trusted webhook input; `path` is
+ * model-authored, so it is URL-encoded by the shared `encodeFindingPath`
+ * (its own encoding — see that module — not the display sanitizer). The line
+ * fragment is dropped when the model's line numbers are nonsense (≤ 0),
+ * leaving a plain file link.
+ */
+const findingUrl = (repo: string, sha: string, f: Finding): string | null => {
+  if (!isSafeRepoSlug(repo) || !isSafeCommitSha(sha)) return null;
+  const encodedPath = encodeFindingPath(f.path);
   const start = Math.floor(f.startLine);
   const end = Math.floor(f.endLine);
   const fragment = start > 0 ? (end > start ? `#L${start}-L${end}` : `#L${start}`) : "";
   return `https://github.com/${repo}/blob/${sha}/${encodedPath}${fragment}`;
 };
 
-/** `path:line` display text for a finding's location. Square brackets are
- *  stripped on top of `sanitizeModelText` — the text renders inside `[…](url)`
- *  link syntax, where a `]` would break out of the link. */
-const findingLoc = (f: Finding): string => {
-  const path = sanitizeModelText(f.path).replace(/[[\]]/g, "");
-  return f.startLine === f.endLine
-    ? `${path}:${f.startLine}`
-    : `${path}:${f.startLine}-${f.endLine}`;
+/** `📍 [path:line](url)` when the link is trustworthy, else plain
+ *  `📍 path:line` text — never an unvalidated repo/sha interpolated into a
+ *  public comment. */
+const locLine = (input: Pick<RunInput, "repo" | "sha">, f: Finding): string => {
+  const loc = findingLoc(f);
+  const link = findingUrl(input.repo, input.sha, f);
+  return link !== null ? `📍 [${loc}](${link})` : `📍 ${loc}`;
 };
 
-/** Sanitized text safe inside a markdown table cell — an unescaped `|` would
- *  split the row. */
-const tableCell = (s: string): string => sanitizeModelText(s).replace(/\|/g, "\\|");
+/** Same as {@link locLine}, for a markdown table cell (the compact layout). */
+const locCell = (input: Pick<RunInput, "repo" | "sha">, f: Finding): string => {
+  const loc = tableCell(findingLoc(f));
+  const link = findingUrl(input.repo, input.sha, f);
+  return link !== null ? `[${loc}](${link})` : loc;
+};
 
 /** Comment style preset — operator selects the layout via `pr-review.style`
  *  CONFIG_KV. Hard-coded presets only; never an arbitrary template (model-
@@ -1140,7 +1123,7 @@ const renderDefault = (
     "",
     `#### ${i + 1}. ${severityBadge(f.level)} — ${sanitizeModelText(f.title)}`,
     "",
-    `📍 [${findingLoc(f)}](${findingUrl(input.repo, input.sha, f)})`,
+    locLine(input, f),
     "",
     sanitizeModelText(f.message, SANITIZE_MAX_MESSAGE),
   ]);
@@ -1206,8 +1189,7 @@ const renderCompact = (
     "| Severity | Location | Issue |",
     "| --- | --- | --- |",
     ...rendered.map(
-      (f) =>
-        `| ${compactSeverity(f.level)} | [${tableCell(findingLoc(f))}](${findingUrl(input.repo, input.sha, f)}) | ${tableCell(f.message)} |`,
+      (f) => `| ${compactSeverity(f.level)} | ${locCell(input, f)} | ${tableCell(f.message)} |`,
     ),
     ...(overflow > 0 ? ["", `_…and ${overflow} more (see check annotations)._`] : []),
     ...viewerFooter(viewerUrl),

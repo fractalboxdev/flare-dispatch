@@ -39,6 +39,13 @@ export const makeFakeWorkflow = (
      * duplicate-create catch.
      */
     throwAlreadyExistsFor?: ReadonlySet<string>;
+    /**
+     * When set, EVERY `create` call throws this message instead of a
+     * duplicate-id error — a genuine platform/dispatch failure, as opposed to
+     * `throwAlreadyExistsFor`'s "already exists" shape. Used to exercise the
+     * route's 500 path and confirm it leaves no dedup marker behind.
+     */
+    failAllCreatesWith?: string;
   } = {},
 ): FakeWorkflow => {
   const calls: WorkflowCreateCall[] = [];
@@ -48,6 +55,9 @@ export const makeFakeWorkflow = (
   const binding = {
     create: async (options?: { id?: string; params?: unknown }) => {
       const id = options?.id ?? "";
+      if (opts.failAllCreatesWith !== undefined) {
+        throw new Error(opts.failAllCreatesWith);
+      }
       if (alreadyExists.has(id)) {
         throw new Error(`(instance.already_exists) Instance already exists`);
       }
@@ -245,6 +255,12 @@ export const makeFakeEnv = (opts: {
   idempotencyKv?: KVNamespace;
   configKv?: KVNamespace;
   githubWebhookSecret?: string;
+  /** GitLab webhook secret token — verifies POST /v1/webhooks/gitlab. */
+  gitlabWebhookSecret?: string;
+  /** GitLab review Workflow binding — the GitLab webhook route dispatches to it. */
+  gitlabReviewWorkflow?: Env["RUNS_WORKFLOW"];
+  /** Comma-separated GitLab project ids — unset means every project is allowed. */
+  gitlabAllowedProjectIds?: string;
   adminToken?: string;
   logLinkSecret?: string;
   metadata?: FakeD1;
@@ -269,6 +285,15 @@ export const makeFakeEnv = (opts: {
     ...(opts.configKv !== undefined ? { CONFIG_KV: opts.configKv } : {}),
     ...(opts.githubWebhookSecret !== undefined
       ? { GITHUB_WEBHOOK_SECRET: opts.githubWebhookSecret }
+      : {}),
+    ...(opts.gitlabWebhookSecret !== undefined
+      ? { GITLAB_WEBHOOK_SECRET: opts.gitlabWebhookSecret }
+      : {}),
+    ...(opts.gitlabReviewWorkflow !== undefined
+      ? { GITLAB_REVIEW_WORKFLOW: opts.gitlabReviewWorkflow }
+      : {}),
+    ...(opts.gitlabAllowedProjectIds !== undefined
+      ? { GITLAB_ALLOWED_PROJECT_IDS: opts.gitlabAllowedProjectIds }
       : {}),
     ...(opts.adminToken !== undefined ? { ADMIN_TOKEN: opts.adminToken } : {}),
     ...(opts.logLinkSecret !== undefined ? { LOG_LINK_SECRET: opts.logLinkSecret } : {}),

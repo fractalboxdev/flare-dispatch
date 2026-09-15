@@ -15,6 +15,8 @@
     "./playwright-e2e": "./playwright-e2e.ts",
     "./product-demo": "./product-demo.ts",
     "./pr-review": "./pr-review.ts",
+    "./mr-review": "./mr-review.ts",
+    "./mr-review-cost": "./mr-review-cost.ts",
     "./email-otp-login": "./email-otp-login.ts",
     "./finops-audit": "./finops-audit.ts"
   },

@@ -81,3 +81,11 @@ export {
 } from "./engine.js";
 
 export { stripDiffNoise, capDiff, MAX_DIFF_CHARS } from "./diff.js";
+
+export {
+  sanitizeModelText,
+  encodeFindingPath,
+  findingLoc,
+  tableCell,
+  SANITIZE_MAX_MESSAGE,
+} from "./comment-sanitize.js";

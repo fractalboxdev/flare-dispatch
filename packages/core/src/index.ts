@@ -175,6 +175,17 @@ export {
   type AiModelUsage,
 } from "./services/cloudflare";
 export {
+  scm,
+  Scm,
+  ScmError,
+  type ScmService,
+  type ChangeRef,
+  type FetchDiffResult,
+  type ReviewNote,
+  type UpdateReviewNote,
+  type PostReviewResult,
+} from "./services/scm";
+export {
   oidc,
   Oidc,
   type OidcService,

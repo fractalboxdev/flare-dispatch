@@ -47,3 +47,8 @@ coverage/
 # Local git worktrees (agent + manual) — never track checkouts inside the repo
 .claude/worktrees/
 .worktrees/
+
+# Deployment overlays (a deployer's copy next to the entry file, e.g. wrangler.<deploy>.jsonc) carry
+# account and project ids and are never committed; only the example ships.
+apps/dispatcher/wrangler.*.jsonc
+!apps/dispatcher/wrangler.gitlab.example.jsonc

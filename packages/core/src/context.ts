@@ -27,6 +27,7 @@ import type { ModelGateway } from "./services/model-gateway";
 import type { Notice } from "./services/notice";
 import type { Oidc } from "./services/oidc";
 import type { Sandbox } from "./services/sandbox";
+import type { Scm } from "./services/scm";
 import type { Secrets } from "./services/secrets";
 import type { StepRunner } from "./services/step-runner";
 
@@ -46,6 +47,7 @@ export type RunContext =
   | Github
   | Cloudflare
   | ModelGateway
+  | Scm
   | Oidc
   | ChildRuns
   | Executions

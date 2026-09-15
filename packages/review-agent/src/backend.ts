@@ -316,13 +316,21 @@ export type ResolvedBackend = {
   readonly roleArn?: string;
 };
 
-/** Narrow an arbitrary config string to a known `Backend`, or the default. */
-export const parseBackend = (raw: string | undefined): Backend =>
-  BACKENDS.includes(raw as Backend) ? (raw as Backend) : BACKEND_DEFAULT;
+/** Narrow an arbitrary config string to a known `Backend`, or the default.
+ *  Trims first — a CONFIG_KV value with stray leading/trailing whitespace
+ *  (a copy-paste, a trailing newline) must resolve the same as the clean
+ *  value, not silently fall back to the default. */
+export const parseBackend = (raw: string | undefined): Backend => {
+  const trimmed = raw?.trim();
+  return BACKENDS.includes(trimmed as Backend) ? (trimmed as Backend) : BACKEND_DEFAULT;
+};
 
-/** Narrow an arbitrary config string to a known `ReviewMode`, or `fallback`. */
-export const parseMode = (raw: string | undefined, fallback: ReviewMode): ReviewMode =>
-  REVIEW_MODES.includes(raw as ReviewMode) ? (raw as ReviewMode) : fallback;
+/** Narrow an arbitrary config string to a known `ReviewMode`, or `fallback`.
+ *  Trims first — see {@link parseBackend}. */
+export const parseMode = (raw: string | undefined, fallback: ReviewMode): ReviewMode => {
+  const trimmed = raw?.trim();
+  return REVIEW_MODES.includes(trimmed as ReviewMode) ? (trimmed as ReviewMode) : fallback;
+};
 
 /** Lower bound for a diff-cap override — below this a review sees nothing useful. */
 const MIN_MAX_DIFF_CHARS = 1_000;

@@ -19,6 +19,7 @@ export { productDemo } from "./product-demo";
 export { playwrightDemo } from "./playwright-demo";
 export { prReview } from "./pr-review";
 export { improvePr } from "./improve-pr";
+export { mrReview } from "./mr-review";
 export { specDriftPr } from "./spec-drift-pr";
 export { orgSpecAudit } from "./org-spec-audit";
 export { triageIssues } from "./triage-issues";

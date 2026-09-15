@@ -605,6 +605,44 @@ describe("pr-review", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("a sha that doesn't look genuine renders a plain path:line, never an unvalidated link", () => {
+    const reportWithFindings = {
+      toolCalls: [
+        {
+          name: "report",
+          arguments: {
+            findings: [
+              {
+                path: "src/foo.ts",
+                startLine: 10,
+                endLine: 12,
+                level: "warning",
+                title: "Missing null check",
+                message: "`foo.bar` may be undefined",
+              },
+            ],
+          },
+        },
+      ],
+      text: "",
+    } as const;
+
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { ...backendConfig, "pr-review.style": "compact" },
+      sandboxProgram: { "git diff": { exitCode: 0, stdout: "" } },
+      sandboxFiles: { [DIFF_FILE]: "diff --git a/src/foo.ts b/src/foo.ts\n+++ b/src/foo.ts\n+x\n" },
+      modelGateway: { responses: Array(4).fill(reportWithFindings) },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.exit(prReview.run({ ...baseInput, sha: "not-a-real-sha!" }));
+      const body = handles.github.pullReviewCalls[0]!.body;
+      expect(body).toContain("src/foo.ts:10-12");
+      expect(body).not.toContain("github.com");
+      expect(body).not.toContain("not-a-real-sha!");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("neutralises markdown link/image injection in model-authored finding text", () => {
     // A hostile fork PR can steer the model into emitting markdown that, once
     // posted under the App's identity, becomes a disguised phishing link or a

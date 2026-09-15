@@ -48,6 +48,13 @@ describe("parseBackend", () => {
     expect(parseBackend("opencode")).toBe(BACKEND_DEFAULT);
     expect(parseBackend("reasonix")).toBe(BACKEND_DEFAULT);
   });
+  it("trims surrounding whitespace before matching (CONFIG_KV hygiene)", () => {
+    expect(parseBackend("  anthropic\n")).toBe("anthropic");
+    expect(parseBackend("\tbedrock ")).toBe("bedrock");
+  });
+  it("a blank/whitespace-only value falls back to the default (not a match)", () => {
+    expect(parseBackend("   ")).toBe(BACKEND_DEFAULT);
+  });
 });
 
 describe("parseMode", () => {
@@ -58,6 +65,10 @@ describe("parseMode", () => {
   it("falls back to the supplied default for unknown / unset", () => {
     expect(parseMode(undefined, "json")).toBe("json");
     expect(parseMode("structured", "tools")).toBe("tools");
+  });
+  it("trims surrounding whitespace before matching (CONFIG_KV hygiene)", () => {
+    expect(parseMode("  json\n", "tools")).toBe("json");
+    expect(parseMode("   ", "tools")).toBe("tools");
   });
 });
 

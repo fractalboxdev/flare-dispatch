@@ -1,0 +1,117 @@
+{
+  // FlareDispatch — GitLab-mode Worker, EXAMPLE config.
+  //
+  // Copy this file, replace every placeholder id below with a real one from
+  // your own Cloudflare account, and deploy it under your own Worker name —
+  // this file is not deployed as-is. It is a deliberately TRIMMED copy of the
+  // root wrangler.jsonc: the free-plan deploy shape for the GitLab adapter.
+  // Everything container / browser / email / cron / custom-domain /
+  // static-asset / Access-related is REMOVED — a GitLab-mode deploy is a
+  // Worker-only review that reads a merge request over the GitLab API, calls a
+  // Workers AI model, and posts a note. What remains is the minimum the
+  // GitlabReviewWorkflow needs: D1 (executions rows), KV (config), the AI
+  // binding, and the review Workflow itself.
+  //
+  // Provisioning + deploy runbook: packages/gitlab-app/README.md § Deploying
+  // the GitLab mode.
+  //
+  // Upgrading from an earlier copy of this example: IDEMPOTENCY_KV (under
+  // kv_namespaces below) is now REQUIRED — the webhook route fails closed
+  // (`503 throttle_not_configured`) and dispatches nothing without it.
+  // Provision one (`wrangler kv namespace create IDEMPOTENCY_KV`), paste its
+  // id in below, and redeploy.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "flare-dispatch-gitlab",
+  // Relative to THIS config file (apps/dispatcher/).
+  "main": "src/index.gitlab.ts",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": { "enabled": true },
+
+  // Workers AI binding — backs the `modelGateway` capability the review engine
+  // calls. The binding IS the auth (Workers AI is account-billed); no model API
+  // key. Optionally routed through an AI Gateway via the `AI_GATEWAY_ID` var.
+  "ai": { "binding": "AI" },
+
+  // The GitLab review Workflow (apps/dispatcher/src/workflow-gitlab.ts). Its
+  // steps map to durable checkpoints; the class is exported by src/index.gitlab.ts.
+  // The `name` here is what a Slack failure notification's Workflow-instance
+  // link points at by default (env.ts's WORKFLOW_NAME var overrides it if you
+  // rename this).
+  "workflows": [
+    {
+      "name": "gitlab-review",
+      "binding": "GITLAB_REVIEW_WORKFLOW",
+      "class_name": "GitlabReviewWorkflow"
+    }
+  ],
+
+  // D1 — the `executions` metadata rows the Workflow writes. Reuses the SAME
+  // migrations dir as the main deploy (infra/migrations, relative to this
+  // config). Provision a fresh DB (`wrangler d1 create flare-dispatch-gitlab`)
+  // and paste its id over the placeholder below before deploying.
+  "d1_databases": [
+    {
+      "binding": "RUNS_METADATA",
+      "database_name": "flare-dispatch-gitlab",
+      "database_id": "<your-d1-id>",
+      "migrations_dir": "../../infra/migrations"
+    }
+  ],
+
+  // KV — the `config` capability. Reuses the shared `pr-review.*` keys so the
+  // operator tunes the backend/model in one place (see
+  // packages/gitlab-app/README.md § Deploying the GitLab mode).
+  // Provision (`wrangler kv namespace create CONFIG_KV`) and paste the id.
+  "kv_namespaces": [
+    {
+      "binding": "CONFIG_KV",
+      "id": "<your-config-kv-id>"
+    },
+    // IDEMPOTENCY_KV — REQUIRED. Backs the per-MR throttle, the delivery-UUID
+    // dedup and the per-head marker; the webhook route fails closed (`503
+    // throttle_not_configured`) without it and dispatches nothing. Provision
+    // (`wrangler kv namespace create IDEMPOTENCY_KV`) and paste the id below.
+    {
+      "binding": "IDEMPOTENCY_KV",
+      "id": "<your-idempotency-kv-id>"
+    }
+  ],
+
+  // Plain (non-secret) vars. VIEWER_ACCESS_MODE=token-only because a GitLab-mode
+  // deploy has no Cloudflare Access application in front of it — the viewer
+  // surfaces fall back to their per-execution capability token rather than
+  // default-denying.
+  "vars": {
+    "VIEWER_ACCESS_MODE": "token-only",
+    // Optional — only needed for the Slack failure notification's Workflow-
+    // instance link (both must be set together; either alone omits the link):
+    // "CLOUDFLARE_ACCOUNT_ID": "<your-32-hex-account-id>",
+    // "WORKFLOW_NAME": "gitlab-review",  // matches workflows[].name above;
+    //                                    // only needed if you rename it there.
+    // Optional — comma-separated GitLab project ids; when set, a webhook for
+    // any OTHER project is acknowledged and ignored rather than dispatched:
+    // "GITLAB_ALLOWED_PROJECT_IDS": "42,101",
+    // Optional — a self-hosted GitLab instance's API base (default
+    // https://gitlab.com/api/v4):
+    // "GITLAB_BASE_URL": "https://gitlab.example.com/api/v4",
+  },
+
+  // Worker Secrets (set with `wrangler secret put --config apps/dispatcher/wrangler.gitlab.example.jsonc`):
+  //   GITLAB_TOKEN           — GitLab project/group access token (scoped `api`);
+  //                            backs the live `scm` capability. See .dev.vars.example.
+  //   GITLAB_WEBHOOK_SECRET  — the secret token echoed in X-Gitlab-Token; verifies
+  //                            POST /v1/webhooks/gitlab.
+  //   SLACK_WEBHOOK_URL      — optional. A Slack incoming-webhook URL; when set,
+  //                            GitlabReviewWorkflow posts a failure/skipped-quota
+  //                            alert there. Absent → that step is a no-op.
+  // Out-of-band by design — not declared here.
+
+  // REMOVED vs the root config (all container/browser/host-coupled surface a
+  // GitLab-mode deploy does not use): `assets` (dashboard SPA), `browser`
+  // binding, `routes` (custom domain), `send_email`, `containers`,
+  // `durable_objects`, `migrations` (DO-class registration — this deploy
+  // exports no DO class), `triggers.crons`, `r2_buckets`, and the ACCESS_* /
+  // PUBLIC_ORIGIN / INBOX_DOMAIN / ADMISSION_CAP vars.
+}

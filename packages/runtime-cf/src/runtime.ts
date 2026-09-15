@@ -35,6 +35,7 @@ import {
   ConfigDeferred,
   ModelGatewayDeferred,
   OidcDeferred,
+  ScmDeferred,
 } from "./deferred";
 import { type CloudflareLiveConfig, makeCloudflareLive } from "./cloudflare-live";
 import { type GithubLiveConfig, makeGithubLive } from "./github-live";
@@ -436,6 +437,11 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
     github,
     cloudflare,
     modelGateway,
+    // `Scm` (the provider-neutral GitLab/GitHub review seam) is only wired live
+    // by the GitLab-mode entry (apps/dispatcher/src/index.gitlab.ts) — the
+    // primary runtime has no SCM provider, so the dying stub keeps the Tag
+    // satisfied for `RunContext` without any existing run touching it.
+    ScmDeferred,
     oidcLayer,
     childRuns,
     executions,

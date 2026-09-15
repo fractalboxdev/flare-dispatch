@@ -56,6 +56,9 @@ importers:
       '@fractalboxdev/flare-dispatch-github-app':
         specifier: workspace:*
         version: link:../../packages/github-app
+      '@fractalboxdev/flare-dispatch-gitlab-app':
+        specifier: workspace:*
+        version: link:../../packages/gitlab-app
       '@fractalboxdev/flare-dispatch-runs':
         specifier: workspace:*
         version: link:../../runs
@@ -204,6 +207,21 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
 
+  packages/gitlab-app:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      msw:
+        specifier: ^2.7.0
+        version: 2.15.0(@types/node@22.20.1)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
   packages/review-agent:
     dependencies:
       '@fractalboxdev/flare-dispatch-core':
@@ -237,6 +255,9 @@ importers:
       '@fractalboxdev/flare-dispatch-github-app':
         specifier: workspace:*
         version: link:../github-app
+      '@fractalboxdev/flare-dispatch-gitlab-app':
+        specifier: workspace:*
+        version: link:../gitlab-app
       '@fractalboxdev/flare-dispatch-substrate-contract':
         specifier: workspace:*
         version: link:../substrate-contract

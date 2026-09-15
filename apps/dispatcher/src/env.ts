@@ -197,6 +197,77 @@ export interface Env {
   readonly GITHUB_WEBHOOK_SECRET?: string;
 
   /**
+   * GitLab project/group access token (scoped `api`) — Worker secret, set via
+   * `wrangler secret put GITLAB_TOKEN`. Backs the live GitLab `scm` capability
+   * (`makeGitlabScmLive`): reads a merge request's diff and posts the review
+   * note. Absent, OR blank/whitespace-only (treated the same as absent — never
+   * a valid credential), selects the degraded `Scm` Layer (fetchDiff fails
+   * `auth-failed`, postReview is a logged no-op). Only the `mr-review` run
+   * touches it. See `packages/gitlab-app/README.md`.
+   */
+  readonly GITLAB_TOKEN?: string;
+
+  /**
+   * GitLab API base URL override, for a self-hosted GitLab instance — a var,
+   * not a secret. Absent → `https://gitlab.com/api/v4` (`makeGitlabScmLive`'s
+   * default). Passed through to the Workflow's `scm` Layer as `baseUrl`; blank/
+   * whitespace-only is treated as absent, same as `GITLAB_TOKEN`.
+   */
+  readonly GITLAB_BASE_URL?: string;
+
+  /**
+   * GitLab webhook secret token — Worker secret. Verifies the `X-Gitlab-Token`
+   * header on `POST /v1/webhooks/gitlab` (a constant-time compare). Absent → the
+   * GitLab webhook route refuses (`503 webhook_not_configured`): like the GitHub
+   * webhook, GitLab mode is opt-in and never accepts unverified deliveries.
+   */
+  readonly GITLAB_WEBHOOK_SECRET?: string;
+
+  /**
+   * Optional project allowlist — a comma-separated list of GitLab project ids
+   * (e.g. `"42,101"`), a var, not a secret. Each entry must be plain digits
+   * (`^\d+$`) once trimmed; a non-matching entry is dropped rather than
+   * failing the whole list. When set, a webhook delivery whose `project.id`
+   * is not in the list is acknowledged and ignored (`202
+   * {"ignored":true,"reason":"project not allowed"}`), never dispatched.
+   * Absent, or blank/whitespace-only, means UNSET — every project is allowed
+   * (the default). A non-blank value where every entry is invalid fails
+   * CLOSED instead (the resulting allowlist is empty, so every project is
+   * blocked) and logs a `console.error`, rather than being silently treated
+   * as unset.
+   */
+  readonly GITLAB_ALLOWED_PROJECT_IDS?: string;
+
+  /**
+   * The GitLab MR-review Workflow binding — instantiates `GitlabReviewWorkflow`
+   * executions from the GitLab webhook route. Present only on a GitLab-mode
+   * deploy (apps/dispatcher/wrangler.gitlab.example.jsonc). Absent → the
+   * webhook route `503`s (the binding is required to dispatch a review).
+   */
+  readonly GITLAB_REVIEW_WORKFLOW?: Workflow;
+
+  /**
+   * Slack incoming-webhook URL — a Worker secret, set via
+   * `wrangler secret put SLACK_WEBHOOK_URL`. When set, `GitlabReviewWorkflow`'s
+   * `notify-failure` step posts a Slack message for a `failure` or
+   * `skipped-quota` review outcome (the review could not complete, or the
+   * model quota degraded it to no note). Absent → the step is a no-op; a
+   * Slack delivery failure (bad URL, non-2xx, network) is logged and
+   * swallowed — it never fails the Workflow. See `packages/gitlab-app/README.md`.
+   */
+  readonly SLACK_WEBHOOK_URL?: string;
+
+  /**
+   * The GitLab review Workflow's configured name (the `workflows[].name` in
+   * wrangler, e.g. `wrangler.gitlab.example.jsonc`) — a var, not a secret.
+   * Used only to build the Cloudflare dashboard Workflow-instance link in a
+   * Slack failure notification (`CLOUDFLARE_ACCOUNT_ID`, declared below, must
+   * also be set for that link to appear). Defaults to `gitlab-review` (the example
+   * config's own name) when absent.
+   */
+  readonly WORKFLOW_NAME?: string;
+
+  /**
    * Admin bearer token — Worker secret. Gates `POST /v1/admin/events/:wf_id`
    * (the `step.waitForEvent` signalling surface, specs/03-dsl.md
    * § Human-in-the-loop). Production deploys put Cloudflare Access in front
@@ -427,6 +498,10 @@ export interface Env {
    * logs. Absent (the BYOC default — each deploy owns its account) → no
    * `details_url`, the check-run renders exactly as before. Set with
    * `wrangler` via the `vars` block in wrangler.jsonc.
+   *
+   * `GitlabReviewWorkflow`'s `notify-failure` step reuses this SAME var for
+   * the same purpose — a Workflow-instance link in its Slack message
+   * (paired with `WORKFLOW_NAME` above and `SLACK_WEBHOOK_URL` above).
    */
   readonly CLOUDFLARE_ACCOUNT_ID?: string;
 
