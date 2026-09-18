@@ -2,7 +2,8 @@
 //
 // Extracted from `routes/dispatch.ts` so EVERY trigger surface that ends in a
 // `RUNS_WORKFLOW.create` — Action mode (`routes/dispatch.ts`), Schedule mode
-// (`routes/scheduled.ts`), and signal ingress (`routes/signals-webhook.ts`) —
+// (`routes/scheduled.ts`), signal ingress (`routes/signals-webhook.ts`), and
+// check-run re-runs (`rerequest.ts`) —
 // drives the exact same execution path:
 //
 //   1. receiver-level dedup short-circuit on `IDEMPOTENCY_KV` (when bound),
@@ -43,6 +44,10 @@ export interface InstantiateArgs {
   readonly notify?: { readonly emails: readonly string[] };
   /** Absolute origin so the run's artifact URLs come back absolute. */
   readonly origin: string;
+  /** Attempt number of a check-run re-run (rerequest.ts); absent → 1. */
+  readonly attempt?: number;
+  /** The id of attempt 1 of the family a re-run retries. */
+  readonly retryOf?: string;
 }
 
 /** The outcome of an instantiation — the bits the 202 response carries. */
@@ -99,6 +104,8 @@ export const instantiateRun = async (
       ? { notify: { emails: args.notify.emails } }
       : {}),
     origin: args.origin,
+    ...(args.attempt !== undefined ? { attempt: args.attempt } : {}),
+    ...(args.retryOf !== undefined ? { retryOf: args.retryOf } : {}),
   };
 
   // CF Workflows rejects a `create({id})` whose id was seen before with

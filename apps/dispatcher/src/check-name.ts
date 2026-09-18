@@ -68,3 +68,12 @@ export const checkRunNameFor = (run: string, inputs: unknown): string => {
   const label = readCheckLabel(inputs);
   return label === undefined ? `flare-dispatch/${run}` : `flare-dispatch/${run}:${label}`;
 };
+
+/**
+ * The check-run output TITLE for an execution: the check name, plus
+ * ` (attempt N)` on a re-run. The NAME stays fixed across attempts — branch
+ * protection requires checks by name, and GitHub counts the latest check-run
+ * of a name — so the attempt lives in the title a reviewer reads instead.
+ */
+export const checkRunTitleFor = (checkRunName: string, attempt: number): string =>
+  attempt > 1 ? `${checkRunName} (attempt ${attempt})` : checkRunName;

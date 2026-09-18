@@ -40,6 +40,35 @@ artifact behind. For `offload-test`, per-stage exec steps
 into `step-<label>.log` uploads so earlier stages' logs survive a later stage's
 death.
 
+## Re-running a check
+
+GitHub's **Re-run** button on a `flare-dispatch/*` check-run re-dispatches the
+execution that posted it — same run, repo, commit, and recorded inputs — so a
+check that went red because the platform killed its container is retried
+without a new commit. **Re-run all checks** on the suite re-runs every check at
+that commit whose latest attempt did not pass; green checks are left alone.
+
+- **Attempts.** A re-run is a new execution: Cloudflare Workflows never reuses
+  an instance id, so attempt N runs as `<first-instance-id>_attempt-<N>`
+  (hash-truncated past 64 chars, like every instance id).
+  `GET /v1/executions/:id` reports `attempt` and, on a re-run, `retryOf` — the
+  first attempt's id. The check-run keeps its name, so branch protection counts
+  the newest attempt; its title reads `flare-dispatch/<run> (attempt N)`.
+- **One at a time.** A re-run is refused while any attempt of the same check is
+  still queued or running, per the Workflow instance's own status — repeated
+  clicks dispatch nothing more. An execution left `running` by a Workflow that
+  died does not block.
+- **Bounded.** Five attempts per check, the first dispatch included. A re-run
+  bypasses the run's `cooldown`, which caps push storms, not explicit retries.
+- **Not replayed.** Completion-notify emails and a Slack origin are not recorded
+  on the execution, so a re-run reports on the check-run only.
+
+The webhook answers `202` with a `rerun` array stating, per check, whether it
+dispatched (`executionId`, `attempt`) or why it refused (`foreign_app`,
+`unknown_check_run`, `in_progress`, `attempts_exhausted`,
+`run_not_registered`, `inputs_unreplayable`). Re-runs need the App subscribed to
+the **Check run** and **Check suite** events, which the app manifest requests.
+
 ## `check` — universal command gate (opt-out by default)
 
 Configurable PR gate for repos that do **not** want the hardcoded Oxc/`oxlint`
