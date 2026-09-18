@@ -16,6 +16,7 @@
 // failing `Github` Layer — the fake is the green-path simulator.
 
 import { Effect, Layer } from "effect";
+import { GitHubApiError } from "../errors";
 import {
   type CreateRelease,
   type DraftPullRequestResult,
@@ -44,6 +45,14 @@ export type GithubFakeState = {
    * caller passes a matching `ref`.
    */
   files: Record<string, string>;
+  /**
+   * Seeded branch heads answering `branchHead`, keyed `"owner/name:branch"`.
+   * An unseeded branch FAILS (404), as the live read does — mutate this map
+   * mid-test to move a branch.
+   */
+  branchHeads: Record<string, string>;
+  /** Every `branchHead` call, in order. */
+  readonly branchHeadCalls: Array<{ repo: string; branch: string }>;
   /** Every `issues` call, in order. */
   readonly issuesCalls: Array<{
     repo: string;
@@ -135,6 +144,8 @@ export const makeGithubFake = (
      * ref; an unseeded path is `found: false`.
      */
     files?: Record<string, string>;
+    /** Branch heads keyed `"owner/name:branch"`; an unseeded branch fails. */
+    branchHeads?: Record<string, string>;
     /** Clock used to evaluate `pushedWithinDays` / `updatedWithinHours`. */
     now?: number;
     /**
@@ -149,6 +160,8 @@ export const makeGithubFake = (
     workflowRuns: [...(opts.workflowRuns ?? [])],
     pullRequestHistory: [...(opts.pullRequestHistory ?? [])],
     files: { ...opts.files },
+    branchHeads: { ...opts.branchHeads },
+    branchHeadCalls: [],
     issuesCalls: [],
     actionRunsCalls: [],
     pullRequestHistoryCalls: [],
@@ -336,6 +349,15 @@ export const makeGithubFake = (
           (req.ref === undefined ? undefined : state.files[`${req.repo}@${req.ref}:${req.path}`]) ??
           state.files[`${req.repo}:${req.path}`];
         return content === undefined ? { found: false } : { found: true, content };
+      }),
+
+    branchHead: ({ repo, branch }): Effect.Effect<string, GitHubApiError> =>
+      Effect.suspend(() => {
+        state.branchHeadCalls.push({ repo, branch });
+        const sha = state.branchHeads[`${repo}:${branch}`];
+        return sha === undefined
+          ? Effect.fail(new GitHubApiError({ status: 404, reason: "other" }))
+          : Effect.succeed(sha);
       }),
 
     pullReview: (req) =>

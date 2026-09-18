@@ -171,7 +171,29 @@ export type RunSpec<I, O, IEnc, OEnc> = {
    * distinction is whether a PERSON has to decide.
    */
   readonly humanGate?: HumanGateSpec;
+  /**
+   * Serializes executions that share a group: at most one runs at a time, and
+   * while it runs, only the most recently dispatched waiter survives — an
+   * older waiter concludes `RunSkipped` naming the revision that replaced it.
+   * A running execution is never cancelled or skipped by a newer one. See
+   * `SerializeSpec`.
+   */
+  readonly serialize?: (input: I) => SerializeSpec | undefined;
   readonly run: (input: I) => Effect.Effect<O, RunError, RunContext>;
+};
+
+/**
+ * The serialization group one execution joins, derived from its decoded
+ * inputs. `undefined` from `serialize` opts that execution out.
+ */
+export type SerializeSpec = {
+  /** Executions with equal `group` strings never overlap. */
+  readonly group: string;
+  /**
+   * What this execution acts on (a commit SHA for a deploy) — named in the
+   * skip reason of every waiter it replaces, and in a waiter's queued summary.
+   */
+  readonly revision: string;
 };
 
 /**

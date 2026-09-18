@@ -70,10 +70,12 @@ import {
   makeCFRuntimeLive,
   makeContainerLeaseD1,
   makeRunAdmissionD1,
+  makeSerialQueueD1,
   makeWritebackTokenMinter,
   previewSafeSandboxId,
   recordExecutionCost,
   resolveAdmissionCap,
+  runSerialGate,
   runWriteback,
   type WritebackOutcome,
 } from "@fractalboxdev/flare-dispatch-runtime-cf";
@@ -81,7 +83,7 @@ import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
 import { preAssertedApproval, resolveTargets, runGrant, runsOnFacade } from "./grant-catalog";
 import { selectSandboxNs } from "./sandbox-routing";
-import { queuedSummary } from "./admission-summary";
+import { queuedSummary, serialQueuedSummary } from "./admission-summary";
 import { appendFailureSummary, failureSummaryMd, runSkippedReason } from "./failure-summary";
 import { renderResultEmail } from "./notify";
 import { workflowDashboardUrl } from "./dashboard-url";
@@ -905,10 +907,64 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // peer rows. An `AdmissionTimedOut` flows into `exit` as a normal
       // `failure`: recorded + reported through the same check-run path, with
       // failure-summary.ts rendering it unmistakably as an infra-wait timeout.
-      const gated: Effect.Effect<unknown, RunError, RunContext> = admissionGate.pipe(
+      const admitted: Effect.Effect<unknown, RunError, RunContext> = admissionGate.pipe(
         Effect.andThen(admissionHeld),
         Effect.ensuring(admissions.release(payload.executionId).pipe(Effect.ignore)),
       );
+
+      // --- Per-group serialization (runs that declare `serialize`) ---------
+      //
+      // OUTSIDE admission: a waiter behind an in-flight peer of its group must
+      // not hold a pool slot while it waits. The group is held — heartbeated —
+      // through admission, the lease, and the run body, and released on every
+      // exit path, a skip included. A superseded waiter fails `RunSkipped`, so
+      // it lands below as a `skipped` row and a `neutral` check naming the
+      // revision that replaced it. See serial-queue-d1.ts.
+      const serialSpec = run.serialize?.(input);
+      const gated: Effect.Effect<unknown, RunError, RunContext> =
+        serialSpec === undefined
+          ? admitted
+          : Effect.gen(function* () {
+              const serialQueue = makeSerialQueueD1(db);
+              return yield* runSerialGate({
+                store: serialQueue,
+                executionId: payload.executionId,
+                group: serialSpec.group,
+                revision: serialSpec.revision,
+                stepDo,
+                sleep: (name, ms) =>
+                  Effect.tryPromise(() => step.sleep(name, ms)).pipe(Effect.orDie),
+                onWait: (holderRevision) =>
+                  checks
+                    .progress({
+                      repo: payload.github.repo,
+                      checkRunId,
+                      ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
+                      output: { title: checkRunName, summary: serialQueuedSummary(holderRevision) },
+                    })
+                    .pipe(
+                      Effect.catchAllCause((cause) =>
+                        Effect.logWarning(`serial: queued-summary update failed — ${cause}`),
+                      ),
+                    ),
+              }).pipe(
+                Effect.andThen(
+                  Effect.gen(function* () {
+                    yield* Effect.forkScoped(
+                      serialQueue
+                        .heartbeat(payload.executionId)
+                        .pipe(
+                          Effect.ignore,
+                          Effect.repeat(Schedule.spaced(Duration.millis(LEASE_HEARTBEAT_EVERY_MS))),
+                          Effect.asVoid,
+                        ),
+                    );
+                    return yield* admitted;
+                  }).pipe(Effect.scoped),
+                ),
+                Effect.ensuring(serialQueue.release(payload.executionId).pipe(Effect.ignore)),
+              );
+            });
       const exit = yield* Effect.exit(gated);
       const completedAt = yield* Effect.sync(() => Date.now());
 

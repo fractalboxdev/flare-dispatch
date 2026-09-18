@@ -84,17 +84,27 @@
 //
 // --- Deploy ordering ----------------------------------------------------------
 //
-// Two rapid pushes dispatch two executions keyed by SHA; completion order is
-// not guaranteed, so the older push can in principle deploy last. A repo where
-// that matters guards inside its command. The checkout's `origin` is the
-// UNAUTHENTICATED `https://github.com/<owner>/<name>.git` — the sandbox scrubs
-// the clone credential (packages/runtime-cf/src/sandbox-cf.ts,
-// `scrubCloneCredential`) — so `git ls-remote origin` answers only for a repo
-// readable anonymously. On a private repo it fails, and a guard of the shape
-// `[ "$(git ls-remote …)" = "$(git rev-parse HEAD)" ] || exit 0` then skips
-// EVERY deploy green. A guard must fail closed when the lookup fails:
-//   tip=$(git ls-remote origin refs/heads/main) && [ -n "$tip" ] || exit 1
-//   [ "${tip%%[[:space:]]*}" = "$(git rev-parse HEAD)" ] || exit 0
+// Ordering is a dispatcher property, in two parts:
+//
+//   1. `serialize` puts every execution of one repo + branch + `checkLabel` in
+//      one group (apps/dispatcher/src/workflow.ts, runtime-cf
+//      serial-queue-d1.ts). At most one runs; while it runs, a newer dispatch
+//      waits and supersedes any older waiter, which concludes `neutral`
+//      naming the newer SHA. A running deploy is never cancelled.
+//   2. `branch-head` — once this execution holds its group and a sandbox slot,
+//      it reads the branch's head through the GitHub App. A head that is not
+//      `sha` means a newer push landed; the run skips (`neutral`, naming the
+//      head) before cloning, unless the dispatch sets `requireHead: false` (a
+//      deliberate rollback). The head is also handed to the command:
+//
+//        FLAREDISPATCH_BRANCH            the branch, or "" when not dispatched
+//        FLAREDISPATCH_BRANCH_HEAD_SHA   the head at dequeue, or "" when unknown
+//        FLAREDISPATCH_SHA               the commit being deployed
+//
+//      Empty means UNKNOWN (no branch, App uncredentialed, lookup failed) —
+//      never "matches". The checkout's `origin` carries no credential
+//      (packages/runtime-cf/src/sandbox-cf.ts, `scrubCloneCredential`), so a
+//      command cannot look the head up itself on a private repo.
 //
 // Spec: specs/02-runs.md § worker-deploy, specs/04-gha-integration.md
 // § Webhook mode.
@@ -105,7 +115,9 @@ import {
   artifact,
   config,
   defineRun,
+  github,
   io,
+  RunSkipped,
   sandbox,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
@@ -158,6 +170,12 @@ const WorkerDeployInput = Schema.Struct({
    * removed with `secrets` at the substrate stage-2 exit (ADR-0006).
    */
   secretPrefix: Schema.optional(Schema.String),
+  /**
+   * Skip (neutral) when `branch`'s head is no longer `sha` at dequeue time.
+   * Default true; a rollback that deploys an older commit on purpose sets it
+   * false. No effect without `branch`, or when the head cannot be read.
+   */
+  requireHead: Schema.optionalWith(Schema.Boolean, { default: () => true }),
   /** `sandbox.exec` timeout. Omitted → `worker-deploy.timeoutSec:<repo>` → 900. */
   timeoutSec: Schema.optional(Schema.Number),
   /**
@@ -191,6 +209,27 @@ const TIMEOUT_SEC_DEFAULT = 900;
  * `offload-test` / `check`.
  */
 const STEP_TIMEOUT_HEADROOM_SEC = 120;
+
+/** The env names the deploy command reads the dequeue-time branch head from. */
+export const BRANCH_ENV = "FLAREDISPATCH_BRANCH";
+export const BRANCH_HEAD_SHA_ENV = "FLAREDISPATCH_BRANCH_HEAD_SHA";
+export const DEPLOY_SHA_ENV = "FLAREDISPATCH_SHA";
+
+/**
+ * The serialization group: one per repo, branch, and label. The branch keeps a
+ * staging deploy from superseding a pending production one; the label keeps a
+ * second deploy of one commit from waiting on the first.
+ */
+export const serialGroup = (repo: string, branch?: string, checkLabel?: string): string =>
+  `worker-deploy:${repo}${branch !== undefined && branch !== "" ? `@${branch}` : ""}${
+    checkLabel !== undefined ? `:${checkLabel}` : ""
+  }`;
+
+/** `sha` is the head, allowing an abbreviated dispatch SHA. */
+const isHead = (head: string, sha: string): boolean => {
+  const s = sha.toLowerCase();
+  return head === s || (s.length >= 7 && head.startsWith(s));
+};
 
 /** Decoded input — pins the trigger's `inputs` return to the full shape. */
 type WorkerDeployI = Schema.Schema.Type<typeof WorkerDeployInput>;
@@ -230,9 +269,9 @@ const parseIntConfig = (raw: string | undefined): number | undefined => {
 
 export const workerDeploy = defineRun({
   name: "worker-deploy",
-  // 1.1.0 — additive: `checkLabel`, `worker-deploy.timeoutSec:<repo>`, and
-  // explicit exec StepOpts (no step retries, step timeout ≥ exec timeout).
-  version: "1.1.0",
+  // 1.2.0 — additive: per-group serialization, the dequeue-time head check
+  // (`requireHead`), and the `FLAREDISPATCH_*` head env.
+  version: "1.2.0",
 
   // Webhook-mode trigger — `check_suite.requested` is GitHub's per-push signal
   // to checks-writing Apps (see header). Gated to the repo's default branch.
@@ -263,9 +302,15 @@ export const workerDeploy = defineRun({
         // Decoded-shape defaults the trigger return must restate.
         install: false,
         secrets: [],
+        requireHead: true,
       }),
     },
   ],
+
+  serialize: (input) => ({
+    group: serialGroup(input.repo, input.branch, input.checkLabel),
+    revision: input.sha,
+  }),
 
   inputs: WorkerDeployInput,
   outputs: WorkerDeployOutput,
@@ -320,6 +365,34 @@ export const workerDeploy = defineRun({
       }
       const command = cfg.command;
 
+      // branch-head — the tip of the branch now that this execution holds its
+      // serialization group. Any failure is "unknown" (""), never a match: the
+      // command decides whether unknown blocks it (see header).
+      const branch = input.branch !== undefined && input.branch !== "" ? input.branch : undefined;
+      const head =
+        branch === undefined
+          ? { sha: "" }
+          : yield* step("branch-head", () =>
+              github.branchHead({ repo: input.repo, branch }).pipe(
+                Effect.map((sha) => ({ sha })),
+                Effect.catchAll((e) =>
+                  io
+                    .log(
+                      "warn",
+                      `worker-deploy: head of ${branch} unreadable (GitHub ${e.status} ${e.reason}) — ${BRANCH_HEAD_SHA_ENV} is empty`,
+                    )
+                    .pipe(Effect.as({ sha: "" })),
+                ),
+              ),
+            );
+      if (input.requireHead && head.sha !== "" && !isHead(head.sha, input.sha)) {
+        return yield* Effect.fail(
+          new RunSkipped({
+            reason: `superseded by ${head.sha.slice(0, 12)} — ${branch} moved past ${input.sha.slice(0, 12)} before this deploy started`,
+          }),
+        );
+      }
+
       // checkout — container + clone at the pushed SHA (+ optional cached
       // install), same opening move as offload-test.
       const { container, dir } = yield* step("checkout", () =>
@@ -352,8 +425,15 @@ export const workerDeploy = defineRun({
             cwd: dir,
             container,
             command,
-            // Per-dispatch `env` wins over a same-named config-store secret.
-            env: { ...secretEnv, ...input.env },
+            // Per-dispatch `env` wins over a same-named config-store secret;
+            // the head env wins over both, so no dispatch can spoof it.
+            env: {
+              ...secretEnv,
+              ...input.env,
+              [BRANCH_ENV]: branch ?? "",
+              [BRANCH_HEAD_SHA_ENV]: head.sha,
+              [DEPLOY_SHA_ENV]: input.sha,
+            },
             // Scrub secret VALUES from the captured log before it is persisted,
             // in case the command echoes its env. Not hypothetical here: a deploy
             // command is the one that carries a cloud provider's write-scoped API

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   AcceptanceFailed,
   AdmissionTimedOut,
+  SerialQueueTimedOut,
   ApprovalTimedOut,
   ArtifactUploadFailed,
   BrowserUnavailable,
@@ -49,6 +50,7 @@ const summarize = (e: RunError): string =>
       ContainerLaunchFailed: ({ image }) => `launch ${image}`,
       ContainerBusy: ({ containerId }) => `container busy ${containerId}`,
       AdmissionTimedOut: ({ position }) => `admission ${position} ahead`,
+      SerialQueueTimedOut: ({ group }) => `serial ${group}`,
       PortNeverOpened: ({ port }) => `port ${port} never opened`,
       ExposePortFailed: ({ port }) => `expose port ${port} failed`,
       BrowserUnavailable: ({ reason }) => `browser ${reason}`,
@@ -112,6 +114,15 @@ const samples: ReadonlyArray<{ name: string; err: RunError; expect: string }> = 
       poolBusy: 16,
     }),
     expect: "admission 3 ahead",
+  },
+  {
+    name: "SerialQueueTimedOut",
+    err: new SerialQueueTimedOut({
+      group: "worker-deploy:o/n@main",
+      holderRevision: "abc",
+      waitedMs: 3_600_000,
+    }),
+    expect: "serial worker-deploy:o/n@main",
   },
   {
     name: "PortNeverOpened",
@@ -267,6 +278,17 @@ describe("cause-carrying messages (#88)", () => {
     });
     expect(err.message).toBe(
       "timed out waiting for a sandbox slot after 20 min (3 run(s) ahead, 16 slot(s) busy) — the run never started",
+    );
+  });
+
+  it("SerialQueueTimedOut.message names the holder and says the run never started", () => {
+    const err = new SerialQueueTimedOut({
+      group: "worker-deploy:o/n@main",
+      holderRevision: "0123456789abcdef0123",
+      waitedMs: 3_600_000,
+    });
+    expect(err.message).toBe(
+      "timed out after 60 min queued behind 0123456789ab in worker-deploy:o/n@main — the run never started",
     );
   });
 

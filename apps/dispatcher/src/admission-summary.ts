@@ -31,3 +31,16 @@ export const queuedSummary = (
     `times out ${hh}:${mm} UTC`
   );
 };
+
+/**
+ * The line a serialized run posts while it waits behind an in-flight peer of
+ * its group — once per holder. Says the one thing a reader needs to not be
+ * surprised later: a newer dispatch replaces this one while it waits.
+ *
+ * @param holderRevision revision the in-flight execution is running, when known.
+ */
+export const serialQueuedSummary = (holderRevision: string | undefined): string =>
+  `Queued — waiting for the in-flight run ` +
+  `${holderRevision !== undefined && holderRevision !== "" ? `of \`${holderRevision.slice(0, 12)}\` ` : ""}` +
+  `to finish; runs of this group never overlap. A newer dispatch replaces this ` +
+  `one while it waits.`;

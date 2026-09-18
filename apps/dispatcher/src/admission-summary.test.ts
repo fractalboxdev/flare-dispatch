@@ -2,7 +2,7 @@
 // formatting, exercised with fixed inputs like failure-summary.test.ts.
 
 import { describe, expect, it } from "vitest";
-import { queuedSummary } from "./admission-summary";
+import { queuedSummary, serialQueuedSummary } from "./admission-summary";
 
 describe("queuedSummary", () => {
   // 2026-06-05T12:34:00.000Z
@@ -23,5 +23,18 @@ describe("queuedSummary", () => {
     expect(queuedSummary(0, 16, 16, Date.UTC(2026, 5, 5, 3, 5, 0))).toContain(
       "times out 03:05 UTC",
     );
+  });
+});
+
+describe("serialQueuedSummary", () => {
+  it("names the in-flight revision and warns that a newer dispatch replaces this one", () => {
+    expect(serialQueuedSummary("0123456789abcdef0123")).toBe(
+      "Queued — waiting for the in-flight run of `0123456789ab` to finish; runs of this group " +
+        "never overlap. A newer dispatch replaces this one while it waits.",
+    );
+  });
+
+  it("omits the revision when the holder is not known", () => {
+    expect(serialQueuedSummary(undefined)).toContain("waiting for the in-flight run to finish");
   });
 });
