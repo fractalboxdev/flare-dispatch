@@ -100,3 +100,25 @@ setup() {
     bash -c 'source "$SCRIPT"; set +o pipefail; printf "%s" "$J" | signals_invalid_reason'
   [[ "$output" == *'source exceeds 120 chars'* ]]
 }
+
+# --- compute_targets: idempotency key ----------------------------------------
+
+@test "compute_targets keys an unlabelled dispatch as run-repo-sha12" {
+  run env GITHUB_REPOSITORY=owner/name INPUT_RUN=worker-deploy ENDPOINT=https://d.example \
+    bash -c 'source "$SCRIPT"; SHA=0123456789abcdef; INPUTS="{\"repo\":\"owner/name\"}"; compute_targets; echo "$IDEMPOTENCY_KEY"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "worker-deploy-owner_name-0123456789ab" ]
+}
+
+@test "compute_targets folds checkLabel into the key so labelled dispatches stay distinct" {
+  run env GITHUB_REPOSITORY=owner/name INPUT_RUN=worker-deploy ENDPOINT=https://d.example \
+    bash -c 'source "$SCRIPT"; SHA=0123456789abcdef; INPUTS="{\"checkLabel\":\"containers\"}"; compute_targets; echo "$IDEMPOTENCY_KEY"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "worker-deploy-containers-owner_name-0123456789ab" ]
+}
+
+@test "compute_targets ignores a non-string checkLabel" {
+  run env GITHUB_REPOSITORY=owner/name INPUT_RUN=check ENDPOINT=https://d.example \
+    bash -c 'source "$SCRIPT"; SHA=0123456789abcdef; INPUTS="{\"checkLabel\":7}"; compute_targets; echo "$IDEMPOTENCY_KEY"'
+  [ "$output" = "check-owner_name-0123456789ab" ]
+}

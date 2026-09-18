@@ -9,7 +9,7 @@
 #
 #   POST ${endpoint}/v1/dispatch/${run}
 #     X-FlareDispatch-Signature: sha256=<hex over the RAW body bytes>
-#     Idempotency-Key: <run>-<repo>-<sha12>
+#     Idempotency-Key: <run>[-<checkLabel>]-<repo>-<sha12>
 #   202 { executionId, detailsUrl?, logsUrl? }   → outputs, success
 #   401                                           → HMAC drift, no retry
 #   400 / 404                                     → config bug, no retry
@@ -300,14 +300,25 @@ sign_body() {
 }
 
 # --- idempotency key + URL ---------------------------------------------------
-# {run}-{repo}-{sha12} so a re-run of the same step collapses onto one execution
-# at the receiver. Randomized fallback when repo/sha are absent (local act runs).
+# {run}[-{checkLabel}]-{repo}-{sha12} so a re-run of the same step collapses
+# onto one execution at the receiver, while two steps dispatching one run with
+# different `checkLabel`s stay two executions — the label names a separate
+# check-run, so collapsing them would leave the second check never posted.
+# Randomized fallback when repo/sha are absent (local act runs).
 # Sets $IDEMPOTENCY_KEY and $URL.
+
+# Print `-<checkLabel>` when the inputs JSON on stdin carries a string
+# `checkLabel`, else nothing. Pure.
+check_label_suffix() {
+  jq -r 'if (.checkLabel | type) == "string" and (.checkLabel | length) > 0
+         then "-\(.checkLabel)" else "" end'
+}
 
 compute_targets() {
   if [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "$SHA" ]; then
-    local repo_safe="${GITHUB_REPOSITORY//\//_}"
-    IDEMPOTENCY_KEY="${INPUT_RUN}-${repo_safe}-${SHA:0:12}"
+    local repo_safe="${GITHUB_REPOSITORY//\//_}" label
+    label="$(check_label_suffix <<<"${INPUTS:-null}")"
+    IDEMPOTENCY_KEY="${INPUT_RUN}${label}-${repo_safe}-${SHA:0:12}"
   else
     IDEMPOTENCY_KEY="${INPUT_RUN}-$(date +%s)-${RANDOM}"
   fi
