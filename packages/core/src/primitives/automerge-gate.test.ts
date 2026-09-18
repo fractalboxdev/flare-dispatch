@@ -380,6 +380,7 @@ const githubService = (over: Partial<GithubService>): GithubService => ({
   actionRuns: () => Effect.succeed([]),
   pullRequestHistory: () => Effect.succeed([]),
   readTextFile: () => Effect.succeed({ found: false }),
+  branchHead: () => Effect.succeed("0".repeat(40)),
   pullReview: () => Effect.void,
   openDraftPullRequest: () => Effect.succeed({ number: 0, url: "", created: false }),
   createRelease: () => Effect.succeed({ id: 0, url: "", tag: "", published: false }),

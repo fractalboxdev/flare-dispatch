@@ -391,6 +391,20 @@ export interface GithubService {
   ) => Effect.Effect<TextFileResult, GitHubApiError>;
 
   /**
+   * A branch's current head commit SHA — the read `worker-deploy` uses to tell
+   * whether the commit it is about to deploy is still the tip. Fails on a
+   * missing branch, an unreadable ref, and an uncredentialed deploy alike: no
+   * answer here can stand in for a SHA, so the caller decides what "unknown"
+   * means rather than comparing against a placeholder.
+   */
+  readonly branchHead: (req: {
+    repo: string;
+    /** Branch name without `refs/heads/`. */
+    branch: string;
+    installationId?: number;
+  }) => Effect.Effect<string, GitHubApiError>;
+
+  /**
    * Post a top-level PR review comment (`event: "COMMENT"`). The run uses this
    * to leave an always-visible comment on every review — success or failure.
    * Best-effort reporting: a live deploy without App credentials degrades to a
@@ -545,6 +559,8 @@ export const github = {
     installationId?: number;
   }) => Effect.flatMap(Github, (g) => g.pullRequestHistory(opts)),
   readTextFile: (req: ReadTextFileRequest) => Effect.flatMap(Github, (g) => g.readTextFile(req)),
+  branchHead: (req: { repo: string; branch: string; installationId?: number }) =>
+    Effect.flatMap(Github, (g) => g.branchHead(req)),
   issues: (opts: {
     repo: string;
     state?: "open" | "closed" | "all";

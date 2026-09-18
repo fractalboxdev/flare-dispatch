@@ -15,7 +15,7 @@ import {
   __clearTokenCache,
   __clearRepoInstallationCache,
 } from "@fractalboxdev/flare-dispatch-github-app";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -188,6 +188,37 @@ describe("makeGithubLive — readTextFile", () => {
         .pipe(Effect.provide(makeGithubLive(undefined))),
     );
     expect(exit._tag).toBe("Failure");
+    expect(recorded.tokenExchanges).toBe(0);
+  });
+});
+
+describe("makeGithubLive — branchHead", () => {
+  const HEAD = "fedcba9876543210fedcba9876543210fedcba98";
+
+  it("resolves the installation, mints a token, and returns the ref's SHA", async () => {
+    server.use(
+      http.get("https://api.github.com/repos/:owner/:repo/git/ref/*", ({ request }) => {
+        expect(request.headers.get("authorization")).toBe("Bearer ghs_install_token");
+        expect(new URL(request.url).pathname).toBe("/repos/owner/private/git/ref/heads/main");
+        return HttpResponse.json({ object: { sha: HEAD, type: "commit" } });
+      }),
+    );
+    const sha = await Effect.runPromise(
+      github
+        .branchHead({ repo: "owner/private", branch: "main" })
+        .pipe(Effect.provide(makeGithubLive(CONFIG))),
+    );
+    expect(sha).toBe(HEAD);
+    expect(recorded.tokenExchanges).toBe(1);
+  });
+
+  it("degraded — no App config FAILS; no string may stand in for a SHA", async () => {
+    const exit = await Effect.runPromiseExit(
+      github
+        .branchHead({ repo: "owner/private", branch: "main" })
+        .pipe(Effect.provide(makeGithubLive(undefined))),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
     expect(recorded.tokenExchanges).toBe(0);
   });
 });

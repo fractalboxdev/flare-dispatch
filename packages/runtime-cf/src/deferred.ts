@@ -123,6 +123,8 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
     pullRequestHistory: () =>
       Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     readTextFile: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    // `branchHead` has no empty answer at all — any string would be read as a SHA.
+    branchHead: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     // `issues` is the same class: an empty list reads as "nothing to triage",
     // which a scheduled run would act on by reporting a clean estate.
     issues: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),

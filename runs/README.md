@@ -476,6 +476,7 @@ back to the repo key.
       {
         "repo": "${{ github.repository }}",
         "sha": "${{ github.sha }}",
+        "branch": "${{ github.ref_name }}",
         "checkLabel": "containers",
         "failOnNonZeroExit": true
       }
@@ -487,14 +488,53 @@ the webhook's instance id is `worker-deploy_<repo_>_<sha12>`, the Action's is
 
 ### Deploy ordering
 
-Two rapid pushes deploy in completion order, not push order. A command that
-guards against an older push landing last compares `HEAD` to the branch tip —
-but the checkout's `origin` carries no credential (the sandbox scrubs it after
-the clone), so `git ls-remote origin` works only on a repo readable
-anonymously. Make the guard fail closed when the lookup fails, or a private repo
-skips every deploy green:
+Deploys of one repo, branch, and `checkLabel` never overlap. While one runs, a
+newer dispatch of the same group waits, and each new arrival replaces the
+waiter before it: of three pushes in quick succession, the first deploys, the
+second concludes `neutral` with `skipped: superseded by <third sha12>`, and the
+third deploys after the first finishes. A running deploy is never cancelled. A
+waiter that stays queued for 60 minutes behind a live deploy fails red
+(`SerialQueueTimedOut`) without having started. A different branch or label is
+a different group and runs alongside.
+
+Once a deploy holds its group and a sandbox slot, the dispatcher reads the
+branch's head through the GitHub App. When the head is no longer the dispatched
+`sha`, a newer push landed, and the deploy concludes `neutral` with
+`skipped: superseded by <head sha12>` before cloning. A rollback that deploys an
+older commit on purpose dispatches with `"requireHead": false`.
+
+The command also receives that head, since it cannot look it up itself: the
+checkout's `origin` carries no credential, so `git ls-remote` fails on a private
+repo.
+
+| Env                             | Value                                |
+| ------------------------------- | ------------------------------------ |
+| `FLAREDISPATCH_BRANCH`          | the dispatched `branch`, or empty    |
+| `FLAREDISPATCH_BRANCH_HEAD_SHA` | the branch head at dequeue, or empty |
+| `FLAREDISPATCH_SHA`             | the commit being deployed            |
+
+**Empty means unknown, never a match.** The head is empty when the dispatch
+names no `branch` (webhook mode always names it; an Action dispatch must pass
+`"branch": "${{ github.ref_name }}"`), when the App has no credentials, and when
+the read fails. A command that guards on the head picks one of two policies:
 
 ```bash
-tip=$(git ls-remote origin refs/heads/main) && [ -n "$tip" ] || exit 1
-[ "${tip%%[[:space:]]*}" = "$(git rev-parse HEAD)" ] || exit 0
+# Fail closed on unknown — no deploy without a confirmed head.
+[ -n "$FLAREDISPATCH_BRANCH_HEAD_SHA" ] || { echo "branch head unknown"; exit 1; }
+[ "$FLAREDISPATCH_BRANCH_HEAD_SHA" = "$FLAREDISPATCH_SHA" ] || exit 0
+
+# Fail closed only on a mismatch — deploy when the head is unknown.
+[ -z "$FLAREDISPATCH_BRANCH_HEAD_SHA" ] ||
+  [ "$FLAREDISPATCH_BRANCH_HEAD_SHA" = "$FLAREDISPATCH_SHA" ] || exit 0
 ```
+
+A known mismatching head never reaches the command — the dispatcher skipped it —
+and a push that lands mid-deploy queues behind this one rather than racing it.
+The guard's job is deciding what an unknown head means.
+
+Before a dispatch joins the queue, it reads the branch head the same way. A
+commit that is already not the head — a re-requested check suite of an old
+commit, a late webhook — concludes `neutral` at once and never enters the queue,
+so it cannot displace the head's waiting deploy. A dispatch that is the head
+supersedes every waiter that is not, whatever order they arrived in. Only when
+the head is unknown does arrival order decide which waiter survives.

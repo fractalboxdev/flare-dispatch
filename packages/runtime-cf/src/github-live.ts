@@ -36,6 +36,7 @@ import {
   listIssues,
   listPullRequests,
   openDraftPullRequest,
+  readBranchHead,
   readRepoTextFile,
   removeIssueLabel,
   resolveRepoInstallationId,
@@ -267,6 +268,15 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
         return yield* ghCall(() =>
           readRepoTextFile({ token, repo, path, ...(ref !== undefined ? { ref } : {}) }),
         );
+      }),
+
+    branchHead: ({ repo, branch, installationId }) =>
+      Effect.gen(function* () {
+        // A placeholder SHA would compare unequal to every deploy and skip it;
+        // an uncredentialed deploy fails like every other read.
+        if (config === undefined) return yield* readNeedsCredentials<string>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() => readBranchHead({ token, repo, branch }));
       }),
 
     issues: ({ repo, state, labels, updatedWithinDays, maxPages, strict, installationId }) =>

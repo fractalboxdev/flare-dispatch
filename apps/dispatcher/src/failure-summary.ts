@@ -16,6 +16,7 @@ import type {
   ExecTimeout,
   RunError,
   SecretsMissing,
+  SerialQueueTimedOut,
   StepFailed,
 } from "@fractalboxdev/flare-dispatch-core";
 
@@ -49,6 +50,17 @@ export const admissionTimedOutMd = (e: AdmissionTimedOut): string =>
   `The execution **never started**: the container pool stayed saturated for ` +
   `the whole wait, so this is capacity back-pressure — **not a test ` +
   `failure**. Re-run once in-flight runs drain.`;
+
+/**
+ * Render a `SerialQueueTimedOut`: the run never started, because one peer of
+ * its group held it — and kept heartbeating — for the whole wait.
+ */
+export const serialQueueTimedOutMd = (e: SerialQueueTimedOut): string =>
+  `⏳ **Timed out waiting for an in-flight run of \`${e.group}\`** — queued for ` +
+  `${Math.round(e.waitedMs / 60_000)} min behind ` +
+  `${e.holderRevision !== "" ? `\`${e.holderRevision.slice(0, 12)}\`` : "a peer"}.\n\n` +
+  `The execution **never started**. Runs of this group never overlap, and the ` +
+  `holder was still alive when the wait gave up. Re-run once it finishes.`;
 
 const execFailedMd = (e: ExecFailed): string =>
   `**Exec failed** (exit \`${e.exitCode}\`):\n\n\`\`\`\n${clip(e.stderrTail)}\n\`\`\``;
@@ -123,6 +135,7 @@ export const failureSummaryMd = (exit: Exit.Exit<unknown, RunError>): string | u
           Match.value(failure).pipe(
             Match.tag("AcceptanceFailed", (e) => e.summaryMd),
             Match.tag("AdmissionTimedOut", (e) => admissionTimedOutMd(e)),
+            Match.tag("SerialQueueTimedOut", (e) => serialQueueTimedOutMd(e)),
             Match.tag("ExecFailed", (e) => execFailedMd(e)),
             Match.tag("ExecTimeout", (e) => execTimeoutMd(e)),
             Match.tag("StepFailed", (e) => stepFailedMd(e)),

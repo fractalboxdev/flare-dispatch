@@ -23,6 +23,10 @@
 //   (h) timeout key     — `worker-deploy.timeoutSec:<repo>` sets the webhook
 //                          exec timeout; a dispatched value wins
 //   (i) checkLabel      — a labelled dispatch reads only its labelled command
+//   (j) ordering        — the serialization group; the dequeue-time head check
+//                          skips a stale commit (unless `requireHead: false`)
+//                          and hands the head to the command as env, empty
+//                          when unknown
 //
 // Plus the standard determinism source guard.
 //
@@ -44,6 +48,7 @@ const baseInput = {
   command: DEPLOY_CMD,
   secrets: [] as readonly string[],
   install: false,
+  requireHead: true,
   failOnNonZeroExit: false,
 } as const;
 
@@ -88,6 +93,7 @@ describe("worker-deploy", () => {
         sha: "abc123",
         secrets: [] as readonly string[],
         install: false,
+        requireHead: true,
         failOnNonZeroExit: true,
       };
 
@@ -113,6 +119,7 @@ describe("worker-deploy", () => {
         sha: "abc123",
         secrets: [] as readonly string[],
         install: false,
+        requireHead: true,
         failOnNonZeroExit: true,
       };
 
@@ -147,6 +154,7 @@ describe("worker-deploy", () => {
         sha: "abc123",
         secrets: [] as readonly string[],
         install: false,
+        requireHead: true,
         failOnNonZeroExit: true,
       };
 
@@ -158,6 +166,9 @@ describe("worker-deploy", () => {
         expect(exec?.env).toEqual({
           CLOUDFLARE_API_TOKEN: "cf_token_from_worker",
           CLOUDFLARE_ACCOUNT_ID: "cf_account_from_worker",
+          FLAREDISPATCH_BRANCH: "",
+          FLAREDISPATCH_BRANCH_HEAD_SHA: "",
+          FLAREDISPATCH_SHA: "abc123",
         });
       }).pipe(Effect.provide(layer));
     },
@@ -177,6 +188,7 @@ describe("worker-deploy", () => {
       sha: "abc123",
       secrets: [] as readonly string[],
       install: false,
+      requireHead: true,
       failOnNonZeroExit: true,
     };
 
@@ -216,6 +228,7 @@ describe("worker-deploy", () => {
       sha: "abc123",
       secrets: [] as readonly string[],
       install: false,
+      requireHead: true,
       failOnNonZeroExit: true,
     };
 
@@ -323,6 +336,7 @@ describe("worker-deploy", () => {
     sha: "abc123",
     secrets: [] as readonly string[],
     install: false,
+    requireHead: true,
     failOnNonZeroExit: true,
   };
 
@@ -418,6 +432,155 @@ describe("worker-deploy", () => {
     );
   });
 
+  // --- Deploy ordering — serialization group + the dequeue-time head check ----
+
+  const PUSHED = "1111111111111111111111111111111111111111";
+  const NEWER = "2222222222222222222222222222222222222222";
+  const onMain = { ...baseInput, sha: PUSHED, branch: "main" };
+
+  it("serialize — one group per repo, branch, and label; the revision is the SHA", () => {
+    const spec = (i: Parameters<NonNullable<typeof workerDeploy.serialize>>[0]) =>
+      workerDeploy.serialize?.(i);
+    expect(spec({ ...onMain })).toMatchObject({
+      group: "worker-deploy:owner/name@main",
+      revision: PUSHED,
+    });
+    expect(spec({ ...onMain, checkLabel: "containers" })?.group).toBe(
+      "worker-deploy:owner/name@main:containers",
+    );
+    expect(spec({ ...onMain, branch: "staging" })?.group).toBe("worker-deploy:owner/name@staging");
+    expect(spec({ ...baseInput })?.group).toBe("worker-deploy:owner/name");
+  });
+
+  it.effect(
+    "serialize — the group's current revision is the branch head, read through the App",
+    () => {
+      const { layer } = makeCFRuntimeTest({
+        github: { branchHeads: { "owner/name:main": NEWER } },
+      });
+      return Effect.gen(function* () {
+        const current = workerDeploy.serialize?.(onMain)?.current;
+        expect(current).toBeDefined();
+        if (current !== undefined) expect(yield* current).toBe(NEWER);
+        // An unreadable head is unknown, never a placeholder SHA.
+        const unknown = workerDeploy.serialize?.({ ...onMain, branch: "gone" })?.current;
+        if (unknown !== undefined) expect(yield* unknown).toBeUndefined();
+        // No head read for a rollback or a branchless dispatch.
+        expect(
+          workerDeploy.serialize?.({ ...onMain, requireHead: false })?.current,
+        ).toBeUndefined();
+        expect(workerDeploy.serialize?.(baseInput)?.current).toBeUndefined();
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("head env — the command sees the branch, its head at dequeue, and the SHA", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
+      github: { branchHeads: { "owner/name:main": PUSHED } },
+    });
+    return Effect.gen(function* () {
+      const result = yield* workerDeploy.run({
+        ...onMain,
+        // A dispatch cannot spoof the head.
+        env: { FLAREDISPATCH_BRANCH_HEAD_SHA: NEWER, NODE_ENV: "production" },
+      });
+      expect(result.deployed).toBe(true);
+      expect(handles.sandbox.execs.find((e) => e.command === DEPLOY_CMD)?.env).toEqual({
+        NODE_ENV: "production",
+        FLAREDISPATCH_BRANCH: "main",
+        FLAREDISPATCH_BRANCH_HEAD_SHA: PUSHED,
+        FLAREDISPATCH_SHA: PUSHED,
+      });
+      expect(handles.github.branchHeadCalls).toEqual([{ repo: "owner/name", branch: "main" }]);
+      expect(handles.executions.steps.map((s) => s.name)).toEqual([
+        "resolve-config",
+        "branch-head",
+        "checkout",
+        "exec",
+        "upload-log",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("stale at dequeue — a newer head skips the deploy, naming it, before any clone", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
+      github: { branchHeads: { "owner/name:main": NEWER } },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(workerDeploy.run(onMain));
+      const failure = Exit.isFailure(exit)
+        ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+        : undefined;
+      expect(failure).toMatchObject({ _tag: "RunSkipped" });
+      expect((failure as { reason: string }).reason).toBe(
+        "superseded by 222222222222 — main moved past 111111111111 before this deploy started",
+      );
+      expect(handles.sandbox.clones).toHaveLength(0);
+      expect(handles.sandbox.execs).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("stale at dequeue — an abbreviated dispatch SHA that prefixes the head deploys", () => {
+    const { layer } = makeCFRuntimeTest({
+      sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
+      github: { branchHeads: { "owner/name:main": PUSHED } },
+    });
+    return Effect.gen(function* () {
+      const result = yield* workerDeploy.run({ ...onMain, sha: PUSHED.slice(0, 12) });
+      expect(result.deployed).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("requireHead: false — a rollback deploys an older commit on purpose", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
+      github: { branchHeads: { "owner/name:main": NEWER } },
+    });
+    return Effect.gen(function* () {
+      const result = yield* workerDeploy.run({ ...onMain, requireHead: false });
+      expect(result.deployed).toBe(true);
+      expect(
+        handles.sandbox.execs.find((e) => e.command === DEPLOY_CMD)?.env?.[
+          "FLAREDISPATCH_BRANCH_HEAD_SHA"
+        ],
+      ).toBe(NEWER);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "head unknown — an unreadable head deploys with an EMPTY head env, never a match",
+    () => {
+      // The fake fails an unseeded branch, as the live read does on a 404, a
+      // missing installation, or an uncredentialed deploy.
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
+      });
+      return Effect.gen(function* () {
+        const result = yield* workerDeploy.run(onMain);
+        expect(result.deployed).toBe(true);
+        const env = handles.sandbox.execs.find((e) => e.command === DEPLOY_CMD)?.env;
+        expect(env?.["FLAREDISPATCH_BRANCH_HEAD_SHA"]).toBe("");
+        expect(env?.["FLAREDISPATCH_BRANCH"]).toBe("main");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("no branch — no head read; both head vars are empty", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DEPLOY_CMD]: { exitCode: 0 } },
+      github: { branchHeads: { "owner/name:main": NEWER } },
+    });
+    return Effect.gen(function* () {
+      yield* workerDeploy.run(baseInput);
+      expect(handles.github.branchHeadCalls).toHaveLength(0);
+      const env = handles.sandbox.execs.find((e) => e.command === DEPLOY_CMD)?.env;
+      expect(env?.["FLAREDISPATCH_BRANCH"]).toBe("");
+      expect(env?.["FLAREDISPATCH_BRANCH_HEAD_SHA"]).toBe("");
+    }).pipe(Effect.provide(layer));
+  });
+
   // --- Webhook trigger — check_suite as the default-branch push signal --------
 
   const checkSuitePayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -443,6 +606,7 @@ describe("worker-deploy", () => {
       failOnNonZeroExit: true,
       install: false,
       secrets: [],
+      requireHead: true,
     });
     expect(trigger?.idempotencyKey(ctx)).toBe("worker-deploy:owner_name:abcdef012345");
   });

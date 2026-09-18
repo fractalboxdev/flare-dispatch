@@ -67,6 +67,7 @@ export {
   type ReadRepoTextFileOptions,
   type ReadRepoTextFileResult,
 } from "./repo-files";
+export { readBranchHead, branchRefUrl, type ReadBranchHeadOptions } from "./branch-head";
 export {
   addIssueLabels,
   closeIssueAsDuplicate,

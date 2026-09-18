@@ -19,6 +19,7 @@ export {
   type CooldownSpec,
   type HumanGateSpec,
   type SandboxImage,
+  type SerializeSpec,
   type TriggerSpec,
   type ScheduleSpec,
   type ScheduleContext,
