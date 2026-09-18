@@ -85,7 +85,7 @@ import { queuedSummary } from "./admission-summary";
 import { appendFailureSummary, failureSummaryMd, runSkippedReason } from "./failure-summary";
 import { renderResultEmail } from "./notify";
 import { workflowDashboardUrl } from "./dashboard-url";
-import { checkRunNameFor } from "./check-name";
+import { checkRunNameFor, checkRunTitleFor } from "./check-name";
 import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "./log-token";
 import { logLinksSuffix, startedSummary } from "./summary-links";
 import { resolveMailboxLinkSecret, signMailboxToken } from "./mailbox-token";
@@ -167,6 +167,15 @@ const DispatchPayload = Schema.Struct({
    * Distinct from `origin` above, which is the dispatcher's own public URL.
    */
   source: Schema.optional(DispatchSource),
+  /**
+   * Which attempt of its family this execution is — absent (→ 1) on every
+   * dispatch path but a check-run re-run, which sets the next number
+   * (rerequest.ts). Persisted to `executions.attempt` and shown in the
+   * check-run title.
+   */
+  attempt: Schema.optional(Schema.Int.pipe(Schema.greaterThanOrEqualTo(1))),
+  /** The id of attempt 1 of the family a re-run retries — `executions.retry_of`. */
+  retryOf: Schema.optional(Schema.String),
 });
 type DispatchPayload = Schema.Schema.Type<typeof DispatchPayload>;
 
@@ -351,6 +360,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // separately-requirable checks on the same commit (check-name.ts). Every
     // run without that input names identically to before.
     const checkRunName = checkRunNameFor(payload.run, payload.inputs);
+    // The name stays fixed across re-runs (branch protection keys on it); the
+    // output title carries the attempt so a re-run reads as one.
+    const attempt = payload.attempt ?? 1;
+    const checkRunTitle = checkRunTitleFor(checkRunName, attempt);
     // The Cloudflare Workflows instance page for this execution — the "Details"
     // link on the GitHub check-run + a markdown link in its summary. `undefined`
     // when CLOUDFLARE_ACCOUNT_ID is unset (BYOC default): the check-run renders
@@ -601,6 +614,8 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         ...(payload.parentExecutionId !== undefined
           ? { parentExecutionId: payload.parentExecutionId }
           : {}),
+        attempt,
+        ...(payload.retryOf !== undefined ? { retryOf: payload.retryOf } : {}),
       });
 
       // Open the check-run (`in_progress`). With no App config this resolves
@@ -611,7 +626,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         name: checkRunName,
         ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
         output: {
-          title: checkRunName,
+          title: checkRunTitle,
           // Both log links from the very first render (summary-links.ts) — a
           // reviewer watching an in-progress check reaches the viewer without
           // waiting for the verdict update.
@@ -721,7 +736,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                 checkRunId,
                 ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
                 output: {
-                  title: checkRunName,
+                  title: checkRunTitle,
                   summary: queuedSummary(
                     decision.position,
                     decision.poolBusy,
@@ -1029,7 +1044,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         conclusion: status === "skipped" ? "neutral" : status,
         ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
         output: {
-          title: checkRunName,
+          title: checkRunTitle,
           summary:
             skipReason !== undefined
               ? `⊘ ${payload.run} — skipped: ${skipReason}.${logsSuffix}`

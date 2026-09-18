@@ -5,7 +5,7 @@
 // `checkLabel` produces a distinct, separately-requirable name.
 
 import { describe, expect, it } from "vitest";
-import { checkRunNameFor } from "./check-name";
+import { checkRunNameFor, checkRunTitleFor } from "./check-name";
 
 describe("checkRunNameFor", () => {
   it("names a labelless dispatch exactly as before — `flare-dispatch/<run>`", () => {
@@ -72,5 +72,17 @@ describe("checkRunNameFor", () => {
   it("accepts a label exactly at the 32-char ceiling", () => {
     const label = "a".repeat(32);
     expect(checkRunNameFor("check", { checkLabel: label })).toBe(`flare-dispatch/check:${label}`);
+  });
+});
+
+describe("checkRunTitleFor", () => {
+  it("is the bare check name on attempt 1", () => {
+    expect(checkRunTitleFor("flare-dispatch/check", 1)).toBe("flare-dispatch/check");
+  });
+
+  it("names the attempt on a re-run", () => {
+    expect(checkRunTitleFor("flare-dispatch/check:codegen", 3)).toBe(
+      "flare-dispatch/check:codegen (attempt 3)",
+    );
   });
 });

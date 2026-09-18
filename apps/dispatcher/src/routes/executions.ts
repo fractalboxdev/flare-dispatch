@@ -55,6 +55,9 @@ const executionView = (row: ExecutionRow, links: { logsUrl?: string; dashboardUr
   completedAt: row.completed_at,
   ...(row.parent_execution_id !== null ? { parentExecutionId: row.parent_execution_id } : {}),
   ...(row.check_run_id !== null ? { checkRunId: row.check_run_id } : {}),
+  // `?? 1`: a row read before migration 0007 has no column at all.
+  attempt: row.attempt ?? 1,
+  ...(row.retry_of != null ? { retryOf: row.retry_of } : {}),
   ...(links.logsUrl !== undefined ? { logsUrl: links.logsUrl } : {}),
   ...(links.dashboardUrl !== undefined ? { dashboardUrl: links.dashboardUrl } : {}),
 });

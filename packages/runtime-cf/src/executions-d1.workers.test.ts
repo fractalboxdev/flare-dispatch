@@ -108,6 +108,33 @@ describe("D1ExecutionsLive", () => {
     expect(child?.parent_execution_id).toBe(EXECUTION_ID);
   });
 
+  it("records attempt 1 / NULL retry_of by default, and the lineage a re-run passes", async () => {
+    const layer = makeD1ExecutionsLive(bindings.db, CTX);
+    const rerunId = "01TEST00000000000000000003";
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const executions = yield* Executions;
+        yield* executions.startExecution({ id: EXECUTION_ID, run: "check", startedAt: 0 });
+        yield* executions.startExecution({
+          id: rerunId,
+          run: "check",
+          startedAt: 1,
+          attempt: 2,
+          retryOf: EXECUTION_ID,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const lineage = async (id: string) =>
+      bindings.db
+        .prepare(`SELECT attempt, retry_of FROM executions WHERE id = ?`)
+        .bind(id)
+        .first<{ attempt: number; retry_of: string | null }>();
+    expect(await lineage(EXECUTION_ID)).toEqual({ attempt: 1, retry_of: null });
+    expect(await lineage(rerunId)).toEqual({ attempt: 2, retry_of: EXECUTION_ID });
+  });
+
   it("writes one steps row per step, each spanning start → finish", async () => {
     const layer = makeD1ExecutionsLive(bindings.db, CTX);
     const stepNames = ["checkout", "exec", "upload-log"];

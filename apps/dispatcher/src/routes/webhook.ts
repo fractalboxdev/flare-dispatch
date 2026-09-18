@@ -37,6 +37,7 @@ import { verify } from "../hmac";
 import { toInstanceId } from "../instance-id";
 import { triggersByEvent } from "../registry";
 import { resolveReleaseApproval } from "../release-approval";
+import { decodeRerequest, handleRerequest } from "../rerequest";
 import { signalWorkflow } from "../signal-workflow";
 import type { Env } from "../env";
 
@@ -185,6 +186,26 @@ export const handleGithubWebhook = async (request: Request, env: Env): Promise<R
       },
       202,
     );
+  }
+
+  // 6c. Check re-run (GitHub's "Re-run" / "Re-run all checks" on a check this
+  //     App posted). Re-dispatches the recorded execution as its next attempt
+  //     (rerequest.ts) and returns: a re-run never ALSO fans out triggers, so
+  //     a trigger on `check_run` / `check_suite` sees every action but
+  //     `rerequested`. Always 202 — a refusal is reported, not retried.
+  const rerequest = decodeRerequest(event, payload);
+  if (rerequest !== undefined) {
+    const outcomes = await handleRerequest(
+      env,
+      rerequest,
+      env.PUBLIC_ORIGIN ?? new URL(request.url).origin,
+    );
+    if (env.IDEMPOTENCY_KV !== undefined) {
+      await env.IDEMPOTENCY_KV.put(deliveryKey, "1", {
+        expirationTtl: DEDUP_TTL_SEC,
+      });
+    }
+    return json({ event, deliveryId, rerun: outcomes }, 202);
   }
 
   // 7. Look up every (run, trigger) whose event matches. Filter by the

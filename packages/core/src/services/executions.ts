@@ -54,6 +54,10 @@ export type ExecutionRecord = {
    * column a fan-out parent reads back to join on its children's outcomes.
    */
   readonly parentExecutionId?: string;
+  /** 1 for a dispatched execution; N for the (N-1)th re-run of it. Absent → 1. */
+  readonly attempt?: number;
+  /** The id of attempt 1 of this execution's family, when this row is a re-run. */
+  readonly retryOf?: string;
 };
 
 /**
@@ -73,6 +77,17 @@ export interface ExecutionsService {
      * fan-out parent can enumerate its children. Omitted for top-level rows.
      */
     parentExecutionId?: string;
+    /**
+     * Which attempt of its family this execution is — persisted to
+     * `executions.attempt`. Omitted → 1. A check-run re-run dispatches a fresh
+     * execution with the next attempt number (routes/rerequest.ts).
+     */
+    attempt?: number;
+    /**
+     * The id of attempt 1 of the family this execution re-runs — persisted to
+     * `executions.retry_of`. Omitted on attempt 1.
+     */
+    retryOf?: string;
   }) => Effect.Effect<void>;
 
   /** Mark an `executions` row terminal. */
