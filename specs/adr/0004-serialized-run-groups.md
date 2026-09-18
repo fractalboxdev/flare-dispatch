@@ -1,7 +1,7 @@
 # ADR-0004 — Serialized run groups: one in flight, newest waiter wins, in D1
 
 **Status:** proposed 2026-09-18
-**Related:** `packages/runtime-cf/src/serial-queue-d1.ts` · `apps/dispatcher/src/workflow.ts` · `runs/worker-deploy.ts` · `infra/migrations/0007_serial_queue.sql` · ADR-0001 § Consequences ("No per-entity mutex")
+**Related:** `packages/runtime-cf/src/serial-queue-d1.ts` · `apps/dispatcher/src/workflow.ts` · `runs/worker-deploy.ts` · `infra/migrations/0008_serial_queue.sql` · ADR-0001 § Consequences ("No per-entity mutex")
 
 ## Context
 
@@ -18,13 +18,18 @@ serialization.
 
 ## Decision
 
-A run may declare `serialize: (input) => { group, revision } | undefined`. For
-executions with equal `group`:
+A run may declare `serialize: (input) => { group, revision, current? } | undefined`.
+For executions with equal `group`:
 
 - at most one runs;
-- a new arrival marks every older waiter superseded in the same D1 batch that
-  enqueues it, so the only live waiter is the newest; a superseded waiter fails
-  `RunSkipped` (a `neutral` check naming the newer revision);
+- when the spec names a `current` revision (for a deploy, the branch head), it
+  is read once before the execution touches the queue. An arrival whose
+  revision is not current fails `RunSkipped` at once and supersedes nothing. An
+  arrival whose revision is current supersedes every waiter whose revision is
+  not, whenever that waiter arrived;
+- otherwise a new arrival marks every older waiter superseded in the same D1
+  batch that enqueues it, so the only live waiter is the newest; a superseded
+  waiter fails `RunSkipped` (a `neutral` check naming the newer revision);
 - a running execution is never touched by a newer one;
 - a waiter queued past 60 minutes behind a live holder fails
   `SerialQueueTimedOut`.
@@ -62,10 +67,13 @@ new infrastructure broke the tie between D1 and a Durable Object.
 
 - Deploy latency for a burst: the newest push waits for the in-flight deploy,
   then up to one poll interval.
-- Order is arrival order, not commit order. An older commit's dispatch arriving
-  after a newer one (a re-requested check suite, a late webhook) supersedes the
-  newer waiter and is then skipped by the head check, leaving the head undeployed
-  until the next dispatch. Both checks read `neutral` and name each other.
+- Every serialized `worker-deploy` dispatch makes one GitHub API call before it
+  queues, and another at dequeue. A late or re-requested older commit skips
+  without displacing the head's waiting deploy.
+- When the head read fails, the group falls back to arrival order, and an older
+  commit arriving after a newer one can supersede it; the dequeue-time head
+  check then skips the older commit too, and the head waits for the next
+  dispatch.
 - A holder that dies without releasing blocks its group until its heartbeat
   stales (10 minutes).
 - Any run can opt in; each one that does documents its group key.

@@ -1,4 +1,4 @@
--- Migration number: 0007 	 serial queue
+-- Migration number: 0008 	 serial queue
 --
 -- Per-group serialization for runs that declare `serialize` (worker-deploy:
 -- one group per repo, branch, and checkLabel). At most one row per group is

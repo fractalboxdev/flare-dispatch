@@ -46,7 +46,7 @@
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { getSandbox } from "@cloudflare/sandbox";
-import { Duration, Effect, Exit, Schedule, Schema } from "effect";
+import { Duration, Effect, Exit, Runtime, Schedule, Schema } from "effect";
 import {
   admissionAcquireAttempts,
   type AdmissionPool,
@@ -926,12 +926,19 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           ? admitted
           : Effect.gen(function* () {
               const serialQueue = makeSerialQueueD1(db);
+              // `current` needs the run's capabilities (the branch-head read);
+              // the gate runs it inside a durable step as a plain promise.
+              const rt = yield* Effect.runtime<RunContext>();
+              const readCurrent = serialSpec.current;
               return yield* runSerialGate({
                 store: serialQueue,
                 executionId: payload.executionId,
                 group: serialSpec.group,
                 revision: serialSpec.revision,
                 stepDo,
+                ...(readCurrent !== undefined
+                  ? { current: () => Runtime.runPromise(rt)(readCurrent) }
+                  : {}),
                 sleep: (name, ms) =>
                   Effect.tryPromise(() => step.sleep(name, ms)).pipe(Effect.orDie),
                 onWait: (holderRevision) =>

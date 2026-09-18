@@ -88,9 +88,13 @@
 //
 //   1. `serialize` puts every execution of one repo + branch + `checkLabel` in
 //      one group (apps/dispatcher/src/workflow.ts, runtime-cf
-//      serial-queue-d1.ts). At most one runs; while it runs, a newer dispatch
-//      waits and supersedes any older waiter, which concludes `neutral`
-//      naming the newer SHA. A running deploy is never cancelled.
+//      serial-queue-d1.ts). At most one runs; a running deploy is never
+//      cancelled. Before a dispatch joins the queue it reads the branch head:
+//      a SHA that is not the head skips at once and supersedes nothing, so a
+//      late or re-requested older commit cannot displace the head's waiting
+//      deploy. A dispatch that IS the head supersedes every waiter that is
+//      not (`neutral`, naming the head). With the head unknown, the newest
+//      arrival supersedes older waiters.
 //   2. `branch-head` — once this execution holds its group and a sandbox slot,
 //      it reads the branch's head through the GitHub App. A head that is not
 //      `sha` means a newer push landed; the run skips (`neutral`, naming the
@@ -225,6 +229,13 @@ export const serialGroup = (repo: string, branch?: string, checkLabel?: string):
     checkLabel !== undefined ? `:${checkLabel}` : ""
   }`;
 
+/** The branch head, or `undefined` when it cannot be read — never a placeholder. */
+const readHead = (repo: string, branch: string) =>
+  github.branchHead({ repo, branch }).pipe(
+    Effect.map((sha): string | undefined => sha),
+    Effect.orElseSucceed(() => undefined),
+  );
+
 /** `sha` is the head, allowing an abbreviated dispatch SHA. */
 const isHead = (head: string, sha: string): boolean => {
   const s = sha.toLowerCase();
@@ -307,9 +318,15 @@ export const workerDeploy = defineRun({
     },
   ],
 
+  // The branch head is the group's current revision: a dispatch of a commit
+  // that is no longer the head skips before it joins the queue, so a late or
+  // re-requested older commit never displaces the head's waiting deploy.
   serialize: (input) => ({
     group: serialGroup(input.repo, input.branch, input.checkLabel),
     revision: input.sha,
+    ...(input.requireHead && input.branch !== undefined && input.branch !== ""
+      ? { current: readHead(input.repo, input.branch) }
+      : {}),
   }),
 
   inputs: WorkerDeployInput,

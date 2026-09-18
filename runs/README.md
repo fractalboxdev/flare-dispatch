@@ -532,8 +532,9 @@ A known mismatching head never reaches the command — the dispatcher skipped it
 and a push that lands mid-deploy queues behind this one rather than racing it.
 The guard's job is deciding what an unknown head means.
 
-Order is arrival order: the dispatcher sees no commit graph. A dispatch of an
-older commit that arrives after a newer one — a re-requested check suite, a
-late webhook — replaces the newer waiter, then skips at dequeue because it is
-not the head. The branch head then stays undeployed until the next dispatch;
-both checks read `neutral` and name the other commit.
+Before a dispatch joins the queue, it reads the branch head the same way. A
+commit that is already not the head — a re-requested check suite of an old
+commit, a late webhook — concludes `neutral` at once and never enters the queue,
+so it cannot displace the head's waiting deploy. A dispatch that is the head
+supersedes every waiter that is not, whatever order they arrived in. Only when
+the head is unknown does arrival order decide which waiter survives.

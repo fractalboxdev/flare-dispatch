@@ -441,7 +441,7 @@ describe("worker-deploy", () => {
   it("serialize — one group per repo, branch, and label; the revision is the SHA", () => {
     const spec = (i: Parameters<NonNullable<typeof workerDeploy.serialize>>[0]) =>
       workerDeploy.serialize?.(i);
-    expect(spec({ ...onMain })).toEqual({
+    expect(spec({ ...onMain })).toMatchObject({
       group: "worker-deploy:owner/name@main",
       revision: PUSHED,
     });
@@ -451,6 +451,28 @@ describe("worker-deploy", () => {
     expect(spec({ ...onMain, branch: "staging" })?.group).toBe("worker-deploy:owner/name@staging");
     expect(spec({ ...baseInput })?.group).toBe("worker-deploy:owner/name");
   });
+
+  it.effect(
+    "serialize — the group's current revision is the branch head, read through the App",
+    () => {
+      const { layer } = makeCFRuntimeTest({
+        github: { branchHeads: { "owner/name:main": NEWER } },
+      });
+      return Effect.gen(function* () {
+        const current = workerDeploy.serialize?.(onMain)?.current;
+        expect(current).toBeDefined();
+        if (current !== undefined) expect(yield* current).toBe(NEWER);
+        // An unreadable head is unknown, never a placeholder SHA.
+        const unknown = workerDeploy.serialize?.({ ...onMain, branch: "gone" })?.current;
+        if (unknown !== undefined) expect(yield* unknown).toBeUndefined();
+        // No head read for a rollback or a branchless dispatch.
+        expect(
+          workerDeploy.serialize?.({ ...onMain, requireHead: false })?.current,
+        ).toBeUndefined();
+        expect(workerDeploy.serialize?.(baseInput)?.current).toBeUndefined();
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("head env — the command sees the branch, its head at dequeue, and the SHA", () => {
     const { layer, handles } = makeCFRuntimeTest({

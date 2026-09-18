@@ -16,14 +16,21 @@
 // D1, not KV, for the reason `run-admission-d1.ts` gives: D1 serializes writes
 // per database, so the conditional claim UPDATE is atomic and two waiters
 // cannot both take a group. KV has no compare-and-set. Same `RUNS_METADATA`
-// binding, one new table (migration 0007), no new binding.
+// binding, one new table (migration 0008), no new binding.
 //
-// Order is ARRIVAL order (`enqueued_at`), not commit order: the dispatcher sees
-// no commit graph. A dispatch of an older commit that arrives after a newer one
-// — a re-requested check suite, a delayed webhook — supersedes the newer
-// waiter. `worker-deploy`'s head check then skips the older commit too, and the
-// branch head stays undeployed until the next dispatch. Both checks read
-// `neutral` and name the other revision, so the gap is visible.
+// Arrival order alone would be wrong for a deploy: a dispatch of an older
+// commit that arrives after a newer one — a re-requested check suite, a late
+// webhook — would supersede the newer waiter. So a group may name its CURRENT
+// revision (`SerializeSpec.current`, the branch head for `worker-deploy`),
+// read once before the execution touches the queue:
+//
+//   - an arrival whose revision is not current skips at once — it never
+//     enqueues, so it supersedes nothing;
+//   - an arrival whose revision IS current supersedes every waiter whose
+//     revision is not, whatever order they arrived in.
+//
+// Arrival order decides between waiters only when the current revision is
+// unknown (no branch, lookup failed) — the fallback, never the rule.
 //
 // The poll loop runs through the caller's durable steps (`stepDo` / `sleep`),
 // exactly like the admission gate, so a waiter hibernates for free and a
@@ -104,6 +111,8 @@ export interface SerialQueueStore {
     executionId: string,
     group: string,
     revision: string,
+    /** The group's current revision when known — also supersedes waiters that are not it. */
+    current?: string,
   ) => Effect.Effect<{ readonly enqueuedAt: number }, Error>;
 
   /**
@@ -135,6 +144,7 @@ export const makeSerialQueueD1 = (
     group: string,
     revision: string,
     ts: number,
+    current: string | undefined,
   ): Effect.Effect<{ readonly enqueuedAt: number }, Error> =>
     d1(() =>
       db.batch([
@@ -158,11 +168,23 @@ export const makeSerialQueueD1 = (
                         AND execution_id < ?1))`,
           )
           .bind(executionId, group, revision),
+        // With the current revision known, a waiter that is not it is stale
+        // whenever it arrived — the revision decides, not arrival order. The
+        // SQL twin of `revisionMatches` (an abbreviation of ≥7 chars matches).
+        db
+          .prepare(
+            `UPDATE serial_queue SET state = 'superseded', superseded_by = ?3
+             WHERE ?4 IS NOT NULL AND group_key = ?2 AND state = 'queued' AND execution_id != ?1
+               AND NOT (lower(revision) = lower(?4)
+                        OR (length(revision) >= 7
+                            AND substr(lower(?4), 1, length(revision)) = lower(revision)))`,
+          )
+          .bind(executionId, group, revision, current ?? null),
         db.prepare(`SELECT enqueued_at FROM serial_queue WHERE execution_id = ?`).bind(executionId),
       ]),
     ).pipe(
       Effect.map((results) => {
-        const row = results[2]?.results[0] as { enqueued_at: number } | undefined;
+        const row = results[3]?.results[0] as { enqueued_at: number } | undefined;
         return { enqueuedAt: row?.enqueued_at ?? ts };
       }),
     );
@@ -199,7 +221,7 @@ export const makeSerialQueueD1 = (
       }
       // A row collected under `SERIAL_GC_AFTER_MS` (a waiter paused for hours)
       // re-joins as the newest arrival rather than claiming blind.
-      if (own === null) yield* enqueueAt(executionId, group, revision, ts);
+      if (own === null) yield* enqueueAt(executionId, group, revision, ts, undefined);
 
       const claimed = yield* d1(() =>
         db
@@ -239,11 +261,22 @@ export const makeSerialQueueD1 = (
     ).pipe(Effect.asVoid);
 
   return {
-    enqueue: (executionId, group, revision) => enqueueAt(executionId, group, revision, now()),
+    enqueue: (executionId, group, revision, current) =>
+      enqueueAt(executionId, group, revision, now(), current),
     attempt,
     heartbeat,
     release,
   };
+};
+
+/**
+ * `revision` names the `current` revision: equal, or an abbreviation of it at
+ * least 7 characters long (a dispatch may carry a short SHA).
+ */
+export const revisionMatches = (current: string, revision: string): boolean => {
+  const c = current.toLowerCase();
+  const r = revision.toLowerCase();
+  return c === r || (r.length >= 7 && c.startsWith(r));
 };
 
 /** The first 12 characters — how a check-run summary names a commit. */
@@ -266,6 +299,11 @@ export const runSerialGate = (opts: {
   readonly revision: string;
   readonly stepDo: <T>(name: string, body: () => Promise<T>) => Effect.Effect<T>;
   readonly sleep: (name: string, ms: number) => Effect.Effect<void>;
+  /**
+   * Reads the group's current revision (`SerializeSpec.current`), resolving
+   * `undefined` when unknown. Runs once, in a durable step, before enqueue.
+   */
+  readonly current?: () => Promise<string | undefined>;
   /** Called when the holder changes while waiting — best-effort reporting. */
   readonly onWait?: (holderRevision: string | undefined) => Effect.Effect<void>;
   readonly pollEveryMs?: number;
@@ -275,8 +313,26 @@ export const runSerialGate = (opts: {
     const { store, executionId, group, revision, stepDo } = opts;
     const pollEveryMs = opts.pollEveryMs ?? SERIAL_POLL_EVERY_MS;
     const maxWaitMs = opts.maxWaitMs ?? SERIAL_MAX_WAIT_MS;
+    // The current-revision check comes BEFORE the queue: a stale arrival
+    // skips here and never displaces the waiter that is current.
+    const current = opts.current;
+    const { head } =
+      current === undefined
+        ? { head: "" }
+        : yield* stepDo("serial-current", async () => ({ head: (await current()) ?? "" }));
+    if (head !== "" && !revisionMatches(head, revision)) {
+      return yield* Effect.fail(
+        new RunSkipped({
+          reason:
+            `superseded by ${short(head)} — \`${group}\` was already at ${short(head)}, ` +
+            `not ${short(revision)}, when this dispatch arrived`,
+        }),
+      );
+    }
     const { enqueuedAt } = yield* stepDo("serial-enqueue", () =>
-      Effect.runPromise(store.enqueue(executionId, group, revision)),
+      Effect.runPromise(
+        store.enqueue(executionId, group, revision, head !== "" ? head : undefined),
+      ),
     );
     // A COUNT, not a wall-clock bound, so the loop is replay-stable. The final
     // iteration's `wait` is a timeout whatever the clock says.

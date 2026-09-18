@@ -194,6 +194,15 @@ export type SerializeSpec = {
    * skip reason of every waiter it replaces, and in a waiter's queued summary.
    */
   readonly revision: string;
+  /**
+   * The revision that is current for the group right now (a deploy's branch
+   * head), or `undefined` when unknown. Read once, before the execution joins
+   * the queue: an execution whose `revision` is not current skips at once and
+   * supersedes nothing, and a known current revision also supersedes every
+   * waiter that is not it, whenever that waiter arrived. Omitted → arrival
+   * order alone decides.
+   */
+  readonly current?: Effect.Effect<string | undefined, never, RunContext>;
 };
 
 /**

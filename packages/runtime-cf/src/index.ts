@@ -72,6 +72,7 @@ export {
   makeSerialQueueD1,
   runSerialGate,
   decideSerial,
+  revisionMatches,
   SERIAL_POLL_EVERY_MS,
   SERIAL_MAX_WAIT_MS,
   SERIAL_HOLDER_TTL_MS,

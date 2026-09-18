@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   decideSerial,
   makeSerialQueueD1,
+  revisionMatches,
   runSerialGate,
   SERIAL_HOLDER_TTL_MS,
   type SerialQueueStore,
@@ -107,6 +108,27 @@ describe("makeSerialQueueD1 — serialization against real D1", () => {
     expect(await run(store.enqueue(A.id, G, A.rev))).toEqual({ enqueuedAt: T0 });
     expect(await state(B.id)).toBe("queued");
     expect(await state(A.id)).toBe("superseded");
+  });
+
+  it("a known current revision supersedes a waiter that is not it, whenever it arrived", async () => {
+    // X carries a later `enqueued_at` than B's — arrival order alone would
+    // keep X. B names the current revision, so X, not current, is superseded.
+    clock = T0 + 10;
+    await run(store.enqueue("exec-x", G, "0ld0ld0ld0ld"));
+    clock = T0;
+    await run(store.enqueue(B.id, G, B.rev, B.rev));
+    expect(await state("exec-x")).toBe("superseded");
+    expect(await state(B.id)).toBe("queued");
+  });
+
+  it("an abbreviated waiter revision still counts as current", async () => {
+    // D arrived later with a short SHA of the head; C then enqueues naming the
+    // head. Neither rule may supersede D.
+    clock = T0 + 10;
+    await run(store.enqueue("exec-d", G, B.rev.slice(0, 10)));
+    clock = T0;
+    await run(store.enqueue(C.id, G, B.rev, B.rev));
+    expect(await state("exec-d")).toBe("queued");
   });
 
   it("groups are independent — another label or branch runs alongside", async () => {
@@ -215,6 +237,88 @@ describe("runSerialGate — the poll loop through durable steps", () => {
     });
   });
 
+  it("a late OLDER dispatch skips before the queue; the newer waiter survives and runs", async () => {
+    // A deploys; B (the branch head) waits; then the older commit O arrives —
+    // a re-requested check suite. O must not supersede B.
+    await Effect.runPromise(store.enqueue(A.id, G, A.rev));
+    await Effect.runPromise(store.attempt(A.id, G, A.rev));
+    clock += 1;
+    await Effect.runPromise(store.enqueue(B.id, G, B.rev, B.rev));
+    clock += 1;
+
+    const { names, stepDo } = steps();
+    const exit = await Effect.runPromiseExit(
+      runSerialGate({
+        store,
+        executionId: "exec-old",
+        group: G,
+        revision: "0ld0ld0ld0ld0000",
+        stepDo,
+        current: async () => B.rev,
+        sleep: () => Effect.void,
+      }),
+    );
+
+    const failure = failureOf(exit);
+    expect(failure).toMatchObject({ _tag: "RunSkipped" });
+    expect((failure as { reason: string }).reason).toContain(`superseded by ${B.rev.slice(0, 12)}`);
+    // It never touched the queue.
+    expect(names).toEqual(["serial-current"]);
+    expect(
+      await bindings.db
+        .prepare(`SELECT COUNT(*) AS n FROM serial_queue WHERE execution_id = 'exec-old'`)
+        .first<{ n: number }>(),
+    ).toEqual({ n: 0 });
+
+    // B is intact, and runs once A finishes.
+    const b = steps();
+    await Effect.runPromise(
+      runSerialGate({
+        store,
+        executionId: B.id,
+        group: G,
+        revision: B.rev,
+        stepDo: b.stepDo,
+        current: async () => B.rev,
+        sleep: () => Effect.promise(() => Effect.runPromise(store.release(A.id))),
+      }),
+    );
+    expect(b.names).toEqual([
+      "serial-current",
+      "serial-enqueue",
+      "serial-claim-0",
+      "serial-claim-1",
+    ]);
+  });
+
+  it("an unknown current revision falls back to arrival order", async () => {
+    await Effect.runPromise(store.enqueue(A.id, G, A.rev));
+    await Effect.runPromise(store.attempt(A.id, G, A.rev));
+    await Effect.runPromise(store.enqueue(B.id, G, B.rev));
+    clock += 1;
+    const { stepDo } = steps();
+    let sleeps = 0;
+    const exit = await Effect.runPromiseExit(
+      runSerialGate({
+        store,
+        executionId: C.id,
+        group: G,
+        revision: C.rev,
+        stepDo,
+        current: async () => undefined,
+        pollEveryMs: 30_000,
+        maxWaitMs: 30_000,
+        sleep: () => Effect.sync(() => void sleeps++),
+      }),
+    );
+    // C enqueued and superseded B by arrival; C itself waits behind A.
+    expect(failureOf(exit)).toMatchObject({ _tag: "SerialQueueTimedOut" });
+    expect(await store.attempt(B.id, G, B.rev).pipe(Effect.runPromise)).toMatchObject({
+      kind: "superseded",
+      by: C.rev,
+    });
+  });
+
   it("fails SerialQueueTimedOut once the wait ceiling passes with the holder alive", async () => {
     await Effect.runPromise(store.enqueue(A.id, G, A.rev));
     await Effect.runPromise(store.attempt(A.id, G, A.rev));
@@ -263,5 +367,15 @@ describe("decideSerial (pure)", () => {
       waitedMs: 5,
     });
     expect(decideSerial({ kind: "wait", holderRevision: "h" }, 0, 4, 5).kind).toBe("wait");
+  });
+});
+
+describe("revisionMatches (pure)", () => {
+  it("matches equal and ≥7-char abbreviated revisions, case-insensitively", () => {
+    const head = "0123456789abcdef0123456789abcdef01234567";
+    expect(revisionMatches(head, head)).toBe(true);
+    expect(revisionMatches(head, "0123456789AB")).toBe(true);
+    expect(revisionMatches(head, "012345")).toBe(false);
+    expect(revisionMatches(head, "fedcba9876543210")).toBe(false);
   });
 });
