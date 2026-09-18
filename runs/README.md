@@ -400,3 +400,72 @@ Use it when the stages are independent (different feature unifications of one
 tree, say). Leave it at 1 when a later stage consumes an earlier one's output,
 which sharing a container is the only way to express. A value above the stage
 count is clamped to it.
+
+## `worker-deploy` — continuous deploy on default-branch push
+
+Webhook mode fires on `check_suite.requested` for the default branch, resolves
+everything a push payload cannot carry from CONFIG_KV, and posts
+`flare-dispatch/worker-deploy`. No command key → the run no-ops green.
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "worker-deploy.command:owner/repo"    "pnpm build && pnpm exec wrangler deploy"
+wrangler kv key put --binding=CONFIG_KV \
+  "worker-deploy.secrets:owner/repo"    "CLOUDFLARE_API_TOKEN"   # Worker-secret NAMES
+wrangler kv key put --binding=CONFIG_KV \
+  "worker-deploy.timeoutSec:owner/repo" "1500"                   # positive integer
+```
+
+`timeoutSec` precedence is dispatch value → `worker-deploy.timeoutSec:<repo>` → 900. A malformed value degrades to 900.
+
+**A deploy is never step-retried.** The `exec` step runs with `retries: 0` and a
+Workflow step timeout of the exec timeout + 120s, so the sandbox's deadline —
+not the platform's 600s step default — ends a slow deploy, and a failure is
+reported once instead of re-publishing every Worker on a second attempt.
+
+### A second deploy of the same commit (`checkLabel`)
+
+A repo that deploys part of its stack after other CI work — container-backed
+Workers after an image build, say — dispatches `worker-deploy` a second time in
+Action mode with a `checkLabel`. It posts `flare-dispatch/worker-deploy:<label>`
+beside the webhook's check instead of overwriting it, and runs as its own
+execution (the label is part of both the Action's `Idempotency-Key` and the
+direct-dispatch instance id).
+
+A labelled dispatch without `command` reads only
+`worker-deploy.command:<repo>:<label>` — never the unlabelled key, which would
+re-run the webhook's deploy. `worker-deploy.timeoutSec:<repo>:<label>` falls
+back to the repo key.
+
+```yaml
+- uses: fractalboxdev/flare-dispatch/actions/flare-dispatch-action@<sha>
+  with:
+    run: worker-deploy
+    endpoint: ${{ vars.FLAREDISPATCH_ENDPOINT }}
+    hmac-secret: ${{ secrets.FLAREDISPATCH_HMAC }}
+    inputs: |
+      {
+        "repo": "${{ github.repository }}",
+        "sha": "${{ github.sha }}",
+        "checkLabel": "containers",
+        "failOnNonZeroExit": true
+      }
+```
+
+A webhook dispatch and an Action dispatch of one push are always two executions:
+the webhook's instance id is `worker-deploy_<repo_>_<sha12>`, the Action's is
+`worker-deploy[-<label>]-<repo_>-<sha12>`.
+
+### Deploy ordering
+
+Two rapid pushes deploy in completion order, not push order. A command that
+guards against an older push landing last compares `HEAD` to the branch tip —
+but the checkout's `origin` carries no credential (the sandbox scrubs it after
+the clone), so `git ls-remote origin` works only on a repo readable
+anonymously. Make the guard fail closed when the lookup fails, or a private repo
+skips every deploy green:
+
+```bash
+tip=$(git ls-remote origin refs/heads/main) && [ -n "$tip" ] || exit 1
+[ "${tip%%[[:space:]]*}" = "$(git rev-parse HEAD)" ] || exit 0
+```

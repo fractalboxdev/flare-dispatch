@@ -60,6 +60,8 @@ branch protection can't gate it. The action reads `pull_request.head.sha` from
 the event payload so the verdict lands on the commit the author pushed, falling
 back to `GITHUB_SHA` for push events. The same head SHA keys the
 `Idempotency-Key`, so a step re-run collapses onto one execution per head commit.
+An `inputs.checkLabel` joins the key (`<run>-<label>-<repo>-<sha12>`), so two
+steps dispatching one run with different labels stay two executions.
 
 ## Collecting signals (`collect-command`)
 
