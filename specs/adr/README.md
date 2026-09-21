@@ -14,4 +14,4 @@ interfaces or assume they exist.
 | [0001](./0001-cloudflare-workflows-scope.md) | proposed | How runs use Cloudflare Workflows: one instance per dispatch, hibernation reserved for bounded human decisions, entity lifecycles keep state in the system of record |
 | [0002](./0002-memory-capability.md)          | proposed | Org context is an optional, total `memory` capability with MCP-speaking adapters; runs consume, never produce                                                        |
 | [0003](./0003-no-context-relay.md)           | proposed | Context backends ingest GitHub directly; FlareDispatch builds no relay, export, or pull endpoint for them                                                            |
-| [0004](./0004-serialized-run-groups.md)      | proposed | A run may declare a serialization group: one execution in flight, newest waiter wins, never cancel the running one; state in D1                                      |
+| [0004](./0004-serialized-run-groups.md)      | accepted | A run may declare a serialization group: one execution in flight, newest waiter wins, never cancel the running one; state in D1                                      |
