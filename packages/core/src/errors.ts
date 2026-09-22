@@ -224,9 +224,10 @@ export class StepFailed extends Schema.TaggedError<StepFailed>()("StepFailed", {
 }) {}
 
 /**
- * The run could not do its job for a CAPACITY reason and is bowing out — the
- * work was never attempted-and-failed, it was impossible to attempt (e.g.
- * pr-review's diff exceeds the model's context window even after truncation).
+ * The run could not do its job and is bowing out — the work was never
+ * attempted-and-failed, it was impossible to attempt: a CAPACITY reason (e.g.
+ * pr-review's diff exceeds the model's context window even after truncation)
+ * or a repo that never opted in (offload-test with no configured command).
  * The dispatcher concludes the check-run `neutral` with `reason` in the
  * summary instead of `failure`: a review that didn't happen is not a failed
  * review, and a red that isn't actionable trains people to ignore the check.
