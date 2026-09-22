@@ -517,15 +517,49 @@ describe("offload-test", () => {
   );
 
   it.effect(
-    "command resolution — no `command` and no CONFIG_KV fails fast with StepFailed before checkout",
+    "command resolution — a webhook dispatch with no CONFIG_KV command skips with RunSkipped (neutral) before checkout",
     () => {
       const { layer, handles } = makeCFRuntimeTest({
         sandboxProgram: { "pnpm test": { exitCode: 0 } },
         // no `config` seed — neither command key resolves.
       });
+      // Webhook-shaped: the trigger never passes `command`.
       const input = {
         repo: "owner/name",
         sha: "abc123",
+        secrets: [] as readonly string[],
+        install: false,
+        failOnNonZeroExit: true,
+      };
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(offloadTest.run(input));
+        expect(Exit.isFailure(exit)).toBe(true);
+        const failure = Exit.isFailure(exit)
+          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+          : undefined;
+        expect((failure as { _tag?: string })?._tag).toBe("RunSkipped");
+        // The neutral check names the key that opts the repo in.
+        expect((failure as { reason?: string })?.reason).toContain(
+          "offload-test.command:owner/name",
+        );
+        // Skipped before any work: never cloned, never exec'd.
+        expect(handles.sandbox.clones).toHaveLength(0);
+        expect(handles.sandbox.execs).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "command resolution — an Action dispatch passing an empty `command` fails fast with StepFailed",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+      });
+      const input = {
+        repo: "owner/name",
+        sha: "abc123",
+        command: "  ",
         secrets: [] as readonly string[],
         install: false,
         failOnNonZeroExit: false,
@@ -533,7 +567,6 @@ describe("offload-test", () => {
 
       return Effect.gen(function* () {
         const exit = yield* Effect.exit(offloadTest.run(input));
-        expect(Exit.isFailure(exit)).toBe(true);
         const tag = Exit.isFailure(exit)
           ? Option.match(Cause.failureOption(exit.cause), {
               onSome: (f) => (f as { _tag?: string })._tag,
@@ -541,7 +574,6 @@ describe("offload-test", () => {
             })
           : undefined;
         expect(tag).toBe("StepFailed");
-        // Fail-fast: never cloned, never exec'd.
         expect(handles.sandbox.clones).toHaveLength(0);
         expect(handles.sandbox.execs).toHaveLength(0);
       }).pipe(Effect.provide(layer));

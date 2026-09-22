@@ -152,6 +152,7 @@ import {
   config,
   defineRun,
   io,
+  RunSkipped,
   sandbox,
   spawnChildRun,
   StepFailed,
@@ -463,8 +464,9 @@ export const offloadTest = defineRun({
       // `offload-test.command`). This step runs ONLY when the dispatch carried
       // no command, so Action-mode dispatches keep the exact
       // `checkout → exec → upload-log` step shape (the `??` short-circuits before
-      // the `yield*`). A command missing everywhere fails fast — running an empty
-      // command would post a meaningless green check.
+      // the `yield*`). A command missing everywhere never runs — an empty
+      // command would post a meaningless green check; the run skips instead
+      // (neutral check, see below).
       // `install` / `timeoutSec` are resolved INSIDE this same step, not a
       // second one. They are a webhook-mode concern, and webhook mode is
       // exactly the case that omits `command` — so folding them in here means
@@ -589,6 +591,21 @@ export const offloadTest = defineRun({
       // resolved command (the step above fails otherwise), and the unlabelled
       // command may legitimately be absent.
       if (stages === undefined && (command === undefined || command.trim().length === 0)) {
+        // A webhook dispatch reaches every repo the App is installed on, and a
+        // repo that never set a command has not opted in — its tests may run
+        // somewhere else entirely. That is a skip (neutral check naming the key
+        // to set), not a failure: a red that no PR author can act on trains
+        // people to ignore the check. An Action dispatch chose this run and
+        // passed an empty command, which is a broken caller, so it stays red.
+        if (input.command === undefined) {
+          return yield* Effect.fail(
+            new RunSkipped({
+              reason:
+                `no offload-test command is configured for ${input.repo} — set CONFIG_KV ` +
+                `\`${repoCommandKey(input.repo)}\` or \`${COMMAND_KEY}\` to run it`,
+            }),
+          );
+        }
         return yield* Effect.fail(
           new StepFailed({
             step: "resolve-command",
