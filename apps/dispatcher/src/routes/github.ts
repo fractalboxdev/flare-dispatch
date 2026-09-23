@@ -177,10 +177,12 @@ const jsonError = (error: string, message: string, status: number): Response =>
 // there's zero JS to ship for theming. If the design system on the docs site
 // evolves materially, mirror the token block below.
 
-/** Canonical docs/landing origin — the pages link back here for the full story. */
+/** The documentation site (apps/docs) — the pages link back here for the full story. */
 const DOCS_ORIGIN = "https://flare-dispatch.fractalbox.dev";
-/** The public repo — `#quickstart` is the deploy-from-zero entry point. */
-const REPO_URL = "https://github.com/fractalbox/flare-dispatch";
+/** Deploying a Dispatcher and wiring its GitHub App, end to end. */
+const DEPLOY_GUIDE = `${DOCS_ORIGIN}/actions/deploy-dispatcher-action/`;
+/** The public repo. */
+const REPO_URL = "https://github.com/fractalboxdev/flare-dispatch";
 
 /**
  * The shared stylesheet. Inlined into every install page's `<head>`. A trimmed
@@ -287,10 +289,10 @@ const brandPage = (opts: {
   <footer class="colophon container">
     BYOC · runs in your own Cloudflare account
     <nav>
-      <a href="${DOCS_ORIGIN}/docs/prd">PRD</a>
-      <a href="${DOCS_ORIGIN}/docs/05-byoc">BYOC setup</a>
-      <a href="${DOCS_ORIGIN}/recipes">Recipes</a>
-      <a href="${REPO_URL}#quickstart">Quickstart</a>
+      <a href="${DOCS_ORIGIN}/">Docs</a>
+      <a href="${DEPLOY_GUIDE}">Deploy guide</a>
+      <a href="${DOCS_ORIGIN}/runs/">Run catalog</a>
+      <a href="${REPO_URL}">Source</a>
     </nav>
   </footer>
 ${opts.tail ?? ""}
@@ -619,7 +621,7 @@ ${clientSecret}</pre>
   <p class="cta"><a class="btn" href="${installUrl}" rel="noreferrer noopener">Install ${name}</a></p>
 
   <h2>3. Verify</h2>
-  <p>After installing, dispatch a run from a workflow on the installed repo — the Dispatcher will create a check-run on the commit. See the <a href="${DOCS_ORIGIN}/docs/05-byoc">BYOC setup spec</a> for the end-to-end walkthrough.</p>`,
+  <p>After installing, dispatch a run from a workflow on the installed repo — the Dispatcher will create a check-run on the commit. See the <a href="${DEPLOY_GUIDE}">deploy guide</a> for the end-to-end walkthrough.</p>`,
   });
 };
 
@@ -740,7 +742,7 @@ const renderInstallLlms = (origin: string): string => `# Install FlareDispatch �
 
 - Dispatcher origin: ${origin}
 - Full docs: ${DOCS_ORIGIN}
-- Source + quickstart: ${REPO_URL}#quickstart
+- Source: ${REPO_URL}
 
 ## Prerequisites (verify before starting)
 
@@ -793,15 +795,15 @@ choice of scope — surface the link, don't guess.)
 
 Open a pull request (or dispatch a run) on an installed repo. Within a few
 seconds a FlareDispatch Check Run should appear on the commit. If it does, the
-install is complete. If not, see the BYOC setup spec:
-${DOCS_ORIGIN}/docs/05-byoc
+install is complete. If not, see the deploy guide:
+${DEPLOY_GUIDE}
 
 ## Notes
 
 - Idempotent: re-running \`wrangler secret put\` overwrites; re-running
   \`wrangler deploy\` is safe.
 - Pure-webhook mode means no \`.github/workflows\` file is required — installing
-  the App is the trigger. Details: ${DOCS_ORIGIN}/docs/05-byoc
+  the App is the trigger. Details: ${DOCS_ORIGIN}/runs/
 `;
 
 /**

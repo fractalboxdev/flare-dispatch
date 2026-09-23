@@ -10,7 +10,13 @@ name: docs
 #
 # It runs on pull_request as well as main because deploy.yml only runs on push to
 # main, so a PR-time signal needs its own workflow. It is cheap: no Docker, no
-# Cloudflare credentials, no deploy — typedoc over one entry point.
+# Cloudflare credentials — typedoc over one entry point.
+#
+# `site` builds the documentation site (apps/docs) on every run — the build fails
+# on a broken internal link — and on main deploys it to its Worker, which serves
+# flare-dispatch.fractalbox.dev. Its pages are symbolic links to Markdown across
+# the repo (guides, run catalog, action READMEs, specs), so any path can change
+# the site and the workflow carries no path filter.
 on:
   pull_request:
   push:
@@ -44,3 +50,25 @@ jobs:
             git diff --cached -- apps/docs/reference
             exit 1
           fi
+
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run build
+      # Static assets only, so the deploy token needs Workers Scripts:Edit and no
+      # zone grant: the custom domain is already attached, and wrangler only
+      # re-asserts it.
+      - name: Deploy
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: apps/docs
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
