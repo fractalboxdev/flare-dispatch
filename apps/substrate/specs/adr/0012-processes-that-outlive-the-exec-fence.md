@@ -41,9 +41,11 @@ This is a decision about *semantics*, and it makes the surface small:
 - `startDetached(key, input)` starts a process and returns a substrate-assigned id. It runs
   `ensure()` behind the ticket gate and crosses the ADR-0007 approval floor exactly as `exec` does —
   a floor command started detached must not be a way around the floor — and it applies **no grant**.
-- `detachedStatus(key, processId)` answers running / exited-with-code / unknown. There is no
-  `waitForExit` on the facade: a consumer polls from its own durable steps, the same shape admission
-  already uses, because a Worker call that blocks for twenty minutes is not a call.
+- `detachedStatus(key, processId)` answers running / exited-with-code / gone, where `gone` carries
+  the reason the substrate no longer has the process (an id this execution never started, a process
+  the container no longer tracks, or a container that cannot be reached). There is no `waitForExit`
+  on the facade: a consumer polls from its own durable steps, the same shape admission already uses,
+  because a Worker call that blocks for twenty minutes is not a call.
 - `stopDetached(key, processId)` kills it and forgets it. `abort` and `checkpoint` clear every
   record with the container.
 

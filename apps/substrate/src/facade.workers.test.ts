@@ -113,6 +113,43 @@ describe("admission (ADR-0004) - the ceiling is the substrate's to own", () => {
     expect(outcome.refusal).toHaveProperty("retryAfterMs");
   });
 
+  it("keeps a queued execution's row while it is under its age ceiling", async () => {
+    await dispatcher().admissionAttempt(freshKey(), RECIPE);
+    await dispatcher().admissionAttempt(freshKey(), RECIPE);
+
+    const waiting = freshKey();
+    const outcome = await dispatcher().ensureSandbox(waiting, RECIPE, {
+      mode: "queue",
+      maxQueueAgeMs: 60 * 60_000,
+    });
+    expect(outcome).toMatchObject({ ok: false, refusal: { kind: "admission-refused" } });
+    if (outcome.ok) return;
+    expect(outcome.refusal).toHaveProperty("retryAfterMs");
+    expect(outcome.refusal).not.toHaveProperty("timedOut");
+    const behind = await dispatcher().admissionEnqueue(freshKey(), RECIPE);
+    expect(behind.position).toBeGreaterThanOrEqual(1);
+  });
+
+  it("times a queued execution out past maxQueueAgeMs and releases its row", async () => {
+    await dispatcher().admissionAttempt(freshKey(), RECIPE);
+    await dispatcher().admissionAttempt(freshKey(), RECIPE);
+
+    const before = await dispatcher().poolStatus();
+    const queuedBefore = before.pools.find((p) => p.pool === "lean")?.queued ?? 0;
+    const outcome = await dispatcher().ensureSandbox(freshKey(), RECIPE, {
+      mode: "queue",
+      maxQueueAgeMs: 0,
+    });
+    expect(outcome).toMatchObject({
+      ok: false,
+      refusal: { kind: "admission-refused", pool: "lean", timedOut: true },
+    });
+    if (outcome.ok) return;
+    expect(outcome.refusal).not.toHaveProperty("retryAfterMs");
+    const after = await dispatcher().poolStatus();
+    expect(after.pools.find((p) => p.pool === "lean")?.queued).toBe(queuedBefore);
+  });
+
   it("partitions the pools by consumer policy, never by anything a caller says", async () => {
     // fractalbot lands on `task` (cap 1) and the dispatcher on `lean` (cap 2)
     // from the SAME recipe: the image class is policy-selected from the
