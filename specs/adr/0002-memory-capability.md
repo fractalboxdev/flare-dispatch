@@ -124,6 +124,27 @@ recall is grounding, not a dependency), `.max-passages`, `.visibility.<tag>`, pl
 `<run>.memory.enabled` so a run opts in individually. A run must behave identically, minus
 grounding, with the whole namespace empty.
 
+A recall travels from the run to a rendered comment as data at every step:
+
+```mermaid
+flowchart TB
+  accTitle: The memory recall path
+  run["**run**<br/>visibility from `repository.private`"] -->|"recall(query, visibility)"| cfg{"Is `memory.backend` set?"}
+  cfg -->|no| noop["**MemoryNoop**<br/>`skipped: true`, no passages"]
+  cfg -->|yes| mcp["**MemoryMcpHttp** or<br/>**MemoryMcpServiceBinding**<br/>MCP JSON-RPC, low timeout"]
+  mcp --> backend[("**context backend**<br/>scoped per visibility tag")]
+  gh["**GitHub and other sources**"] -. "ingested on the backend's schedule" .-> backend
+  backend --> result["**RecallResult**<br/>passages, or a refusal as data"]
+  noop --> result
+  result --> fence["**fence**<br/>byte cap, data fence, trusted preamble"]
+  fence --> model[model call]
+  model --> sanitize["**per-field sanitizer**"]
+  sanitize --> comment["repo surface<br/>disclosure when refused"]
+  class noop muted
+  class fence warn
+  class sanitize warn
+```
+
 ## Rationale
 
 **Total beats fallible for an optional capability.** The alternative — `recall` raising a

@@ -1,7 +1,7 @@
 # Consuming the facade
 
 The facade is the only way into the substrate ([ADR-0003](../../substrate/specs/adr/0003-facade-only-consumption.md)).
-A consumer holds no Durable Object binding, no container class, no D1 — one service binding, eight
+A consumer holds no Durable Object binding, no container class, no D1 — one service binding, thirteen
 methods, plain structural types. Every type named below is documented in the
 [generated reference](../reference/substrate-contract/README.md); this page is the sequence and the
 handling patterns the reference does not carry.
@@ -97,6 +97,39 @@ if (!attempt.admitted) return retryLater(attempt);   // position, poolBusy, cap
 refuses rather than blocks when it has not. Call `admissionRelease` when you abandon a wait, and note
 that `checkpoint` and `abort` release the slot for you.
 
+The ticket never leaves the substrate; every admitting call mints a fresh one and hands it to the
+execution's Durable Object, which checks it again before it boots anything.
+
+```mermaid
+sequenceDiagram
+  accTitle: Queued admission and the ticket gate
+  participant C as Consumer
+  participant F as Facade
+  participant A as Admission D1
+  participant S as Sandbox DO
+  C->>F: admissionEnqueue(key, recipe)
+  F->>A: insert a queued row
+  F-->>C: QueuePosition
+  loop durable step, consumer backoff
+    C->>F: admissionAttempt(key, recipe)
+    F->>A: claim a slot, FIFO under the pool cap
+    alt slot free and first in line
+      F->>F: mint a ticket, 10 min TTL
+      F->>S: admit(ticket), verified before it is stored
+      F-->>C: admitted, expiresAt
+    else pool full or not first
+      F-->>C: not admitted, position, poolBusy, cap
+    end
+  end
+  C->>F: ensureSandbox(key, recipe, queue mode)
+  F->>A: row already admitted, heartbeat refreshed
+  F->>S: admit(fresh ticket)
+  F->>S: ensure(recipe)
+  S->>S: ticket gate, else ticket-rejected
+  S-->>F: generation, rebuilt
+  F-->>C: EnsureOutcome
+```
+
 An admitted ticket expires 10 minutes after it is minted and is refreshed by exec'ing, so an
 execution that sits idle past that window re-admits on its next call — which can refuse. A resume
 after a long approval wait is exactly this case.
@@ -105,6 +138,35 @@ after a long approval wait is exactly this case.
 
 `execUnderGrant` runs the whole fence inside the substrate: stale-revoke, ensure, apply grant, run,
 kill-before-revoke. A consumer supplies a command and gets back facts.
+
+```mermaid
+sequenceDiagram
+  accTitle: One execUnderGrant call
+  participant C as Consumer
+  participant F as Facade
+  participant A as Admission D1
+  participant S as Sandbox DO
+  participant K as Container
+  C->>F: execUnderGrant(key, input)
+  F->>F: recipe check, else recipe-rejected
+  F->>A: enqueue, then one claim attempt
+  alt not admitted
+    F-->>C: admission-refused
+  else admitted
+    F->>S: admit(fresh ticket)
+    F->>S: guardedExec(input)
+    S->>S: approval floor, spend the attestation
+    S->>K: revoke any stale grant
+    S->>S: ensure(recipe) behind the ticket gate
+    S->>K: applyGrant, deny then handlers then allow
+    S->>K: runTaskCommand, deduped on idempotencyKey
+    Note over S,K: in a finally block, even on a throw or timeout
+    S->>K: killFencedProcesses
+    S->>K: revokeGrant
+    S-->>F: receipt, ensured, granted, killed
+    F-->>C: ExecOutcome
+  end
+```
 
 ```ts
 const outcome = await env.SUBSTRATE.execUnderGrant(key, {
@@ -184,3 +246,17 @@ next `ensureSandbox` or `execUnderGrant` restores from it. `abort(key)` skips th
 off-switch. Neither is optional in practice: an admitted slot stops counting only once its heartbeat
 goes 10 minutes stale, so a consumer that walks away from an execution parks a slot for that long,
 and the default caps (`lean` 6, `browser` 3, `agent` 3, `task` 4) are small enough to feel it.
+
+```mermaid
+stateDiagram-v2
+  accTitle: An execution's pool slot
+  [*] --> Queued : admissionEnqueue or any admitting call
+  Queued --> Admitted : under the pool cap and first in line
+  Queued --> [*] : admissionRelease, or a refuse-mode refusal
+  Queued --> Lapsed : 100 s with no attempt
+  Admitted --> Admitted : exec or attempt refreshes the heartbeat
+  Admitted --> [*] : checkpoint, abort or admissionRelease
+  Admitted --> Lapsed : heartbeat 10 min stale
+  Lapsed : stops counting against the cap or the line
+  Lapsed --> [*] : swept by any release once 10 min stale
+```

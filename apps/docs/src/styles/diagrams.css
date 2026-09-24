@@ -1,0 +1,28 @@
+/*
+ * Merlion stylesheet for the docs site's ```mermaid diagrams. The Astro integration
+ * compiles it once per build and loads the compiled page CSS after merlion-themes.css;
+ * this file never reaches a page. The compiler accepts literal values only, so the
+ * colours repeat brand.css rather than reading Starlight's tokens.
+ *
+ * Starlight sets data-theme="light" or "dark" on <html>; `:root` repeats the light values
+ * for standalone renders.
+ */
+
+:root,
+[data-theme="light"] {
+  --paper: #f4f1ea;
+  --ink: #13131a;
+  --accent: #d63300;
+  --merlion-bg: var(--paper);
+  --merlion-fg: var(--ink);
+  --merlion-accent: var(--accent);
+}
+
+[data-theme="dark"] {
+  --paper: hsl(224, 10%, 10%);
+  --ink: #eceef2;
+  --accent: #ff3d00;
+  --merlion-bg: var(--paper);
+  --merlion-fg: var(--ink);
+  --merlion-accent: var(--accent);
+}

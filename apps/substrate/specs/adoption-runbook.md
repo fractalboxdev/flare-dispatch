@@ -12,6 +12,21 @@ Keeping them apart is what makes each step reversible. Flipping the backend move
 without changing what a run may reach; graduating a position changes what a run may reach
 without moving it. A bad step is one revert, not two.
 
+```mermaid
+flowchart TB
+  accTitle: The stage-2 operator sequence
+  pre["**0. Preconditions**<br/>substrate healthy, tests green"] --> dep["**1. Deploy the dispatcher**<br/>binding present, backend off"]
+  dep --> flip["**2. Flip the backend on**<br/>facade-capable runs move, at legacy"]
+  flip --> per["**3–4. Per run**<br/>report window, then enforce"]
+  per --> gate{"Every run at enforce,<br/>none needs the fleet?"}
+  gate -->|no| res["**Blocked**<br/>see § Residuals"]
+  gate -->|yes| drain["**5.1 Drain**<br/>wait for quiet executions"]
+  drain --> del["**5.2 Delete the classes**<br/>dispatcher's container stanza gone"]
+  del --> caps["**5.3 Raise the pool caps**<br/>ceiling and caps in one change"]
+  class res warn
+  class caps ok
+```
+
 ## 0. Preconditions
 
 - The substrate worker is deployed and healthy, with `TICKET_SECRET` set and its D1 migrations
@@ -109,6 +124,23 @@ Denials are recorded without the `would-deny:` prefix — a row is now a request
 
 Graduate one run at a time. The positions are per run precisely so a bad grant is one run's
 problem.
+
+```mermaid
+stateDiagram-v2
+  accTitle: One run's path onto the substrate
+  state "Dispatcher fleet" as fleet
+  state "Substrate, legacy" as legacy
+  state "Substrate, report" as report
+  state "Substrate, enforce" as enforce
+  [*] --> fleet
+  fleet --> legacy : SUBSTRATE_BACKEND on, run is facade-capable
+  legacy --> fleet : backend back off
+  legacy --> report : rollout report
+  report --> report : new would-deny rows, widen a profile
+  report --> enforce : clean window and a human egress check
+  report --> legacy : revert
+  enforce --> report : revert
+```
 
 ## 5. Drain, delete, and raise the caps
 

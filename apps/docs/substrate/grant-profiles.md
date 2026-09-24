@@ -9,15 +9,17 @@ The reason for that asymmetry is the threat model. The workload is assumed hosti
 a `build.rs`, a `conftest.py` — so nothing may depend on a model or a payload cooperating. A grant
 derived from a dispatch input is a grant an attacker steers, which defeats deny-all outright.
 
-Six names are reserved: `public-repo-read`, `js-install`, `rust-install`, `browser-fetch`, `cf-api`,
-`github-api-read`. Only `public-repo-read` is served today — `recipeProblem` in
-`apps/substrate/src/facade.ts` rejects any other selection with a `recipe-rejected` refusal, so a
-consumer naming an unbuilt profile gets a typed answer rather than silent open egress.
+Six names are reserved and served: `public-repo-read`, `js-install`, `rust-install`,
+`browser-fetch`, `cf-api`, `github-api-read`, each an entry in `GRANT_PROFILES`
+(`apps/substrate/src/engine/profiles.ts`). `recipeProblem` in `apps/substrate/src/facade.ts` checks
+every selection against that catalog and rejects a name it does not carry — or any profile on a
+recipe with no `repo` — with a `recipe-rejected` refusal, so a consumer gets a typed answer rather
+than silent open egress. Selected profiles compose onto `public-repo-read`; they never replace it.
 
 ## What a profile is made of
 
 A profile is a function from grant params to an `EgressPolicy`, living beside `publicRepoPolicy` in
-`apps/substrate/src/engine/egress.ts`:
+`apps/substrate/src/engine/profiles.ts`:
 
 ```ts
 type EgressPolicy = {
@@ -35,11 +37,51 @@ type PathRule = {
 ```
 
 `buildGrant` turns a policy into the four calls that arm a container — `denyHost`,
-`setOutboundByHost`, `allowHost` — and `applyGrant` issues them in that order. Admission is last on
+`setOutboundByHost`, `setOutboundHandler` (the `report` catch-all only), `allowHost` — and
+`applyGrant` issues them in that order. Admission is last on
 purpose: `allowedHosts` is evaluated strictly before any handler, so admitting a host before its
 handler is mapped opens a window where requests fall through to public egress.
 
+```mermaid
+flowchart TB
+  accTitle: Arming and closing a grant
+  subgraph apply["applyGrant"]
+    d["**denyHost**<br/>each deny entry"] --> h["**setOutboundByHost**<br/>each admitted host"]
+    h --> c["**setOutboundHandler**<br/>report catch-all only"]
+    c --> a["**allowHost**<br/>each admitted host, last"]
+  end
+  subgraph revoke["revokeGrant"]
+    ra["**removeAllowedHost**<br/>admission first"] --> rh["**removeOutboundByHost**"]
+    rh --> rc["**catch-all to denyAll**<br/>report only"]
+  end
+  a -->|"command runs, then its processes die"| ra
+  rc --> kept["**deny list stays**<br/>never revoked"]
+  class kept muted
+```
+
 ## Three properties every profile must hold
+
+Every outbound request from a container under an `enforce` grant takes this path:
+
+```mermaid
+flowchart TB
+  accTitle: One outbound request under an enforce grant
+  req["**container request**"] --> gate{"denied, or not<br/>allowlisted?"}
+  gate -->|yes| p520["**520**<br/>no handler runs;<br/>the proxy records it"]
+  gate -->|no| bound{"grant bound to<br/>this container?"}
+  bound -->|no| d403["**403**<br/>reason only; denial recorded"]
+  bound -->|yes| decide{"**decide**<br/>https, deny floor, host,<br/>method and path rule"}
+  decide -->|no rule| d403
+  decide -->|rule| body{"body under `maxBodyBytes`<br/>and `assertBody` passes?"}
+  body -->|no| d403
+  body -->|yes| cred["**attach credential**<br/>this host's, if any"]
+  cred -->|secret unavailable| d403
+  cred --> fetch["**Worker fetch**<br/>redirect manual"]
+  fetch -->|"3xx: re-decide Location"| decide
+  fetch -->|any other status| resp["**response**<br/>set-cookie stripped"]
+  class p520,d403 danger
+  class resp ok
+```
 
 **Host scope proves nothing.** Within a grant window the workload picks the request, and the same host
 serves opposite operations: `github.com` carries `git-upload-pack` (read) and `git-receive-pack`
@@ -85,8 +127,9 @@ is added.
    signed paths with no repository segment, so the only controls left there are GET-only and no body —
    which is why LFS is opt-in behind `recipe.lfs` rather than part of the default clone grant. A host
    whose paths cannot be scoped to a non-model-authored input should be opt-in for the same reason.
-5. **Route it.** Select the policy in `buildGrant` from the recipe's profile list, and widen the
-   `recipeProblem` gate in `facade.ts` that currently admits `public-repo-read` alone.
+5. **Route it.** Add the profile to `GRANT_PROFILES` in `engine/profiles.ts`. That catalog is both
+   what `grantPolicy` composes a grant from and what the `recipeProblem` gate checks selections
+   against.
 6. **Add the name to `GrantProfileName`** in `packages/substrate-contract/src/index.ts`. That is an
    additive widening of an input union: non-breaking, no `CONTRACT_VERSION` bump
    ([versioning policy](contract-versioning.md)).
@@ -119,21 +162,24 @@ Every denial is recorded per execution as `{host, method, path, reason, count}`,
 403 — a hostile process must not be able to use denial text as an oracle for what else it could have
 reached.
 
-**The observation has a hole, and it is the one that matters when authoring.** A host that is not
-admitted at all dies as a bodyless platform 520 *before any handler runs*, so it produces no denial
-event. What lands in `sub_denials` today is handler 403s: admitted host, wrong method or path. So
-iterating against denial events teaches you the paths you got wrong on hosts you already listed, and
-teaches you nothing about hosts you never listed — those show up only as connection failures in the
-workload's own output.
+Denials come from two places. A handler 403 — admitted host, wrong method, path or body — is recorded
+by the handler itself. A host that is not admitted at all dies as a bodyless platform 520 *before any
+handler runs*; the substrate's outbound proxy (`apps/substrate/src/outbound-proxy.ts`) sits in front
+of that gate and records it as `host … is not admitted (refused by the container gate)`, leaving the
+response byte-for-byte unchanged. So iterating against denial events shows both the paths you got
+wrong on hosts you listed and the hosts you never listed.
 
-Retrieval is also manual today: `denialsFor` in `apps/substrate/src/admission/denials-d1.ts` reads the
-table, but no facade call exposes it, so reading denials means querying the substrate's D1 directly
-(`wrangler d1 execute flare-dispatch-substrate --remote --command "SELECT * FROM sub_denials WHERE container_id = '…'"`).
+**One failure still leaves no row.** A container that fails to trust the interception CA fails TLS on
+every HTTPS request, which produces no 520 to classify. The deploy-time canary's HTTPS probe detects
+exactly that, and `/health` answers `503 unverified` until it passes.
+
+A consumer reads an execution's denials through the facade: `denials(key)` returns the aggregated
+`DenialEvent[]` for that key, and an unreadable trail comes back empty, logged in the substrate.
 
 ## Graduating a run: `legacy` → `report` → `enforce`
 
-ADR-0005 specifies a three-position per-run flag so a workload can move onto deny-all without a
-flag-day:
+`SubstrateRecipe.enforcement` is ADR-0005's three-position per-run flag, so a workload can move onto
+deny-all without a flag-day. Absent means `enforce`, and only reviewed consumer code sets it:
 
 | Position | Egress posture | What it is for |
 | --- | --- | --- |
@@ -146,13 +192,12 @@ legitimate work across the run's normal traffic, including its slow paths — a 
 dependency-refresh path both reach hosts a single PR run never touches. The reviewer who merges the
 profile is the one who flips it, in the same PR as the profile or the one after.
 
-**The flag is not built.** The substrate is enforce-only today: containers run with an empty allowlist
-and `public-repo-read` is the single served profile, so there is no position in which a workload's
-real traffic flows while the engine records what it would have refused. Until it lands, authoring is
-an iterate-under-enforce loop — run, read the 403s and the container's own connection failures, widen
-the profile, run again — which costs a failed execution per iteration and, per the hole above, hides
-missing hosts behind platform 520s. `report` is the specified fix for exactly that; building it means
-a posture where `decide` records and forwards rather than records and refuses.
+Under `legacy` and `report` the grant admits every host. `report` also maps a catch-all handler that
+runs `decide` against the selected profiles, records each refusal it *would* have made with a
+`would-deny: ` prefix, and forwards the request untouched. It injects no credential: an unenforced
+grant is never the path on which a secret first reaches a host
+([ADR-0006](../../substrate/specs/adr/0006-credential-boundary.md)). Every position validates the
+profile selection, so a run cannot discover on graduation day that its profile set is unservable.
 
 ## May BYOC operators author custom profiles?
 

@@ -12,6 +12,11 @@ packages:
 overrides:
   effect: 3.21.2
 
+# The Merlion packages install from tarballs in apps/docs/vendor/merlion and are
+# not on the npm registry, so the release-age check has no publish date to read.
+minimumReleaseAgeExclude:
+  - "@fractalbox/merlion-*"
+
 # pnpm 10+ gates dependency lifecycle (build) scripts behind an explicit
 # allowlist. These are the packages whose install/postinstall scripts pnpm 9
 # ran implicitly; allowing them keeps `pnpm install` from erroring with

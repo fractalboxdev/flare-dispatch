@@ -5,6 +5,18 @@ that owns the account's Containers ceiling, artifacts on R2, and metered model a
 it never decides what to run and never renders an outcome. Consumers — the dispatcher in this repo,
 fractalbot from its own — reach it through one service-binding facade and nothing else.
 
+```mermaid
+flowchart LR
+  accTitle: Where the substrate sits
+  disp["**dispatcher**<br/>`DispatcherFacade`"] --> fac["**facade**<br/>one service binding"]
+  fb["**fractalbot**<br/>`FractalbotFacade`"] --> fac
+  fac --> adm[("**admission D1**<br/>pool slots")]
+  fac --> sdo["**Sandbox DO**<br/>ticket gate, exec fence"]
+  sdo --> box["**container**<br/>deny-all egress"]
+  sdo --> r2[("**R2**<br/>artifacts, snapshots")]
+  class fac accent
+```
+
 These four documents are what a consumer or an operator needs; none of them requires reading the
 substrate's source.
 

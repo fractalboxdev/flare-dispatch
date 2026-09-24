@@ -29,6 +29,19 @@ fractalbot's egress engine cites the library by line. The consumer repos current
   still routes HTTPS through `ContainerProxy.fetch` and the CA path is unchanged; `deniedHosts`
   holds against handler overrides; redirects are handler-policed.
 
+The canary sits between the two deploys, so a dispatcher never ships against an unverified floor:
+
+```mermaid
+flowchart TB
+    accTitle: SDK-pin canary gate
+    deploy["**substrate deploy**<br/>pinned SDK pair and image"] --> probe["**`POST /canary`**<br/>container fetches an unlisted host"]
+    probe --> graded{"HTTPS leg answered<br/>520 at the proxy?"}
+    graded -->|yes| ok["**verified**<br/>`/health` ok, dispatcher deploy runs"]
+    graded -->|no| bad["**unverified**<br/>`/health` 503, dispatcher deploy blocked"]
+    class ok ok
+    class bad danger
+```
+
 ## Consequences
 
 - **A test holds the pin, because no auto-bump mechanism exists to disable.** `src/container-config.test.ts`

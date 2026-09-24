@@ -55,6 +55,22 @@ is `killAllProcesses()` unchanged, so the hot path grows no new failure mode. Wh
 cannot be read, it falls back to `killAllProcesses()`: killing a declared process is a wrong answer,
 leaving a grant-holder alive is a worse one.
 
+```mermaid
+stateDiagram-v2
+    accTitle: Detached process lifecycle
+    state "Running, floor posture" as Floor
+    state "Running inside a later fence" as Shared
+    state "Exited, record kept" as Exited
+    state "Gone" as Gone
+    [*] --> Floor : startDetached, behind ticket and approval floor, no grant
+    Floor --> Shared : a later exec applies its grant
+    Shared --> Floor : fence kills undeclared processes, then revokes
+    Floor --> Exited : process ends
+    Floor --> Gone : stopDetached, abort, checkpoint or container stop
+    Exited --> Gone : stopDetached, abort, checkpoint or container stop
+    Gone --> [*]
+```
+
 ### Preview URLs stay off the facade for now
 
 `exposePort` is an inbound route into a container, not an egress grant, and the two need different

@@ -47,12 +47,42 @@ never what you emit.** The substrate emits refusals and consumers must render ev
 default branch that logs "something failed" throws away the field that made the refusal actionable —
 which is the exact failure `SubstrateRefusal` exists to prevent.
 
+The table reduces to four questions, asked in order:
+
+```mermaid
+flowchart TB
+  accTitle: Does a change bump CONTRACT_VERSION?
+  q1{"removes, renames<br/>or narrows anything?"} -->|yes| bump["**bump**<br/>`CONTRACT_VERSION` and semver"]
+  q1 -->|no| q2{"adds a required<br/>input field?"}
+  q2 -->|yes| bump
+  q2 -->|no| q3{"widens an output union<br/>the substrate emits?"}
+  q3 -->|yes| bump
+  q3 -->|no| q4{"changes what a value<br/>means, same shape?"}
+  q4 -->|yes| bump
+  q4 -->|no| semver["**semver only**<br/>release note names any new method"]
+  class bump danger
+  class semver ok
+```
+
 ## How a breaking change ships: expand, migrate, contract
 
 Deploy order makes the naive swap impossible. The substrate deploys before its consumers
 ([runbook](byoc-upgrade.md)), and consumers deploy from their own repositories on their own
 schedules, so there is always a window in which a new substrate is serving old consumers. A breaking
 change is three releases, not one:
+
+```mermaid
+stateDiagram-v2
+  accTitle: A breaking change across three releases
+  [*] --> Expand : substrate release ships the new shape
+  Expand : serves generations N and N+1
+  Expand --> Migrate : consumers start bumping pins
+  Migrate : each consumer deploys on its own schedule
+  Migrate --> Migrate : one more consumer moves
+  Migrate --> Contract : evidence that none is left on N
+  Contract : old shape removed
+  Contract --> [*]
+```
 
 1. **Expand.** The substrate ships the new shape *alongside* the old one — a new optional field, a new
    method, a new refusal kind emitted only on paths a consumer opted into. `CONTRACT_VERSION` bumps

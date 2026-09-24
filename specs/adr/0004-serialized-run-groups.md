@@ -38,6 +38,58 @@ The gate runs in `RunWorkflow` before admission, so a waiter holds no pool slot,
 and the group is heartbeated through admission, the lease, and the run body.
 State lives in one D1 table on the existing `RUNS_METADATA` binding.
 
+One execution's path through the gate:
+
+```mermaid
+stateDiagram-v2
+    accTitle: An execution in a serialized group
+    state current_check <<choice>>
+    [*] --> current_check : spec names a current revision
+    [*] --> Waiting : no current revision, enqueue
+    current_check --> Skipped : revision is not current
+    current_check --> Waiting : revision is current, or head unknown
+    Waiting --> Waiting : claim fails, sleep 30s
+    Waiting --> Skipped : a newer waiter superseded it
+    Waiting --> TimedOut : 60 min behind a live holder
+    Waiting --> Holding : claim succeeds
+    state Holding {
+        [*] --> Admission
+        Admission --> Lease
+        Lease --> RunBody
+        RunBody --> [*]
+    }
+    Holding --> Released : any exit, heartbeat stops
+    Skipped --> [*]
+    TimedOut --> [*]
+    Released --> [*]
+    note right of Skipped : RunSkipped, a neutral check
+    note right of TimedOut : SerialQueueTimedOut
+    note left of Holding : heartbeated, a dead holder frees the group after 10 min
+```
+
+Three pushes to one branch in quick succession:
+
+```mermaid
+sequenceDiagram
+    accTitle: Newest waiter wins in a deploy burst
+    participant A as deploy of push A
+    participant Q as serial queue (D1)
+    participant B as deploy of push B
+    participant C as deploy of push C
+    A->>Q: enqueue, claim
+    Q-->>A: holds the group
+    B->>Q: enqueue
+    Q-->>B: wait behind A
+    C->>Q: enqueue, mark B superseded
+    B->>Q: next claim
+    Q-->>B: superseded by C
+    Note over B: fails RunSkipped
+    Note over A: never touched by B or C
+    A->>Q: release on exit
+    C->>Q: next claim, up to 30s later
+    Q-->>C: holds the group
+```
+
 `worker-deploy` groups by repo, branch, and `checkLabel`, and after it holds its
 group reads the branch head through the GitHub App: a head that is not the
 dispatched SHA skips the deploy; the head is also exported to the command.

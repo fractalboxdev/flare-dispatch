@@ -34,6 +34,39 @@ actionable reason; a CI run must queue with visible progress, hibernating in its
 - The admission D1 is bound to the substrate worker only. Consumer-side quotas (fractalbot's
   per-conversation/per-user caps) stay consumer-side, ahead of the physical gate.
 
+A queued consumer polls from its own durable steps; the container boots only against a ticket the
+DO verifies itself.
+
+```mermaid
+sequenceDiagram
+    accTitle: Admission by ticket
+    participant C as Consumer
+    participant F as Facade
+    participant D as Admission D1
+    participant S as Sandbox DO
+    C->>F: admissionEnqueue(key, recipe)
+    F->>D: enqueue — FIFO row in the class's pool
+    loop durable steps, until admitted
+        C->>F: admissionAttempt(key, recipe)
+        F->>D: claim if the pool is under its cap
+        D-->>F: refused — position, poolBusy
+        F-->>C: admitted false, position, poolBusy, cap
+    end
+    F->>F: mint ticket — HMAC over consumer, key, pool, 10 min TTL
+    F->>S: admit(consumer, key, ticket)
+    S->>S: verify, then store the ticket
+    C->>F: ensureSandbox or execUnderGrant
+    F->>S: ensure(recipe)
+    S->>S: ticket gate — verify the stored ticket
+    alt no valid ticket
+        S-->>F: ticket-rejected, nothing boots
+    else valid ticket
+        S-->>F: container restored or rebuilt
+    end
+    C->>F: admissionRelease, checkpoint or abort
+    F->>D: release the slot
+```
+
 ## Consequences
 
 - "Zero out-of-gate container creates" becomes testable: call `ensure()` without a ticket and watch
