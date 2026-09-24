@@ -8,7 +8,9 @@ export const SECTIONS = [
   { key: "design", title: "Design records" },
 ] as const;
 
-export const sectionOf = (id: string): string => id.split("/")[0] ?? id;
+// Docs ids live under `docs/`; the section is the segment after it, and `docs` itself is
+// the overview.
+export const sectionOf = (id: string): string => id.replace(/^docs\/?/, "").split("/")[0] || "index";
 
 export const sectionRank = (id: string): number => {
   const i = SECTIONS.findIndex((s) => s.key === sectionOf(id));
@@ -16,3 +18,7 @@ export const sectionRank = (id: string): number => {
 };
 
 export const SITE = new URL("https://flare-dispatch.fractalbox.dev");
+
+// Mirrors REPO_URL in pages.mjs, which walks the content tree at import and so cannot be
+// imported from a prerendered page.
+export const REPO_URL = "https://github.com/fractalboxdev/flare-dispatch";
