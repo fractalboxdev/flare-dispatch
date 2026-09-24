@@ -1,0 +1,55 @@
+---
+title: BYOC CI/CD on Cloudflare
+description: FlareDispatch offloads the expensive half of GitHub Actions — agentic review, Playwright e2e, acceptance suites, matrix fan-outs — onto a Cloudflare stack you own.
+template: splash
+hero:
+  title: FlareDispatch
+  tagline: Offload the expensive half of GitHub Actions onto a Cloudflare stack you own. Runs are typed Effect-TS programs, not YAML.
+  actions:
+    - text: Offload a job
+      link: /actions/flare-dispatch-action/
+      icon: right-arrow
+    - text: Run catalog
+      link: /runs/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/fractalboxdev/flare-dispatch
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+FlareDispatch is BYOC CI/CD. Heavy jobs — agentic code review, Playwright e2e, acceptance suites, matrix fan-outs, security scans — run on Cloudflare instead of GitHub-hosted runners. Each organization deploys one Dispatcher Worker and one GitHub App into its own Cloudflare account; there is no multi-tenant service.
+
+<CardGrid>
+  <Card title="Workflows" icon="random">
+    Orchestration. Every run is a durable Workflow instance with a step timeline.
+  </Card>
+  <Card title="Containers" icon="laptop">
+    Execution. Jobs run in sandboxed containers under deny-all egress.
+  </Card>
+  <Card title="Browser Rendering" icon="seti:html">
+    Playwright e2e and recorded product demos over CDP.
+  </Card>
+  <Card title="R2" icon="document">
+    Cache and artifacts, with tokened log links on every check-run.
+  </Card>
+</CardGrid>
+
+## Triggers
+
+A run starts from a **GitHub Actions** step (`flare-dispatch-action` HMAC-signs and POSTs the dispatch), a **GitHub App webhook** (repo events fire runs directly), or a **cron schedule**. The verdict lands on the pull request as a `flare-dispatch/<run>` check-run; gate branch protection on that name.
+
+## Runs are programs
+
+Runs are written against a layered Effect-TS DSL: **capabilities** wrap Cloudflare primitives, **primitives** compose them into build, test and cache steps, and **recipes** are the named runs a Dispatcher registers. Steps are typed, errors are tagged, and matches are exhaustive.
+
+## Start here
+
+<CardGrid>
+  <LinkCard title="Offload a job" href="/actions/flare-dispatch-action/" description="Dispatch a run from a GitHub Actions step and gate on its check-run." />
+  <LinkCard title="Deploy a Dispatcher" href="/actions/deploy-dispatcher-action/" description="Ship the Worker into your own account from an operator overlay." />
+  <LinkCard title="Run catalog" href="/runs/" description="The runs a Dispatcher registers, their inputs, and where their logs live." />
+  <LinkCard title="Substrate" href="/substrate/" description="The execution environment for agentic work, consumed through a service-binding facade." />
+</CardGrid>

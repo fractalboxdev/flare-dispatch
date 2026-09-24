@@ -3,6 +3,7 @@ packages:
   - "apps/dispatcher"
   - "apps/dashboard"
   - "apps/substrate"
+  - "apps/docs"
   - "runs"
 
 # Pin effect to the reference's proven patch. effect 3.21.3+ shifts a type

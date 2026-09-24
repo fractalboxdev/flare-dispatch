@@ -1,0 +1,18 @@
+// The documentation site: a Worker serving the Astro build from static assets, with no
+// Worker script. The dispatcher Worker serves the API, webhooks and dashboard on its own
+// hostname (the root wrangler.jsonc).
+//
+// Deploy: `pnpm --filter @fractalboxdev/flare-dispatch-docs run deploy` (astro build +
+// wrangler deploy). The account comes from CLOUDFLARE_ACCOUNT_ID or `wrangler login`.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "flare-dispatch-docs",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page",
+  },
+  // Custom domain (requires the fractalbox.dev zone in the deploying account). A BYOC
+  // org serving its own docs replaces the hostname in its overlay.
+  "routes": [{ "pattern": "flare-dispatch.fractalbox.dev", "custom_domain": true }],
+}

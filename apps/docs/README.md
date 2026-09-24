@@ -13,6 +13,22 @@ committed output differs from what the current source produces. A hand-maintaine
 drifts from the types consumers actually pin, and the drift stays invisible until someone follows it
 into a compile error.
 
-No site build exists in this repo yet. These files are plain markdown a static generator can consume
-unchanged, and they read correctly on GitHub in the meantime; [`llms.txt`](llms.txt) indexes them for
-agents that fetch raw markdown.
+The site at <https://flare-dispatch.fractalbox.dev> is an Astro Starlight build of this directory.
+Every page under [`src/content/docs/`](src/content/docs/) except the landing page is a relative
+symbolic link to Markdown elsewhere in the repo — these guides, the run catalog, the action READMEs,
+the specs and ADRs — so each file has one copy and reads the same on GitHub and on the site.
+[`src/lib/pages.mjs`](src/lib/pages.mjs) derives each page's title and description from its first
+heading and paragraph, and rewrites relative links to site URLs (or to GitHub, for files that are not
+pages). The site also serves `/llms.txt` and `/llms-full.txt`, generated from the same pages.
+
+To publish another file, add a symbolic link under `src/content/docs/` and a sidebar entry in
+[`astro.config.mjs`](astro.config.mjs). The build fails on a broken internal link.
+
+```sh
+pnpm --filter @fractalboxdev/flare-dispatch-docs run dev     # local preview
+pnpm --filter @fractalboxdev/flare-dispatch-docs run build   # what CI runs
+```
+
+`.github/workflows/docs.yml` builds the site on every pull request and deploys it on `main`, to a
+static-assets Worker (`wrangler.jsonc`). The dispatcher Worker — API, webhooks, dashboard, log
+viewer — serves `flare-dispatch-app.fractalbox.dev`.
