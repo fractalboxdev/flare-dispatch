@@ -261,6 +261,12 @@ export type AdmissionRefused = {
   position?: number;
   queuedForMs?: number;
   retryAfterMs?: number;
+  /**
+   * `true` when a `{mode:'queue'}` execution has waited `maxQueueAgeMs` or longer
+   * without admission. The substrate has released its queue row, so polling
+   * again re-enqueues at the back; stop and report instead.
+   */
+  timedOut?: boolean;
 };
 
 /** The command matches the irreversible floor and no attestation was carried. */
@@ -373,7 +379,7 @@ export type DetachedProcess = {
 };
 
 /**
- * What a detached process is doing. `unknown` is its own state rather than an
+ * What a detached process is doing. `gone` is its own state rather than an
  * error: a container that slept, restarted or was checkpointed no longer has
  * the process, and a consumer polling from a durable step needs to tell that
  * apart from "still running" without catching a throw.
@@ -491,7 +497,8 @@ export interface SubstrateFacade {
    * `{mode:'refuse'}` fails fast with `admission-refused` when the pool is
    * full; `{mode:'queue'}` expects the consumer to have driven
    * admissionEnqueue/Attempt to admission first, and refuses (never blocks)
-   * when it has not.
+   * when it has not. A queued execution that has waited `maxQueueAgeMs` or
+   * longer is refused with `timedOut: true` and loses its queue row.
    */
   ensureSandbox(
     key: SandboxKey,

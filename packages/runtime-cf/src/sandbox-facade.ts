@@ -114,7 +114,9 @@ export const describeRefusal: (refusal: SubstrateRefusal) => string =
   Match.type<SubstrateRefusal>().pipe(
     Match.discriminatorsExhaustive("kind")({
       "admission-refused": (r) =>
-        `substrate admission refused: pool ${r.pool} is ${r.poolBusy}/${r.cap} busy`,
+        r.timedOut
+          ? `substrate admission timed out: queued ${r.queuedForMs ?? 0}ms behind pool ${r.pool} at ${r.poolBusy}/${r.cap} busy`
+          : `substrate admission refused: pool ${r.pool} is ${r.poolBusy}/${r.cap} busy`,
       "approval-required": (r) =>
         `substrate refused an irreversible command: the run definition does not pre-assert "${r.rule}"`,
       "attestation-rejected": (r) => `substrate rejected the approval attestation: ${r.reason}`,

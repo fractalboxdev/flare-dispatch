@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-06
-- **Implementation:** `shipped` — `src/admission/pools.ts:120` `poolPolicyView` / `:140` `selectPool`, four image classes in `apps/substrate/wrangler.jsonc`, recipe keys frozen by `SUBSTRATE_RECIPE_KEYS`. Tests: `admission/pools.test.ts`, `container-config.test.ts`.
+- **Implementation:** `partial` — `src/admission/pools.ts:120` `poolPolicyView` / `:140` `selectPool`, four image classes in `apps/substrate/wrangler.jsonc`, recipe keys frozen by `SUBSTRATE_RECIPE_KEYS`. Selection reads the consumer only: fractalbot gets `task`, every other consumer `lean`. The `browser` and `agent` classes are deployed and unselectable until the dispatcher's run catalog runs on the facade with a per-run class policy. Tests: `admission/pools.test.ts`, `container-config.test.ts`.
 
 ## Context
 
