@@ -31,6 +31,26 @@ In branch protection, require the **check-run** name (e.g.
 `flare-dispatch/offload-test`), not this GHA job — the check-run is the real PR
 signal. The step itself succeeds the moment the dispatch is accepted (`202`).
 
+The Dispatcher creates the Workflow instance before it answers `202`; the run
+and its check-run happen after the step has already finished.
+
+```mermaid
+sequenceDiagram
+    accTitle: From dispatch to check-run verdict
+    participant A as flare-dispatch-action
+    participant D as Dispatcher Worker
+    participant W as RunWorkflow
+    participant G as GitHub Checks
+    A->>D: POST /v1/dispatch/‹run› with signature + Idempotency-Key
+    D->>D: verify HMAC, look up run, validate inputs
+    D->>W: create instance, id = executionId
+    D-->>A: 202 executionId, detailsUrl, logsUrl
+    Note over A: step green, outputs written
+    W->>G: open flare-dispatch/‹run› check-run, in_progress
+    W->>W: execute the run
+    W->>G: complete check-run with success, failure or neutral
+```
+
 ## Inputs
 
 | Input             | Required | Default           | Notes                                                                                                                                                                                          |
@@ -104,7 +124,22 @@ merged inputs carry signals but no `firedAt`. The machine-readable contract is
 
 Per [`specs/04-gha-integration.md` § Failure handling](../../specs/04-gha-integration.md):
 
-- **Dispatcher unreachable / `429` / `5xx`** — retried up to 3× with backoff
+```mermaid
+flowchart TB
+    accTitle: How the step handles each response
+    post["**POST the signed body**<br/>same bytes every attempt"] --> code{"HTTP status"}
+    code -->|202| ok["**Step green**<br/>execution-id written"]
+    code -->|401| drift["**Fail, no retry**<br/>both secret fingerprints printed"]
+    code -->|"400 / 404"| cfg["**Fail, no retry**<br/>Dispatcher error inlined"]
+    code -->|"any other, incl. network error"| more{"attempts < 3?"}
+    more -->|yes| wait["sleep attempt × 5s"]
+    wait --> post
+    more -->|no| gaveup["**Fail**<br/>last status inlined"]
+    class ok ok
+    class drift,cfg,gaveup danger
+```
+
+- **Dispatcher unreachable / `429` / `5xx`** — retried with backoff, 3 attempts in total; every status other than `202`, `400`, `401` and `404` (including a `403` refusal) counts as transient
   (`attempt × 5s`, override via `FLARE_RETRY_BACKOFF_MS`), then the step fails.
 - **`401`** (HMAC rejected) — config bug; the step fails immediately, no retry.
   The job log prints two 8-char fingerprints (`sha256(secret)[:8]`):

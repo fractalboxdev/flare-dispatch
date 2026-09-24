@@ -38,6 +38,26 @@ default and re-opened through a grant, or it does not land.
   tier field. fractalbot satisfies this today: its `sandbox_exec` declares one property, `command`,
   with `additionalProperties: false`.
 
+Selection reads the consumer's entrypoint and a projection of the recipe; no field a caller sends
+can name a pool.
+
+```mermaid
+flowchart TB
+    accTitle: Policy selects the image class
+    recipe["**recipe over RPC**<br/>may carry undeclared keys"] --> view["**poolPolicyView**<br/>keeps `SUBSTRATE_RECIPE_KEYS` only"]
+    entry["**facade entrypoint**<br/>fixes the consumer id"] --> sel{"selectPool"}
+    view --> sel
+    sel -->|fractalbot| task["`task`"]
+    sel -->|dispatcher, self-check| lean["`lean`"]
+    subgraph pools["One admission pool per class"]
+        lean
+        browser["`browser`"]
+        agent["`agent`"]
+        task
+    end
+    class browser,agent muted
+```
+
 ## Consequences
 
 - The `task` class builds from its own `infra/Dockerfile.task`, not another `image_vars` branch of

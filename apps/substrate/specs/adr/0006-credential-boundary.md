@@ -29,6 +29,28 @@ leave by two sanctioned shapes:
    headers, and hands the container nothing (or an inert placeholder for tools that refuse to start
    without one).
 
+```mermaid
+flowchart TB
+    accTitle: Where a credential attaches
+    subgraph box["Container — no long-lived credential"]
+        cmd["**command**"]
+        art["**artifact**<br/>written under `/artifacts`"]
+    end
+    subgraph worker["Worker side"]
+        secrets[("Worker secrets")]
+        handler["**egress handler**<br/>drops container auth headers<br/>injects the host's `headerTemplate`"]
+        wb["**writeback**<br/>substrate or consumer Worker"]
+    end
+    cmd -->|request that passes the grant| handler
+    cmd --> art
+    art --> wb
+    secrets --> handler
+    secrets --> wb
+    handler --> api["credentialed host<br/>e.g. `api.cloudflare.com`"]
+    wb --> write["authenticated write"]
+    class secrets accent
+```
+
 The **one sanctioned in-container credential** is the per-execution model-proxy token:
 execution-scoped, budget-capped, header-only transport (query-param rejected), revoked by a DO alarm
 at the run's max wall-clock — revocation does not depend on finalize running — and never logged.

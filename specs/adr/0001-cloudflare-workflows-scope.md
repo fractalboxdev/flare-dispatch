@@ -90,6 +90,25 @@ humans also act on — a GitHub issue, a PR, a deployment — the authoritative 
 that entity's own status field (labels, PR state, deployment status), and each webhook
 event starts a short instance that reads state, acts, and writes state back.
 
+The rules select a run's instance shape:
+
+```mermaid
+flowchart TB
+  accTitle: Which instance shape a run takes
+  ev["**event arrives**<br/>webhook, Action, schedule, child spawn"] --> name["**name the instance**<br/>from the event's identity"]
+  name --> dup{"Instance id already<br/>created?"}
+  dup -->|yes| folded["**deduplicated**<br/>answered as dispatched"]
+  dup -->|no| human{"Named person owes an answer<br/>inside a stated window?"}
+  human -->|yes| hib["**hibernating instance**<br/>`step.waitForEvent` with a timeout<br/>e.g. release approval, 72 h"]
+  human -->|no| entity{"Tracks an external entity<br/>humans also edit?"}
+  entity -->|yes| fresh["**fresh instance per event**<br/>read state, act, write state back<br/>to labels / PR state / deploy status"]
+  entity -->|no| short["**one short instance**<br/>runs to completion in minutes"]
+  class folded muted
+  class hib accent
+  class fresh ok
+  class short ok
+```
+
 Corollary to rules 3 and 4: wall-clock bounds must be written explicitly (`timeoutSec`
 on exec, `Effect.timeoutFail` around waits, as `waitForPort` already does at
 `sandbox-cf.ts:565-577`). Declaring `maxDurationSec` is documentation, not enforcement,

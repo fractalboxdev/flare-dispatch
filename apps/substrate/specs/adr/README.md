@@ -70,3 +70,23 @@ this change only stops the two facts sharing one word in the meantime.
 | [0010](0010-named-image-classes-policy-selected.md) | Named image classes, selected by policy | Proposed | shipped |
 | [0011](0011-sdk-pin-as-security-surface.md) | The sandbox SDK pin is a security surface | Proposed | shipped — literal pins on both halves, the transitive one walked through the `apps/substrate` lockfile edge; scoped to the substrate, so the dispatcher's own `@cloudflare/sandbox` 0.10.1 is unasserted |
 | [0012](0012-processes-that-outlive-the-exec-fence.md) | A process that outlives the exec fence holds no grant | Proposed | shipped — selective teardown and the `killAllProcesses` fallback both real |
+
+## How the controls compose
+
+One `execUnderGrant` call crosses these controls in order; budgets (0009) have no caller
+yet, and the SDK pin (0011) gates deploys rather than calls.
+
+```mermaid
+flowchart TB
+    accTitle: Controls on one exec
+    c["**consumer Worker**<br/>dispatcher or fractalbot"] -->|service binding| f["**facade** · 0003<br/>consumer id fixed by the entrypoint"]
+    f --> p["**pool selection** · 0010<br/>policy picks the image class"]
+    p --> a["**admission ticket** · 0004<br/>pool cap in D1, HMAC ticket to the DO"]
+    a --> ap{"**approval floor** · 0007<br/>attested if irreversible?"}
+    ap -->|no| r["typed refusal"]
+    ap -->|yes, or not a floor command| fence["**exec fence** · 0005<br/>ensure behind the ticket, apply grant,<br/>run, kill, revoke"]
+    fence -.->|container requests| eg["**egress handler** · 0005, 0006<br/>deny-all floor, profile rules,<br/>credential injection"]
+    fence --> o["**execution facts** · 0008<br/>receipt, granted hosts, kill count"]
+    class r danger
+    class eg accent
+```

@@ -31,6 +31,20 @@ The substrate's metered model proxy enforces two tiers:
 2. **Per-consumer ceiling** — a second budget DO keyed by consumer identity on the service binding;
    the hard stop that holds when a consumer's own ledger is wrong.
 
+A charge clears only when it fits both tiers, checked execution-first:
+
+```mermaid
+flowchart TB
+    accTitle: Two-tier spend decision
+    charge["**charge**<br/>micro-USD, unpriced models at the top rate"] --> exec{"execution spent + charge<br/>over the run's cap?"}
+    exec -->|yes| stopE["**budget-stop**<br/>scope `execution`, meter state"]
+    exec -->|no| cons{"consumer spent + charge<br/>over the ceiling?"}
+    cons -->|yes| stopC["**budget-stop**<br/>scope `consumer`, meter state"]
+    cons -->|no| ok["**charge admitted**<br/>fits both tiers"]
+    class stopE,stopC danger
+    class ok ok
+```
+
 Budget stops cross the facade as typed refusals carrying meter state — never as opaque model-call
 failures. Consumer-side budgets (fractalbot's `BudgetLedger`, its token pacing, all budget UX) stay
 consumer-side as the product layer above the floor.

@@ -18,6 +18,24 @@ authenticates its own HTTPS calls mid-build — the credential is a per-host des
 egress handler resolves the value from the substrate Worker's own environment and sets the header on
 requests that pass the grant; the container gets nothing.
 
+```mermaid
+flowchart TB
+  accTitle: How writes leave a container
+  subgraph ctr["Container"]
+    work["**Workload**<br/>no long-lived credential"]
+    tok["**Model-proxy token**<br/>per execution"]
+  end
+  work -->|artifact| wb["**Worker-side writeback**<br/>substrate or consumer Worker"]
+  work -->|"HTTPS, auth stripped"| eh["**Egress handler**<br/>header from the Worker's env"]
+  tok -->|"Authorization header"| mp["**Metered model proxy**<br/>not built yet"]
+  wb --> dest["**Provider**<br/>authenticated write"]
+  eh --> dest
+  mp --> model["**Model provider**"]
+  class wb ok
+  class eh accent
+  class mp warn
+```
+
 Four controls make the second shape safe, one function each:
 
 | Control | Where |
@@ -29,6 +47,38 @@ Four controls make the second shape safe, one function each:
 
 Unresolvable descriptors fail **closed**: the request is refused and recorded as a denial naming the
 missing binding, rather than sent unauthenticated to fail confusingly at the provider.
+
+One enforced request through a credentialed profile:
+
+```mermaid
+sequenceDiagram
+  accTitle: Handler injection for one request
+  participant C as Container
+  participant P as ContainerProxy
+  participant H as Egress handler
+  participant U as Provider
+  C->>P: HTTPS request
+  alt host outside the grant
+    P-->>C: 520
+  end
+  P->>H: request with grant params
+  H->>H: check rule, strip auth
+  alt rule refuses
+    H-->>C: 403, denial recorded
+  end
+  H->>H: resolve secret from Worker env
+  alt secret unresolvable
+    H-->>C: 403, denial names the binding
+  end
+  H->>U: request + injected header
+  opt 3xx response
+    U-->>H: Location
+    H->>H: re-check next hop
+    H->>U: next hop
+  end
+  U-->>H: response
+  H-->>C: response, set-cookie stripped
+```
 
 ## Migration table
 
@@ -70,6 +120,25 @@ same headroom and pass. The ADR names a Durable Object for the ceiling; D1 is th
 guarantee from the store that already owns the account's other hard cap, and it avoids a second DO
 class in the one worker whose deploy churns running containers. Moving it later is a store swap
 behind `ModelBudgetStore`, not a change to the rule.
+
+One model call, as the proxy route runs it — each decision below exists in `src/budget/`; the route
+that calls them is the part not built:
+
+```mermaid
+flowchart TB
+  accTitle: One metered model call
+  call["**Model call**<br/>token in the Authorization header"] --> verify{"**Verify token**<br/>execution, epoch, expiresAt"}
+  verify -->|fail| deny["**Refused**<br/>a query-string token too"]
+  verify -->|ok| exe{"**Execution tier**<br/>estimate fits the run's limit?"}
+  exe -->|no| stopE["**budget-stop**<br/>scope: execution"]
+  exe -->|yes| con{"**Consumer tier**<br/>estimate fits the ceiling?"}
+  con -->|"no, execution charge refunded"| stopC["**budget-stop**<br/>scope: consumer"]
+  con -->|yes| fwd["**Forward to provider**"]
+  fwd --> settle["**Settle**<br/>actual against held, both tiers"]
+  class deny,stopE,stopC danger
+  class fwd muted
+  class settle ok
+```
 
 Budget stops cross the facade as `budget-stop` refusals carrying meter state in USD, never as opaque
 model-call failures. **Unmeasured is not free**: a model the price card does not know is charged at

@@ -25,6 +25,31 @@ command unless the call carries an **approval attestation**. Who may assert diff
 
 The regex list lives in the substrate and is versioned with it.
 
+The attestation binds to the command's SHA-256 and is spent once per `(taskId, ordinal)`; a retry
+of the same step under the same idempotency key passes through.
+
+```mermaid
+sequenceDiagram
+    accTitle: Approval floor at exec
+    participant C as Consumer
+    participant F as Facade
+    participant S as Sandbox DO
+    C->>F: execUnderGrant(key, command, approval?)
+    F->>S: guardedExec — after admission
+    S->>S: match command against APPROVAL_FLOOR
+    alt floor command, no attestation
+        S-->>F: approval-required, naming the rule
+    else attestation for a different command hash
+        S-->>F: attestation-rejected
+    else step already spent by other work
+        S-->>F: attestation-rejected
+    else no floor match, or a valid first spend
+        S->>S: record the spend, then run the fence
+        S-->>F: receipt
+    end
+    F-->>C: ExecOutcome or typed refusal
+```
+
 ## Consequences
 
 - The tool-loop bypass closes structurally at fractalbot's bind (its stage 3).
