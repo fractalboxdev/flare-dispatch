@@ -2,6 +2,7 @@
 import { defineConfig } from "astro/config";
 import { satteri } from "@astrojs/markdown-satteri";
 import starlight from "@astrojs/starlight";
+import merlion from "@fractalbox/merlion-astro";
 import starlightLinksValidator from "starlight-links-validator";
 import { README_PAGES, repoLinks } from "./src/lib/pages.mjs";
 
@@ -63,6 +64,8 @@ export default defineConfig({
         },
       ],
     }),
+    // Every ```mermaid block renders to inline, themeable SVG at build time.
+    merlion({ stylesheet: "src/styles/diagrams.css", width: 720 }),
   ],
   vite: {
     server: { allowedHosts: [".ts.net"] },
