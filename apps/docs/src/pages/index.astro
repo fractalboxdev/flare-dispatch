@@ -1,0 +1,392 @@
+---
+import { Code } from "@astrojs/starlight/components";
+import Landing from "../layouts/Landing.astro";
+import HeroDiagram from "../components/landing/HeroDiagram.astro";
+import BillingTimeline from "../components/landing/BillingTimeline.astro";
+import { INSTANCE_SPECS, containerMicroUsdPerSec } from "../data/benchmarks";
+import { REPO_URL } from "../lib/llms";
+
+const DESCRIPTION =
+  "BYOC CI/CD that runs agentic code review, Playwright e2e, acceptance suites, sharded matrices and security scans on Cloudflare — billed per vCPU-second in your own account. Runs are typed Effect-TS programs, not YAML.";
+
+// §02 cost card. GitHub-hosted Linux x64 per-minute rates
+// (docs.github.com/en/billing/reference/actions-runner-pricing); the FlareDispatch figure
+// prices the vCPU-active minutes on a standard-2 container through the cost engine that
+// meters real executions (src/data/benchmarks.ts).
+const RUN_MINUTES = 10;
+const ACTIVE_SECONDS = 120;
+const instance = INSTANCE_SPECS["standard-2"];
+const fdUsd = (ACTIVE_SECONDS * containerMicroUsdPerSec("standard-2")) / 1_000_000;
+const runners = [
+  { label: "ubuntu-latest", sub: "2-core · GHA", perMin: 0.006 },
+  { label: "4-core larger runner", sub: "4-core · GHA", perMin: 0.012 },
+  { label: "8-core larger runner", sub: "8-core · GHA", perMin: 0.022 },
+];
+const minRatio = Math.floor((runners[0].perMin * RUN_MINUTES) / fdUsd);
+const maxRatio = Math.floor((runners[runners.length - 1].perMin * RUN_MINUTES) / fdUsd);
+
+const value = [
+  {
+    id: "01 / Cost",
+    title: "Pay per vCPU-second",
+    body: "Heavy compute bills at Cloudflare Container rates — per vCPU-second, scaled to zero between runs — instead of per GitHub Actions minute. The jobs that dominate a CI bill move to the cheapest place to run them.",
+  },
+  {
+    id: "02 / Headroom",
+    title: "No platform ceilings",
+    body: "No 6-hour job limit: each run declares its own wall-time ceiling. No 10 GB cache cap: the dependency cache lives in your R2 bucket. Artifact retention is yours to set.",
+  },
+  {
+    id: "03 / Fit",
+    title: "Install the App, or keep Actions",
+    body: "In webhook mode the GitHub App fires runs on every PR with no workflow file and zero Actions minutes. In Action mode a workflow step dispatches the run, for jobs that interleave with the rest of a pipeline. Either way the verdict lands as a check-run.",
+  },
+];
+
+const capabilities = [
+  {
+    id: "05.01 / Agentic review",
+    title: "Review runs that read the whole diff",
+    body: "pr-review fans a diff out to per-domain reviewers, or one generalist, and posts a single verdict with a severity table and per-finding blob links.",
+  },
+  {
+    id: "05.02 / Writeback",
+    title: "Propose the fix back as a PR",
+    body: "self-heal-pr runs a coding agent in a credential-free sandbox and opens a draft PR only when the repro goes green; spec-drift-pr and improve-pr file their proposals the same way. The Worker holds the App key, never the agent.",
+  },
+  {
+    id: "05.03 / Model routing",
+    title: "Provider-agnostic model gateway",
+    body: "Model calls route to Workers AI, Anthropic or Bedrock, chosen per run from KV config with no redeploy. Bedrock signs with SigV4, with no long-lived AWS keys in the Worker.",
+  },
+  {
+    id: "05.04 / Admission control",
+    title: "Bursts queue instead of failing",
+    body: "A FIFO admission gate caps in-flight runs at the pool size, and the check-run shows the queue position while a run waits. Runs that must not overlap declare a serial group.",
+  },
+  {
+    id: "05.05 / Session replay",
+    title: "Scrub the walkthrough inline",
+    body: "product-demo drives a deployed app over CDP with session recording; reviewers replay it in an rrweb player linked from the check-run and the result email.",
+  },
+  {
+    id: "05.06 / Observability signals",
+    title: "Bring your own APM",
+    body: "ci-triage-pr reads the vendor-neutral signals/v1 shape from a small adapter on your side — Datadog, SigNoz, HyperDX or your own — so no observability key sits in the Dispatcher.",
+  },
+];
+
+const bets = [
+  {
+    statement: "<strong>Progressive</strong> offloading.",
+    body: "Move CI one job at a time, heaviest first. GitHub Actions keeps the cheap jobs and the PR gate; nothing is all-or-nothing.",
+  },
+  {
+    statement: "Runs are <strong>typed programs</strong>, not YAML.",
+    body: "A run is an Effect-TS program: Schema-typed inputs and outputs, durable steps, tagged errors, exhaustive matching. Fork it, edit it, unit-test it without booting a container.",
+  },
+  {
+    statement: "BYOC <strong>by construction</strong>.",
+    body: "Each organization deploys its own Dispatcher and GitHub App into its own Cloudflare account. There is no multi-tenant operator and no hosted service to trust.",
+  },
+];
+
+const workflowYaml = `# .github/workflows/ci.yml — Action mode
+- uses: fractalboxdev/flare-dispatch/actions/flare-dispatch-action@<sha>
+  with:
+    run: offload-test
+    endpoint: \${{ vars.FLAREDISPATCH_ENDPOINT }}
+    hmac-secret: \${{ secrets.FLAREDISPATCH_HMAC }}
+    inputs: |
+      { "repo": "\${{ github.repository }}", "sha": "\${{ github.sha }}", "command": "pnpm test" }`;
+
+const runTs = `// runs/oxlint.ts, condensed — webhook mode, no workflow file
+export const oxlint = defineRun({
+  name: "oxlint",
+  triggers: [{ event: "pull_request", actions: ["opened", "synchronize"], inputs }],
+  inputs: OxlintInput,   // Schema.Struct({ repo, sha, args, version, … })
+  outputs: OxlintOutput, // Schema.Struct({ exitCode, durationMs, logUri, skipped })
+  limits: { maxDurationSec: 600 },
+
+  run: (input) =>
+    Effect.gen(function* () {
+      const { container, dir } = yield* step("checkout", () =>
+        workspace({ repo: input.repo, sha: input.sha, install: false }),
+      );
+      const result = yield* step("exec", () =>
+        sandbox.exec({ container, cwd: dir, command: "npx --yes oxlint@1.79.0" }),
+      );
+      const logUri = yield* step("upload-log", () =>
+        artifact.upload({ name: "oxlint.log", path: result.logPath, signedUrlTTL: "30 days" }),
+      );
+      if (result.exitCode !== 0) {
+        return yield* Effect.fail(new AcceptanceFailed({ exitCode: result.exitCode, summaryMd: logUri }));
+      }
+      return { exitCode: 0, durationMs: result.durationMs, logUri, skipped: false };
+    }),
+});`;
+
+const snippets = [
+  { id: "workflow", label: "ci.yml", lang: "yaml" as const, code: workflowYaml, blurb: "Dispatch a registered run from a workflow step; the verdict arrives as the flare-dispatch/offload-test check-run.", href: "/docs/actions/flare-dispatch-action/" },
+  { id: "run", label: "oxlint.ts", lang: "ts" as const, code: runTs, blurb: "A run is a program: typed contract, durable steps, a tagged failure that turns the check red.", href: "/docs/runs/" },
+];
+---
+
+<Landing title="FlareDispatch — offload the expensive half of GitHub Actions onto Cloudflare" description={DESCRIPTION}>
+  <section class="hero">
+    <div class="container">
+      <div class="hero__meta">
+        <span class="section-marker reveal" data-delay="1">§00 / Manifest</span>
+        <span class="section-marker reveal" data-delay="1">BYOC · open source</span>
+      </div>
+      <h1 class="hero__title reveal" data-delay="2">
+        Offload the <em>expensive&#160;half</em> of GitHub&#160;Actions onto Cloudflare.
+      </h1>
+      <p class="hero__sub reveal" data-delay="3">
+        FlareDispatch moves agentic code review, Playwright e2e, acceptance suites, sharded matrices and
+        security scans off GitHub-hosted runners and onto Cloudflare — billed per vCPU-second in your own
+        account. Trigger a run from a workflow step or a cron schedule, or install the GitHub App and let
+        runs fire on every PR with zero Actions minutes.
+      </p>
+      <div class="hero__cta reveal" data-delay="4">
+        <a class="btn" href="/docs/actions/flare-dispatch-action/">Offload a job</a>
+        <a class="btn btn--ghost" href="/docs/">Read the docs</a>
+        <a class="btn btn--ghost" href="/docs/runs/">Run catalog</a>
+      </div>
+    </div>
+    <HeroDiagram />
+  </section>
+
+  <section class="tenets">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§01 / Why it pays off</span>
+        <h2>Heavy CI at the price of raw serverless compute.</h2>
+      </div>
+      <div class="tenets__grid">
+        {
+          value.map((v) => (
+            <article class="tenet">
+              <span class="tenet__id">{v.id}</span>
+              <h3 class="tenet__title">{v.title}</h3>
+              <p class="tenet__rationale">{v.body}</p>
+            </article>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="bottleneck">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§02 / The bottleneck</span>
+        <h2>Most of a code-review run is the model thinking, not your CPU working.</h2>
+        <p class="bottleneck__lede">
+          An agentic review is mostly LLM I/O: the run waits on the model while the vCPU idles. GitHub
+          Actions bills that wait by the wall-clock minute. FlareDispatch bills container vCPU-seconds, and
+          the model wait runs in a Workflow step that accrues no container time — so a run pays for its <em>active</em>
+          slivers, here about a fifth of it.
+        </p>
+      </div>
+      <div class="bottleneck__split">
+        <BillingTimeline />
+        <aside class="cost-card" aria-label={`Sample cost for one ${RUN_MINUTES}-minute code-review run`}>
+          <span class="cost-card__eyebrow">Sample cost · one {RUN_MINUTES}-min review</span>
+          <table class="cost-card__table">
+            <thead>
+              <tr>
+                <th>Runner</th>
+                <th>$&#8239;/&#8239;min</th>
+                <th>/ run</th>
+              </tr>
+            </thead>
+            <tbody>
+              {
+                runners.map((r) => (
+                  <tr>
+                    <th scope="row">
+                      <code>{r.label}</code>
+                      <span class="cost-card__sub">{r.sub}</span>
+                    </th>
+                    <td>{r.perMin.toFixed(3)}</td>
+                    <td>${(r.perMin * RUN_MINUTES).toFixed(3)}</td>
+                  </tr>
+                ))
+              }
+              <tr class="cost-card__total">
+                <th scope="row">
+                  <code>flare-dispatch</code>
+                  <span class="cost-card__sub">~{ACTIVE_SECONDS / 60}&#8239;min active · standard-2</span>
+                </th>
+                <td>vCPU-s</td>
+                <td class="cost-card__win">~${fdUsd.toFixed(3)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="cost-card__verdict">{minRatio}–{maxRatio}× cheaper per run</p>
+          <p class="cost-card__note">
+            Review is I/O-bound and never needs the cores, yet GitHub bills all {RUN_MINUTES}&#8239;minutes at
+            the runner's rate, so a bigger runner only widens the gap. The FlareDispatch figure prices {ACTIVE_SECONDS / 60}&#8239;minutes
+            on a {instance.vcpu}-vCPU, {instance.gib}&#8239;GiB container. CI compute only — model
+            tokens cost the same either way. GitHub rates are Linux x64 list prices; container rates come from
+            the <a href={`${REPO_URL}/blob/main/packages/core/src/cost.ts`}>rate card</a>.
+          </p>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <section class="compare">
+    <div class="container">
+      <div class="compare__intro">
+        <div>
+          <span class="section-marker">§03 / Positioning</span>
+          <h2>Every other option gives up one of three things.</h2>
+        </div>
+        <p>
+          Hosted runners are easy but bill per minute under hard ceilings. Self-hosted and hybrid runners lift
+          the ceilings and hand you a fleet to operate. FlareDispatch runs on serverless Cloudflare primitives
+          in an account you already own.
+        </p>
+      </div>
+      <div class="compare__wrap">
+        <table class="compare__table">
+          <thead>
+            <tr>
+              <th>Heavy-CI option</th>
+              <th>Serverless, scale-to-zero compute</th>
+              <th>No 6&#8239;h / 10&#8239;GB ceilings</th>
+              <th>No runner fleet to operate</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>GHA hosted runners</td><td class="compare__no">—</td><td class="compare__no">—</td><td class="compare__yes">✓</td></tr>
+            <tr><td>Self-hosted runners</td><td class="compare__no">—</td><td class="compare__yes">✓</td><td class="compare__no">—</td></tr>
+            <tr><td>Buildkite Agent (hybrid)</td><td class="compare__no">—</td><td class="compare__yes">✓</td><td class="compare__no">—</td></tr>
+            <tr class="is-flare-dispatch"><td>FlareDispatch</td><td class="compare__yes">✓</td><td class="compare__yes">✓</td><td class="compare__yes">✓</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="snippets">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§04 / The code</span>
+        <h2>One step to dispatch. One program to run.</h2>
+      </div>
+      <div class="snippets__widget">
+        <div class="snippets__tabs" role="tablist" aria-label="Code samples">
+          {
+            snippets.map((s, i) => (
+              <button
+                type="button"
+                class="snippets__tab"
+                role="tab"
+                id={`snippet-tab-${s.id}`}
+                aria-controls={`snippet-panel-${s.id}`}
+                aria-selected={i === 0 ? "true" : "false"}
+                data-tab="snippet"
+                data-target={`snippet-panel-${s.id}`}
+              >
+                {s.label}
+              </button>
+            ))
+          }
+        </div>
+        {
+          snippets.map((s, i) => (
+            <div
+              class="snippets__panel"
+              role="tabpanel"
+              id={`snippet-panel-${s.id}`}
+              aria-labelledby={`snippet-tab-${s.id}`}
+              data-panel="snippet"
+              hidden={i !== 0}
+            >
+              <div class="snippets__blurb">
+                <span>{s.blurb}</span>
+                <a href={s.href}>Docs →</a>
+              </div>
+              <Code code={s.code} lang={s.lang} wrap />
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="tenets">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§05 / Platform</span>
+        <h2>More than runs: the platform underneath.</h2>
+      </div>
+      <div class="tenets__grid">
+        {
+          capabilities.map((c) => (
+            <article class="tenet">
+              <span class="tenet__id">{c.id}</span>
+              <h3 class="tenet__title">{c.title}</h3>
+              <p class="tenet__rationale">{c.body}</p>
+            </article>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="manifesto">
+    <div class="container">
+      <div class="manifesto__header">
+        <span class="section-marker">§06 / Design philosophy</span>
+        <h2>Three bets the design rests on.</h2>
+      </div>
+      <ol class="manifesto__list">
+        {
+          bets.map((b, i) => (
+            <li class="manifesto__item">
+              <span class="manifesto__num">§06.0{i + 1}</span>
+              <div>
+                <p class="manifesto__statement" set:html={b.statement} />
+                <p class="manifesto__body">{b.body}</p>
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <section class="container">
+    <div class="cta-band">
+      <div>
+        <span class="section-marker">§07 / Start</span>
+        <h2>One Dispatcher per org, in your own Cloudflare account.</h2>
+      </div>
+      <div class="cta-band__actions">
+        <a class="btn" href="/docs/actions/deploy-dispatcher-action/">Deploy a Dispatcher</a>
+        <a class="btn btn--ghost" href="/docs/actions/flare-dispatch-action/">Offload a job</a>
+        <a class="btn btn--ghost" href="/benchmarks/">Benchmarks</a>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    // Tabs: a tab carries data-tab="<group>" and data-target="<panel id>"; its panels carry
+    // data-panel="<group>".
+    for (const tab of document.querySelectorAll<HTMLElement>("[data-tab]")) {
+      tab.addEventListener("click", () => {
+        const group = tab.dataset.tab;
+        for (const t of document.querySelectorAll(`[data-tab="${group}"]`)) {
+          t.setAttribute("aria-selected", String(t === tab));
+        }
+        for (const p of document.querySelectorAll<HTMLElement>(`[data-panel="${group}"]`)) {
+          p.toggleAttribute("hidden", p.id !== tab.dataset.target);
+        }
+      });
+    }
+  </script>
+</Landing>

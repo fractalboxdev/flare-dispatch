@@ -10,7 +10,7 @@ export const GET: APIRoute = async ({ site }) => {
     (a, b) => sectionRank(a.id) - sectionRank(b.id) || a.id.localeCompare(b.id),
   );
   const parts = entries.map((e) => {
-    const url = new URL(e.id === "index" ? "/" : `/${e.id}/`, base).href;
+    const url = new URL(`/${e.id}/`, base).href;
     const body = (e.body ?? "").replace(/^# .*\n+/m, "").trim();
     return `# ${e.data.title}\n\nSource: ${url}\n\n${body}\n`;
   });

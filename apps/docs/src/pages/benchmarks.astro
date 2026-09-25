@@ -1,0 +1,154 @@
+---
+import Landing from "../layouts/Landing.astro";
+import { benchmarks, type BenchmarkRow } from "../data/benchmarks";
+import { REPO_URL } from "../lib/llms";
+
+// Modeled per-run speed and cost (src/data/benchmarks.ts). Deterministic; no execution
+// data leaves the Dispatcher.
+
+const fmtUsd = (microUsd: number | null): string => {
+  if (microUsd === null) return "—";
+  const usd = microUsd / 1_000_000;
+  if (usd === 0) return "$0";
+  return usd < 1 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
+};
+
+const fmtDuration = (s: number): string => {
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem === 0 ? `${m}m` : `${m}m${rem}s`;
+};
+
+// Model column: a metered figure, "neurons" for the account-billed Workers AI catalog, or
+// "—" for a run that makes no model call.
+const modelCell = (r: BenchmarkRow): string => {
+  if (r.model === null) return "—";
+  return r.modelMetered ? fmtUsd(r.modelMicroUsd) : "neurons*";
+};
+
+const runs = benchmarks;
+const anyUnmetered = runs.some((r) => r.model !== null && !r.modelMetered);
+const costSource = `${REPO_URL}/blob/main/packages/core/src/cost.ts`;
+---
+
+<Landing
+  title="Benchmarks — FlareDispatch"
+  description="Modeled wall-time and cost per FlareDispatch run: container compute by instance type plus model inference, priced from the rate card that meters real executions."
+>
+  <div class="page">
+    <header class="page-intro">
+      <div>
+        <span class="section-marker">§ / Benchmarks</span>
+        <h1>Speed &amp; cost, per run.</h1>
+      </div>
+      <div>
+        <p>
+          A <strong>modeled</strong> projection of each run's wall-time and marginal cost: container compute
+          (<code>instance vCPU and memory × active seconds</code>) plus model inference for the runs that call
+          a model, priced from the <a href={costSource}>rate card</a> that meters real executions. These are
+          planning estimates, not a bill.
+        </p>
+        <p class="bench-callout">
+          <strong>Modeled, not metered.</strong> Re-check Cloudflare and model pricing before budgeting. The
+          measured per-execution cost is on your Dispatcher's Access-gated dashboard.
+        </p>
+      </div>
+    </header>
+
+    <div class="bench-wrap">
+      <table class="bench-table">
+        <thead>
+          <tr>
+            <th>Run</th>
+            <th>Trigger</th>
+            <th>Instance</th>
+            <th class="num">~Wall</th>
+            <th class="num">Container</th>
+            <th class="num">Model</th>
+            <th class="num">~Cost / run</th>
+          </tr>
+        </thead>
+        <tbody>
+          {
+            runs.map((r) => (
+              <tr>
+                <td class="bench-name" title={r.note}>
+                  <code>{r.name}</code>
+                </td>
+                <td class="bench-muted">{r.kind === "github-event" ? "event" : "cron"}</td>
+                <td class="bench-muted">{r.instance}</td>
+                <td class="num">{fmtDuration(r.wallSeconds)}</td>
+                <td class="num">{fmtUsd(r.containerMicroUsd)}</td>
+                <td class="num">{modelCell(r)}</td>
+                <td class="num bench-total">{fmtUsd(r.totalMicroUsd)}</td>
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
+    </div>
+    {
+      anyUnmetered && (
+        <p class="bench-footnote">
+          <strong>*neurons</strong> — the run's default backend is the Workers AI catalog, billed as
+          account-level Neurons with no per-call token usage, so no per-run USD is modeled. The Anthropic and
+          Bedrock backends bill per token at the model's rate. Hover a run name for its workload assumptions.
+        </p>
+      )
+    }
+  </div>
+</Landing>
+
+<style>
+  .bench-callout {
+    margin-top: 1.25rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--accent);
+    font-size: var(--fs-small);
+    line-height: 1.55;
+  }
+  .bench-wrap {
+    overflow-x: auto;
+  }
+  .bench-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-small);
+  }
+  .bench-table th,
+  .bench-table td {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--hairline);
+    text-align: left;
+    white-space: nowrap;
+  }
+  .bench-table thead th {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: var(--fs-tiny);
+    border-bottom: 2px solid var(--ink);
+  }
+  .bench-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
+  }
+  .bench-name code {
+    font-weight: 600;
+  }
+  .bench-muted {
+    color: var(--muted);
+  }
+  .bench-total {
+    font-weight: 600;
+  }
+  .bench-footnote {
+    margin-top: 1rem;
+    font-size: var(--fs-small);
+    color: var(--muted);
+    line-height: 1.55;
+  }
+</style>

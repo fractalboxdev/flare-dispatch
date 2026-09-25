@@ -1,16 +1,8 @@
 // Cost-engine unit tests — pins the rate card to specs/06-cost.md's worked
-// numbers and exercises the metered-vs-modeled basis logic.
-//
-// These constant pins are also the drift latch the docs benchmark generator is
-// held to: `scripts/emit-benchmarks.mjs` restates the rate card in plain JS to
-// stay bare-node runnable, and the generator's `--check` mode + the rate-card
-// assertion in the docs build keep that restatement honest (the same shape as
-// `signals.ts` ↔ `emit-signals-schema.mjs`). If a number here changes, the
-// committed `apps/docs/src/data/benchmarks.json` must be regenerated.
+// numbers and exercises the metered-vs-modeled basis logic. The docs benchmark
+// (apps/docs/src/data/benchmarks.ts) imports this engine directly, so a rate
+// change here reprices the site on its next build.
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CONTAINER_GIB_MICRO_USD_PER_SEC,
@@ -192,46 +184,6 @@ describe("estimateExecutionCost — honesty basis", () => {
     expect(cost.basis).toBe("unmetered");
     expect(cost.modelMicroUsd).toBeNull();
     expect(cost.totalMicroUsd).toBe(0);
-  });
-});
-
-describe("docs benchmark rate-card mirror (drift latch)", () => {
-  // scripts/emit-benchmarks.mjs hand-mirrors the rate card to stay bare-node
-  // runnable; this latch fails CI if the committed JSON's `rateCard` diverges
-  // from the exported TS constants (the signals.ts ↔ emit-signals-schema.mjs
-  // pattern). On failure: re-run `node scripts/emit-benchmarks.mjs`.
-  const HERE = dirname(fileURLToPath(import.meta.url));
-  const benchmarks = JSON.parse(
-    readFileSync(resolve(HERE, "../../../apps/docs/src/data/benchmarks.json"), "utf8"),
-  ) as {
-    rateCard: {
-      vcpuMicroUsdPerSec: number;
-      gibMicroUsdPerSec: number;
-      instances: Record<string, { vcpu: number; gib: number }>;
-      models: Record<string, { inputPerMTokUsd: number; outputPerMTokUsd: number }>;
-    };
-  };
-
-  it("container rates match the exported constants", () => {
-    expect(benchmarks.rateCard.vcpuMicroUsdPerSec).toBe(CONTAINER_VCPU_MICRO_USD_PER_SEC);
-    expect(benchmarks.rateCard.gibMicroUsdPerSec).toBe(CONTAINER_GIB_MICRO_USD_PER_SEC);
-  });
-
-  it("instance specs match INSTANCE_SPECS", () => {
-    expect(benchmarks.rateCard.instances).toEqual(INSTANCE_SPECS);
-  });
-
-  it("model rates match modelRate() for each family", () => {
-    // Compare only the per-token rates (the JSON omits the `source` footnote).
-    const rate = (id: string) => {
-      const r = modelRate(id)!;
-      return { inputPerMTokUsd: r.inputPerMTokUsd, outputPerMTokUsd: r.outputPerMTokUsd };
-    };
-    const { opus, sonnet, haiku, deepseek } = benchmarks.rateCard.models;
-    expect(opus).toEqual(rate("anthropic/claude-opus-4-6"));
-    expect(sonnet).toEqual(rate("anthropic/claude-sonnet-4-6"));
-    expect(haiku).toEqual(rate("anthropic/claude-haiku-4-5"));
-    expect(deepseek).toEqual(rate("deepseek/deepseek-reasoner"));
   });
 });
 

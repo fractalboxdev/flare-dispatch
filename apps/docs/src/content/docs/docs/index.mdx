@@ -1,21 +1,6 @@
 ---
-title: BYOC CI/CD on Cloudflare
+title: Overview
 description: FlareDispatch offloads the expensive half of GitHub Actions — agentic review, Playwright e2e, acceptance suites, matrix fan-outs — onto a Cloudflare stack you own.
-template: splash
-hero:
-  title: FlareDispatch
-  tagline: Offload the expensive half of GitHub Actions onto a Cloudflare stack you own. Runs are typed Effect-TS programs, not YAML.
-  actions:
-    - text: Offload a job
-      link: /actions/flare-dispatch-action/
-      icon: right-arrow
-    - text: Run catalog
-      link: /runs/
-      variant: minimal
-    - text: GitHub
-      link: https://github.com/fractalboxdev/flare-dispatch
-      icon: external
-      variant: minimal
 ---
 
 import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
@@ -48,8 +33,8 @@ Runs are written against a layered Effect-TS DSL: **capabilities** wrap Cloudfla
 ## Start here
 
 <CardGrid>
-  <LinkCard title="Offload a job" href="/actions/flare-dispatch-action/" description="Dispatch a run from a GitHub Actions step and gate on its check-run." />
-  <LinkCard title="Deploy a Dispatcher" href="/actions/deploy-dispatcher-action/" description="Ship the Worker into your own account from an operator overlay." />
-  <LinkCard title="Run catalog" href="/runs/" description="The runs a Dispatcher registers, their inputs, and where their logs live." />
-  <LinkCard title="Substrate" href="/substrate/" description="The execution environment for agentic work, consumed through a service-binding facade." />
+  <LinkCard title="Offload a job" href="/docs/actions/flare-dispatch-action/" description="Dispatch a run from a GitHub Actions step and gate on its check-run." />
+  <LinkCard title="Deploy a Dispatcher" href="/docs/actions/deploy-dispatcher-action/" description="Ship the Worker into your own account from an operator overlay." />
+  <LinkCard title="Run catalog" href="/docs/runs/" description="The runs a Dispatcher registers, their inputs, and where their logs live." />
+  <LinkCard title="Substrate" href="/docs/substrate/" description="The execution environment for agentic work, consumed through a service-binding facade." />
 </CardGrid>

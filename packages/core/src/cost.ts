@@ -6,10 +6,8 @@
 //
 //   * the runtime (`packages/runtime-cf`) — to persist a per-execution cost
 //     rollup at `finishExecution`;
-//   * the docs benchmark generator (`scripts/emit-benchmarks.mjs`) — to render a
-//     per-recipe modeled speed+cost table (the .mjs mirrors the rate constants
-//     below; `cost.test.ts` fails CI if the mirror drifts, the same
-//     drift-guard pattern as `signals.ts` ↔ `emit-signals-schema.mjs`);
+//   * the docs site (`apps/docs/src/data/benchmarks.ts`) — to price a per-run
+//     modeled speed+cost table at build time;
 //   * the analytics endpoint + dashboard — to display per-execution cost.
 //
 // --- metered vs modeled — the load-bearing distinction --------------------------

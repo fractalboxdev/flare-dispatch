@@ -30,36 +30,36 @@ export default defineConfig({
           errorOnLocalLinks: true,
           exclude: ({ link }) =>
             // Pages outside the docs collection.
-            ["/llms.txt", "/llms-full.txt"].includes(link) ||
+            ["/", "/benchmarks/", "/llms.txt", "/llms-full.txt"].includes(link) ||
             // README.md pages served at their directory (src/lib/pages.mjs).
             README_PAGES.has(link.replace(/#.*$/, "")),
         }),
       ],
       sidebar: [
-        { label: "Overview", link: "/" },
+        { label: "Overview", link: "/docs/" },
         {
           label: "GitHub Actions",
-          items: ["actions", "actions/flare-dispatch-action", "actions/deploy-dispatcher-action"],
+          items: ["docs/actions", "docs/actions/flare-dispatch-action", "docs/actions/deploy-dispatcher-action"],
         },
-        { label: "Run catalog", slug: "runs" },
+        { label: "Run catalog", slug: "docs/runs" },
         {
           label: "Substrate",
           items: [
-            "substrate",
-            "substrate/facade",
-            "substrate/grant-profiles",
-            "substrate/byoc-upgrade",
-            "substrate/contract-versioning",
+            "docs/substrate",
+            "docs/substrate/facade",
+            "docs/substrate/grant-profiles",
+            "docs/substrate/byoc-upgrade",
+            "docs/substrate/contract-versioning",
           ],
         },
-        { label: "API reference", items: [{ label: "Substrate facade", slug: "reference/substrate-contract" }] },
+        { label: "API reference", items: [{ label: "Substrate facade", slug: "docs/reference/substrate-contract" }] },
         {
           label: "Design records",
           collapsed: true,
           items: [
-            { label: "Dispatcher ADRs", collapsed: true, items: [{ autogenerate: { directory: "design/adr" } }] },
-            { label: "Dispatcher specs", collapsed: true, items: [{ autogenerate: { directory: "design/dispatcher" } }] },
-            { label: "Substrate specs", collapsed: true, items: [{ autogenerate: { directory: "design/substrate" } }] },
+            { label: "Dispatcher ADRs", collapsed: true, items: [{ autogenerate: { directory: "docs/design/adr" } }] },
+            { label: "Dispatcher specs", collapsed: true, items: [{ autogenerate: { directory: "docs/design/dispatcher" } }] },
+            { label: "Substrate specs", collapsed: true, items: [{ autogenerate: { directory: "docs/design/substrate" } }] },
           ],
         },
       ],

@@ -1,0 +1,10 @@
+# Root-level docs paths → their /docs/ pages; / is the product page. Workers static assets
+# apply these before asset lookup.
+/actions/*    /docs/actions/:splat    301
+/design/*     /docs/design/:splat     301
+/reference/*  /docs/reference/:splat  301
+/runs/        /docs/runs/             301
+/substrate/*  /docs/substrate/:splat  301
+/actions      /docs/actions/          301
+/runs         /docs/runs/             301
+/substrate    /docs/substrate/        301

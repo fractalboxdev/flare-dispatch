@@ -22,7 +22,7 @@ export const GET: APIRoute = async ({ site }) => {
     if (pages.length === 0) continue;
     lines.push(`## ${section.title}`, "");
     for (const e of pages) {
-      const url = new URL(e.id === "index" ? "/" : `/${e.id}/`, base).href;
+      const url = new URL(`/${e.id}/`, base).href;
       lines.push(`- [${e.data.title}](${url})${e.data.description ? `: ${e.data.description}` : ""}`);
     }
     lines.push("");

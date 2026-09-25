@@ -13,15 +13,21 @@ committed output differs from what the current source produces. A hand-maintaine
 drifts from the types consumers actually pin, and the drift stays invisible until someone follows it
 into a compile error.
 
-The site at <https://flare-dispatch.fractalbox.dev> is an Astro Starlight build of this directory.
-Every page under [`src/content/docs/`](src/content/docs/) except the landing page is a relative
+The site at <https://flare-dispatch.fractalbox.dev> is an Astro build of this directory. The product
+page (`/`) and `/benchmarks/` are plain Astro pages in [`src/pages/`](src/pages/) with their own
+layout and stylesheet; the documentation under `/docs/` is Starlight. `/benchmarks/` prices the
+workload profiles in [`src/data/benchmarks.ts`](src/data/benchmarks.ts) through the cost engine
+(`packages/core/src/cost.ts`) at build time. `public/_redirects` maps the
+root-level docs paths (`/actions/…`, `/runs/`, `/substrate/…`) to their `/docs/` pages.
+
+Every page under [`src/content/docs/docs/`](src/content/docs/docs/) except the docs overview is a relative
 symbolic link to Markdown elsewhere in the repo — these guides, the run catalog, the action READMEs,
 the specs and ADRs — so each file has one copy and reads the same on GitHub and on the site.
 [`src/lib/pages.mjs`](src/lib/pages.mjs) derives each page's title and description from its first
 heading and paragraph, and rewrites relative links to site URLs (or to GitHub, for files that are not
 pages). The site also serves `/llms.txt` and `/llms-full.txt`, generated from the same pages.
 
-To publish another file, add a symbolic link under `src/content/docs/` and a sidebar entry in
+To publish another file, add a symbolic link under `src/content/docs/docs/` and a sidebar entry in
 [`astro.config.mjs`](astro.config.mjs). The build fails on a broken internal link.
 
 ```sh

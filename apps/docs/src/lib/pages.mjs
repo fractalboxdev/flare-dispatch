@@ -1,9 +1,9 @@
 // @ts-check
-// Repository Markdown on the site. Every page under src/content/docs/ except the landing
-// page is a relative symbolic link into the repository (a guide, a README, a spec), so
-// each file has one copy and reads the same on GitHub and here. This module supplies
-// what Starlight needs and GitHub does not: ids, titles, descriptions, and site URLs for
-// the relative links those files contain.
+// Repository Markdown on the site. Every page under src/content/docs/ except the docs
+// overview (docs/index.mdx) is a relative symbolic link into the repository (a guide, a
+// README, a spec), so each file has one copy and reads the same on GitHub and here. This
+// module supplies what Starlight needs and GitHub does not: ids, titles, descriptions,
+// and site URLs for the relative links those files contain.
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,7 +138,7 @@ export const pageHref = (href, realFile) => {
   return `${REPO_URL}/${isDir ? "tree" : "blob"}/main/${repoRel}${hash}`;
 };
 
-/** Real path of a repository page, or null for the landing page and non-files. */
+/** Real path of a repository page, or null for the docs overview and non-files. */
 const repoFile = (/** @type {URL | undefined} */ fileURL) => {
   if (!fileURL) return null;
   try {
@@ -152,7 +152,7 @@ const repoFile = (/** @type {URL | undefined} */ fileURL) => {
 /**
  * Sätteri hast plugin factory: in repository files, rewrites relative links to site URLs
  * so links written for GitHub work on the site, and drops the first `# heading`, because
- * Starlight renders the title from front matter. The landing page is left alone.
+ * Starlight renders the title from front matter. The docs overview is left alone.
  * @param {{ fileURL?: URL }} ctx
  */
 export const repoLinks = ({ fileURL } = {}) => {
