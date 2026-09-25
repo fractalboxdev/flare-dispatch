@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./primitives": "./src/primitives/index.ts",
     "./signals": "./src/signals.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./cost": "./src/cost.ts"
   },
   "scripts": {
     "test": "vitest run"

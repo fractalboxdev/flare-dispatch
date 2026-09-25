@@ -111,6 +111,9 @@ importers:
       '@fractalbox/merlion-wasm':
         specifier: file:vendor/merlion/fractalbox-merlion-wasm-0.1.0.tgz
         version: file:apps/docs/vendor/merlion/fractalbox-merlion-wasm-0.1.0.tgz
+      '@fractalboxdev/flare-dispatch-core':
+        specifier: workspace:*
+        version: link:../../packages/core
       astro:
         specifier: 7.3.3
         version: 7.3.3(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)(@types/node@24.13.6)(aws4fetch@1.0.20)(tsx@4.23.11)(yaml@2.9.0)

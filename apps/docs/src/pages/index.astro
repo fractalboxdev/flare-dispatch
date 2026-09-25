@@ -3,7 +3,7 @@ import { Code } from "@astrojs/starlight/components";
 import Landing from "../layouts/Landing.astro";
 import HeroDiagram from "../components/landing/HeroDiagram.astro";
 import BillingTimeline from "../components/landing/BillingTimeline.astro";
-import benchmarks from "../data/benchmarks.json";
+import { INSTANCE_SPECS, containerMicroUsdPerSec } from "../data/benchmarks";
 import { REPO_URL } from "../lib/llms";
 
 const DESCRIPTION =
@@ -11,15 +11,12 @@ const DESCRIPTION =
 
 // §02 cost card. GitHub-hosted Linux x64 per-minute rates
 // (docs.github.com/en/billing/reference/actions-runner-pricing); the FlareDispatch figure
-// prices the vCPU-active minutes on a standard-2 container from the rate card that meters
-// real executions (packages/core/src/cost.ts, mirrored into benchmarks.json).
+// prices the vCPU-active minutes on a standard-2 container through the cost engine that
+// meters real executions (src/data/benchmarks.ts).
 const RUN_MINUTES = 10;
 const ACTIVE_SECONDS = 120;
-const { rateCard } = benchmarks;
-const instance = rateCard.instances["standard-2"];
-const fdUsd =
-  (ACTIVE_SECONDS * (instance.vcpu * rateCard.vcpuMicroUsdPerSec + instance.gib * rateCard.gibMicroUsdPerSec)) /
-  1_000_000;
+const instance = INSTANCE_SPECS["standard-2"];
+const fdUsd = (ACTIVE_SECONDS * containerMicroUsdPerSec("standard-2")) / 1_000_000;
 const runners = [
   { label: "ubuntu-latest", sub: "2-core · GHA", perMin: 0.006 },
   { label: "4-core larger runner", sub: "4-core · GHA", perMin: 0.012 },
@@ -231,7 +228,7 @@ const snippets = [
           <p class="cost-card__note">
             Review is I/O-bound and never needs the cores, yet GitHub bills all {RUN_MINUTES}&#8239;minutes at
             the runner's rate, so a bigger runner only widens the gap. The FlareDispatch figure prices {ACTIVE_SECONDS / 60}&#8239;minutes
-            on a 1-vCPU, 6&#8239;GiB container. CI compute only — model
+            on a {instance.vcpu}-vCPU, {instance.gib}&#8239;GiB container. CI compute only — model
             tokens cost the same either way. GitHub rates are Linux x64 list prices; container rates come from
             the <a href={`${REPO_URL}/blob/main/packages/core/src/cost.ts`}>rate card</a>.
           </p>

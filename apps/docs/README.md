@@ -15,7 +15,9 @@ into a compile error.
 
 The site at <https://flare-dispatch.fractalbox.dev> is an Astro build of this directory. The product
 page (`/`) and `/benchmarks/` are plain Astro pages in [`src/pages/`](src/pages/) with their own
-layout and stylesheet; the documentation under `/docs/` is Starlight. `public/_redirects` maps the
+layout and stylesheet; the documentation under `/docs/` is Starlight. `/benchmarks/` prices the
+workload profiles in [`src/data/benchmarks.ts`](src/data/benchmarks.ts) through the cost engine
+(`packages/core/src/cost.ts`) at build time. `public/_redirects` maps the
 root-level docs paths (`/actions/…`, `/runs/`, `/substrate/…`) to their `/docs/` pages.
 
 Every page under [`src/content/docs/docs/`](src/content/docs/docs/) except the docs overview is a relative

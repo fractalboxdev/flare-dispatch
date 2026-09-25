@@ -1,13 +1,10 @@
 ---
 import Landing from "../layouts/Landing.astro";
-import benchmarks from "../data/benchmarks.json";
+import { benchmarks, type BenchmarkRow } from "../data/benchmarks";
 import { REPO_URL } from "../lib/llms";
 
-// Modeled per-run speed and cost: curated workload profiles priced through the rate card
-// that meters real executions (packages/core/src/cost.ts). Deterministic; no execution
+// Modeled per-run speed and cost (src/data/benchmarks.ts). Deterministic; no execution
 // data leaves the Dispatcher.
-
-type Run = (typeof benchmarks.recipes)[number];
 
 const fmtUsd = (microUsd: number | null): string => {
   if (microUsd === null) return "—";
@@ -25,13 +22,13 @@ const fmtDuration = (s: number): string => {
 
 // Model column: a metered figure, "neurons" for the account-billed Workers AI catalog, or
 // "—" for a run that makes no model call.
-const modelCell = (r: Run): string => {
-  if (r.modelId === null) return "—";
+const modelCell = (r: BenchmarkRow): string => {
+  if (r.model === null) return "—";
   return r.modelMetered ? fmtUsd(r.modelMicroUsd) : "neurons*";
 };
 
-const runs = benchmarks.recipes as readonly Run[];
-const anyUnmetered = runs.some((r) => r.modelId !== null && !r.modelMetered);
+const runs = benchmarks;
+const anyUnmetered = runs.some((r) => r.model !== null && !r.modelMetered);
 const costSource = `${REPO_URL}/blob/main/packages/core/src/cost.ts`;
 ---
 
