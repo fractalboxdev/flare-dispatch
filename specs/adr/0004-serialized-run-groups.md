@@ -1,7 +1,7 @@
 # ADR-0004 — Serialized run groups: one in flight, newest waiter wins, in D1
 
 **Status:** proposed 2026-09-18
-**Related:** `packages/runtime-cf/src/serial-queue-d1.ts` · `apps/dispatcher/src/workflow.ts` · `runs/worker-deploy.ts` · `infra/migrations/0008_serial_queue.sql` · ADR-0001 § Consequences ("No per-entity mutex")
+**Related:** `packages/runtime-cf/src/serial-queue-d1.ts` · `apps/flare-dispatch-app/src/workflow.ts` · `apps/flare-dispatch-app/src/runs/worker-deploy.ts` · `infra/migrations/0008_serial_queue.sql` · ADR-0001 § Consequences ("No per-entity mutex")
 
 ## Context
 
@@ -91,8 +91,8 @@ sequenceDiagram
 ```
 
 `worker-deploy` groups by repo, branch, and `checkLabel`, and after it holds its
-group reads the branch head through the GitHub App: a head that is not the
-dispatched SHA skips the deploy; the head is also exported to the command.
+group reads the branch head through the GitHub App: a head that is not
+the dispatched SHA skips the deploy; the head is also exported to the command.
 
 ## Options considered
 
@@ -102,9 +102,9 @@ dispatched SHA skips the deploy; the head is also exported to the command.
   migration, and the poll loop hibernates in `step.sleep`. Cost: waiters poll
   (every 30s, ≤121 claim steps), so a freed group is taken up to 30s late.
 - **A Durable Object per group.** Single-threaded, can push "your turn" instead
-  of being polled. Lost on operating cost: a new class, a wrangler migration tag,
-  and a second store for the same queue semantics D1 already provides in this
-  codebase. Worth revisiting if poll latency or step count matters.
+  of being polled. Lost on operating cost: a new class, a wrangler migration
+  tag, and a second store for the same queue semantics D1 already provides in
+  this codebase. Worth revisiting if poll latency or step count matters.
 - **KV.** No compare-and-set and eventually consistent; two waiters can both
   believe they hold the group. Rejected on correctness.
 - **Cancel the in-flight deploy when a newer one arrives.** A killed deploy may
