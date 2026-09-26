@@ -43,6 +43,7 @@ export {
 } from "./actions";
 export {
   openDraftPullRequest,
+  closeBotPullRequest,
   commitFilesAndOpenPr,
   treeEntry,
   deletionEntry,
@@ -53,6 +54,8 @@ export {
   type CommitFilesResult,
   type OpenDraftPullRequestOptions,
   type OpenDraftPullRequestResult,
+  type CloseBotPullRequestOptions,
+  type CloseBotPullRequestResult,
 } from "./pull-requests";
 export {
   listPullRequests,

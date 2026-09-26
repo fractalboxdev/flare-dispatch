@@ -163,6 +163,8 @@ export {
   type PullReviewRequest,
   type OpenDraftPullRequest,
   type DraftPullRequestResult,
+  type CloseDraftPullRequest,
+  type CloseDraftPullRequestResult,
   type CreateRelease,
   type ReleaseResult,
 } from "./services/github";

@@ -11,7 +11,7 @@ import type {
   ModelCompletionResult,
   WorkflowRunRef,
 } from "@fractalboxdev/flare-dispatch-core";
-import { ciTriagePr } from "./ci-triage-pr";
+import { ciTriagePr, HEAD_BRANCH } from "./ci-triage-pr";
 
 const firedAt = Date.UTC(2026, 5, 3); // 2026-06-03
 // `run()` takes the DECODED input shape (the dispatcher's Schema decode applies
@@ -94,7 +94,8 @@ describe("ci-triage-pr", () => {
       const calls = handles.github.openDraftPullRequestCalls;
       expect(calls).toHaveLength(1);
       expect(calls[0]!.repo).toBe("owner/name");
-      expect(calls[0]!.headBranch).toBe("flare-dispatch/ci-triage-2026-06-03");
+      expect(calls[0]!.headBranch).toBe("flare-dispatch/ci-triage");
+      expect(calls[0]!.preserveHumanCommits).toBe(true);
       expect(calls[0]!.files[0]!.path).toBe(".flare-dispatch/ci-triage-2026-06-03.md");
       expect(calls[0]!.files[0]!.content).toContain("flaky CI");
     }).pipe(Effect.provide(layer));
@@ -115,6 +116,46 @@ describe("ci-triage-pr", () => {
       expect(handles.github.openDraftPullRequestCalls).toHaveLength(0);
       // Cheap, model not even consulted on a green day.
       expect(handles.modelGateway.requests).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("closes the rolling PR on the first green day after a red one", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      config,
+      github: { workflowRuns: [failedRun], now: firedAt },
+      cloudflare: { deployments: [], now: firedAt },
+      modelGateway: { responses: [triage()] },
+    });
+
+    return Effect.gen(function* () {
+      yield* ciTriagePr.run(input);
+      // The failure is fixed: the next fire reads no failed runs.
+      handles.github.workflowRuns.length = 0;
+      const out = yield* ciTriagePr.run({ firedAt: firedAt + 86_400_000, signals: [] });
+      expect(out.prClosed).toBe(true);
+      expect(handles.github.closeDraftPullRequestCalls).toEqual([
+        expect.objectContaining({ repo: "owner/name", headBranch: HEAD_BRANCH }),
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("leaves a rolling PR a human pushed to untouched", () => {
+    const { layer } = makeCFRuntimeTest({
+      config,
+      github: {
+        workflowRuns: [failedRun],
+        now: firedAt,
+        humanOwnedBranches: [`owner/name#${HEAD_BRANCH}`],
+      },
+      cloudflare: { deployments: [], now: firedAt },
+      modelGateway: { responses: [triage()] },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* ciTriagePr.run(input);
+      expect(out.prHeld).toBe(true);
+      expect(out.prOpened).toBe(false);
+      expect(out.prUpdated).toBe(false);
     }).pipe(Effect.provide(layer));
   });
 

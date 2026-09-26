@@ -163,7 +163,11 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
     openDraftPullRequest: ({ repo, headBranch }) =>
       Effect.logInfo(
         `github.openDraftPullRequest skipped (no GitHub App credentials) — ${repo}#${headBranch} not opened`,
-      ).pipe(Effect.as({ number: 0, url: "", created: false })),
+      ).pipe(Effect.as({ number: 0, url: "", created: false, skipped: false })),
+    closeDraftPullRequest: ({ repo, headBranch }) =>
+      Effect.logInfo(
+        `github.closeDraftPullRequest skipped (no GitHub App credentials) — ${repo}#${headBranch} left open`,
+      ).pipe(Effect.as({ closed: false, reason: "uncredentialed" } as const)),
     // `createRelease` (a release write) degrades to a logged no-op, the same
     // posture as the other writes. The recipe sees `published: false`.
     createRelease: ({ repo, tag }) =>
