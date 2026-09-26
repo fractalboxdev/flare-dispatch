@@ -16,6 +16,7 @@ overrides:
 # not on the npm registry, so the release-age check has no publish date to read.
 minimumReleaseAgeExclude:
   - "@fractalbox/merlion-*"
+  - wrangler@4.140.0
 
 # pnpm 10+ gates dependency lifecycle (build) scripts behind an explicit
 # allowlist. These are the packages whose install/postinstall scripts pnpm 9
