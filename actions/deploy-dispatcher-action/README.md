@@ -139,6 +139,31 @@ See [`action.yml`](./action.yml). The required ones:
 | `cloudflare-api-token`  | CF API token with the scopes `wrangler deploy` needs.                                    |
 | `cloudflare-account-id` | 32-hex account id.                                                                       |
 
+### Deploying from a private mirror
+
+Run the deploy workflow **inside the mirror**, and point the action at the
+mirror's own commit. A workflow's `GITHUB_TOKEN` always reads its own
+repository, private or not, so no extra token is needed and nothing depends on
+the upstream repo staying reachable. Commit the overlay into the mirror; the
+upstream has no `infra/flare-dispatch/`, so syncing the mirror never conflicts
+with it.
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+  - uses: ./actions/deploy-dispatcher-action
+    with:
+      upstream-repo: ${{ github.repository }}
+      upstream-ref: ${{ github.sha }}
+      wrangler-config: infra/flare-dispatch/wrangler.jsonc
+      cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
+
+Bumping upstream is then a mirror sync; the deployed SHA is the mirror commit
+the workflow ran on. A deploy workflow in a *different* repo cannot read a
+private mirror, because `GITHUB_TOKEN` is scoped to the calling repository.
+
 ---
 
 ## Outputs
