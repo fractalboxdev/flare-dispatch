@@ -50,6 +50,15 @@ describe("buildStepConfig", () => {
     });
   });
 
+  it("maps retries: 0 to limit 0 — a never-retry step does not fall back to CF's default retries", () => {
+    // `worker-deploy`'s exec step relies on this: a falsy check here would drop
+    // the policy and hand a deploy command CF's default retries.
+    expect(buildStepConfig({ timeoutSec: 1020, retries: 0 })).toEqual({
+      timeout: "1020 seconds",
+      retries: { limit: 0, delay: "5 seconds", backoff: "exponential" },
+    });
+  });
+
   it("treats timeoutSec: 0 as set (a deliberate zero timeout)", () => {
     // 0 !== undefined, so it is honored — a run that asks for 0 gets "0 seconds"
     // rather than silently falling back to CF's default.

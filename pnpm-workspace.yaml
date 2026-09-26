@@ -3,6 +3,7 @@ packages:
   - "apps/dispatcher"
   - "apps/dashboard"
   - "apps/substrate"
+  - "apps/docs"
   - "runs"
 
 # Pin effect to the reference's proven patch. effect 3.21.3+ shifts a type
@@ -10,6 +11,12 @@ packages:
 # suites; 3.21.2 is the version the whole substrate was validated against.
 overrides:
   effect: 3.21.2
+
+# The Merlion packages install from tarballs in apps/docs/vendor/merlion and are
+# not on the npm registry, so the release-age check has no publish date to read.
+minimumReleaseAgeExclude:
+  - "@fractalbox/merlion-*"
+  - wrangler@4.140.0
 
 # pnpm 10+ gates dependency lifecycle (build) scripts behind an explicit
 # allowlist. These are the packages whose install/postinstall scripts pnpm 9

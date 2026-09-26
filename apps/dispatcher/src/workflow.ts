@@ -46,7 +46,7 @@
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { getSandbox } from "@cloudflare/sandbox";
-import { Duration, Effect, Exit, Schedule, Schema } from "effect";
+import { Duration, Effect, Exit, Runtime, Schedule, Schema } from "effect";
 import {
   admissionAcquireAttempts,
   type AdmissionPool,
@@ -70,10 +70,12 @@ import {
   makeCFRuntimeLive,
   makeContainerLeaseD1,
   makeRunAdmissionD1,
+  makeSerialQueueD1,
   makeWritebackTokenMinter,
   previewSafeSandboxId,
   recordExecutionCost,
   resolveAdmissionCap,
+  runSerialGate,
   runWriteback,
   type WritebackOutcome,
 } from "@fractalboxdev/flare-dispatch-runtime-cf";
@@ -81,11 +83,11 @@ import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
 import { preAssertedApproval, resolveTargets, runGrant, runsOnFacade } from "./grant-catalog";
 import { selectSandboxNs } from "./sandbox-routing";
-import { queuedSummary } from "./admission-summary";
+import { queuedSummary, serialQueuedSummary } from "./admission-summary";
 import { appendFailureSummary, failureSummaryMd, runSkippedReason } from "./failure-summary";
 import { renderResultEmail } from "./notify";
 import { workflowDashboardUrl } from "./dashboard-url";
-import { checkRunNameFor } from "./check-name";
+import { checkRunNameFor, checkRunTitleFor } from "./check-name";
 import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "./log-token";
 import { logLinksSuffix, startedSummary } from "./summary-links";
 import { resolveMailboxLinkSecret, signMailboxToken } from "./mailbox-token";
@@ -167,6 +169,15 @@ const DispatchPayload = Schema.Struct({
    * Distinct from `origin` above, which is the dispatcher's own public URL.
    */
   source: Schema.optional(DispatchSource),
+  /**
+   * Which attempt of its family this execution is — absent (→ 1) on every
+   * dispatch path but a check-run re-run, which sets the next number
+   * (rerequest.ts). Persisted to `executions.attempt` and shown in the
+   * check-run title.
+   */
+  attempt: Schema.optional(Schema.Int.pipe(Schema.greaterThanOrEqualTo(1))),
+  /** The id of attempt 1 of the family a re-run retries — `executions.retry_of`. */
+  retryOf: Schema.optional(Schema.String),
 });
 type DispatchPayload = Schema.Schema.Type<typeof DispatchPayload>;
 
@@ -351,6 +362,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // separately-requirable checks on the same commit (check-name.ts). Every
     // run without that input names identically to before.
     const checkRunName = checkRunNameFor(payload.run, payload.inputs);
+    // The name stays fixed across re-runs (branch protection keys on it); the
+    // output title carries the attempt so a re-run reads as one.
+    const attempt = payload.attempt ?? 1;
+    const checkRunTitle = checkRunTitleFor(checkRunName, attempt);
     // The Cloudflare Workflows instance page for this execution — the "Details"
     // link on the GitHub check-run + a markdown link in its summary. `undefined`
     // when CLOUDFLARE_ACCOUNT_ID is unset (BYOC default): the check-run renders
@@ -443,6 +458,24 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         };
       }
     }
+
+    // Per-repo container transport — the canary knob for `rpc`.
+    //
+    // The SDK's streaming file APIs exist only on its `rpc` client (`http` is
+    // the "route-based compatibility" path), which is why the R2 dependency
+    // cache misses on every run: its restore hands `writeFile` a stream, the SDK
+    // routes any stream to `writeFileStream`, and that raises off `rpc`.
+    // `SANDBOX_TRANSPORT=rpc` as a Worker var would fix it for every repo at
+    // once; this lets one prove it first.
+    //
+    // A value the SDK does not recognise is ignored by it with a warning, so a
+    // typo degrades to the default rather than breaking the run.
+    // Container path only — the substrate owns its own transport, so a run
+    // there should not pay a KV read to be told about one it cannot use.
+    const sandboxTransport =
+      substrateFacade === undefined
+        ? await this.env.CONFIG_KV?.get(`sandbox.transport:${payload.github.repo}`)
+        : undefined;
 
     const runtime = makeCFRuntimeLive({
       db,
@@ -542,6 +575,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         ? { aiGatewayAuthToken: this.env.AI_GATEWAY_AUTH_TOKEN }
         : {}),
       sandboxPreviewHostname: this.env.SANDBOX_PREVIEW_HOSTNAME,
+      ...(sandboxTransport === "rpc" ||
+      sandboxTransport === "websocket" ||
+      sandboxTransport === "http"
+        ? { sandboxTransport }
+        : {}),
       ...(publicOrigin !== undefined ? { publicOrigin } : {}),
       ...(logsBaseUrl !== undefined ? { logsViewerBase: logsBaseUrl } : {}),
       // Wire the live OIDC signing Layer when both the JWK + issuer URL are
@@ -578,6 +616,8 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         ...(payload.parentExecutionId !== undefined
           ? { parentExecutionId: payload.parentExecutionId }
           : {}),
+        attempt,
+        ...(payload.retryOf !== undefined ? { retryOf: payload.retryOf } : {}),
       });
 
       // Open the check-run (`in_progress`). With no App config this resolves
@@ -588,7 +628,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         name: checkRunName,
         ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
         output: {
-          title: checkRunName,
+          title: checkRunTitle,
           // Both log links from the very first render (summary-links.ts) — a
           // reviewer watching an in-progress check reaches the viewer without
           // waiting for the verdict update.
@@ -698,7 +738,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                 checkRunId,
                 ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
                 output: {
-                  title: checkRunName,
+                  title: checkRunTitle,
                   summary: queuedSummary(
                     decision.position,
                     decision.poolBusy,
@@ -867,10 +907,71 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // peer rows. An `AdmissionTimedOut` flows into `exit` as a normal
       // `failure`: recorded + reported through the same check-run path, with
       // failure-summary.ts rendering it unmistakably as an infra-wait timeout.
-      const gated: Effect.Effect<unknown, RunError, RunContext> = admissionGate.pipe(
+      const admitted: Effect.Effect<unknown, RunError, RunContext> = admissionGate.pipe(
         Effect.andThen(admissionHeld),
         Effect.ensuring(admissions.release(payload.executionId).pipe(Effect.ignore)),
       );
+
+      // --- Per-group serialization (runs that declare `serialize`) ---------
+      //
+      // OUTSIDE admission: a waiter behind an in-flight peer of its group must
+      // not hold a pool slot while it waits. The group is held — heartbeated —
+      // through admission, the lease, and the run body, and released on every
+      // exit path, a skip included. A superseded waiter fails `RunSkipped`, so
+      // it lands below as a `skipped` row and a `neutral` check naming the
+      // revision that replaced it. See serial-queue-d1.ts.
+      const serialSpec = run.serialize?.(input);
+      const gated: Effect.Effect<unknown, RunError, RunContext> =
+        serialSpec === undefined
+          ? admitted
+          : Effect.gen(function* () {
+              const serialQueue = makeSerialQueueD1(db);
+              // `current` needs the run's capabilities (the branch-head read);
+              // the gate runs it inside a durable step as a plain promise.
+              const rt = yield* Effect.runtime<RunContext>();
+              const readCurrent = serialSpec.current;
+              return yield* runSerialGate({
+                store: serialQueue,
+                executionId: payload.executionId,
+                group: serialSpec.group,
+                revision: serialSpec.revision,
+                stepDo,
+                ...(readCurrent !== undefined
+                  ? { current: () => Runtime.runPromise(rt)(readCurrent) }
+                  : {}),
+                sleep: (name, ms) =>
+                  Effect.tryPromise(() => step.sleep(name, ms)).pipe(Effect.orDie),
+                onWait: (holderRevision) =>
+                  checks
+                    .progress({
+                      repo: payload.github.repo,
+                      checkRunId,
+                      ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
+                      output: { title: checkRunName, summary: serialQueuedSummary(holderRevision) },
+                    })
+                    .pipe(
+                      Effect.catchAllCause((cause) =>
+                        Effect.logWarning(`serial: queued-summary update failed — ${cause}`),
+                      ),
+                    ),
+              }).pipe(
+                Effect.andThen(
+                  Effect.gen(function* () {
+                    yield* Effect.forkScoped(
+                      serialQueue
+                        .heartbeat(payload.executionId)
+                        .pipe(
+                          Effect.ignore,
+                          Effect.repeat(Schedule.spaced(Duration.millis(LEASE_HEARTBEAT_EVERY_MS))),
+                          Effect.asVoid,
+                        ),
+                    );
+                    return yield* admitted;
+                  }).pipe(Effect.scoped),
+                ),
+                Effect.ensuring(serialQueue.release(payload.executionId).pipe(Effect.ignore)),
+              );
+            });
       const exit = yield* Effect.exit(gated);
       const completedAt = yield* Effect.sync(() => Date.now());
 
@@ -1006,7 +1107,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         conclusion: status === "skipped" ? "neutral" : status,
         ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
         output: {
-          title: checkRunName,
+          title: checkRunTitle,
           summary:
             skipReason !== undefined
               ? `⊘ ${payload.run} — skipped: ${skipReason}.${logsSuffix}`

@@ -16,7 +16,10 @@
 // failing `Github` Layer — the fake is the green-path simulator.
 
 import { Effect, Layer } from "effect";
+import { GitHubApiError } from "../errors";
 import {
+  type CloseDraftPullRequest,
+  type CloseDraftPullRequestResult,
   type CreateRelease,
   type DraftPullRequestResult,
   Github,
@@ -44,12 +47,28 @@ export type GithubFakeState = {
    * caller passes a matching `ref`.
    */
   files: Record<string, string>;
+  /**
+   * Seeded branch heads answering `branchHead`, keyed `"owner/name:branch"`.
+   * An unseeded branch FAILS (404), as the live read does — mutate this map
+   * mid-test to move a branch.
+   */
+  branchHeads: Record<string, string>;
+  /** Every `branchHead` call, in order. */
+  readonly branchHeadCalls: Array<{ repo: string; branch: string }>;
   /** Every `issues` call, in order. */
   readonly issuesCalls: Array<{
     repo: string;
     state: "open" | "closed" | "all";
     labels?: readonly string[];
     updatedWithinDays?: number;
+    maxPages?: number;
+    /**
+     * Recorded, never simulated — the fake holds one page, so it can never
+     * truncate. A dedup read's correctness depends on ASKING for `strict`, and
+     * that is the half a test can pin here; the truncation itself is pinned
+     * against the wire in `issues.test.ts`.
+     */
+    strict?: boolean;
   }>;
   /** Every `actionRuns` call, in order. */
   readonly actionRunsCalls: Array<{
@@ -72,6 +91,22 @@ export type GithubFakeState = {
   readonly pullReviewCalls: PullReviewRequest[];
   /** Every `openDraftPullRequest` call, in order. */
   readonly openDraftPullRequestCalls: OpenDraftPullRequest[];
+  /** Every `closeDraftPullRequest` call, in order. */
+  readonly closeDraftPullRequestCalls: CloseDraftPullRequest[];
+  /**
+   * Every `openIssue` call, in order — and each one also lands in `issues`.
+   *
+   * That second half is the point. A run whose whole job is "do not file what I
+   * already filed" can only be tested if a filed issue is visible to the next
+   * read, so the fake appends it rather than merely recording the call. Without
+   * that, every test would pass against a run that dedups against nothing.
+   */
+  readonly openIssueCalls: Array<{
+    repo: string;
+    title: string;
+    body: string;
+    labels?: readonly string[];
+  }>;
   /** Every `createRelease` call, in order — lets a test assert a release published. */
   readonly createReleaseCalls: CreateRelease[];
   /** Every label ADD, in order. */
@@ -113,6 +148,8 @@ export const makeGithubFake = (
      * ref; an unseeded path is `found: false`.
      */
     files?: Record<string, string>;
+    /** Branch heads keyed `"owner/name:branch"`; an unseeded branch fails. */
+    branchHeads?: Record<string, string>;
     /** Clock used to evaluate `pushedWithinDays` / `updatedWithinHours`. */
     now?: number;
     /**
@@ -120,6 +157,13 @@ export const makeGithubFake = (
      * Lower it to make `maxPages` observable without seeding hundreds of PRs.
      */
     historyPageSize?: number;
+    /**
+     * Head branches keyed `"owner/name#branch"` a human has pushed to — the
+     * fake's stand-in for non-bot commits. `openDraftPullRequest` with
+     * `preserveHumanCommits` reports `skipped: true` on them, and
+     * `closeDraftPullRequest` leaves their PR open.
+     */
+    humanOwnedBranches?: readonly string[];
   } = {},
 ): { layer: Layer.Layer<Github>; state: GithubFakeState } => {
   const state: GithubFakeState = {
@@ -127,12 +171,16 @@ export const makeGithubFake = (
     workflowRuns: [...(opts.workflowRuns ?? [])],
     pullRequestHistory: [...(opts.pullRequestHistory ?? [])],
     files: { ...opts.files },
+    branchHeads: { ...opts.branchHeads },
+    branchHeadCalls: [],
     issuesCalls: [],
     actionRunsCalls: [],
     pullRequestHistoryCalls: [],
     readTextFileCalls: [],
     pullReviewCalls: [],
     openDraftPullRequestCalls: [],
+    closeDraftPullRequestCalls: [],
+    openIssueCalls: [],
     createReleaseCalls: [],
     addIssueLabelsCalls: [],
     removeIssueLabelCalls: [],
@@ -144,11 +192,12 @@ export const makeGithubFake = (
   // Branches the fake has already "opened" a PR for — so a re-run with the same
   // headBranch reports `created: false`, mirroring the live idempotency.
   const openedBranches = new Set<string>();
+  const humanOwned = new Set(opts.humanOwnedBranches ?? []);
 
   const service: GithubService = {
-    issues: ({ repo, state: want = "open", labels, updatedWithinDays }) =>
+    issues: ({ repo, state: want = "open", labels, updatedWithinDays, maxPages, strict }) =>
       Effect.sync(() => {
-        state.issuesCalls.push({ repo, state: want, labels, updatedWithinDays });
+        state.issuesCalls.push({ repo, state: want, labels, updatedWithinDays, maxPages, strict });
         const need = labels === undefined ? undefined : new Set(labels);
         return state.issues.filter((i) => {
           if (i.repo !== repo) return false;
@@ -162,6 +211,34 @@ export const makeGithubFake = (
           }
           return true;
         });
+      }),
+
+    openIssue: ({ repo, title, body, labels }) =>
+      Effect.sync(() => {
+        state.openIssueCalls.push({ repo, title, body, labels });
+        // Numbered above every issue the fake knows about, in this repo or any
+        // other, because GitHub's numbering is per repo but a test asserting on
+        // `#3` should not have it mean two different issues.
+        const number = state.issues.reduce((max, i) => Math.max(max, i.number), 0) + 1;
+        const url = `https://github.com/${repo}/issues/${number}`;
+        state.issues = [
+          ...state.issues,
+          {
+            repo,
+            number,
+            title,
+            body,
+            state: "open" as const,
+            labels: [...(labels ?? [])],
+            author: "flare-dispatch[bot]",
+            authorAssociation: "OWNER",
+            url,
+            commentCount: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ];
+        return { number, url };
       }),
 
     // The writes record and mutate the seeded issue, so a test can assert both
@@ -195,7 +272,9 @@ export const makeGithubFake = (
       Effect.sync(() => {
         state.closeIssueAsDuplicateCalls.push({ repo, issue, duplicateOf });
         state.issues = state.issues.map((i) =>
-          i.repo === repo && i.number === issue ? { ...i, state: "closed" as const } : i,
+          i.repo === repo && i.number === issue
+            ? { ...i, state: "closed" as const, closedAt: now }
+            : i,
         );
       }),
 
@@ -285,6 +364,15 @@ export const makeGithubFake = (
         return content === undefined ? { found: false } : { found: true, content };
       }),
 
+    branchHead: ({ repo, branch }): Effect.Effect<string, GitHubApiError> =>
+      Effect.suspend(() => {
+        state.branchHeadCalls.push({ repo, branch });
+        const sha = state.branchHeads[`${repo}:${branch}`];
+        return sha === undefined
+          ? Effect.fail(new GitHubApiError({ status: 404, reason: "other" }))
+          : Effect.succeed(sha);
+      }),
+
     pullReview: (req) =>
       Effect.sync(() => {
         state.pullReviewCalls.push(req);
@@ -294,6 +382,9 @@ export const makeGithubFake = (
       Effect.sync(() => {
         state.openDraftPullRequestCalls.push(req);
         const key = `${req.repo}#${req.headBranch}`;
+        if (req.preserveHumanCommits === true && humanOwned.has(key)) {
+          return { number: 0, url: "", created: false, skipped: true };
+        }
         const created = !openedBranches.has(key);
         openedBranches.add(key);
         // Deterministic fake PR number derived from call order.
@@ -302,7 +393,18 @@ export const makeGithubFake = (
           number,
           url: `https://github.com/${req.repo}/pull/${number}`,
           created,
+          skipped: false,
         };
+      }),
+
+    closeDraftPullRequest: (req): Effect.Effect<CloseDraftPullRequestResult, never> =>
+      Effect.sync((): CloseDraftPullRequestResult => {
+        state.closeDraftPullRequestCalls.push(req);
+        const key = `${req.repo}#${req.headBranch}`;
+        if (!openedBranches.has(key)) return { closed: false, reason: "none-open" };
+        if (humanOwned.has(key)) return { closed: false, reason: "human-owned" };
+        openedBranches.delete(key);
+        return { closed: true, number: 0 };
       }),
 
     createRelease: (req): Effect.Effect<ReleaseResult, never> =>

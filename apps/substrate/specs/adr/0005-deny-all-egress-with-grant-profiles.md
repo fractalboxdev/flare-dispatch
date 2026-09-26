@@ -33,6 +33,29 @@ bodyless 520s before any handler runs.
 - Rollout is a three-position per-run flag: `legacy` → `report` (legacy posture, would-be denials
   recorded — the grant-authoring loop) → `enforce`; a run graduates only after a clean report window.
 
+A container request under `report` or `enforce` meets the platform gate first, then the grant's
+handler:
+
+```mermaid
+flowchart TB
+    accTitle: Egress request evaluation
+    req["**container request**<br/>HTTP or HTTPS, intercepted"] --> gate{"host denied, or outside<br/>the grant's allowlist?"}
+    gate -->|yes| p520["**520** at the platform proxy<br/>captured as a denial event"]
+    gate -->|no| bound{"grant bound to<br/>this container?"}
+    bound -->|no| h403["**403** from the handler<br/>denial recorded, body names the rule only"]
+    bound -->|yes| pos{"rollout position"}
+    pos -->|report| fwd["**forwarded untouched**<br/>would-be denial recorded"]
+    pos -->|enforce| rule{"protocol, method, path<br/>and body match a rule?"}
+    rule -->|no| h403
+    rule -->|yes| send["**fetch** with `redirect: manual`<br/>this host's credential injected"]
+    send --> redir{"3xx with Location?"}
+    redir -->|yes, re-policed| rule
+    redir -->|no| resp["response to the container<br/>`set-cookie` stripped"]
+    class p520,h403 danger
+    class fwd warn
+    class resp ok
+```
+
 ## Consequences
 
 - One audited egress surface; flare-dispatch's secrets-in-env posture ends (ADR-0006 carries the

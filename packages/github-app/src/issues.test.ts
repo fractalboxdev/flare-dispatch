@@ -22,6 +22,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   addIssueLabels,
   closeIssueAsDuplicate,
+  createIssue,
   createIssueComment,
   listIssues,
   removeIssueLabel,
@@ -63,6 +64,13 @@ const server = setupServer(
   http.get("https://api.github.com/repos/:owner/:repo/issues", async ({ request }) => {
     await capture(request, "list");
     return HttpResponse.json(pages.shift() ?? []);
+  }),
+  http.post("https://api.github.com/repos/:owner/:repo/issues", async ({ request }) => {
+    await capture(request, "create");
+    return HttpResponse.json(
+      { number: 41, html_url: "https://github.com/owner/name/issues/41" },
+      { status: 201 },
+    );
   }),
   http.post(
     "https://api.github.com/repos/:owner/:repo/issues/:n/labels",
@@ -196,6 +204,90 @@ describe("listIssues", () => {
       ),
     );
     await expect(listIssues({ ...base })).rejects.toThrow();
+  });
+
+  it("reads closed_at, and leaves it empty while the issue is open", async () => {
+    pages = [[rawIssue({ state: "closed", closed_at: "2026-08-10T09:00:00Z" }), rawIssue()]];
+    const out = await listIssues({ ...base, state: "all" });
+    expect(out[0]?.closedAt).toBe("2026-08-10T09:00:00Z");
+    expect(out[1]?.closedAt).toBe("");
+  });
+
+  // The dedup read's whole job is answering "have I already filed this?", and a
+  // list the ceiling cut short answers "no" for everything it never reached.
+  it("throws under `strict` when the page ceiling cut the list short", async () => {
+    const full = Array.from({ length: 100 }, (_, i) => rawIssue({ number: i + 1 }));
+    pages = [full, full];
+    await expect(listIssues({ ...base, maxPages: 1, strict: true })).rejects.toThrow(
+      /page ceiling/,
+    );
+  });
+
+  it("does not throw under `strict` when a short page ended the list", async () => {
+    pages = [[rawIssue()]];
+    await expect(listIssues({ ...base, maxPages: 1, strict: true })).resolves.toHaveLength(1);
+  });
+
+  // The boundary case: a full last page that happens to be the last page. GitHub
+  // cannot say so, and neither can we — a strict caller is told to look again
+  // rather than shown a list nobody can vouch for.
+  it("throws under `strict` on an exactly-full last page", async () => {
+    pages = [Array.from({ length: 100 }, (_, i) => rawIssue({ number: i + 1 })), []];
+    await expect(listIssues({ ...base, maxPages: 1, strict: true })).rejects.toThrow();
+  });
+});
+
+describe("createIssue", () => {
+  it("POSTs title, body and labels to /issues and returns the number and url", async () => {
+    const out = await createIssue({
+      ...base,
+      title: "Is ADR-0002 accepted?",
+      body: "maintenance-key: org-spec-audit/memory-capability",
+      labels: ["maintenance:open-question", "question:decide"],
+    });
+
+    expect(out).toEqual({ number: 41, url: "https://github.com/owner/name/issues/41" });
+    expect(calls[0]).toMatchObject({ method: "POST", path: "create" });
+    expect(calls[0]?.body).toEqual({
+      title: "Is ADR-0002 accepted?",
+      body: "maintenance-key: org-spec-audit/memory-capability",
+      labels: ["maintenance:open-question", "question:decide"],
+    });
+    expect(calls[0]?.authorization).toBe("Bearer inst-token-abc");
+  });
+
+  it("omits `labels` entirely when none were given", async () => {
+    await createIssue({ ...base, title: "t", body: "b" });
+    expect(calls[0]?.body).toEqual({ title: "t", body: "b" });
+  });
+
+  it("fails when the create returns no issue number — #0 links nowhere", async () => {
+    server.use(
+      http.post("https://api.github.com/repos/:owner/:repo/issues", () =>
+        HttpResponse.json({ html_url: "https://github.com/owner/name/issues/?" }, { status: 201 }),
+      ),
+    );
+    await expect(createIssue({ ...base, title: "t", body: "b" })).rejects.toThrow(
+      /no issue number/,
+    );
+  });
+
+  it("fails when the create returns no url — a notice would link nowhere", async () => {
+    server.use(
+      http.post("https://api.github.com/repos/:owner/:repo/issues", () =>
+        HttpResponse.json({ number: 41 }, { status: 201 }),
+      ),
+    );
+    await expect(createIssue({ ...base, title: "t", body: "b" })).rejects.toThrow(/no html_url/);
+  });
+
+  it("surfaces a non-2xx", async () => {
+    server.use(
+      http.post("https://api.github.com/repos/:owner/:repo/issues", () =>
+        HttpResponse.json({ message: "Resource not accessible by integration" }, { status: 403 }),
+      ),
+    );
+    await expect(createIssue({ ...base, title: "t", body: "b" })).rejects.toThrow();
   });
 });
 

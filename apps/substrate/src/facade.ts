@@ -162,7 +162,12 @@ export abstract class SubstrateFacadeBase extends WorkerEntrypoint<Env> implemen
       if (!admitted.admitted) {
         // Fail-fast refusal in both modes — in queue mode the consumer keeps
         // driving attempts from its own durable steps; this call never waits.
-        if (admission.mode === "refuse") await this.store.release(id);
+        // A queued execution past its age ceiling loses its row: the refusal
+        // is final, so the row would otherwise hold a place nobody claims.
+        const queuedForMs = Math.max(0, Date.now() - admitted.enqueuedAt);
+        const timedOut =
+          admission.mode === "queue" && queuedForMs >= admission.maxQueueAgeMs;
+        if (admission.mode === "refuse" || timedOut) await this.store.release(id);
         return {
           ok: false,
           refusal: {
@@ -171,8 +176,8 @@ export abstract class SubstrateFacadeBase extends WorkerEntrypoint<Env> implemen
             poolBusy: admitted.poolBusy,
             cap: this.caps[pool],
             position: admitted.position,
-            queuedForMs: Math.max(0, Date.now() - admitted.enqueuedAt),
-            retryAfterMs: ADMISSION_RETRY_AFTER_MS,
+            queuedForMs,
+            ...(timedOut ? { timedOut: true } : { retryAfterMs: ADMISSION_RETRY_AFTER_MS }),
           },
         };
       }

@@ -46,8 +46,9 @@
   // Custom domain (requires the fractalbox.dev zone in this account). The
   // GitHub App install flow substitutes the request origin into the manifest,
   // so hitting the install page on this host wires the App's webhook/callback
-  // URLs to it.
-  "routes": [{ "pattern": "flare-dispatch.fractalbox.dev", "custom_domain": true }],
+  // URLs to it. The bare flare-dispatch.fractalbox.dev serves the documentation
+  // site (apps/docs/wrangler.jsonc).
+  "routes": [{ "pattern": "flare-dispatch-app.fractalbox.dev", "custom_domain": true }],
 
   // Workers AI — backs the modelGateway capability the pr-review engine calls.
   // The binding IS the auth (account-billed), so no model API key is needed.

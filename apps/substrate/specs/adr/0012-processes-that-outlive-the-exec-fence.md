@@ -41,9 +41,11 @@ This is a decision about *semantics*, and it makes the surface small:
 - `startDetached(key, input)` starts a process and returns a substrate-assigned id. It runs
   `ensure()` behind the ticket gate and crosses the ADR-0007 approval floor exactly as `exec` does —
   a floor command started detached must not be a way around the floor — and it applies **no grant**.
-- `detachedStatus(key, processId)` answers running / exited-with-code / unknown. There is no
-  `waitForExit` on the facade: a consumer polls from its own durable steps, the same shape admission
-  already uses, because a Worker call that blocks for twenty minutes is not a call.
+- `detachedStatus(key, processId)` answers running / exited-with-code / gone, where `gone` carries
+  the reason the substrate no longer has the process (an id this execution never started, a process
+  the container no longer tracks, or a container that cannot be reached). There is no `waitForExit`
+  on the facade: a consumer polls from its own durable steps, the same shape admission already uses,
+  because a Worker call that blocks for twenty minutes is not a call.
 - `stopDetached(key, processId)` kills it and forgets it. `abort` and `checkpoint` clear every
   record with the container.
 
@@ -52,6 +54,22 @@ execution declared detached. With no declared process — the overwhelming major
 is `killAllProcesses()` unchanged, so the hot path grows no new failure mode. When `listProcesses`
 cannot be read, it falls back to `killAllProcesses()`: killing a declared process is a wrong answer,
 leaving a grant-holder alive is a worse one.
+
+```mermaid
+stateDiagram-v2
+    accTitle: Detached process lifecycle
+    state "Running, floor posture" as Floor
+    state "Running inside a later fence" as Shared
+    state "Exited, record kept" as Exited
+    state "Gone" as Gone
+    [*] --> Floor : startDetached, behind ticket and approval floor, no grant
+    Floor --> Shared : a later exec applies its grant
+    Shared --> Floor : fence kills undeclared processes, then revokes
+    Floor --> Exited : process ends
+    Floor --> Gone : stopDetached, abort, checkpoint or container stop
+    Exited --> Gone : stopDetached, abort, checkpoint or container stop
+    Gone --> [*]
+```
 
 ### Preview URLs stay off the facade for now
 

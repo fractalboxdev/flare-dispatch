@@ -372,6 +372,7 @@ describe("evaluateAutomerge — a self-declared run marker is not authorship", (
 
 const githubService = (over: Partial<GithubService>): GithubService => ({
   issues: () => Effect.succeed([]),
+  openIssue: () => Effect.succeed({ number: 1, url: "" }),
   addIssueLabels: () => Effect.void,
   removeIssueLabel: () => Effect.void,
   commentOnIssue: () => Effect.void,
@@ -379,8 +380,11 @@ const githubService = (over: Partial<GithubService>): GithubService => ({
   actionRuns: () => Effect.succeed([]),
   pullRequestHistory: () => Effect.succeed([]),
   readTextFile: () => Effect.succeed({ found: false }),
+  branchHead: () => Effect.succeed("0".repeat(40)),
   pullReview: () => Effect.void,
-  openDraftPullRequest: () => Effect.succeed({ number: 0, url: "", created: false }),
+  openDraftPullRequest: () =>
+    Effect.succeed({ number: 0, url: "", created: false, skipped: false }),
+  closeDraftPullRequest: () => Effect.succeed({ closed: false, reason: "none-open" }),
   createRelease: () => Effect.succeed({ id: 0, url: "", tag: "", published: false }),
   ...over,
 });

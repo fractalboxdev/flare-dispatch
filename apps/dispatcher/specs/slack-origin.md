@@ -16,6 +16,31 @@ Implementation: [`../src/slack-origin.ts`](../src/slack-origin.ts) (policy),
 Everything up to § The verdict callback is about runs that **came from** Slack. § The notice covers
 the other direction — a scheduled run with something to say and no thread to say it in.
 
+```mermaid
+sequenceDiagram
+    accTitle: A slack-origin dispatch, round trip
+    participant S as Slack
+    participant I as Slack ingress
+    participant D as Dispatcher
+    participant W as RunWorkflow
+    participant G as GitHub
+    S->>I: event
+    Note over I: classify by event class,<br/>conversational ones stay here
+    I->>D: POST /v1/dispatch/:run, HMAC, Idempotency-Key, source
+    alt refused by the envelope
+        D-->>I: 403 with error, message, run
+        I->>S: post message in thread
+    else accepted
+        D->>W: create instance, source in params
+        D-->>I: 202 with executionId
+        I->>S: ack in thread
+        W->>G: check-run, in_progress
+        W->>G: complete the check-run
+        W->>I: POST verdict, signed with k_verdict
+        I->>S: post verdict in thread, bot token
+    end
+```
+
 ## The dispatch body
 
 The ordinary body plus one optional block. Absent, nothing below applies and the GHA-Action path
@@ -58,6 +83,30 @@ posted verbatim into the thread — one branch for the caller, one sentence for 
 | `payload_command_run` | The run takes a command from its dispatch payload |
 | `repo_not_pinned` | `github.repo` is not the pinned target |
 | `idempotency_key_required` | No `Idempotency-Key` header |
+
+The run half runs after the envelope decodes and before `inputs` decode; the inputs half runs
+after:
+
+```mermaid
+flowchart TB
+  accTitle: Where the slack-origin policy sits in the dispatch route
+  sig{"Signature verifies?"} -->|no| e401["**401**"]
+  sig -->|"yes, and which key"| body["run lookup, JSON parse,<br/>envelope decode"]
+  body --> scoped{"Slack-scoped key<br/>without `source`?"}
+  scoped -->|yes| e403["**403**<br/>error, message, run"]
+  scoped -->|no| has{"Has `source`?"}
+  has -->|no| inputs
+  has -->|yes| runhalf{"**run half**<br/>unconfigured, credential,<br/>approval, allowlist, payload command,<br/>repo pin, Idempotency-Key"}
+  runhalf -->|first refusal| e403
+  runhalf -->|admitted| inputs["decode `inputs`<br/>against the run's schema"]
+  inputs -->|"with `source`"| inhalf{"**inputs half**<br/>credential after defaults"}
+  inputs -->|"no `source`"| rest
+  inhalf -->|refused| e403
+  inhalf -->|"admitted, `secrets` forced empty"| rest["target gate, cooldown, dedup,<br/>create the Workflow"]
+  class e401 danger
+  class e403 danger
+  class rest ok
+```
 
 ### `secrets: []`, enforced on what executes
 
@@ -158,6 +207,30 @@ A run publishes through the `notice` capability
 notice.publish({ useCase, text, dedupeKey, links });
 ```
 
+```mermaid
+sequenceDiagram
+    accTitle: A scheduled run publishes a notice
+    participant C as Cron tick
+    participant R as Run
+    participant D as Dispatcher
+    participant N as Notice receiver
+    participant S as Slack channel
+    C->>R: start, no origin
+    R->>D: notice.publish with useCase, text, dedupeKey, links
+    alt slack-notice.url unset
+        Note over D: logged no-op
+    else configured
+        D->>N: POST /flare-dispatch/notify, signed with k_notice, deliveryId run:dedupeKey
+        alt useCase unmapped
+            N-->>D: 403
+        else mapped
+            N->>S: post escaped text and links
+            N-->>D: 2xx, or 409 when already delivered
+        end
+    end
+    Note over R: the run's verdict never depends on the notice
+```
+
 **The shape is the security property.** There is no channel, thread, recipient or URL, and no way to
 express one. `useCase` is a routing *key* the receiver resolves against a map in its own deploy
 config; an unmapped one is refused there. The emit side is the untrusted half — `text` may be
@@ -202,6 +275,17 @@ to reach the stronger surface.
 The `ikm` is still one secret. Two labels off one secret is domain separation; two secrets would be
 a second thing to rotate for a separation HKDF already gives.
 
+```mermaid
+flowchart TB
+  accTitle: One secret, two callback keys
+  ikm["**ikm**<br/>`SLACK_NOTIFY_SECRET`, else `HMAC_SECRET`"] -->|"HKDF, info slack-notify/v1"| kv["**k_verdict**"]
+  ikm -->|"HKDF, info slack-notice/v1"| kn["**k_notice**"]
+  kv --> verdict["**verdict callback**<br/>`origin` names channel and thread"]
+  kn --> notice["**notice**<br/>`useCase` only, no destination"]
+  class verdict warn
+  class notice ok
+```
+
 > **Deploy the receiver first.** The receiver must derive notices under the exact string
 > `flare-dispatch/slack-notice/v1`. A receiver still on `flare-dispatch/slack-notify/v1` rejects
 > every notice with a 401 — silently and indefinitely, because a failed notice is correctly never
@@ -237,6 +321,15 @@ So the id carries **two** states in the receiver's store, and only the second is
 | ----------- | --------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `claimed`   | The post was attempted; outcome unknown or failed   | **Not** 409 — re-attempt the post, taking over the claim, or answer a 5xx     |
 | `delivered` | Slack accepted the post                             | `409`                                                                          |
+
+```mermaid
+stateDiagram-v2
+    accTitle: A deliveryId in the receiver's store
+    [*] --> claimed : first POST of the id
+    claimed --> claimed : a repeat POST re-attempts the post, or answers 5xx
+    claimed --> delivered : Slack accepts the post
+    delivered --> delivered : a repeat POST answers 409
+```
 
 **`409` is reserved for `delivered`.** A receiver that answers 409 for a `claimed`-but-unposted id
 breaks the reading on this side, and does it silently. Implementing the split is the receiver's half

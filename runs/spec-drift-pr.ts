@@ -5,7 +5,10 @@
 // with the reconciling spec edits. It is the unattended, cron-driven sibling of
 // the `spec-drift` skill's `--apply`: the skill is invoked by hand; this run
 // fires on a wall-clock cadence and files its proposal as a draft PR a human
-// reviews before merge.
+// reviews before merge. Each repo has at most one open spec-drift PR: a fire
+// that finds drift re-proposes against the base tip and refreshes that PR in
+// place, and a fire that finds none closes it. A PR a human has pushed to is
+// never overwritten or closed.
 //
 // --- Reuse: the SAME review infra as ai-code-review --------------------------
 //
@@ -39,7 +42,10 @@ import {
   step,
   type Container,
 } from "@fractalboxdev/flare-dispatch-core";
-import type { GitHubApiError } from "@fractalboxdev/flare-dispatch-core";
+import type {
+  CloseDraftPullRequestResult,
+  GitHubApiError,
+} from "@fractalboxdev/flare-dispatch-core";
 import { isoDate, parseList, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 import {
   type BackendUnconfigured,
@@ -55,6 +61,16 @@ import {
 const NAMESPACE = "spec-drift";
 const key = namespacedKey(NAMESPACE);
 const REPOS_KEY = key("repos");
+/**
+ * The ONE head branch per repo. `openDraftPullRequest` is idempotent on the
+ * head branch — it force-updates the ref and reuses the open PR — so a
+ * stable name keeps a single rolling draft PR that each fire refreshes. A
+ * date-keyed name would open a fresh PR every day the drift persists.
+ */
+export const HEAD_BRANCH = "flare-dispatch/spec-drift";
+
+/** Posted on the rolling PR when a fire finds the specs back in sync. */
+const CLOSE_COMMENT = `Closed by \`flare-dispatch/spec-drift-pr\`: the latest scan finds the specs in sync with the implementation. This PR replaces whole files, so merging it now would revert the fixes on the base branch.`;
 const BASE_KEY = key("base");
 
 /** Caps so a huge repo can't blow the model context window. */
@@ -100,6 +116,10 @@ const Output = Schema.Struct({
   reposScanned: Schema.Number,
   prsOpened: Schema.Number,
   prsUpdated: Schema.Number,
+  /** Rolling PRs closed because the specs came back in sync. */
+  prsClosed: Schema.Number,
+  /** Rolling PRs left untouched because a human pushed to them. */
+  prsHeld: Schema.Number,
   reposClean: Schema.Number,
 });
 
@@ -134,7 +154,14 @@ export const specDriftPr = defineRun({
         yield* step("log-empty", () =>
           io.log("warn", `spec-drift-pr: ${REPOS_KEY} is unset — nothing to scan`),
         );
-        return { reposScanned: 0, prsOpened: 0, prsUpdated: 0, reposClean: 0 };
+        return {
+          reposScanned: 0,
+          prsOpened: 0,
+          prsUpdated: 0,
+          prsClosed: 0,
+          prsHeld: 0,
+          reposClean: 0,
+        };
       }
 
       const baseBranch = (yield* step("resolve-base", () => config.get(BASE_KEY))) ?? "main";
@@ -167,7 +194,7 @@ export const specDriftPr = defineRun({
             Effect.catchAll((err) =>
               io
                 .log("warn", `spec-drift-pr: skipped ${repo} — ${describe(err)}`)
-                .pipe(Effect.as({ opened: false, updated: false, clean: false })),
+                .pipe(Effect.as(SKIPPED)),
             ),
           ),
         { concurrency: 2 },
@@ -177,6 +204,8 @@ export const specDriftPr = defineRun({
         reposScanned: repos.length,
         prsOpened: outcomes.filter((o) => o.opened).length,
         prsUpdated: outcomes.filter((o) => o.updated).length,
+        prsClosed: outcomes.filter((o) => o.closed).length,
+        prsHeld: outcomes.filter((o) => o.held).length,
         reposClean: outcomes.filter((o) => o.clean).length,
       };
     }),
@@ -187,7 +216,17 @@ export const specDriftPr = defineRun({
 type RepoOutcome = {
   readonly opened: boolean;
   readonly updated: boolean;
+  readonly closed: boolean;
+  readonly held: boolean;
   readonly clean: boolean;
+};
+
+const SKIPPED: RepoOutcome = {
+  opened: false,
+  updated: false,
+  closed: false,
+  held: false,
+  clean: false,
 };
 
 type ScanArgs = {
@@ -211,7 +250,7 @@ const scanRepo = (args: ScanArgs) =>
     );
     if (specsText.trim().length === 0) {
       // No specs/ dir → nothing to drift from.
-      return { opened: false, updated: false, clean: true } satisfies RepoOutcome;
+      return { ...SKIPPED, clean: true } satisfies RepoOutcome;
     }
     const tree = yield* step(`gather-tree-${args.repo}`, () =>
       shOut(container, dir, TREE_SCRIPT).pipe(Effect.map((s) => s.slice(0, MAX_TREE_CHARS))),
@@ -238,15 +277,31 @@ const scanRepo = (args: ScanArgs) =>
     );
 
     if (proposal.edits.length === 0) {
-      yield* io.log("info", `spec-drift-pr: ${args.repo} — specs in sync`);
-      return { opened: false, updated: false, clean: true } satisfies RepoOutcome;
+      // The rolling PR, if any, now proposes stale full-file contents — retract it.
+      const closed = yield* step(`close-pr-${args.repo}`, () =>
+        github.closeDraftPullRequest({
+          repo: args.repo,
+          headBranch: HEAD_BRANCH,
+          comment: CLOSE_COMMENT,
+        }),
+      );
+      yield* io.log(
+        "info",
+        `spec-drift-pr: ${args.repo} — specs in sync; ${describeClose(closed)}`,
+      );
+      return {
+        ...SKIPPED,
+        closed: closed.closed,
+        held: !closed.closed && closed.reason === "human-owned",
+        clean: true,
+      } satisfies RepoOutcome;
     }
 
     const result = yield* step(`open-pr-${args.repo}`, () =>
       github.openDraftPullRequest({
         repo: args.repo,
         baseBranch: args.baseBranch,
-        headBranch: `flare-dispatch/spec-drift-${args.day}`,
+        headBranch: HEAD_BRANCH,
         title: `docs(specs): reconcile spec drift (${args.day})`,
         body: renderPrBody(proposal),
         commitMessage: `docs(specs): reconcile spec/implementation drift\n\nGenerated by flare-dispatch spec-drift-pr.`,
@@ -254,18 +309,23 @@ const scanRepo = (args: ScanArgs) =>
           path: e.path,
           content: e.newContent,
         })),
+        preserveHumanCommits: true,
       }),
     );
+
+    if (result.skipped) {
+      yield* io.log(
+        "info",
+        `spec-drift-pr: ${args.repo} — ${HEAD_BRANCH} carries human commits; left untouched`,
+      );
+      return { ...SKIPPED, held: true } satisfies RepoOutcome;
+    }
 
     yield* io.log(
       "info",
       `spec-drift-pr: ${args.repo} — ${result.created ? "opened" : "updated"} draft PR #${result.number}`,
     );
-    return {
-      opened: result.created,
-      updated: !result.created,
-      clean: false,
-    } satisfies RepoOutcome;
+    return { ...SKIPPED, opened: result.created, updated: !result.created } satisfies RepoOutcome;
   });
 
 // --- In-container gather scripts (plain `git`, no extra CLI) -----------------
@@ -325,6 +385,17 @@ const renderPrBody = (proposal: typeof DriftProposal.Type): string =>
     "",
     MARKER,
   ].join("\n");
+
+/** One-liner for a `closeDraftPullRequest` outcome. */
+const describeClose = (r: CloseDraftPullRequestResult): string =>
+  r.closed
+    ? `closed stale PR #${r.number}`
+    : Match.value(r.reason).pipe(
+        Match.when("none-open", () => "no open PR"),
+        Match.when("human-owned", () => `PR #${r.number ?? "?"} has human commits; left open`),
+        Match.when("uncredentialed", () => "no GitHub App credentials; nothing closed"),
+        Match.exhaustive,
+      );
 
 /** The errors `scanRepo`'s `catchAll` knows how to describe precisely. */
 type CaughtError = BackendUnconfigured | ModelCallFailed | StructuredOutputInvalid | GitHubApiError;

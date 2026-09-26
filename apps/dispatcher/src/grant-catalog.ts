@@ -154,6 +154,13 @@ export const RUN_GRANTS: Readonly<Record<string, RunGrant>> = {
   // installation token (ADR-0006), so no API host is admitted.
   "pr-review": { profiles: ["public-repo-read"], rollout: "legacy" },
   "spec-drift-pr": { profiles: JS_BUILD, rollout: "legacy" },
+  // Narrow for the same reason as `org-spec-audit`, and the run is written to
+  // keep it that way: every measurement script is read-only — no install, no
+  // build, no network — so a container that could reach a registry would be a
+  // grant wider than any use. That bound is what makes `size` report the
+  // dependency surface rather than built bundle bytes; the honest grant and the
+  // honest measurement are the same decision.
+  "improve-pr": { profiles: ["public-repo-read"], rollout: "legacy" },
   // Narrower than its sibling on purpose: the sweep only clones and reads with
   // `git`, never installs or builds, and its single write is the Worker-side
   // draft PR. No `js-install`.

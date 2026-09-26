@@ -9,11 +9,24 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { commitFilesAndOpenPr, deletionEntry, openDraftPullRequest, treeEntry } from "./index";
+import {
+  closeBotPullRequest,
+  commitFilesAndOpenPr,
+  deletionEntry,
+  openDraftPullRequest,
+  treeEntry,
+} from "./index";
 
 let calls: string[] = [];
 let createdRef = false;
-let openPrs: Array<{ number: number; html_url: string }> = [];
+let openPrs: Array<{
+  number: number;
+  html_url: string;
+  user?: { type: string };
+  base?: { ref: string };
+}> = [];
+/** Commits ahead of base on the head branch; `undefined` → compare 404s. */
+let compareCommits: Array<{ author: { type: string } | null }> | undefined;
 let headRefExists = false;
 let lastTreeBody: { tree: unknown[]; base_tree: string } | undefined;
 let lastPrBody: Record<string, unknown> | undefined;
@@ -76,9 +89,20 @@ const server = setupServer(
       { status: 201 },
     );
   }),
-  http.patch(`${base}/pulls/:number`, () => {
-    calls.push("PATCH pull");
+  http.patch(`${base}/pulls/:number`, async ({ request }) => {
+    const body = (await request.json()) as Record<string, unknown>;
+    calls.push(body.state === "closed" ? "CLOSE pull" : "PATCH pull");
     return HttpResponse.json({});
+  }),
+  http.get(`${base}/compare/:range`, () => {
+    calls.push("GET compare");
+    return compareCommits === undefined
+      ? HttpResponse.text("not found", { status: 404 })
+      : HttpResponse.json({ commits: compareCommits });
+  }),
+  http.post(`${base}/issues/:number/comments`, () => {
+    calls.push("POST comment");
+    return HttpResponse.json({}, { status: 201 });
   }),
 );
 
@@ -89,6 +113,7 @@ afterEach(() => {
   createdRef = false;
   openPrs = [];
   headRefExists = false;
+  compareCommits = undefined;
   lastTreeBody = undefined;
   lastPrBody = undefined;
 });
@@ -124,6 +149,7 @@ describe("openDraftPullRequest", () => {
       number: 7,
       url: "https://github.com/owner/name/pull/7",
       created: true,
+      skipped: false,
     });
     // Default branch resolved, a blob per file, tree, commit, ref, PR opened.
     expect(calls.filter((c) => c === "POST blob")).toHaveLength(2);
@@ -157,6 +183,95 @@ describe("openDraftPullRequest", () => {
     expect(calls).not.toContain("POST pull");
     // baseBranch supplied → no default-branch lookup.
     expect(calls).not.toContain("GET repo");
+  });
+});
+
+describe("openDraftPullRequest — preserveHumanCommits", () => {
+  const req = {
+    token: "t",
+    repo: "owner/name",
+    baseBranch: "main",
+    headBranch: "flare-dispatch/spec-drift",
+    title: "spec drift",
+    body: "edits",
+    commitMessage: "docs: reconcile specs",
+    files: [{ path: "specs/a.md", content: "new a" }],
+    preserveHumanCommits: true,
+  } as const;
+
+  it("leaves a branch with a human commit untouched", async () => {
+    compareCommits = [{ author: { type: "Bot" } }, { author: { type: "User" } }];
+    const result = await openDraftPullRequest(req);
+    expect(result.skipped).toBe(true);
+    expect(calls).not.toContain("POST commit");
+    expect(calls).not.toContain("PATCH ref");
+  });
+
+  it("counts a commit with no linked account as human", async () => {
+    compareCommits = [{ author: null }];
+    const result = await openDraftPullRequest(req);
+    expect(result.skipped).toBe(true);
+  });
+
+  it("force-updates a bot-only branch", async () => {
+    compareCommits = [{ author: { type: "Bot" } }];
+    createdRef = true;
+    openPrs = [{ number: 7, html_url: "https://github.com/owner/name/pull/7" }];
+    const result = await openDraftPullRequest(req);
+    expect(result).toMatchObject({ skipped: false, created: false, number: 7 });
+    expect(calls).toContain("PATCH ref");
+  });
+
+  it("creates a missing branch (compare 404)", async () => {
+    const result = await openDraftPullRequest(req);
+    expect(result).toMatchObject({ skipped: false, created: true });
+  });
+});
+
+describe("closeBotPullRequest", () => {
+  const req = {
+    token: "t",
+    repo: "owner/name",
+    headBranch: "flare-dispatch/spec-drift",
+    comment: "specs back in sync",
+  } as const;
+  const botPr = {
+    number: 9,
+    html_url: "https://github.com/owner/name/pull/9",
+    user: { type: "Bot" },
+    base: { ref: "main" },
+  };
+
+  it("comments on and closes a bot-only PR", async () => {
+    openPrs = [botPr];
+    compareCommits = [{ author: { type: "Bot" } }];
+    expect(await closeBotPullRequest(req)).toEqual({ closed: true, number: 9 });
+    expect(calls).toEqual(["GET pulls", "GET compare", "POST comment", "CLOSE pull"]);
+  });
+
+  it("reports none-open when no PR is on the branch", async () => {
+    expect(await closeBotPullRequest(req)).toEqual({ closed: false, reason: "none-open" });
+    expect(calls).not.toContain("CLOSE pull");
+  });
+
+  it("leaves a PR with a human commit open", async () => {
+    openPrs = [botPr];
+    compareCommits = [{ author: { type: "Bot" } }, { author: { type: "User" } }];
+    expect(await closeBotPullRequest(req)).toEqual({
+      closed: false,
+      reason: "human-owned",
+      number: 9,
+    });
+    expect(calls).not.toContain("POST comment");
+    expect(calls).not.toContain("CLOSE pull");
+  });
+
+  it("leaves a PR a human opened open", async () => {
+    openPrs = [{ ...botPr, user: { type: "User" } }];
+    compareCommits = [{ author: { type: "Bot" } }];
+    const result = await closeBotPullRequest(req);
+    expect(result).toMatchObject({ closed: false, reason: "human-owned" });
+    expect(calls).not.toContain("CLOSE pull");
   });
 });
 

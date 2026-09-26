@@ -86,18 +86,21 @@ export const makeD1ExecutionsLive = (
     }).pipe(Effect.orDie);
 
   const service: ExecutionsService = {
-    startExecution: ({ id, run: runName, startedAt, parentExecutionId }) =>
+    startExecution: ({ id, run: runName, startedAt, parentExecutionId, attempt, retryOf }) =>
       run("startExecution", () =>
         db
           // `OR IGNORE`: the PK `id` is deterministic (the executionId), so a
           // replayed insert on Workflow resume is a no-op, not a PK violation.
           // `parent_execution_id` is NULL for a top-level execution and the
           // spawning parent's id for a `spawnChildRun` child — the lineage a
-          // fan-out parent reads back to join on its children.
+          // fan-out parent reads back to join on its children. `attempt` /
+          // `retry_of` tie a check-run re-run to the family it retries
+          // (infra/migrations/0007) — 1 / NULL for every dispatched execution.
           .prepare(
             `INSERT OR IGNORE INTO executions
-               (id, run, repo, ref, sha, status, started_at, input_json, parent_execution_id)
-             VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+               (id, run, repo, ref, sha, status, started_at, input_json, parent_execution_id,
+                attempt, retry_of)
+             VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
           )
           .bind(
             id,
@@ -108,6 +111,8 @@ export const makeD1ExecutionsLive = (
             startedAt,
             JSON.stringify(ctx.input),
             parentExecutionId ?? null,
+            attempt ?? 1,
+            retryOf ?? null,
           )
           .run(),
       ),

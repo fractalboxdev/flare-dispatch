@@ -69,9 +69,19 @@ pnpm exec wrangler deploy                                    # then the dispatch
 ```
 
 In CI the ordering is a job dependency rather than a step order — `.github/workflows/deploy.yml` runs
-`ci` → `substrate` → `deploy`, with `needs:` between them. That is deliberate: a step ordering inside
-one job is lost the moment someone adds a matrix or reorders for speed, and a substrate deploy that
+`ci` → `substrate` → `canary` → `deploy`, with `needs:` between them. That is deliberate: a step
+ordering inside one job is lost the moment someone adds a matrix or reorders for speed, and a substrate deploy that
 fails must stop the dispatcher's. Half a topology is worse than none of it.
+
+```mermaid
+flowchart LR
+  accTitle: The deploy job graph
+  ci["**ci**<br/>lint, typecheck, test"] --> sub["**substrate**<br/>D1 migrations, then deploy"]
+  sub --> can["**canary**<br/>unlisted host must 520,<br/>then `/health`"]
+  can -->|"target is not substrate-only"| disp["**deploy**<br/>the dispatcher"]
+  can --> dog["**dogfood**<br/>facade round trip"]
+  class can accent
+```
 
 Container images are rebuilt by `wrangler deploy` on the runner, which is why the deploy job needs
 Docker.
@@ -84,31 +94,55 @@ without the CI product deploys only that worker
 ## Verify
 
 ```sh
-curl -fsS https://<your-substrate-host>/health
-# {"status":"ok","version":"0.1.0","contractVersion":1,
-#  "pools":{"lean":6,"browser":3,"agent":3,"task":4},"ceiling":16}
+apps/substrate/scripts/verify-deploy.sh https://<your-substrate-host> canary
+apps/substrate/scripts/verify-deploy.sh https://<your-substrate-host> health
+# /health → {"status":"ok","version":"0.1.0","contractVersion":1,"deployment":"…",
+#            "pools":{"lean":6,"browser":3,"agent":3,"task":4},"ceiling":16,
+#            "canary":{"status":"passed","evidence":"…","checkedAt":…,"substrateVersion":"0.1.0"}}
 ```
 
-`version` is the substrate release an operator is running — the number a security advisory declares a
-floor against. `contractVersion` is the facade generation this deployment serves, which is what tells
-a consumer maintainer whether their pin still matches
-([versioning policy](contract-versioning.md)). A `500` with `"status":"misconfigured"` means the pool
-partition does not fit the ceiling and names which; fix the overlay and redeploy.
+The canary is the check
+[ADR-0011](../../substrate/specs/adr/0011-sdk-pin-as-security-surface.md) specifies: `POST /canary`
+boots a container and asserts that an HTTPS fetch to an unlisted host dies with a 520. It needs no
+credential, and a verdict is stored per deployment, so repeat calls reuse it rather than boot another
+container — a `passed` or `failed` verdict stands for 24 hours, an `inconclusive` one for 10 minutes.
 
-Two caveats on what health does *not* prove. `SUBSTRATE_VERSION` is a hand-maintained constant kept
-in step with `apps/substrate/package.json` by review, so it reports the version someone last wrote,
-not the code that is running — a version-floor check is only as good as that discipline. And health
-asserts configuration, not enforcement: the deploy-time canary that
-[ADR-0011](../../substrate/specs/adr/0011-sdk-pin-as-security-surface.md) specifies — a container
-fetch to an unlisted host must die with a 520 before consumer traffic is admitted — is not yet part
-of this surface. Until it is, "the substrate is deployed" and "the substrate enforces the floor its
-version claims" are two different statements.
+`/health` answers `200 ok` only while a fresh, passing canary exists for the running deployment;
+otherwise it answers `503` with `"status":"unverified"` and the canary block says why (`never-run`,
+`failed`, `inconclusive`, or a verdict past its window). A `500` with `"status":"misconfigured"` means the pool
+partition does not fit the ceiling and names which; fix the overlay and redeploy. `version` is the
+substrate release an operator is running — the number a security advisory declares a floor against.
+`contractVersion` is the facade generation this deployment serves, which is what tells a consumer
+maintainer whether their pin still matches ([versioning policy](contract-versioning.md)).
+
+One caveat on what health does *not* prove: `SUBSTRATE_VERSION` is a hand-maintained constant kept in
+step with `apps/substrate/package.json` by review, so it reports the version someone last wrote, not
+the code that is running — a version-floor check is only as good as that discipline. The canary
+verdict is keyed to the Worker's version id, so it speaks for the build that is running — provided the
+overlay keeps the `version_metadata` binding; without it the key falls back to that same semver.
 
 ## Upgrading
 
 A routine upgrade is: move your pin to the new upstream commit, re-apply your overlay, run the two
 deploys in order, check health. Migrations under `apps/substrate/migrations` are applied by
 `wrangler d1 migrations apply` and are not run by a deploy — a release that adds one says so.
+
+```mermaid
+flowchart TB
+  accTitle: A routine upgrade
+  pin["**move the pin**<br/>re-apply the overlay"] --> mig["**D1 migrations**<br/>already-applied ones are no-ops"]
+  mig --> sub["**deploy the substrate**"]
+  sub --> can["**canary**<br/>`verify-deploy.sh` canary"]
+  can --> health{"`/health`"}
+  health -->|500 misconfigured| fix["**fix the overlay**<br/>pool caps exceed the ceiling"]
+  fix --> sub
+  health -->|503 unverified| stop["**stop**<br/>floor unproven;<br/>deploy no consumer"]
+  health -->|200 ok| sec{"substrate-only<br/>security fix?"}
+  sec -->|yes| done(["done"])
+  sec -->|no| disp["**deploy the dispatcher**"]
+  disp --> done
+  class stop danger
+```
 
 A **security release** carries three things a routine one does not: the minimum supported version, a
 statement of what the floor loses below it, and whether the fix is substrate-only. Compare the

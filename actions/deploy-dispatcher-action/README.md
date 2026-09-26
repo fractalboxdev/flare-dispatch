@@ -12,7 +12,29 @@ The action:
 3. `pnpm install --frozen-lockfile` in the upstream tree.
 4. `wrangler d1 migrations apply <binding> --remote`.
 5. `wrangler deploy`.
-6. (Optional) Polls `inputs.health-check-url`'s `/health` with backoff.
+6. (Optional) Polls `inputs.health-check-url` exactly as given (include the `/health` path) with backoff.
+
+```mermaid
+flowchart TB
+    accTitle: Operator overlay deploy pipeline
+    subgraph repo["Your repo"]
+        pin["UPSTREAM_SHA"]
+        overlay["wrangler.jsonc overlay"]
+    end
+    pin -->|"upstream-ref"| checkout["**Checkout upstream**<br/>at the pinned SHA"]
+    checkout --> apply["**Apply overlay**<br/>replaces upstream wrangler.jsonc"]
+    overlay -->|"wrangler-config"| apply
+    apply --> install["pnpm install --frozen-lockfile"]
+    install --> migrate["wrangler d1 migrations apply --remote"]
+    migrate --> deploy["wrangler deploy"]
+    deploy --> hasurl{"health-check-url set?"}
+    hasurl -->|no| skip["**Done**<br/>worker-url empty"]
+    hasurl -->|yes| poll{"200 within<br/>health-check-attempts?"}
+    poll -->|yes| healthy["**Done**<br/>worker-url set"]
+    poll -->|no| fail["**Step fails**"]
+    class healthy ok
+    class fail danger
+```
 
 Sibling to [`flare-dispatch-action`](../flare-dispatch-action/) — that one
 **dispatches a run** from a consumer repo into a Worker; this one **ships the
@@ -116,6 +138,31 @@ See [`action.yml`](./action.yml). The required ones:
 | `wrangler-config`       | Path to your overlay (relative to the consumer repo root).                               |
 | `cloudflare-api-token`  | CF API token with the scopes `wrangler deploy` needs.                                    |
 | `cloudflare-account-id` | 32-hex account id.                                                                       |
+
+### Deploying from a private mirror
+
+Run the deploy workflow **inside the mirror**, and point the action at the
+mirror's own commit. A workflow's `GITHUB_TOKEN` always reads its own
+repository, private or not, so no extra token is needed and nothing depends on
+the upstream repo staying reachable. Commit the overlay into the mirror; the
+upstream has no `infra/flare-dispatch/`, so syncing the mirror never conflicts
+with it.
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+  - uses: ./actions/deploy-dispatcher-action
+    with:
+      upstream-repo: ${{ github.repository }}
+      upstream-ref: ${{ github.sha }}
+      wrangler-config: infra/flare-dispatch/wrangler.jsonc
+      cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
+
+Bumping upstream is then a mirror sync; the deployed SHA is the mirror commit
+the workflow ran on. A deploy workflow in a *different* repo cannot read a
+private mirror, because `GITHUB_TOKEN` is scoped to the calling repository.
 
 ---
 

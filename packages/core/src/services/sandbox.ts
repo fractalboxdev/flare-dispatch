@@ -115,7 +115,38 @@ export interface SandboxService {
     image?: string;
     memMB?: number;
     vCPU?: number;
+    /**
+     * A SECOND container for this execution, addressed by name.
+     *
+     * Omitted, `acquire` returns the execution's own container — one per
+     * execution, which is what every run wanted until one wanted several. A
+     * `key` derives a distinct container id from the execution id and this
+     * name, so a run that needs work isolated from its own other work (stages
+     * that would otherwise race for one checkout directory) can have it.
+     *
+     * The key is part of an id that must stay DNS-safe and short — the live
+     * layer runs it through the same normalisation as the execution id, so an
+     * arbitrary string is safe to pass, but a long one is truncated into a
+     * digest and stops being readable in logs. Keep it short and stable: a
+     * stage label, a shard index.
+     *
+     * Reaping is the caller's. A keyed container is not covered by the
+     * dispatcher's end-of-run teardown, which destroys the execution's own id
+     * and cannot know what a run named; call `destroy` when the work is done,
+     * or accept the `sleepAfter` window as the backstop.
+     */
+    key?: string;
   }) => Effect.Effect<Container, ContainerLaunchFailed | ContainerBusy>;
+  /**
+   * Destroy a container now rather than at `sleepAfter`.
+   *
+   * Best-effort and idempotent: destroying an already-dead container, or one
+   * the SDK never provisioned, succeeds. The point is the bill — a container
+   * idles for the full `sleepAfter` window after its last command and is
+   * charged wall-clock for it, which on a CI-shaped workload is most of the
+   * cost of the ones a run acquired and finished with early.
+   */
+  readonly destroy: (opts: { container: Container }) => Effect.Effect<void>;
   readonly gitClone: (opts: {
     repo: string;
     sha: string;
@@ -168,8 +199,9 @@ export class Sandbox extends Context.Tag("@fractalboxdev/flare-dispatch-core/San
  * `Effect.flatMap(Sandbox, (s) => s.exec(...))`.
  */
 export const sandbox = {
-  acquire: (opts: { image?: string; memMB?: number; vCPU?: number } = {}) =>
+  acquire: (opts: { image?: string; memMB?: number; vCPU?: number; key?: string } = {}) =>
     Effect.flatMap(Sandbox, (s) => s.acquire(opts)),
+  destroy: (opts: { container: Container }) => Effect.flatMap(Sandbox, (s) => s.destroy(opts)),
   git: {
     clone: (opts: { repo: string; sha: string; container?: Container }) =>
       Effect.flatMap(Sandbox, (s) => s.gitClone(opts)),

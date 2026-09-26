@@ -1,0 +1,139 @@
+---
+// Billing-model graphic for the landing page.
+//
+// One code-review run, billed two ways, on a single shared time axis:
+//   • GitHub Actions — the whole wall-clock run is billed, the idle LLM wait
+//     included (per-minute runner time).
+//   • FlareDispatch  — only the vCPU-active slivers are billed; the model-wait
+//     runs in a Workflow step (CPU-time billed) and accrues no compute.
+//
+// Both bars use identical segment geometry, so the active slivers line up
+// column-for-column. The only visual difference is whether the idle gaps are
+// filled (billed) or empty (free) — that contrast *is* the argument.
+//
+// Segment widths are illustrative but proportionate: ~20% active, ~80% wait.
+
+type Seg = { kind: "cpu" | "io"; w: number; label?: string };
+
+const segments: Seg[] = [
+  { kind: "cpu", w: 4, label: "setup" },
+  { kind: "io", w: 17, label: "read diff" },
+  { kind: "cpu", w: 3 },
+  { kind: "io", w: 22, label: "review ①" },
+  { kind: "cpu", w: 2 },
+  { kind: "io", w: 21, label: "review ②" },
+  { kind: "cpu", w: 2 },
+  { kind: "io", w: 20, label: "synthesize" },
+  { kind: "cpu", w: 9, label: "post" },
+];
+
+const total = segments.reduce((s, x) => s + x.w, 0);
+const activePct = segments
+  .filter((s) => s.kind === "cpu")
+  .reduce((s, x) => s + x.w, 0);
+
+const BX0 = 104;
+const BX1 = 468;
+const BW = BX1 - BX0;
+
+let cursor = BX0;
+const placed = segments.map((s) => {
+  const x = cursor;
+  const w = (s.w / total) * BW;
+  cursor += w;
+  return { ...s, x, w };
+});
+
+const GHA_Y = 62;
+const FD_Y = 122;
+const BAR_H = 38;
+---
+
+<figure class="billing" aria-labelledby="billing-caption">
+  <svg
+    class="billing__svg"
+    viewBox="0 0 540 232"
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-label={`Billed time for one code-review run. GitHub Actions bills the entire wall-clock run, including the roughly ${total - activePct} percent spent waiting on the model. FlareDispatch bills only the roughly ${activePct} percent that is vCPU-active.`}
+  >
+    <text class="title" x="0" y="22">BILLED TIME · ONE CODE-REVIEW RUN</text>
+
+    <!-- vCPU-active columns, carried through both bars so the slivers align -->
+    {placed
+      .filter((s) => s.kind === "cpu")
+      .map((s) => (
+        <rect
+          class="col-active"
+          x={s.x}
+          y={GHA_Y}
+          width={s.w}
+          height={FD_Y + BAR_H - GHA_Y}
+        />
+      ))}
+
+    <!-- phase labels (the waits) above the top bar -->
+    {placed.map((s) =>
+      s.kind === "io" && s.label ? (
+        <text class="phase" x={s.x + s.w / 2} y={GHA_Y - 8} text-anchor="middle">
+          {s.label}
+        </text>
+      ) : null,
+    )}
+
+    <!-- Bar 1: GitHub Actions — the whole run is billed, wait included -->
+    <text class="row-name" x="0" y={GHA_Y + 16}>GitHub</text>
+    <text class="row-name" x="0" y={GHA_Y + 28}>Actions</text>
+    {placed.map((s) => (
+      <rect
+        class={s.kind === "cpu" ? "seg-active" : "gha-wait"}
+        x={s.x}
+        y={GHA_Y}
+        width={s.w}
+        height={BAR_H}
+      />
+    ))}
+    <rect class="gha-frame" x={BX0} y={GHA_Y} width={BW} height={BAR_H} />
+    <text class="end-label end-label--gha" x={BX1 + 8} y={GHA_Y + BAR_H / 2 + 4}>
+      10 min
+    </text>
+
+    <!-- Bar 2: FlareDispatch — only the active slivers are billed -->
+    <text class="row-name row-name--fd" x="0" y={FD_Y + 16}>Flare</text>
+    <text class="row-name row-name--fd" x="0" y={FD_Y + 28}>Dispatch</text>
+    <rect class="fd-envelope" x={BX0} y={FD_Y} width={BW} height={BAR_H} />
+    {placed
+      .filter((s) => s.kind === "cpu")
+      .map((s) => (
+        <rect class="seg-active" x={s.x} y={FD_Y} width={s.w} height={BAR_H} />
+      ))}
+    {placed
+      .filter((s) => s.kind === "io" && s.w > 50)
+      .map((s) => (
+        <text class="idle" x={s.x + s.w / 2} y={FD_Y + BAR_H / 2 + 3} text-anchor="middle">
+          free
+        </text>
+      ))}
+    <text class="end-label end-label--fd" x={BX1 + 8} y={FD_Y + BAR_H / 2 + 4}>
+      ~2 min
+    </text>
+
+    <!-- shared time axis -->
+    <line class="axis-line" x1={BX0} y1={FD_Y + BAR_H + 12} x2={BX1} y2={FD_Y + BAR_H + 12} />
+    <text class="axis" x={BX0} y={FD_Y + BAR_H + 26}>wall-clock time of one run →</text>
+
+    <!-- legend -->
+    <g class="legend" transform="translate(104, 214)">
+      <rect class="legend-swatch seg-active" x="0" y="-9" width="11" height="11" />
+      <text class="legend-label" x="17" y="0">vCPU-active — billed by both</text>
+      <rect class="legend-swatch legend-swatch--wait" x="210" y="-9" width="11" height="11" />
+      <text class="legend-label" x="227" y="0">LLM I/O wait — GitHub Actions only</text>
+    </g>
+  </svg>
+  <figcaption id="billing-caption" class="sr-only">
+    A code-review run is roughly {activePct}% vCPU-active and {total - activePct}%
+    LLM I/O wait. GitHub Actions bills the entire wall-clock run; FlareDispatch
+    bills only the vCPU-active fraction, because the model-wait runs in a
+    CPU-time-billed Workflow step.
+  </figcaption>
+</figure>

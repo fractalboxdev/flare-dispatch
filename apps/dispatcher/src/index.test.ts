@@ -13,6 +13,7 @@
 // Plus the artifact endpoint (streams the R2 object) and /health.
 
 import { describe, expect, it } from "vitest";
+import { checkRunNameFor } from "./check-name";
 import { handleRequest } from "./router";
 import { fingerprint, sign } from "./hmac";
 import { makeFakeEnv, makeFakeKv, makeFakeR2, makeFakeWorkflow } from "./test-helpers";
@@ -111,6 +112,7 @@ describe("GET /health", () => {
         "deploy-smoke",
         "email-otp-login",
         "finops-audit",
+        "improve-pr",
         "matrix-fanout",
         "offload-test",
         "org-spec-audit",
@@ -648,6 +650,34 @@ describe("POST /v1/dispatch/:run — dedup", () => {
     });
     await handleRequest(await dispatchRequest("check", bodyText), env);
     expect(workflow.calls[0]!.id).toBe("check_owner_test-repo_abc123def456");
+  });
+
+  it("a labelled worker-deploy dispatch keeps its label through decode — own check-run name, own execution", async () => {
+    // A second deploy of one commit (e.g. container Workers after an image
+    // build) must not post under the webhook deploy's `flare-dispatch/worker-deploy`.
+    // The label reaches the Workflow only if the run's schema declares it —
+    // an undeclared key is stripped by the decode, and the check-run would
+    // then be named as if unlabelled.
+    const { env, workflow } = fixture();
+    const bodyText = JSON.stringify({
+      ...validBody,
+      run: "worker-deploy",
+      inputs: {
+        repo: "owner/test-repo",
+        sha: "abc123def456",
+        command: "pnpm deploy:containers",
+        checkLabel: "containers",
+      },
+    });
+    const res = await handleRequest(await dispatchRequest("worker-deploy", bodyText), env);
+    expect(res.status).toBe(202);
+
+    const params = workflow.calls[0]!.params as { inputs: Record<string, unknown> };
+    expect(params.inputs.checkLabel).toBe("containers");
+    expect(checkRunNameFor("worker-deploy", params.inputs)).toBe(
+      "flare-dispatch/worker-deploy:containers",
+    );
+    expect(workflow.calls[0]!.id).toBe("worker-deploy_containers_owner_test-repo_abc123def456");
   });
 
   it("without IDEMPOTENCY_KV bound, semantic id is still used — duplicate Workflow.create is the dedup", async () => {

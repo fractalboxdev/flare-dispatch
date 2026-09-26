@@ -24,6 +24,11 @@ export type ExecutionRow = {
   readonly input_json: string;
   readonly summary_json: string | null;
   readonly check_run_id: number | null;
+  // --- Attempt lineage (infra/migrations/0007) --------------------------------
+  /** 1 for a dispatched execution, N for its (N-1)th check-run re-run. */
+  readonly attempt: number;
+  /** The id of attempt 1 of this row's family; NULL on attempt 1 itself. */
+  readonly retry_of: string | null;
   // --- Cost rollup (infra/migrations/0005; written at finishExecution) --------
   // All nullable: pre-0005 rows, still-running executions, and deploys without
   // the cost path leave these NULL.
@@ -120,6 +125,50 @@ export const listExecutions = async (
 /** Fetch one execution by id, or `null` if there is no such row. */
 export const getExecution = async (db: D1Database, id: string): Promise<ExecutionRow | null> =>
   db.prepare("SELECT * FROM executions WHERE id = ?").bind(id).first<ExecutionRow>();
+
+/**
+ * The execution that posted a check-run, by the GitHub check-run id — or
+ * `null` when no execution on this deploy posted it. Scoped to `repo` as well:
+ * the repo named by the webhook is the one the re-run is authorized against,
+ * so a row from any other repo must not answer.
+ */
+export const getExecutionByCheckRun = async (
+  db: D1Database,
+  repo: string,
+  checkRunId: number,
+): Promise<ExecutionRow | null> =>
+  db
+    .prepare("SELECT * FROM executions WHERE check_run_id = ? AND repo = ?")
+    .bind(checkRunId, repo)
+    .first<ExecutionRow>();
+
+/**
+ * Every attempt of one execution family: the root (attempt 1) plus each
+ * re-run pointing at it through `retry_of`. Unordered; empty when the root id
+ * names no row.
+ */
+export const getAttemptFamily = async (db: D1Database, rootId: string): Promise<ExecutionRow[]> => {
+  const root = await getExecution(db, rootId);
+  if (root === null) return [];
+  const { results } = await db
+    .prepare("SELECT * FROM executions WHERE retry_of = ?")
+    .bind(rootId)
+    .all<ExecutionRow>();
+  return [root, ...(results ?? [])];
+};
+
+/** Every execution recorded against one commit of one repo. */
+export const listExecutionsAtSha = async (
+  db: D1Database,
+  repo: string,
+  sha: string,
+): Promise<ExecutionRow[]> => {
+  const { results } = await db
+    .prepare("SELECT * FROM executions WHERE repo = ? AND sha = ?")
+    .bind(repo, sha)
+    .all<ExecutionRow>();
+  return results ?? [];
+};
 
 /** Fetch an execution's steps, ordered by start time then name. */
 export const getSteps = async (db: D1Database, executionId: string): Promise<StepRow[]> => {

@@ -65,7 +65,6 @@ describe("ModelAction", () => {
       { type: "nav", url: "https://staging.example.com/login" },
       { type: "key", key: "Enter" },
       { type: "wait", ms: 500 },
-      { type: "screenshot" },
       { type: "done", narrative: "Signed in.", status: "passed" },
     ];
     for (const c of cases) {
@@ -76,6 +75,11 @@ describe("ModelAction", () => {
   it("rejects an unknown action type", () => {
     expect(() =>
       Schema.decodeUnknownSync(ModelAction)({ type: "scroll", target: "x" }),
+    ).toThrow();
+    // `screenshot` was removed with the tool: nothing can produce it, and
+    // `toolCallToAction` maps the legacy tool name to a 0ms wait instead.
+    expect(() =>
+      Schema.decodeUnknownSync(ModelAction)({ type: "screenshot" }),
     ).toThrow();
   });
 });

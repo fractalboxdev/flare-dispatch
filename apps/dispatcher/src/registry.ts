@@ -29,6 +29,7 @@ import {
   refreshFixtures,
   releaseNotes,
   selfHealPr,
+  improvePr,
   specDriftPr,
   triageIssues,
   triagePrs,
@@ -46,6 +47,7 @@ const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
   [productDemo.name]: productDemo as Run<unknown, unknown>,
   [playwrightDemo.name]: playwrightDemo as Run<unknown, unknown>,
   [prReview.name]: prReview as Run<unknown, unknown>,
+  [improvePr.name]: improvePr as Run<unknown, unknown>,
   [specDriftPr.name]: specDriftPr as Run<unknown, unknown>,
   // The other half of the internal audit: `spec-drift-pr` proposes the drift a
   // machine can fix, this sweeps the estate for what needs a human answer and

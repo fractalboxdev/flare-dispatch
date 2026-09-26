@@ -39,12 +39,23 @@ export const makeFakeWorkflow = (
      * duplicate-create catch.
      */
     throwAlreadyExistsFor?: ReadonlySet<string>;
+    /**
+     * The status `get(id).status()` reports per instance id; `undefined` makes
+     * the status read reject the way the platform does for an id it has no
+     * instance for. Omitted → every id reports `running`.
+     */
+    instanceStatus?: (id: string) => string | undefined;
   } = {},
 ): FakeWorkflow => {
   const calls: WorkflowCreateCall[] = [];
   const events: WorkflowSendEventCall[] = [];
   const reject = opts.rejectSendEventFor ?? new Set<string>();
   const alreadyExists = opts.throwAlreadyExistsFor ?? new Set<string>();
+  const statusOf = async (id: string) => {
+    const status = opts.instanceStatus === undefined ? "running" : opts.instanceStatus(id);
+    if (status === undefined) throw new Error(`instance.not_found: ${id}`);
+    return { status };
+  };
   const binding = {
     create: async (options?: { id?: string; params?: unknown }) => {
       const id = options?.id ?? "";
@@ -62,7 +73,7 @@ export const makeFakeWorkflow = (
     },
     get: (id: string) => ({
       id,
-      status: async () => ({ status: "running" }),
+      status: () => statusOf(id),
       sendEvent: async (e: { type: string; payload: unknown }) => {
         if (reject.has(id)) {
           throw new Error(`unknown_instance: ${id}`);
@@ -245,6 +256,8 @@ export const makeFakeEnv = (opts: {
   idempotencyKv?: KVNamespace;
   configKv?: KVNamespace;
   githubWebhookSecret?: string;
+  /** `GITHUB_APP_ID` — the App a check-run re-run must belong to. */
+  githubAppId?: string;
   adminToken?: string;
   logLinkSecret?: string;
   metadata?: FakeD1;
@@ -270,6 +283,7 @@ export const makeFakeEnv = (opts: {
     ...(opts.githubWebhookSecret !== undefined
       ? { GITHUB_WEBHOOK_SECRET: opts.githubWebhookSecret }
       : {}),
+    ...(opts.githubAppId !== undefined ? { GITHUB_APP_ID: opts.githubAppId } : {}),
     ...(opts.adminToken !== undefined ? { ADMIN_TOKEN: opts.adminToken } : {}),
     ...(opts.logLinkSecret !== undefined ? { LOG_LINK_SECRET: opts.logLinkSecret } : {}),
     ...(opts.publicOrigin !== undefined ? { PUBLIC_ORIGIN: opts.publicOrigin } : {}),

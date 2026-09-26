@@ -18,19 +18,20 @@ per-consumer budgets, approval attestation, and the audit trail — see the ADRs
 ## Consumers and boundary
 
 ```mermaid
-flowchart LR
+flowchart TB
+  accTitle: Consumers and the substrate boundary
   subgraph consumers[Consumers]
     rw[flare-dispatch RunWorkflow]
     tw[fractalbot TaskWorkflow]
     later[future surfaces]
   end
   subgraph sub[substrate worker]
-    facade[Facade: WorkerEntrypoint over service binding]
-    pool[Admission: per-class pools, ticket-gated boot]
-    box[Container DOs: lean, browser, agent, task]
-    eg[Egress: deny-all, grant profiles, credential injection]
+    facade["Facade: WorkerEntrypoint over service binding"]
+    pool["Admission: per-class pools, ticket-gated boot"]
+    box["Container DOs: lean, browser, agent, task"]
+    eg["Egress: deny-all, grant profiles, credential injection"]
     r2[R2 artifacts and backups]
-    mp[Metered model proxy: per-execution and per-consumer]
+    mp["Metered model proxy: per-execution and per-consumer"]
   end
   rw --> facade
   tw --> facade
@@ -66,6 +67,26 @@ model cooperation — is the floor for **all** workloads, CI included:
 - The `@cloudflare/sandbox` + `@cloudflare/containers` pin is a security surface with a deploy-time
   canary ([ADR-0011](adr/0011-sdk-pin-as-security-surface.md)).
 
+Every command a consumer sends crosses the exec fence (`src/engine/exec-fence.ts`), which holds the
+grant open only for the command's lifetime:
+
+```mermaid
+flowchart TB
+  accTitle: The exec fence around one command
+  cmd["**execUnderGrant**<br/>command + recipe + idempotency key"] --> floor{"Irreversible command?"}
+  floor -->|"yes, no valid attestation"| refuse["**Refused**<br/>typed refusal, nothing runs"]
+  floor -->|"no, or attestation spent once"| stale["**Stale revoke**<br/>clear any grant a prior call left"]
+  stale --> ensure{"**ensure**<br/>admitted ticket?"}
+  ensure -->|no| refuse
+  ensure -->|yes| apply["**Apply grant**<br/>profile hosts, method and path rules"]
+  apply --> run["**Run command**<br/>dedupe on key, output to artifacts"]
+  run --> kill["**Kill fenced processes**<br/>always, even on throw or timeout<br/>declared detached ones spared"]
+  kill --> revoke["**Revoke grant**<br/>container back to deny-all"]
+  class refuse danger
+  class run accent
+  class revoke ok
+```
+
 **Accepted residuals** (inherited from fractalbot's ADR-0005, restated so consumers start from
 documented gaps): DNS exfiltration is uncovered; `git-upload-pack` is a bounded exfiltration sink;
 anything a fenced command backgrounds survives the fence's kill, which reaches only the container's
@@ -87,6 +108,20 @@ Per-org BYOC, unchanged: an org deploys its dispatcher **and** its the substrate
 dispatcher's service binding requires it), each from its own operator overlay under one upstream pin.
 fractalbot remains a separate single-workspace deployable binding to the FractalBox org's substrate.
 
+```mermaid
+flowchart TB
+  accTitle: One org's BYOC deployment
+  pin["**Upstream pin**<br/>one commit, two overlays"]
+  disp["**dispatcher worker**<br/>binds `DispatcherFacade`"]
+  fb["**fractalbot**<br/>binds `FractalbotFacade`"]
+  sub["**substrate worker**<br/>container classes, D1, R2"]
+  pin -->|deploys first| sub
+  pin -->|deploys second| disp
+  disp -->|service binding| sub
+  fb -.->|"service binding, FractalBox org"| sub
+  class sub accent
+```
+
 Deploy blast radius is the structural reason the substrate is its own worker: container DO classes live in
 whichever worker defines them, and deploying that worker churns running containers. Product
 iteration on the dispatcher or fractalbot must never kill long-lived work mid-run.
@@ -101,6 +136,18 @@ a substrate-only bump path exists so a security patch never queues behind a prod
 `deploy.yml` runs **migrations → substrate → canary → dispatcher**, and the canary is a gate rather
 than a report: the dispatcher is a consumer, and ADR-0011 requires the floor to be proven on the
 running build before consumer traffic reaches it.
+
+```mermaid
+flowchart LR
+  accTitle: deploy.yml job order
+  mig["**Substrate D1**<br/>migrations"] --> sub["**Deploy**<br/>substrate"]
+  sub --> can{"**Canary**<br/>HTTPS to unlisted host dies 520"}
+  can -->|fail| stop["**Stop**<br/>dispatcher never deploys"]
+  can -->|pass| disp["**Dispatcher**<br/>migrations, then deploy"]
+  can -->|pass| dog["**Dogfood**<br/>facade round trip"]
+  class stop danger
+  class can accent
+```
 
 | Surface | What it answers |
 | --- | --- |

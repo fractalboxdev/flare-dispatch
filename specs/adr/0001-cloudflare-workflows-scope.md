@@ -6,7 +6,7 @@
 ## Context
 
 Every run already executes as one Cloudflare Workflows instance — `RunWorkflow` is the
-only execution shape in the tree. What has never been written down is *which* of
+only execution shape in the tree. What has never been written down is _which_ of
 Workflows' durability features a run may lean on, and how long an instance may live.
 Two patterns exist today and nothing says when to reach for which:
 
@@ -28,18 +28,18 @@ per webhook event, with the issue's labels as the authoritative state.
 
 Platform facts, verified against Cloudflare docs on 2026-08-06 (Paid plan):
 
-| | |
-| --- | --- |
-| Steps per instance | 10,000 default, configurable to 25,000 |
-| Step duration (wall clock) | **unlimited** |
-| Step compute time | 30 s default, configurable to 5 min |
-| Maximum sleep | 365 days |
-| Concurrent instances | 50,000 |
-| Instance creation rate | 300/s per account |
-| Retention of completed instance state | 30 days |
-| Maximum step result size | 1 MiB |
-| Persisted state per instance | 1 GB |
-| Billing | 500,000 steps included/mo then $0.80 per additional 100,000; storage 1 GB included then $0.20/GB-mo; **step and storage billing begins 2026-08-10** |
+|                                       |                                                                                                                                                     |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Steps per instance                    | 10,000 default, configurable to 25,000                                                                                                              |
+| Step duration (wall clock)            | **unlimited**                                                                                                                                       |
+| Step compute time                     | 30 s default, configurable to 5 min                                                                                                                 |
+| Maximum sleep                         | 365 days                                                                                                                                            |
+| Concurrent instances                  | 50,000                                                                                                                                              |
+| Instance creation rate                | 300/s per account                                                                                                                                   |
+| Retention of completed instance state | 30 days                                                                                                                                             |
+| Maximum step result size              | 1 MiB                                                                                                                                               |
+| Persisted state per instance          | 1 GB                                                                                                                                                |
+| Billing                               | 500,000 steps included/mo then $0.80 per additional 100,000; storage 1 GB included then $0.20/GB-mo; **step and storage billing begins 2026-08-10** |
 
 So the platform does not forbid the hibernating design: instances are cheap, waits can
 run a year, and 50,000 concurrent instances is far more than any repo's open issues.
@@ -108,12 +108,31 @@ deploy still pays one fenced exec per retryable step, gains a retry on pool-admi
 refusals, and pays a retried recipe-pin mismatch, because
 `packages/runtime-cf/src/sandbox-facade.ts:274-287` folds both into `CheckoutFailed`.
 
-Scoped deliberately. A re-clone restores the tree the *spec* describes, which is right
+Scoped deliberately. A re-clone restores the tree the _spec_ describes, which is right
 for a suite, a lint or a build, and wrong for a step that reads a tree an earlier step
 mutated. Applied to `self-heal-pr`'s verify step it would hand back a clean checkout and
 pass on unmodified code, turning an infra failure into a wrong green — worse than the red
 it replaces. Those steps need captured bytes restored, which is the `FileRef` chokepoint
 still open in `REWRITE.md`.
+
+The rules select a run's instance shape:
+
+```mermaid
+flowchart TB
+  accTitle: Which instance shape a run takes
+  ev["**event arrives**<br/>webhook, Action, schedule, child spawn"] --> name["**name the instance**<br/>from the event's identity"]
+  name --> dup{"Instance id already<br/>created?"}
+  dup -->|yes| folded["**deduplicated**<br/>answered as dispatched"]
+  dup -->|no| human{"Named person owes an answer<br/>inside a stated window?"}
+  human -->|yes| hib["**hibernating instance**<br/>`step.waitForEvent` with a timeout<br/>e.g. release approval, 72 h"]
+  human -->|no| entity{"Tracks an external entity<br/>humans also edit?"}
+  entity -->|yes| fresh["**fresh instance per event**<br/>read state, act, write state back<br/>to labels / PR state / deploy status"]
+  entity -->|no| short["**one short instance**<br/>runs to completion in minutes"]
+  class folded muted
+  class hib accent
+  class fresh ok
+  class short ok
+```
 
 Corollary to rules 3 and 4: wall-clock bounds must be written explicitly (`timeoutSec`
 on exec, `Effect.timeoutFail` around waits, as `waitForPort` already does at
@@ -141,7 +160,7 @@ again — or killing the instance and starting another, which is rule 4 with ext
 bookkeeping.
 
 **External state must be authoritative because humans edit it.** Maintainers read and
-change labels by hand; that *is* the status UI. If a suspended program held the real
+change labels by hand; that _is_ the status UI. If a suspended program held the real
 state, a maintainer removing a label would desync it from what everyone sees and the
 instance would keep acting on stale beliefs. When the system of record holds the state, a
 human edit is simply a legal transition and costs nothing to support.

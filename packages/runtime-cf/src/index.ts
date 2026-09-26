@@ -68,6 +68,18 @@ export {
   ADMISSION_WAITER_TTL_MS,
   type RunAdmissionStore,
 } from "./run-admission-d1";
+export {
+  makeSerialQueueD1,
+  runSerialGate,
+  decideSerial,
+  revisionMatches,
+  SERIAL_POLL_EVERY_MS,
+  SERIAL_MAX_WAIT_MS,
+  SERIAL_HOLDER_TTL_MS,
+  type SerialQueueStore,
+  type SerialObservation,
+  type SerialDecision,
+} from "./serial-queue-d1";
 export { makeStepRunnerCloudflare } from "./step-runner-cf";
 export { makeChecksGithubLive, NOOP_CHECK_RUN_ID, type ChecksGithubConfig } from "./checks-github";
 export { makeGithubLive, type GithubLiveConfig } from "./github-live";

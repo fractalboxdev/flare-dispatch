@@ -50,6 +50,26 @@ export type IssueRef = {
   readonly createdAt: number;
   /** epoch ms. */
   readonly updatedAt: number;
+  /**
+   * epoch ms when the issue was closed, or `undefined` while it is open.
+   *
+   * `updatedAt` cannot stand in: any touch resets it, so a window dated from it
+   * never expires. This is the column the org store's `pulls` table lacks and
+   * `issues` has — the whole reason an issue-shaped ledger needs no workaround
+   * where a PR-shaped one needed a file in git.
+   */
+  readonly closedAt?: number;
+};
+
+/** The outcome of {@link GithubService.openIssue}. */
+export type IssueCreated = {
+  readonly number: number;
+  /**
+   * The issue's web URL. Never empty: a caller announces the issue by linking
+   * it, so a create that came back without one fails rather than publishing a
+   * link to nowhere.
+   */
+  readonly url: string;
 };
 
 /**
@@ -99,7 +119,7 @@ export type OpenDraftPullRequest = {
    * Defaults to the repo's default branch when omitted.
    */
   readonly baseBranch?: string;
-  /** The head branch to create/update (e.g. `flare-dispatch/spec-drift-2026-06-03`). */
+  /** The head branch to create/update (e.g. `flare-dispatch/spec-drift`). */
   readonly headBranch: string;
   /** PR title. */
   readonly title: string;
@@ -116,6 +136,13 @@ export type OpenDraftPullRequest = {
    */
   readonly draft?: boolean;
   /**
+   * Leave the head branch untouched when it carries any commit a bot account
+   * did not author — a rolling PR's reviewer pushed to it, and a force-update
+   * would discard that work. The result reports `skipped: true`. Default
+   * `false`.
+   */
+  readonly preserveHumanCommits?: boolean;
+  /**
    * The GitHub installation id authenticating the writes. Optional — the live
    * Layer resolves it from the repo when absent (the App is the source of truth
    * for which installation covers a repo).
@@ -131,7 +158,34 @@ export type DraftPullRequestResult = {
   readonly url: string;
   /** `true` when this call opened a new PR; `false` when it updated an open one. */
   readonly created: boolean;
+  /** `true` when `preserveHumanCommits` left a human-touched branch untouched. */
+  readonly skipped: boolean;
 };
+
+/**
+ * A request to retract a rolling proposal PR — close the open PR on
+ * `headBranch` after posting `comment`. The live Layer closes only a PR a bot
+ * account opened whose commits are all bot-authored; anything a human opened
+ * or pushed to stays open.
+ */
+export type CloseDraftPullRequest = {
+  /** "owner/name". */
+  readonly repo: string;
+  readonly headBranch: string;
+  /** Posted on the PR before it closes — a rendered template, never model prose. */
+  readonly comment: string;
+  readonly installationId?: number;
+};
+
+/** The outcome of {@link GithubService.closeDraftPullRequest}. */
+export type CloseDraftPullRequestResult =
+  | { readonly closed: true; readonly number: number }
+  | {
+      readonly closed: false;
+      /** `none-open`: nothing to close. `human-owned`: left open on purpose. `uncredentialed`: no App. */
+      readonly reason: "none-open" | "human-owned" | "uncredentialed";
+      readonly number?: number;
+    };
 
 /**
  * A request to publish a **GitHub Release** — the narrow *release write* the
@@ -371,6 +425,20 @@ export interface GithubService {
   ) => Effect.Effect<TextFileResult, GitHubApiError>;
 
   /**
+   * A branch's current head commit SHA — the read `worker-deploy` uses to tell
+   * whether the commit it is about to deploy is still the tip. Fails on a
+   * missing branch, an unreadable ref, and an uncredentialed deploy alike: no
+   * answer here can stand in for a SHA, so the caller decides what "unknown"
+   * means rather than comparing against a placeholder.
+   */
+  readonly branchHead: (req: {
+    repo: string;
+    /** Branch name without `refs/heads/`. */
+    branch: string;
+    installationId?: number;
+  }) => Effect.Effect<string, GitHubApiError>;
+
+  /**
    * Post a top-level PR review comment (`event: "COMMENT"`). The run uses this
    * to leave an always-visible comment on every review — success or failure.
    * Best-effort reporting: a live deploy without App credentials degrades to a
@@ -394,8 +462,42 @@ export interface GithubService {
     labels?: readonly string[];
     updatedWithinDays?: number;
     maxPages?: number;
+    /**
+     * Fail rather than return a list the page ceiling cut short.
+     *
+     * A triage pass wants the default: the 500 most recently updated issues are
+     * the tick's work and a longer backlog waits. A **deduplication** read
+     * cannot — it asks "have I filed this already?", and a truncated list says
+     * "no" for every issue it did not reach, so the caller duplicates whatever
+     * fell off the end. Set it wherever an absent row is read as a fact.
+     */
+    strict?: boolean;
     installationId?: number;
   }) => Effect.Effect<readonly IssueRef[], GitHubApiError>;
+
+  /**
+   * Open one issue — the write the spec-audit sweep files an open question with.
+   *
+   * **Fails rather than degrading to a logged no-op**, which is the opposite of
+   * `openDraftPullRequest` below, and the difference is what the artifact is. A
+   * PR write that no-ops loses nothing: the branch is idempotent and the content
+   * is a file that still exists in the commit the next tick will re-derive. Here
+   * the issue *is* the question — there is no file, no branch, and no second
+   * copy — so a silent no-op drops it, and the loop then has no record that it
+   * ever had something to ask.
+   *
+   * Narrow on purpose: a title, a body, and labels. No assignee, no milestone,
+   * no template. What bounds it is the caller — the sweep files into one control
+   * repo resolved from config, and never files a question it did not first fail
+   * to find among that repo's existing issues.
+   */
+  readonly openIssue: (req: {
+    repo: string;
+    title: string;
+    body: string;
+    labels?: readonly string[];
+    installationId?: number;
+  }) => Effect.Effect<IssueCreated, GitHubApiError>;
 
   /** Add labels to an issue — the state machine's write (§5). */
   readonly addIssueLabels: (req: {
@@ -455,6 +557,16 @@ export interface GithubService {
   ) => Effect.Effect<DraftPullRequestResult, GitHubApiError>;
 
   /**
+   * Close a rolling proposal PR a later run no longer stands behind — the
+   * counterpart of `openDraftPullRequest` for a fire that finds nothing to
+   * propose. Only a bot-opened, bot-only PR closes. A deploy without App
+   * credentials degrades to a logged no-op (`reason: "uncredentialed"`).
+   */
+  readonly closeDraftPullRequest: (
+    req: CloseDraftPullRequest,
+  ) => Effect.Effect<CloseDraftPullRequestResult, GitHubApiError>;
+
+  /**
    * Publish a GitHub Release (creating the tag at `target` when absent) — the
    * release write the `release-notes` recipe calls on human approval. A deploy
    * without App credentials degrades to a logged no-op (`published: false`).
@@ -491,14 +603,24 @@ export const github = {
     installationId?: number;
   }) => Effect.flatMap(Github, (g) => g.pullRequestHistory(opts)),
   readTextFile: (req: ReadTextFileRequest) => Effect.flatMap(Github, (g) => g.readTextFile(req)),
+  branchHead: (req: { repo: string; branch: string; installationId?: number }) =>
+    Effect.flatMap(Github, (g) => g.branchHead(req)),
   issues: (opts: {
     repo: string;
     state?: "open" | "closed" | "all";
     labels?: readonly string[];
     updatedWithinDays?: number;
     maxPages?: number;
+    strict?: boolean;
     installationId?: number;
   }) => Effect.flatMap(Github, (g) => g.issues(opts)),
+  openIssue: (req: {
+    repo: string;
+    title: string;
+    body: string;
+    labels?: readonly string[];
+    installationId?: number;
+  }) => Effect.flatMap(Github, (g) => g.openIssue(req)),
   addIssueLabels: (req: {
     repo: string;
     issue: number;
@@ -522,5 +644,7 @@ export const github = {
   pullReview: (req: PullReviewRequest) => Effect.flatMap(Github, (g) => g.pullReview(req)),
   openDraftPullRequest: (req: OpenDraftPullRequest) =>
     Effect.flatMap(Github, (g) => g.openDraftPullRequest(req)),
+  closeDraftPullRequest: (req: CloseDraftPullRequest) =>
+    Effect.flatMap(Github, (g) => g.closeDraftPullRequest(req)),
   createRelease: (req: CreateRelease) => Effect.flatMap(Github, (g) => g.createRelease(req)),
 } as const;

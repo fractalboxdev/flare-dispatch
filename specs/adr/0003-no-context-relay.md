@@ -51,6 +51,16 @@ a bulk export, or a stable published schema over executions, findings, or run hi
 derived layer above — structured findings, tier, verdict, cost, timings, outcome taxonomy —
 stays internal and is not offered as an ingestion surface.
 
+```mermaid
+flowchart LR
+  accTitle: Where context backends read CI data
+  fd["**FlareDispatch**"] -->|"rendered check runs,<br/>review comments"| gh["**GitHub**"]
+  fd --> internal[("**derived layer**<br/>D1 and R2: findings, tier,<br/>verdict, cost, timings")]
+  gh -->|"own connector, cadence,<br/>credential"| backend[("**context backend**")]
+  backend -->|"recall (ADR-0002)"| fd
+  class internal muted
+```
+
 This closes ADR-0002's revisit trigger on the subject. Reopening it requires a new record.
 
 ## Rationale

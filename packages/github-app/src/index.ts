@@ -43,6 +43,7 @@ export {
 } from "./actions";
 export {
   openDraftPullRequest,
+  closeBotPullRequest,
   commitFilesAndOpenPr,
   treeEntry,
   deletionEntry,
@@ -53,6 +54,8 @@ export {
   type CommitFilesResult,
   type OpenDraftPullRequestOptions,
   type OpenDraftPullRequestResult,
+  type CloseBotPullRequestOptions,
+  type CloseBotPullRequestResult,
 } from "./pull-requests";
 export {
   listPullRequests,
@@ -67,9 +70,11 @@ export {
   type ReadRepoTextFileOptions,
   type ReadRepoTextFileResult,
 } from "./repo-files";
+export { readBranchHead, branchRefUrl, type ReadBranchHeadOptions } from "./branch-head";
 export {
   addIssueLabels,
   closeIssueAsDuplicate,
+  createIssue,
   createIssueComment,
   listIssues,
   removeIssueLabel,
@@ -77,6 +82,8 @@ export {
   type AuthorAssociation,
   type CloseIssueAsDuplicateOptions,
   type CreateIssueCommentOptions,
+  type CreateIssueOptions,
+  type CreateIssueResult,
   type IssueListItem,
   type ListIssuesOptions,
   type RemoveIssueLabelOptions,

@@ -65,10 +65,19 @@ const makeFakeBox = (opts: {
           name: undefined,
         })),
     ),
+    // The SDK's per-container transport pin. Recorded rather than stubbed away:
+    // which containers got which transport is the whole assertion for the
+    // canary knob.
+    setTransport: vi.fn(async (t: string) => {
+      transportCalls.push(t);
+    }),
     _getLogs: getLogs,
     _waitForPort: waitForPort,
   };
 };
+
+/** Every `setTransport` the Layer issued, in order. */
+const transportCalls: string[] = [];
 
 // A stand-in for the SDK's `SessionTerminatedError` (thrown when a command's
 // shell exits). `vi.hoisted` so it exists before the hoisted `vi.mock` factory
@@ -88,8 +97,17 @@ const { FakeSessionTerminatedError } = vi.hoisted(() => ({
 // returns whatever the current test installed via `currentBox`. The error class
 // is needed for `execToResult`'s `instanceof` recovery path.
 let currentBox: ReturnType<typeof makeFakeBox>;
+// Every id the Layer routed by, in order. The mock used to ignore its `id`
+// argument entirely, which is why no test could see that `exec` was resolving
+// the execution's container rather than the handle it was passed — the defect
+// that made five "isolated" stages share one filesystem.
+const requestedSandboxIds: string[] = [];
+
 vi.mock("@cloudflare/sandbox", () => ({
-  getSandbox: () => currentBox,
+  getSandbox: (_ns: unknown, id: string) => {
+    requestedSandboxIds.push(id);
+    return currentBox;
+  },
   SessionTerminatedError: FakeSessionTerminatedError,
 }));
 
@@ -278,6 +296,120 @@ describe("makeSandboxCloudflareLive — exposePort (C)", () => {
 // shell then exited) is a result the run can report + upload artifacts for;
 // only a could-not-launch error is an Effect failure. This is what lets a
 // failing `playwright-demo` still surface its videoUri/logUri.
+describe("makeSandboxCloudflareLive — container routing", () => {
+  const routingLayer = () => makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-1");
+
+  it.effect("acquire is one container per execution, and a distinct one per key", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      const [a, b, keyed, keyed2] = yield* Effect.flatMap(SandboxTag, (s) =>
+        Effect.all([
+          s.acquire({}),
+          s.acquire({}),
+          s.acquire({ key: "features" }),
+          s.acquire({ key: "workspace" }),
+        ]),
+      ).pipe(Effect.provide(routingLayer()));
+
+      expect(a.id).toBe(b.id);
+      expect(keyed.id).not.toBe(a.id);
+      expect(keyed2.id).not.toBe(keyed.id);
+      // Ids stay DNS-safe and inside the preview-URL budget — the constraint
+      // `previewSafeSandboxId` exists for, now applied to keyed ids too.
+      for (const c of [a, keyed, keyed2]) {
+        expect(c.id).toMatch(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/);
+        expect(c.id.length).toBeLessThanOrEqual(40);
+      }
+    }),
+  );
+
+  it.effect("no transport option leaves the container on the Worker-wide default", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      transportCalls.length = 0;
+      yield* Effect.flatMap(SandboxTag, (s) => s.acquire({})).pipe(
+        Effect.provide(makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-2")),
+      );
+      // Untouched: the default is whatever `SANDBOX_TRANSPORT` says, and a
+      // Layer that pinned it unasked would silently change every consumer.
+      expect(transportCalls).toEqual([]);
+    }),
+  );
+
+  it.effect("a transport option pins EVERY container the execution acquires", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      transportCalls.length = 0;
+      yield* Effect.flatMap(SandboxTag, (s) =>
+        Effect.all([s.acquire({}), s.acquire({ key: "features" })]),
+      ).pipe(
+        Effect.provide(
+          makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-3", undefined, undefined, undefined, "rpc"),
+        ),
+      );
+      // Per CONTAINER, not per Layer: a keyed container is a different DO and
+      // carries its own transport, so pinning the first would leave the stage
+      // containers on the compatibility client — which is where the streaming
+      // file APIs do not exist.
+      expect(transportCalls).toEqual(["rpc", "rpc"]);
+    }),
+  );
+
+  it.effect("re-acquiring a container does not re-pin it", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      transportCalls.length = 0;
+      yield* Effect.flatMap(SandboxTag, (s) =>
+        // Three acquires, two containers. `acquire` is also how a caller derives
+        // an id without provisioning — `ensureWorkspace` on a rebuild, and the
+        // stage reaper naming the container it is about to destroy. Each of
+        // those would otherwise wake a Durable Object to re-assert a setting it
+        // already has.
+        Effect.all([
+          s.acquire({}),
+          s.acquire({}),
+          s.acquire({ key: "features" }),
+          s.acquire({ key: "features" }),
+        ]),
+      ).pipe(
+        Effect.provide(
+          makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-4", undefined, undefined, undefined, "rpc"),
+        ),
+      );
+      expect(transportCalls).toEqual(["rpc", "rpc"]);
+    }),
+  );
+
+  it.effect("exec routes by the handle it is given, not by the execution", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => ({ exitCode: 0, duration: 1, stdout: "", stderr: "" }));
+
+      yield* Effect.flatMap(SandboxTag, (s) =>
+        Effect.gen(function* () {
+          const own = yield* s.acquire({});
+          const keyed = yield* s.acquire({ key: "features" });
+          requestedSandboxIds.length = 0;
+          yield* s.exec({ command: "one", container: own });
+          yield* s.exec({ command: "two", container: keyed });
+          yield* s.exec({ command: "three" });
+          return { own, keyed };
+        }),
+      ).pipe(
+        Effect.provide(routingLayer()),
+        Effect.flatMap(({ own, keyed }) =>
+          Effect.sync(() => {
+            // The whole bug in one assertion: the second exec must reach the
+            // keyed container, and an exec with no handle still reaches the
+            // execution's own.
+            expect(requestedSandboxIds).toEqual([own.id, keyed.id, own.id]);
+          }),
+        ),
+      );
+    }),
+  );
+});
+
 describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
   const execLayer = () => makeSandboxCloudflareLive(ns, makeBucket().bucket, "exec-1");
 

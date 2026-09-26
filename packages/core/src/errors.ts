@@ -124,6 +124,31 @@ export class AdmissionTimedOut extends Schema.TaggedError<AdmissionTimedOut>()(
   }
 }
 
+/**
+ * A run declaring `serialize` waited its whole ceiling behind an in-flight
+ * execution of the same group, which kept heartbeating the entire time. The
+ * run **never started**. Distinct from `AdmissionTimedOut`: the pool may have
+ * been idle — one peer held the group, and a serialized group never runs two.
+ */
+export class SerialQueueTimedOut extends Schema.TaggedError<SerialQueueTimedOut>()(
+  "SerialQueueTimedOut",
+  {
+    /** The serialization group, e.g. `worker-deploy:owner/name@main`. */
+    group: Schema.String,
+    /** Revision the in-flight holder was running when the wait gave up. */
+    holderRevision: Schema.String,
+    /** Total time queued before giving up, ms. */
+    waitedMs: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return (
+      `timed out after ${Math.round(this.waitedMs / 60_000)} min queued behind ` +
+      `${this.holderRevision.slice(0, 12)} in ${this.group} — the run never started`
+    );
+  }
+}
+
 export class PortNeverOpened extends Schema.TaggedError<PortNeverOpened>()("PortNeverOpened", {
   port: Schema.Number,
   timeoutSec: Schema.Number,
@@ -199,9 +224,10 @@ export class StepFailed extends Schema.TaggedError<StepFailed>()("StepFailed", {
 }) {}
 
 /**
- * The run could not do its job for a CAPACITY reason and is bowing out — the
- * work was never attempted-and-failed, it was impossible to attempt (e.g.
- * pr-review's diff exceeds the model's context window even after truncation).
+ * The run could not do its job and is bowing out — the work was never
+ * attempted-and-failed, it was impossible to attempt: a CAPACITY reason (e.g.
+ * pr-review's diff exceeds the model's context window even after truncation)
+ * or a repo that never opted in (offload-test with no configured command).
  * The dispatcher concludes the check-run `neutral` with `reason` in the
  * summary instead of `failure`: a review that didn't happen is not a failed
  * review, and a red that isn't actionable trains people to ignore the check.
@@ -301,6 +327,7 @@ export type RunError =
   | ContainerLaunchFailed
   | ContainerBusy
   | AdmissionTimedOut
+  | SerialQueueTimedOut
   | PortNeverOpened
   | ExposePortFailed
   | BrowserUnavailable

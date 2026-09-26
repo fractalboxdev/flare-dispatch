@@ -123,9 +123,16 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
     pullRequestHistory: () =>
       Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     readTextFile: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    // `branchHead` has no empty answer at all — any string would be read as a SHA.
+    branchHead: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     // `issues` is the same class: an empty list reads as "nothing to triage",
     // which a scheduled run would act on by reporting a clean estate.
     issues: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    // `openIssue` is the one WRITE in the fail class, because the issue it opens
+    // is the artifact and not a report of one. A logged skip here discards the
+    // question with nothing left holding it — no branch, no file, no second
+    // copy — and the run would report a clean sweep having asked nothing.
+    openIssue: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     // The state-machine writes degrade to a logged no-op, like `pullReview`.
     addIssueLabels: ({ repo, issue }) =>
       Effect.logInfo(
@@ -156,7 +163,11 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
     openDraftPullRequest: ({ repo, headBranch }) =>
       Effect.logInfo(
         `github.openDraftPullRequest skipped (no GitHub App credentials) — ${repo}#${headBranch} not opened`,
-      ).pipe(Effect.as({ number: 0, url: "", created: false })),
+      ).pipe(Effect.as({ number: 0, url: "", created: false, skipped: false })),
+    closeDraftPullRequest: ({ repo, headBranch }) =>
+      Effect.logInfo(
+        `github.closeDraftPullRequest skipped (no GitHub App credentials) — ${repo}#${headBranch} left open`,
+      ).pipe(Effect.as({ closed: false, reason: "uncredentialed" } as const)),
     // `createRelease` (a release write) degrades to a logged no-op, the same
     // posture as the other writes. The recipe sees `published: false`.
     createRelease: ({ repo, tag }) =>

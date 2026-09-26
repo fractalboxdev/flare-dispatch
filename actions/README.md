@@ -13,6 +13,15 @@ The two are complementary: `deploy-dispatcher-action` stands up the Dispatcher i
 your account once; `flare-dispatch-action` runs in each consumer repo's CI to
 offload heavy jobs onto it.
 
+```mermaid
+flowchart LR
+    accTitle: Where each action sits
+    ops["**Operator repo**<br/>deploy-dispatcher-action"] -->|"wrangler deploy"| worker["**Dispatcher Worker**<br/>your Cloudflare account"]
+    ci["**Consumer repo CI**<br/>flare-dispatch-action"] -->|"signed POST, 202"| worker
+    worker -->|"check-run verdict"| pr["**Pull request**<br/>flare-dispatch/‹run›"]
+    class worker accent
+```
+
 ```yaml
 # consumer repo — offload the test suite onto your Dispatcher
 - uses: fractalboxdev/flare-dispatch/actions/flare-dispatch-action@<sha>

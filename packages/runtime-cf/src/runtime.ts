@@ -173,6 +173,13 @@ export type CFRuntimeLiveOptions = {
    */
   readonly sandboxPreviewHostname?: string;
   /**
+   * Pin this execution's containers to a transport instead of the Worker-wide
+   * `SANDBOX_TRANSPORT` default — see `makeSandboxCloudflareLive`'s `transport`
+   * option for why the choice is per-execution rather than per-Worker.
+   * Container path only; the substrate facade owns its own transport.
+   */
+  readonly sandboxTransport?: "http" | "websocket" | "rpc";
+  /**
    * The dispatcher's own public origin (e.g.
    * `https://<worker>.<account>.workers.dev`) — prefixed onto the
    * `/v1/artifacts/...` URLs the `artifact` capability returns so the links
@@ -315,6 +322,7 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
           cloneAuth,
           opts.sandboxPreviewHostname,
           opts.logsViewerBase,
+          opts.sandboxTransport,
         );
   const stepRunner = makeStepRunnerCloudflare(opts.workflowStep, opts.executionId);
   const checks = makeChecksGithubLive(opts.checks);

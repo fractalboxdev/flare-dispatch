@@ -412,8 +412,18 @@ export type CheckSuppressionArgs = {
   readonly ledgerRef?: string;
   /** The repo prior proposals were opened against — defaults to `ledgerRepo`. */
   readonly proposalRepo?: string;
-  /** The head-branch prefix every proposal of this kind shares. */
-  readonly headBranchPrefix: string;
+  /**
+   * The head-branch prefix every proposal of this kind shares.
+   *
+   * **Omit it for a consumer that opens no PRs**, and the cooldown half is
+   * skipped entirely — no PR-history read, no spend, no cooldown. That is not a
+   * degraded mode: a cooldown dated from a closed PR is meaningless where no PR
+   * exists, and passing a prefix that matches nothing would answer "no prior
+   * proposals" every tick for a reason no reader could tell apart from "the
+   * feature is off". The spec-audit sweep is the first such consumer — its
+   * memory is the issue it filed, and only the ledger half applies here.
+   */
+  readonly headBranchPrefix?: string;
   /** Now, in epoch ms — passed in so a run's clock is the one that decides. */
   readonly nowMs: number;
   /** Cooldown length — defaults to {@link COOLDOWN_DAYS_DEFAULT}. */
@@ -464,25 +474,32 @@ export const checkSuppression = (args: CheckSuppressionArgs) =>
       );
     }
 
-    // 2. The cooldowns. Paginate no further back than the cooldown window —
-    //    `updatedAt >= closedAt`, so nothing closed inside it can be missed.
-    const priorProposals = yield* github
-      .pullRequestHistory({
-        repo: proposalRepo,
-        headBranchPrefix: args.headBranchPrefix,
-        state: "all",
-        updatedWithinDays: cooldownDays,
-      })
-      .pipe(
-        Effect.catchTag("GitHubApiError", (err) =>
-          Effect.gen(function* () {
-            const why = `PR history for ${proposalRepo} (${args.headBranchPrefix}*) unreadable (GitHub ${err.status} ${err.reason}) — cooldowns NOT applied this tick`;
-            degraded.push(why);
-            yield* io.log("warn", `suppression: ${why}`);
-            return [] as readonly PullRequestHistoryRef[];
-          }),
-        ),
-      );
+    // 2. The cooldowns — only for a consumer that opens PRs. With no prefix
+    //    there is no PR to have been closed, so the read is skipped rather than
+    //    made and ignored: an empty history would otherwise be recorded as "no
+    //    prior proposals", which reads the same as a working cooldown finding
+    //    nothing.
+    const headBranchPrefix = args.headBranchPrefix;
+    const priorProposals =
+      headBranchPrefix === undefined
+        ? ([] as readonly PullRequestHistoryRef[])
+        : yield* github
+            .pullRequestHistory({
+              repo: proposalRepo,
+              headBranchPrefix,
+              state: "all",
+              updatedWithinDays: cooldownDays,
+            })
+            .pipe(
+              Effect.catchTag("GitHubApiError", (err) =>
+                Effect.gen(function* () {
+                  const why = `PR history for ${proposalRepo} (${headBranchPrefix}*) unreadable (GitHub ${err.status} ${err.reason}) — cooldowns NOT applied this tick`;
+                  degraded.push(why);
+                  yield* io.log("warn", `suppression: ${why}`);
+                  return [] as readonly PullRequestHistoryRef[];
+                }),
+              ),
+            );
 
     const verdicts = decideSuppression({
       candidates: args.keys,

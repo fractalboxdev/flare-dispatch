@@ -26,7 +26,9 @@
 
 import {
   addIssueLabels,
+  closeBotPullRequest,
   closeIssueAsDuplicate,
+  createIssue,
   createIssueComment,
   createPullReview,
   createRelease,
@@ -35,6 +37,7 @@ import {
   listIssues,
   listPullRequests,
   openDraftPullRequest,
+  readBranchHead,
   readRepoTextFile,
   removeIssueLabel,
   resolveRepoInstallationId,
@@ -42,10 +45,12 @@ import {
 } from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect, Layer, Schedule } from "effect";
 import {
+  type CloseDraftPullRequestResult,
   type DraftPullRequestResult,
   Github,
   GitHubApiError,
   type GithubService,
+  type IssueCreated,
   type IssueRef,
   type PullRequestHistoryRef,
   type ReleaseResult,
@@ -267,7 +272,16 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
         );
       }),
 
-    issues: ({ repo, state, labels, updatedWithinDays, maxPages, installationId }) =>
+    branchHead: ({ repo, branch, installationId }) =>
+      Effect.gen(function* () {
+        // A placeholder SHA would compare unequal to every deploy and skip it;
+        // an uncredentialed deploy fails like every other read.
+        if (config === undefined) return yield* readNeedsCredentials<string>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() => readBranchHead({ token, repo, branch }));
+      }),
+
+    issues: ({ repo, state, labels, updatedWithinDays, maxPages, strict, installationId }) =>
       Effect.gen(function* () {
         if (config === undefined) return yield* readNeedsCredentials<readonly IssueRef[]>();
         const token = yield* mintToken(config, repo, installationId);
@@ -281,22 +295,51 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
               ? { updatedSince: Date.now() - updatedWithinDays * 86_400_000 }
               : {}),
             ...(maxPages !== undefined ? { maxPages } : {}),
+            ...(strict === true ? { strict: true } : {}),
           }),
         );
-        return raw.map((i): IssueRef => ({
-          repo,
-          number: i.number,
-          title: i.title,
-          body: i.body,
-          state: i.state,
-          labels: i.labels,
-          author: i.author,
-          authorAssociation: i.authorAssociation,
-          url: i.url,
-          commentCount: i.commentCount,
-          createdAt: Date.parse(i.createdAt) || 0,
-          updatedAt: Date.parse(i.updatedAt) || 0,
-        }));
+        return raw.map((i): IssueRef => {
+          // `closed_at` is absent on an open issue and unparseable on a malformed
+          // one; both leave the field off rather than dating a close at the
+          // epoch, which would read as "closed in 1970" to anything computing a
+          // window from it.
+          const closedAt = i.closedAt === "" ? Number.NaN : Date.parse(i.closedAt);
+          return {
+            repo,
+            number: i.number,
+            title: i.title,
+            body: i.body,
+            state: i.state,
+            labels: i.labels,
+            author: i.author,
+            authorAssociation: i.authorAssociation,
+            url: i.url,
+            commentCount: i.commentCount,
+            createdAt: Date.parse(i.createdAt) || 0,
+            updatedAt: Date.parse(i.updatedAt) || 0,
+            ...(Number.isFinite(closedAt) ? { closedAt } : {}),
+          };
+        });
+      }),
+
+    // `openIssue` is the exception to the paragraph below: it FAILS without
+    // credentials rather than logging a skip. The state-machine writes annotate
+    // an issue that exists whether or not the write lands, and the PR write
+    // leaves its content in git — but this one *is* the artifact, so a no-op
+    // discards the question and leaves the loop with no record it had one.
+    openIssue: ({ repo, title, body, labels, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* readNeedsCredentials<IssueCreated>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() =>
+          createIssue({
+            token,
+            repo,
+            title,
+            body,
+            ...(labels !== undefined && labels.length > 0 ? { labels } : {}),
+          }),
+        );
       }),
 
     // The four state-machine writes + the one close. Each degrades to a logged
@@ -354,7 +397,7 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
           yield* Effect.logInfo(
             `github.openDraftPullRequest skipped (no GitHub App credentials) — ${req.repo}#${req.headBranch} not opened`,
           );
-          return { number: 0, url: "", created: false };
+          return { number: 0, url: "", created: false, skipped: false };
         }
         const token = yield* mintToken(config, req.repo, req.installationId);
         return yield* ghCall(() =>
@@ -368,6 +411,28 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
             commitMessage: req.commitMessage,
             files: req.files,
             ...(req.draft !== undefined ? { draft: req.draft } : {}),
+            ...(req.preserveHumanCommits !== undefined
+              ? { preserveHumanCommits: req.preserveHumanCommits }
+              : {}),
+          }),
+        );
+      }),
+
+    closeDraftPullRequest: (req): Effect.Effect<CloseDraftPullRequestResult, GitHubApiError> =>
+      Effect.gen(function* () {
+        if (config === undefined) {
+          yield* Effect.logInfo(
+            `github.closeDraftPullRequest skipped (no GitHub App credentials) — ${req.repo}#${req.headBranch} left open`,
+          );
+          return { closed: false, reason: "uncredentialed" } as const;
+        }
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() =>
+          closeBotPullRequest({
+            token,
+            repo: req.repo,
+            headBranch: req.headBranch,
+            comment: req.comment,
           }),
         );
       }),

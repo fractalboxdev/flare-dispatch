@@ -5,6 +5,82 @@ registers them by name; Action mode dispatches via
 [`flare-dispatch-action`](../actions/flare-dispatch-action/), webhook mode fires
 from each run's `triggers`.
 
+## From trigger to check-run
+
+All three trigger sources end in one `RUNS_WORKFLOW.create`, keyed by the run's
+instance id; everything after that runs inside the Workflow.
+
+```mermaid
+flowchart TB
+  accTitle: Trigger sources reaching a run's Workflow
+  gha["**GitHub Actions**<br/>flare-dispatch-action"] -->|"POST /v1/dispatch/:run"| disp
+  app["**GitHub App webhook**<br/>pull_request, check_suite"] -->|"POST /v1/webhooks/github"| disp
+  cron["**Cron Trigger**"] -->|"scheduled()"| disp
+  disp["**Dispatcher Worker**<br/>verify, dedup, gate, cooldown"] -->|"RUNS_WORKFLOW.create"| wf["**RunWorkflow**<br/>one instance per execution"]
+  wf --> box["**Container**<br/>clone, install, exec"]
+  wf --> r2[("**R2**<br/>logs, artifacts, dep cache")]
+  wf --> checks["**check-run**<br/>flare-dispatch/*"]
+  class disp accent
+  class checks ok
+```
+
+A run is a recipe: it composes primitives, which ride the capability layer, and
+calls capabilities directly where no primitive fits.
+
+```mermaid
+flowchart TB
+  accTitle: The layers a PR run is built from
+  subgraph recipes["recipes (runs/)"]
+    check["check"]
+    offload["offload-test"]
+    deploy["worker-deploy"]
+  end
+  subgraph prims["primitives"]
+    ensure["ensureWorkspace"]
+    ws["workspace"]
+    install["installCached"]
+    load["loadSecrets"]
+  end
+  subgraph caps["capabilities"]
+    sandbox["sandbox"]
+    cache["cache"]
+    secrets["secrets"]
+    other["config, artifact, github, io"]
+  end
+  recipes --> prims
+  recipes --> other
+  ensure --> ws
+  ws --> install
+  ws --> sandbox
+  install --> cache
+  load --> secrets
+```
+
+Every execution passes the same gates around its run body, and every exit —
+a gate timeout included — completes the check-run it opened.
+
+```mermaid
+flowchart TB
+  accTitle: One execution inside RunWorkflow
+  open["**check-run opens**<br/>in_progress"] --> ser{"run declares<br/>serialize?"}
+  ser -->|yes| serial["**serial gate**<br/>one execution per group"]
+  ser -->|no| adm
+  serial --> adm["**admission**<br/>per-pool slot, FIFO"]
+  adm --> lease["**container lease**"]
+  lease --> body["**run body**<br/>durable steps"]
+  body --> destroy["**destroy container**"]
+  destroy --> exit{"run exit"}
+  exit -->|success| ok["**success**"]
+  exit -->|RunSkipped| neutral["**neutral**<br/>skip reason as summary"]
+  exit -->|failure| red["**failure**"]
+  serial -->|superseded| neutral
+  serial -->|SerialQueueTimedOut| red
+  adm -->|AdmissionTimedOut| red
+  class ok ok
+  class neutral muted
+  class red danger
+```
+
 ## Finding your logs
 
 Three layers, closest first:
@@ -39,6 +115,53 @@ artifact behind. For `offload-test`, per-stage exec steps
 ([#82](https://github.com/fractalboxdev/flare-dispatch/pull/82)) split the run
 into `step-<label>.log` uploads so earlier stages' logs survive a later stage's
 death.
+
+## Re-running a check
+
+GitHub's **Re-run** button on a `flare-dispatch/*` check-run re-dispatches the
+execution that posted it — same run, repo, commit, and recorded inputs — so a
+check that went red because the platform killed its container is retried
+without a new commit. **Re-run all checks** on the suite re-runs every check at
+that commit whose latest attempt did not pass; green checks are left alone.
+
+```mermaid
+flowchart TB
+  accTitle: Re-run decision for one check
+  click_["**Re-run** on a check-run"] --> app{"this deploy's<br/>GitHub App?"}
+  app -->|no| r1["refused<br/>foreign_app"]
+  app -->|yes| known{"an execution here<br/>posted it?"}
+  known -->|no| r2["refused<br/>unknown_check_run"]
+  known -->|yes| live{"an attempt still<br/>queued or running?"}
+  live -->|yes| r3["refused<br/>in_progress"]
+  live -->|no| reg{"run registered,<br/>inputs decode?"}
+  reg -->|no| r4["refused<br/>run_not_registered,<br/>inputs_unreplayable"]
+  reg -->|yes| cap{"attempt 5<br/>reached?"}
+  cap -->|yes| r5["refused<br/>attempts_exhausted"]
+  cap -->|no| go["**dispatch attempt N**<br/>`_attempt-N` instance id"]
+  class r1,r2,r3,r4,r5 muted
+  class go ok
+```
+
+- **Attempts.** A re-run is a new execution: Cloudflare Workflows never reuses
+  an instance id, so attempt N runs as `<first-instance-id>_attempt-<N>`
+  (hash-truncated past 64 chars, like every instance id).
+  `GET /v1/executions/:id` reports `attempt` and, on a re-run, `retryOf` — the
+  first attempt's id. The check-run keeps its name, so branch protection counts
+  the newest attempt; its title reads `flare-dispatch/<run> (attempt N)`.
+- **One at a time.** A re-run is refused while any attempt of the same check is
+  still queued or running, per the Workflow instance's own status — repeated
+  clicks dispatch nothing more. An execution left `running` by a Workflow that
+  died does not block.
+- **Bounded.** Five attempts per check, the first dispatch included. A re-run
+  bypasses the run's `cooldown`, which caps push storms, not explicit retries.
+- **Not replayed.** Completion-notify emails and a Slack origin are not recorded
+  on the execution, so a re-run reports on the check-run only.
+
+The webhook answers `202` with a `rerun` array stating, per check, whether it
+dispatched (`executionId`, `attempt`) or why it refused (`foreign_app`,
+`unknown_check_run`, `in_progress`, `attempts_exhausted`,
+`run_not_registered`, `inputs_unreplayable`). Re-runs need the App subscribed to
+the **Check run** and **Check suite** events, which the app manifest requests.
 
 ## `check` — universal command gate (opt-out by default)
 
@@ -188,6 +311,40 @@ command needs `node_modules` / a lockfile install.
       }
 ```
 
+## `oxlint` — install-free Oxc gate, on a version pinned in the run
+
+Clone → `npx --yes oxlint@<version>` → upload log → green/red
+`flare-dispatch/oxlint`. No install, no per-repo command, no `.oxlintrc.json`
+required, so it is droppable on any repo.
+
+The version is an **exact pin** in [`oxlint.ts`](./oxlint.ts) (`VERSION_DEFAULT`),
+not a range and not a dist-tag. It was the major line `1` until 2026-08-18, when
+oxlint 1.79.0 moved five React rules into the `correctness` category: because
+oxlint selects rules by category, every consumer tracking `@1` went red within
+the hour, on every open PR at once, for findings that predated all of them —
+and no consumer could fix it, because the version lives here. The same release
+left each repo's own `pnpm lint` green, since that runs the repo's pinned
+devDependency; a floating gate means the two lanes enforce different rule sets
+and nothing says so until they disagree.
+
+Bumping `VERSION_DEFAULT` can turn consumers red, so it belongs in its own PR.
+
+### Pinning one repo (`oxlint.version:<repo>`)
+
+A repo that a bump breaks — or one that wants a newer oxlint before the default
+moves — sets its own version without waiting on a deploy:
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "oxlint.version:owner/repo" "1.74.0"
+```
+
+Resolution is dispatch input → `oxlint.version:<repo>` → the dispatcher-wide
+`oxlint.version` → `VERSION_DEFAULT`. An Action-mode dispatch that passes
+`version` skips the lookup entirely (and the `resolve-version` step with it).
+Set an exact version: a range here re-resolves on every run and reinstates the
+same problem one repo at a time.
+
 ## `offload-test` — webhook mode needs two CONFIG_KV keys to run a real suite
 
 `offload-test`'s `pull_request` trigger can only pass what it computes from the
@@ -220,10 +377,30 @@ fires, i.e. a hung run holding a container indefinitely.
 `maxDurationSec` (1800) is validated at definition time only — it is not a
 runtime kill.
 
+```mermaid
+flowchart TB
+  accTitle: offload-test single-exec flow and verdicts
+  resolve["**resolve-command**<br/>dispatch, then CONFIG_KV"] --> staged{"stages<br/>configured?"}
+  staged -->|yes| stages["**staged mode**<br/>below"]
+  staged -->|no| cmd{"command<br/>resolved?"}
+  cmd -->|"no, webhook"| skip["**neutral**<br/>no command configured"]
+  cmd -->|"no, Action"| bad["**failure**<br/>StepFailed"]
+  cmd -->|yes| checkout["**checkout**<br/>clone, optional install"]
+  checkout --> exec["**exec**<br/>ensureWorkspace, then sandbox.exec<br/>3 retries on ExecFailed, StepFailed"]
+  exec --> upload["**upload-log**<br/>step.log"]
+  upload --> code{"exit code"}
+  code -->|0| ok["**success**"]
+  code -->|"non-zero, failOnNonZeroExit"| red["**failure**<br/>AcceptanceFailed"]
+  code -->|"non-zero, Action default"| reported["**success**<br/>exitCode in output"]
+  class skip muted
+  class bad,red danger
+  class ok,reported ok
+```
+
 ### Staged mode (`offload-test.stages:<repo>`)
 
 One long buffered exec killed by the platform takes its whole log with it
-(issue #39). Three more rungs split the webhook-mode run into one exec step per
+(issue #39). Three more config keys split the webhook-mode run into one exec step per
 stage, each uploading its `step-<label>.log` immediately, so a later stage's
 death cannot orphan an earlier stage's log:
 
@@ -248,8 +425,8 @@ wrangler kv key put --binding=CONFIG_KV \
   step as well as the command, so the stages stay distinct executions.
 - `offload-test.timeoutSec:<repo>:<label>` — per-stage exec ceiling.
 
-Per-stage timeout precedence: labelled rung → dispatch `timeoutSec` →
-unlabelled rung → default (600). The labelled rung outranks the dispatch value
+Per-stage timeout precedence: labelled key → dispatch `timeoutSec` →
+unlabelled key → default (600). The labelled key outranks the dispatch value
 — an inversion of the usual dispatch-wins rule — because staged mode only
 exists when the dispatch omitted `command` (webhook mode), so a `timeoutSec`
 riding such a dispatch is a coarse whole-run knob, and the stage-specific key
@@ -261,7 +438,55 @@ ceilings are the only runtime enforcement — size them to the suite.
 
 Staged mode is webhook-only: a dispatch that passes `command` skips the config
 read and stays single-exec. Stages run inside one workflow instance posting one
-check-run — sequentially by default, concurrently when the next rung says so.
+check-run — sequentially by default, concurrently when `offload-test.stageConcurrency:<repo>` says so.
+
+```mermaid
+flowchart TB
+  accTitle: Sequential staged mode on one shared container
+  checkout["**checkout**<br/>one shared container"] --> exec["**exec-{label}**<br/>ensureWorkspace, then exec<br/>3 retries"]
+  exec -->|"step died"| marker["**marker log**<br/>step-{label}.log"]
+  marker --> dead["**failure**<br/>later stages ⊘ skipped"]
+  exec -->|"ran to an exit code"| upload["**upload-log-{label}**"]
+  upload -->|"upload failed"| dead
+  upload --> code{"exit code"}
+  code -->|0| more{"more<br/>stages?"}
+  more -->|yes| exec
+  more -->|no| ok["**success**"]
+  code -->|"non-zero"| red["**red stage**<br/>later stages ⊘ skipped<br/>failure when failOnNonZeroExit"]
+  class dead,red danger
+  class ok ok
+```
+
+### Container transport (`sandbox.transport:<repo>`)
+
+```bash
+wrangler kv key put --binding=CONFIG_KV "sandbox.transport:owner/repo" "rpc"
+```
+
+Pins every container that repo's executions acquire to one of `http` (the
+default), `websocket`, or `rpc`. **Any other value is dropped by the dispatcher
+before it reaches the SDK** — silently, and the run proceeds on the default. A
+typo therefore degrades rather than breaks, but it also says nothing: check the
+key back if a transport change appears to have had no effect.
+
+**Why it exists.** The SDK's streaming file APIs live only on its `rpc` client —
+its own comment calls `rpc` the "primary container-control client" and
+`http`/`websocket` the "route-based compatibility client", and `writeFileStream`
+is a bare `throw` off `rpc`. That is why the R2 dependency cache misses on every
+run: `installCached`'s restore hands `writeFile` a `ReadableStream`, the SDK
+routes any stream to `writeFileStream`, it raises, and `composeRestoreOr`
+records a miss.
+
+`SANDBOX_TRANSPORT=rpc` as a Worker var fixes that in one line — and changes the
+control path for every repo this dispatcher serves, at once. This key is the
+same choice scoped to one consumer, so a change with that blast radius can be
+proved before it is taken.
+
+**It is sticky.** `setTransport` persists to the container's Durable Object
+storage, and the SDK prefers a stored transport over the env-derived default on
+cold start. A container pinned here keeps that transport for its lifetime;
+since ids are per execution, the pin is re-applied per run and costs one DO call
+at acquire.
 
 ### A stage does not assume its checkout
 
@@ -304,7 +529,42 @@ wrangler kv key put --binding=CONFIG_KV \
 ```
 
 Absent or `1` is the shared-container sequential mode above, byte for byte.
-Above 1, each stage acquires its **own** workspace and up to N run at once.
+Above 1, each stage acquires its **own** container — `acquire({ key: <label> })`
+— and up to N run at once.
+
+```mermaid
+flowchart TB
+  accTitle: Isolated stages, each on its own container
+  resolve["**resolve-command**<br/>stages, concurrency N"] --> a1
+  resolve --> b1
+  subgraph sa["stage a"]
+    a1["**exec-a**<br/>acquire key a, clone, exec<br/>3 retries"] --> a2["**upload-log-a**"]
+    a2 --> a3["destroy container a"]
+  end
+  subgraph sb["stage b"]
+    b1["**exec-b**<br/>acquire key b, clone, exec<br/>3 retries"] --> b2["**upload-log-b**"]
+    b2 --> b3["destroy container b"]
+  end
+  a3 --> any{"any stage died,<br/>lost its log, or went red?"}
+  b3 --> any
+  any -->|no| ok["**success**"]
+  any -->|yes| red["**failure**<br/>a red stage only when failOnNonZeroExit"]
+  class ok ok
+  class red danger
+```
+
+The key is what makes that true. Until the runtime routed by the handle, a
+second `acquire` returned the execution's one container and the stages raced to
+wipe each other's checkout (`git clone` clears its target directory first): five
+stages, five `CheckoutFailed`s, in under five seconds. Each keyed container is
+destroyed as its stage finishes rather than idling out `sleepAfter` — the
+dispatcher's end-of-run teardown owns the execution's own id and cannot know
+what a run named.
+
+**Not available on the substrate backend**, which namespaces one sandbox per
+consumer execution. `acquire({ key })` there fails `ContainerLaunchFailed`
+rather than quietly handing back the first container, because quietly handing it
+back is the defect this option exists to fix.
 
 The reason is the retry, not the speed. A stage step carries `retries: 3` on
 `ExecFailed`, and with a shared container that guarantee is empty: container
@@ -331,3 +591,152 @@ Use it when the stages are independent (different feature unifications of one
 tree, say). Leave it at 1 when a later stage consumes an earlier one's output,
 which sharing a container is the only way to express. A value above the stage
 count is clamped to it.
+
+## `worker-deploy` — continuous deploy on default-branch push
+
+Webhook mode fires on `check_suite.requested` for the default branch, resolves
+everything a push payload cannot carry from CONFIG_KV, and posts
+`flare-dispatch/worker-deploy`. No command key → the run no-ops green.
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "worker-deploy.command:owner/repo"    "pnpm build && pnpm exec wrangler deploy"
+wrangler kv key put --binding=CONFIG_KV \
+  "worker-deploy.secrets:owner/repo"    "CLOUDFLARE_API_TOKEN"   # Worker-secret NAMES
+wrangler kv key put --binding=CONFIG_KV \
+  "worker-deploy.timeoutSec:owner/repo" "1500"                   # positive integer
+```
+
+`timeoutSec` precedence is dispatch value → `worker-deploy.timeoutSec:<repo>` → 900. A malformed value degrades to 900.
+
+**A deploy is never step-retried.** The `exec` step runs with `retries: 0` and a
+Workflow step timeout of the exec timeout + 120s, so the sandbox's deadline —
+not the platform's 600s step default — ends a slow deploy, and a failure is
+reported once instead of re-publishing every Worker on a second attempt.
+
+```mermaid
+flowchart TB
+  accTitle: worker-deploy steps and verdicts
+  resolve["**resolve-config**<br/>command, timeout, secret names"] --> cmd{"command<br/>configured?"}
+  cmd -->|no| noop["**success**<br/>not-configured, no deploy"]
+  cmd -->|yes| head["**branch-head**<br/>read through the GitHub App"]
+  head --> is{"head is<br/>the dispatched sha?"}
+  is -->|"no, requireHead"| skip["**neutral**<br/>superseded by the head"]
+  is -->|"yes, or unknown"| checkout["**checkout**<br/>clone the sha"]
+  checkout --> exec["**exec**<br/>secrets loaded inline<br/>retries 0, step timeout +120s"]
+  exec --> upload["**upload-log**<br/>step.log"]
+  upload --> code{"exit code"}
+  code -->|0| ok["**success**<br/>deployed"]
+  code -->|"non-zero, failOnNonZeroExit"| red["**failure**<br/>not deployed"]
+  class noop,ok ok
+  class skip muted
+  class red danger
+```
+
+### A second deploy of the same commit (`checkLabel`)
+
+A repo that deploys part of its stack after other CI work — container-backed
+Workers after an image build, say — dispatches `worker-deploy` a second time in
+Action mode with a `checkLabel`. It posts `flare-dispatch/worker-deploy:<label>`
+beside the webhook's check instead of overwriting it, and runs as its own
+execution (the label is part of both the Action's `Idempotency-Key` and the
+direct-dispatch instance id).
+
+A labelled dispatch without `command` reads only
+`worker-deploy.command:<repo>:<label>` — never the unlabelled key, which would
+re-run the webhook's deploy. `worker-deploy.timeoutSec:<repo>:<label>` falls
+back to the repo key.
+
+```yaml
+- uses: fractalboxdev/flare-dispatch/actions/flare-dispatch-action@<sha>
+  with:
+    run: worker-deploy
+    endpoint: ${{ vars.FLAREDISPATCH_ENDPOINT }}
+    hmac-secret: ${{ secrets.FLAREDISPATCH_HMAC }}
+    inputs: |
+      {
+        "repo": "${{ github.repository }}",
+        "sha": "${{ github.sha }}",
+        "branch": "${{ github.ref_name }}",
+        "checkLabel": "containers",
+        "failOnNonZeroExit": true
+      }
+```
+
+A webhook dispatch and an Action dispatch of one push are always two executions:
+the webhook's instance id is `worker-deploy_<repo_>_<sha12>`, the Action's is
+`worker-deploy[-<label>]-<repo_>-<sha12>`.
+
+### Deploy ordering
+
+Deploys of one repo, branch, and `checkLabel` never overlap. While one runs, a
+newer dispatch of the same group waits, and each new arrival replaces the
+waiter before it: of three pushes in quick succession, the first deploys, the
+second concludes `neutral` with `skipped: superseded by <third sha12>`, and the
+third deploys after the first finishes. A running deploy is never cancelled. A
+waiter that stays queued for 60 minutes behind a live deploy fails red
+(`SerialQueueTimedOut`) without having started. A different branch or label is
+a different group and runs alongside.
+
+```mermaid
+sequenceDiagram
+  accTitle: Three pushes and a late dispatch in one deploy group
+  participant A as Push A
+  participant B as Push B
+  participant C as Push C
+  participant Q as Serial queue (D1)
+  participant L as Late, old sha
+  A->>Q: head is A — enqueue, claim
+  Note over A: holds the group, deploys A
+  B->>Q: head is B — enqueue
+  Q-->>B: wait behind A
+  C->>Q: head is C — enqueue
+  Q-->>B: superseded by C
+  Note over B: concludes neutral
+  Note over L: head is C, not this sha —<br/>neutral, never enqueued
+  A->>Q: release
+  C->>Q: claim
+  Note over C: branch-head matches — deploys C
+```
+
+Once a deploy holds its group and a sandbox slot, the dispatcher reads the
+branch's head through the GitHub App. When the head is no longer the dispatched
+`sha`, a newer push landed, and the deploy concludes `neutral` with
+`skipped: superseded by <head sha12>` before cloning. A rollback that deploys an
+older commit on purpose dispatches with `"requireHead": false`.
+
+The command also receives that head, since it cannot look it up itself: the
+checkout's `origin` carries no credential, so `git ls-remote` fails on a private
+repo.
+
+| Env                             | Value                                |
+| ------------------------------- | ------------------------------------ |
+| `FLAREDISPATCH_BRANCH`          | the dispatched `branch`, or empty    |
+| `FLAREDISPATCH_BRANCH_HEAD_SHA` | the branch head at dequeue, or empty |
+| `FLAREDISPATCH_SHA`             | the commit being deployed            |
+
+**Empty means unknown, never a match.** The head is empty when the dispatch
+names no `branch` (webhook mode always names it; an Action dispatch must pass
+`"branch": "${{ github.ref_name }}"`), when the App has no credentials, and when
+the read fails. A command that guards on the head picks one of two policies:
+
+```bash
+# Fail closed on unknown — no deploy without a confirmed head.
+[ -n "$FLAREDISPATCH_BRANCH_HEAD_SHA" ] || { echo "branch head unknown"; exit 1; }
+[ "$FLAREDISPATCH_BRANCH_HEAD_SHA" = "$FLAREDISPATCH_SHA" ] || exit 0
+
+# Fail closed only on a mismatch — deploy when the head is unknown.
+[ -z "$FLAREDISPATCH_BRANCH_HEAD_SHA" ] ||
+  [ "$FLAREDISPATCH_BRANCH_HEAD_SHA" = "$FLAREDISPATCH_SHA" ] || exit 0
+```
+
+A known mismatching head never reaches the command — the dispatcher skipped it —
+and a push that lands mid-deploy queues behind this one rather than racing it.
+The guard's job is deciding what an unknown head means.
+
+Before a dispatch joins the queue, it reads the branch head the same way. A
+commit that is already not the head — a re-requested check suite of an old
+commit, a late webhook — concludes `neutral` at once and never enters the queue,
+so it cannot displace the head's waiting deploy. A dispatch that is the head
+supersedes every waiter that is not, whatever order they arrived in. Only when
+the head is unknown does arrival order decide which waiter survives.

@@ -56,13 +56,59 @@
 // `loadSecrets` resolves via the `secrets` capability (Worker string
 // bindings only — no CONFIG_KV). Commands + secret *names* stay in KV.
 //
+// --- A deploy is never step-retried -------------------------------------------
+//
+// The `exec` step carries explicit StepOpts: `retries: 0`, and a step timeout
+// of the exec timeout plus headroom. Left bare, the step inherits Cloudflare
+// Workflows' defaults — a 10-minute step timeout and several retries — so a
+// deploy command that outruns 600s is killed at the step boundary and run
+// AGAIN in the same container (its log lands as `exec-2.ndjson`), publishing
+// every Worker a second time. A deploy is not idempotent the way a test is:
+// each attempt ships a new version. So no failure class is retried here, not
+// even a platform `StepFailed` — a killed step may already have published.
+//
+// --- Several deploys of one commit: `checkLabel` ------------------------------
+//
+// A repo can deploy one SHA more than once with different work — the webhook
+// deploys its Workers, and an Action-mode dispatch deploys container-backed
+// Workers after a GHA image build. Both would post `flare-dispatch/worker-deploy`
+// and overwrite each other's verdict. A `checkLabel` names the second one
+// `flare-dispatch/worker-deploy:<label>` (apps/dispatcher/src/check-name.ts),
+// and folds into both the Action's `Idempotency-Key` and the direct-dispatch
+// instance id, so it stays its own execution.
+//
+// A labelled dispatch that omits `command` reads ONLY
+// `worker-deploy.command:<repo>:<label>` — never the unlabelled key. Unlike
+// `check`'s ladder, falling back would re-run the webhook's deploy under a
+// second name.
+//
 // --- Deploy ordering ----------------------------------------------------------
 //
-// Two rapid pushes dispatch two executions keyed by SHA; completion order is
-// not guaranteed, so the older push can in principle deploy last. A repo where
-// that matters guards inside its command — the checkout has an authenticated
-// `origin`, so a one-liner works (see recipes/worker-deploy/README.md):
-//   [ "$(git ls-remote origin refs/heads/main | cut -f1)" = "$(git rev-parse HEAD)" ] || exit 0
+// Ordering is a dispatcher property, in two parts:
+//
+//   1. `serialize` puts every execution of one repo + branch + `checkLabel` in
+//      one group (apps/dispatcher/src/workflow.ts, runtime-cf
+//      serial-queue-d1.ts). At most one runs; a running deploy is never
+//      cancelled. Before a dispatch joins the queue it reads the branch head:
+//      a SHA that is not the head skips at once and supersedes nothing, so a
+//      late or re-requested older commit cannot displace the head's waiting
+//      deploy. A dispatch that IS the head supersedes every waiter that is
+//      not (`neutral`, naming the head). With the head unknown, the newest
+//      arrival supersedes older waiters.
+//   2. `branch-head` — once this execution holds its group and a sandbox slot,
+//      it reads the branch's head through the GitHub App. A head that is not
+//      `sha` means a newer push landed; the run skips (`neutral`, naming the
+//      head) before cloning, unless the dispatch sets `requireHead: false` (a
+//      deliberate rollback). The head is also handed to the command:
+//
+//        FLAREDISPATCH_BRANCH            the branch, or "" when not dispatched
+//        FLAREDISPATCH_BRANCH_HEAD_SHA   the head at dequeue, or "" when unknown
+//        FLAREDISPATCH_SHA               the commit being deployed
+//
+//      Empty means UNKNOWN (no branch, App uncredentialed, lookup failed) —
+//      never "matches". The checkout's `origin` carries no credential
+//      (packages/runtime-cf/src/sandbox-cf.ts, `scrubCloneCredential`), so a
+//      command cannot look the head up itself on a private repo.
 //
 // Spec: specs/02-runs.md § worker-deploy, specs/04-gha-integration.md
 // § Webhook mode.
@@ -73,7 +119,9 @@ import {
   artifact,
   config,
   defineRun,
+  github,
   io,
+  RunSkipped,
   sandbox,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
@@ -91,6 +139,15 @@ const WorkerDeployInput = Schema.Struct({
    * No per-repo key → the run no-ops green (see header).
    */
   command: Schema.optional(Schema.String),
+  /**
+   * Names a second deploy of the same commit: the check-run posts as
+   * `flare-dispatch/worker-deploy:<label>` and a command-less dispatch reads
+   * `worker-deploy.command:<repo>:<label>` (see header). Same pattern as
+   * `check`'s label, so a malformed one is a 400 at dispatch.
+   */
+  checkLabel: Schema.optional(
+    Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/)),
+  ),
   image: Schema.optional(Schema.String), // container image override
   /** Run the R2-cached dependency install after the clone. */
   install: Schema.optionalWith(Schema.Boolean, { default: () => false }),
@@ -117,7 +174,14 @@ const WorkerDeployInput = Schema.Struct({
    * removed with `secrets` at the substrate stage-2 exit (ADR-0006).
    */
   secretPrefix: Schema.optional(Schema.String),
-  timeoutSec: Schema.optional(Schema.Number), // default 900
+  /**
+   * Skip (neutral) when `branch`'s head is no longer `sha` at dequeue time.
+   * Default true; a rollback that deploys an older commit on purpose sets it
+   * false. No effect without `branch`, or when the head cannot be read.
+   */
+  requireHead: Schema.optionalWith(Schema.Boolean, { default: () => true }),
+  /** `sandbox.exec` timeout. Omitted → `worker-deploy.timeoutSec:<repo>` → 900. */
+  timeoutSec: Schema.optional(Schema.Number),
   /**
    * Fail the run Effect (→ red check) on a non-zero exit. Webhook mode sets
    * this true — the check-run is the only signal a deploy failed. Action mode
@@ -142,14 +206,83 @@ const WorkerDeployOutput = Schema.Struct({
 /** Default `exec` timeout — a build + `wrangler deploy` fits comfortably. */
 const TIMEOUT_SEC_DEFAULT = 900;
 
-/** CONFIG_KV keys — all strictly per-repo (see header: no global fallback). */
-const commandKey = (repo: string): string => `worker-deploy.command:${repo}`;
+/**
+ * Headroom added to the exec timeout to derive the Workflow STEP timeout, so
+ * the sandbox's own deadline fires first (a clean `ExecTimeout` with the log
+ * so far) instead of the platform killing the step. Same constant as
+ * `offload-test` / `check`.
+ */
+const STEP_TIMEOUT_HEADROOM_SEC = 120;
+
+/** The env names the deploy command reads the dequeue-time branch head from. */
+export const BRANCH_ENV = "FLAREDISPATCH_BRANCH";
+export const BRANCH_HEAD_SHA_ENV = "FLAREDISPATCH_BRANCH_HEAD_SHA";
+export const DEPLOY_SHA_ENV = "FLAREDISPATCH_SHA";
+
+/**
+ * The serialization group: one per repo, branch, and label. The branch keeps a
+ * staging deploy from superseding a pending production one; the label keeps a
+ * second deploy of one commit from waiting on the first.
+ */
+export const serialGroup = (repo: string, branch?: string, checkLabel?: string): string =>
+  `worker-deploy:${repo}${branch !== undefined && branch !== "" ? `@${branch}` : ""}${
+    checkLabel !== undefined ? `:${checkLabel}` : ""
+  }`;
+
+/** The branch head, or `undefined` when it cannot be read — never a placeholder. */
+const readHead = (repo: string, branch: string) =>
+  github.branchHead({ repo, branch }).pipe(
+    Effect.map((sha): string | undefined => sha),
+    Effect.orElseSucceed(() => undefined),
+  );
+
+/** `sha` is the head, allowing an abbreviated dispatch SHA. */
+const isHead = (head: string, sha: string): boolean => {
+  const s = sha.toLowerCase();
+  return head === s || (s.length >= 7 && head.startsWith(s));
+};
+
+/** Decoded input — pins the trigger's `inputs` return to the full shape. */
+type WorkerDeployI = Schema.Schema.Type<typeof WorkerDeployInput>;
+
+/**
+ * CONFIG_KV keys — all strictly per-repo (see header: no global fallback). A
+ * labelled dispatch's command key is its own, with no unlabelled fallback.
+ */
+const commandKey = (repo: string, checkLabel?: string): string =>
+  checkLabel === undefined
+    ? `worker-deploy.command:${repo}`
+    : `worker-deploy.command:${repo}:${checkLabel}`;
 const secretsKey = (repo: string): string => `worker-deploy.secrets:${repo}`;
 const secretPrefixKey = (repo: string): string => `worker-deploy.secret-prefix:${repo}`;
 
+/**
+ * Per-repo exec timeout, for webhook dispatches — the trigger's `inputs` is
+ * sync + payload-only and cannot carry one, so without this key webhook mode
+ * is pinned to 900s:
+ *
+ *   wrangler kv key put --binding=CONFIG_KV "worker-deploy.timeoutSec:owner/repo" "1500"
+ *
+ * A labelled dispatch reads `…:<repo>:<label>` first and falls back to the
+ * repo key — a timeout, unlike a command, is safe to share. A dispatch that
+ * passes `timeoutSec` wins over both.
+ */
+const timeoutKeys = (repo: string, checkLabel: string | undefined): readonly string[] =>
+  checkLabel === undefined
+    ? [`worker-deploy.timeoutSec:${repo}`]
+    : [`worker-deploy.timeoutSec:${repo}:${checkLabel}`, `worker-deploy.timeoutSec:${repo}`];
+
+/** A positive integer, or `undefined` for absent/garbage — never `NaN`. */
+const parseIntConfig = (raw: string | undefined): number | undefined => {
+  const n = Number(raw?.trim());
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+};
+
 export const workerDeploy = defineRun({
   name: "worker-deploy",
-  version: "1.0.0",
+  // 1.2.0 — additive: per-group serialization, the dequeue-time head check
+  // (`requireHead`), and the `FLAREDISPATCH_*` head env.
+  version: "1.2.0",
 
   // Webhook-mode trigger — `check_suite.requested` is GitHub's per-push signal
   // to checks-writing Apps (see header). Gated to the repo's default branch.
@@ -157,8 +290,12 @@ export const workerDeploy = defineRun({
     {
       event: "check_suite",
       actions: ["requested"],
-      // Semantic instanceId (`{run}:{repo_}:{sha12}`) — a webhook- and an
-      // Action-mode dispatch of the same push collapse to one execution.
+      // Instance id `worker-deploy_{repo_}_{sha12}` — dedups webhook
+      // redeliveries of one push. It does NOT collapse with an Action-mode
+      // dispatch: the Action sends `Idempotency-Key: worker-deploy-{repo_}-{sha12}`
+      // (hyphens, actions/flare-dispatch-action/dispatch.sh), a distinct id, so
+      // both deploys run. Only a direct dispatch WITHOUT that header lands on
+      // this id (routes/dispatch.ts `semanticInstanceId`).
       idempotencyKey: ({ payload }) =>
         `worker-deploy:${String(payload.repository?.full_name ?? "unknown/unknown").replace(
           /\//g,
@@ -167,7 +304,7 @@ export const workerDeploy = defineRun({
       gate: ({ payload }) =>
         typeof payload.check_suite?.head_branch === "string" &&
         payload.check_suite.head_branch === payload.repository?.default_branch,
-      inputs: ({ payload }) => ({
+      inputs: ({ payload }): WorkerDeployI => ({
         repo: String(payload.repository?.full_name ?? "unknown/unknown"),
         sha: String(payload.check_suite?.head_sha ?? ""),
         branch: String(payload.check_suite?.head_branch ?? ""),
@@ -176,9 +313,21 @@ export const workerDeploy = defineRun({
         // Decoded-shape defaults the trigger return must restate.
         install: false,
         secrets: [],
+        requireHead: true,
       }),
     },
   ],
+
+  // The branch head is the group's current revision: a dispatch of a commit
+  // that is no longer the head skips before it joins the queue, so a late or
+  // re-requested older commit never displaces the head's waiting deploy.
+  serialize: (input) => ({
+    group: serialGroup(input.repo, input.branch, input.checkLabel),
+    revision: input.sha,
+    ...(input.requireHead && input.branch !== undefined && input.branch !== ""
+      ? { current: readHead(input.repo, input.branch) }
+      : {}),
+  }),
 
   inputs: WorkerDeployInput,
   outputs: WorkerDeployOutput,
@@ -189,13 +338,24 @@ export const workerDeploy = defineRun({
 
   run: (input) =>
     Effect.gen(function* () {
-      // resolve-config — the per-repo deploy command + secret key NAMES (never
-      // values: this step's return is checkpointed). Missing command → the
-      // repo hasn't opted in; no-op green rather than failing every push of
-      // every installed repo.
+      // resolve-config — the per-repo deploy command, exec timeout, and secret
+      // key NAMES (never values: this step's return is checkpointed). Missing
+      // command → the repo hasn't opted in; no-op green rather than failing
+      // every push of every installed repo.
+      const cmdKey = commandKey(input.repo, input.checkLabel);
       const cfg = yield* step("resolve-config", () =>
         Effect.gen(function* () {
-          const command = input.command ?? (yield* config.get(commandKey(input.repo)));
+          const command = input.command ?? (yield* config.get(cmdKey));
+          const timeoutSec =
+            input.timeoutSec ??
+            (yield* Effect.reduce(
+              timeoutKeys(input.repo, input.checkLabel),
+              undefined as number | undefined,
+              (found, key) =>
+                found !== undefined
+                  ? Effect.succeed(found)
+                  : config.get(key).pipe(Effect.map(parseIntConfig)),
+            ));
           const secretNames =
             input.secrets.length > 0
               ? [...input.secrets]
@@ -205,13 +365,13 @@ export const workerDeploy = defineRun({
                   .filter((s) => s.length > 0);
           const secretPrefix =
             input.secretPrefix ?? (yield* config.get(secretPrefixKey(input.repo)));
-          return { command, secretNames, secretPrefix };
+          return { command, timeoutSec, secretNames, secretPrefix };
         }),
       );
       if (cfg.command === undefined || cfg.command.trim().length === 0) {
         yield* io.log(
           "warn",
-          `worker-deploy: no \`${commandKey(input.repo)}\` in the config store — repo not opted in, skipping`,
+          `worker-deploy: no \`${cmdKey}\` in the config store — repo not opted in, skipping`,
         );
         return {
           deployed: false,
@@ -221,6 +381,34 @@ export const workerDeploy = defineRun({
         };
       }
       const command = cfg.command;
+
+      // branch-head — the tip of the branch now that this execution holds its
+      // serialization group. Any failure is "unknown" (""), never a match: the
+      // command decides whether unknown blocks it (see header).
+      const branch = input.branch !== undefined && input.branch !== "" ? input.branch : undefined;
+      const head =
+        branch === undefined
+          ? { sha: "" }
+          : yield* step("branch-head", () =>
+              github.branchHead({ repo: input.repo, branch }).pipe(
+                Effect.map((sha) => ({ sha })),
+                Effect.catchAll((e) =>
+                  io
+                    .log(
+                      "warn",
+                      `worker-deploy: head of ${branch} unreadable (GitHub ${e.status} ${e.reason}) — ${BRANCH_HEAD_SHA_ENV} is empty`,
+                    )
+                    .pipe(Effect.as({ sha: "" })),
+                ),
+              ),
+            );
+      if (input.requireHead && head.sha !== "" && !isHead(head.sha, input.sha)) {
+        return yield* Effect.fail(
+          new RunSkipped({
+            reason: `superseded by ${head.sha.slice(0, 12)} — ${branch} moved past ${input.sha.slice(0, 12)} before this deploy started`,
+          }),
+        );
+      }
 
       // checkout — container + clone at the pushed SHA (+ optional cached
       // install), same opening move as offload-test.
@@ -243,22 +431,36 @@ export const workerDeploy = defineRun({
 
       // exec — the deploy itself. A non-zero exit is a normal ExecResult here;
       // the failOnNonZeroExit branch below decides whether it reds the check.
-      const result = yield* step("exec", () =>
-        sandbox.exec({
-          cwd: dir,
-          container,
-          command,
-          // Per-dispatch `env` wins over a same-named config-store secret.
-          env: { ...secretEnv, ...input.env },
-          // Scrub secret VALUES from the captured log before it is persisted,
-          // in case the command echoes its env. Not hypothetical here: a deploy
-          // command is the one that carries a cloud provider's write-scoped API
-          // token, and `wrangler`-class tools print their environment on some
-          // error paths. The log lands in R2 on a stable path (artifact TTLs are
-          // not yet enforced), so a leak there is durable.
-          redactValues: Object.values(secretEnv),
-          timeoutSec: input.timeoutSec ?? TIMEOUT_SEC_DEFAULT,
-        }),
+      // StepOpts are explicit (see header § A deploy is never step-retried):
+      // `retries: 0`, and a step timeout above the exec's so the sandbox
+      // deadline, not the platform's 600s default, ends a long deploy.
+      const execTimeoutSec = cfg.timeoutSec ?? TIMEOUT_SEC_DEFAULT;
+      const result = yield* step(
+        "exec",
+        () =>
+          sandbox.exec({
+            cwd: dir,
+            container,
+            command,
+            // Per-dispatch `env` wins over a same-named config-store secret;
+            // the head env wins over both, so no dispatch can spoof it.
+            env: {
+              ...secretEnv,
+              ...input.env,
+              [BRANCH_ENV]: branch ?? "",
+              [BRANCH_HEAD_SHA_ENV]: head.sha,
+              [DEPLOY_SHA_ENV]: input.sha,
+            },
+            // Scrub secret VALUES from the captured log before it is persisted,
+            // in case the command echoes its env. Not hypothetical here: a deploy
+            // command is the one that carries a cloud provider's write-scoped API
+            // token, and `wrangler`-class tools print their environment on some
+            // error paths. The log lands in R2 on a stable path (artifact TTLs are
+            // not yet enforced), so a leak there is durable.
+            redactValues: Object.values(secretEnv),
+            timeoutSec: execTimeoutSec,
+          }),
+        { timeoutSec: execTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC, retries: 0 },
       );
 
       // upload-log — the deploy log as a signed R2 artifact.

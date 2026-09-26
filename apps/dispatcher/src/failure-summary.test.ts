@@ -15,6 +15,7 @@ import {
   ExecTimeout,
   RunSkipped,
   SecretsMissing,
+  SerialQueueTimedOut,
   StepFailed,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
@@ -65,6 +66,26 @@ describe("failureSummaryMd", () => {
     expect(md).toContain("16 sandbox slot(s) in use");
     expect(md).toContain("never started");
     expect(md).toContain("not a test failure");
+  });
+
+  it("renders a SerialQueueTimedOut as a wait behind a live peer, not a failure of this run", () => {
+    const md = failureSummaryMd(
+      Exit.fail(
+        new SerialQueueTimedOut({
+          group: "worker-deploy:o/n@main",
+          holderRevision: "0123456789abcdef0123",
+          waitedMs: 3_600_000,
+        }),
+      ),
+    );
+    expect(md).toContain("in-flight run of `worker-deploy:o/n@main`");
+    expect(md).toContain("60 min behind `0123456789ab`");
+    expect(md).toContain("never started");
+  });
+
+  it("does not render a superseded run as a failure — it is a skip", () => {
+    const exit = Exit.fail(new RunSkipped({ reason: "superseded by 0123456789ab" }));
+    expect(runSkippedReason(exit)).toBe("superseded by 0123456789ab");
   });
 
   it("renders ExecFailed with exit code + stderr tail", () => {
