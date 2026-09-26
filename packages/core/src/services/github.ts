@@ -119,7 +119,7 @@ export type OpenDraftPullRequest = {
    * Defaults to the repo's default branch when omitted.
    */
   readonly baseBranch?: string;
-  /** The head branch to create/update (e.g. `flare-dispatch/spec-drift-2026-06-03`). */
+  /** The head branch to create/update (e.g. `flare-dispatch/spec-drift`). */
   readonly headBranch: string;
   /** PR title. */
   readonly title: string;

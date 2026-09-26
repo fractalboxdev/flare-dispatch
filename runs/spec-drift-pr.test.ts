@@ -7,7 +7,7 @@ import { Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import type { ModelCompletionResult } from "@fractalboxdev/flare-dispatch-core";
-import { specDriftPr } from "./spec-drift-pr";
+import { HEAD_BRANCH, specDriftPr } from "./spec-drift-pr";
 
 const firedAt = Date.UTC(2026, 5, 3); // 2026-06-03
 const input = { firedAt } as const;
@@ -55,8 +55,25 @@ describe("spec-drift-pr", () => {
       const calls = handles.github.openDraftPullRequestCalls;
       expect(calls).toHaveLength(1);
       expect(calls[0]!.repo).toBe("owner/name");
-      expect(calls[0]!.headBranch).toBe("flare-dispatch/spec-drift-2026-06-03");
+      expect(calls[0]!.headBranch).toBe("flare-dispatch/spec-drift");
       expect(calls[0]!.files).toEqual([{ path: "specs/01.md", content: "new spec text" }]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("targets the same head branch on every day's fire", () => {
+    const edit = { path: "specs/01.md", newContent: "new spec text", rationale: "stale" };
+    const { layer, handles } = makeCFRuntimeTest({
+      config: backendConfig,
+      sandboxProgram,
+      modelGateway: { responses: [proposal([edit]), proposal([edit])] },
+    });
+
+    return Effect.gen(function* () {
+      yield* specDriftPr.run(input);
+      yield* specDriftPr.run({ firedAt: firedAt + 86_400_000 });
+
+      const branches = handles.github.openDraftPullRequestCalls.map((c) => c.headBranch);
+      expect(branches).toEqual([HEAD_BRANCH, HEAD_BRANCH]);
     }).pipe(Effect.provide(layer));
   });
 
