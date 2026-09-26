@@ -561,6 +561,24 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
       }),
   );
 
+  it.effect("a checkout path containing 'timeout' still fails as ExecFailed, not ExecTimeout", () =>
+    Effect.gen(function* () {
+      currentBox = makeFakeBox({ proc: null });
+      currentBox.exec = vi.fn(async () => ({
+        exitCode: 1,
+        duration: 0,
+        stdout: "",
+        stderr: "Failed to change directory to '/workspace/request-timeout'",
+      }));
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.exec({ command: "cargo test", cwd: "/workspace/request-timeout", env: {} }),
+      ).pipe(Effect.provide(execLayer()), Effect.exit);
+      const err = failureOf<{ _tag: string; stderrTail?: string }>(exit);
+      expect(err?._tag).toBe("ExecFailed");
+      expect(err?.stderrTail).toContain("was missing at exec time");
+    }),
+  );
+
   it("isWorkingDirFailure — fires only on a cwd-set, non-zero, no-stdout, cd-error result", () => {
     const cd = (over: Record<string, unknown> = {}) => ({
       exitCode: 1,
