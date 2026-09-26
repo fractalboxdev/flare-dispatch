@@ -23,6 +23,7 @@
 // Spec: specs/01-architecture.md § Sandbox, specs/pm/plan.md § PR4 + § 6.
 
 import { Sandbox } from "@cloudflare/sandbox";
+import { recordContainerStop, takeRequested, type StopParamsLike } from "./container-stop";
 import type { Env } from "./env";
 
 /**
@@ -59,18 +60,77 @@ import type { Env } from "./env";
  */
 const SANDBOX_SLEEP_AFTER = "10m";
 
-/** The Durable Object class backing the lean `RUNS_SANDBOX` Container binding. */
-export class RunSandbox extends Sandbox<Env> {
+/**
+ * The shared body of the three `onStop` overrides.
+ *
+ * The classes exist only to give each container image a named class (see the
+ * header), so the record belongs in one place rather than copied into each —
+ * and the ordering below is load-bearing, so it should not be re-derived three
+ * times either.
+ *
+ * Called AFTER `super.onStop()`: `callOnStop` in `@cloudflare/containers`
+ * awaits the override and only then writes the DO's stopped state, so doing the
+ * R2 put first would delay the SDK's own teardown and leave the state reading
+ * `healthy` while the container is already gone.
+ */
+const recordStopFor = async (
+  env: Env,
+  ctx: DurableObjectState,
+  requested: boolean,
+  params?: StopParamsLike,
+): Promise<void> =>
+  recordContainerStop(
+    env.RUNS_STORAGE,
+    ctx.id.name ?? String(ctx.id),
+    params,
+    Date.now(),
+    requested,
+    env.CONTAINER_STOP_RECORDS,
+  );
+
+/**
+ * Everything the three named classes share.
+ *
+ * They exist only to give each container image a class wrangler can register
+ * (see the header), so the lifecycle logic lives here once. Three copies means
+ * three places to fix an ordering or flag-lifetime bug, and a miss in one is
+ * silent.
+ */
+abstract class RecordingSandbox extends Sandbox<Env> {
   override sleepAfter = SANDBOX_SLEEP_AFTER;
+
+  /**
+   * Set by our own `destroy()` so the record can say who asked. `workflow.ts`
+   * tears every run down through an `Effect.ensuring`, so without this the
+   * corpus is mostly our own teardowns with nothing to tell them from the
+   * deaths worth reading.
+   */
+  #intent = { requested: false };
+
+  override async destroy(): Promise<void> {
+    this.#intent.requested = true;
+    await super.destroy();
+  }
+
+  override async onStop(params?: StopParamsLike): Promise<void> {
+    // Read-and-clear. `destroy()` does not reach `onStop` inline — the alarm
+    // loop delivers it later — so the flag has to persist across that gap, and
+    // then NOT persist any further. Left set, it would swallow every subsequent
+    // stop this instance sees, including a real death after a failed destroy.
+    const requested = takeRequested(this.#intent);
+    await super.onStop();
+    await recordStopFor(this.env, this.ctx, requested, params);
+  }
 }
+
+/** The Durable Object class backing the lean `RUNS_SANDBOX` Container binding. */
+export class RunSandbox extends RecordingSandbox {}
 
 /**
  * The Durable Object class backing the chromium-baked `RUNS_SANDBOX_BROWSER`
  * Container binding. Identical to `RunSandbox` — only the bound image differs.
  */
-export class RunSandboxBrowser extends Sandbox<Env> {
-  override sleepAfter = SANDBOX_SLEEP_AFTER;
-}
+export class RunSandboxBrowser extends RecordingSandbox {}
 
 /**
  * The Durable Object class backing the agent-tier `RUNS_SANDBOX_AGENT` Container
@@ -79,6 +139,4 @@ export class RunSandboxBrowser extends Sandbox<Env> {
  * Container image, so the self-heal routing split needs this third class.
  * specs/08-self-healing.md § 6.2.
  */
-export class RunSandboxAgent extends Sandbox<Env> {
-  override sleepAfter = SANDBOX_SLEEP_AFTER;
-}
+export class RunSandboxAgent extends RecordingSandbox {}
