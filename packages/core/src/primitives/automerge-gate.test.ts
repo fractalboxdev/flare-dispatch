@@ -382,7 +382,9 @@ const githubService = (over: Partial<GithubService>): GithubService => ({
   readTextFile: () => Effect.succeed({ found: false }),
   branchHead: () => Effect.succeed("0".repeat(40)),
   pullReview: () => Effect.void,
-  openDraftPullRequest: () => Effect.succeed({ number: 0, url: "", created: false }),
+  openDraftPullRequest: () =>
+    Effect.succeed({ number: 0, url: "", created: false, skipped: false }),
+  closeDraftPullRequest: () => Effect.succeed({ closed: false, reason: "none-open" }),
   createRelease: () => Effect.succeed({ id: 0, url: "", tag: "", published: false }),
   ...over,
 });

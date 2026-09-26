@@ -26,6 +26,7 @@
 
 import {
   addIssueLabels,
+  closeBotPullRequest,
   closeIssueAsDuplicate,
   createIssue,
   createIssueComment,
@@ -44,6 +45,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect, Layer, Schedule } from "effect";
 import {
+  type CloseDraftPullRequestResult,
   type DraftPullRequestResult,
   Github,
   GitHubApiError,
@@ -395,7 +397,7 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
           yield* Effect.logInfo(
             `github.openDraftPullRequest skipped (no GitHub App credentials) — ${req.repo}#${req.headBranch} not opened`,
           );
-          return { number: 0, url: "", created: false };
+          return { number: 0, url: "", created: false, skipped: false };
         }
         const token = yield* mintToken(config, req.repo, req.installationId);
         return yield* ghCall(() =>
@@ -409,6 +411,28 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
             commitMessage: req.commitMessage,
             files: req.files,
             ...(req.draft !== undefined ? { draft: req.draft } : {}),
+            ...(req.preserveHumanCommits !== undefined
+              ? { preserveHumanCommits: req.preserveHumanCommits }
+              : {}),
+          }),
+        );
+      }),
+
+    closeDraftPullRequest: (req): Effect.Effect<CloseDraftPullRequestResult, GitHubApiError> =>
+      Effect.gen(function* () {
+        if (config === undefined) {
+          yield* Effect.logInfo(
+            `github.closeDraftPullRequest skipped (no GitHub App credentials) — ${req.repo}#${req.headBranch} left open`,
+          );
+          return { closed: false, reason: "uncredentialed" } as const;
+        }
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() =>
+          closeBotPullRequest({
+            token,
+            repo: req.repo,
+            headBranch: req.headBranch,
+            comment: req.comment,
           }),
         );
       }),

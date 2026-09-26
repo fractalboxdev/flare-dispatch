@@ -119,7 +119,7 @@ export type OpenDraftPullRequest = {
    * Defaults to the repo's default branch when omitted.
    */
   readonly baseBranch?: string;
-  /** The head branch to create/update (e.g. `flare-dispatch/spec-drift-2026-06-03`). */
+  /** The head branch to create/update (e.g. `flare-dispatch/spec-drift`). */
   readonly headBranch: string;
   /** PR title. */
   readonly title: string;
@@ -136,6 +136,13 @@ export type OpenDraftPullRequest = {
    */
   readonly draft?: boolean;
   /**
+   * Leave the head branch untouched when it carries any commit a bot account
+   * did not author — a rolling PR's reviewer pushed to it, and a force-update
+   * would discard that work. The result reports `skipped: true`. Default
+   * `false`.
+   */
+  readonly preserveHumanCommits?: boolean;
+  /**
    * The GitHub installation id authenticating the writes. Optional — the live
    * Layer resolves it from the repo when absent (the App is the source of truth
    * for which installation covers a repo).
@@ -151,7 +158,34 @@ export type DraftPullRequestResult = {
   readonly url: string;
   /** `true` when this call opened a new PR; `false` when it updated an open one. */
   readonly created: boolean;
+  /** `true` when `preserveHumanCommits` left a human-touched branch untouched. */
+  readonly skipped: boolean;
 };
+
+/**
+ * A request to retract a rolling proposal PR — close the open PR on
+ * `headBranch` after posting `comment`. The live Layer closes only a PR a bot
+ * account opened whose commits are all bot-authored; anything a human opened
+ * or pushed to stays open.
+ */
+export type CloseDraftPullRequest = {
+  /** "owner/name". */
+  readonly repo: string;
+  readonly headBranch: string;
+  /** Posted on the PR before it closes — a rendered template, never model prose. */
+  readonly comment: string;
+  readonly installationId?: number;
+};
+
+/** The outcome of {@link GithubService.closeDraftPullRequest}. */
+export type CloseDraftPullRequestResult =
+  | { readonly closed: true; readonly number: number }
+  | {
+      readonly closed: false;
+      /** `none-open`: nothing to close. `human-owned`: left open on purpose. `uncredentialed`: no App. */
+      readonly reason: "none-open" | "human-owned" | "uncredentialed";
+      readonly number?: number;
+    };
 
 /**
  * A request to publish a **GitHub Release** — the narrow *release write* the
@@ -523,6 +557,16 @@ export interface GithubService {
   ) => Effect.Effect<DraftPullRequestResult, GitHubApiError>;
 
   /**
+   * Close a rolling proposal PR a later run no longer stands behind — the
+   * counterpart of `openDraftPullRequest` for a fire that finds nothing to
+   * propose. Only a bot-opened, bot-only PR closes. A deploy without App
+   * credentials degrades to a logged no-op (`reason: "uncredentialed"`).
+   */
+  readonly closeDraftPullRequest: (
+    req: CloseDraftPullRequest,
+  ) => Effect.Effect<CloseDraftPullRequestResult, GitHubApiError>;
+
+  /**
    * Publish a GitHub Release (creating the tag at `target` when absent) — the
    * release write the `release-notes` recipe calls on human approval. A deploy
    * without App credentials degrades to a logged no-op (`published: false`).
@@ -600,5 +644,7 @@ export const github = {
   pullReview: (req: PullReviewRequest) => Effect.flatMap(Github, (g) => g.pullReview(req)),
   openDraftPullRequest: (req: OpenDraftPullRequest) =>
     Effect.flatMap(Github, (g) => g.openDraftPullRequest(req)),
+  closeDraftPullRequest: (req: CloseDraftPullRequest) =>
+    Effect.flatMap(Github, (g) => g.closeDraftPullRequest(req)),
   createRelease: (req: CreateRelease) => Effect.flatMap(Github, (g) => g.createRelease(req)),
 } as const;

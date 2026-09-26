@@ -11,7 +11,9 @@
 //   4. find an open PR for the head branch, else open a new PR (draft per opt).
 //
 // Idempotent on `headBranch`: a re-run updates the branch (force-update to the
-// fresh commit) and reuses the already-open PR. Used by both the `github`
+// fresh commit) and reuses the already-open PR. With `preserveHumanCommits`, a
+// branch carrying any commit not authored by a bot account is left untouched,
+// so a reviewer's push to a rolling PR survives the next run. Used by both the `github`
 // capability's `openDraftPullRequest` (run-driven, full-content edits) and the
 // Worker's post-run `writeback` step (manifest-driven, supports deletions +
 // modes + non-draft).
@@ -59,6 +61,13 @@ export type CommitFilesOptions = {
    * with no commit — the caller's "no-op on existing branch" path.
    */
   readonly updateExisting?: boolean;
+  /**
+   * Leave the head branch untouched (`skipped: true`, no commit) when it
+   * carries any commit ahead of the base that a bot account did not author —
+   * a human pushed to it, and a force-update would discard that work.
+   * Default `false`.
+   */
+  readonly preserveHumanCommits?: boolean;
   /** Open a PR. `false` ⇒ push the branch only, open no PR. */
   readonly pr: { readonly title: string; readonly body: string; readonly draft?: boolean } | false;
   /** API base override (tests / GHE). */
@@ -79,7 +88,8 @@ export type CommitFilesResult = {
   readonly created: boolean;
   /**
    * `true` when nothing was written: the head branch already existed and
-   * `updateExisting: false`. The caller reports a clean skip.
+   * `updateExisting: false`, or it carries human commits and
+   * `preserveHumanCommits` is set. The caller reports a clean skip.
    */
   readonly skipped: boolean;
 };
@@ -99,26 +109,27 @@ export const deletionEntry = (path: string): TreeEntry => ({
   sha: null,
 });
 
-/**
- * Commit the file edits + deletions and open (or update) a PR.
- *
- * @throws {GithubApiError} when any underlying call returns non-2xx (other than
- * the expected 422 on an already-existing ref, which is handled per
- * `updateExisting`).
- */
-export const commitFilesAndOpenPr = async (
-  opts: CommitFilesOptions,
-): Promise<CommitFilesResult> => {
+type RepoApi = <T>(
+  path: string,
+  init?: { method?: string; body?: unknown },
+  okExtra?: (status: number) => boolean,
+) => Promise<{ status: number; json: T }>;
+
+/** A bound JSON client for one repo's REST endpoints. */
+const repoApi = (opts: {
+  token: string;
+  repo: string;
+  apiBase?: string;
+  fetchImpl?: typeof fetch;
+}): { api: RepoApi; owner: string } => {
   const { owner, name } = splitRepo(opts.repo);
   const { apiBase, doFetch } = resolveClient(opts);
   const repoUrl = `${apiBase}/repos/${owner}/${name}`;
-  const updateExisting = opts.updateExisting ?? true;
-
-  const api = async <T>(
+  const api: RepoApi = async <T>(
     path: string,
     init?: { method?: string; body?: unknown },
     okExtra?: (status: number) => boolean,
-  ): Promise<{ status: number; json: T }> => {
+  ) => {
     const res = await doFetch(`${repoUrl}${path}`, {
       method: init?.method ?? "GET",
       headers: ghHeaders(opts.token, { json: true }),
@@ -130,6 +141,41 @@ export const commitFilesAndOpenPr = async (
     const json = (await res.json().catch(() => ({}))) as T;
     return { status: res.status, json };
   };
+  return { api, owner };
+};
+
+/**
+ * Whether `headBranch` carries a commit ahead of `baseBranch` that no bot
+ * account authored. A commit whose author email maps to no GitHub account has
+ * no `author` object and counts as human. A missing head branch has no
+ * commits, so the answer is `false`.
+ */
+const hasHumanCommits = async (
+  api: RepoApi,
+  baseBranch: string,
+  headBranch: string,
+): Promise<boolean> => {
+  const compare = await api<{ commits?: Array<{ author: { type?: string } | null }> }>(
+    `/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(headBranch)}`,
+    undefined,
+    (status) => status === 404,
+  );
+  if (compare.status === 404) return false;
+  return (compare.json.commits ?? []).some((c) => c.author?.type !== "Bot");
+};
+
+/**
+ * Commit the file edits + deletions and open (or update) a PR.
+ *
+ * @throws {GithubApiError} when any underlying call returns non-2xx (other than
+ * the expected 422 on an already-existing ref, which is handled per
+ * `updateExisting`).
+ */
+export const commitFilesAndOpenPr = async (
+  opts: CommitFilesOptions,
+): Promise<CommitFilesResult> => {
+  const { api, owner } = repoApi(opts);
+  const updateExisting = opts.updateExisting ?? true;
 
   // 1. Base branch + its tip commit.
   const baseBranch =
@@ -146,6 +192,13 @@ export const commitFilesAndOpenPr = async (
     if (headRef.status !== 404) {
       return { created: false, skipped: true };
     }
+  }
+
+  if (
+    opts.preserveHumanCommits === true &&
+    (await hasHumanCommits(api, baseBranch, opts.headBranch))
+  ) {
+    return { created: false, skipped: true };
   }
 
   const baseRef = (
@@ -264,6 +317,8 @@ export type OpenDraftPullRequestOptions = {
   readonly files: readonly { readonly path: string; readonly content: string }[];
   /** Open as a draft. Default `true`. */
   readonly draft?: boolean;
+  /** See {@link CommitFilesOptions.preserveHumanCommits}. */
+  readonly preserveHumanCommits?: boolean;
   readonly apiBase?: string;
   readonly fetchImpl?: typeof fetch;
 };
@@ -272,6 +327,8 @@ export type OpenDraftPullRequestResult = {
   readonly number: number;
   readonly url: string;
   readonly created: boolean;
+  /** `true` when human commits on the head branch left it untouched. */
+  readonly skipped: boolean;
 };
 
 /** Commit the file edits and open (or update) a PR (draft by default). */
@@ -286,6 +343,9 @@ export const openDraftPullRequest = async (
     commitMessage: opts.commitMessage,
     files: opts.files,
     pr: { title: opts.title, body: opts.body, draft: opts.draft ?? true },
+    ...(opts.preserveHumanCommits !== undefined
+      ? { preserveHumanCommits: opts.preserveHumanCommits }
+      : {}),
     ...(opts.apiBase !== undefined ? { apiBase: opts.apiBase } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
   });
@@ -293,5 +353,58 @@ export const openDraftPullRequest = async (
     number: result.number ?? 0,
     url: result.url ?? "",
     created: result.created,
+    skipped: result.skipped,
   };
+};
+
+// --- closeBotPullRequest ------------------------------------------------------
+//
+// The retraction a rolling-PR run needs when a fire finds nothing to propose:
+// the open PR still carries yesterday's full-file contents, and merging it
+// would revert whatever fixed the drift on the base branch.
+
+export type CloseBotPullRequestOptions = {
+  readonly token: string;
+  readonly repo: string;
+  /** The head branch whose open PR to close. */
+  readonly headBranch: string;
+  /** Comment posted on the PR before it closes. */
+  readonly comment: string;
+  readonly apiBase?: string;
+  readonly fetchImpl?: typeof fetch;
+};
+
+export type CloseBotPullRequestResult =
+  | { readonly closed: true; readonly number: number }
+  | {
+      readonly closed: false;
+      readonly reason: "none-open" | "human-owned";
+      readonly number?: number;
+    };
+
+/**
+ * Close the open PR on `headBranch` — only when a bot account opened it and
+ * every commit on the branch is bot-authored. A PR a human opened or pushed to
+ * stays open (`reason: "human-owned"`); the branch itself is kept, so the next
+ * proposal force-updates it and opens a fresh PR.
+ */
+export const closeBotPullRequest = async (
+  opts: CloseBotPullRequestOptions,
+): Promise<CloseBotPullRequestResult> => {
+  const { api, owner } = repoApi(opts);
+  const open = (
+    await api<Array<{ number: number; user: { type?: string } | null; base: { ref: string } }>>(
+      `/pulls?head=${owner}:${encodeURIComponent(opts.headBranch)}&state=open`,
+    )
+  ).json;
+  const pr = Array.isArray(open) ? open[0] : undefined;
+  if (pr === undefined) return { closed: false, reason: "none-open" };
+
+  if (pr.user?.type !== "Bot" || (await hasHumanCommits(api, pr.base.ref, opts.headBranch))) {
+    return { closed: false, reason: "human-owned", number: pr.number };
+  }
+
+  await api(`/issues/${pr.number}/comments`, { method: "POST", body: { body: opts.comment } });
+  await api(`/pulls/${pr.number}`, { method: "PATCH", body: { state: "closed" } });
+  return { closed: true, number: pr.number };
 };

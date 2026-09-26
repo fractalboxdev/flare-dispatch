@@ -18,6 +18,8 @@
 import { Effect, Layer } from "effect";
 import { GitHubApiError } from "../errors";
 import {
+  type CloseDraftPullRequest,
+  type CloseDraftPullRequestResult,
   type CreateRelease,
   type DraftPullRequestResult,
   Github,
@@ -89,6 +91,8 @@ export type GithubFakeState = {
   readonly pullReviewCalls: PullReviewRequest[];
   /** Every `openDraftPullRequest` call, in order. */
   readonly openDraftPullRequestCalls: OpenDraftPullRequest[];
+  /** Every `closeDraftPullRequest` call, in order. */
+  readonly closeDraftPullRequestCalls: CloseDraftPullRequest[];
   /**
    * Every `openIssue` call, in order — and each one also lands in `issues`.
    *
@@ -153,6 +157,13 @@ export const makeGithubFake = (
      * Lower it to make `maxPages` observable without seeding hundreds of PRs.
      */
     historyPageSize?: number;
+    /**
+     * Head branches keyed `"owner/name#branch"` a human has pushed to — the
+     * fake's stand-in for non-bot commits. `openDraftPullRequest` with
+     * `preserveHumanCommits` reports `skipped: true` on them, and
+     * `closeDraftPullRequest` leaves their PR open.
+     */
+    humanOwnedBranches?: readonly string[];
   } = {},
 ): { layer: Layer.Layer<Github>; state: GithubFakeState } => {
   const state: GithubFakeState = {
@@ -168,6 +179,7 @@ export const makeGithubFake = (
     readTextFileCalls: [],
     pullReviewCalls: [],
     openDraftPullRequestCalls: [],
+    closeDraftPullRequestCalls: [],
     openIssueCalls: [],
     createReleaseCalls: [],
     addIssueLabelsCalls: [],
@@ -180,6 +192,7 @@ export const makeGithubFake = (
   // Branches the fake has already "opened" a PR for — so a re-run with the same
   // headBranch reports `created: false`, mirroring the live idempotency.
   const openedBranches = new Set<string>();
+  const humanOwned = new Set(opts.humanOwnedBranches ?? []);
 
   const service: GithubService = {
     issues: ({ repo, state: want = "open", labels, updatedWithinDays, maxPages, strict }) =>
@@ -369,6 +382,9 @@ export const makeGithubFake = (
       Effect.sync(() => {
         state.openDraftPullRequestCalls.push(req);
         const key = `${req.repo}#${req.headBranch}`;
+        if (req.preserveHumanCommits === true && humanOwned.has(key)) {
+          return { number: 0, url: "", created: false, skipped: true };
+        }
         const created = !openedBranches.has(key);
         openedBranches.add(key);
         // Deterministic fake PR number derived from call order.
@@ -377,7 +393,18 @@ export const makeGithubFake = (
           number,
           url: `https://github.com/${req.repo}/pull/${number}`,
           created,
+          skipped: false,
         };
+      }),
+
+    closeDraftPullRequest: (req): Effect.Effect<CloseDraftPullRequestResult, never> =>
+      Effect.sync((): CloseDraftPullRequestResult => {
+        state.closeDraftPullRequestCalls.push(req);
+        const key = `${req.repo}#${req.headBranch}`;
+        if (!openedBranches.has(key)) return { closed: false, reason: "none-open" };
+        if (humanOwned.has(key)) return { closed: false, reason: "human-owned" };
+        openedBranches.delete(key);
+        return { closed: true, number: 0 };
       }),
 
     createRelease: (req): Effect.Effect<ReleaseResult, never> =>

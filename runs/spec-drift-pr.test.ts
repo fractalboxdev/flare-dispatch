@@ -7,7 +7,7 @@ import { Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import type { ModelCompletionResult } from "@fractalboxdev/flare-dispatch-core";
-import { specDriftPr } from "./spec-drift-pr";
+import { HEAD_BRANCH, specDriftPr } from "./spec-drift-pr";
 
 const firedAt = Date.UTC(2026, 5, 3); // 2026-06-03
 const input = { firedAt } as const;
@@ -55,8 +55,65 @@ describe("spec-drift-pr", () => {
       const calls = handles.github.openDraftPullRequestCalls;
       expect(calls).toHaveLength(1);
       expect(calls[0]!.repo).toBe("owner/name");
-      expect(calls[0]!.headBranch).toBe("flare-dispatch/spec-drift-2026-06-03");
+      expect(calls[0]!.headBranch).toBe("flare-dispatch/spec-drift");
       expect(calls[0]!.files).toEqual([{ path: "specs/01.md", content: "new spec text" }]);
+      expect(calls[0]!.preserveHumanCommits).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("targets the same head branch on every day's fire", () => {
+    const edit = { path: "specs/01.md", newContent: "new spec text", rationale: "stale" };
+    const { layer, handles } = makeCFRuntimeTest({
+      config: backendConfig,
+      sandboxProgram,
+      modelGateway: { responses: [proposal([edit]), proposal([edit])] },
+    });
+
+    return Effect.gen(function* () {
+      yield* specDriftPr.run(input);
+      yield* specDriftPr.run({ firedAt: firedAt + 86_400_000 });
+
+      const branches = handles.github.openDraftPullRequestCalls.map((c) => c.headBranch);
+      expect(branches).toEqual([HEAD_BRANCH, HEAD_BRANCH]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("leaves a rolling PR a human pushed to untouched", () => {
+    const { layer } = makeCFRuntimeTest({
+      config: backendConfig,
+      sandboxProgram,
+      github: { humanOwnedBranches: [`owner/name#${HEAD_BRANCH}`] },
+      modelGateway: {
+        responses: [
+          proposal([{ path: "specs/01.md", newContent: "new spec text", rationale: "stale" }]),
+        ],
+      },
+    });
+
+    return Effect.gen(function* () {
+      const out = yield* specDriftPr.run(input);
+      expect(out.prsHeld).toBe(1);
+      expect(out.prsOpened).toBe(0);
+      expect(out.prsUpdated).toBe(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("closes the rolling PR once the specs are back in sync", () => {
+    const edit = { path: "specs/01.md", newContent: "new spec text", rationale: "stale" };
+    const { layer, handles } = makeCFRuntimeTest({
+      config: backendConfig,
+      sandboxProgram,
+      modelGateway: { responses: [proposal([edit]), proposal([])] },
+    });
+
+    return Effect.gen(function* () {
+      yield* specDriftPr.run(input);
+      const out = yield* specDriftPr.run({ firedAt: firedAt + 86_400_000 });
+      expect(out.prsClosed).toBe(1);
+      expect(out.reposClean).toBe(1);
+      expect(handles.github.closeDraftPullRequestCalls).toEqual([
+        expect.objectContaining({ repo: "owner/name", headBranch: HEAD_BRANCH }),
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
