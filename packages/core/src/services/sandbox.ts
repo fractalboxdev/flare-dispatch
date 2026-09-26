@@ -47,8 +47,11 @@ export type ExecOpts = {
   readonly container?: Container;
   /**
    * Plaintext values (typically resolved Worker-secret values injected via
-   * `env`) to scrub from the captured stdout/stderr before EITHER the inline
-   * `ExecResult` tail or the full log streamed to R2 is persisted. A command
+   * `env`) to scrub from every durable surface this exec produces: the inline
+   * `ExecResult` tail, the full log streamed to R2, the COMMAND recorded in
+   * that log's meta line, and `ExecTimeout.command` (which Workflows persists
+   * as the attempt record). An implementation that scrubs only the streams does
+   * not satisfy this. A command
    * that echoes an injected credential — deliberately or via a misbehaving
    * tool — must not leak it through the log artifact's signed URL. Exact-
    * substring match, each occurrence replaced with `"***"`. Empty/omitted is

@@ -170,7 +170,11 @@ export const makeSandboxFake = (
           ? Effect.fail(
               new ExecTimeout({
                 timeoutSec: canned.timeoutSec ?? opts.timeoutSec ?? 600,
-                command,
+                // Scrubbed, as the live layer does. `ExecTimeout.message`
+                // inlines the command and Workflows persists it, so a fake that
+                // left it raw would let a run-level test pass on a property the
+                // live layer establishes and the fake contradicts.
+                command: redact(command, opts.redactValues),
               }),
             )
           : Effect.fail(
