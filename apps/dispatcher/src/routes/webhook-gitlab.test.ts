@@ -756,3 +756,40 @@ describe("mr-review draft gate", () => {
     expect(reviewWorkflow.calls).toHaveLength(1);
   });
 });
+
+describe("operator Slack alerts from the webhook route (2026-09-27)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const HOOK = "https://hooks.slack.invalid/services/SECRET";
+  const posts: string[] = [];
+  const stubSlack = () => {
+    posts.length = 0;
+    vi.stubGlobal("fetch", async (_u: string, init?: RequestInit) => {
+      posts.push((JSON.parse(String(init?.body)) as { text: string }).text);
+      return new Response("", { status: 200 });
+    });
+  };
+
+  it("a failed Workflow create (not a duplicate) alerts critical with the MR ids", async () => {
+    stubSlack();
+    const { env } = fixture({ failCreateWith: "internal error: workflows unavailable" });
+    const res = await handleRequest(
+      gitlabRequest(mrPayload(), { token: WEBHOOK_SECRET }),
+      { ...env, SLACK_WEBHOOK_URL: HOOK } as Env,
+    );
+    expect(res.status).toBe(500);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatch(/^flare-dispatch-review \[critical\] Workflow create failed/);
+    expect(posts[0]).toContain("project=42 mr=7");
+  });
+
+  it("a missing Workflow binding alerts", async () => {
+    stubSlack();
+    const { env } = fixture({ withWorkflow: false });
+    const res = await handleRequest(
+      gitlabRequest(mrPayload(), { token: WEBHOOK_SECRET }),
+      { ...env, SLACK_WEBHOOK_URL: HOOK } as Env,
+    );
+    expect(res.status).toBe(503);
+    expect(posts[0]).toContain("GITLAB_REVIEW_WORKFLOW binding is absent");
+  });
+});

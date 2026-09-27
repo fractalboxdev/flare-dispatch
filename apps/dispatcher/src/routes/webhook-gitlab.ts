@@ -34,6 +34,7 @@
 // health check, not delivery-shape problems, and GitLab redelivering them
 // changes nothing.
 
+import { opsAlert } from "../ops-alert";
 import type { Env } from "../env";
 import { toInstanceId } from "../instance-id";
 import { mrInputsFromPayload } from "@fractalboxdev/flare-dispatch-runs/mr-review";
@@ -529,6 +530,12 @@ export const handleGitlabWebhook = async (
 
   // 6. The review Workflow must be bound to dispatch.
   if (env.GITLAB_REVIEW_WORKFLOW === undefined) {
+    await opsAlert(env, {
+      key: "workflow-not-configured",
+      severity: "critical",
+      what: "GITLAB_REVIEW_WORKFLOW binding is absent on this deploy: no review can start",
+      ids: { project: projectId, mr: iid },
+    });
     return json(
       {
         error: "workflow_not_configured",
@@ -576,6 +583,12 @@ export const handleGitlabWebhook = async (
     // A duplicate create IS the dedup path — treat it as accepted.
     if (!/already.?exists|duplicate/i.test(message)) {
       console.error(`[webhook-gitlab] create failed id="${id}": ${message}`);
+      await opsAlert(env, {
+        key: "workflow-create-failed",
+        severity: "critical",
+        what: `Workflow create failed; GitLab may redeliver: ${message.slice(0, 160)}`,
+        ids: { project: projectId, mr: iid, head: input.headSha.slice(0, 12), execution: id },
+      });
       return json({ error: "dispatch_failed", detail: message }, 500);
     }
     duplicated = true;

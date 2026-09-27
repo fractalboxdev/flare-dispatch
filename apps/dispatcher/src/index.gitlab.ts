@@ -15,6 +15,7 @@
 // absent here — a GitLab-mode deploy never boots a container.
 
 import type { Env } from "./env";
+import { guardFetch, sweepStaleReviews } from "./ops-alert";
 import { handleRequest } from "./router";
 
 // The GitLab MR-review Workflow (workflow-gitlab.ts) — the ONLY binding class
@@ -23,6 +24,11 @@ export { GitlabReviewWorkflow } from "./workflow-gitlab";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return handleRequest(request, env);
+    return guardFetch(env, () => handleRequest(request, env));
+  },
+  // The Moonshot config's cron (wrangler.review.jsonc): a review that died before `finalize`
+  // (no notify-failure) is found by its row still `running` after 60 min.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(sweepStaleReviews(env));
   },
 } satisfies ExportedHandler<Env>;

@@ -42,6 +42,7 @@
 // than re-running the body. NO container / browser imports live here — a
 // GitLab-mode deploy binds neither.
 
+import { reportWorkflowException } from "./ops-alert";
 import { WorkflowEntrypoint, type WorkflowStepConfig } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { Effect, Exit, Layer, Schedule } from "effect";
@@ -119,7 +120,21 @@ const REVIEW_CHUNK_STEP_CONFIG: WorkflowStepConfig = {
 };
 
 export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewParams> {
+  // A step that fails after its retries throws out of run(): notify-failure never runs, so the
+  // operator alert goes here (ops-alert.ts), and the instance still ends `errored`.
   override async run(
+    event: WorkflowEvent<GitlabReviewParams>,
+    step: WorkflowStep,
+  ): Promise<void> {
+    try {
+      await this.review(event, step);
+    } catch (e) {
+      await reportWorkflowException(this.env, event.payload, e);
+      throw e;
+    }
+  }
+
+  private async review(
     event: WorkflowEvent<GitlabReviewParams>,
     step: WorkflowStep,
   ): Promise<void> {
