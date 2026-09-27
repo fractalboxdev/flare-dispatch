@@ -5,7 +5,7 @@
 // (2xx, non-2xx, and a thrown network error all resolve rather than throw).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSlackFailureMessage, claimSlackAlert, postSlackFailureNotification, type SlackFailureNotifyInput } from "./gitlab-slack-notify";
+import { buildSlackFailureMessage, claimSlackAlert, releaseSlackAlert, postSlackFailureNotification, type SlackFailureNotifyInput } from "./gitlab-slack-notify";
 
 const base: SlackFailureNotifyInput = {
   projectId: "42",
@@ -190,6 +190,15 @@ describe("claimSlackAlert — at most one alert per MR head", () => {
     expect(puts).toHaveLength(1);
     expect(puts[0]!.key).toBe("gitlab-review:slack-alert:42:7:abc123");
     expect(puts[0]!.ttl).toBeGreaterThanOrEqual(60 * 60 * 24);
+  });
+
+  it("releasing a claim (the Slack post failed) lets the next instance alert", async () => {
+    const { kv, store } = fakeKv();
+    const withDelete = { ...kv, delete: async (k: string) => void store.delete(k) };
+    const head = { projectId: "42", iid: 7, headSha: "abc123" };
+    expect(await claimSlackAlert(withDelete, head)).toBe(true);
+    await releaseSlackAlert(withDelete, head);
+    expect(await claimSlackAlert(withDelete, head)).toBe(true);
   });
 
   it("a new head of the same MR alerts again", async () => {

@@ -461,6 +461,8 @@ export type ChunkResult = {
   readonly findings: readonly AnnotatedFinding[];
   readonly usage: CostUsage;
   readonly error: string | null;
+  /** Reviewers that failed (after any fallback) while others in the chunk answered. */
+  readonly failedAgents: readonly string[];
   /** Every failure was a rate limit (drives `skipped-quota` when all chunks fail). */
   readonly rateLimited: boolean;
 };
@@ -741,6 +743,7 @@ export const mrReviewChunk = (
     );
     const oks = results.flatMap((r) => (Either.isRight(r) ? [r.right] : []));
     const errs = results.flatMap((r) => (Either.isLeft(r) ? [r.left] : []));
+    const failedAgents = results.flatMap((r, i) => (Either.isLeft(r) ? [ctx.agents[i]!] : []));
 
     let naiveFindings: AnnotatedFinding[] = [];
     if (ctx.naive.enabled) {
@@ -772,6 +775,7 @@ export const mrReviewChunk = (
       findings,
       usage: yield* Ref.get(usageRef),
       error: errs.length > 0 ? describeError(errs[0]) : null,
+      failedAgents: failed ? [] : failedAgents,
       rateLimited: errs.length > 0 && errs.every(isRateLimited),
     } satisfies ChunkResult;
   });
@@ -809,7 +813,7 @@ export const mrReviewReduce = (
     for (const r of results) {
       if (r.status !== "failed") continue;
       for (const p of r.paths) {
-        const why = `review failed (${r.error ?? "unknown error"})`;
+        const why = `review failed (${r.error ?? "unknown error"})${r.findings.length > 0 ? "; only the blind naive seats read it" : ""}`;
         const prev = notReviewed.get(p);
         notReviewed.set(p, prev !== undefined ? `${prev}; ${why}` : okPaths.has(p) ? `partially reviewed: ${why}` : why);
       }
@@ -824,13 +828,16 @@ export const mrReviewReduce = (
     const verifyMax = positiveInt(yield* config.get(`${NS}.verify.maxFindings`), 12);
     // The verify diff for a finding: every section for its path across the
     // chunks, else the text of the chunk the finding came from.
+    // Bounded to about one chunk: the verify call must not rebuild the long
+    // prompt the chunking exists to avoid.
+    const verifyMaxChars = Math.max(...prep.chunks.map((c) => c.text.length), 1);
     const sectionFor = (f: AnnotatedFinding): string => {
-      const parts = prep.chunks.flatMap((c) => {
-        const s = diffSectionsForPath(c.text, f.path);
-        return s.length > 0 ? s : [];
-      });
-      if (parts.length > 0) return parts.join("");
-      return prep.chunks.find((c) => c.id === f.chunk)?.text ?? prep.chunks.map((c) => c.text).join("");
+      const own = prep.chunks.find((c) => c.id === f.chunk);
+      const ownParts = own !== undefined ? diffSectionsForPath(own.text, f.path) : [];
+      if (ownParts.length > 0) return ownParts.join("");
+      const other = prep.chunks.flatMap((c) => diffSectionsForPath(c.text, f.path)).join("");
+      if (other !== "") return other.slice(0, verifyMaxChars);
+      return own?.text ?? prep.chunks[0]?.text ?? "";
     };
     let verifiedFindings: ReadonlyArray<AnnotatedFinding> = allFindings;
     if (verifyEnabled !== "false" && allFindings.length > 0) {
@@ -914,9 +921,18 @@ const diffSectionsForPath = (diff: string, path: string): string[] => {
 
 /** "Reviewed in N chunks" + which model answered where the fallback stepped in. */
 const chunkNotices = (results: readonly ChunkResult[], ctx: ChunkContext): string[] => {
-  if (results.length <= 1 && results.every((r) => r.fallbacks === 0)) return [];
+  if (results.length <= 1 && results.every((r) => r.fallbacks === 0 && r.failedAgents.length === 0)) return [];
   const fell = results.filter((r) => r.fallbacks > 0);
   const lines = [`ℹ️ reviewed in ${results.length} chunk(s)`];
+  const partial = results.filter((r) => r.status === "ok" && r.failedAgents.length > 0);
+  if (partial.length > 0) {
+    const n = partial.reduce((a, r) => a + r.failedAgents.length, 0);
+    lines.push(
+      `⚠️ ${n} reviewer(s) failed and are missing from this review: ${partial
+        .map((r) => `#${r.id + 1} (${r.failedAgents.join(", ")})`)
+        .join(", ")}`,
+    );
+  }
   if (fell.length > 0) {
     lines.push(
       `ℹ️ ${fell.length} chunk(s) answered on the fallback model ${ctx.fallbackModel ?? "?"} after ${ctx.model} failed: ${fell

@@ -481,8 +481,8 @@ const workersAiError = (model: string, cause: unknown): ModelGatewayError => {
  * event is `data: <json>`; the answer is the concatenated `choices[0].delta.content`
  * (chat shape) or `response` (legacy shape) — `reasoning_content` deltas are the
  * model thinking and are skipped. Usage arrives as per-event deltas and then a
- * final event carrying the run's TOTAL, so the larger of "last event" and "sum of
- * the earlier events" is the total whichever way a model reports it. The reader
+ * final event carrying the run's TOTAL; a final event smaller than the earlier
+ * sum means there was no total event, and every delta is summed. The reader
  * is cancelled when `signal` aborts (the per-call deadline interrupting).
  */
 const readSseStream = async (
@@ -540,7 +540,9 @@ const readSseStream = async (
   } finally {
     signal.removeEventListener("abort", onAbort);
   }
-  const outputTokens = lastOut !== undefined ? Math.max(lastOut, outSum) : undefined;
+  // A final event at least as large as everything before it is the run's total
+  // (what Workers AI sends); otherwise the events were plain deltas — sum them all.
+  const outputTokens = lastOut === undefined ? undefined : lastOut >= outSum ? lastOut : outSum + lastOut;
   return {
     toolCalls: [],
     text,

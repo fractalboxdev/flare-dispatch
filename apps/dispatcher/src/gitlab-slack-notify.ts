@@ -150,7 +150,11 @@ export const postSlackFailureNotification = async (
 export type AlertClaimKv = {
   readonly get: (key: string) => Promise<string | null>;
   readonly put: (key: string, value: string, options?: { expirationTtl?: number }) => Promise<void>;
+  readonly delete?: (key: string) => Promise<void>;
 };
+
+const alertKey = (head: { readonly projectId: string; readonly iid: number; readonly headSha: string }): string =>
+  `gitlab-review:slack-alert:${head.projectId}:${head.iid}:${head.headSha}`;
 
 /** How long a head's alert claim lasts — longer than any review of that head runs. */
 const ALERT_CLAIM_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -169,7 +173,7 @@ export const claimSlackAlert = async (
   head: { readonly projectId: string; readonly iid: number; readonly headSha: string },
 ): Promise<boolean> => {
   if (kv === undefined) return true;
-  const key = `gitlab-review:slack-alert:${head.projectId}:${head.iid}:${head.headSha}`;
+  const key = alertKey(head);
   try {
     if ((await kv.get(key)) !== null) return false;
     await kv.put(key, new Date().toISOString(), { expirationTtl: ALERT_CLAIM_TTL_SECONDS });
@@ -177,5 +181,20 @@ export const claimSlackAlert = async (
   } catch (e) {
     console.warn(`[gitlab-review] Slack alert claim failed, alerting anyway: ${e instanceof Error ? e.message : String(e)}`);
     return true;
+  }
+};
+
+/**
+ * Give a head's claim back when the Slack post itself failed — otherwise one
+ * Slack outage would silence that head for the whole claim TTL. Best-effort.
+ */
+export const releaseSlackAlert = async (
+  kv: AlertClaimKv | undefined,
+  head: { readonly projectId: string; readonly iid: number; readonly headSha: string },
+): Promise<void> => {
+  try {
+    await kv?.delete?.(alertKey(head));
+  } catch (e) {
+    console.warn(`[gitlab-review] Slack alert claim release failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 };

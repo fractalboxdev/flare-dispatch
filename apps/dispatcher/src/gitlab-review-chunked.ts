@@ -67,6 +67,7 @@ export const runChunkedReview = async (opts: {
               // The step's own usage is lost with the step — not a true zero.
               usage: { inputTokens: 0, outputTokens: 0, calls: 0, unknown: true, byModel: {} },
               error: `chunk step failed${attempts}: ${message}`,
+              failedAgents: [],
               rateLimited: false,
             };
           }

@@ -63,10 +63,10 @@ describe("runChunkedReview", () => {
   it("a chunk step that exhausts its retries becomes a failed chunk — the review still completes", async () => {
     const diff = fileDiff("src/a.ts", 120) + fileDiff("src/b.ts", 120);
     const { step } = recorder("review-chunk-1");
-    const out = await runChunkedReview({ input, step, run: (eff) => Effect.runPromise(eff.pipe(Effect.provide(layerFor(diff)))) });
+    const out = await runChunkedReview({ input, step, chunkAttempts: 2, run: (eff) => Effect.runPromise(eff.pipe(Effect.provide(layerFor(diff)))) });
     expect(out.result.status).toBe("success");
     expect(out.result.output?.verdict).not.toBe("approve");
-    expect(out.result.noteBody).toMatch(/Not reviewed[\s\S]*step timed out/);
+    expect(out.result.noteBody).toMatch(/Not reviewed[\s\S]*chunk step failed after 2 attempt\(s\): step timed out/);
   });
 
   it("an empty diff finishes in the prepare step (no chunk, no reduce)", async () => {

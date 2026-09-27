@@ -76,7 +76,7 @@ import {
   REVIEW_STEP_RETRY_LIMIT,
   REVIEW_STEP_TIMEOUT,
 } from "./gitlab-review-step-config";
-import { buildSlackFailureMessage, claimSlackAlert, postSlackFailureNotification } from "./gitlab-slack-notify";
+import { buildSlackFailureMessage, claimSlackAlert, postSlackFailureNotification, releaseSlackAlert } from "./gitlab-slack-notify";
 import { gitlabScmConfig } from "./gitlab-scm-config";
 import type { Env } from "./env";
 
@@ -410,6 +410,8 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
         ...(this.env.CLOUDFLARE_ACCOUNT_ID !== undefined ? { accountId: this.env.CLOUDFLARE_ACCOUNT_ID } : {}),
       });
       const notified = await postSlackFailureNotification(slackWebhookUrl, message);
+      // A failed post must not use up the head's one alert.
+      if (!notified) await releaseSlackAlert(this.env.IDEMPOTENCY_KV, input);
       return { notified };
     });
 

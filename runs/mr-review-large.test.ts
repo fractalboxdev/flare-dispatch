@@ -247,6 +247,57 @@ describe("mr-review — large MRs", () => {
     }).pipe(Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config())));
   });
 
+  it.effect("verify reads the finding's own chunk, never the whole diff", () => {
+    const diff = fileDiff("src/a.ts", 120) + fileDiff("src/b.ts", 120) + fileDiff("src/c.ts", 120);
+    const scm = makeScmFake({ diff });
+    const gw = gateway((req) =>
+      req.system.startsWith("You are verifying")
+        ? { toolCalls: [], text: '{"verdict":"confirmed","reason":"r"}' }
+        : pathIn(req) === "src/b.ts"
+          ? { toolCalls: [], text: findingJson("src/nope.ts", "misattributed path") }
+          : { toolCalls: [], text: '{"findings":[]}' },
+    );
+    return Effect.gen(function* () {
+      yield* mrReviewCompute(input);
+      const verify = gw.requests.filter((q) => q.system.startsWith("You are verifying"));
+      expect(verify.length).toBeGreaterThan(0);
+      for (const q of verify) {
+        expect(q.user).toContain("diff --git a/src/b.ts");
+        expect(q.user).not.toContain("diff --git a/src/a.ts");
+        expect(q.user).not.toContain("diff --git a/src/c.ts");
+      }
+    }).pipe(
+      Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config({ "pr-review.chunk.maxChars": "10000", "pr-review.verify.enabled": "true" }))),
+    );
+  });
+
+  it.effect("a reviewer that failed inside an otherwise-ok chunk is named in the note", () => {
+    const scm = makeScmFake({ diff: fileDiff("src/a.ts", 120) });
+    const gw = gateway((req) =>
+      req.user.includes("Review domain: security")
+        ? new ModelGatewayError({ model: req.model, reason: "auth-failed", message: "401 denied" })
+        : { toolCalls: [], text: '{"findings":[]}' },
+    );
+    return Effect.gen(function* () {
+      const r = yield* mrReviewCompute(input);
+      expect(r.status).toBe("success");
+      expect(r.noteBody).toMatch(/1 reviewer\(s\) failed[\s\S]*security/);
+    }).pipe(Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config({ "pr-review.agents": "multi" }))));
+  });
+
+  it.effect("a backtick in a not-reviewed path cannot break out of its code span", () => {
+    const diff = fileDiff("src/a.ts", 120) + fileDiff("docs/x`.md **bold**", 120);
+    const scm = makeScmFake({ diff });
+    const gw = gateway(() => ({ toolCalls: [], text: '{"findings":[]}' }));
+    return Effect.gen(function* () {
+      const r = yield* mrReviewCompute(input);
+      const line = r.noteBody!.split("\n").find((l) => l.startsWith("- ") && l.includes("docs/x"))!;
+      expect(line.split("`").length - 1).toBe(2);
+    }).pipe(
+      Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config({ "pr-review.chunk.maxChars": "10000", "pr-review.chunk.maxChunks": "1" }))),
+    );
+  });
+
   it.effect("the ignored-path notice still renders and ignored files are never 'not reviewed'", () => {
     const diff = fileDiff("src/a.ts", 3) + fileDiff("pnpm-lock.yaml", 3);
     const scm = makeScmFake({ diff });

@@ -69,8 +69,12 @@ export const fileSignal = (path: string): number => {
 const splitFile = (file: DiffFile, maxChars: number): readonly string[] => {
   if (file.text.length <= maxChars) return [file.text];
   const firstHunk = file.text.search(/^@@/m);
-  // No hunk marker (a binary or rename-only section) — nothing smaller to split into.
-  if (firstHunk < 0) return splitLines(file.text, "", maxChars);
+  // No hunk marker (a binary or rename-only section): split by line, but keep
+  // the `diff --git` line on every piece so the model can name the file.
+  if (firstHunk < 0) {
+    const nl = file.text.indexOf("\n") + 1;
+    return splitLines(file.text.slice(nl), file.text.slice(0, nl), maxChars);
+  }
   const header = file.text.slice(0, firstHunk);
   const hunks = file.text.slice(firstHunk).split(/^(?=@@)/m);
   const room = Math.max(1, maxChars - header.length);

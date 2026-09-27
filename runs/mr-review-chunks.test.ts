@@ -84,6 +84,13 @@ describe("planChunks", () => {
     ]);
   });
 
+  it("a big section with no hunk marker still repeats its header line in every piece", () => {
+    const text = `diff --git a/bin.dat b/bin.dat\n${Array.from({ length: 200 }, (_, i) => `index line ${i} ${"z".repeat(30)}`).join("\n")}\n`;
+    const plan = planChunks(text, { maxChars: 1_000, maxChunks: 100 });
+    expect(plan.chunks.length).toBeGreaterThan(1);
+    for (const c of plan.chunks) expect(c.text.startsWith("diff --git a/bin.dat b/bin.dat\n")).toBe(true);
+  });
+
   it("an empty diff yields no chunks", () => {
     expect(planChunks("", { maxChars: 1_000, maxChunks: 4 })).toEqual({ chunks: [], notReviewed: [] });
   });

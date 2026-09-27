@@ -894,6 +894,22 @@ describe("makeModelGatewayLive — Workers AI streaming", () => {
     expect(result.outputTokens).toBe(10);
   });
 
+  it("sums per-event usage deltas when no final total arrives", async () => {
+    const ai: AiBinding = {
+      run: () =>
+        Promise.resolve(
+          sseStream([
+            delta({ content: "a" }, { prompt_tokens: 9, completion_tokens: 5 }),
+            delta({ content: "b" }, { prompt_tokens: 0, completion_tokens: 3 }),
+            delta({ content: "c" }, { prompt_tokens: 0, completion_tokens: 2 }),
+          ]) as never,
+        ),
+    };
+    const result = await run(ai, undefined, { model: "@cf/x", system: "s", user: "u", stream: true });
+    expect(result.outputTokens).toBe(10);
+    expect(result.inputTokens).toBe(9);
+  });
+
   it("reads the legacy `response` delta shape too", async () => {
     const ai: AiBinding = {
       run: () => Promise.resolve(sseStream([{ response: "hel" }, { response: "lo" }]) as never),
