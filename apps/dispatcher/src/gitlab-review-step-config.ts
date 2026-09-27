@@ -41,3 +41,14 @@ export const REVIEW_STEP_ATTEMPTS = REVIEW_STEP_RETRY_LIMIT + 1;
  * bake-off) instead of dying unmeasured.
  */
 export const REVIEW_STEP_TIMEOUT = "25 minutes";
+
+/**
+ * Large-MR review: each CHUNK is its own durable step (see
+ * gitlab-review-chunked.ts). One chunk is ~10k chars of diff — a persona
+ * fan-out plus naive seats, each call bounded by `pr-review.callTimeoutMs` —
+ * so it gets a far shorter budget than the old whole-review step, and one
+ * retry. A chunk that still fails is listed as "Not reviewed", never fatal.
+ */
+export const REVIEW_CHUNK_STEP_RETRY_LIMIT = 1;
+export const REVIEW_CHUNK_STEP_ATTEMPTS = REVIEW_CHUNK_STEP_RETRY_LIMIT + 1;
+export const REVIEW_CHUNK_STEP_TIMEOUT = "10 minutes";

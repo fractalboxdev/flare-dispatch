@@ -194,7 +194,7 @@ export const reviewOutcome = (
       // seats that did answer; the D1 row must record that spend, not report nothing.
       summaryJson:
         r.output !== null
-          ? JSON.stringify({ ...r.output, usage: r.usage })
+          ? JSON.stringify({ ...r.output, usage: r.usage, ...(r.chunks !== undefined ? { chunks: r.chunks } : {}) })
           : hasSpend(r.usage)
             ? JSON.stringify({ usage: r.usage })
             : null,

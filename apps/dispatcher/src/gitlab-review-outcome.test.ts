@@ -42,6 +42,15 @@ describe("reviewOutcome", () => {
     expect(JSON.parse(out.summaryJson!)).toEqual({ ...output, usage });
   });
 
+  it("a chunked review records the per-chunk summary (models, fallbacks) in summaryJson", () => {
+    const chunks = [
+      { id: 0, files: 3, status: "ok" as const, models: ["@cf/zai-org/glm-5.3-flash"], fallbacks: 0 },
+      { id: 1, files: 1, status: "ok" as const, models: ["@cf/qwen/qwen3-30b-a3b-fp8"], fallbacks: 1 },
+    ];
+    const compute: MrComputeResult = { status: "success", output, usage, noteBody: "n", reason: null, chunks };
+    expect(JSON.parse(reviewOutcome(Exit.succeed(compute)).summaryJson!)).toEqual({ ...output, usage, chunks });
+  });
+
   it("usage without a calls field (a value built before it existed) → calls defaults to 0", () => {
     const compute: MrComputeResult = { status: "success", output, usage: { inputTokens: 1, outputTokens: 1 }, noteBody: "the note", reason: null };
     const out = reviewOutcome(Exit.succeed(compute));

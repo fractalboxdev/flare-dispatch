@@ -846,3 +846,107 @@ describe("makeModelGatewayLive — bedrock-via-AI-Gateway route", () => {
     expect(exit._tag).toBe("Failure");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Streaming + per-call deadline (large-MR review): a long glm generation over
+// one blocking `ai.run` hit Workers AI 3046 "Request timeout"; the stream keeps
+// the connection producing and the deadline bounds the call from our side.
+
+/** An SSE byte stream in the shape Workers AI emits for `stream: true`. */
+const sseStream = (events: ReadonlyArray<unknown>, opts: { done?: boolean; hangAfter?: boolean } = {}) => {
+  const enc = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const e of events) controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
+      if (opts.done !== false) controller.enqueue(enc.encode("data: [DONE]\n\n"));
+      if (opts.hangAfter !== true) controller.close();
+    },
+  });
+};
+
+const delta = (d: { content?: string; reasoning_content?: string }, usage?: { prompt_tokens: number; completion_tokens: number }) => ({
+  choices: [{ delta: d, finish_reason: null, index: 0 }],
+  ...(usage !== undefined ? { usage } : {}),
+});
+
+describe("makeModelGatewayLive — Workers AI streaming", () => {
+  it("sends stream:true on a json-mode call and assembles the content deltas, skipping reasoning", async () => {
+    let seenInputs: Record<string, unknown> | undefined;
+    const ai: AiBinding = {
+      run: (_m, inputs) => {
+        seenInputs = inputs as Record<string, unknown>;
+        return Promise.resolve(
+          sseStream([
+            delta({ content: "" }, { prompt_tokens: 20, completion_tokens: 0 }),
+            delta({ reasoning_content: "thinking..." }, { prompt_tokens: 0, completion_tokens: 5 }),
+            delta({ content: '{"findings":' }, { prompt_tokens: 0, completion_tokens: 3 }),
+            delta({ content: "[]}" }, { prompt_tokens: 0, completion_tokens: 2 }),
+            // The final chunk carries the run's TOTAL usage, not a delta.
+            { choices: [], usage: { prompt_tokens: 20, completion_tokens: 10 } },
+          ]) as never,
+        );
+      },
+    };
+    const result = await run(ai, undefined, { model: "@cf/zai-org/glm-5.3-flash", system: "s", user: "u", stream: true });
+    expect(seenInputs?.stream).toBe(true);
+    expect(result.text).toBe('{"findings":[]}');
+    expect(result.inputTokens).toBe(20);
+    expect(result.outputTokens).toBe(10);
+  });
+
+  it("reads the legacy `response` delta shape too", async () => {
+    const ai: AiBinding = {
+      run: () => Promise.resolve(sseStream([{ response: "hel" }, { response: "lo" }]) as never),
+    };
+    const result = await run(ai, undefined, { model: "@cf/meta/llama", system: "s", user: "u", stream: true });
+    expect(result.text).toBe("hello");
+  });
+
+  it("does not stream a tools-mode call (tool calls are not assembled from deltas)", async () => {
+    const { ai, seen } = stubAi({ tool_calls: [{ name: "report", arguments: { findings: [] } }] });
+    await run(ai, undefined, {
+      model: "@cf/meta/llama",
+      system: "s",
+      user: "u",
+      stream: true,
+      tools: [{ name: "report", description: "d", parameters: {} }],
+    });
+    expect((seen.inputs as Record<string, unknown>).stream).toBeUndefined();
+  });
+
+  it("omits stream when the request does not ask for it (back-compat)", async () => {
+    const { ai, seen } = stubAi({ response: "{}" });
+    await run(ai, undefined, { model: "@cf/meta/llama", system: "s", user: "u" });
+    expect((seen.inputs as Record<string, unknown>).stream).toBeUndefined();
+  });
+
+  it("fails as timeout when the call passes its deadline (a stream that stops producing)", async () => {
+    const ai: AiBinding = {
+      run: () => Promise.resolve(sseStream([delta({ content: "{" })], { done: false, hangAfter: true }) as never),
+    };
+    const exit = await Effect.runPromiseExit(
+      modelGateway
+        .complete({ model: "@cf/zai-org/glm-5.3-flash", system: "s", user: "u", stream: true, timeoutMs: 50 })
+        .pipe(Effect.provide(makeModelGatewayLive(ai, undefined))),
+    );
+    const err = failureOf(exit);
+    expect(err?.reason).toBe("timeout");
+    expect(err?.message).toMatch(/deadline/);
+  });
+
+  it("fails as timeout when a blocking call passes its deadline", async () => {
+    const ai: AiBinding = { run: () => new Promise(() => {}) };
+    const exit = await Effect.runPromiseExit(
+      modelGateway
+        .complete({ model: "@cf/zai-org/glm-5.3-flash", system: "s", user: "u", timeoutMs: 30 })
+        .pipe(Effect.provide(makeModelGatewayLive(ai, undefined))),
+    );
+    expect(failureOf(exit)?.reason).toBe("timeout");
+  });
+
+  it("forwards a reasoning effort to Workers AI as reasoning_effort", async () => {
+    const { ai, seen } = stubAi({ response: "{}" });
+    await run(ai, undefined, { model: "@cf/zai-org/glm-5.3-flash", system: "s", user: "u", reasoningEffort: "low" });
+    expect((seen.inputs as Record<string, unknown>).reasoning_effort).toBe("low");
+  });
+});

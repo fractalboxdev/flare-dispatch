@@ -78,6 +78,24 @@ export type ModelCompletionRequest = {
    */
   readonly jsonSchema?: unknown;
   /**
+   * Ask the backend to stream the answer and assemble it (Workers AI catalog,
+   * text path only). A long reasoning-model generation over one blocking call
+   * hit Workers AI 3046 "Request timeout"; a stream keeps producing. Backends
+   * without streaming ignore it.
+   */
+  readonly stream?: boolean;
+  /**
+   * Per-call deadline in milliseconds. Past it the call fails with
+   * `ModelGatewayError` reason `"timeout"` — so a hung call cannot eat a whole
+   * Workflow step budget. Absent → no deadline beyond the platform's own.
+   */
+  readonly timeoutMs?: number;
+  /**
+   * Reasoning effort hint for reasoning models (Workers AI `reasoning_effort`).
+   * Models that do not support it ignore it.
+   */
+  readonly reasoningEffort?: string;
+  /**
    * AWS credentials + region — required for `bedrock/*` model ids only.
    * Per-execution: short-lived STS creds minted by `awsAssumeRole` inside the
    * run, threaded here so the Bedrock route can SigV4-sign without holding any

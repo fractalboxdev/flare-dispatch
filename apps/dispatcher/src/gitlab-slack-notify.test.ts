@@ -5,7 +5,7 @@
 // (2xx, non-2xx, and a thrown network error all resolve rather than throw).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSlackFailureMessage, postSlackFailureNotification, type SlackFailureNotifyInput } from "./gitlab-slack-notify";
+import { buildSlackFailureMessage, claimSlackAlert, postSlackFailureNotification, type SlackFailureNotifyInput } from "./gitlab-slack-notify";
 
 const base: SlackFailureNotifyInput = {
   projectId: "42",
@@ -163,5 +163,44 @@ describe("postSlackFailureNotification", () => {
     expect(logged).not.toContain(webhookUrl);
     expect(logged).not.toContain("super-secret-token");
     expect(logged).toContain("<redacted>");
+  });
+});
+
+describe("claimSlackAlert — at most one alert per MR head", () => {
+  const fakeKv = () => {
+    const store = new Map<string, string>();
+    const puts: Array<{ key: string; ttl?: number }> = [];
+    return {
+      store,
+      puts,
+      kv: {
+        get: async (k: string) => store.get(k) ?? null,
+        put: async (k: string, v: string, o?: { expirationTtl?: number }) => {
+          store.set(k, v);
+          puts.push({ key: k, ttl: o?.expirationTtl });
+        },
+      },
+    };
+  };
+
+  it("the first claim for a head wins; a second instance for the SAME head is refused", async () => {
+    const { kv, puts } = fakeKv();
+    expect(await claimSlackAlert(kv, { projectId: "42", iid: 7, headSha: "abc123" })).toBe(true);
+    expect(await claimSlackAlert(kv, { projectId: "42", iid: 7, headSha: "abc123" })).toBe(false);
+    expect(puts).toHaveLength(1);
+    expect(puts[0]!.key).toBe("gitlab-review:slack-alert:42:7:abc123");
+    expect(puts[0]!.ttl).toBeGreaterThanOrEqual(60 * 60 * 24);
+  });
+
+  it("a new head of the same MR alerts again", async () => {
+    const { kv } = fakeKv();
+    expect(await claimSlackAlert(kv, { projectId: "42", iid: 7, headSha: "abc123" })).toBe(true);
+    expect(await claimSlackAlert(kv, { projectId: "42", iid: 7, headSha: "def456" })).toBe(true);
+  });
+
+  it("no KV binding, or a KV error, still alerts (an alert beats silence)", async () => {
+    expect(await claimSlackAlert(undefined, { projectId: "42", iid: 7, headSha: "abc" })).toBe(true);
+    const broken = { get: async () => { throw new Error("kv down"); }, put: async () => {} };
+    expect(await claimSlackAlert(broken, { projectId: "42", iid: 7, headSha: "abc" })).toBe(true);
   });
 });

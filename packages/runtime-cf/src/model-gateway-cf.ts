@@ -138,6 +138,10 @@ type AiTextInputs = {
     readonly type: "json_schema";
     readonly json_schema: unknown;
   };
+  /** Stream the answer as SSE (`data: {...}` events) instead of one JSON body. */
+  readonly stream?: boolean;
+  /** Reasoning effort for reasoning models (e.g. glm-5.3-flash); others ignore it. */
+  readonly reasoning_effort?: string;
 };
 
 /**
@@ -269,7 +273,8 @@ export type AiBinding = {
     model: string,
     inputs: AiTextInputs,
     options?: { gateway: { id: string } },
-  ) => Promise<AiTextOutput>;
+    // A `stream: true` call resolves to the SSE byte stream instead.
+  ) => Promise<AiTextOutput | ReadableStream<Uint8Array>>;
   /** `env.AI.gateway(id)` — universal-endpoint access for BYOK providers. */
   readonly gateway?: (gatewayId: string) => AiGatewayBinding;
 };
@@ -434,22 +439,26 @@ const completeWorkersAi = (
       ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...jsonResponseFormat(req.jsonSchema),
+      // Stream only the text path: tool calls are not assembled from deltas.
+      ...(req.stream === true && !sendingTools ? { stream: true } : {}),
+      ...(req.reasoningEffort !== undefined ? { reasoning_effort: req.reasoningEffort } : {}),
     };
 
-    const output = yield* Effect.tryPromise({
+    const raw = yield* Effect.tryPromise({
       try: () =>
         gatewayId !== undefined
           ? ai.run(req.model, inputs, { gateway: { id: gatewayId } })
           : ai.run(req.model, inputs),
-      catch: (cause) => {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        return new ModelGatewayError({
-          model: req.model,
-          reason: reasonFor(message),
-          message: `Workers AI run failed: ${message}`,
-        });
-      },
+      catch: (cause) => workersAiError(req.model, cause),
     });
+
+    if (raw instanceof ReadableStream) {
+      return yield* Effect.tryPromise({
+        try: (signal) => readSseStream(raw, signal),
+        catch: (cause) => workersAiError(req.model, cause),
+      });
+    }
+    const output = raw;
 
     // Read the answer from EITHER the legacy `{response, tool_calls}` shape OR
     // the chat-completion `{choices:[{message:{content, tool_calls}}]}` shape —
@@ -461,6 +470,84 @@ const completeWorkersAi = (
       ...readUsage(output),
     } satisfies ModelCompletionResult;
   });
+
+const workersAiError = (model: string, cause: unknown): ModelGatewayError => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return new ModelGatewayError({ model, reason: reasonFor(message), message: `Workers AI run failed: ${message}` });
+};
+
+/**
+ * Assemble a Workers AI SSE stream (`stream: true`) into a completion. Each
+ * event is `data: <json>`; the answer is the concatenated `choices[0].delta.content`
+ * (chat shape) or `response` (legacy shape) — `reasoning_content` deltas are the
+ * model thinking and are skipped. Usage arrives as per-event deltas and then a
+ * final event carrying the run's TOTAL, so the larger of "last event" and "sum of
+ * the earlier events" is the total whichever way a model reports it. The reader
+ * is cancelled when `signal` aborts (the per-call deadline interrupting).
+ */
+const readSseStream = async (
+  stream: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): Promise<ModelCompletionResult> => {
+  const reader = stream.getReader();
+  const onAbort = () => void reader.cancel().catch(() => {});
+  signal.addEventListener("abort", onAbort, { once: true });
+  const dec = new TextDecoder();
+  let buf = "";
+  let text = "";
+  let promptTokens: number | undefined;
+  let outSum = 0;
+  let lastOut: number | undefined;
+  let sawUsage = false;
+  const handle = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const payload = line.slice(5).trim();
+    if (payload === "" || payload === "[DONE]") return;
+    let ev: {
+      response?: unknown;
+      choices?: ReadonlyArray<{ delta?: { content?: unknown } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    try {
+      ev = JSON.parse(payload) as typeof ev;
+    } catch {
+      return;
+    }
+    const piece = ev.choices?.[0]?.delta?.content ?? ev.response;
+    if (typeof piece === "string") text += piece;
+    const u = ev.usage;
+    if (u !== undefined) {
+      sawUsage = true;
+      if (typeof u.prompt_tokens === "number") promptTokens = Math.max(promptTokens ?? 0, u.prompt_tokens);
+      if (typeof u.completion_tokens === "number") {
+        if (lastOut !== undefined) outSum += lastOut;
+        lastOut = u.completion_tokens;
+      }
+    }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        handle(buf.slice(0, nl).trim());
+        buf = buf.slice(nl + 1);
+      }
+    }
+    handle(buf.trim());
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+  const outputTokens = lastOut !== undefined ? Math.max(lastOut, outSum) : undefined;
+  return {
+    toolCalls: [],
+    text,
+    ...(sawUsage && promptTokens !== undefined ? { inputTokens: promptTokens } : {}),
+    ...(sawUsage && outputTokens !== undefined ? { outputTokens } : {}),
+  };
+};
 
 /**
  * The Anthropic universal route — `ai.gateway(id).run({provider:"anthropic"})`.
@@ -986,11 +1073,28 @@ export const makeModelGatewayLive = (
             ? completeOpenAiCompat(ai, gatewayId, gatewayAuthToken, req, OPENAI)
             : completeWorkersAi(ai, gatewayId, req);
 
+  // The per-call deadline wraps every route: past `timeoutMs` the call fails as
+  // `timeout` (the interrupt aborts a streaming read) instead of holding the step.
+  const routeWithDeadline = (req: ModelCompletionRequest) =>
+    req.timeoutMs === undefined || !(req.timeoutMs > 0)
+      ? route(req)
+      : route(req).pipe(
+          Effect.timeoutFail({
+            duration: req.timeoutMs,
+            onTimeout: () =>
+              new ModelGatewayError({
+                model: req.model,
+                reason: "timeout",
+                message: `model call passed its ${req.timeoutMs} ms deadline`,
+              }),
+          }),
+        );
+
   const service: ModelGatewayService = {
     complete: (req) =>
       usageSink === undefined
-        ? route(req)
-        : route(req).pipe(
+        ? routeWithDeadline(req)
+        : routeWithDeadline(req).pipe(
             // Record usage on success only; the write is best-effort and must
             // never delay or fail the review (Effect.ignore inside recordModelUsage).
             Effect.tap((result) => recordModelUsage(usageSink, req.model, result)),

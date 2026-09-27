@@ -145,3 +145,37 @@ export const postSlackFailureNotification = async (
     return false;
   }
 };
+
+/** The slice of a KV namespace {@link claimSlackAlert} uses. */
+export type AlertClaimKv = {
+  readonly get: (key: string) => Promise<string | null>;
+  readonly put: (key: string, value: string, options?: { expirationTtl?: number }) => Promise<void>;
+};
+
+/** How long a head's alert claim lasts — longer than any review of that head runs. */
+const ALERT_CLAIM_TTL_SECONDS = 60 * 60 * 24 * 7;
+
+/**
+ * At most ONE Slack alert per MR head. Every failed run posts to the client's
+ * channel, and several Workflow instances can end on the same head (a webhook
+ * re-send, a re-labelled MR), so the first instance to fail claims the head in
+ * KV and later ones stay quiet. KV is eventually consistent — two instances
+ * failing within seconds of each other can both alert — which is acceptable:
+ * the guard is against a stream of alerts, not an exact-once protocol. No KV
+ * binding, or a KV error, returns `true`: an alert beats silence.
+ */
+export const claimSlackAlert = async (
+  kv: AlertClaimKv | undefined,
+  head: { readonly projectId: string; readonly iid: number; readonly headSha: string },
+): Promise<boolean> => {
+  if (kv === undefined) return true;
+  const key = `gitlab-review:slack-alert:${head.projectId}:${head.iid}:${head.headSha}`;
+  try {
+    if ((await kv.get(key)) !== null) return false;
+    await kv.put(key, new Date().toISOString(), { expirationTtl: ALERT_CLAIM_TTL_SECONDS });
+    return true;
+  } catch (e) {
+    console.warn(`[gitlab-review] Slack alert claim failed, alerting anyway: ${e instanceof Error ? e.message : String(e)}`);
+    return true;
+  }
+};

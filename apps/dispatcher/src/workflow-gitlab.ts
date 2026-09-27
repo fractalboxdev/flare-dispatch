@@ -10,10 +10,12 @@
 //                         MR shows something is happening before the model
 //                         fan-out finishes. Its note id is threaded through so
 //                         `post-review` can UPDATE it in place.
-//   3. review           — build the 3-Layer stack (modelGateway + config + the
-//                         GitLab `scm`) and run `mrReviewCompute` (fetch + model
-//                         fan-out + render — but NOT post). Yields the verdict +
-//                         the rendered note body.
+//   3. review-prepare / review-chunk-<n> / review-reduce — the review as
+//                         map-reduce steps (gitlab-review-chunked.ts): plan
+//                         the chunks, review each chunk in its own step (own
+//                         retry + timeout, checkpointed), then merge, verify
+//                         and render — but NOT post. Yields the verdict + the
+//                         rendered note body.
 //   4. mark-reviewed-at — durably captures the instant the review step
 //                         concluded, so a replay between here and `finalize`
 //                         can never inflate the wall time the timing footer
@@ -42,7 +44,7 @@
 
 import { WorkflowEntrypoint, type WorkflowStepConfig } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
-import { Effect, Layer, Schedule } from "effect";
+import { Effect, Exit, Layer, Schedule } from "effect";
 import { ScmError } from "@fractalboxdev/flare-dispatch-core";
 import {
   ConfigDeferred,
@@ -53,10 +55,10 @@ import {
 } from "@fractalboxdev/flare-dispatch-runtime-cf";
 import {
   mrPostNote,
-  mrReviewCompute,
   mrUpdateNote,
   type MrReviewInput,
 } from "@fractalboxdev/flare-dispatch-runs/mr-review";
+import { runChunkedReview, type ReviewStepKind } from "./gitlab-review-chunked";
 import {
   placeholderNoteBody,
   reconcilePostedStatus,
@@ -67,11 +69,14 @@ import {
   type ReviewOutcome,
 } from "./gitlab-review-outcome";
 import {
+  REVIEW_CHUNK_STEP_ATTEMPTS,
+  REVIEW_CHUNK_STEP_RETRY_LIMIT,
+  REVIEW_CHUNK_STEP_TIMEOUT,
   REVIEW_STEP_ATTEMPTS,
   REVIEW_STEP_RETRY_LIMIT,
   REVIEW_STEP_TIMEOUT,
 } from "./gitlab-review-step-config";
-import { buildSlackFailureMessage, postSlackFailureNotification } from "./gitlab-slack-notify";
+import { buildSlackFailureMessage, claimSlackAlert, postSlackFailureNotification } from "./gitlab-slack-notify";
 import { gitlabScmConfig } from "./gitlab-scm-config";
 import type { Env } from "./env";
 
@@ -105,6 +110,12 @@ type StepDoWith = <T>(name: string, config: WorkflowStepConfig, cb: () => Promis
 const REVIEW_STEP_CONFIG: WorkflowStepConfig = {
   retries: { limit: REVIEW_STEP_RETRY_LIMIT, delay: "30 seconds", backoff: "constant" },
   timeout: REVIEW_STEP_TIMEOUT,
+};
+
+/** One chunk of a large-MR review — its own retry and a shorter budget. */
+const REVIEW_CHUNK_STEP_CONFIG: WorkflowStepConfig = {
+  retries: { limit: REVIEW_CHUNK_STEP_RETRY_LIMIT, delay: "30 seconds", backoff: "constant" },
+  timeout: REVIEW_CHUNK_STEP_TIMEOUT,
 };
 
 export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewParams> {
@@ -201,40 +212,47 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
       return { noteId };
     });
 
-    // 3. The review COMPUTE (no post). Build the 3-Layer stack, each Layer
-    //    degrading when its binding/secret is absent (config dies on read, model
-    //    fails typed, scm fails auth-failed) — `mrReviewCompute` catches those
-    //    into a failure note and never itself fails. `reviewOutcome` maps the
-    //    Exit to the row fields + note body, logging the Cause on any defect.
+    // 3. The review COMPUTE (no post), as map-reduce durable steps:
+    //    review-prepare → review-chunk-<n> (one per chunk, own retry/timeout)
+    //    → review-reduce (see gitlab-review-chunked.ts). Each Effect runs over
+    //    the 3-Layer stack (modelGateway + config + the GitLab `scm`), each
+    //    Layer degrading when its binding/secret is absent. The run functions
+    //    never fail; a chunk step that exhausts its retries becomes a failed
+    //    chunk ("Not reviewed"), not a failed review.
     let outcome: ReviewOutcome;
-    // 1 unless the step's own retries were exhausted (a timeout, typically) —
-    // the Slack failure notification reports this as "N attempts".
+    // 1 unless the prepare/reduce step's own retries were exhausted — the
+    // Slack failure notification reports this as "N attempts".
     let attempts = 1;
+    let reviewSteps = 1;
+    const modelLayer =
+      this.env.AI === undefined
+        ? ModelGatewayDeferred
+        : makeModelGatewayLive(
+            this.env.AI,
+            this.env.AI_GATEWAY_ID !== undefined && this.env.AI_GATEWAY_ID.length > 0
+              ? this.env.AI_GATEWAY_ID
+              : undefined,
+          );
+    const configLayer =
+      this.env.CONFIG_KV === undefined
+        ? ConfigDeferred
+        : makeConfigKvLive(this.env.CONFIG_KV);
+    const layer = Layer.mergeAll(modelLayer, configLayer, scmLayer);
+    const stepConfigFor = (kind: ReviewStepKind): WorkflowStepConfig =>
+      kind === "chunk" ? REVIEW_CHUNK_STEP_CONFIG : REVIEW_STEP_CONFIG;
     try {
-      outcome = await stepDoWith("review", REVIEW_STEP_CONFIG, async () => {
-      const modelLayer =
-        this.env.AI === undefined
-          ? ModelGatewayDeferred
-          : makeModelGatewayLive(
-              this.env.AI,
-              this.env.AI_GATEWAY_ID !== undefined && this.env.AI_GATEWAY_ID.length > 0
-                ? this.env.AI_GATEWAY_ID
-                : undefined,
-            );
-      const configLayer =
-        this.env.CONFIG_KV === undefined
-          ? ConfigDeferred
-          : makeConfigKvLive(this.env.CONFIG_KV);
-      const layer = Layer.mergeAll(modelLayer, configLayer, scmLayer);
-
-      const exit = await Effect.runPromiseExit(
-        mrReviewCompute(input).pipe(Effect.provide(layer)),
-      );
-      return reviewOutcome(exit);
+      const reviewed = await runChunkedReview({
+        input,
+        chunkAttempts: REVIEW_CHUNK_STEP_ATTEMPTS,
+        step: (name, kind, cb) => stepDoWith(name, stepConfigFor(kind), cb),
+        run: (eff) => Effect.runPromise(eff.pipe(Effect.provide(layer))),
       });
+      reviewSteps = reviewed.steps;
+      outcome = reviewOutcome(Exit.succeed(reviewed.result));
     } catch (cause) {
-      // Retries exhausted (timeouts, or a defect the compute did not catch). Finalize as
-      // failure and say so on the MR instead of erroring the Workflow silently.
+      // Prepare or reduce exhausted its retries (a timeout, or a defect the
+      // compute did not catch). Finalize as failure and say so on the MR
+      // instead of erroring the Workflow silently.
       const message = cause instanceof Error ? cause.message : String(cause);
       console.error(`[gitlab-review] review step failed after retries: ${message}`);
       outcome = reviewStepFailedOutcome(message);
@@ -265,7 +283,10 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
     // no-ops internally when there is nothing to notify), so it is never
     // conditional here.
     const elapsedMs = reviewedAt - startedAt;
-    const stepsRun = 7;
+    // insert-execution, post-placeholder, mark-reviewed-at, post-review,
+    // notify-failure, finalize — six — plus the review's own steps (prepare,
+    // one per chunk, reduce; just prepare when it finished there).
+    const stepsRun = 6 + reviewSteps;
 
     // 4. Post the result — its OWN durable step, so a replay after a completed
     //    post/update never re-posts the model fan-out's note. Best-effort: a
@@ -365,6 +386,10 @@ export class GitlabReviewWorkflow extends WorkflowEntrypoint<Env, GitlabReviewPa
       }
       if (slackWebhookUrl === undefined || slackWebhookUrl.trim().length === 0) {
         return { notified: false };
+      }
+      // At most ONE alert per MR head, across every instance that reviews it.
+      if (!(await claimSlackAlert(this.env.IDEMPOTENCY_KV, input))) {
+        return { notified: false, deduped: true };
       }
       const message = buildSlackFailureMessage({
         projectId: input.projectId,
