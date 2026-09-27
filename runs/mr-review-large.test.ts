@@ -114,6 +114,36 @@ describe("mr-review — large MRs", () => {
     );
   });
 
+  it.effect("a glm primary model defaults to reasoning effort low (probe 2026-09-27); 'off' turns it off; other models get none", () => {
+    const diff = fileDiff("src/a.ts", 3);
+    const run = (extra: Record<string, string>) => {
+      const gw = gateway(() => ({ toolCalls: [], text: '{"findings":[]}' }));
+      return mrReviewCompute(input).pipe(
+        Effect.as(gw.requests),
+        Effect.provide(Layer.mergeAll(makeScmFake({ diff }).layer, gw.layer, config(extra))),
+      );
+    };
+    return Effect.gen(function* () {
+      const glm = yield* run({ "pr-review.workers-ai.model": "@cf/zai-org/glm-5.3-flash" });
+      expect(glm[0]!.reasoningEffort).toBe("low");
+      const off = yield* run({ "pr-review.workers-ai.model": "@cf/zai-org/glm-5.3-flash", "pr-review.workers-ai.reasoningEffort": "off" });
+      expect(off[0]!.reasoningEffort).toBeUndefined();
+      const other = yield* run({});
+      expect(other[0]!.reasoningEffort).toBeUndefined();
+    });
+  });
+
+  it.effect("reviewers are told today's date, so a recent release is not flagged as 'unreleased'", () => {
+    const scm = makeScmFake({ diff: fileDiff("src/a.ts", 3) });
+    const gw = gateway(() => ({ toolCalls: [], text: '{"findings":[]}' }));
+    return Effect.gen(function* () {
+      yield* mrReviewCompute(input);
+      const today = new Date().toISOString().slice(0, 10);
+      expect(gw.requests[0]!.system).toContain(`Today's date is ${today}`);
+      expect(gw.requests[0]!.system).toMatch(/training data/);
+    }).pipe(Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config())));
+  });
+
   it.effect("an empty answer on the primary model is retried once on the naive model and recorded", () => {
     const scm = makeScmFake({ diff: fileDiff("src/a.ts", 3) });
     const gw = gateway((req) =>
@@ -134,7 +164,7 @@ describe("mr-review — large MRs", () => {
     }).pipe(Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config())));
   });
 
-  it.effect("a timeout on the primary model also falls back; a rate limit does not", () => {
+  it.live("a timeout on the primary model also falls back; a rate limit does not", () => {
     const scm = makeScmFake({ diff: fileDiff("src/a.ts", 3) });
     const gw = gateway((req) =>
       req.model === PRIMARY
@@ -151,8 +181,26 @@ describe("mr-review — large MRs", () => {
       const limited = yield* mrReviewChunk(prep.ctx, prep.chunks[0]!).pipe(Effect.provide(gwRate.layer));
       expect(limited.status).toBe("failed");
       expect(limited.rateLimited).toBe(true);
-      expect(gwRate.requests).toHaveLength(1);
-    }).pipe(Effect.provide(Layer.mergeAll(scm.layer, config())));
+      // Re-sent with backoff (3 retries), then no naive fallback for a rate limit.
+      expect(gwRate.requests.map((q) => q.model)).toEqual([PRIMARY, PRIMARY, PRIMARY, PRIMARY]);
+    }).pipe(Effect.provide(Layer.mergeAll(scm.layer, config({ "pr-review.rateLimitRetryMs": "1" }))));
+  });
+
+  it.live("a rate-limited call (Workers AI 3021 per-minute limit) is retried with backoff before it counts as failed", () => {
+    const scm = makeScmFake({ diff: fileDiff("src/a.ts", 3) });
+    let n = 0;
+    const gw = gateway((req) =>
+      ++n <= 2
+        ? new ModelGatewayError({ model: req.model, reason: "rate-limited", message: "3021: rate limiting" })
+        : { toolCalls: [], text: findingJson("src/a.ts", "after the retry") },
+    );
+    return Effect.gen(function* () {
+      const r = yield* mrReviewCompute(input);
+      expect(r.status).toBe("success");
+      expect(r.noteBody).toContain("after the retry");
+      expect(gw.requests.map((q) => q.model)).toEqual([PRIMARY, PRIMARY, PRIMARY]);
+      expect(r.usage?.calls).toBe(3);
+    }).pipe(Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config({ "pr-review.rateLimitRetryMs": "1" }))));
   });
 
   it.effect("a failed chunk yields a partial review: findings + 'Not reviewed', and never ✅ Approve", () => {

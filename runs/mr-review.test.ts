@@ -199,13 +199,14 @@ describe("mr-review", () => {
 
   it.effect("usage.calls counts a failed call too — a call that failed still cost a request", () => {
     const scmFake = makeScmFake({ diff: "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n" });
-    // "rate-limited" (not "bad-response") — the latter triggers
-    // completeStructured's own tools→json auto-fallback retry, which would
-    // cost a SECOND raw call for the same seat and skew this exact count.
+    // "auth-failed" (not "bad-response") — the latter triggers
+    // completeStructured's own tools→json auto-fallback retry, and
+    // "rate-limited" is re-sent with backoff; either would cost a SECOND raw
+    // call for the same seat and skew this exact count.
     const modelFake = makeModelGatewayFake({
       responses: [
         reportWithFinding,
-        new ModelGatewayError({ model: "@cf/test/model", reason: "rate-limited", message: "429" }),
+        new ModelGatewayError({ model: "@cf/test/model", reason: "auth-failed", message: "401" }),
         reportWithFinding,
         reportWithFinding,
       ],
@@ -219,7 +220,7 @@ describe("mr-review", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("rate-limited model (quota exhausted) → skipped-quota: NO note is posted", () => {
+  it.live("rate-limited model (quota exhausted) → skipped-quota: NO note is posted", () => {
     const scmFake = makeScmFake({ diff: "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n" });
     // The lone reviewer's model call fails rate-limited → every reviewer fails.
     const modelFake = makeModelGatewayFake({
@@ -231,7 +232,7 @@ describe("mr-review", () => {
         }),
       ],
     });
-    const layer = Layer.mergeAll(scmFake.layer, modelFake.layer, makeConfigFake(backendConfig));
+    const layer = Layer.mergeAll(scmFake.layer, modelFake.layer, makeConfigFake({ ...backendConfig, "pr-review.rateLimitRetryMs": "1" }));
 
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(mrReviewProgram(baseInput));
