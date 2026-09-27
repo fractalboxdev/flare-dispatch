@@ -73,6 +73,42 @@ const pathIn = (req: ModelCompletionRequest): string =>
   /diff --git a\/(\S+)/.exec(req.user)?.[1] ?? "unknown";
 
 describe("mr-review — large MRs", () => {
+  it.effect("gives every chunk reviewer the diff map and the verifier the replacement from another chunk (Atomos !304)", () => {
+    const a = fileDiff("src/a.ts", 120).replace("@@ -1,120 +1,120 @@\n", "@@ -1,121 +1,120 @@\n-export const legacyGuard = 1;\n");
+    const b = fileDiff("src/b.ts", 120) + "+export const legacyGuard = 2;\n";
+    const scm = makeScmFake({ diff: a + b });
+    const gw = gateway((req) =>
+      req.system?.includes("verifying")
+        ? { toolCalls: [], text: '{"verdict":"refuted","reason":"added back in src/b.ts"}' }
+        : pathIn(req).endsWith("a.ts") && req.user.includes("This chunk:\n<untrusted-diff-") && req.user.includes("-export const legacyGuard")
+          ? {
+              toolCalls: [],
+              text: JSON.stringify({
+                findings: [{ path: "src/a.ts", startLine: 1, endLine: 1, level: "failure", title: "`legacyGuard` removed with no replacement", message: "The guard is gone." }],
+              }),
+            }
+          : { toolCalls: [], text: '{"findings":[]}' },
+    );
+    return Effect.gen(function* () {
+      const r = yield* mrReviewCompute(input);
+      const reviews = gw.requests.filter((q) => !q.system?.includes("verifying"));
+      expect(reviews.length).toBeGreaterThan(1);
+      for (const q of reviews) expect(q.user).toContain("legacyGuard still in added lines (src/b.ts)");
+      const verifies = gw.requests.filter((q) => q.system?.includes("verifying"));
+      expect(verifies.length).toBeGreaterThan(0);
+      for (const q of verifies) expect(q.user).toContain("+export const legacyGuard = 2;");
+      expect(r.noteBody).not.toContain("removed with no replacement");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          scm.layer,
+          gw.layer,
+          config({ "pr-review.workers-ai.maxDiffChars": "20000", "pr-review.chunk.maxChars": "10000", "pr-review.verify.enabled": "true" }),
+        ),
+      ),
+    );
+  });
+
   it.effect("reviews a diff far past maxDiffChars in several chunks — nothing truncated", () => {
     const diff = fileDiff("src/a.ts", 120) + fileDiff("src/b.ts", 120) + fileDiff("src/c.ts", 120);
     const scm = makeScmFake({ diff });
@@ -181,8 +217,8 @@ describe("mr-review — large MRs", () => {
       const limited = yield* mrReviewChunk(prep.ctx, prep.chunks[0]!).pipe(Effect.provide(gwRate.layer));
       expect(limited.status).toBe("failed");
       expect(limited.rateLimited).toBe(true);
-      // Re-sent with backoff (3 retries), then no naive fallback for a rate limit.
-      expect(gwRate.requests.map((q) => q.model)).toEqual([PRIMARY, PRIMARY, PRIMARY, PRIMARY]);
+      // Re-sent with backoff (5 retries), then no naive fallback for a rate limit.
+      expect(gwRate.requests.map((q) => q.model)).toEqual(Array(6).fill(PRIMARY));
     }).pipe(Effect.provide(Layer.mergeAll(scm.layer, config({ "pr-review.rateLimitRetryMs": "1" }))));
   });
 
@@ -200,6 +236,21 @@ describe("mr-review — large MRs", () => {
       expect(r.noteBody).toContain("after the retry");
       expect(gw.requests.map((q) => q.model)).toEqual([PRIMARY, PRIMARY, PRIMARY]);
       expect(r.usage?.calls).toBe(3);
+    }).pipe(Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config({ "pr-review.rateLimitRetryMs": "1" }))));
+  });
+
+  it.live("a call rate-limited five times in a row still answers — the backoff outlasts a per-minute window (live !252)", () => {
+    const scm = makeScmFake({ diff: fileDiff("src/a.ts", 3) });
+    let n = 0;
+    const gw = gateway((req) =>
+      ++n <= 5
+        ? new ModelGatewayError({ model: req.model, reason: "rate-limited", message: "3021: rate limiting" })
+        : { toolCalls: [], text: findingJson("src/a.ts", "after five waits") },
+    );
+    return Effect.gen(function* () {
+      const r = yield* mrReviewCompute(input);
+      expect(r.noteBody).toContain("after five waits");
+      expect(gw.requests).toHaveLength(6);
     }).pipe(Effect.provide(Layer.mergeAll(scm.layer, gw.layer, config({ "pr-review.rateLimitRetryMs": "1" }))));
   });
 
