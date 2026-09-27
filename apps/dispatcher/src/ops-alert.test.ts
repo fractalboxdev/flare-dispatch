@@ -80,24 +80,31 @@ describe("opsAlert: one message per key per 30 min, deduped in IDEMPOTENCY_KV", 
 });
 
 describe("sweepStaleReviews: a review row `running` for over 60 min never finalized", () => {
-  it("alerts once with the count and the oldest id; an older row alerted already", async () => {
-    const s = slack();
+  it("names each stale row once, counts them all, and retries rows a failed post did not name", async () => {
+    const s = slack(500);
     const kv = makeFakeKv();
     const d1 = makeFakeD1({
       executions: [
         { id: "mr-review-old", status: "running", started_at: T0 - 61 * 60_000 },
         { id: "mr-review-ancient", status: "running", started_at: T0 - 5 * 60 * 60_000 },
         { id: "mr-review-new", status: "running", started_at: T0 - 5 * 60_000 },
+        { id: "mr-review-done", status: "success", started_at: T0 - 90 * 60_000 },
       ],
     } as never);
     const env = { SLACK_WEBHOOK_URL: HOOK, IDEMPOTENCY_KV: kv.binding, RUNS_METADATA: d1.binding };
     await sweepStaleReviews(env, T0);
     expect(s.posts).toHaveLength(1);
-    expect(s.posts[0]).toContain("1 review(s) running for over 60 min");
-    expect(s.posts[0]).toContain("execution=mr-review-old");
-    // A row alerts in the sweeps of its first 15 stale minutes only, not every 30 min for ever.
-    await sweepStaleReviews(env, T0 + 16 * 60_000);
-    expect(s.posts).toHaveLength(1);
+    s.state.status = 200;
+    await sweepStaleReviews(env, T0 + 10 * 60_000);
+    expect(s.posts).toHaveLength(2);
+    expect(s.posts[1]).toContain("2 new of 2 review(s) running for over 60 min");
+    expect(s.posts[1]).toContain("execution=mr-review-old");
+    // Named once: later sweeps, even after the cooldown, send nothing for the same rows.
+    await sweepStaleReviews(env, T0 + 20 * 60_000);
+    await sweepStaleReviews(env, T0 + 3 * 60 * 60_000);
+    expect(s.posts).toHaveLength(3); // mr-review-new went stale at T0 + 55 min
+    expect(s.posts[2]).toContain("1 new of 3 review(s)");
+    expect(s.posts[2]).toContain("execution=mr-review-new");
   });
 });
 

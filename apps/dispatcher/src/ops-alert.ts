@@ -85,12 +85,27 @@ const writeRecord = async (
   }
 };
 
+type OpsAlertResult = "sent" | "suppressed" | "failed" | "disabled";
+
 /** Sends one deduped operator alert. Never throws. */
 export const opsAlert = async (
   env: OpsAlertEnv,
   input: OpsAlertInput,
   now: number = Date.now(),
-): Promise<"sent" | "suppressed" | "failed" | "disabled"> => {
+): Promise<OpsAlertResult> => {
+  try {
+    return await sendOpsAlert(env, input, now);
+  } catch (e) {
+    console.warn(`[ops-alert] ${input.key} failed: ${e instanceof Error ? e.message : String(e)}`);
+    return "failed";
+  }
+};
+
+const sendOpsAlert = async (
+  env: OpsAlertEnv,
+  input: OpsAlertInput,
+  now: number,
+): Promise<OpsAlertResult> => {
   console.warn(`[ops-alert] ${input.severity} ${input.key} ${input.what}`);
   const url = env.SLACK_WEBHOOK_URL;
   if (url === undefined || url.trim().length === 0) return "disabled";
@@ -115,16 +130,18 @@ export const opsAlert = async (
 
 /** A review row `running` this long never finalized (a review runs at most two 25-min attempts). */
 export const STALE_REVIEW_MS = 60 * 60_000;
-/**
- * A row alerts only while it is this much past STALE_REVIEW_MS, so a stuck row alerts in one or
- * two sweeps (10-min cron) and not every cooldown for ever.
- */
-export const STALE_WINDOW_MS = 15 * 60_000;
+/** Most rows one sweep reads; the message says when there are more. */
+const STALE_LIMIT = 100;
+/** A stale row is named in one message only: its claim outlives any stuck row worth a message. */
+const STALE_CLAIM_TTL_SECONDS = 7 * 24 * 60 * 60;
+const staleClaimKey = (id: string): string => `ops-alert:stale-row:${id}`;
 
 /**
  * The cron's sweep: a Workflow instance that died without reaching its `finalize` step (e.g. a
  * deploy reset its Durable Object, WorkflowInternalError) sends no `notify-failure` and leaves its
- * row `running`. Never throws.
+ * row `running`. Each stale row is claimed in IDEMPOTENCY_KV once a message named it, so it is
+ * alerted once, however long the sweep or Slack was down; the message counts every stale row.
+ * Never throws.
  */
 export const sweepStaleReviews = async (
   env: OpsAlertEnv & { readonly RUNS_METADATA?: D1Database },
@@ -133,24 +150,35 @@ export const sweepStaleReviews = async (
   try {
     if (env.RUNS_METADATA === undefined) return;
     const { results } = await env.RUNS_METADATA.prepare(
-      "SELECT id, started_at FROM executions WHERE status = ? AND started_at < ?",
+      "SELECT id, started_at FROM executions WHERE status = ? AND started_at < ? LIMIT ?",
     )
-      .bind("running", now - STALE_REVIEW_MS)
+      .bind("running", now - STALE_REVIEW_MS, STALE_LIMIT)
       .all<{ id: string; started_at: number }>();
-    const from = now - STALE_REVIEW_MS - STALE_WINDOW_MS;
-    const rows = (results ?? []).filter((r) => r.started_at >= from);
-    if (rows.length === 0) return;
-    const oldest = rows.reduce((a, b) => (b.started_at < a.started_at ? b : a));
-    await opsAlert(
+    const rows = results ?? [];
+    const fresh: { id: string; started_at: number }[] = [];
+    for (const r of rows) {
+      if ((await env.IDEMPOTENCY_KV?.get(staleClaimKey(r.id))) == null) fresh.push(r);
+    }
+    if (fresh.length === 0) return;
+    const newest = fresh.reduce((a, b) => (b.started_at > a.started_at ? b : a));
+    const total = rows.length >= STALE_LIMIT ? `${STALE_LIMIT}+` : String(rows.length);
+    const sent = await opsAlert(
       env,
       {
         key: "stale-review",
         severity: "warning",
-        what: `${rows.length} review(s) running for over 60 min and never finalized (no notify-failure was sent)`,
-        ids: { execution: oldest.id },
+        what: `${fresh.length} new of ${total} review(s) running for over 60 min and never finalized (no notify-failure was sent)`,
+        ids: { execution: newest.id },
       },
       now,
     );
+    // Claim only what a message named: a suppressed or failed alert names them again later.
+    if (sent !== "sent") return;
+    for (const r of fresh) {
+      await env.IDEMPOTENCY_KV?.put(staleClaimKey(r.id), String(now), {
+        expirationTtl: STALE_CLAIM_TTL_SECONDS,
+      });
+    }
   } catch (e) {
     await opsAlert(
       env,
