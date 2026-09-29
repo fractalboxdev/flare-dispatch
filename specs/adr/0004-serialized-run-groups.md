@@ -1,6 +1,6 @@
 # ADR-0004 — Serialized run groups: one in flight, newest waiter wins, in D1
 
-**Status:** proposed 2026-09-18
+**Status:** accepted 2026-09-18
 **Related:** `packages/runtime-cf/src/serial-queue-d1.ts` · `apps/dispatcher/src/workflow.ts` · `runs/worker-deploy.ts` · `infra/migrations/0008_serial_queue.sql` · ADR-0001 § Consequences ("No per-entity mutex")
 
 ## Context
