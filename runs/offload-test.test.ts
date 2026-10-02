@@ -18,6 +18,9 @@
 //   (e) install     — `install: true` runs the R2-cached dependency install
 //                      inside the checkout step; the `image` override reaches
 //                      the container acquire
+//   (f) repo secrets — webhook mode resolves secret NAMES from
+//                      `offload-test.secrets:<repo>`; the values reach every
+//                      exec path and the install, and never a step result
 //
 // Plus a determinism guard: the run body must not call `Date.now()` /
 // `crypto.randomUUID()` directly — non-determinism flows only through `io`,
@@ -30,8 +33,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { it } from "@effect/vitest";
-import { Cause, Effect, Exit, Option } from "effect";
+import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { describe, expect } from "vitest";
+import { StepRunner, type StepRunnerService } from "@fractalboxdev/flare-dispatch-core";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import { offloadTest } from "./offload-test";
 
@@ -1580,6 +1584,263 @@ describe("offload-test isolated stages", () => {
       expect(new Set(handles.sandbox.acquired.map((x) => x.key))).toEqual(new Set(["a", "b"]));
     }).pipe(Effect.provide(layer));
   });
+});
+
+// --- Per-repo secrets (webhook mode) -----------------------------------------
+// The trigger pins `secrets: []`, so a webhook dispatch names its credentials
+// in `offload-test.secrets:<repo>`. Names are checkpointed; values are not.
+
+/**
+ * Wrap the ambient StepRunner so every step's success value is captured — the
+ * value CF Workflows would checkpoint. Lets a test assert that no secret VALUE
+ * ever rides a step result.
+ */
+const recordStepResults = (into: { name: string; result: unknown }[]) =>
+  Layer.effect(
+    StepRunner,
+    Effect.map(StepRunner, (inner): StepRunnerService => ({
+      waitForEvent: inner.waitForEvent,
+      run: (name, body, opts) =>
+        inner.run(name, body, opts).pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              into.push({ name, result });
+            }),
+          ),
+        ),
+    })),
+  );
+
+const failureTag = (exit: Exit.Exit<unknown, unknown>): string | undefined =>
+  Exit.isFailure(exit)
+    ? Option.match(Cause.failureOption(exit.cause), {
+        onSome: (f) => (f as { _tag?: string })._tag,
+        onNone: () => undefined,
+      })
+    : undefined;
+
+describe("offload-test per-repo secrets", () => {
+  const webhookInput = {
+    repo: "owner/name",
+    sha: "abc123",
+    secrets: [] as readonly string[],
+    failOnNonZeroExit: true,
+  };
+  const TOKEN = "tok-registry-5f3a9c";
+  const EXTRA = "extra-value-81d2";
+  const SECRETS_KEY = "offload-test.secrets:owner/name";
+
+  const expectNoSecretInSteps = (results: { name: string; result: unknown }[]) => {
+    expect(results.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(results);
+    expect(serialized).not.toContain(TOKEN);
+    expect(serialized).not.toContain(EXTRA);
+  };
+
+  it.effect(
+    "single exec — KV-named secrets reach the command and the install, never a step result",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          "pnpm test": { exitCode: 0, stdout: `auth ${TOKEN}` },
+          "pnpm install --frozen-lockfile": { exitCode: 0, stdout: `registry ${TOKEN}` },
+        },
+        secrets: { NODE_AUTH_TOKEN: TOKEN, EXTRA_KEY: EXTRA },
+        config: {
+          "offload-test.command:owner/name": "pnpm test",
+          "offload-test.install:owner/name": "true",
+          // Trimmed, empties dropped.
+          [SECRETS_KEY]: " NODE_AUTH_TOKEN , ,EXTRA_KEY ",
+          "offload-test.secret-prefix:owner/name": "ci/",
+        },
+      });
+      const steps: { name: string; result: unknown }[] = [];
+
+      return Effect.gen(function* () {
+        const result = yield* offloadTest.run(webhookInput);
+        expect(result.exitCode).toBe(0);
+
+        const expected = { NODE_AUTH_TOKEN: TOKEN, EXTRA_KEY: EXTRA };
+        const testExec = handles.sandbox.execs.find((e) => e.command === "pnpm test");
+        expect(testExec?.env).toEqual(expected);
+
+        // The install runs inside `checkout`, before the command — a private
+        // registry needs the token there, and its log is scrubbed.
+        const install = handles.sandbox.execs.find(
+          (e) => e.command === "pnpm install --frozen-lockfile",
+        );
+        expect(install?.env).toEqual(expected);
+        expect(install?.stdout).not.toContain(TOKEN);
+        expect(testExec?.stdout).not.toContain(TOKEN);
+
+        // Same step list as any webhook run — no new step for secrets.
+        expect(handles.executions.steps.map((s) => s.name)).toEqual([
+          "resolve-command",
+          "checkout",
+          "exec",
+          "upload-log",
+        ]);
+        // The resolve step checkpoints the NAMES (and prefix), never values.
+        const resolved = steps.find((s) => s.name === "resolve-command")?.result as {
+          secretNames?: readonly string[];
+          secretPrefix?: string;
+        };
+        expect(resolved.secretNames).toEqual(["NODE_AUTH_TOKEN", "EXTRA_KEY"]);
+        expect(resolved.secretPrefix).toBe("ci/");
+        expectNoSecretInSteps(steps);
+      }).pipe(Effect.provide(recordStepResults(steps)), Effect.provide(layer));
+    },
+  );
+
+  it.effect("sequential stages — every stage's exec receives the KV-named secrets", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "run-a": { exitCode: 0, stdout: `a ${TOKEN}` },
+        "run-b": { exitCode: 0 },
+      },
+      secrets: { NODE_AUTH_TOKEN: TOKEN },
+      config: {
+        "offload-test.stages:owner/name": "a,b",
+        "offload-test.command:owner/name:a": "run-a",
+        "offload-test.command:owner/name:b": "run-b",
+        [SECRETS_KEY]: "NODE_AUTH_TOKEN",
+      },
+    });
+    const steps: { name: string; result: unknown }[] = [];
+
+    return Effect.gen(function* () {
+      const result = yield* offloadTest.run(webhookInput);
+      expect(result.exitCode).toBe(0);
+      for (const command of ["run-a", "run-b"]) {
+        expect(handles.sandbox.execs.find((e) => e.command === command)?.env).toEqual({
+          NODE_AUTH_TOKEN: TOKEN,
+        });
+      }
+      expect(handles.executions.steps.map((s) => s.name)).toContain("checkout");
+      expectNoSecretInSteps(steps);
+    }).pipe(Effect.provide(recordStepResults(steps)), Effect.provide(layer));
+  });
+
+  it.effect(
+    "isolated stages — each stage's own workspace install and exec receive the secrets",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: {
+          "run-a": { exitCode: 0, stdout: `a ${TOKEN}` },
+          "run-b": { exitCode: 0 },
+        },
+        secrets: { NODE_AUTH_TOKEN: TOKEN },
+        config: {
+          "offload-test.stages:owner/name": "a,b",
+          "offload-test.command:owner/name:a": "run-a",
+          "offload-test.command:owner/name:b": "run-b",
+          "offload-test.stageConcurrency:owner/name": "2",
+          "offload-test.install:owner/name": "true",
+          [SECRETS_KEY]: "NODE_AUTH_TOKEN",
+        },
+      });
+      const steps: { name: string; result: unknown }[] = [];
+
+      return Effect.gen(function* () {
+        const result = yield* offloadTest.run(webhookInput);
+        expect(result.exitCode).toBe(0);
+        expect(handles.executions.steps.map((s) => s.name)).not.toContain("checkout");
+
+        for (const command of ["run-a", "run-b"]) {
+          expect(handles.sandbox.execs.find((e) => e.command === command)?.env).toEqual({
+            NODE_AUTH_TOKEN: TOKEN,
+          });
+        }
+        // One install per stage, each inside its stage's retryable step.
+        const installs = handles.sandbox.execs.filter(
+          (e) => e.command === "pnpm install --frozen-lockfile",
+        );
+        expect(installs).toHaveLength(2);
+        for (const install of installs) {
+          expect(install.env).toEqual({ NODE_AUTH_TOKEN: TOKEN });
+        }
+        expectNoSecretInSteps(steps);
+      }).pipe(Effect.provide(recordStepResults(steps)), Effect.provide(layer));
+    },
+  );
+
+  it.effect("dispatch-supplied secrets override the KV names", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "pnpm test": { exitCode: 0 } },
+      secrets: { NODE_AUTH_TOKEN: TOKEN, EXTRA_KEY: EXTRA },
+      config: {
+        "offload-test.command:owner/name": "pnpm test",
+        [SECRETS_KEY]: "NODE_AUTH_TOKEN",
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* offloadTest.run({ ...webhookInput, secrets: ["EXTRA_KEY"] });
+      expect(handles.sandbox.execs.find((e) => e.command === "pnpm test")?.env).toEqual({
+        EXTRA_KEY: EXTRA,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "a KV-named secret with no Worker value fails with SecretsMissing before checkout",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+        config: {
+          "offload-test.command:owner/name": "pnpm test",
+          [SECRETS_KEY]: "NODE_AUTH_TOKEN",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(offloadTest.run(webhookInput));
+        expect(failureTag(exit)).toBe("SecretsMissing");
+        // Fail-fast: no container work at all — not even the clone.
+        expect(handles.sandbox.clones).toHaveLength(0);
+        expect(handles.sandbox.execs).toHaveLength(0);
+        expect(handles.executions.steps.map((s) => s.name)).toEqual(["resolve-command"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "absent key — same steps, same resolve-step result, no env; no dispatcher-wide fallback",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+        secrets: { NODE_AUTH_TOKEN: TOKEN },
+        config: {
+          "offload-test.command:owner/name": "pnpm test",
+          "offload-test.install:owner/name": "true",
+          // An unscoped list is NOT a fallback — secrets stay per-repo.
+          "offload-test.secrets": "NODE_AUTH_TOKEN",
+        },
+      });
+      const steps: { name: string; result: unknown }[] = [];
+
+      return Effect.gen(function* () {
+        yield* offloadTest.run(webhookInput);
+        expect(handles.executions.steps.map((s) => s.name)).toEqual([
+          "resolve-command",
+          "checkout",
+          "exec",
+          "upload-log",
+        ]);
+        // Exactly the pre-secrets checkpoint shape.
+        expect(steps.find((s) => s.name === "resolve-command")?.result).toStrictEqual({
+          command: "pnpm test",
+          install: true,
+          timeoutSec: undefined,
+        });
+        expect(handles.sandbox.execs.find((e) => e.command === "pnpm test")?.env).toEqual({});
+        const install = handles.sandbox.execs.find(
+          (e) => e.command === "pnpm install --frozen-lockfile",
+        );
+        expect(install?.env).toBeUndefined();
+      }).pipe(Effect.provide(recordStepResults(steps)), Effect.provide(layer));
+    },
+  );
 });
 
 // --- Source guard: no direct Date.now() / crypto.randomUUID() in the run -----
