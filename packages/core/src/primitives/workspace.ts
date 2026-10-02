@@ -23,6 +23,10 @@ export const workspace = (opts: {
   sha: string;
   image?: string; // container image override
   install?: boolean; // run installCached after the clone
+  /** Env for the install command (see `installCached`); ignored without `install`. */
+  installEnv?: Record<string, string>;
+  /** Values to scrub from the install exec's log (see `installCached`). */
+  redactValues?: readonly string[];
   /**
    * Put this workspace in a container of its own, named by this key.
    *
@@ -47,7 +51,12 @@ export const workspace = (opts: {
       container,
     });
     if (opts.install) {
-      yield* installCached({ container, dir });
+      yield* installCached({
+        container,
+        dir,
+        ...(opts.installEnv !== undefined ? { env: opts.installEnv } : {}),
+        ...(opts.redactValues !== undefined ? { redactValues: opts.redactValues } : {}),
+      });
     }
     return { container, dir };
   });
@@ -81,6 +90,8 @@ export const ensureWorkspace = (opts: {
   sha: string;
   image?: string;
   install?: boolean;
+  installEnv?: Record<string, string>;
+  redactValues?: readonly string[];
   key?: string;
 }) =>
   Effect.gen(function* () {
@@ -99,5 +110,7 @@ export const ensureWorkspace = (opts: {
       sha: opts.sha,
       ...(opts.image !== undefined ? { image: opts.image } : {}),
       ...(opts.install !== undefined ? { install: opts.install } : {}),
+      ...(opts.installEnv !== undefined ? { installEnv: opts.installEnv } : {}),
+      ...(opts.redactValues !== undefined ? { redactValues: opts.redactValues } : {}),
     });
   });

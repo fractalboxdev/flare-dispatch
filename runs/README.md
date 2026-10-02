@@ -397,6 +397,36 @@ flowchart TB
   class ok,reported ok
 ```
 
+### Credentials (`offload-test.secrets:<repo>`)
+
+The trigger pins `secrets: []`, so a webhook dispatch cannot name a credential.
+A repo whose suite needs one — a registry token so `pnpm install` can fetch a
+private package, say — names it in CONFIG_KV and stores the value as a Worker
+secret on the dispatcher:
+
+```bash
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.secrets:owner/repo"       "NODE_AUTH_TOKEN"   # comma-separated env var NAMES
+wrangler kv key put --binding=CONFIG_KV \
+  "offload-test.secret-prefix:owner/repo" "ci/"               # optional; deprecated, ignored by loadSecrets
+wrangler secret put NODE_AUTH_TOKEN                           # the VALUE, on the dispatcher Worker
+```
+
+- Names are trimmed and empties dropped. They are read inside `resolve-command`,
+  so only the names are checkpointed; values load inline with
+  `loadSecrets({ required: true })`, and a named key with no Worker value fails
+  the run with `SecretsMissing` before checkout.
+- Dispatch-supplied `secrets` / `secretPrefix` win; the keys are the fallback
+  when the dispatch named none. Per-repo only — there is no dispatcher-wide
+  `offload-test.secrets`, so one repo's credentials never reach another's
+  command.
+- The values reach every exec path (single exec, sequential stages, isolated
+  stages) under the dispatch `env`, and the dependency install inside
+  `checkout` / each isolated stage's workspace. Every one of those execs scrubs
+  the values from its log.
+- Absent key → the run loads no secrets and its steps and checkpoints are
+  unchanged.
+
 ### Staged mode (`offload-test.stages:<repo>`)
 
 One long buffered exec killed by the platform takes its whole log with it

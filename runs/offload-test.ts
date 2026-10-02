@@ -141,6 +141,25 @@
 //    durable Workflow storage, and plaintext credentials must not land there
 //    either. The config read is cheap + idempotent to re-run on replay.
 //
+//    Webhook mode cannot name secrets in the dispatch (the trigger's `inputs`
+//    is sync + payload-only and pins `secrets: []`), so the NAMES resolve from
+//    CONFIG_KV inside `resolve-command`, same contract as `worker-deploy`:
+//    `offload-test.secrets:<repo>` (comma-separated env var names) and
+//    `offload-test.secret-prefix:<repo>`. Dispatch-supplied `secrets` /
+//    `secretPrefix` win; the keys are per-repo only — no dispatcher-wide
+//    fallback, so one repo's credentials never reach another repo's command.
+//    Only the names are checkpointed; VALUES come from Worker secrets
+//    (`wrangler secret put <NAME>` on the dispatcher), never CONFIG_KV.
+//    Absent key → the step returns exactly what it did before, and the run
+//    loads no secrets.
+//
+//    Secrets load BEFORE `checkout`, because the dependency install runs
+//    there: a repo whose `.npmrc` reads a registry token needs it at
+//    `pnpm install` time, not only when the test command runs. The install
+//    exec receives the secret env (and scrubs it from its log); every exec
+//    path — single exec, sequential stages, isolated stages — receives the
+//    secret env merged under the dispatch `env`.
+//
 // Spec: specs/02-runs.md § 1, specs/03-dsl.md § Top-level shape + § sandbox,
 //       specs/pm/plan.md § PR3.
 
@@ -355,6 +374,26 @@ const stageTimeoutKey = (repo: string, label: string): string => `${repoTimeoutK
 const repoStageConcurrencyKey = (repo: string): string => `offload-test.stageConcurrency:${repo}`;
 
 /**
+ * Per-repo secret NAMES for webhook mode (header note 3). Values are Worker
+ * secrets, never KV:
+ *
+ *   wrangler kv key put --binding=CONFIG_KV "offload-test.secrets:owner/repo" "NODE_AUTH_TOKEN"
+ *   wrangler secret put NODE_AUTH_TOKEN
+ *
+ * Deliberately no unscoped `offload-test.secrets` fallback: a dispatcher-wide
+ * list would inject one repo's credentials into every installed repo's tests.
+ */
+const repoSecretsKey = (repo: string): string => `offload-test.secrets:${repo}`;
+const repoSecretPrefixKey = (repo: string): string => `offload-test.secret-prefix:${repo}`;
+
+/** Comma-separated names → trimmed, non-empty list. */
+const parseNameList = (raw: string | undefined): string[] =>
+  (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+/**
  * Legal stage label — same charset `check` enforces on `checkLabel`, for the
  * same reason: the label becomes a step name (`exec-<label>`) and a CONFIG_KV
  * key segment, so a stray `:`/space/emoji would produce keys and step names
@@ -417,10 +456,12 @@ const parseIntConfig = (raw: string | undefined): number | undefined => {
 
 export const offloadTest = defineRun({
   name: "offload-test",
+  // 1.4.0 — additive: per-repo secret names (`offload-test.secrets:<repo>`)
+  // for webhook mode. Absent key → the 1.3.0 behaviour, byte-identical.
   // 1.3.0 — additive: isolated stages (`offload-test.stageConcurrency:<repo>`).
   // Absent or 1 → the 1.2.0 staged behaviour, byte-identical; no stages key →
   // the 1.1.0 single-exec behaviour, likewise.
-  version: "1.3.0",
+  version: "1.4.0",
 
   // Webhook-mode trigger — the zero-GHA test path (specs/04-gha-integration.md
   // § Pure webhook mode). Fires the repo's suite on every PR push; the run body
@@ -455,6 +496,8 @@ export const offloadTest = defineRun({
         failOnNonZeroExit: true,
         // `secrets` keeps its schema default restated — a PR-triggered dispatch
         // must never carry credentials, so pinning it empty here is deliberate.
+        // A repo whose command needs one names it in
+        // `offload-test.secrets:<repo>`; the run body resolves it (note 3).
         secrets: [],
       }),
     },
@@ -494,6 +537,9 @@ export const offloadTest = defineRun({
         timeoutSec: number | undefined;
         stages?: readonly ResolvedStage[] | undefined;
         stageConcurrency?: number | undefined;
+        /** KV-resolved secret NAMES — never values (this is a step result). */
+        secretNames?: readonly string[] | undefined;
+        secretPrefix?: string | undefined;
       } =
         input.command === undefined
           ? yield* step("resolve-command", () =>
@@ -506,13 +552,30 @@ export const offloadTest = defineRun({
                 const install = parseBoolConfig(yield* config.get(repoInstallKey(input.repo)));
                 const timeoutSec = parseIntConfig(yield* config.get(repoTimeoutKey(input.repo)));
 
+                // secret NAMES — only when the dispatch named none. Added to
+                // the step result only when the key yields names, so a repo
+                // without the key checkpoints exactly what it did before.
+                const secretNames =
+                  input.secrets.length > 0
+                    ? []
+                    : parseNameList(yield* config.get(repoSecretsKey(input.repo)));
+                const secretPrefix =
+                  secretNames.length > 0 && input.secretPrefix === undefined
+                    ? yield* config.get(repoSecretPrefixKey(input.repo))
+                    : undefined;
+                const secretFields = {
+                  ...(secretNames.length > 0 ? { secretNames } : {}),
+                  ...(secretPrefix !== undefined ? { secretPrefix } : {}),
+                };
+
                 // stages — resolved in this SAME step (not a new one) so the
                 // unstaged step shape stays exactly what the suite pins, and so
                 // staged mode exists only where the defect lives: the webhook
                 // path, whose one buffered exec is the thing that dies. See
                 // header § Staged mode.
                 const stagesRaw = yield* config.get(repoStagesKey(input.repo));
-                if (stagesRaw === undefined) return { command, install, timeoutSec };
+                if (stagesRaw === undefined)
+                  return { command, install, timeoutSec, ...secretFields };
                 const labels = stagesRaw
                   .split(",")
                   .map((l) => l.trim())
@@ -591,7 +654,14 @@ export const offloadTest = defineRun({
                 const stageConcurrency = parseIntConfig(
                   yield* config.get(repoStageConcurrencyKey(input.repo)),
                 );
-                return { command, install, timeoutSec, stages, stageConcurrency };
+                return {
+                  command,
+                  install,
+                  timeoutSec,
+                  stages,
+                  stageConcurrency,
+                  ...secretFields,
+                };
               }),
             )
           : {
@@ -646,34 +716,15 @@ export const offloadTest = defineRun({
           : Math.min(Math.max(resolved.stageConcurrency ?? 1, 1), stages.length);
       const isolatedStages = stages !== undefined && stageConcurrency > 1;
 
-      // checkout — acquire a container (honouring the `image` override), clone
-      // the repo at the requested SHA, and optionally run the R2-cached
-      // dependency install. One primitive, same opening move as cdp-acceptance.
-      //
-      // SKIPPED for isolated stages: each acquires its own workspace inside its
-      // own retryable step, so a shared one here would be a container paid for
-      // and never used.
-      // `key` is what makes isolated stages actually isolated. Without it every
-      // stage's `workspace()` resolved to the execution's single container and
-      // they raced to wipe each other's checkout — `git clone` clears its target
-      // directory first, so five stages produced five `CheckoutFailed`s in under
-      // five seconds. Unkeyed (the shared-container mode) is unchanged.
-      const acquireWorkspace = (key?: string) =>
-        workspace({
-          repo: input.repo,
-          sha: input.sha,
-          image: input.image,
-          install,
-          ...(key !== undefined ? { key } : {}),
-        });
-      const shared = isolatedStages ? undefined : yield* step("checkout", () => acquireWorkspace());
-
-      // load-secrets — resolve the named credentials from the config store
-      // into the env injected below. Called INLINE, not in a `step`: secrets
-      // must not land in a durable Workflow checkpoint (see header note 3).
-      // A no-op (empty record) when `secrets` is empty.
-      const secretEnv = yield* loadSecrets(input.secrets, {
-        prefix: input.secretPrefix,
+      // load-secrets — resolve the named credentials from Worker secrets into
+      // the env injected below. Called INLINE, not in a `step`: secrets must
+      // not land in a durable Workflow checkpoint (see header note 3). Names
+      // come from the dispatch, else from `offload-test.secrets:<repo>`
+      // (resolved above). A no-op (empty record) when no names resolve. Runs
+      // BEFORE `checkout` so the dependency install there can use them.
+      const secretNames = input.secrets.length > 0 ? input.secrets : (resolved.secretNames ?? []);
+      const secretEnv = yield* loadSecrets(secretNames, {
+        prefix: input.secretPrefix ?? resolved.secretPrefix,
         required: true,
       });
 
@@ -713,6 +764,45 @@ export const offloadTest = defineRun({
       ].filter((v) => v.length > 0);
       const renderable = (command: string): string =>
         secretValues.reduce((out, value) => out.split(value).join("***"), command);
+
+      // The install inside `workspace` gets the secret keys too (a private
+      // registry token is needed at install time), with the same values the
+      // command sees — a dispatch `env` override wins there as well. Only the
+      // secret keys: the install never took the non-secret dispatch `env`, and
+      // still doesn't. Spread only when there is something to pass, so a run
+      // without secrets issues the same install exec it always did.
+      const installSecrets =
+        secretValues.length > 0
+          ? {
+              installEnv: Object.fromEntries(
+                Object.keys(secretEnv).map((key) => [key, effectiveEnv[key] ?? ""]),
+              ),
+              redactValues: secretValues,
+            }
+          : {};
+
+      // checkout — acquire a container (honouring the `image` override), clone
+      // the repo at the requested SHA, and optionally run the R2-cached
+      // dependency install. One primitive, same opening move as cdp-acceptance.
+      //
+      // SKIPPED for isolated stages: each acquires its own workspace inside its
+      // own retryable step, so a shared one here would be a container paid for
+      // and never used.
+      // `key` is what makes isolated stages actually isolated. Without it every
+      // stage's `workspace()` resolved to the execution's single container and
+      // they raced to wipe each other's checkout — `git clone` clears its target
+      // directory first, so five stages produced five `CheckoutFailed`s in under
+      // five seconds. Unkeyed (the shared-container mode) is unchanged.
+      const acquireWorkspace = (key?: string) =>
+        workspace({
+          repo: input.repo,
+          sha: input.sha,
+          image: input.image,
+          install,
+          ...installSecrets,
+          ...(key !== undefined ? { key } : {}),
+        });
+      const shared = isolatedStages ? undefined : yield* step("checkout", () => acquireWorkspace());
 
       // self-heal — (gated, OFF unless `self-heal.ci.enabled=true`) auto-dispatch
       // a fix for a DETERMINISTIC CI failure. Unlike the LLM-driven demo verdict
@@ -891,6 +981,7 @@ export const offloadTest = defineRun({
                             sha: input.sha,
                             ...(input.image !== undefined ? { image: input.image } : {}),
                             install,
+                            ...installSecrets,
                           });
                     return yield* sandbox.exec({
                       cwd: ws.dir,
@@ -1311,6 +1402,7 @@ export const offloadTest = defineRun({
             sha: input.sha,
             ...(input.image !== undefined ? { image: input.image } : {}),
             install,
+            ...installSecrets,
           }).pipe(
             Effect.flatMap((ws) =>
               sandbox.exec({

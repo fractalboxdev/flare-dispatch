@@ -98,6 +98,16 @@ export const installCached = (opts: {
   container: Container;
   dir: string;
   tool?: Tool; // default: auto-detect from the lockfile
+  /**
+   * Env for the install command itself — e.g. a registry token a private
+   * `.npmrc` interpolates. Only the install exec on a cache miss receives it;
+   * the lockfile probes and the hash need none. Values never reach the cached
+   * archive: it holds the populated dependency directories, not the config the
+   * install read.
+   */
+  env?: Record<string, string>;
+  /** Values to scrub from the install exec's durable log — see `sandbox.exec`. */
+  redactValues?: readonly string[];
 }) =>
   Effect.gen(function* () {
     const tool = opts.tool ?? (yield* detectTool(opts));
@@ -125,6 +135,13 @@ export const installCached = (opts: {
       base,
       container: opts.container,
       dir: opts.dir,
-      onMiss: () => sandbox.exec({ cwd: opts.dir, container: opts.container, command: install }),
+      onMiss: () =>
+        sandbox.exec({
+          cwd: opts.dir,
+          container: opts.container,
+          command: install,
+          ...(opts.env !== undefined ? { env: opts.env } : {}),
+          ...(opts.redactValues !== undefined ? { redactValues: opts.redactValues } : {}),
+        }),
     });
   });
