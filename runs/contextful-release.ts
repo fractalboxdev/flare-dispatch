@@ -38,7 +38,8 @@ const ReleaseCellOutput = Schema.Struct({
   manifest: Schema.String,
   assets: Schema.Array(Schema.String),
   imageLayer: Schema.optional(Schema.Struct({
-    name: Schema.String, size: Schema.Number, digest: Schema.String, diffId: Schema.String,
+    name: Schema.String, archiveName: Schema.String,
+    size: Schema.Number, digest: Schema.String, diffId: Schema.String,
   })),
 });
 
@@ -112,6 +113,9 @@ export const contextfulReleaseCell = defineRun({
           const digest = yield* sandbox.exec({ container: checkout.container, command: ["sha256sum", path], timeoutSec: 120 });
           const sha256 = digest.stdout.match(/^([a-f0-9]{64})\s/)?.[1];
           if (digest.exitCode !== 0 || sha256 === undefined) return yield* Effect.die(new Error(`missing SHA-256 for ${name}`));
+          if (name === parsed.archive && sha256 !== parsed.sha256) {
+            return yield* Effect.die(new Error("release archive digest differs from its manifest"));
+          }
           yield* artifact.upload({ name, path, container: checkout.container });
           if (!input.dryRun) yield* github.publishReleaseAsset({
             repo: input.repo, releaseId: input.releaseId, artifactName: name,
@@ -119,9 +123,10 @@ export const contextfulReleaseCell = defineRun({
             sha256,
           });
         }
-        let imageLayer: { name: string; size: number; digest: string; diffId: string } | undefined;
+        let imageLayer: { name: string; archiveName: string; size: number; digest: string; diffId: string } | undefined;
         if (input.target === "x86_64-unknown-linux-musl") {
           const layerName = `${input.profile}-${version}-linux-amd64.layer.tar.gz`;
+          const archiveName = `${input.profile}-${version}-linux-amd64.oci.tar`;
           const base = `${checkout.dir}/dist/${input.profile}-${version}-image`;
           const binary = `${checkout.dir}/target/release-artifacts/${input.target}/release/contextful`;
           const footprint = yield* sandbox.exec({ container: checkout.container, cwd: checkout.dir,
@@ -129,7 +134,8 @@ export const contextfulReleaseCell = defineRun({
               "--profile", input.profile, binary], timeoutSec: 600 });
           if (footprint.exitCode !== 0) return yield* Effect.die(new Error(`image footprint failed for ${input.profile}`));
           const built = yield* sandbox.exec({ container: checkout.container, cwd: checkout.dir,
-            command: ["/opt/build-oci-layer.sh", binary, `${base}/root`, `${checkout.dir}/dist/${layerName}`],
+            command: ["/opt/build-oci-layer.sh", binary, `${base}/root`,
+              `${checkout.dir}/dist/${layerName}`, `${checkout.dir}/dist/${archiveName}`, version],
             timeoutSec: 600 });
           const lines = built.stdout.trim().split("\n");
           const diffId = lines[0]?.match(/^([a-f0-9]{64})\s/)?.[1];
@@ -139,7 +145,8 @@ export const contextfulReleaseCell = defineRun({
             return yield* Effect.die(new Error("OCI image layer failed"));
           }
           yield* artifact.upload({ name: layerName, path: `${checkout.dir}/dist/${layerName}`, container: checkout.container });
-          imageLayer = { name: layerName, size, digest, diffId };
+          yield* artifact.upload({ name: archiveName, path: `${checkout.dir}/dist/${archiveName}`, container: checkout.container });
+          imageLayer = { name: layerName, archiveName, size, digest, diffId };
         }
         return { profile: input.profile, target: input.target, manifest, assets,
           ...(imageLayer !== undefined ? { imageLayer } : {}) };
@@ -266,16 +273,19 @@ export const contextfulRelease = defineRun({
     }
     const formulaAssets = (JSON.parse(formulaChildren[0].summaryJson ?? "{}") as { assets?: string[] }).assets;
     if (formulaAssets?.length !== 6) return yield* Effect.die(new Error("release formula output is incomplete"));
-    if (dryRun) return { tag: input.tag, sha: tag.commitSha, dryRun: true, releaseId: 0,
-      cells: CELLS.length, assets: CELLS.length * 3 + formulaAssets.length };
     const imageChildren = children.filter((child) => {
       const output = JSON.parse(child.summaryJson ?? "{}") as { target?: string };
       return output.target === "x86_64-unknown-linux-musl";
     });
-    if (imageChildren.length !== 3) return yield* Effect.die(new Error("release needs three Linux amd64 images"));
+    if (imageChildren.length !== 3 || imageChildren.some((child) => {
+      const output = JSON.parse(child.summaryJson ?? "{}") as { profile?: string; imageLayer?: { archiveName?: string } };
+      return output.imageLayer?.archiveName !== `${output.profile}-${input.tag.slice(1)}-linux-amd64.oci.tar`;
+    })) return yield* Effect.die(new Error("release needs three Linux amd64 OCI image archives"));
+    if (dryRun) return { tag: input.tag, sha: tag.commitSha, dryRun: true, releaseId: 0,
+      cells: CELLS.length, assets: CELLS.length * 3 + formulaAssets.length };
     for (const child of imageChildren) {
       const output = JSON.parse(child.summaryJson!) as {
-        profile: string; imageLayer?: { name: string; size: number; digest: string; diffId: string };
+        profile: string; imageLayer?: { name: string; archiveName: string; size: number; digest: string; diffId: string };
       };
       if (output.imageLayer === undefined) return yield* Effect.die(new Error("release image layer is missing"));
       yield* step(`publish-image-${output.profile}`, () => github.publishContainerImage({

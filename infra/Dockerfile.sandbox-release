@@ -22,11 +22,12 @@ RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
 RUN python3 -m venv /opt/zig && \
     /opt/zig/bin/pip install --no-cache-dir ziglang==0.13.0 && \
     ln -s "$(find /opt/zig/lib -path '*/ziglang/zig' -type f -print -quit)" /opt/zig/bin/zig && \
-    zig version && cargo zigbuild --version
+    zig version && cargo zigbuild --help >/dev/null
 
 # Text-only TAPI records only the macOS system symbols referenced by
 # iana-time-zone. The runtime framework comes from macOS itself.
 COPY infra/darwin-stubs /opt/darwin-stubs
 COPY infra/build-oci-layer.sh /opt/build-oci-layer.sh
+COPY infra/build-oci-layout.py /opt/build-oci-layout.py
 ENV CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-F/opt/darwin-stubs" \
     CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-F/opt/darwin-stubs"

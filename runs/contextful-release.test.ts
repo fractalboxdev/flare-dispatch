@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import { contextfulRelease, contextfulReleaseCell } from "./contextful-release";
@@ -38,6 +38,23 @@ describe("contextful-release", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("refuses an archive whose bytes differ from the release manifest digest", () => {
+    const target = "aarch64-unknown-linux-musl";
+    const name = `contextful-control-0.5.0-${target}`;
+    const manifest = JSON.stringify({ profile: "contextful-control", target,
+      archive: `${name}.tar.gz`, sha256: "b".repeat(64), sbom: `${name}.cdx.json` });
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
+      sandboxFiles: { [`/workspace/contextful/dist/${name}.release.json`]: manifest },
+    });
+    return Effect.gen(function* () {
+      const result = yield* Effect.exit(contextfulReleaseCell.run({ repo, tag: "v0.5.0", sha,
+        profile: "contextful-control", target, releaseId: 0, dryRun: true }));
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(handles.artifact.uploads).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("manual dry-run joins ten cells and a formula child without a release write", () => {
     const { layer, handles } = makeCFRuntimeTest({
       github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
@@ -54,8 +71,14 @@ describe("contextful-release", () => {
             ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "aarch64-apple-darwin"])
             .map((target) => ({ profile, target })));
         const cell = cells[index]!;
+        const imageLayer = cell.target === "x86_64-unknown-linux-musl" ? {
+          name: `${cell.profile}-0.5.0-linux-amd64.layer.tar.gz`,
+          archiveName: `${cell.profile}-0.5.0-linux-amd64.oci.tar`,
+          size: 3, digest: "a".repeat(64), diffId: "b".repeat(64),
+        } : undefined;
         return { executionId: id, status: "success", summaryJson: JSON.stringify({ ...cell,
           manifest: JSON.stringify({ ...cell, archive: "archive.tar.gz", sha256: "a".repeat(64), sbom: "sbom.cdx.json" }),
+          ...(imageLayer === undefined ? {} : { imageLayer }),
         }) };
       }) },
     });
@@ -83,6 +106,7 @@ describe("contextful-release", () => {
         const cell = cells[Number(id.split(":").at(-1))]!;
         const imageLayer = cell.target === "x86_64-unknown-linux-musl" ? {
           name: `${cell.profile}-0.5.0-linux-amd64.layer.tar.gz`, size: 3,
+          archiveName: `${cell.profile}-0.5.0-linux-amd64.oci.tar`,
           digest: "a".repeat(64), diffId: "b".repeat(64),
         } : undefined;
         return { executionId: id, status: "success", summaryJson: JSON.stringify({ ...cell,
