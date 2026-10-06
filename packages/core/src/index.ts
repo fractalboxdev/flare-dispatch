@@ -195,6 +195,7 @@ export {
 } from "./services/checks";
 export {
   spawnChildRun,
+  handoffChildAdmission,
   ChildRuns,
   isTerminalChildStatus,
   type ChildRunsService,

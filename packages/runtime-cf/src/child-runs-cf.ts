@@ -35,6 +35,7 @@ import {
   ChildSpawnFailed,
   type ChildStatusRecord,
 } from "@fractalboxdev/flare-dispatch-core";
+import { makeRunAdmissionD1 } from "./run-admission-d1";
 
 /** The minimal CF `Workflow`-binding surface `spawn` needs. */
 export type WorkflowBindingLike = {
@@ -144,6 +145,8 @@ export const deriveChildInstanceId = (opts: {
 /** Build the live `ChildRuns` Layer bound to a CF `Workflow` binding. */
 export const makeChildRunsLive = (cfg: ChildRunsLiveConfig): Layer.Layer<ChildRuns> => {
   const service: ChildRunsService = {
+    handoffAdmission: () =>
+      makeRunAdmissionD1(cfg.db).release(cfg.parentExecutionId).pipe(Effect.orDie),
     spawn: ({ run, input, instanceId }) => {
       const id = deriveChildInstanceId({
         run,

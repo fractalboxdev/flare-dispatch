@@ -55,7 +55,7 @@ export const resolveAdmissionCap = (raw: string | undefined): number => {
 /**
  * Delay between claim attempts while the pool is full. Each wait is a
  * durable `step.sleep`, so a queued run costs nothing while it waits; 20s
- * keeps the loop ≤60 claim steps + 60 sleeps over the full queue-age ceiling
+ * keeps the loop ≤270 claim steps + 270 sleeps over the largest run override
  * — trivial against the 10k Workflow step cap (#83 precedent).
  */
 export const ADMISSION_POLL_EVERY_MS = 20_000;
@@ -63,8 +63,8 @@ export const ADMISSION_POLL_EVERY_MS = 20_000;
 /**
  * Dispatch-age ceiling — a run queued longer than this fails
  * `AdmissionTimedOut` instead of hanging toward the Workflow wall-clock cap.
- * 20 minutes ≈ the slowest pool drain worth waiting for (a 25-min matrix is
- * the worst in-flight run; most finish in minutes).
+ * The default applies to ordinary runs; matrix runs can declare a longer
+ * bound in their reviewed run definition.
  */
 export const ADMISSION_MAX_QUEUE_AGE_MS = 20 * 60_000;
 

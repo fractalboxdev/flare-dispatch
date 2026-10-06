@@ -107,11 +107,13 @@ describe("contextful-gate", () => {
         "discover-base-stages",
         "release-discovery-container",
         "spawn-stages-0",
+        "handoff-admission",
         "await-stages-0",
         "spawn-stages-2",
         "await-stages-2",
       ]);
       expect(handles.sandbox.destroyed).toHaveLength(1);
+      expect(handles.childRuns.admissionHandoffs).toBe(1);
     }).pipe(Effect.provide(layer));
   });
 
@@ -143,6 +145,23 @@ describe("contextful-gate", () => {
       if (Exit.isFailure(exit))
         expect(Cause.pretty(exit.cause)).toContain("Gate stages failed: pins");
       expect(handles.childRuns.spawned).toHaveLength(3);
+      expect(handles.childRuns.admissionHandoffs).toBe(1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("makes the parent red when a queued child never settles", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DISCOVER]: { stdout: "pins\n", exitCode: 0 } },
+      childRuns: {
+        pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "missing" })),
+      },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(contextfulGate.run(input));
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("ChildWaitTimeout");
+      expect(handles.childRuns.spawned).toHaveLength(1);
+      expect(handles.childRuns.admissionHandoffs).toBe(1);
     }).pipe(Effect.provide(layer));
   });
 });

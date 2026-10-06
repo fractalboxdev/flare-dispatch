@@ -11,8 +11,10 @@ import type { RunContext } from "./context";
 import type { RunError } from "./errors";
 import type { WritebackSpec } from "./writeback";
 
-export type RunLimits = {
+export type RunLimits<I = unknown> = {
   readonly maxDurationSec: number;
+  /** Maximum admission wait; defaults to the dispatcher's standard queue age. */
+  readonly admissionMaxQueueAgeSec?: number | ((input: I) => number);
   readonly maxConcurrency?: number;
   readonly requiresBrowser?: boolean;
 };
@@ -136,7 +138,7 @@ export type RunSpec<I, O, IEnc, OEnc> = {
   readonly sandboxImage?: SandboxImage;
   readonly inputs: Schema.Schema<I, IEnc>;
   readonly outputs: Schema.Schema<O, OEnc>;
-  readonly limits: RunLimits;
+  readonly limits: RunLimits<I>;
   readonly triggers?: readonly TriggerSpec<I>[];
   readonly schedules?: readonly ScheduleSpec<I>[];
   /**

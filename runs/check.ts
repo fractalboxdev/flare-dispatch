@@ -100,6 +100,8 @@ const CheckInput = Schema.Struct({
   checkLabel: Schema.optional(
     Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/)),
   ),
+  /** Optional bounded queue wait for dispatched long-running matrix checks. */
+  admissionMaxQueueAgeSec: Schema.optional(Schema.Number),
   image: Schema.optional(Schema.String), // container image override
   /** Run the R2-cached dependency install after the clone. */
   install: Schema.optionalWith(Schema.Boolean, { default: () => false }),
@@ -274,6 +276,8 @@ export const check = defineRun({
   limits: {
     // Wall-time ceiling — headroom for cold install + slow linters.
     maxDurationSec: 1800,
+    admissionMaxQueueAgeSec: (input) =>
+      Math.min(90 * 60, Math.max(20 * 60, input.admissionMaxQueueAgeSec ?? 20 * 60)),
   },
 
   run: (input) =>

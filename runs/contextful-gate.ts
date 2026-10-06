@@ -1,5 +1,11 @@
 import { Effect, Schema } from "effect";
-import { AcceptanceFailed, defineRun, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
+import {
+  AcceptanceFailed,
+  defineRun,
+  handoffChildAdmission,
+  sandbox,
+  step,
+} from "@fractalboxdev/flare-dispatch-core";
 import {
   ensureWorkspace,
   fanOut,
@@ -71,7 +77,7 @@ export const contextfulGate = defineRun({
       }),
     },
   ],
-  limits: { maxDurationSec: 10 * 3600 },
+  limits: { maxDurationSec: 30 * 3600, admissionMaxQueueAgeSec: 90 * 60 },
   run: (input) =>
     Effect.gen(function* () {
       const { container, dir } = yield* step("checkout", () =>
@@ -152,15 +158,19 @@ export const contextfulGate = defineRun({
               command: `cargo run --locked -q -p contextful-ci -- gate --predecessors --stage ${stage} --base ${input.baseSha}`,
               failOnNonZeroExit: true,
               timeoutSec: 1800,
+              admissionMaxQueueAgeSec: 90 * 60,
               install: false,
               secrets: [],
             }),
           }),
         );
+        if (offset === 0) {
+          yield* step("handoff-admission", () => handoffChildAdmission());
+        }
         const results = yield* step(`await-stages-${offset}`, () =>
           waitForChildren({
             ids: handles.map((handle) => handle.executionId),
-            timeout: "35 minutes",
+            timeout: "130 minutes",
           }),
         );
         results.forEach((result, index) => {
