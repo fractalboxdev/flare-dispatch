@@ -36,6 +36,9 @@ describe("contextful-release", () => {
       expect(result.imageLayer).toBeUndefined();
       expect(handles.sandbox.execs[0]?.command).toContain("release --builder zigbuild");
       expect(handles.artifact.uploads).toHaveLength(3);
+      const buildStep = handles.executions.steps.find((entry) => entry.name === "build-and-upload");
+      expect(buildStep?.metadata?.["stepOpts.timeoutSec"]).toBe(14460);
+      expect(buildStep?.metadata?.["stepOpts.retries"]).toBe(0);
     }).pipe(Effect.provide(layer));
   });
 
