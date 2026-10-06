@@ -55,6 +55,7 @@ export type GithubFakeState = {
   branchHeads: Record<string, string>;
   /** Every `branchHead` call, in order. */
   readonly branchHeadCalls: Array<{ repo: string; branch: string }>;
+  readonly appendMeasureNoteCalls: Array<{ repo: string; commit: string; text: string }>;
   /** Every `issues` call, in order. */
   readonly issuesCalls: Array<{
     repo: string;
@@ -173,6 +174,7 @@ export const makeGithubFake = (
     files: { ...opts.files },
     branchHeads: { ...opts.branchHeads },
     branchHeadCalls: [],
+    appendMeasureNoteCalls: [],
     issuesCalls: [],
     actionRunsCalls: [],
     pullRequestHistoryCalls: [],
@@ -371,6 +373,11 @@ export const makeGithubFake = (
         return sha === undefined
           ? Effect.fail(new GitHubApiError({ status: 404, reason: "other" }))
           : Effect.succeed(sha);
+      }),
+
+    appendMeasureNote: ({ repo, commit, text }) =>
+      Effect.sync(() => {
+        state.appendMeasureNoteCalls.push({ repo, commit, text });
       }),
 
     pullReview: (req) =>

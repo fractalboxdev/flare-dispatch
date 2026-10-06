@@ -181,6 +181,7 @@ export const RUN_GRANTS: Readonly<Record<string, RunGrant>> = {
   // The Cloudflare reads happen Worker-side through the `cloudflare`
   // capability, not from the container — so `cf-api` is deliberately absent.
   "finops-audit": { profiles: ["public-repo-read"], rollout: "legacy" },
+  "contextful-measures": { profiles: ["public-repo-read", "rust-install"], rollout: "legacy" },
 
   // --- deploy --------------------------------------------------------------
   // `cf-api` is where `wrangler deploy` sends its bytes; `wrangler` itself

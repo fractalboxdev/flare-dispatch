@@ -28,6 +28,7 @@
       "45 5 * * *", // org-spec-audit — daily, after spec-drift-pr
       "0 6 * * *", // ci-triage-pr   — daily
       "0 7 * * 1", // finops-audit   — Mondays
+      "17 2 * * *", // contextful-measures — daily
     ],
   },
 

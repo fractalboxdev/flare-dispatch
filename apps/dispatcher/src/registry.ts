@@ -14,6 +14,7 @@ import {
   cdpAcceptance,
   check,
   ciTriagePr,
+  contextfulMeasures,
   demoReel,
   deploySmoke,
   emailOtpLogin,
@@ -68,6 +69,7 @@ const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
   [vitestShard.name]: vitestShard as Run<unknown, unknown>,
   [emailOtpLogin.name]: emailOtpLogin as Run<unknown, unknown>,
   [finopsAudit.name]: finopsAudit as Run<unknown, unknown>,
+  [contextfulMeasures.name]: contextfulMeasures as Run<unknown, unknown>,
   [workerDeploy.name]: workerDeploy as Run<unknown, unknown>,
   // Presentation stage for a captured demo: consumes a product-demo
   // execution's demo-bundle/v1 and renders a deck (+ MP4 when the image

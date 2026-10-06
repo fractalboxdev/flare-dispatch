@@ -71,6 +71,7 @@ export {
   type ReadRepoTextFileResult,
 } from "./repo-files";
 export { readBranchHead, branchRefUrl, type ReadBranchHeadOptions } from "./branch-head";
+export { appendGitNote, type AppendGitNoteOptions } from "./git-notes";
 export {
   addIssueLabels,
   closeIssueAsDuplicate,
