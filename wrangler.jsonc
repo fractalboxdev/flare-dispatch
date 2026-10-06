@@ -29,6 +29,7 @@
       "0 6 * * *", // ci-triage-pr   — daily
       "0 7 * * 1", // finops-audit   — Mondays
       "17 2 * * *", // contextful-measures — daily
+      "17 3 * * 0", // contextful-protocol — weekly
     ],
   },
 
