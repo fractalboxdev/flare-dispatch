@@ -58,7 +58,8 @@ describe("sandboxImage catalog", () => {
           r.sandboxImage !== undefined &&
           r.sandboxImage !== "lean" &&
           r.sandboxImage !== "browser" &&
-          r.sandboxImage !== "agent",
+          r.sandboxImage !== "agent" &&
+          r.sandboxImage !== "release",
       )
       .map((r) => r.name);
     expect(unknown).toEqual([]);
