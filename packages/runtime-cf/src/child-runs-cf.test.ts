@@ -101,10 +101,10 @@ describe("makeChildRunsLive", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(wf.calls).toHaveLength(1);
     const call = wf.calls[0]!;
-    expect(call.id).toBe("pr-review:owner_name:42");
+    expect(call.id).toBe("pr-review_owner_name_42");
     // id is BOTH the instance id and the child's executionId (dispatch contract).
     expect(call.params).toEqual({
-      executionId: "pr-review:owner_name:42",
+      executionId: "pr-review_owner_name_42",
       run: "pr-review",
       github: {
         repo: "owner/name",
@@ -164,6 +164,15 @@ describe("makeChildRunsLive", () => {
         input: { i: 1 },
       }),
     );
+  });
+
+  it("uses Cloudflare's instance-id alphabet for explicit and derived children", () => {
+    for (const id of [
+      deriveChildInstanceId({ run: "check", parentExecutionId: "contextful-gate_390_sha", input: { stage: "pins" } }),
+      deriveChildInstanceId({ run: "check", parentExecutionId: "parent", input: {}, instanceId: "review:owner/repo:42" }),
+    ]) {
+      expect(id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    }
   });
 
   it("treats a duplicate instance as created: false, not a failure", async () => {

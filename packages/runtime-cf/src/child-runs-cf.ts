@@ -18,7 +18,7 @@
 // caller owns determinism; without one we derive
 // `<run>.<parentExecutionId>.<fnv1a(input)>`, fully determined by the parent
 // context + input. The result is hashed/truncated to stay within the CF 64-char
-// instance-id limit and reduced to a single path segment (`/`, `:` → `_`).
+// instance-id limit and reduced to Cloudflare's `[A-Za-z0-9_-]` alphabet.
 //
 // `parentExecutionId` rides in the child's `DispatchPayload` so the child writes
 // its `executions.parent_execution_id` lineage column on boot — the join key a
@@ -105,13 +105,11 @@ const fnv1a = (s: string): string => {
 };
 
 /**
- * Reduce a raw id to a single safe segment within the length cap. Matches the
- * dispatch route's `semanticInstanceId` charset — `/` and whitespace become
- * `_`, while `:` is preserved (CF Workflows accepts it; production top-level ids
- * like `pr-review:owner_name:<sha>` rely on it).
+ * Reduce a raw id to Cloudflare's Workflow instance-id alphabet and length cap.
+ * The dispatch route applies the same `[A-Za-z0-9_-]` restriction.
  */
 const sanitize = (raw: string): string => {
-  const seg = raw.replace(/[/\s]/g, "_");
+  const seg = raw.replace(/[^A-Za-z0-9_-]/g, "_");
   // Over the cap → keep a readable prefix + a hash suffix so it stays unique.
   return seg.length <= MAX_INSTANCE_ID_LEN
     ? seg
