@@ -101,10 +101,10 @@ describe("makeChildRunsLive", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(wf.calls).toHaveLength(1);
     const call = wf.calls[0]!;
-    expect(call.id).toBe("pr-review:owner_name:42");
+    expect(call.id).toBe("pr-review_owner_name_42");
     // id is BOTH the instance id and the child's executionId (dispatch contract).
     expect(call.params).toEqual({
-      executionId: "pr-review:owner_name:42",
+      executionId: "pr-review_owner_name_42",
       run: "pr-review",
       github: {
         repo: "owner/name",
