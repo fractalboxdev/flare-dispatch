@@ -24,8 +24,9 @@ describe("contextful-gate", () => {
       parseStages(Array.from({ length: 65 }, (_, i) => `part${i}`).join("\n")),
     ).toBeUndefined();
     expect(parseStages(" ".repeat(4097))).toBeUndefined();
-    expect(parseStages(Array.from({ length: 48 }, (_, i) => `part${i}`).join("\n")))
-      .toHaveLength(48);
+    expect(parseStages(Array.from({ length: 48 }, (_, i) => `part${i}`).join("\n"))).toHaveLength(
+      48,
+    );
   });
 
   it("keeps base stages when the head removes them", () => {
@@ -82,7 +83,10 @@ describe("contextful-gate", () => {
   it.effect("spawns at most two stages per wave and reports every stage", () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: {
-        [DISCOVER_HEAD]: { stdout: "pins\nworkspace.compile\nformal\ntest-first.contextful-core\n", exitCode: 0 },
+        [DISCOVER_HEAD]: {
+          stdout: "pins\nworkspace.compile\nformal\ntest-first.contextful-core\n",
+          exitCode: 0,
+        },
         [DISCOVER]: { stdout: "pins\nworkspace.compile\nformal\n", exitCode: 0 },
       },
       childRuns: {
@@ -137,6 +141,50 @@ describe("contextful-gate", () => {
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(contextfulGate.run(input));
       expect(Exit.isFailure(exit)).toBe(true);
+      expect(handles.childRuns.spawned).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("discovers older heads only when clap rejects the base argument", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [DISCOVER_HEAD]: {
+          stdout: "",
+          stderr: "error: unexpected argument '--base' found\nUsage: contextful-ci stages --parts",
+          exitCode: 2,
+        },
+        [DISCOVER]: { stdout: "pins\n", exitCode: 0 },
+      },
+      childRuns: {
+        pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "success" })),
+      },
+    });
+    return Effect.gen(function* () {
+      const output = yield* contextfulGate.run(input);
+      expect(output).toEqual({ stages: 1, failed: [] });
+      expect(
+        handles.sandbox.execs
+          .map((exec) => exec.command)
+          .filter((command) => command.startsWith("cargo ")),
+      ).toEqual([DISCOVER_HEAD, DISCOVER, DISCOVER]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps a compilation failure red without compatibility discovery", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "", stderr: "compilation failed", exitCode: 101 },
+        [DISCOVER]: { stdout: "pins\n", exitCode: 0 },
+      },
+    });
+    return Effect.gen(function* () {
+      const output = yield* Effect.exit(contextfulGate.run(input));
+      expect(Exit.isFailure(output)).toBe(true);
+      expect(
+        handles.sandbox.execs
+          .map((exec) => exec.command)
+          .filter((command) => command.startsWith("cargo ")),
+      ).toEqual([DISCOVER_HEAD, DISCOVER]);
       expect(handles.childRuns.spawned).toHaveLength(0);
     }).pipe(Effect.provide(layer));
   });

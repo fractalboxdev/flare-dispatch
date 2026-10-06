@@ -88,12 +88,28 @@ export const contextfulGate = defineRun({
         () =>
           ensureWorkspace({ current: { container, dir }, repo: input.repo, sha: input.sha }).pipe(
             Effect.flatMap((ws) =>
-              sandbox.exec({
-                container: ws.container,
-                cwd: ws.dir,
-                command: `${DISCOVER} --base ${input.baseSha}`,
-                timeoutSec: 1800,
-              }),
+              sandbox
+                .exec({
+                  container: ws.container,
+                  cwd: ws.dir,
+                  command: `${DISCOVER} --base ${input.baseSha}`,
+                  timeoutSec: 1800,
+                })
+                .pipe(
+                  Effect.flatMap((result) =>
+                    result.exitCode === 2 &&
+                    result.stdout.trim() === "" &&
+                    /unexpected argument '--base' found/.test(result.stderr) &&
+                    /Usage:/.test(result.stderr)
+                      ? sandbox.exec({
+                          container: ws.container,
+                          cwd: ws.dir,
+                          command: DISCOVER,
+                          timeoutSec: 1800,
+                        })
+                      : Effect.succeed(result),
+                  ),
+                ),
             ),
           ),
         { timeoutSec: 1920, retries: 3, retryOn: ["ExecFailed", "StepFailed", "CheckoutFailed"] },
