@@ -40,6 +40,7 @@ describe("contextful-gate", () => {
     const payload = {
       repository: { full_name: input.repo },
       pull_request: {
+        number: 42,
         draft: true,
         head: { sha: SHA, repo: { full_name: input.repo } },
         base: { sha: BASE_SHA },
@@ -47,6 +48,21 @@ describe("contextful-gate", () => {
     };
     expect(trigger?.gate?.({ payload } as never)).toBe(true);
     expect(trigger?.inputs({ payload } as never)).toEqual(input);
+    const event = { payload } as never;
+    expect(trigger?.idempotencyKey?.(event)).toBe(`contextful-gate:42:${SHA}:${BASE_SHA}`);
+    expect(
+      trigger?.idempotencyKey?.({
+        payload: { ...payload, pull_request: { ...payload.pull_request, number: 43 } },
+      } as never),
+    ).not.toBe(trigger?.idempotencyKey?.(event));
+    expect(
+      trigger?.idempotencyKey?.({
+        payload: {
+          ...payload,
+          pull_request: { ...payload.pull_request, base: { sha: "c".repeat(40) } },
+        },
+      } as never),
+    ).not.toBe(trigger?.idempotencyKey?.(event));
     expect(
       trigger?.gate?.({
         payload: {

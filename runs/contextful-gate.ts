@@ -60,7 +60,7 @@ export const contextfulGate = defineRun({
       event: "pull_request",
       actions: ["opened", "synchronize", "reopened", "ready_for_review"],
       idempotencyKey: ({ payload }) =>
-        `contextful-gate:${String(payload.pull_request?.head?.sha ?? "")}`,
+        `contextful-gate:${String(payload.pull_request?.number ?? "")}:${String(payload.pull_request?.head?.sha ?? "")}:${String(payload.pull_request?.base?.sha ?? "")}`,
       gate: ({ payload }) =>
         payload.repository?.full_name === REPO &&
         payload.pull_request?.head?.repo?.full_name === REPO,
