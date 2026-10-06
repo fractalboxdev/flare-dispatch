@@ -107,6 +107,11 @@ export const contextfulReleaseCell = defineRun({
           parsed.sbom !== `${name}.cdx.json` || !/^[a-f0-9]{64}$/.test(parsed.sha256)) {
           return yield* Effect.die(new Error("release cell manifest does not match its inputs"));
         }
+        const checksum = yield* sandbox.readFile({ container: checkout.container,
+          path: `${checkout.dir}/dist/${parsed.archive}.sha256` }).pipe(Effect.orDie);
+        if (checksum.trim() !== `${parsed.sha256}  ${parsed.archive}`) {
+          return yield* Effect.die(new Error("release checksum file differs from its manifest"));
+        }
         const assets = [parsed.archive, `${parsed.archive}.sha256`, parsed.sbom];
         for (const name of assets) {
           const path = `${checkout.dir}/dist/${name}`;

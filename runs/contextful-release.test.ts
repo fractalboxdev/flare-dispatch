@@ -26,7 +26,8 @@ describe("contextful-release", () => {
       sha256: "a".repeat(64), sbom: `${stem}.cdx.json` });
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
-      sandboxFiles: { [`/workspace/contextful/dist/${stem}.release.json`]: manifest },
+      sandboxFiles: { [`/workspace/contextful/dist/${stem}.release.json`]: manifest,
+        [`/workspace/contextful/dist/${stem}.tar.gz.sha256`]: `${"a".repeat(64)}  ${stem}.tar.gz\n` },
     });
     return Effect.gen(function* () {
       const result = yield* contextfulReleaseCell.run({ repo, tag: "v0.5.0", sha,
@@ -45,7 +46,26 @@ describe("contextful-release", () => {
       archive: `${name}.tar.gz`, sha256: "b".repeat(64), sbom: `${name}.cdx.json` });
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
-      sandboxFiles: { [`/workspace/contextful/dist/${name}.release.json`]: manifest },
+      sandboxFiles: { [`/workspace/contextful/dist/${name}.release.json`]: manifest,
+        [`/workspace/contextful/dist/${name}.tar.gz.sha256`]: `${"b".repeat(64)}  ${name}.tar.gz\n` },
+    });
+    return Effect.gen(function* () {
+      const result = yield* Effect.exit(contextfulReleaseCell.run({ repo, tag: "v0.5.0", sha,
+        profile: "contextful-control", target, releaseId: 0, dryRun: true }));
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(handles.artifact.uploads).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses a checksum file that names different release bytes", () => {
+    const target = "aarch64-unknown-linux-musl";
+    const name = `contextful-control-0.5.0-${target}`;
+    const manifest = JSON.stringify({ profile: "contextful-control", target,
+      archive: `${name}.tar.gz`, sha256: "a".repeat(64), sbom: `${name}.cdx.json` });
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
+      sandboxFiles: { [`/workspace/contextful/dist/${name}.release.json`]: manifest,
+        [`/workspace/contextful/dist/${name}.tar.gz.sha256`]: `${"b".repeat(64)}  ${name}.tar.gz\n` },
     });
     return Effect.gen(function* () {
       const result = yield* Effect.exit(contextfulReleaseCell.run({ repo, tag: "v0.5.0", sha,
