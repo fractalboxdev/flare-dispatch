@@ -80,9 +80,9 @@ export const CLONE_TIMEOUT_SEC = 600;
  * How the workspace clones — deliberately COMPLETE: no `--filter`, no
  * `--depth`, no `--single-branch`.
  *
- * The clone is the container's ONLY authenticated reach at GitHub: the
- * credential lives on that one `exec` and nothing after it holds one (ADR-0006,
- * see {@link CREDENTIAL_HELPER_ARGS}). So a repository that still needs the
+ * The clone and an optional immutable-head fetch are the container's only
+ * authenticated reaches at GitHub. Credentials are scrubbed before workload
+ * commands run (ADR-0006, see {@link CREDENTIAL_HELPER_ARGS}). So a repository that still needs the
  * network to answer a question about its own history has no way to ask — git
  * falls back to the promisor remote, finds no credential, and dies on `could not
  * read Username for 'https://github.com'` → `unable to read <oid>`.
@@ -105,9 +105,19 @@ export const cloneCommand = (url: string, targetDir: string, authenticated = fal
   return `git ${auth}clone --quiet ${shellQuote(url)} ${shellQuote(targetDir)}`;
 };
 
+/** Fetch a requested commit absent from the clone's ordinary branch refspec. */
+export const fetchCommitCommand = (
+  targetDir: string,
+  sha: string,
+  authenticated = false,
+): string => {
+  const auth = authenticated ? `${CREDENTIAL_HELPER_ARGS} ` : "";
+  return `git ${auth}-C ${shellQuote(targetDir)} fetch --no-tags -- origin ${shellQuote(sha)}`;
+};
+
 /**
  * The environment variable the clone's credential helper reads the installation
- * token out of. Set on the clone `exec` and nothing else.
+ * token out of. Set on clone and optional immutable-head fetch execs only.
  */
 export const CLONE_TOKEN_ENV = "FLARE_DISPATCH_CLONE_TOKEN";
 

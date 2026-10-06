@@ -344,7 +344,15 @@ describe("makeSandboxCloudflareLive — container routing", () => {
         Effect.all([s.acquire({}), s.acquire({ key: "features" })]),
       ).pipe(
         Effect.provide(
-          makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-3", undefined, undefined, undefined, "rpc"),
+          makeSandboxCloudflareLive(
+            ns,
+            makeBucket().bucket,
+            "route-3",
+            undefined,
+            undefined,
+            undefined,
+            "rpc",
+          ),
         ),
       );
       // Per CONTAINER, not per Layer: a keyed container is a different DO and
@@ -373,7 +381,15 @@ describe("makeSandboxCloudflareLive — container routing", () => {
         ]),
       ).pipe(
         Effect.provide(
-          makeSandboxCloudflareLive(ns, makeBucket().bucket, "route-4", undefined, undefined, undefined, "rpc"),
+          makeSandboxCloudflareLive(
+            ns,
+            makeBucket().bucket,
+            "route-4",
+            undefined,
+            undefined,
+            undefined,
+            "rpc",
+          ),
         ),
       );
       expect(transportCalls).toEqual(["rpc", "rpc"]);
@@ -768,8 +784,8 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
 // therefore no `installation_id`, so the clone used to go out unauthenticated
 // and 404 on every private repo — reported as a bare `Failed to clone
 // repository`. The Layer now authenticates whenever App credentials exist and
-// resolves the installation for the repo it is cloning; the token buys exactly
-// one fetch, reaches git only through the clone `exec`'s environment, and is
+// resolves the installation for the repo it is cloning; the token reaches git
+// only through clone and optional missing-head fetch execs' environment, and is
 // never persisted into a failure record (ADR-0006).
 describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
   /** App credentials with no installation id — the Schedule-mode shape. */
@@ -865,8 +881,8 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
     }),
   );
 
-  // The container's ONE authenticated reach at GitHub is this clone — the scrub
-  // below takes the credential away immediately. A `--filter`/`--depth` clone
+  // The clone provides complete history; the optional immutable-head fetch
+  // only covers an object absent from ordinary branch refs. A `--filter`/`--depth` clone
   // leaves objects to fetch later, and there is nothing left to fetch them with:
   // `pr-review`'s three-dot diff reads merge-base blobs that are in neither the
   // default-branch tree the clone lands on nor the head `git checkout` moves to,
@@ -892,6 +908,70 @@ describe("makeSandboxCloudflareLive — gitClone credentials (E)", () => {
       const cause = failureOf<{ _tag: string; cause: unknown }>(exit)?.cause as Error;
       expect(cause.message).toContain("git clone exited 1");
       expect(cause.message).toContain("repository not found");
+    }),
+  );
+
+  it.effect(
+    "fetches an immutable PR head missing from the default clone before scrubbing auth",
+    () =>
+      Effect.gen(function* () {
+        const prHead = "f".repeat(40);
+        let fetched = false;
+        currentBox.exec = vi.fn(async (command: string) => {
+          if (command.startsWith("git checkout") && !fetched) {
+            return {
+              exitCode: 128,
+              duration: 0,
+              stdout: "",
+              stderr: "fatal: reference is not a tree",
+            };
+          }
+          if (command.includes("fetch") && command.includes(prHead)) fetched = true;
+          return { exitCode: 0, duration: 0, stdout: "", stderr: "" };
+        });
+
+        const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+          s.gitClone({ repo: "acme/beacon", sha: prHead }),
+        ).pipe(Effect.provide(cloneLayer(SCHEDULED_AUTH)), Effect.exit);
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        const commands = execCommands();
+        const fetchIndex = commands.findIndex(
+          (command) => command.includes("fetch") && command.includes(prHead),
+        );
+        expect(fetchIndex).toBeGreaterThan(
+          commands.findIndex((command) => command.startsWith("git checkout")),
+        );
+        expect(fetchIndex).toBeLessThan(
+          commands.findIndex((command) => command.includes("remote set-url")),
+        );
+        expect((currentBox.exec.mock.calls as unknown as unknown[][])[fetchIndex]?.[1]).toEqual(
+          expect.objectContaining({ env: { FLARE_DISPATCH_CLONE_TOKEN: TOKEN } }),
+        );
+      }),
+  );
+
+  it.effect("scrubs credentials and fails when the missing head cannot be fetched", () =>
+    Effect.gen(function* () {
+      const prHead = "f".repeat(40);
+      currentBox.exec = vi.fn(async (command: string) => {
+        if (command.startsWith("git checkout") || command.includes("fetch --no-tags")) {
+          return { exitCode: 128, duration: 0, stdout: "", stderr: "fatal: object unavailable" };
+        }
+        return { exitCode: 0, duration: 0, stdout: "", stderr: "" };
+      });
+
+      const exit = yield* Effect.flatMap(SandboxTag, (s) =>
+        s.gitClone({ repo: "acme/beacon", sha: prHead }),
+      ).pipe(Effect.provide(cloneLayer(SCHEDULED_AUTH)), Effect.exit);
+
+      const failure = failureOf<{ _tag: string; cause: unknown }>(exit);
+      expect(failure?._tag).toBe("CheckoutFailed");
+      expect(failure?.cause).toBeInstanceOf(Error);
+      if (failure?.cause instanceof Error) {
+        expect(failure.cause.message).toContain(`git fetch ${prHead} exited 128`);
+      }
+      expect(execCommands().some((command) => command.includes("remote set-url"))).toBe(true);
     }),
   );
 

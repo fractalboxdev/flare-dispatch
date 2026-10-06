@@ -69,6 +69,7 @@ import {
   CLONE_TIMEOUT_SEC,
   CLONE_TOKEN_ENV,
   cloneCommand,
+  fetchCommitCommand,
   installationLookupSlug,
   repoUrl,
   shellQuote,
@@ -365,7 +366,6 @@ export const makeSandboxCloudflareLive = (
   /** Container ids whose transport this Layer has already pinned — see `acquire`. */
   const pinned = new Set<string>();
 
-
   // `exec` log keys are unique within a run: the first exec is `exec.ndjson`
   // (the name the plan's acceptance pins), subsequent execs `exec-2.ndjson`, …
   let execSeq = 0;
@@ -531,9 +531,7 @@ export const makeSandboxCloudflareLive = (
     acquire: (opts) =>
       Effect.gen(function* () {
         const id =
-          opts.key === undefined
-            ? sandboxId
-            : previewSafeSandboxId(`${executionId}:${opts.key}`);
+          opts.key === undefined ? sandboxId : previewSafeSandboxId(`${executionId}:${opts.key}`);
         // Pin the container's transport before anything runs in it, when the
         // caller asked for one. See `transport` in this Layer's options for why
         // this is per-container rather than a Worker-wide env var.
@@ -554,7 +552,9 @@ export const makeSandboxCloudflareLive = (
             try {
               await getSandbox(ns, id).setTransport(transport);
             } catch (cause) {
-              console.warn(`setTransport(${transport}) failed for ${id} — staying on the default: ${String(cause)}`);
+              console.warn(
+                `setTransport(${transport}) failed for ${id} — staying on the default: ${String(cause)}`,
+              );
             }
           });
         }
@@ -588,12 +588,13 @@ export const makeSandboxCloudflareLive = (
           // unauthenticated clone that 404s as a bare git error.
           //
           // The token is short-lived (~1h) and reaches the container only as an
-          // environment variable on the clone `exec`, which a git credential
-          // helper reads to answer GitHub's challenge (see
+          // environment variable on clone and optional missing-head fetch
+          // execs, which a git credential helper reads to answer GitHub's
+          // challenge (see
           // `CREDENTIAL_HELPER_ARGS`). It is never embedded in the clone URL, so
           // it is in neither the command string, git's stderr, nor
-          // `.git/config`. It buys exactly one fetch — which is why that fetch
-          // has to bring down everything the run will ever need (see
+          // `.git/config`. Both authorized fetches finish before the scrub; the
+          // clone brings down the complete history the run needs (see
           // `cloneCommand`). Operator-supplied custom URLs and SSH remotes skip
           // the whole path (see `installationLookupSlug`) — an App token cannot
           // authenticate them, so a clone of one is never blocked on a lookup.
@@ -642,18 +643,41 @@ export const makeSandboxCloudflareLive = (
             // `cloneCommand`). The URL git is given is the credential-free one;
             // the token rides in `env` and is read back by the credential
             // helper, so the command string holds only the variable's name.
-            const cloned = await boxFor(container).exec(cloneCommand(originUrl, targetDir, token !== undefined), {
-              timeout: CLONE_TIMEOUT_SEC * 1000,
-              ...(token !== undefined ? { env: { [CLONE_TOKEN_ENV]: token } } : {}),
-            });
+            const cloned = await boxFor(container).exec(
+              cloneCommand(originUrl, targetDir, token !== undefined),
+              {
+                timeout: CLONE_TIMEOUT_SEC * 1000,
+                ...(token !== undefined ? { env: { [CLONE_TOKEN_ENV]: token } } : {}),
+              },
+            );
             if (cloned.exitCode !== 0) {
               throw new Error(`git clone exited ${cloned.exitCode}: ${cloned.stderr}`);
             }
             // The clone lands on the default branch; pin the exact SHA so the
             // run is reproducible.
-            const checkout = await boxFor(container).exec(`git checkout ${sha}`, {
+            let checkout = await boxFor(container).exec(`git checkout ${shellQuote(sha)}`, {
               cwd: targetDir,
             });
+            // `git clone` follows branch refs but omits GitHub's persistent
+            // `refs/pull/*/head`. A merged PR's source branch can disappear
+            // while its immutable head remains fetchable by object id. Fetch
+            // only on a missing full SHA, while the installation credential is
+            // still available, then pin that exact object before scrubbing.
+            if (checkout.exitCode !== 0 && /^[a-f0-9]{40}$/i.test(sha)) {
+              const fetched = await boxFor(container).exec(
+                fetchCommitCommand(targetDir, sha, token !== undefined),
+                {
+                  timeout: CLONE_TIMEOUT_SEC * 1000,
+                  ...(token !== undefined ? { env: { [CLONE_TOKEN_ENV]: token } } : {}),
+                },
+              );
+              if (fetched.exitCode !== 0) {
+                throw new Error(`git fetch ${sha} exited ${fetched.exitCode}: ${fetched.stderr}`);
+              }
+              checkout = await boxFor(container).exec(`git checkout ${shellQuote(sha)}`, {
+                cwd: targetDir,
+              });
+            }
             if (checkout.exitCode !== 0) {
               throw new Error(
                 `git checkout ${sha} exited ${checkout.exitCode}: ${checkout.stderr}`,
