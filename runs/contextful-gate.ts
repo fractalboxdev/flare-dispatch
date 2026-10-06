@@ -16,8 +16,8 @@ import {
 const REPO = "fractalboxdev/contextful";
 const DISCOVER = "cargo run --locked -q -p contextful-ci -- stages --parts";
 const STAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
-const MAX_STAGES = 32;
-const MAX_STAGE_LIST_BYTES = 2048;
+const MAX_STAGES = 64;
+const MAX_STAGE_LIST_BYTES = 4096;
 const STAGE_CONCURRENCY = 2;
 
 const Input = Schema.Struct({
@@ -91,7 +91,7 @@ export const contextfulGate = defineRun({
               sandbox.exec({
                 container: ws.container,
                 cwd: ws.dir,
-                command: DISCOVER,
+                command: `${DISCOVER} --base ${input.baseSha}`,
                 timeoutSec: 1800,
               }),
             ),
@@ -138,7 +138,7 @@ export const contextfulGate = defineRun({
         return yield* Effect.fail(
           new AcceptanceFailed({
             exitCode: 1,
-            summaryMd: "The combined head and base gate stage lists exceed 32 parts.",
+            summaryMd: "The combined head and base gate stage lists exceed 64 parts.",
           }),
         );
       }

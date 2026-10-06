@@ -7,6 +7,7 @@ import { contextfulGate, mergeStages, parseStages } from "./contextful-gate";
 const SHA = "a".repeat(40);
 const BASE_SHA = "b".repeat(40);
 const DISCOVER = "cargo run --locked -q -p contextful-ci -- stages --parts";
+const DISCOVER_HEAD = `${DISCOVER} --base ${BASE_SHA}`;
 const input = { repo: "fractalboxdev/contextful", sha: SHA, baseSha: BASE_SHA } as const;
 
 describe("contextful-gate", () => {
@@ -20,9 +21,11 @@ describe("contextful-gate", () => {
     expect(parseStages("pins\npins\n")).toBeUndefined();
     expect(parseStages("pins\nunsafe; command\n")).toBeUndefined();
     expect(
-      parseStages(Array.from({ length: 33 }, (_, i) => `part${i}`).join("\n")),
+      parseStages(Array.from({ length: 65 }, (_, i) => `part${i}`).join("\n")),
     ).toBeUndefined();
-    expect(parseStages(" ".repeat(2049))).toBeUndefined();
+    expect(parseStages(" ".repeat(4097))).toBeUndefined();
+    expect(parseStages(Array.from({ length: 48 }, (_, i) => `part${i}`).join("\n")))
+      .toHaveLength(48);
   });
 
   it("keeps base stages when the head removes them", () => {
@@ -78,14 +81,17 @@ describe("contextful-gate", () => {
 
   it.effect("spawns at most two stages per wave and reports every stage", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { [DISCOVER]: { stdout: "pins\nworkspace.compile\nformal\n", exitCode: 0 } },
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "pins\nworkspace.compile\nformal\ntest-first.contextful-core\n", exitCode: 0 },
+        [DISCOVER]: { stdout: "pins\nworkspace.compile\nformal\n", exitCode: 0 },
+      },
       childRuns: {
         pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "success" })),
       },
     });
     return Effect.gen(function* () {
       const output = yield* contextfulGate.run(input);
-      expect(output).toEqual({ stages: 3, failed: [] });
+      expect(output).toEqual({ stages: 4, failed: [] });
       expect(handles.childRuns.spawned.map((spawn) => spawn.input)).toEqual([
         expect.objectContaining({
           checkLabel: "pins",
@@ -98,6 +104,10 @@ describe("contextful-gate", () => {
         expect.objectContaining({
           checkLabel: "formal",
           command: expect.stringContaining(`--stage formal --base ${BASE_SHA}`),
+        }),
+        expect.objectContaining({
+          checkLabel: "test-first.contextful-core",
+          command: expect.stringContaining(`--stage test-first.contextful-core --base ${BASE_SHA}`),
         }),
       ]);
       expect(handles.executions.steps.map((entry) => entry.name)).toEqual([
@@ -119,7 +129,10 @@ describe("contextful-gate", () => {
 
   it.effect("fails its own check when discovery fails", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { [DISCOVER]: { stdout: "", exitCode: 1 } },
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "", exitCode: 1 },
+        [DISCOVER]: { stdout: "", exitCode: 1 },
+      },
     });
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(contextfulGate.run(input));
@@ -130,7 +143,10 @@ describe("contextful-gate", () => {
 
   it.effect("continues after a red child and makes the parent red", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { [DISCOVER]: { stdout: "pins\nworkspace.compile\nformal\n", exitCode: 0 } },
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "pins\nworkspace.compile\nformal\n", exitCode: 0 },
+        [DISCOVER]: { stdout: "pins\nworkspace.compile\nformal\n", exitCode: 0 },
+      },
       childRuns: {
         pollFn: (ids) =>
           ids.map((executionId) => ({
@@ -151,7 +167,10 @@ describe("contextful-gate", () => {
 
   it.effect("makes the parent red when a queued child never settles", () => {
     const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { [DISCOVER]: { stdout: "pins\n", exitCode: 0 } },
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "pins\n", exitCode: 0 },
+        [DISCOVER]: { stdout: "pins\n", exitCode: 0 },
+      },
       childRuns: {
         pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "missing" })),
       },
