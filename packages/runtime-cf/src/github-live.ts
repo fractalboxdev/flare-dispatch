@@ -25,6 +25,7 @@
 // Spec: specs/04-gha-integration.md § Check-runs callback (symmetric write).
 
 import {
+  appendGitNote,
   addIssueLabels,
   closeBotPullRequest,
   closeIssueAsDuplicate,
@@ -279,6 +280,13 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
         if (config === undefined) return yield* readNeedsCredentials<string>();
         const token = yield* mintToken(config, repo, installationId);
         return yield* ghCall(() => readBranchHead({ token, repo, branch }));
+      }),
+
+    appendMeasureNote: ({ repo, commit, text, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* readNeedsCredentials<void>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() => appendGitNote({ token, repo, commit, text }));
       }),
 
     issues: ({ repo, state, labels, updatedWithinDays, maxPages, strict, installationId }) =>

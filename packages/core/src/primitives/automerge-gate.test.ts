@@ -381,6 +381,7 @@ const githubService = (over: Partial<GithubService>): GithubService => ({
   pullRequestHistory: () => Effect.succeed([]),
   readTextFile: () => Effect.succeed({ found: false }),
   branchHead: () => Effect.succeed("0".repeat(40)),
+  appendMeasureNote: () => Effect.void,
   pullReview: () => Effect.void,
   openDraftPullRequest: () =>
     Effect.succeed({ number: 0, url: "", created: false, skipped: false }),

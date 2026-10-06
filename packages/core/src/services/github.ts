@@ -438,6 +438,14 @@ export interface GithubService {
     installationId?: number;
   }) => Effect.Effect<string, GitHubApiError>;
 
+  /** Append one JSON report to a commit's refs/notes/measures note. */
+  readonly appendMeasureNote: (req: {
+    repo: string;
+    commit: string;
+    text: string;
+    installationId?: number;
+  }) => Effect.Effect<void, GitHubApiError>;
+
   /**
    * Post a top-level PR review comment (`event: "COMMENT"`). The run uses this
    * to leave an always-visible comment on every review — success or failure.
@@ -605,6 +613,12 @@ export const github = {
   readTextFile: (req: ReadTextFileRequest) => Effect.flatMap(Github, (g) => g.readTextFile(req)),
   branchHead: (req: { repo: string; branch: string; installationId?: number }) =>
     Effect.flatMap(Github, (g) => g.branchHead(req)),
+  appendMeasureNote: (req: {
+    repo: string;
+    commit: string;
+    text: string;
+    installationId?: number;
+  }) => Effect.flatMap(Github, (g) => g.appendMeasureNote(req)),
   issues: (opts: {
     repo: string;
     state?: "open" | "closed" | "all";
