@@ -1,0 +1,34 @@
+# Release builds run inside the Cloudflare Sandbox protocol image. Zig's Darwin
+# libc/linker support needs no Apple SDK files in this Linux container.
+FROM docker.io/cloudflare/sandbox:0.10.1
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:/opt/zig/bin:$PATH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential clang lld cmake python3 python3-pip python3-venv \
+    pkg-config perl git file libclang-dev ca-certificates util-linux curl && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
+    --default-toolchain 1.97.1 --target aarch64-apple-darwin \
+    --target x86_64-apple-darwin --target x86_64-unknown-linux-musl \
+    --target aarch64-unknown-linux-musl --no-modify-path && \
+    cargo install cargo-zigbuild --locked --version 0.21.6 && \
+    chmod -R a+rX "$RUSTUP_HOME" "$CARGO_HOME"
+
+RUN python3 -m venv /opt/zig && \
+    /opt/zig/bin/pip install --no-cache-dir ziglang==0.13.0 && \
+    ln -s "$(find /opt/zig/lib -path '*/ziglang/zig' -type f -print -quit)" /opt/zig/bin/zig && \
+    zig version && cargo zigbuild --help >/dev/null
+
+# Text-only TAPI records only the macOS system symbols referenced by
+# iana-time-zone. The runtime framework comes from macOS itself.
+COPY infra/darwin-stubs /opt/darwin-stubs
+COPY infra/build-oci-layer.sh /opt/build-oci-layer.sh
+COPY infra/build-oci-layout.py /opt/build-oci-layout.py
+ENV CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-F/opt/darwin-stubs" \
+    CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-F/opt/darwin-stubs" \
+    CARGO_BUILD_JOBS=4

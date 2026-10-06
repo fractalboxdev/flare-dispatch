@@ -23,6 +23,9 @@ const report = JSON.stringify({
 });
 
 describe("contextful-measures", () => {
+  it("allows a scheduled measurement to queue behind a full sandbox pool", () => {
+    expect(contextfulMeasures.limits.admissionMaxQueueAgeSec).toBe(21600);
+  });
   it("builds a newline-terminated report from every record with the execution attempt", () => {
     const dir = mkdtempSync(join(tmpdir(), "contextful-measures-"));
     try {

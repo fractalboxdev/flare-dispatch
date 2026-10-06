@@ -216,6 +216,8 @@ export type CreateRelease = {
   readonly body: string;
   /** Publish as a pre-release. Default `false`. */
   readonly prerelease?: boolean;
+  /** Keep the release unpublished while child artifacts are uploaded. */
+  readonly draft?: boolean;
   /**
    * The GitHub installation id authenticating the write. Optional — the live
    * Layer resolves it from the repo when absent.
@@ -233,6 +235,49 @@ export type ReleaseResult = {
   readonly tag: string;
   /** `true` when a release was actually published; `false` on a no-op deploy. */
   readonly published: boolean;
+  readonly draft?: boolean;
+};
+
+export type ReleaseLookup = {
+  readonly repo: string;
+  readonly tag: string;
+  readonly installationId?: number;
+};
+
+export type TagTarget = { readonly refSha: string; readonly commitSha: string };
+
+export type PublishRelease = {
+  readonly repo: string;
+  readonly releaseId: number;
+  readonly installationId?: number;
+};
+
+/** A completed artifact in the execution's R2 namespace. */
+export type PublishReleaseAsset = {
+  readonly repo: string;
+  readonly releaseId: number;
+  readonly artifactName: string;
+  readonly contentType: string;
+  readonly sha256?: string;
+  readonly installationId?: number;
+};
+
+export type ReleaseAssetResult = {
+  readonly id: number;
+  readonly name: string;
+  readonly size: number;
+  readonly downloadUrl: string;
+};
+
+export type PublishContainerImage = {
+  readonly repo: string;
+  readonly profile: string;
+  readonly version: string;
+  readonly sourceExecutionId: string;
+  readonly layerArtifactName: string;
+  readonly layerSize: number;
+  readonly layerDigest: string;
+  readonly diffId: string;
 };
 
 /**
@@ -580,6 +625,16 @@ export interface GithubService {
    * without App credentials degrades to a logged no-op (`published: false`).
    */
   readonly createRelease: (req: CreateRelease) => Effect.Effect<ReleaseResult, GitHubApiError>;
+  readonly tagCommit: (req: ReleaseLookup) => Effect.Effect<string, GitHubApiError>;
+  readonly tagTarget: (req: ReleaseLookup) => Effect.Effect<TagTarget, GitHubApiError>;
+  readonly commitOnDefaultBranch: (req: { repo: string; commitSha: string; installationId?: number }) => Effect.Effect<boolean, GitHubApiError>;
+  readonly releaseByTag: (req: ReleaseLookup) => Effect.Effect<ReleaseResult | undefined, GitHubApiError>;
+  readonly publishRelease: (req: PublishRelease) => Effect.Effect<ReleaseResult, GitHubApiError>;
+  /** Stream a completed R2 artifact to a GitHub Release with App credentials held in the Worker. */
+  readonly publishReleaseAsset: (
+    req: PublishReleaseAsset,
+  ) => Effect.Effect<ReleaseAssetResult, GitHubApiError>;
+  readonly publishContainerImage: (req: PublishContainerImage) => Effect.Effect<void, GitHubApiError>;
 }
 
 /** Context.Tag — the dependency a run carries until a Layer provides it. */
@@ -661,4 +716,13 @@ export const github = {
   closeDraftPullRequest: (req: CloseDraftPullRequest) =>
     Effect.flatMap(Github, (g) => g.closeDraftPullRequest(req)),
   createRelease: (req: CreateRelease) => Effect.flatMap(Github, (g) => g.createRelease(req)),
+  tagCommit: (req: ReleaseLookup) => Effect.flatMap(Github, (g) => g.tagCommit(req)),
+  tagTarget: (req: ReleaseLookup) => Effect.flatMap(Github, (g) => g.tagTarget(req)),
+  commitOnDefaultBranch: (req: { repo: string; commitSha: string; installationId?: number }) => Effect.flatMap(Github, (g) => g.commitOnDefaultBranch(req)),
+  releaseByTag: (req: ReleaseLookup) => Effect.flatMap(Github, (g) => g.releaseByTag(req)),
+  publishRelease: (req: PublishRelease) => Effect.flatMap(Github, (g) => g.publishRelease(req)),
+  publishReleaseAsset: (req: PublishReleaseAsset) =>
+    Effect.flatMap(Github, (g) => g.publishReleaseAsset(req)),
+  publishContainerImage: (req: PublishContainerImage) =>
+    Effect.flatMap(Github, (g) => g.publishContainerImage(req)),
 } as const;

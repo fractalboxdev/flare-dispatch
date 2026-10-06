@@ -27,6 +27,7 @@ export { ciTriagePr } from "./ci-triage-pr";
 export { refreshFixtures } from "./refresh-fixtures";
 export { selfHealPr } from "./self-heal-pr";
 export { releaseNotes } from "./release-notes";
+export { contextfulRelease, contextfulReleaseCell, contextfulReleaseFormula } from "./contextful-release";
 export { oxlint } from "./oxlint";
 export { check } from "./check";
 export { contextfulGate } from "./contextful-gate";

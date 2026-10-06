@@ -7,6 +7,7 @@ import { selectSandboxNs } from "./sandbox-routing";
 const lean = "LEAN" as const;
 const browser = "BROWSER" as const;
 const agent = "AGENT" as const;
+const release = "RELEASE" as const;
 
 describe("selectSandboxNs", () => {
   it("routes a browser run to the browser binding when it is bound", () => {
@@ -19,6 +20,10 @@ describe("selectSandboxNs", () => {
 
   it("routes an agent run to the agent binding when it is bound", () => {
     expect(selectSandboxNs("agent", { lean, browser, agent })).toBe(agent);
+  });
+
+  it("routes a release run to the release toolchain binding", () => {
+    expect(selectSandboxNs("release", { lean, browser, release })).toBe(release);
   });
 
   it("degrades an agent run to lean when no agent binding is deployed", () => {

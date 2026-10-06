@@ -30,6 +30,7 @@ import {
   type PullReviewRequest,
   type ReadTextFileRequest,
   type ReleaseResult,
+  type ReleaseAssetResult,
   type TextFileResult,
   type WorkflowRunRef,
 } from "../services/github";
@@ -110,6 +111,10 @@ export type GithubFakeState = {
   }>;
   /** Every `createRelease` call, in order — lets a test assert a release published. */
   readonly createReleaseCalls: CreateRelease[];
+  readonly publishReleaseCalls: Array<{ repo: string; releaseId: number }>;
+  readonly publishContainerImageCalls: Array<{ repo: string; profile: string; version: string }>;
+  readonly releases: Record<string, ReleaseResult>;
+  readonly tagCommits: Record<string, string>;
   /** Every label ADD, in order. */
   readonly addIssueLabelsCalls: Array<{ repo: string; issue: number; labels: readonly string[] }>;
   /** Every label REMOVE, in order. */
@@ -184,6 +189,10 @@ export const makeGithubFake = (
     closeDraftPullRequestCalls: [],
     openIssueCalls: [],
     createReleaseCalls: [],
+    publishReleaseCalls: [],
+    publishContainerImageCalls: [],
+    releases: {},
+    tagCommits: {},
     addIssueLabelsCalls: [],
     removeIssueLabelCalls: [],
     commentOnIssueCalls: [],
@@ -419,13 +428,38 @@ export const makeGithubFake = (
         state.createReleaseCalls.push(req);
         // Deterministic fake release id derived from call order.
         const id = state.createReleaseCalls.length;
-        return {
+        const release = {
           id,
           url: `https://github.com/${req.repo}/releases/tag/${req.tag}`,
           tag: req.tag,
-          published: true,
+          published: !req.draft,
+          draft: req.draft ?? false,
         };
+        state.releases[`${req.repo}:${req.tag}`] = release;
+        return release;
       }),
+    tagCommit: (req) => Effect.sync(() => state.tagCommits[`${req.repo}:${req.tag}`] ?? ""),
+    tagTarget: (req) => Effect.sync(() => ({ refSha: state.tagCommits[`${req.repo}:${req.tag}`] ?? "", commitSha: state.tagCommits[`${req.repo}:${req.tag}`] ?? "" })),
+    commitOnDefaultBranch: () => Effect.succeed(true),
+    releaseByTag: (req) => Effect.sync(() => state.releases[`${req.repo}:${req.tag}`]),
+    publishRelease: (req) => Effect.sync(() => {
+      state.publishReleaseCalls.push(req);
+      const release = Object.values(state.releases).find((entry) => entry.id === req.releaseId);
+      if (release === undefined) throw new Error("release not found");
+      const published = { ...release, published: true, draft: false };
+      state.releases[`${req.repo}:${release.tag}`] = published;
+      return published;
+    }),
+    publishReleaseAsset: (req): Effect.Effect<ReleaseAssetResult, never> =>
+      Effect.succeed({
+        id: req.releaseId,
+        name: req.artifactName,
+        size: 0,
+        downloadUrl: `https://github.com/${req.repo}/releases/download/${req.releaseId}/${req.artifactName}`,
+      }),
+    publishContainerImage: (req) => Effect.sync(() => {
+      state.publishContainerImageCalls.push({ repo: req.repo, profile: req.profile, version: req.version });
+    }),
   };
 
   return { layer: Layer.succeed(Github, service), state };

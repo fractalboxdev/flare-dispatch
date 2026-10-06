@@ -114,7 +114,7 @@ export type ScheduleSpec<I> = {
  * be `requiresBrowser: true, sandboxImage: "lean"` (CDP, no in-image browser)
  * or `requiresBrowser: false, sandboxImage: "browser"` (in-sandbox Playwright).
  */
-export type SandboxImage = "lean" | "browser" | "agent";
+export type SandboxImage = "lean" | "browser" | "agent" | "release";
 
 export type RunSpec<I, O, IEnc, OEnc> = {
   readonly name: string;

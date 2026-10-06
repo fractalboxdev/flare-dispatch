@@ -23,12 +23,12 @@ import type { Env } from "./env";
 import { handleRequest } from "./router";
 import { handleInboundEmail } from "./routes/email-handler";
 import { handleScheduled } from "./routes/scheduled";
-import { RunSandbox, RunSandboxBrowser, RunSandboxAgent } from "./sandbox";
+import { RunSandbox, RunSandboxBrowser, RunSandboxAgent, RunSandboxRelease } from "./sandbox";
 
 // Re-export the binding classes so wrangler's `main` entry resolves them.
 export { RunWorkflow } from "./workflow";
 export { AgentBudget } from "./agent-budget-do";
-export { RunSandbox, RunSandboxBrowser, RunSandboxAgent };
+export { RunSandbox, RunSandboxBrowser, RunSandboxAgent, RunSandboxRelease };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

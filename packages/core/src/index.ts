@@ -167,6 +167,8 @@ export {
   type CloseDraftPullRequestResult,
   type CreateRelease,
   type ReleaseResult,
+  type PublishReleaseAsset,
+  type ReleaseAssetResult,
 } from "./services/github";
 export {
   cloudflare,

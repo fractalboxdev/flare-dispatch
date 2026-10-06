@@ -89,7 +89,19 @@ export {
   type ListIssuesOptions,
   type RemoveIssueLabelOptions,
 } from "./issues";
-export { createRelease, type CreateReleaseOptions, type CreateReleaseResult } from "./releases";
+export {
+  createRelease,
+  getReleaseByTag,
+  publishRelease,
+  resolveTagCommit,
+  resolveTagTarget,
+  commitOnDefaultBranch,
+  uploadReleaseAsset,
+  type CreateReleaseOptions,
+  type CreateReleaseResult,
+  type UploadReleaseAssetOptions,
+  type UploadReleaseAssetResult,
+} from "./releases";
 export {
   fetchPublicAppRegistration,
   diffRegistration,

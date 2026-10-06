@@ -33,6 +33,12 @@ import {
   createIssueComment,
   createPullReview,
   createRelease,
+  getReleaseByTag,
+  publishRelease,
+  resolveTagCommit,
+  resolveTagTarget,
+  commitOnDefaultBranch,
+  uploadReleaseAsset,
   getInstallationToken,
   listActionRuns,
   listIssues,
@@ -55,9 +61,12 @@ import {
   type IssueRef,
   type PullRequestHistoryRef,
   type ReleaseResult,
+  type ReleaseAssetResult,
   type TextFileResult,
   type WorkflowRunRef,
 } from "@fractalboxdev/flare-dispatch-core";
+import { artifactKey } from "./artifact-r2";
+import { pushGhcrImage } from "./ghcr-push";
 
 /** The GitHub App credentials the live `pullReview` write needs. */
 export type GithubLiveConfig = {
@@ -122,7 +131,13 @@ const logSkip = (repo: string, pr: number, why: string): Effect.Effect<void> =>
  * dies (V3 work). With credentials, `pullReview` mints an installation token
  * from each request's `installationId` and posts the review.
  */
-export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Layer<Github> => {
+export const makeGithubLive = (
+  config: GithubLiveConfig | undefined,
+  artifactsBucket?: R2Bucket,
+  executionId?: string,
+  db?: D1Database,
+  ghcr?: { readonly username: string; readonly token: string },
+): Layer.Layer<Github> => {
   /**
    * Mint a fresh installation token for a repo. Prefers an explicit
    * `installationId`, else resolves the repo's installation from the App JWT
@@ -467,14 +482,112 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
             ...(req.name !== undefined ? { name: req.name } : {}),
             body: req.body,
             ...(req.prerelease !== undefined ? { prerelease: req.prerelease } : {}),
+            ...(req.draft !== undefined ? { draft: req.draft } : {}),
           }),
         );
         return {
           id: result.id,
           url: result.htmlUrl,
           tag: result.tagName,
-          published: true,
+          published: !req.draft,
+          draft: req.draft ?? false,
         };
+      }),
+    tagCommit: (req) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() => resolveTagCommit({ token, repo: req.repo, tag: req.tag }));
+      }),
+    tagTarget: (req) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() => resolveTagTarget({ token, repo: req.repo, tag: req.tag }));
+      }),
+    commitOnDefaultBranch: (req) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() => commitOnDefaultBranch({ token, repo: req.repo, commitSha: req.commitSha }));
+      }),
+    releaseByTag: (req) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        const release = yield* ghCall(() => getReleaseByTag({ token, repo: req.repo, tag: req.tag }));
+        return release === undefined ? undefined : {
+          id: release.id, url: release.htmlUrl, tag: release.tagName,
+          published: !release.draft, draft: release.draft,
+        };
+      }),
+    publishRelease: (req) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        const release = yield* ghCall(() => publishRelease({ token, repo: req.repo, releaseId: req.releaseId }));
+        return { id: release.id, url: release.htmlUrl, tag: release.tagName, published: true, draft: false };
+      }),
+    publishReleaseAsset: (req): Effect.Effect<ReleaseAssetResult, GitHubApiError> =>
+      Effect.gen(function* () {
+        if (config === undefined || artifactsBucket === undefined || executionId === undefined) {
+          return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
+        }
+        const source = yield* Effect.tryPromise({
+          try: () => artifactsBucket.get(artifactKey(executionId, req.artifactName)),
+          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+        });
+        if (source === null) {
+          return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
+        }
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() =>
+          uploadReleaseAsset({
+            token,
+            repo: req.repo,
+            releaseId: req.releaseId,
+            name: req.artifactName,
+            contentType: req.contentType,
+            content: source.body,
+            size: source.size,
+            ...(req.sha256 !== undefined ? { sha256: req.sha256 } : {}),
+          }),
+        );
+      }),
+    publishContainerImage: (req): Effect.Effect<void, GitHubApiError> =>
+      Effect.gen(function* () {
+        if (ghcr === undefined || artifactsBucket === undefined || executionId === undefined || db === undefined) {
+          return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
+        }
+        if (req.repo !== "fractalboxdev/contextful" ||
+          !["contextful-control", "contextful-edge", "contextful-full"].includes(req.profile) ||
+          !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(req.version) ||
+          req.layerArtifactName !== `${req.profile}-${req.version}-linux-amd64.layer.tar.gz` ||
+          !/^[a-f0-9]{64}$/.test(req.layerDigest) || !/^[a-f0-9]{64}$/.test(req.diffId)) {
+          return yield* Effect.fail(new GitHubApiError({ status: 400, reason: "other" }));
+        }
+        const child = yield* Effect.tryPromise({
+          try: () => db.prepare("SELECT status FROM executions WHERE id = ? AND parent_execution_id = ? AND run = ?")
+            .bind(req.sourceExecutionId, executionId, "contextful-release-cell").first<{ status: string }>(),
+          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+        });
+        if (child?.status !== "success") return yield* Effect.fail(new GitHubApiError({ status: 403, reason: "other" }));
+        const source = yield* Effect.tryPromise({
+          try: () => artifactsBucket.get(artifactKey(req.sourceExecutionId, req.layerArtifactName)),
+          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+        });
+        if (source === null || source.size !== req.layerSize) {
+          return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
+        }
+        return yield* Effect.tryPromise({
+          try: () => pushGhcrImage({
+            username: ghcr.username, token: ghcr.token,
+            name: `${req.repo}/${req.profile}`, tag: req.version,
+            layer: source.body, layerSize: source.size,
+            layerDigest: req.layerDigest, diffId: req.diffId,
+          }),
+          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+        });
       }),
   };
 

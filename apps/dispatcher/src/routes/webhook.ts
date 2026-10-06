@@ -62,9 +62,9 @@ type WebhookPayload = Record<string, unknown>;
  * repo/ref/sha context + the optional `installation_id` for the check-run
  * callback. Extracted from the standard fields GitHub puts on every webhook
  * payload — `repository.full_name`, `installation.id` — plus best-effort SHA
- * extraction (deployment / pull_request / head_commit).
+ * extraction (deployment / pull_request / push / head_commit).
  */
-const synthesizeGithubBlock = (
+export const synthesizeGithubBlock = (
   payload: WebhookPayload,
 ): {
   repo: string;
@@ -83,13 +83,16 @@ const synthesizeGithubBlock = (
   const commitSha = (payload as { head_commit?: { id?: string } }).head_commit?.id;
   const checkRunSha = (payload as { check_run?: { head_sha?: string } }).check_run?.head_sha;
   const checkSuiteSha = (payload as { check_suite?: { head_sha?: string } }).check_suite?.head_sha;
-  const sha = deploymentSha ?? prSha ?? commitSha ?? checkRunSha ?? checkSuiteSha ?? "main";
+  const pushSha = (payload as { after?: string }).after;
+  const pushRef = (payload as { ref?: string }).ref;
+  const sha =
+    deploymentSha ?? prSha ?? pushSha ?? commitSha ?? checkRunSha ?? checkSuiteSha ?? "main";
+  const ref =
+    typeof pushRef === "string" && pushRef.startsWith("refs/") ? pushRef : "refs/heads/main";
 
   const installation_id = (payload as { installation?: { id?: number } }).installation?.id;
 
-  return installation_id !== undefined
-    ? { repo, ref: "refs/heads/main", sha, installation_id }
-    : { repo, ref: "refs/heads/main", sha };
+  return installation_id !== undefined ? { repo, ref, sha, installation_id } : { repo, ref, sha };
 };
 
 /** Handle `POST /v1/webhooks/github`. */

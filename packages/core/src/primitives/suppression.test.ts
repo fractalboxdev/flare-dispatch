@@ -311,6 +311,13 @@ const githubService = (over: Partial<GithubService>): GithubService => ({
     Effect.succeed({ number: 0, url: "", created: false, skipped: false }),
   closeDraftPullRequest: () => Effect.succeed({ closed: false, reason: "none-open" }),
   createRelease: () => Effect.succeed({ id: 0, url: "", tag: "", published: false }),
+  tagCommit: () => Effect.succeed("0".repeat(40)),
+  tagTarget: () => Effect.succeed({ refSha: "0".repeat(40), commitSha: "0".repeat(40) }),
+  commitOnDefaultBranch: () => Effect.succeed(true),
+  releaseByTag: () => Effect.succeed(undefined),
+  publishRelease: () => Effect.succeed({ id: 0, url: "", tag: "", published: false }),
+  publishReleaseAsset: () => Effect.succeed({ id: 0, name: "", size: 0, downloadUrl: "" }),
+  publishContainerImage: () => Effect.void,
   ...over,
 });
 

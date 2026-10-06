@@ -144,3 +144,6 @@ export class RunSandboxBrowser extends RecordingSandbox {}
  * specs/08-self-healing.md § 6.2.
  */
 export class RunSandboxAgent extends RecordingSandbox {}
+
+/** Release toolchain image; the sandbox protocol matches the other classes. */
+export class RunSandboxRelease extends RecordingSandbox {}

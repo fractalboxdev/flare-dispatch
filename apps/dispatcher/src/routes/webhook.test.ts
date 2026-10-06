@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { sign } from "../hmac";
 import { handleRequest } from "../router";
 import { makeFakeEnv, makeFakeKv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
+import { synthesizeGithubBlock } from "./webhook";
 
 const WEBHOOK_SECRET = "github-webhook-secret-please-rotate";
 const HMAC_SECRET = "unused-but-required-by-env-shape";
@@ -149,6 +150,23 @@ describe("POST /v1/webhooks/github — headers", () => {
 });
 
 describe("POST /v1/webhooks/github — trigger evaluation", () => {
+  it("preserves the pushed tag ref and commit for release triggers", () => {
+    expect(
+      synthesizeGithubBlock({
+        ref: "refs/tags/v1.2.3",
+        after: "a".repeat(40),
+        head_commit: { id: "b".repeat(40) },
+        repository: { full_name: "owner/test-repo" },
+        installation: { id: 99999 },
+      }),
+    ).toEqual({
+      repo: "owner/test-repo",
+      ref: "refs/tags/v1.2.3",
+      sha: "a".repeat(40),
+      installation_id: 99999,
+    });
+  });
+
   it("valid sig + matching deployment_status → dispatches deploy-smoke", async () => {
     const { env, workflow } = fixture();
     const req = await webhookRequest(deploymentStatusPayload);
@@ -199,9 +217,7 @@ describe("POST /v1/webhooks/github — trigger evaluation", () => {
     const { env, workflow } = fixture({ publicOrigin: "https://ci.example.dev" });
     const res = await handleRequest(await webhookRequest(deploymentStatusPayload), env);
     expect(res.status).toBe(202);
-    expect((workflow.calls[0]!.params as { origin: string }).origin).toBe(
-      "https://ci.example.dev",
-    );
+    expect((workflow.calls[0]!.params as { origin: string }).origin).toBe("https://ci.example.dev");
   });
 
   it("gate rejects non-production deployments → 202 with dispatched: 0", async () => {

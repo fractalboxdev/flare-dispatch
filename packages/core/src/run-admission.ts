@@ -29,7 +29,7 @@
 // Issue: #109. Pattern sibling: container-lease.ts (#91).
 
 /** The container pool a run is admitted into — one semaphore per pool. */
-export type AdmissionPool = "lean" | "browser" | "agent";
+export type AdmissionPool = "lean" | "browser" | "agent" | "release";
 
 /**
  * What one claim attempt observed, read atomically by the runtime layer:

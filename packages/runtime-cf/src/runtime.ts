@@ -127,6 +127,8 @@ export type CFRuntimeLiveOptions = {
    * empty, and clones go out unauthenticated (public repos only).
    */
   readonly githubApp?: GithubLiveConfig;
+  /** Classic PAT and login for Worker-side GHCR publication. */
+  readonly ghcr?: { readonly username: string; readonly token: string };
   /**
    * Cloudflare REST credentials for the `cloudflare` capability — a scoped
    * `CLOUDFLARE_API_TOKEN` (Pages:Read) + `CLOUDFLARE_ACCOUNT_ID`. Used by the
@@ -390,7 +392,7 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
   // logged no-ops and the read surface returns empty (reporting must never fail
   // a run). The per-repo installation is resolved by the capability itself when
   // a request carries no `installationId`.
-  const github = makeGithubLive(githubAppCfg);
+  const github = makeGithubLive(githubAppCfg, opts.bucket, opts.executionId, opts.db, opts.ghcr);
   // `Cloudflare` is live when a scoped API token + account id are configured;
   // absent, the deferred Layer returns empty (a read-only capability degrades
   // to "found nothing", never a die).

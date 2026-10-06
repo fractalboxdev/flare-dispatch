@@ -50,7 +50,7 @@ export const contextfulMeasures = defineRun({
   }),
   inputs: Input,
   outputs: Output,
-  limits: { maxDurationSec: 21600 },
+  limits: { maxDurationSec: 21600, admissionMaxQueueAgeSec: 21600 },
   run: (input) =>
     Effect.gen(function* () {
       if (input.repo !== REPO || input.ref !== `refs/heads/${BRANCH}`) {
