@@ -29,6 +29,7 @@ export { selfHealPr } from "./self-heal-pr";
 export { releaseNotes } from "./release-notes";
 export { oxlint } from "./oxlint";
 export { check } from "./check";
+export { contextfulGate } from "./contextful-gate";
 export { emailOtpLogin } from "./email-otp-login";
 export { finopsAudit } from "./finops-audit";
 export { contextfulMeasures } from "./contextful-measures";
