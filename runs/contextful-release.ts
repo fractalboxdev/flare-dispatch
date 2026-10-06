@@ -8,6 +8,8 @@ const SHA = /^[a-f0-9]{40}$/;
 const PROFILES = ["contextful-control", "contextful-edge", "contextful-full"] as const;
 const LINUX = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"] as const;
 const DARWIN = ["x86_64-apple-darwin", "aarch64-apple-darwin"] as const;
+const RELEASE_BUILD_TIMEOUT_SEC = 14400;
+const RELEASE_STEP_HEADROOM_SEC = 60;
 const CELLS = PROFILES.flatMap((profile) =>
   (profile === "contextful-control" ? LINUX : [...LINUX, ...DARWIN]).map((target) => ({
     profile,
@@ -95,7 +97,7 @@ export const contextfulReleaseCell = defineRun({
             "--builder", "zigbuild", "--profile", input.profile,
             "--target", input.target, "--target-dir", "target/release-artifacts", "--out", "dist",
           ],
-          timeoutSec: 14400,
+          timeoutSec: RELEASE_BUILD_TIMEOUT_SEC,
         });
         if (result.exitCode !== 0) {
           return yield* Effect.die(new Error(`release build failed for ${input.profile}/${input.target}: ${result.exitCode}`));
@@ -156,6 +158,10 @@ export const contextfulReleaseCell = defineRun({
         return { profile: input.profile, target: input.target, manifest, assets,
           ...(imageLayer !== undefined ? { imageLayer } : {}) };
       }),
+      // Some cross-target release builds exceed 30 minutes. Match the
+      // sandbox's bounded four-hour command timeout and leave upload headroom;
+      // retrying would restart an expensive build from scratch.
+      { timeoutSec: RELEASE_BUILD_TIMEOUT_SEC + RELEASE_STEP_HEADROOM_SEC, retries: 0 },
     ),
 });
 
