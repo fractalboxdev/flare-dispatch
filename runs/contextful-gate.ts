@@ -101,18 +101,23 @@ export const contextfulGate = defineRun({
         () =>
           ensureWorkspace({ current: baseWorkspace, repo: input.repo, sha: input.baseSha }).pipe(
             Effect.flatMap((ws) =>
-              sandbox.exec({
-                container: ws.container,
-                cwd: ws.dir,
-                command: DISCOVER,
-                timeoutSec: 1800,
-              }),
+              sandbox
+                .exec({
+                  container: ws.container,
+                  cwd: ws.dir,
+                  command: DISCOVER,
+                  timeoutSec: 1800,
+                })
+                .pipe(Effect.map((result) => ({ ...result, container: ws.container }))),
             ),
           ),
         { timeoutSec: 1920, retries: 3, retryOn: ["ExecFailed", "StepFailed", "CheckoutFailed"] },
       );
       const baseStages =
         baseDiscovery.exitCode === 0 ? parseStages(baseDiscovery.stdout) : undefined;
+      yield* step("release-discovery-container", () =>
+        sandbox.destroy({ container: baseDiscovery.container }),
+      );
       if (headStages === undefined || baseStages === undefined) {
         return yield* Effect.fail(
           new AcceptanceFailed({

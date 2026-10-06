@@ -105,11 +105,13 @@ describe("contextful-gate", () => {
         "discover-stages",
         "checkout-base",
         "discover-base-stages",
+        "release-discovery-container",
         "spawn-stages-0",
         "await-stages-0",
         "spawn-stages-2",
         "await-stages-2",
       ]);
+      expect(handles.sandbox.destroyed).toHaveLength(1);
     }).pipe(Effect.provide(layer));
   });
 
