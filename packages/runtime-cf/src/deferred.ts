@@ -177,7 +177,13 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
       Effect.logInfo(
         `github.createRelease skipped (no GitHub App credentials) — ${repo}@${tag} not published`,
       ).pipe(Effect.as({ id: 0, url: "", tag, published: false })),
+    tagCommit: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    tagTarget: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    commitOnDefaultBranch: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    releaseByTag: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    publishRelease: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     publishReleaseAsset: () => Effect.fail(new GitHubApiError({ status: 0, reason: "other" })),
+    publishContainerImage: () => Effect.fail(new GitHubApiError({ status: 0, reason: "other" })),
   }))(),
 );
 

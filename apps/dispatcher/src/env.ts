@@ -146,6 +146,9 @@ export interface Env {
    */
   readonly RUNS_SANDBOX_AGENT?: DurableObjectNamespace<Sandbox>;
 
+  /** Pinned Rust, Zig, and native C++ toolchain for release builds. */
+  readonly RUNS_SANDBOX_RELEASE?: DurableObjectNamespace<Sandbox>;
+
   /** R2 bucket — `logs/<execution-id>/<step>.ndjson` + `artifacts/...`. */
   readonly RUNS_STORAGE: R2Bucket;
 
@@ -197,6 +200,8 @@ export interface Env {
    * `GITHUB_APP_ID` to mint short-lived installation tokens (no PATs).
    */
   readonly GITHUB_APP_PRIVATE_KEY?: string;
+  readonly GHCR_USERNAME?: string;
+  readonly GHCR_TOKEN?: string;
 
   /**
    * GitHub App webhook secret — Worker secret. Verifies `X-Hub-Signature-256`

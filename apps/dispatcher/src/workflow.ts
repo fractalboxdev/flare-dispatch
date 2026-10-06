@@ -329,6 +329,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       lean: this.env.RUNS_SANDBOX,
       browser: this.env.RUNS_SANDBOX_BROWSER,
       agent: this.env.RUNS_SANDBOX_AGENT,
+      release: this.env.RUNS_SANDBOX_RELEASE,
     });
 
     // The admission-semaphore pool key — the SAME routing rule as the binding
@@ -339,6 +340,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       lean: "lean",
       browser: this.env.RUNS_SANDBOX_BROWSER !== undefined ? "browser" : undefined,
       agent: this.env.RUNS_SANDBOX_AGENT !== undefined ? "agent" : undefined,
+      release: this.env.RUNS_SANDBOX_RELEASE !== undefined ? "release" : undefined,
     });
     // The per-pool slot cap, from the plain `ADMISSION_CAP` wrangler var
     // (one var for both pools; keep it ≤ each container's `max_instances` —
@@ -512,6 +514,9 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       checks: resolveChecksConfig(this.env, payload.github),
       ...(resolveGithubAppConfig(this.env) !== undefined
         ? { githubApp: resolveGithubAppConfig(this.env) }
+        : {}),
+      ...(this.env.GHCR_USERNAME && this.env.GHCR_TOKEN
+        ? { ghcr: { username: this.env.GHCR_USERNAME, token: this.env.GHCR_TOKEN } }
         : {}),
       ...(resolveCloudflareConfig(this.env) !== undefined
         ? { cloudflare: resolveCloudflareConfig(this.env) }

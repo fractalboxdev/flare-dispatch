@@ -30,7 +30,7 @@ import {
  * `agent` → `standard-3`; an un-set image defaults to `lean`.
  */
 export const instanceForSandboxImage = (sandboxImage: SandboxImage | undefined): InstanceType =>
-  sandboxImage === "agent" ? "standard-3" : "standard-2";
+  sandboxImage === "agent" ? "standard-3" : sandboxImage === "release" ? "standard-4" : "standard-2";
 
 type UsageRow = {
   readonly model: string;

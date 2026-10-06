@@ -32,6 +32,7 @@ export const selectSandboxNs = <T>(
     readonly lean: T;
     readonly browser: T | undefined;
     readonly agent?: T | undefined;
+    readonly release?: T | undefined;
   },
 ): T => {
   if (sandboxImage === "browser" && bindings.browser !== undefined) {
@@ -43,6 +44,9 @@ export const selectSandboxNs = <T>(
   // browser tier. specs/08-self-healing.md § 6.2.
   if (sandboxImage === "agent" && bindings.agent !== undefined) {
     return bindings.agent;
+  }
+  if (sandboxImage === "release" && bindings.release !== undefined) {
+    return bindings.release;
   }
   return bindings.lean;
 };

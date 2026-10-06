@@ -91,6 +91,11 @@ export {
 } from "./issues";
 export {
   createRelease,
+  getReleaseByTag,
+  publishRelease,
+  resolveTagCommit,
+  resolveTagTarget,
+  commitOnDefaultBranch,
   uploadReleaseAsset,
   type CreateReleaseOptions,
   type CreateReleaseResult,

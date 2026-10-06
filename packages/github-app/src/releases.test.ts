@@ -9,7 +9,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createRelease, uploadReleaseAsset, GithubApiError } from "./index";
+import { commitOnDefaultBranch, createRelease, getReleaseByTag, publishRelease, resolveTagCommit, resolveTagTarget, uploadReleaseAsset, GithubApiError } from "./index";
 
 type Captured = {
   authorization: string | null;
@@ -21,6 +21,8 @@ type Captured = {
 let posts: Captured[] = [];
 let status = 201;
 let assetStatus = 201;
+let releasePatches: Array<{ id: string; body: Record<string, unknown> }> = [];
+let tagRefSha = "annotated-tag-sha";
 let assets: Array<{
   url: string;
   authorization: string | null;
@@ -28,6 +30,8 @@ let assets: Array<{
   contentLength: string | null;
   bytes: Uint8Array;
 }> = [];
+let existingAssets: Array<{ id: number; name: string; size: number; state: string; digest: string; browser_download_url: string }> = [];
+let deletedAssets: number[] = [];
 
 const server = setupServer(
   http.post("https://api.github.com/repos/:owner/:repo/releases", async ({ request, params }) => {
@@ -66,11 +70,41 @@ const server = setupServer(
           id: 42,
           name: "archive.tar.gz",
           size: 3,
+          digest: `sha256:${"a".repeat(64)}`,
           browser_download_url: "https://github.com/o/r/releases/download/v1/archive.tar.gz",
         },
         { status: assetStatus },
       );
     },
+  ),
+  http.get("https://api.github.com/repos/:owner/:repo/git/ref/tags/:tag", () =>
+    HttpResponse.json({ object: { type: "tag", sha: tagRefSha } }),
+  ),
+  http.get("https://api.github.com/repos/:owner/:repo/git/tags/:sha", () =>
+    HttpResponse.json({ object: { type: "commit", sha: "a".repeat(40) } }),
+  ),
+  http.get("https://api.github.com/repos/:owner/:repo/releases/tags/:tag", () =>
+    new HttpResponse(null, { status: 404 }),
+  ),
+  http.get("https://api.github.com/repos/:owner/:repo/releases", () =>
+    HttpResponse.json([{ id: 555_001, html_url: "https://github.com/o/r/releases/tag/v1", tag_name: "v1", draft: true }]),
+  ),
+  http.patch("https://api.github.com/repos/:owner/:repo/releases/:id", async ({ params, request }) => {
+    releasePatches.push({ id: String(params.id), body: (await request.json()) as Record<string, unknown> });
+    return HttpResponse.json({ id: Number(params.id), html_url: "https://github.com/o/r/releases/tag/v1", tag_name: "v1", draft: false });
+  }),
+  http.get("https://api.github.com/repos/:owner/:repo", () =>
+    HttpResponse.json({ default_branch: "main" }),
+  ),
+  http.get("https://api.github.com/repos/:owner/:repo/releases/:id/assets", () =>
+    HttpResponse.json(existingAssets),
+  ),
+  http.delete("https://api.github.com/repos/:owner/:repo/releases/assets/:id", ({ params }) => {
+    deletedAssets.push(Number(params.id));
+    return new HttpResponse(null, { status: 204 });
+  }),
+  http.get("https://api.github.com/repos/:owner/:repo/compare/:basehead", () =>
+    HttpResponse.json({ status: "ahead" }),
   ),
 );
 
@@ -81,6 +115,10 @@ afterEach(() => {
   status = 201;
   assets = [];
   assetStatus = 201;
+  releasePatches = [];
+  tagRefSha = "annotated-tag-sha";
+  existingAssets = [];
+  deletedAssets = [];
   vi.unstubAllGlobals();
 });
 
@@ -160,6 +198,26 @@ describe("uploadReleaseAsset", () => {
       TypeError,
     );
   });
+
+  it("reuses a matching uploaded asset and replaces a starter asset", async () => {
+    existingAssets = [{ id: 12, name: "archive.tar.gz", size: 3, state: "uploaded", digest: `sha256:${"a".repeat(64)}`, browser_download_url: "https://example.test/archive" }];
+    const options = { token: "t", repo: "o/r", releaseId: 7, name: "archive.tar.gz", contentType: "application/gzip", size: 3,
+      sha256: "a".repeat(64), content: new Uint8Array([1, 2, 3]) };
+    const reused = await uploadReleaseAsset(options);
+    expect(reused.id).toBe(12);
+    expect(assets).toHaveLength(0);
+    existingAssets[0] = { ...existingAssets[0]!, state: "starter" };
+    await uploadReleaseAsset(options);
+    expect(deletedAssets).toEqual([12]);
+    expect(assets).toHaveLength(1);
+  });
+
+  it("rejects an upload response whose digest differs from the source artifact", async () => {
+    await expect(uploadReleaseAsset({ token: "t", repo: "o/r", releaseId: 7,
+      name: "archive.tar.gz", contentType: "application/gzip", size: 3,
+      sha256: "b".repeat(64), content: new Uint8Array([1, 2, 3]) }))
+      .rejects.toThrow("metadata does not match");
+  });
 });
 afterAll(() => server.close());
 
@@ -205,5 +263,25 @@ describe("createRelease", () => {
     await expect(
       createRelease({ token: "t", repo: "o/r", tag: "v1.0.0", body: "b" }),
     ).rejects.toBeInstanceOf(GithubApiError);
+  });
+});
+
+describe("release lifecycle", () => {
+  it("resolves an annotated tag to its commit", async () => {
+    expect(await resolveTagCommit({ token: "t", repo: "o/r", tag: "v1" })).toBe("a".repeat(40));
+    expect(await resolveTagTarget({ token: "t", repo: "o/r", tag: "v1" })).toEqual({
+      refSha: "annotated-tag-sha", commitSha: "a".repeat(40),
+    });
+  });
+
+  it("accepts a release commit in the default branch history", async () => {
+    expect(await commitOnDefaultBranch({ token: "t", repo: "o/r", commitSha: "a".repeat(40) })).toBe(true);
+  });
+
+  it("reads a draft by tag and publishes its numeric id", async () => {
+    const release = await getReleaseByTag({ token: "t", repo: "o/r", tag: "v1" });
+    expect(release).toMatchObject({ id: 555_001, draft: true });
+    await publishRelease({ token: "t", repo: "o/r", releaseId: release!.id });
+    expect(releasePatches).toEqual([{ id: "555001", body: { draft: false } }]);
   });
 });
