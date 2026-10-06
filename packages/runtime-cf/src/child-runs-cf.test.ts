@@ -65,7 +65,31 @@ const spawn = (
     Effect.flatMap(ChildRuns, (c) => c.spawn(opts)).pipe(Effect.provide(makeChildRunsLive(cfg))),
   );
 
+const handoff = (cfg: ChildRunsLiveConfig) =>
+  Effect.runPromise(
+    Effect.flatMap(ChildRuns, (c) => c.handoffAdmission()).pipe(
+      Effect.provide(makeChildRunsLive(cfg)),
+    ),
+  );
+
 describe("makeChildRunsLive", () => {
+  it("hands off the parent's admission row; a repeated handoff is safe", async () => {
+    const deleted: string[] = [];
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...values: unknown[]) => ({ sql, values }),
+      }),
+      batch: async (statements: { sql: string; values: unknown[] }[]) => {
+        deleted.push(String(statements[0]?.values[0]));
+        return [];
+      },
+    } as unknown as D1Database;
+    const cfg = CFG(makeWorkflowStub(), { db });
+    await handoff(cfg);
+    await handoff(cfg);
+    expect(deleted).toEqual(["parent-exec-001", "parent-exec-001"]);
+  });
+
   it("creates a child with the DispatchPayload shape the parent inherits", async () => {
     const wf = makeWorkflowStub();
     const exit = await spawn(CFG(wf), {

@@ -16,9 +16,10 @@
 
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AdmissionPool } from "@fractalboxdev/flare-dispatch-core";
+import { decideAdmission, type AdmissionPool } from "@fractalboxdev/flare-dispatch-core";
 import {
   ADMISSION_CAP_DEFAULT,
+  ADMISSION_MAX_QUEUE_AGE_MS,
   ADMISSION_TTL_MS,
   ADMISSION_WAITER_TTL_MS,
   makeRunAdmissionD1,
@@ -32,6 +33,18 @@ const T0 = 1_000_000;
 
 describe("makeRunAdmissionD1 — atomic admission against real D1", () => {
   let bindings: TestBindings;
+
+  it("keeps a queued run live through a 30-minute pool turnover", () => {
+    const observed = { admitted: false, position: 14, poolBusy: 16 };
+    expect(decideAdmission(observed, 0, 19 * 60_000, ADMISSION_MAX_QUEUE_AGE_MS)._kind).toBe(
+      "wait",
+    );
+    expect(decideAdmission(observed, 0, 20 * 60_000, ADMISSION_MAX_QUEUE_AGE_MS)._kind).toBe(
+      "timeout",
+    );
+    expect(decideAdmission(observed, 0, 30 * 60_000, 90 * 60_000)._kind).toBe("wait");
+    expect(decideAdmission(observed, 0, 90 * 60_000, 90 * 60_000)._kind).toBe("timeout");
+  });
 
   beforeEach(async () => {
     bindings = await makeTestBindings();

@@ -105,6 +105,13 @@ export const isTerminalChildStatus = (status: ChildRunStatus): boolean => TERMIN
 export interface ChildRunsService {
   readonly spawn: (opts: SpawnChildRunOpts) => Effect.Effect<ChildRunHandle, ChildSpawnFailed>;
   /**
+   * Release the parent's global admission slot after it has finished its own
+   * sandbox work. A parent waiting on children must not occupy a slot that a
+   * child needs to finish. The Workflow finalizer releases the same row again;
+   * both deletions are idempotent.
+   */
+  readonly handoffAdmission: () => Effect.Effect<void>;
+  /**
    * Read the current status of each child execution id. Returns one record per
    * requested id, in the input order; an id with no `executions` row yet is
    * `missing`. Total — a transient D1 read fault degrades every id to a
@@ -134,3 +141,7 @@ export const spawnChildRun = (
   opts: SpawnChildRunOpts,
 ): Effect.Effect<ChildRunHandle, ChildSpawnFailed, ChildRuns> =>
   Effect.flatMap(ChildRuns, (c) => c.spawn(opts));
+
+/** Hand the parent's admission slot to its children before a durable join. */
+export const handoffChildAdmission = (): Effect.Effect<void, never, ChildRuns> =>
+  Effect.flatMap(ChildRuns, (c) => c.handoffAdmission());

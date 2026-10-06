@@ -45,7 +45,7 @@ export const SERIAL_POLL_EVERY_MS = 30_000;
 
 /**
  * How long a waiter queues before failing `SerialQueueTimedOut`. Covers a
- * holder's full admission wait (20 min) plus a long deploy (25 min) with
+ * holder's default admission wait (20 min) plus a long deploy (25 min) with
  * headroom; 120 claims + 120 sleeps at the poll interval.
  */
 export const SERIAL_MAX_WAIT_MS = 60 * 60_000;

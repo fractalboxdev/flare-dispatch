@@ -27,6 +27,7 @@ export type SpawnRecord = {
 /** Inspectable in-memory spawn + poll log — surfaced for test assertions. */
 export type ChildRunsFakeState = {
   readonly spawned: SpawnRecord[];
+  admissionHandoffs: number;
   /** number of `poll` calls so far — surfaced so a loop test can assert it. */
   polls: number;
 };
@@ -58,7 +59,7 @@ export const makeChildRunsFake = (opts?: {
    */
   pollFn?: (ids: readonly string[], call: number) => readonly ChildStatusRecord[];
 }): { layer: Layer.Layer<ChildRuns>; state: ChildRunsFakeState } => {
-  const state: ChildRunsFakeState = { spawned: [], polls: 0 };
+  const state: ChildRunsFakeState = { spawned: [], polls: 0, admissionHandoffs: 0 };
   const seen = new Set<string>(opts?.existing ?? []);
 
   const seedToRecord = (id: string): ChildStatusRecord => {
@@ -73,6 +74,10 @@ export const makeChildRunsFake = (opts?: {
   };
 
   const service: ChildRunsService = {
+    handoffAdmission: () =>
+      Effect.sync(() => {
+        state.admissionHandoffs += 1;
+      }),
     spawn: ({ run, input, instanceId }: SpawnChildRunOpts) =>
       Effect.sync(() => {
         const id = instanceId ?? `${run}:${state.spawned.length}`;

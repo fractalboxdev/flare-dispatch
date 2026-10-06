@@ -664,13 +664,17 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // per-container-id) → run body. A lease waiter holds an admission slot
       // while it waits — by design; there is no circular wait.
       //
-      // Matrix-children hazard (ADR #109 note 2): a fan-out parent holds its
-      // slot while `waitForChildren` blocks on children who would otherwise
-      // queue behind OTHER parents — a starvation shape. Mitigated in
-      // `enqueue`: a child (`parentExecutionId` set) inherits its parent's
-      // `enqueued_at` as the FIFO key, jumping to the parent's place in line;
-      // the dispatch-age timeout bounds the worst case loud, never a hang.
+      // Fan-out parents release their admission slot after spawning children;
+      // a child inherits its parent's FIFO key if it enqueues before handoff.
       const admissions = makeRunAdmissionD1(db, Date.now, admissionCap);
+      const admissionMaxQueueAgeSec =
+        typeof run.limits.admissionMaxQueueAgeSec === "function"
+          ? run.limits.admissionMaxQueueAgeSec(input)
+          : (run.limits.admissionMaxQueueAgeSec ?? ADMISSION_MAX_QUEUE_AGE_MS / 1000);
+      if (!Number.isFinite(admissionMaxQueueAgeSec) || admissionMaxQueueAgeSec <= 0) {
+        throw new Error(`Invalid admission queue age for run ${run.name}`);
+      }
+      const admissionMaxQueueAgeMs = admissionMaxQueueAgeSec * 1000;
       // Wrap a raw CF durable step as an Effect. The gate runs its I/O in
       // `step.do` / `step.sleep` (NOT the run DSL's StepRunner — these steps
       // precede the run body) so every clock read + claim is checkpointed and
@@ -695,11 +699,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           ),
         );
 
-        // Bounded claim/sleep loop — a COUNT (≤60 claims + 60 sleeps at the
-        // defaults), not a wall-clock read, so the bound is replay-stable
+        // Bounded claim/sleep loop uses a count, so the bound is replay-stable
         // and trivial against the Workflows step cap (#83 precedent).
         const maxAttempts = admissionAcquireAttempts(
-          ADMISSION_MAX_QUEUE_AGE_MS,
+          admissionMaxQueueAgeMs,
           ADMISSION_POLL_EVERY_MS,
         );
         let lastReportedPosition: number | undefined;
@@ -712,7 +715,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             observed,
             enqueuedAt,
             observed.now,
-            ADMISSION_MAX_QUEUE_AGE_MS,
+            admissionMaxQueueAgeMs,
           );
 
           if (decision._kind === "admit") return;
@@ -743,7 +746,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                     decision.position,
                     decision.poolBusy,
                     admissionCap,
-                    enqueuedAt + ADMISSION_MAX_QUEUE_AGE_MS,
+                    enqueuedAt + admissionMaxQueueAgeMs,
                   ),
                 },
               })
@@ -773,7 +776,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         // Unreachable — the final attempt returns or fails above.
         return yield* Effect.fail(
           new AdmissionTimedOut({
-            queuedForMs: ADMISSION_MAX_QUEUE_AGE_MS,
+            queuedForMs: admissionMaxQueueAgeMs,
             position: 0,
             poolBusy: 0,
           }),
