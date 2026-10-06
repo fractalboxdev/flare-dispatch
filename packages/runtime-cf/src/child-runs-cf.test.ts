@@ -166,6 +166,15 @@ describe("makeChildRunsLive", () => {
     );
   });
 
+  it("uses Cloudflare's instance-id alphabet for explicit and derived children", () => {
+    for (const id of [
+      deriveChildInstanceId({ run: "check", parentExecutionId: "contextful-gate_390_sha", input: { stage: "pins" } }),
+      deriveChildInstanceId({ run: "check", parentExecutionId: "parent", input: {}, instanceId: "review:owner/repo:42" }),
+    ]) {
+      expect(id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    }
+  });
+
   it("treats a duplicate instance as created: false, not a failure", async () => {
     const wf = makeWorkflowStub({
       throwOn: () => new Error("instance.already_exists: duplicate id"),
