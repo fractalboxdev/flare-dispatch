@@ -110,6 +110,7 @@ describe("GET /health", () => {
         "ci-triage-pr",
         "contextful-gate",
         "contextful-measures",
+        "contextful-protocol",
         "contextful-release",
         "contextful-release-cell",
         "contextful-release-formula",
