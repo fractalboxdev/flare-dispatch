@@ -30,4 +30,5 @@ COPY infra/darwin-stubs /opt/darwin-stubs
 COPY infra/build-oci-layer.sh /opt/build-oci-layer.sh
 COPY infra/build-oci-layout.py /opt/build-oci-layout.py
 ENV CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-F/opt/darwin-stubs" \
-    CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-F/opt/darwin-stubs"
+    CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-F/opt/darwin-stubs" \
+    CARGO_BUILD_JOBS=4
