@@ -81,20 +81,43 @@ export const uploadReleaseAsset = async (
   if (!Number.isSafeInteger(opts.size) || opts.size < 0) {
     throw new TypeError("asset size must be a nonnegative integer");
   }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(opts.name)) {
+    throw new TypeError("asset name must be one path-free filename of at most 255 characters");
+  }
   const uploadBase = opts.uploadBase ?? "https://uploads.github.com";
   const doFetch = opts.fetchImpl ?? fetch;
   const url = new URL(`${uploadBase}/repos/${owner}/${repoName}/releases/${opts.releaseId}/assets`);
   url.searchParams.set("name", opts.name);
-  const res = await doFetch(url, {
+  // Workers derives Content-Length only from a fixed-length body. The R2
+  // ReadableStream stays streaming; the pump never buffers the whole asset.
+  const FixedLength = (
+    globalThis as typeof globalThis & {
+      FixedLengthStream?: new (size: number) => {
+        readable: ReadableStream<Uint8Array>;
+        writable: WritableStream<Uint8Array>;
+      };
+    }
+  ).FixedLengthStream;
+  const fixed =
+    opts.content instanceof ReadableStream && FixedLength !== undefined
+      ? new FixedLength(opts.size)
+      : undefined;
+  const pump =
+    fixed !== undefined && opts.content instanceof ReadableStream
+      ? opts.content.pipeTo(fixed.writable)
+      : undefined;
+  const body = fixed?.readable ?? opts.content;
+  const request = doFetch(url, {
     method: "POST",
     headers: {
       ...ghHeaders(opts.token),
       "Content-Type": opts.contentType,
       "Content-Length": String(opts.size),
     },
-    body: opts.content,
-    ...(opts.content instanceof ReadableStream ? { duplex: "half" } : {}),
+    body,
+    ...(body instanceof ReadableStream ? { duplex: "half" } : {}),
   } as RequestInit);
+  const [res] = await Promise.all([request, pump ?? Promise.resolve()]);
   await assertOk(res, "release asset upload failed");
   const json = (await res.json()) as {
     id: number;

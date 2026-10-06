@@ -8,7 +8,7 @@
 
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createRelease, uploadReleaseAsset, GithubApiError } from "./index";
 
 type Captured = {
@@ -81,9 +81,38 @@ afterEach(() => {
   status = 201;
   assets = [];
   assetStatus = 201;
+  vi.unstubAllGlobals();
 });
 
 describe("uploadReleaseAsset", () => {
+  it("uses a fixed-length stream in Workers", async () => {
+    let fixedSize = -1;
+    class FakeFixedLengthStream extends TransformStream<Uint8Array, Uint8Array> {
+      constructor(size: number) {
+        super();
+        fixedSize = size;
+      }
+    }
+    vi.stubGlobal("FixedLengthStream", FakeFixedLengthStream);
+    const content = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    });
+    await uploadReleaseAsset({
+      token: "t",
+      repo: "o/r",
+      releaseId: 7,
+      name: "archive.tar.gz",
+      contentType: "application/gzip",
+      size: 3,
+      content,
+    });
+    expect(fixedSize).toBe(3);
+    expect(assets[0]!.bytes).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
   it("streams bytes to the uploads API with a safe asset name", async () => {
     const content = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -127,6 +156,9 @@ describe("uploadReleaseAsset", () => {
     };
     await expect(uploadReleaseAsset(args)).rejects.toBeInstanceOf(GithubApiError);
     await expect(uploadReleaseAsset({ ...args, releaseId: 0 })).rejects.toThrow(TypeError);
+    await expect(uploadReleaseAsset({ ...args, name: "../archive.tar.gz" })).rejects.toThrow(
+      TypeError,
+    );
   });
 });
 afterAll(() => server.close());

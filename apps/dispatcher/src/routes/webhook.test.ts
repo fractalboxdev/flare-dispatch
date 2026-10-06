@@ -155,6 +155,7 @@ describe("POST /v1/webhooks/github — trigger evaluation", () => {
       synthesizeGithubBlock({
         ref: "refs/tags/v1.2.3",
         after: "a".repeat(40),
+        head_commit: { id: "b".repeat(40) },
         repository: { full_name: "owner/test-repo" },
         installation: { id: 99999 },
       }),

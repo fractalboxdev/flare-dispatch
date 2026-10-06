@@ -26,6 +26,8 @@ FlareDispatch is BYOC CI/CD. Heavy jobs — agentic code review, Playwright e2e,
 
 A run starts from a **GitHub Actions** step (`flare-dispatch-action` HMAC-signs and POSTs the dispatch), a **GitHub App webhook** (repo events fire runs directly), or a **cron schedule**. The verdict lands on the pull request as a `flare-dispatch/<run>` check-run; gate branch protection on that name.
 
+Tag-driven runs use the GitHub App's `push` event. New Apps created from the manifest subscribe to it. Existing Apps retain their own event settings: enable **Pushes** under GitHub App settings → Permissions & events, then save the subscription before expecting tag pushes to dispatch.
+
 ## Runs are programs
 
 Runs are written against a layered Effect-TS DSL: **capabilities** wrap Cloudflare primitives, **primitives** compose them into build, test and cache steps, and **recipes** are the named runs a Dispatcher registers. Steps are typed, errors are tagged, and matches are exhaustive.

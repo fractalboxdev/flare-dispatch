@@ -86,7 +86,7 @@ export const synthesizeGithubBlock = (
   const pushSha = (payload as { after?: string }).after;
   const pushRef = (payload as { ref?: string }).ref;
   const sha =
-    deploymentSha ?? prSha ?? commitSha ?? checkRunSha ?? checkSuiteSha ?? pushSha ?? "main";
+    deploymentSha ?? prSha ?? pushSha ?? commitSha ?? checkRunSha ?? checkSuiteSha ?? "main";
   const ref =
     typeof pushRef === "string" && pushRef.startsWith("refs/") ? pushRef : "refs/heads/main";
 
