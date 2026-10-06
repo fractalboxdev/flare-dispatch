@@ -34,4 +34,5 @@ export { contextfulGate } from "./contextful-gate";
 export { emailOtpLogin } from "./email-otp-login";
 export { finopsAudit } from "./finops-audit";
 export { contextfulMeasures } from "./contextful-measures";
+export { contextfulProtocol } from "./contextful-protocol";
 export { demoReel } from "./demo-reel";

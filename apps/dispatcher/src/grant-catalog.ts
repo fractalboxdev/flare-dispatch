@@ -183,6 +183,7 @@ export const RUN_GRANTS: Readonly<Record<string, RunGrant>> = {
   // capability, not from the container — so `cf-api` is deliberately absent.
   "finops-audit": { profiles: ["public-repo-read"], rollout: "legacy" },
   "contextful-measures": { profiles: ["public-repo-read", "rust-install"], rollout: "legacy" },
+  "contextful-protocol": { profiles: ["public-repo-read", "rust-install"], rollout: "legacy", facadeGaps: ["container-artifact"] },
 
   // --- deploy --------------------------------------------------------------
   // `cf-api` is where `wrangler deploy` sends its bytes; `wrangler` itself
