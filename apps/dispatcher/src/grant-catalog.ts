@@ -183,6 +183,18 @@ export const RUN_GRANTS: Readonly<Record<string, RunGrant>> = {
   // capability, not from the container — so `cf-api` is deliberately absent.
   "finops-audit": { profiles: ["public-repo-read"], rollout: "legacy" },
   "contextful-measures": { profiles: ["public-repo-read", "rust-install"], rollout: "legacy" },
+  // The parent uses Worker-side GitHub and child-run capabilities only.
+  "contextful-release": { profiles: [], rollout: "legacy" },
+  // Cells and the formula clone the public tree, build with Cargo, and upload
+  // container artifacts; the substrate facade does not serve that upload yet.
+  "contextful-release-cell": {
+    profiles: ["public-repo-read", "rust-install"], rollout: "legacy",
+    facadeGaps: ["container-artifact"],
+  },
+  "contextful-release-formula": {
+    profiles: ["public-repo-read", "rust-install"], rollout: "legacy",
+    facadeGaps: ["container-artifact"],
+  },
 
   // --- deploy --------------------------------------------------------------
   // `cf-api` is where `wrangler deploy` sends its bytes; `wrangler` itself
