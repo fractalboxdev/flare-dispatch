@@ -390,7 +390,7 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
   // logged no-ops and the read surface returns empty (reporting must never fail
   // a run). The per-repo installation is resolved by the capability itself when
   // a request carries no `installationId`.
-  const github = makeGithubLive(githubAppCfg);
+  const github = makeGithubLive(githubAppCfg, opts.bucket, opts.executionId);
   // `Cloudflare` is live when a scoped API token + account id are configured;
   // absent, the deferred Layer returns empty (a read-only capability degrades
   // to "found nothing", never a die).

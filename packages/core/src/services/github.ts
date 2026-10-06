@@ -235,6 +235,22 @@ export type ReleaseResult = {
   readonly published: boolean;
 };
 
+/** A completed artifact in the execution's R2 namespace. */
+export type PublishReleaseAsset = {
+  readonly repo: string;
+  readonly releaseId: number;
+  readonly artifactName: string;
+  readonly contentType: string;
+  readonly installationId?: number;
+};
+
+export type ReleaseAssetResult = {
+  readonly id: number;
+  readonly name: string;
+  readonly size: number;
+  readonly downloadUrl: string;
+};
+
 /**
  * A request to read **one text file** out of a repo — `readTextFile`.
  *
@@ -580,6 +596,10 @@ export interface GithubService {
    * without App credentials degrades to a logged no-op (`published: false`).
    */
   readonly createRelease: (req: CreateRelease) => Effect.Effect<ReleaseResult, GitHubApiError>;
+  /** Stream a completed R2 artifact to a GitHub Release with App credentials held in the Worker. */
+  readonly publishReleaseAsset: (
+    req: PublishReleaseAsset,
+  ) => Effect.Effect<ReleaseAssetResult, GitHubApiError>;
 }
 
 /** Context.Tag — the dependency a run carries until a Layer provides it. */
@@ -661,4 +681,6 @@ export const github = {
   closeDraftPullRequest: (req: CloseDraftPullRequest) =>
     Effect.flatMap(Github, (g) => g.closeDraftPullRequest(req)),
   createRelease: (req: CreateRelease) => Effect.flatMap(Github, (g) => g.createRelease(req)),
+  publishReleaseAsset: (req: PublishReleaseAsset) =>
+    Effect.flatMap(Github, (g) => g.publishReleaseAsset(req)),
 } as const;

@@ -64,7 +64,7 @@ import { putStream } from "./r2-put-stream";
 import { expandTarGzToR2 } from "./tar-extract";
 
 /** R2 key prefix for per-execution artifacts. */
-const artifactKey = (executionId: string, name: string): string =>
+export const artifactKey = (executionId: string, name: string): string =>
   `artifacts/${executionId}/${name}`;
 
 /**

@@ -177,6 +177,7 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
       Effect.logInfo(
         `github.createRelease skipped (no GitHub App credentials) — ${repo}@${tag} not published`,
       ).pipe(Effect.as({ id: 0, url: "", tag, published: false })),
+    publishReleaseAsset: () => Effect.fail(new GitHubApiError({ status: 0, reason: "other" })),
   }))(),
 );
 

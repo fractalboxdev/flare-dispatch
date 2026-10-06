@@ -33,6 +33,7 @@ import {
   createIssueComment,
   createPullReview,
   createRelease,
+  uploadReleaseAsset,
   getInstallationToken,
   listActionRuns,
   listIssues,
@@ -55,9 +56,11 @@ import {
   type IssueRef,
   type PullRequestHistoryRef,
   type ReleaseResult,
+  type ReleaseAssetResult,
   type TextFileResult,
   type WorkflowRunRef,
 } from "@fractalboxdev/flare-dispatch-core";
+import { artifactKey } from "./artifact-r2";
 
 /** The GitHub App credentials the live `pullReview` write needs. */
 export type GithubLiveConfig = {
@@ -122,7 +125,11 @@ const logSkip = (repo: string, pr: number, why: string): Effect.Effect<void> =>
  * dies (V3 work). With credentials, `pullReview` mints an installation token
  * from each request's `installationId` and posts the review.
  */
-export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Layer<Github> => {
+export const makeGithubLive = (
+  config: GithubLiveConfig | undefined,
+  artifactsBucket?: R2Bucket,
+  executionId?: string,
+): Layer.Layer<Github> => {
   /**
    * Mint a fresh installation token for a repo. Prefers an explicit
    * `installationId`, else resolves the repo's installation from the App JWT
@@ -475,6 +482,31 @@ export const makeGithubLive = (config: GithubLiveConfig | undefined): Layer.Laye
           tag: result.tagName,
           published: true,
         };
+      }),
+    publishReleaseAsset: (req): Effect.Effect<ReleaseAssetResult, GitHubApiError> =>
+      Effect.gen(function* () {
+        if (config === undefined || artifactsBucket === undefined || executionId === undefined) {
+          return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
+        }
+        const source = yield* Effect.tryPromise({
+          try: () => artifactsBucket.get(artifactKey(executionId, req.artifactName)),
+          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+        });
+        if (source === null) {
+          return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
+        }
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() =>
+          uploadReleaseAsset({
+            token,
+            repo: req.repo,
+            releaseId: req.releaseId,
+            name: req.artifactName,
+            contentType: req.contentType,
+            content: source.body,
+            size: source.size,
+          }),
+        );
       }),
   };
 

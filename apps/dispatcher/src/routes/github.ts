@@ -107,7 +107,7 @@ export const MANIFEST_TEMPLATE = {
     // already carry `write`; this literal had drifted to `read`.
     pull_requests: "write",
   },
-  default_events: ["check_run", "check_suite", "deployment_status", "pull_request"],
+  default_events: ["check_run", "check_suite", "deployment_status", "pull_request", "push"],
 } as const;
 
 /** The placeholder origin every URL in the template starts with. */

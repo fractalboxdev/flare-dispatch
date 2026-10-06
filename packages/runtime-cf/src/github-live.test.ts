@@ -27,6 +27,7 @@ type Recorded = {
   tokenExchanges: number;
   installationLookups: number;
   reviews: { pr: string; authorization: string | null; body: Record<string, unknown> }[];
+  assets: { name: string | null; authorization: string | null; bytes: Uint8Array }[];
 };
 let recorded: Recorded;
 
@@ -53,15 +54,81 @@ const server = setupServer(
       return HttpResponse.json({ id: 999_001 }, { status: 200 });
     },
   ),
+  http.post(
+    "https://uploads.github.com/repos/:owner/:repo/releases/:id/assets",
+    async ({ request }) => {
+      recorded.assets.push({
+        name: new URL(request.url).searchParams.get("name"),
+        authorization: request.headers.get("authorization"),
+        bytes: new Uint8Array(await request.arrayBuffer()),
+      });
+      return HttpResponse.json(
+        {
+          id: 71,
+          name: "build.tar.gz",
+          size: 3,
+          browser_download_url: "https://github.com/owner/name/releases/download/v1/build.tar.gz",
+        },
+        { status: 201 },
+      );
+    },
+  ),
 );
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 beforeEach(() => {
-  recorded = { tokenExchanges: 0, installationLookups: 0, reviews: [] };
+  recorded = { tokenExchanges: 0, installationLookups: 0, reviews: [], assets: [] };
   __clearTokenCache();
   __clearRepoInstallationCache();
+});
+
+describe("makeGithubLive — publishReleaseAsset", () => {
+  const request = {
+    repo: "owner/name",
+    releaseId: 55,
+    artifactName: "build.tar.gz",
+    contentType: "application/gzip",
+    installationId: 12345,
+  };
+  it("streams a completed R2 artifact with Worker-held App credentials", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const bucket = {
+      get: async (key: string) => {
+        expect(key).toBe("artifacts/01EXEC/build.tar.gz");
+        return {
+          size: bytes.length,
+          body: new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(bytes);
+              c.close();
+            },
+          }),
+        };
+      },
+    } as unknown as R2Bucket;
+    const result = await Effect.runPromise(
+      github
+        .publishReleaseAsset(request)
+        .pipe(Effect.provide(makeGithubLive(CONFIG, bucket, "01EXEC"))),
+    );
+    expect(result.downloadUrl).toContain("/build.tar.gz");
+    expect(recorded.assets).toEqual([
+      { name: "build.tar.gz", authorization: "Bearer ghs_install_token", bytes },
+    ]);
+  });
+
+  it("fails when the R2 artifact is absent", async () => {
+    const bucket = { get: async () => null } as unknown as R2Bucket;
+    const exit = await Effect.runPromiseExit(
+      github
+        .publishReleaseAsset(request)
+        .pipe(Effect.provide(makeGithubLive(CONFIG, bucket, "01EXEC"))),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(recorded.assets).toHaveLength(0);
+  });
 });
 
 const CONFIG: GithubLiveConfig = {

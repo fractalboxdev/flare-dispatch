@@ -50,6 +50,66 @@ export type CreateReleaseResult = {
   readonly tagName: string;
 };
 
+export type UploadReleaseAssetOptions = {
+  readonly token: string;
+  readonly repo: string;
+  readonly releaseId: number;
+  readonly name: string;
+  readonly contentType: string;
+  readonly content: ReadableStream<Uint8Array> | Uint8Array;
+  readonly size: number;
+  /** API host override for GitHub Enterprise and tests. */
+  readonly uploadBase?: string;
+  readonly fetchImpl?: typeof fetch;
+};
+
+export type UploadReleaseAssetResult = {
+  readonly id: number;
+  readonly name: string;
+  readonly size: number;
+  readonly downloadUrl: string;
+};
+
+/** Upload one R2-backed artifact without materializing it in Worker memory. */
+export const uploadReleaseAsset = async (
+  opts: UploadReleaseAssetOptions,
+): Promise<UploadReleaseAssetResult> => {
+  const { owner, name: repoName } = splitRepo(opts.repo);
+  if (!Number.isSafeInteger(opts.releaseId) || opts.releaseId <= 0) {
+    throw new TypeError("releaseId must be a positive integer");
+  }
+  if (!Number.isSafeInteger(opts.size) || opts.size < 0) {
+    throw new TypeError("asset size must be a nonnegative integer");
+  }
+  const uploadBase = opts.uploadBase ?? "https://uploads.github.com";
+  const doFetch = opts.fetchImpl ?? fetch;
+  const url = new URL(`${uploadBase}/repos/${owner}/${repoName}/releases/${opts.releaseId}/assets`);
+  url.searchParams.set("name", opts.name);
+  const res = await doFetch(url, {
+    method: "POST",
+    headers: {
+      ...ghHeaders(opts.token),
+      "Content-Type": opts.contentType,
+      "Content-Length": String(opts.size),
+    },
+    body: opts.content,
+    ...(opts.content instanceof ReadableStream ? { duplex: "half" } : {}),
+  } as RequestInit);
+  await assertOk(res, "release asset upload failed");
+  const json = (await res.json()) as {
+    id: number;
+    name: string;
+    size: number;
+    browser_download_url: string;
+  };
+  return {
+    id: json.id,
+    name: json.name,
+    size: json.size,
+    downloadUrl: json.browser_download_url,
+  };
+};
+
 /**
  * Create (publish) a GitHub Release, creating the tag at `target` if needed.
  *

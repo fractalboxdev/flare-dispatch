@@ -30,6 +30,7 @@ import {
   type PullReviewRequest,
   type ReadTextFileRequest,
   type ReleaseResult,
+  type ReleaseAssetResult,
   type TextFileResult,
   type WorkflowRunRef,
 } from "../services/github";
@@ -425,6 +426,13 @@ export const makeGithubFake = (
           tag: req.tag,
           published: true,
         };
+      }),
+    publishReleaseAsset: (req): Effect.Effect<ReleaseAssetResult, never> =>
+      Effect.succeed({
+        id: req.releaseId,
+        name: req.artifactName,
+        size: 0,
+        downloadUrl: `https://github.com/${req.repo}/releases/download/${req.releaseId}/${req.artifactName}`,
       }),
   };
 

@@ -9,7 +9,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createRelease, GithubApiError } from "./index";
+import { createRelease, uploadReleaseAsset, GithubApiError } from "./index";
 
 type Captured = {
   authorization: string | null;
@@ -20,6 +20,14 @@ type Captured = {
 
 let posts: Captured[] = [];
 let status = 201;
+let assetStatus = 201;
+let assets: Array<{
+  url: string;
+  authorization: string | null;
+  contentType: string | null;
+  contentLength: string | null;
+  bytes: Uint8Array;
+}> = [];
 
 const server = setupServer(
   http.post("https://api.github.com/repos/:owner/:repo/releases", async ({ request, params }) => {
@@ -41,6 +49,29 @@ const server = setupServer(
       { status },
     );
   }),
+  http.post(
+    "https://uploads.github.com/repos/:owner/:repo/releases/:id/assets",
+    async ({ request }) => {
+      assets.push({
+        url: request.url,
+        authorization: request.headers.get("authorization"),
+        contentType: request.headers.get("content-type"),
+        contentLength: request.headers.get("content-length"),
+        bytes: new Uint8Array(await request.arrayBuffer()),
+      });
+      if (assetStatus >= 400)
+        return HttpResponse.json({ message: "upload failed" }, { status: assetStatus });
+      return HttpResponse.json(
+        {
+          id: 42,
+          name: "archive.tar.gz",
+          size: 3,
+          browser_download_url: "https://github.com/o/r/releases/download/v1/archive.tar.gz",
+        },
+        { status: assetStatus },
+      );
+    },
+  ),
 );
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -48,6 +79,55 @@ afterEach(() => {
   server.resetHandlers();
   posts = [];
   status = 201;
+  assets = [];
+  assetStatus = 201;
+});
+
+describe("uploadReleaseAsset", () => {
+  it("streams bytes to the uploads API with a safe asset name", async () => {
+    const content = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    });
+    const result = await uploadReleaseAsset({
+      token: "install-token",
+      repo: "o/r",
+      releaseId: 7,
+      name: "archive.tar.gz",
+      contentType: "application/gzip",
+      size: 3,
+      content,
+    });
+    expect(assets).toHaveLength(1);
+    expect(new URL(assets[0]!.url).searchParams.get("name")).toBe("archive.tar.gz");
+    expect(assets[0]!.authorization).toBe("Bearer install-token");
+    expect(assets[0]!.contentType).toBe("application/gzip");
+    expect(assets[0]!.contentLength).toBe("3");
+    expect(assets[0]!.bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(result).toEqual({
+      id: 42,
+      name: "archive.tar.gz",
+      size: 3,
+      downloadUrl: "https://github.com/o/r/releases/download/v1/archive.tar.gz",
+    });
+  });
+
+  it("surfaces API errors and refuses invalid release IDs", async () => {
+    assetStatus = 422;
+    const args = {
+      token: "t",
+      repo: "o/r",
+      releaseId: 7,
+      name: "archive.tar.gz",
+      contentType: "application/gzip",
+      size: 3,
+      content: new Uint8Array([1, 2, 3]),
+    };
+    await expect(uploadReleaseAsset(args)).rejects.toBeInstanceOf(GithubApiError);
+    await expect(uploadReleaseAsset({ ...args, releaseId: 0 })).rejects.toThrow(TypeError);
+  });
 });
 afterAll(() => server.close());
 

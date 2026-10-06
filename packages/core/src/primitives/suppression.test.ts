@@ -311,6 +311,7 @@ const githubService = (over: Partial<GithubService>): GithubService => ({
     Effect.succeed({ number: 0, url: "", created: false, skipped: false }),
   closeDraftPullRequest: () => Effect.succeed({ closed: false, reason: "none-open" }),
   createRelease: () => Effect.succeed({ id: 0, url: "", tag: "", published: false }),
+  publishReleaseAsset: () => Effect.succeed({ id: 0, name: "", size: 0, downloadUrl: "" }),
   ...over,
 });
 
