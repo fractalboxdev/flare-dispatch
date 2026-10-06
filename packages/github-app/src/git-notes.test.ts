@@ -38,15 +38,14 @@ describe("appendGitNote", () => {
       "POST /git/refs",
     ]);
     expect(requests[2]?.body).toEqual({
-      tree: [
-        { path: `${sha.slice(0, 2)}/${sha.slice(2)}`, mode: "100644", type: "blob", sha: one },
-      ],
+      tree: [{ path: sha, mode: "100644", type: "blob", sha: one }],
     });
     expect(requests[4]?.body).toEqual({ ref: "refs/notes/measures", sha: three });
   });
 
   it("appends to an existing note and skips a repeated report", async () => {
-    const previous = '{"run_id":"old"}\n';
+    // Git's own `git notes append` separates reports with one blank line.
+    const previous = '{"run_id":"old"}\n\n{"run_id":"older"}\n';
     const requests: Array<{ path: string; method: string; body: unknown }> = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input)).pathname;
@@ -56,7 +55,7 @@ describe("appendGitNote", () => {
       if (path.endsWith(`/git/commits/${one}`)) return ok({ tree: { sha: two } });
       if (path.endsWith(`/git/trees/${two}`))
         return ok({
-          tree: [{ path: `${sha.slice(0, 2)}/${sha.slice(2)}`, type: "blob", sha: three }],
+          tree: [{ path: sha, type: "blob", sha: three }],
         });
       if (path.endsWith(`/git/blobs/${three}`))
         return ok({ encoding: "base64", content: btoa(previous) });
@@ -69,7 +68,7 @@ describe("appendGitNote", () => {
     await appendGitNote({ ...options, fetchImpl: fetchImpl as typeof fetch });
     const writtenBlob = requests.find((r) => r.method === "POST" && r.path.endsWith("/git/blobs"));
     expect((writtenBlob?.body as { content: string } | undefined)?.content).toBe(
-      `${previous}${options.text}\n`,
+      `${previous}\n${options.text}\n`,
     );
     expect(requests.at(-1)?.body).toEqual({ sha: four, force: false });
     const duplicate = await appendGitNote({

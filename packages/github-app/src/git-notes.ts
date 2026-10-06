@@ -42,7 +42,10 @@ export const appendGitNote = async (opts: AppendGitNoteOptions): Promise<void> =
       await assertOk(response, `git note ${method} ${path} failed`);
     return { status: response.status, value: (await response.json().catch(() => ({}))) as T };
   };
-  const path = `${opts.commit.slice(0, 2)}/${opts.commit.slice(2)}`;
+  // `git notes append` uses the flat 40-hex path for a new notes ref. Preserve
+  // an existing fanout path when Git has compacted the tree into 2/38 form.
+  const flatPath = opts.commit;
+  const fanoutPath = `${opts.commit.slice(0, 2)}/${opts.commit.slice(2)}`;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const head = await api<{ object?: { sha?: string } }>(
       `/git/ref/notes/${ref}`,
@@ -54,6 +57,7 @@ export const appendGitNote = async (opts: AppendGitNoteOptions): Promise<void> =
     if (head.status !== 404 && !parent)
       throw new GithubApiError("notes ref has no commit", head.status, "");
     let treeSha: string | undefined;
+    let path = flatPath;
     let previous = "";
     if (parent) {
       const commit = await api<{ tree?: { sha?: string } }>(`/git/commits/${parent}`);
@@ -62,7 +66,10 @@ export const appendGitNote = async (opts: AppendGitNoteOptions): Promise<void> =
       const tree = await api<{ tree?: Array<{ path?: string; sha?: string; type?: string }> }>(
         `/git/trees/${treeSha}?recursive=1`,
       );
-      const entry = tree.value.tree?.find((item) => item.path === path && item.type === "blob");
+      const entry = tree.value.tree?.find(
+        (item) => (item.path === flatPath || item.path === fanoutPath) && item.type === "blob",
+      );
+      path = entry?.path ?? flatPath;
       if (entry?.sha) {
         const blob = await api<{ content?: string; encoding?: string }>(`/git/blobs/${entry.sha}`);
         if (blob.value.encoding !== "base64" || typeof blob.value.content !== "string") {
@@ -76,7 +83,7 @@ export const appendGitNote = async (opts: AppendGitNoteOptions): Promise<void> =
     // Workflow replay may repeat the write after a successful GitHub response.
     if (previous.split("\n").includes(opts.text)) return;
     const content =
-      previous.length === 0 ? `${opts.text}\n` : `${previous.trimEnd()}\n${opts.text}\n`;
+      previous.length === 0 ? `${opts.text}\n` : `${previous.trimEnd()}\n\n${opts.text}\n`;
     const blob = await api<{ sha: string }>("/git/blobs", "POST", { content, encoding: "utf-8" });
     const tree = await api<{ sha: string }>("/git/trees", "POST", {
       ...(treeSha ? { base_tree: treeSha } : {}),

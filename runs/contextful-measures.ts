@@ -4,6 +4,7 @@ import {
   artifact,
   defineRun,
   github,
+  io,
   sandbox,
   StepFailed,
   step,
@@ -18,6 +19,7 @@ const Input = Schema.Struct({
   repo: Schema.String,
   ref: Schema.String,
   firedAt: Schema.Number,
+  timeoutSec: Schema.optional(Schema.Number),
 });
 const Output = Schema.Struct({
   commit: Schema.String,
@@ -26,7 +28,10 @@ const Output = Schema.Struct({
 });
 
 /** Build the JSON record in the container, preserving failed-tier results. */
-const reportCommand = `node -e 'const fs=require("node:fs"); const path=require("node:path"); const dir="target/evaluate/records"; const records=fs.existsSync(dir)?fs.readdirSync(dir).filter(n=>n.endsWith(".json")).sort().map(n=>JSON.parse(fs.readFileSync(path.join(dir,n),"utf8"))):[]; fs.writeFileSync("${REPORT_FILE}",JSON.stringify({commit:process.env.MEASURE_COMMIT,run_id:process.env.MEASURE_RUN_ID,run_attempt:1,exit_code:Number(process.env.MEASURE_EXIT),records})+"\\n");'`;
+export const reportCommand = `node -e 'const fs=require("node:fs"); const path=require("node:path"); const dir="target/evaluate/records"; const records=fs.existsSync(dir)?fs.readdirSync(dir).filter(n=>n.endsWith(".json")).sort().map(n=>JSON.parse(fs.readFileSync(path.join(dir,n),"utf8"))):[]; fs.writeFileSync("${REPORT_FILE}",JSON.stringify({commit:process.env.MEASURE_COMMIT,run_id:process.env.MEASURE_RUN_ID,run_attempt:Number(process.env.MEASURE_RUN_ATTEMPT),exit_code:Number(process.env.MEASURE_EXIT),records})+"\\n");'`;
+
+export const runAttempt = (executionId: string): number =>
+  Number(executionId.match(/_attempt-(\d+)$/)?.[1] ?? 1);
 
 export const contextfulMeasures = defineRun({
   name: "contextful-measures",
@@ -36,7 +41,7 @@ export const contextfulMeasures = defineRun({
       cron: "17 2 * * *",
       idempotencyKey: ({ firedAt }) =>
         `contextful-measures:${new Date(firedAt).toISOString().slice(0, 10)}`,
-      inputs: ({ firedAt }) => ({ repo: REPO, ref: `refs/heads/${BRANCH}`, firedAt }),
+      inputs: ({ firedAt }): typeof Input.Type => ({ repo: REPO, ref: `refs/heads/${BRANCH}`, firedAt }),
     },
   ],
   serialize: (input) => ({
@@ -45,7 +50,7 @@ export const contextfulMeasures = defineRun({
   }),
   inputs: Input,
   outputs: Output,
-  limits: { maxDurationSec: 7200 },
+  limits: { maxDurationSec: 21600 },
   run: (input) =>
     Effect.gen(function* () {
       if (input.repo !== REPO || input.ref !== `refs/heads/${BRANCH}`) {
@@ -60,6 +65,11 @@ export const contextfulMeasures = defineRun({
       const commit = yield* step("resolve-head", () =>
         github.branchHead({ repo: REPO, branch: BRANCH }),
       );
+      const executionId = yield* io.executionId;
+      const runId = executionId || `contextful-measures:${input.firedAt}`;
+      // The ledger runs 65 entries in sequence and compiles its own test
+      // binaries. Allow the operator to raise or lower the command ceiling.
+      const timeoutSec = Math.max(300, Math.min(input.timeoutSec ?? 18000, 20000));
       const ws = yield* step("checkout", () => workspace({ repo: REPO, sha: commit }));
       const measured = yield* step(
         "measure",
@@ -68,9 +78,9 @@ export const contextfulMeasures = defineRun({
             container: ws.container,
             cwd: ws.dir,
             command: MEASURE_COMMAND,
-            timeoutSec: 6000,
+            timeoutSec,
           }),
-        { timeoutSec: 6100, retries: 0 },
+        { timeoutSec: timeoutSec + 100, retries: 0 },
       );
       // A red tier still gets a note. Only report construction or note writing
       // prevents history from being attached.
@@ -81,7 +91,8 @@ export const contextfulMeasures = defineRun({
           command: reportCommand,
           env: {
             MEASURE_COMMIT: commit,
-            MEASURE_RUN_ID: `contextful-measures:${input.firedAt}`,
+            MEASURE_RUN_ID: runId,
+            MEASURE_RUN_ATTEMPT: String(runAttempt(runId)),
             MEASURE_EXIT: String(measured.exitCode),
           },
           timeoutSec: 60,
