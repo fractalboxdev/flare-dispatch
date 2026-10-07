@@ -53,9 +53,9 @@ describe("contextful-protocol", () => {
   }, 30000);
   it("routes the weekly schedule with one identity per tick", () => {
     const schedule = contextfulProtocol.schedules?.[0];
-    expect(schedule?.cron).toBe("17 3 * * 0");
-    expect(schedule?.inputs({ cron: "17 3 * * 0", firedAt: input.firedAt })).toEqual(input);
-    expect(schedule?.idempotencyKey({ cron: "17 3 * * 0", firedAt: input.firedAt })).toBe(
+    expect(schedule?.cron).toBe("17 3 * * SUN");
+    expect(schedule?.inputs({ cron: "17 3 * * SUN", firedAt: input.firedAt })).toEqual(input);
+    expect(schedule?.idempotencyKey({ cron: "17 3 * * SUN", firedAt: input.firedAt })).toBe(
       `contextful-protocol:${input.firedAt}`,
     );
   });
