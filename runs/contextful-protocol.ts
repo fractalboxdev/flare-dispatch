@@ -32,7 +32,7 @@ export const contextfulProtocol = defineRun({
   version: "1.0.0",
   schedules: [
     {
-      cron: "17 3 * * 0",
+      cron: "17 3 * * SUN",
       idempotencyKey: ({ firedAt }) => `contextful-protocol:${firedAt}`,
       inputs: ({ firedAt }): typeof Input.Type => ({ repo: REPO, ref: REF, firedAt }),
     },
