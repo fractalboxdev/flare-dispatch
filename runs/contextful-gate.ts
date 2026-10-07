@@ -50,11 +50,18 @@ export const parseStages = (stdout: string): readonly string[] | undefined => {
   return stages;
 };
 
-/** The base revision keeps deleted stages in the PR's required check set. */
+/** Base-only checks remain required; complete base-aware parts refine their legacy whole check. */
 export const mergeStages = (
   head: readonly string[],
   base: readonly string[],
-): readonly string[] => [...new Set([...head, ...base])];
+  discovery: { readonly headDiscoveredAgainstBase: boolean } = { headDiscoveredAgainstBase: false },
+): readonly string[] => {
+  const splitTestFirst =
+    discovery.headDiscoveredAgainstBase &&
+    head.includes("test-first.validate") &&
+    !head.includes("test-first");
+  return [...new Set([...head, ...base.filter((stage) => !(splitTestFirst && stage === "test-first"))])];
+};
 
 export const contextfulGate = defineRun({
   name: "contextful-gate",
@@ -106,8 +113,8 @@ export const contextfulGate = defineRun({
                           cwd: ws.dir,
                           command: DISCOVER,
                           timeoutSec: 1800,
-                        })
-                      : Effect.succeed(result),
+                        }).pipe(Effect.map((fallback) => ({ ...fallback, headDiscoveredAgainstBase: false })))
+                      : Effect.succeed({ ...result, headDiscoveredAgainstBase: result.exitCode === 0 }),
                   ),
                 ),
             ),
@@ -149,7 +156,7 @@ export const contextfulGate = defineRun({
           }),
         );
       }
-      const stages = mergeStages(headStages, baseStages);
+      const stages = mergeStages(headStages, baseStages, discovery);
       if (stages.length > MAX_STAGES) {
         return yield* Effect.fail(
           new AcceptanceFailed({

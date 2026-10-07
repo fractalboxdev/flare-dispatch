@@ -37,6 +37,77 @@ describe("contextful-gate", () => {
     ]);
   });
 
+  it("refines the whole test-first stage only with successful base-aware discovery", () => {
+    const head = ["pins", "test-first.validate", "test-first.contextful-core"];
+    const base = ["pins", "test-first", "test-first.deleted-package", "formal"];
+    expect(mergeStages(head, base, { headDiscoveredAgainstBase: true })).toEqual([
+      ...head, "test-first.deleted-package", "formal",
+    ]);
+    expect(mergeStages(head, base)).toEqual([...head, ...base.slice(1)]);
+    expect(mergeStages(["pins", "test-first.contextful-core"], base, { headDiscoveredAgainstBase: true })).toContain("test-first");
+    expect(mergeStages(["pins", "test-first", "test-first.validate"], base, { headDiscoveredAgainstBase: true })).toContain("test-first");
+  });
+
+  it.effect("runs complete package parts and retains unrelated base-only stages", () => {
+    const head = "pins\ntest-first.validate\ntest-first.contextful-core\ntest-first.contextful-cli\n";
+    const base = "pins\ntest-first\ntest-first.deleted-package\nformal\n";
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DISCOVER_HEAD]: { stdout: head, exitCode: 0 }, [DISCOVER]: { stdout: base, exitCode: 0 } },
+      childRuns: { pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "success" })) },
+    });
+    return Effect.gen(function* () {
+      expect(yield* contextfulGate.run(input)).toEqual({ stages: 6, failed: [] });
+      expect(handles.childRuns.spawned.map((spawn) => spawn.input)).toEqual([
+        "pins", "test-first.validate", "test-first.contextful-core", "test-first.contextful-cli", "test-first.deleted-package", "formal",
+      ].map((checkLabel) => expect.objectContaining({ checkLabel })));
+      expect(handles.sandbox.execs.filter((exec) => exec.command.startsWith("cargo ")).map((exec) => exec.command)).toEqual([DISCOVER_HEAD, DISCOVER]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refines validate-only discovery when no changed Rust package needs a base run", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DISCOVER_HEAD]: { stdout: "pins\ntest-first.validate\n", exitCode: 0 }, [DISCOVER]: { stdout: "pins\ntest-first\n", exitCode: 0 } },
+      childRuns: { pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "success" })) },
+    });
+    return Effect.gen(function* () {
+      expect(yield* contextfulGate.run(input)).toEqual({ stages: 2, failed: [] });
+      expect(handles.childRuns.spawned.map((spawn) => spawn.input)).toEqual(["pins", "test-first.validate"].map((checkLabel) => expect.objectContaining({ checkLabel })));
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("retains the whole check after unsupported-base compatibility discovery", () => {
+    let discoveries = 0;
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "", stderr: "error: unexpected argument '--base' found\nUsage: contextful-ci stages --parts", exitCode: 2 },
+        [DISCOVER]: {
+          get stdout() { return ++discoveries === 1 ? "pins\ntest-first.validate\n" : "pins\ntest-first\n"; },
+          exitCode: 0,
+        },
+      },
+      childRuns: { pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "success" })) },
+    });
+    return Effect.gen(function* () {
+      expect(yield* contextfulGate.run(input)).toEqual({ stages: 3, failed: [] });
+      expect(handles.childRuns.spawned.map((spawn) => spawn.input)).toEqual(["pins", "test-first.validate", "test-first"].map((checkLabel) => expect.objectContaining({ checkLabel })));
+      expect(handles.sandbox.execs.filter((exec) => exec.command.startsWith("cargo ")).map((exec) => exec.command)).toEqual([DISCOVER_HEAD, DISCOVER, DISCOVER]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses deleted-package discovery errors and malformed lists without dispatch", () => {
+    return Effect.gen(function* () {
+      for (const result of [
+        { stdout: "", stderr: "the changed path's package has a name", exitCode: 1 },
+        { stdout: "test-first.validate\ntest-first.validate\n", exitCode: 0 },
+      ]) {
+        const { layer, handles } = makeCFRuntimeTest({ sandboxProgram: { [DISCOVER_HEAD]: result, [DISCOVER]: { stdout: "test-first\n", exitCode: 0 } } });
+        const exit = yield* Effect.exit(contextfulGate.run(input).pipe(Effect.provide(layer)));
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(handles.childRuns.spawned).toHaveLength(0);
+      }
+    });
+  });
+
   it("admits draft same-repo PRs and refuses fork heads", () => {
     const trigger = contextfulGate.triggers?.[0];
     expect(trigger?.event).toBe("pull_request");
