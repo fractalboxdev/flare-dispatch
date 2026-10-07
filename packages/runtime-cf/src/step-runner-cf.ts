@@ -54,6 +54,7 @@ import {
  * and `waitForEvent` for human-in-the-loop hibernation.
  */
 type WorkflowStepLike = {
+  readonly sleep?: (name: string, milliseconds: number) => Promise<void>;
   readonly do: <T>(name: string, callback: () => Promise<T>) => Promise<T>;
   readonly waitForEvent?: (
     name: string,
@@ -168,6 +169,15 @@ export const makeStepRunnerCloudflare = (
       const ioSvc: IOService = yield* IO;
 
       const service: StepRunnerService = {
+        sleep: (name, milliseconds) =>
+          Effect.tryPromise({
+            try: async () => {
+              if (workflowStep.sleep === undefined)
+                throw new Error("Workflow durable sleep is unavailable");
+              await workflowStep.sleep(name, milliseconds);
+            },
+            catch: (cause) => new StepFailed({ step: name, cause }),
+          }),
         run: (name, body, stepOpts) =>
           Effect.gen(function* () {
             // Capture the ambient RunContext so the body — which still needs

@@ -54,6 +54,8 @@ import {
   defineRun,
   io,
   sandbox,
+  Sandbox,
+  checkpointSleep,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
@@ -366,8 +368,8 @@ export const check = defineRun({
       // are different channels here. A command that runs and exits non-zero
       // comes back as a normal `ExecResult` and is decided below; only
       // `ExecFailed` / `ExecTimeout` fail the Effect. So `retryOn: ExecFailed`
-      // cannot retry a verdict, by construction: it retries the case where the
-      // command never ran.
+      // cannot retry a returned verdict. A lost synchronous response leaves
+      // the command outcome uncertain; long checks recover a durable intent.
       //
       // Which is not hypothetical. Observed on a consumer's PR: a 40-second
       // check reported `ExecFailed: exec failed (exit -1): HTTP error! status:
@@ -379,41 +381,88 @@ export const check = defineRun({
       // ceiling will outrun it again, and three more attempts cost the ceiling
       // three more times.
       const effectiveTimeoutSec = timeoutSec ?? DEFAULT_TIMEOUT_SEC;
-      const result = yield* step(
-        "exec",
-        () =>
-          // The checkout is re-established INSIDE the retryable step, because a
-          // container recycled between steps takes it with it and the retry
-          // would otherwise re-run the command in a directory that is gone —
-          // three times, reporting the missing directory as the repo's verdict.
-          ensureWorkspace({
-            current: { container, dir },
-            repo: input.repo,
-            sha: input.sha,
-            ...(input.image !== undefined ? { image: input.image } : {}),
-            install: input.install,
-          }).pipe(
-            Effect.flatMap((ws) =>
-              sandbox.exec({
+      const service = yield* Sandbox;
+      const durable = service.checkCommand;
+      const result =
+        durable !== undefined && effectiveTimeoutSec > DEFAULT_TIMEOUT_SEC
+          ? yield* Effect.gen(function* () {
+              const ws = yield* step("exec-workspace", () =>
+                ensureWorkspace({
+                  current: { container, dir },
+                  repo: input.repo,
+                  sha: input.sha,
+                  ...(input.image !== undefined ? { image: input.image } : {}),
+                  install: input.install,
+                }),
+              );
+              const opts = {
                 cwd: ws.dir,
                 container: ws.container,
                 command,
-                // Per-dispatch `env` wins over a same-named Worker secret.
                 env: { ...secretEnv, ...input.env },
-                // Defense in depth (header): scrub secret VALUES from the
-                // captured log before it's persisted, in case the command
-                // echoes its env.
                 redactValues: Object.values(secretEnv),
                 timeoutSec: effectiveTimeoutSec,
-              }),
-            ),
-          ),
-        {
-          timeoutSec: effectiveTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
-          retries: PLATFORM_RETRIES,
-          retryOn: RETRY_ON,
-        },
-      );
+              };
+              const handle = yield* step("exec-prepare", () =>
+                durable.prepare({ ...opts, stepName: "exec" }),
+              );
+              // Only the owner intent can authorize launch; retries recover this handle.
+              yield* step("exec-start", () => durable.start(handle, opts), {
+                timeoutSec: 60,
+                retries: PLATFORM_RETRIES,
+                retryOn: RETRY_ON,
+              });
+              const maxPolls = Math.ceil(effectiveTimeoutSec / 5) + 3;
+              for (let i = 0; i < maxPolls; i++) {
+                const status = yield* step(
+                  `exec-observe-${i}`,
+                  () => durable.observe(handle, opts),
+                  { timeoutSec: 60, retries: PLATFORM_RETRIES, retryOn: RETRY_ON },
+                );
+                if (status.state !== "running") break;
+                yield* checkpointSleep(`exec-sleep-${i}`, 5000);
+              }
+              return yield* step("exec-finalize", () => durable.finalize(handle, opts), {
+                timeoutSec: 120,
+                retries: PLATFORM_RETRIES,
+                retryOn: RETRY_ON,
+              });
+            })
+          : yield* step(
+              "exec",
+              () =>
+                // The checkout is re-established INSIDE the retryable step, because a
+                // container recycled between steps takes it with it and the retry
+                // would otherwise re-run the command in a directory that is gone —
+                // three times, reporting the missing directory as the repo's verdict.
+                ensureWorkspace({
+                  current: { container, dir },
+                  repo: input.repo,
+                  sha: input.sha,
+                  ...(input.image !== undefined ? { image: input.image } : {}),
+                  install: input.install,
+                }).pipe(
+                  Effect.flatMap((ws) =>
+                    sandbox.exec({
+                      cwd: ws.dir,
+                      container: ws.container,
+                      command,
+                      // Per-dispatch `env` wins over a same-named Worker secret.
+                      env: { ...secretEnv, ...input.env },
+                      // Defense in depth (header): scrub secret VALUES from the
+                      // captured log before it's persisted, in case the command
+                      // echoes its env.
+                      redactValues: Object.values(secretEnv),
+                      timeoutSec: effectiveTimeoutSec,
+                    }),
+                  ),
+                ),
+              {
+                timeoutSec: effectiveTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
+                retries: PLATFORM_RETRIES,
+                retryOn: RETRY_ON,
+              },
+            );
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.
       // 30-day TTL matches the catalog (`oxlint` / `offload-test` / …); operators

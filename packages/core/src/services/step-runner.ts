@@ -46,6 +46,7 @@ import type { StepOpts } from "../step-opts";
  * `RunContext`).
  */
 export interface StepRunnerService {
+  readonly sleep?: (name: string, milliseconds: number) => Effect.Effect<void, StepFailed>;
   readonly run: <A, E>(
     name: string,
     body: () => Effect.Effect<A, E, RunContext>,

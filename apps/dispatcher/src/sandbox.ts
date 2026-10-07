@@ -25,6 +25,15 @@
 import { Sandbox } from "@cloudflare/sandbox";
 import { recordContainerStop, takeRequested, type StopParamsLike } from "./container-stop";
 import type { Env } from "./env";
+import {
+  makeCheckCommandOwner,
+  checkCommandStorage,
+} from "@fractalboxdev/flare-dispatch-runtime-cf";
+import type {
+  CheckCommandHandle,
+  ExecResult,
+  CheckCommandLogState,
+} from "@fractalboxdev/flare-dispatch-core";
 
 /**
  * Idle window before a finished container is put to sleep.
@@ -102,6 +111,45 @@ const recordStopFor = async (
  */
 abstract class RecordingSandbox extends Sandbox<Env> {
   override sleepAfter = SANDBOX_SLEEP_AFTER;
+
+  private checkOwner() {
+    return makeCheckCommandOwner(checkCommandStorage(this.ctx.storage), this);
+  }
+  async startCheckCommand(opts: {
+    handle: CheckCommandHandle;
+    command: string;
+    cwd?: string;
+    env?: Record<string, string>;
+  }) {
+    return this.checkOwner().start(opts);
+  }
+  async observeCheckCommand(handle: CheckCommandHandle) {
+    return this.checkOwner().observe(handle);
+  }
+  async readCheckCommand(
+    handle: CheckCommandHandle,
+    stream: "stdout" | "stderr",
+    offset: number,
+    length: number,
+  ) {
+    return this.checkOwner().read(handle, stream, offset, length);
+  }
+  async checkCommandLogs(handle: CheckCommandHandle) {
+    return this.checkOwner().logs(handle);
+  }
+  async advanceCheckCommandLogs(
+    handle: CheckCommandHandle,
+    expected: CheckCommandLogState,
+    next: CheckCommandLogState,
+  ) {
+    return this.checkOwner().advanceLogs(handle, expected, next);
+  }
+  async checkCommandReceipt(handle: CheckCommandHandle) {
+    return this.checkOwner().receipt(handle);
+  }
+  async finishCheckCommand(handle: CheckCommandHandle, result: ExecResult) {
+    return this.checkOwner().finish(handle, result);
+  }
 
   /**
    * Set by our own `destroy()` so the record can say who asked. `workflow.ts`

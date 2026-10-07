@@ -21,6 +21,7 @@ import { it } from "@effect/vitest";
 import { Cause, Effect, Either, Exit, Option, Schema } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
+import { Sandbox, type CheckCommandService } from "@fractalboxdev/flare-dispatch-core";
 import { check } from "./check";
 
 const CHECK_CMD = "pnpm lint";
@@ -35,6 +36,62 @@ const baseInput = {
 } as const;
 
 describe("check", () => {
+  it.effect(
+    "long checks checkpoint one prepared process and preserve an actual nonzero verdict",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest();
+      const calls: string[] = [];
+      const durable: CheckCommandService = {
+        prepare: (opts) =>
+          Effect.sync(() => {
+            calls.push("prepare");
+            expect(opts.timeoutSec).toBe(1800);
+            return {
+              id: "stable-command",
+              container: opts.container!,
+              fingerprint: "stable",
+              startedAt: 1000,
+              deadline: 1801000,
+            };
+          }),
+        start: (h) =>
+          Effect.sync(() => {
+            calls.push("start");
+            expect(h.deadline).toBe(1801000);
+          }),
+        observe: (h) =>
+          Effect.sync(() => {
+            calls.push("observe");
+            expect(h.deadline).toBe(1801000);
+            return { state: "exited", exitCode: 7, durationMs: 27 };
+          }),
+        finalize: () =>
+          Effect.sync(() => {
+            calls.push("finalize");
+            return {
+              exitCode: 7,
+              durationMs: 27,
+              logPath: "logs/actual.ndjson",
+              stdout: "",
+              stderr: "actual failure",
+            };
+          }),
+      };
+      return Effect.gen(function* () {
+        const original = yield* Sandbox;
+        const result = yield* Effect.either(
+          check
+            .run({ ...baseInput, timeoutSec: 1800, failOnNonZeroExit: true })
+            .pipe(Effect.provideService(Sandbox, { ...original, checkCommand: durable })),
+        );
+        expect(Either.isLeft(result)).toBe(true);
+        if (Either.isLeft(result)) expect(result.left).toMatchObject({ exitCode: 7 });
+        expect(calls).toEqual(["prepare", "start", "observe", "finalize"]);
+        expect(handles.sandbox.execs.map((e) => e.command)).not.toContain(CHECK_CMD);
+        expect(handles.executions.steps.map((s) => s.name)).toContain("exec-finalize");
+      }).pipe(Effect.provide(layer));
+    },
+  );
   it.effect("not configured — no per-repo command no-ops green: nothing cloned or exec'd", () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },

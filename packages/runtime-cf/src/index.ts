@@ -122,3 +122,5 @@ export {
 // Re-exported so `apps/dispatcher` can `extends` it for the `RUNS_SANDBOX`
 // container binding without a direct `@cloudflare/sandbox` import.
 export { Sandbox as SandboxContainer } from "@cloudflare/sandbox";
+export { makeCheckCommandOwner } from "./check-command";
+export { checkCommandStorage } from "./check-command-storage";

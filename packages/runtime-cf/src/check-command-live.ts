@@ -1,0 +1,210 @@
+import { Effect } from "effect";
+import {
+  ExecFailed,
+  ExecTimeout,
+  flattenCommand,
+  type CheckCommandOwner,
+  type CheckCommandService,
+  type CheckCommandHandle,
+  type Container,
+  type ExecOpts,
+  type ExecResult,
+} from "@fractalboxdev/flare-dispatch-core";
+import { commandFingerprint } from "./check-command";
+import { scrubLogPrefix } from "./check-command-log";
+import { redact } from "./sandbox-output";
+
+export function makeCheckCommandService(
+  executionId: string,
+  defaultContainer: string,
+  ownerFor: (container: Container) => CheckCommandOwner,
+  bucket: Pick<R2Bucket, "put" | "get" | "head">,
+  writeLog: (key: string, command: string, stdout: string, stderr: string) => Promise<void>,
+  tail: (text: string) => string,
+): CheckCommandService {
+  const failed = (opts: ExecOpts) => (cause: unknown) =>
+    new ExecFailed({
+      exitCode: -1,
+      stderrTail: redact(
+        cause instanceof Error ? cause.message : String(cause),
+        opts.redactValues,
+      ).slice(-4096),
+    });
+  const root = (h: CheckCommandHandle) => `logs/${executionId}/check-${h.id}`;
+  const capture = async (h: CheckCommandHandle, opts: ExecOpts, terminal: boolean) => {
+    const owner = ownerFor(h.container);
+    for (const stream of ["stdout", "stderr"] as const) {
+      // One bounded chunk per observation; finalization drains the finite spool.
+      const state = await owner.logs(h);
+      if (state.chunks.length >= 4096)
+        throw new Error("check command log exceeds bounded chunk count");
+      const offset = stream === "stdout" ? state.stdoutOffset : state.stderrOffset;
+      const raw = await owner.read(h, stream, offset, 65536);
+      const prefix = scrubLogPrefix(raw.text, opts.redactValues ?? [], terminal);
+      if (prefix.characters === 0) continue;
+      const end = offset + new TextEncoder().encode(raw.text.slice(0, prefix.characters)).length;
+      const key = `${root(h)}/${stream}-${offset}-${end}.ndjson`;
+      await writeLog(
+        key,
+        redact(flattenCommand(opts.command), opts.redactValues),
+        stream === "stdout" ? prefix.text : "",
+        stream === "stderr" ? prefix.text : "",
+      );
+      const next = {
+        ...state,
+        chunks: [...state.chunks, key],
+        ...(stream === "stdout"
+          ? { stdoutOffset: end, stdoutTail: tail(state.stdoutTail + prefix.text) }
+          : { stderrOffset: end, stderrTail: tail(state.stderrTail + prefix.text) }),
+      };
+      await owner.advanceLogs(h, state, next);
+    }
+  };
+  return {
+    prepare: (opts) =>
+      Effect.tryPromise({
+        try: async () => {
+          const fingerprint = await commandFingerprint(
+            flattenCommand(opts.command),
+            opts.cwd,
+            opts.env,
+            opts.timeoutSec ?? 600,
+            opts.container?.id ?? defaultContainer,
+          );
+          const operation = await commandFingerprint(
+            `${executionId}\0${opts.stepName}\0${fingerprint}`,
+            opts.container?.id ?? defaultContainer,
+          );
+          const startedAt = Date.now();
+          return {
+            id: `check-${operation.slice(0, 48)}`,
+            container: opts.container ?? { id: defaultContainer },
+            fingerprint,
+            startedAt,
+            deadline: startedAt + (opts.timeoutSec ?? 600) * 1000,
+          };
+        },
+        catch: failed(opts),
+      }),
+    start: (handle, opts) =>
+      Effect.tryPromise({
+        try: () =>
+          ownerFor(handle.container).start({
+            handle,
+            command: flattenCommand(opts.command),
+            ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+            ...(opts.env !== undefined ? { env: opts.env } : {}),
+          }),
+        catch: failed(opts),
+      }),
+    observe: (handle, opts) =>
+      Effect.tryPromise({
+        try: async () => {
+          const status = await ownerFor(handle.container).observe(handle);
+          await capture(handle, opts, status.state !== "running");
+          return status;
+        },
+        catch: failed(opts),
+      }),
+    finalize: (handle, opts) =>
+      Effect.gen(function* () {
+        const owner = ownerFor(handle.container);
+        const receipt = yield* Effect.tryPromise({
+          try: () => owner.receipt(handle),
+          catch: failed(opts),
+        });
+        if (receipt !== undefined) return receipt;
+        const status = yield* Effect.tryPromise({
+          try: () => owner.observe(handle),
+          catch: failed(opts),
+        });
+        if (status.state === "timeout")
+          return yield* Effect.fail(
+            new ExecTimeout({
+              timeoutSec: opts.timeoutSec ?? 600,
+              command: redact(flattenCommand(opts.command), opts.redactValues),
+            }),
+          );
+        if (
+          status.state !== "exited" ||
+          status.exitCode === undefined ||
+          !Number.isInteger(status.exitCode)
+        )
+          return yield* Effect.fail(
+            failed(opts)(new Error("check command has no actual terminal exit")),
+          );
+        return yield* Effect.tryPromise({
+          try: async (): Promise<ExecResult> => {
+            for (let i = 0; i < 4096; i++) {
+              const before = await owner.logs(handle);
+              await capture(handle, opts, true);
+              const after = await owner.logs(handle);
+              if (
+                before.stdoutOffset === after.stdoutOffset &&
+                before.stderrOffset === after.stderrOffset
+              )
+                break;
+              if (i === 4095) throw new Error("check log finalization exceeded bounded chunks");
+            }
+            const state = await owner.logs(handle);
+            let size = 0;
+            for (const key of state.chunks) {
+              const part = await bucket.head(key);
+              if (part === null) throw new Error("durable check log chunk missing");
+              size += part.size;
+            }
+            const logPath = `${root(handle)}.ndjson`;
+            const pipe = new FixedLengthStream(size);
+            const writer = pipe.writable.getWriter();
+            const writing = (async () => {
+              try {
+                for (const key of state.chunks) {
+                  const part = await bucket.get(key);
+                  if (part === null) throw new Error("durable check log chunk missing");
+                  const reader = part.body.getReader();
+                  try {
+                    for (;;) {
+                      const chunk = await reader.read();
+                      if (chunk.done) break;
+                      await writer.write(chunk.value);
+                    }
+                  } finally {
+                    await reader.cancel();
+                    reader.releaseLock();
+                  }
+                }
+                await writer.close();
+              } catch (error) {
+                await writer.abort(error);
+                throw error;
+              }
+            })();
+            const publications = await Promise.allSettled([
+              bucket
+                .put(logPath, pipe.readable, {
+                  httpMetadata: { contentType: "application/x-ndjson" },
+                })
+                .catch(async (error) => {
+                  await writer.abort(error);
+                  throw error;
+                }),
+              writing,
+            ]);
+            for (const publication of publications) {
+              if (publication.status === "rejected") throw publication.reason;
+            }
+            if (status.durationMs === undefined || status.durationMs < 0)
+              throw new Error("check command has no actual duration receipt");
+            return owner.finish(handle, {
+              exitCode: status.exitCode!,
+              durationMs: status.durationMs,
+              logPath,
+              stdout: state.stdoutTail,
+              stderr: state.stderrTail,
+            });
+          },
+          catch: failed(opts),
+        });
+      }),
+  };
+}

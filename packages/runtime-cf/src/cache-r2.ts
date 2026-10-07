@@ -56,9 +56,9 @@ const TARBALL_PATH = "/tmp/fd-cache.tar.gz";
  * @param ns      the `RUNS_SANDBOX` DurableObjectNamespace<Sandbox>.
  * @param repo    the `owner/name` slug — scopes the archive key per repo.
  */
-export const makeCacheR2Live = (
+export const makeCacheR2Live = <T extends Sandbox>(
   bucket: R2Bucket,
-  ns: DurableObjectNamespace<Sandbox>,
+  ns: DurableObjectNamespace<T>,
   repo: string,
 ): Layer.Layer<Cache> => {
   const save: SaveFn = (opts) =>

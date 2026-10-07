@@ -4,7 +4,7 @@
 // V0 surface only: Workflow + R2 + D1 + Container. Queue / DO / Browser
 // bindings are deferred to V1+ and intentionally absent here.
 
-import type { Sandbox } from "@cloudflare/sandbox";
+import type { RunSandbox } from "./sandbox";
 import type { SubstrateFacade } from "@fractalboxdev/flare-dispatch-substrate-contract";
 
 export interface Env {
@@ -116,7 +116,7 @@ export interface Env {
    * id)` in `@fractalboxdev/flare-dispatch-runtime-cf` resolves the typed sandbox RPC surface.
    * The default for every run except those declaring `sandboxImage: "browser"`.
    */
-  readonly RUNS_SANDBOX: DurableObjectNamespace<Sandbox>;
+  readonly RUNS_SANDBOX: DurableObjectNamespace<RunSandbox>;
 
   /**
    * Container binding — the chromium-baked sandbox image (built from the same
@@ -131,7 +131,7 @@ export interface Env {
    * soft guard against a missing binding, not a guarantee browser runs work
    * without the second container.
    */
-  readonly RUNS_SANDBOX_BROWSER?: DurableObjectNamespace<Sandbox>;
+  readonly RUNS_SANDBOX_BROWSER?: DurableObjectNamespace<RunSandbox>;
 
   /**
    * Container binding — the agent-tier sandbox image (same Dockerfile with
@@ -144,10 +144,10 @@ export interface Env {
    * `flare-agent` and fails (not a guarantee, just a non-crash). Egress is NOT
    * configurable away — it is part of the tier. specs/08-self-healing.md § 6.2.
    */
-  readonly RUNS_SANDBOX_AGENT?: DurableObjectNamespace<Sandbox>;
+  readonly RUNS_SANDBOX_AGENT?: DurableObjectNamespace<RunSandbox>;
 
   /** Pinned Rust, Zig, and native C++ toolchain for release builds. */
-  readonly RUNS_SANDBOX_RELEASE?: DurableObjectNamespace<Sandbox>;
+  readonly RUNS_SANDBOX_RELEASE?: DurableObjectNamespace<RunSandbox>;
 
   /** R2 bucket — `logs/<execution-id>/<step>.ndjson` + `artifacts/...`. */
   readonly RUNS_STORAGE: R2Bucket;

@@ -6,7 +6,12 @@
 //
 // Spec: specs/03-dsl.md § sandbox.
 
-import { Context, type Duration, Effect } from "effect";
+import { Context, type Duration, Effect, Schema } from "effect";
+import type {
+  CheckCommandHandle,
+  CheckCommandObservation,
+  CheckCommandPrepare,
+} from "../check-command";
 import type {
   CheckoutFailed,
   ContainerBusy,
@@ -31,13 +36,27 @@ export type DetachedHandle = {
  * The result of a command that ran to completion. A non-zero `exitCode` is a
  * normal result (a failing test), surfaced to the run — not an Effect failure.
  */
-export type ExecResult = {
-  readonly exitCode: number;
-  readonly durationMs: number;
-  readonly logPath: string; // R2 key for the captured stdout/stderr
-  readonly stdout: string; // last N KB inlined; full log streamed to R2
-  readonly stderr: string;
-};
+export const ExecResultSchema = Schema.Struct({
+  exitCode: Schema.Number,
+  durationMs: Schema.Number,
+  logPath: Schema.String,
+  stdout: Schema.String,
+  stderr: Schema.String,
+});
+export type ExecResult = typeof ExecResultSchema.Type;
+
+export interface CheckCommandService {
+  prepare(opts: CheckCommandPrepare): Effect.Effect<CheckCommandHandle, ExecFailed>;
+  start(handle: CheckCommandHandle, opts: ExecOpts): Effect.Effect<void, ExecFailed>;
+  observe(
+    handle: CheckCommandHandle,
+    opts: ExecOpts,
+  ): Effect.Effect<CheckCommandObservation, ExecFailed>;
+  finalize(
+    handle: CheckCommandHandle,
+    opts: ExecOpts,
+  ): Effect.Effect<ExecResult, ExecFailed | ExecTimeout>;
+}
 
 export type ExecOpts = {
   readonly cwd?: string;
@@ -156,6 +175,8 @@ export interface SandboxService {
     container?: Container;
   }) => Effect.Effect<string, CheckoutFailed>;
   readonly exec: (opts: ExecOpts) => Effect.Effect<ExecResult, ExecFailed | ExecTimeout>;
+  /** Available on the SDK backend; other execution backends retain their own contract. */
+  readonly checkCommand?: CheckCommandService;
   /**
    * Read a container file's full text content into the Worker. The companion
    * to `exec` for large outputs: `ExecResult.stdout` inlines only a bounded

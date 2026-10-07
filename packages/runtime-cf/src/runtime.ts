@@ -43,6 +43,7 @@ import { makeOidcLive, type OidcLiveConfig } from "./oidc-live";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
 import { makeIOLive } from "./io-live";
 import { makeSandboxCloudflareLive } from "./sandbox-cf";
+import type { CheckCommandOwner, Container } from "@fractalboxdev/flare-dispatch-core";
 import { resolveAppCredentials } from "./sandbox-clone-auth";
 import { CacheOnFacade, makeSandboxFacadeLive, type SandboxFacadeOptions } from "./sandbox-facade";
 import { makeStepRunnerCloudflare } from "./step-runner-cf";
@@ -64,7 +65,7 @@ type WorkflowStepLike = {
 };
 
 /** Everything `makeCFRuntimeLive` needs to wire the per-execution runtime. */
-export type CFRuntimeLiveOptions = {
+export type CFRuntimeLiveOptions<T extends Sandbox = Sandbox> = {
   /** D1 binding — `env.RUNS_METADATA`. */
   readonly db: D1Database;
   /** R2 binding — `env.RUNS_STORAGE`. */
@@ -76,7 +77,8 @@ export type CFRuntimeLiveOptions = {
    * container directly degrade rather than address the wrong one — `artifact`
    * fails loudly in container-tar mode, `cache` becomes a pass-through.
    */
-  readonly sandboxNs?: DurableObjectNamespace<Sandbox>;
+  readonly sandboxNs?: DurableObjectNamespace<T>;
+  readonly checkCommandOwner?: (container: Container) => CheckCommandOwner;
   /**
    * The substrate facade to execute on, instead of a container binding. When
    * set, `sandbox` is `SandboxFacadeLive` and every command crosses the exec
@@ -281,7 +283,9 @@ export type CFRuntimeLiveOptions = {
  * services are merged; `StepRunnerCloudflare` is provided its `Executions` +
  * `IO` dependencies from the same merge.
  */
-export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunContext> => {
+export const makeCFRuntimeLive = <T extends Sandbox>(
+  opts: CFRuntimeLiveOptions<T>,
+): Layer.Layer<RunContext> => {
   const io = makeIOLive({
     db: opts.db,
     currentExecutionId: opts.executionId,
@@ -318,13 +322,14 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
           ...(opts.logsViewerBase !== undefined ? { logsViewerBase: opts.logsViewerBase } : {}),
         })
       : makeSandboxCloudflareLive(
-          opts.sandboxNs as DurableObjectNamespace<Sandbox>,
+          opts.sandboxNs!,
           opts.bucket,
           opts.executionId,
           cloneAuth,
           opts.sandboxPreviewHostname,
           opts.logsViewerBase,
           opts.sandboxTransport,
+          opts.checkCommandOwner,
         );
   const stepRunner = makeStepRunnerCloudflare(opts.workflowStep, opts.executionId);
   const checks = makeChecksGithubLive(opts.checks);
@@ -334,11 +339,7 @@ export const makeCFRuntimeLive = (opts: CFRuntimeLiveOptions): Layer.Layer<RunCo
   const cache =
     opts.substrate !== undefined
       ? CacheOnFacade
-      : makeCacheR2Live(
-          opts.bucket,
-          opts.sandboxNs as DurableObjectNamespace<Sandbox>,
-          opts.execution.repo,
-        );
+      : makeCacheR2Live(opts.bucket, opts.sandboxNs!, opts.execution.repo);
   // `Config` is live when the `CONFIG_KV` binding is present; absent, the
   // dying stub keeps a config-reading run from silently mis-behaving.
   const config =

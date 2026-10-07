@@ -64,6 +64,9 @@ import {
   flattenCommand,
 } from "@fractalboxdev/flare-dispatch-core";
 import { previewSafeSandboxId } from "./preview-sandbox-id";
+import { redact } from "./sandbox-output";
+import { makeCheckCommandService } from "./check-command-live";
+import type { CheckCommandOwner } from "@fractalboxdev/flare-dispatch-core";
 import { resolveCloneToken, type SandboxGithubAuth } from "./sandbox-clone-auth";
 import {
   CLONE_TIMEOUT_SEC,
@@ -102,15 +105,6 @@ const inlineTail = (s: string, viewerUrl?: string): string =>
  * an injected credential a command echoes never reaches a durable surface.
  * Exact-substring match; empty/omitted values is a no-op.
  */
-const redact = (text: string, values?: readonly string[]): string => {
-  if (values === undefined || values.length === 0) return text;
-  let out = text;
-  for (const value of values) {
-    if (value.length === 0) continue;
-    out = out.split(value).join("***");
-  }
-  return out;
-};
 
 /**
  * Re-raise a clone failure with the installation token scrubbed out of its
@@ -294,8 +288,8 @@ const execToResult = async (
  *                     so a run that needs a reachable URL fails loudly rather
  *                     than handing the suite an unreachable `localhost`.
  */
-export const makeSandboxCloudflareLive = (
-  ns: DurableObjectNamespace<Sandbox>,
+export const makeSandboxCloudflareLive = <T extends Sandbox>(
+  ns: DurableObjectNamespace<T>,
   bucket: R2Bucket,
   executionId: string,
   githubAuth?: SandboxGithubAuth,
@@ -334,6 +328,7 @@ export const makeSandboxCloudflareLive = (
    * it sticky if it were ever pointed at the wrong value.
    */
   transport?: "http" | "websocket" | "rpc",
+  checkOwner?: (container: Container) => CheckCommandOwner,
 ): Layer.Layer<SandboxTag> => {
   // The Durable Object / sandbox id. `getSandbox` routes the DO by this id AND
   // the SDK embeds it in the `exposePort` preview URL's DNS label, which must
@@ -812,6 +807,19 @@ export const makeSandboxCloudflareLive = (
         },
       });
     },
+
+    ...(checkOwner !== undefined
+      ? {
+          checkCommand: makeCheckCommandService(
+            executionId,
+            sandboxId,
+            checkOwner,
+            bucket,
+            writeLog,
+            inlineTail,
+          ),
+        }
+      : {}),
 
     // Full-content file read — the companion to `exec` for outputs larger
     // than the inlined stdout tail (see `inlineTail`). The SDK's `readFile`
