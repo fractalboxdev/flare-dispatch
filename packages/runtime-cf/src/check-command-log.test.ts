@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { scrubLogPrefix } from "./check-command-log";
 
 describe("bounded check command log chunks", () => {
+  it("long chunks remove complete overlapping secrets in either policy order", () => {
+    for (const values of [
+      ["abc", "abcdef"],
+      ["abcdef", "abc"],
+    ])
+      expect(scrubLogPrefix("abcdef", values, true).text).toBe("***");
+  });
   it("retains a split secret suffix until the following bytes arrive", () => {
     const first = scrubLogPrefix("hello TOPSEC", ["TOPSECRET"], false);
     expect(first.text).not.toContain("TOP");

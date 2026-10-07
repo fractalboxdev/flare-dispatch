@@ -12,7 +12,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-core";
 import { commandFingerprint } from "./check-command";
 import { scrubLogPrefix } from "./check-command-log";
-import { redact } from "./sandbox-output";
+import { redactLongestFirst as redact } from "./sandbox-output";
 
 export function makeCheckCommandService(
   executionId: string,
@@ -31,6 +31,23 @@ export function makeCheckCommandService(
       ).slice(-4096),
     });
   const root = (h: CheckCommandHandle) => `logs/${executionId}/check-${h.id}`;
+  const validate = async (h: CheckCommandHandle, opts: ExecOpts) => {
+    const containerId = opts.container?.id ?? defaultContainer;
+    const fingerprint = await commandFingerprint(
+      flattenCommand(opts.command),
+      opts.cwd,
+      opts.env,
+      opts.timeoutSec ?? 600,
+      containerId,
+      opts.redactValues,
+    );
+    if (
+      h.container.id !== containerId ||
+      h.fingerprint !== fingerprint ||
+      h.deadline - h.startedAt !== (opts.timeoutSec ?? 600) * 1000
+    )
+      throw new Error("check command identity changed before replay");
+  };
   const capture = async (h: CheckCommandHandle, opts: ExecOpts, terminal: boolean) => {
     const owner = ownerFor(h.container);
     for (const stream of ["stdout", "stderr"] as const) {
@@ -70,6 +87,7 @@ export function makeCheckCommandService(
             opts.env,
             opts.timeoutSec ?? 600,
             opts.container?.id ?? defaultContainer,
+            opts.redactValues,
           );
           const operation = await commandFingerprint(
             `${executionId}\0${opts.stepName}\0${fingerprint}`,
@@ -88,18 +106,22 @@ export function makeCheckCommandService(
       }),
     start: (handle, opts) =>
       Effect.tryPromise({
-        try: () =>
-          ownerFor(handle.container).start({
+        try: async () => {
+          await validate(handle, opts);
+          return ownerFor(handle.container).start({
             handle,
             command: flattenCommand(opts.command),
             ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
             ...(opts.env !== undefined ? { env: opts.env } : {}),
-          }),
+            ...(opts.redactValues !== undefined ? { redactValues: opts.redactValues } : {}),
+          });
+        },
         catch: failed(opts),
       }),
     observe: (handle, opts) =>
       Effect.tryPromise({
         try: async () => {
+          await validate(handle, opts);
           const status = await ownerFor(handle.container).observe(handle);
           await capture(handle, opts, status.state !== "running");
           return status;
@@ -108,6 +130,7 @@ export function makeCheckCommandService(
       }),
     finalize: (handle, opts) =>
       Effect.gen(function* () {
+        yield* Effect.tryPromise({ try: () => validate(handle, opts), catch: failed(opts) });
         const owner = ownerFor(handle.container);
         const receipt = yield* Effect.tryPromise({
           try: () => owner.receipt(handle),

@@ -33,6 +33,7 @@ export interface CheckCommandOwner {
     command: string;
     cwd?: string;
     env?: Record<string, string>;
+    redactValues?: readonly string[];
   }): Promise<void>;
   observe(handle: CheckCommandHandle): Promise<CheckCommandObservation>;
   read(

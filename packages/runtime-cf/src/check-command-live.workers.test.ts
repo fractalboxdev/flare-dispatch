@@ -15,6 +15,84 @@ declare module "cloudflare:test" {
 }
 
 describe("durable command bounded log publication", () => {
+  it.each([
+    { action: "observe", change: "env" },
+    { action: "finalize", change: "env" },
+    { action: "observe", change: "redaction" },
+    { action: "finalize", change: "redaction" },
+    { action: "observe", change: "redaction-order" },
+    { action: "finalize", change: "redaction-order" },
+  ] as const)(
+    "$action refuses replay with changed $change before owner access or upload",
+    async ({ action, change }) => {
+      const calls: string[] = [];
+      const owner: CheckCommandOwner = {
+        async start() {
+          calls.push("start");
+        },
+        async observe() {
+          calls.push("observe");
+          return { state: "exited", exitCode: 0, durationMs: 27 };
+        },
+        async read() {
+          calls.push("read");
+          return { text: "old-opaque-secret", bytes: 17 };
+        },
+        async logs() {
+          calls.push("logs");
+          return { stdoutOffset: 0, stderrOffset: 0, stdoutTail: "", stderrTail: "", chunks: [] };
+        },
+        async advanceLogs() {
+          calls.push("advance");
+        },
+        async receipt() {
+          calls.push("receipt");
+          return { exitCode: 0, durationMs: 27, logPath: "old.ndjson", stdout: "***", stderr: "" };
+        },
+        async finish(_h, result) {
+          calls.push("finish");
+          return result;
+        },
+      };
+      const service = makeCheckCommandService(
+        "identity-replay",
+        "box",
+        () => owner,
+        env.CHECK_COMMAND_LOGS,
+        async () => {
+          calls.push("upload");
+        },
+        (text) => text.slice(-4096),
+      );
+      const original = {
+        command: "command",
+        env: { TOKEN: "old-opaque-secret" },
+        redactValues: change === "redaction-order" ? ["abc", "abcdef"] : ["old-opaque-secret"],
+        timeoutSec: 1800,
+      };
+      const handle = await Effect.runPromise(service.prepare({ ...original, stepName: "exec" }));
+      const changed =
+        change === "env"
+          ? {
+              ...original,
+              env: { TOKEN: "new-opaque-secret" },
+              redactValues: ["new-opaque-secret"],
+            }
+          : {
+              ...original,
+              redactValues:
+                change === "redaction-order"
+                  ? [...original.redactValues].reverse()
+                  : ["new-opaque-secret"],
+            };
+      const attempt =
+        action === "observe"
+          ? service.observe(handle, changed).pipe(Effect.asVoid)
+          : service.finalize(handle, changed).pipe(Effect.asVoid);
+      await expect(Effect.runPromise(attempt)).rejects.toThrow("identity");
+      expect(calls).toEqual([]);
+    },
+  );
   it("lost chunk acknowledgment replays scrubbed bytes and finalization preserves actual exits", async () => {
     for (const code of [0, 7]) {
       const secret = "opaque-secret-value";

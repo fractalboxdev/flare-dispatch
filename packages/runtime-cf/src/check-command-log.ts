@@ -1,4 +1,4 @@
-import { redact } from "./sandbox-output";
+import { redactLongestFirst as redact } from "./sandbox-output";
 
 /** Uncommitted secret suffixes stay in the spool and are reread, never checkpointed. */
 export function scrubLogPrefix(

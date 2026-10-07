@@ -59,6 +59,7 @@ export async function commandFingerprint(
   env: Record<string, string> = {},
   timeoutSec = 600,
   containerId = "",
+  redactValues: readonly string[] = [],
 ): Promise<string> {
   const hash = await crypto.subtle.digest(
     "SHA-256",
@@ -69,6 +70,7 @@ export async function commandFingerprint(
         Object.entries(env).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
         timeoutSec,
         containerId,
+        [...new Set(redactValues.filter((value) => value.length > 0))],
       ]),
     ),
   );
@@ -140,6 +142,7 @@ export function makeCheckCommandOwner(
           env,
           (h.deadline - h.startedAt) / 1000,
           h.container.id,
+          Schema.decodeUnknownSync(Schema.Array(Schema.String))(opts.redactValues ?? []),
         ))
       )
         throw new Error("check command identity changed");

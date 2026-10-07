@@ -120,6 +120,7 @@ abstract class RecordingSandbox extends Sandbox<Env> {
     command: string;
     cwd?: string;
     env?: Record<string, string>;
+    redactValues?: readonly string[];
   }) {
     return this.checkOwner().start(opts);
   }
