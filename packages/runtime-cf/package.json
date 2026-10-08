@@ -7,7 +7,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./model-gateway": "./src/model-gateway-cf.ts"
+    "./model-gateway": "./src/model-gateway-cf.ts",
+    "./native": "./src/native.ts",
+    "./testing": "./src/test-support.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

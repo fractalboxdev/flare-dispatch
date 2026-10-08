@@ -86,7 +86,7 @@ export const makeNativeResultR2 = (bucket: Pick<R2Bucket, "get" | "put">, contro
         } catch { controller.error(refused("native file read verification refused")); }
       },
     }, { highWaterMark: 0 });
-    return { path: file.path, sha256: file.sha256, bytes: file.bytes, body };
+    return { result, path: file.path, sha256: file.sha256, bytes: file.bytes, body };
   });
 
   const publish = (raw: unknown, now: number) => Effect.gen(function* () {

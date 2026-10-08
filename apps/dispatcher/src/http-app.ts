@@ -40,6 +40,7 @@ import { handleHealth } from "./routes/health";
 import { handleInstallLlms, handleInstallNew, handleInstalled } from "./routes/github";
 import { handleLogFile, handleLogsAggregate, handleLogViewer } from "./routes/logs";
 import { handleMailboxRead } from "./routes/mailbox";
+import { handleNativeResultRead } from "./routes/native-results";
 import { handleOidcDiscovery, handleOidcJwks } from "./routes/oidc";
 import { handleProductDemo } from "./routes/product-demos";
 import { handleReplay } from "./routes/replay";
@@ -482,6 +483,7 @@ const baseRouter = HttpRouter.empty.pipe(
     route("GET", () => handleHealth()),
   ),
   HttpRouter.all("/deploy", deployRoute),
+  HttpRouter.all("/v1/native-results/read", route("POST", ({ request, env }) => handleNativeResultRead(request, env))),
   HttpRouter.all(
     "/replay/:sessionId",
     route("GET", ({ env, params }) => handleReplay(env, decode(params, "sessionId")), {
