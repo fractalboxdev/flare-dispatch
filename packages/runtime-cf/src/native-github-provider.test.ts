@@ -85,9 +85,27 @@ describe("authenticated native GitHub provider", () => {
       { actor:{ login:"native-controller[bot]", type:"User" } }, { head_sha:"4".repeat(40) },
       { path:".github/workflows/another.yml" }, { event:"push" },
     ]) {
-      const { provider, fetchImpl } = collector([{ ...apiRun(), status:"queued", conclusion:null, ...patch }]);
-      await expect(runEffect(observe(provider))).rejects.toThrow();
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      for (const status of ["queued", "completed"]) {
+        const { provider, fetchImpl } = collector([{ ...apiRun(), status, conclusion:status === "completed" ? "success" : null, ...patch }]);
+        await expect(runEffect(observe(provider))).rejects.toThrow();
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      }
+    }
+  });
+
+  it("validates bound IDs and trusted controller before observation HTTP", async () => {
+    const { provider, fetchImpl } = collector();
+    for (const raw of [{ runId:0, runAttempt:1 }, { ...bound, runAttempt:1.5 }, { ...bound, extra:"forged" }])
+      await expect(runEffect(observe(provider, raw))).rejects.toThrow();
+    await expect(runEffect(provider.observeRun(request, bound, "human"))).rejects.toThrow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not admit unsuccessful jobs or artifacts after a terminal success observation", async () => {
+    for (const f of [collector([completedRun()], [{ ...completedJob(), conclusion:"failure" }]),
+      collector([completedRun()], [completedJob()], [{ ...artifact(), expired:true }])]) {
+      expect(await runEffect(observe(f.provider))).toMatchObject({ _tag:"Terminal", conclusion:"success" });
+      await expect(runEffect(f.provider.collect(request, bound, "native-controller[bot]"))).rejects.toThrow();
     }
   });
 

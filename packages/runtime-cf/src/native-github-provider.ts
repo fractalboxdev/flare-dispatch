@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import {
   admitNativeApiEvidence, admitNativeRequest, NativeApiEvidence, NativeControllerLogin, NativeReceiptRefused,
   NativeRunCreatedAt, nativeDiscoveryWindow,
+  admitNativeRunObservation,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
   dispatchNativeWindows, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs, readNativeWindowsArtifacts,
@@ -32,6 +33,8 @@ const ApiArtifact = Schema.Struct({ id: PositiveId, name: Schema.String, expired
   size_in_bytes: Schema.Number.pipe(Schema.filter((n) => Number.isSafeInteger(n) && n >= 22 && n <= NATIVE_ARCHIVE_MAX_BYTES)),
   workflow_run: Schema.Struct({ id: PositiveId, head_sha: NativeApiEvidence.fields.executorRef }) });
 const refuse = (reason: string) => new NativeReceiptRefused({ reason });
+const admitControllerLogin = (controllerLogin: string) => Schema.is(NativeControllerLogin)(controllerLogin)
+  ? Effect.void : Effect.fail(refuse("native controller identity invalid"));
 const discoveryEvidence = (run: typeof DiscoveryRun.Type) => ({
   repo: run.repository.full_name, runId: run.id, runAttempt: run.run_attempt, event: run.event,
   executorRef: run.head_sha, workflowPath: run.path, runName: run.display_title,
@@ -48,6 +51,20 @@ export const makeNativeGithubProvider = (client: Client) => {
     if (request.repo !== client.repo || client.token.length === 0)
       return yield* Effect.fail(new NativeReceiptRefused({ reason: "native GitHub repository or credential scope invalid" }));
     return request;
+  });
+  const readExactRun = (raw: unknown, rawBinding: unknown) => Effect.gen(function* () {
+    const request = yield* scoped(raw);
+    const binding = yield* Schema.decodeUnknown(Binding, { onExcessProperty:"error" })(rawBinding).pipe(
+      Effect.mapError(() => refuse("native durable run binding invalid")),
+    );
+    const rawRun = yield* Effect.tryPromise({
+      try: () => readNativeWindowsRun({ ...client, runId:binding.runId, attempt:binding.runAttempt }),
+      catch: () => refuse("complete native GitHub run evidence unavailable"),
+    });
+    const run = yield* decode(ApiRun, rawRun);
+    if (run.id !== binding.runId || run.run_attempt !== binding.runAttempt)
+      return yield* Effect.fail(refuse("native run differs from durable binding"));
+    return { request, binding, rawRun };
   });
   const dispatch = (raw: unknown) => Effect.gen(function* () {
     const request = yield* scoped(raw);
@@ -69,30 +86,24 @@ export const makeNativeGithubProvider = (client: Client) => {
     return runs.map(discoveryEvidence);
   });
   const readRun = (raw: unknown, rawBinding: unknown) => Effect.gen(function* () {
-    yield* scoped(raw);
-    const binding = yield* decode(Binding, rawBinding);
-    const rawRun = yield* Effect.tryPromise({
-      try: () => readNativeWindowsRun({ ...client, runId: binding.runId, attempt: binding.runAttempt }),
-      catch: () => refuse("complete native GitHub run evidence unavailable"),
-    });
+    const { rawRun } = yield* readExactRun(raw, rawBinding);
     const run = yield* decode(DiscoveryRun, rawRun);
-    if (run.id !== binding.runId || run.run_attempt !== binding.runAttempt)
-      return yield* Effect.fail(refuse("native run differs from durable binding"));
     return discoveryEvidence(run);
   });
-  const collect = (raw: unknown, rawBinding: unknown, controllerLogin: string) => Effect.gen(function* () {
-    const request = yield* scoped(raw);
-    const binding = yield* Schema.decodeUnknown(Binding, { onExcessProperty: "error" })(rawBinding).pipe(
-      Effect.mapError(() => refuse("native durable run binding invalid")),
-    );
-    if (!Schema.is(NativeControllerLogin)(controllerLogin))
-      return yield* Effect.fail(refuse("native controller identity invalid"));
-    const rawRun = yield* Effect.tryPromise({
-      try: () => readNativeWindowsRun({ ...client, runId: binding.runId, attempt: binding.runAttempt }),
-      catch: () => refuse("complete native GitHub run evidence unavailable") });
+  const observeRun = (raw: unknown, rawBinding: unknown, controllerLogin: string) => Effect.gen(function* () {
+    yield* admitControllerLogin(controllerLogin);
+    const { request, rawRun } = yield* readExactRun(raw, rawBinding);
     const run = yield* decode(CompletedRun, rawRun);
-    if (run.id !== binding.runId || run.run_attempt !== binding.runAttempt)
-      return yield* Effect.fail(refuse("native run differs from durable binding"));
+    return yield* admitNativeRunObservation(request, {
+      repo:run.repository.full_name, runId:run.id, runAttempt:run.run_attempt, event:run.event,
+      executorRef:run.head_sha, workflowPath:run.path, runName:run.display_title,
+      actorLogin:run.actor.login, actorType:run.actor.type, status:run.status, conclusion:run.conclusion,
+    }, controllerLogin);
+  });
+  const collect = (raw: unknown, rawBinding: unknown, controllerLogin: string) => Effect.gen(function* () {
+    yield* admitControllerLogin(controllerLogin);
+    const { request, binding, rawRun } = yield* readExactRun(raw, rawBinding);
+    const run = yield* decode(CompletedRun, rawRun);
     const rawJobs = yield* Effect.tryPromise({
       try: () => readNativeWindowsJobs({ ...client, runId: binding.runId, attempt: binding.runAttempt }),
       catch: () => refuse("complete native GitHub job evidence unavailable"),
@@ -121,5 +132,5 @@ export const makeNativeGithubProvider = (client: Client) => {
       return yield* Effect.fail(refuse("native archive expired or run identity mismatch"));
     return { api, artifactId: artifact.id };
   });
-  return { dispatch, listRuns, readRun, collect };
+  return { dispatch, listRuns, readRun, observeRun, collect };
 };

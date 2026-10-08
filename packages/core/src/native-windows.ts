@@ -47,6 +47,18 @@ export const NativeApiEvidence = Schema.Struct({
 });
 export type NativeApiEvidence = typeof NativeApiEvidence.Type;
 
+const NativeRunEvidence = NativeApiEvidence.pipe(Schema.pick(
+  "repo", "runId", "runAttempt", "event", "executorRef", "workflowPath", "runName", "actorLogin", "actorType", "status", "conclusion",
+));
+export const NativePendingStatus = Schema.Literal("queued", "in_progress", "requested", "waiting", "pending");
+export const NativeTerminalConclusion = Schema.Literal(
+  "success", "failure", "cancelled", "timed_out", "neutral", "skipped", "action_required", "stale", "startup_failure",
+);
+const NativeRunLifecycle = Schema.Union(
+  Schema.Struct({ status:NativePendingStatus, conclusion:Schema.Null }),
+  Schema.Struct({ status:Schema.Literal("completed"), conclusion:NativeTerminalConclusion }),
+);
+
 export class NativeReceiptRefused extends Schema.TaggedError<NativeReceiptRefused>()(
   "NativeReceiptRefused", { reason: Schema.String },
 ) {}
@@ -101,6 +113,32 @@ export const admitNativeRequest = (raw: unknown) => Effect.gen(function* () {
   return request;
 });
 
+const matchesNativeRunIdentity = (
+  request: NativeRequest, api: typeof NativeRunEvidence.Type, trustedControllerLogin: string,
+) => Schema.is(NativeControllerLogin)(trustedControllerLogin)
+  && api.repo === request.repo && api.event === "workflow_dispatch"
+  && api.actorType === "Bot" && api.actorLogin === trustedControllerLogin
+  && api.executorRef === request.executor_ref && api.workflowPath === ".github/workflows/native-windows.yml"
+  && api.runName === `native-${request.nonce}`;
+
+/** An authentic terminal run conclusion is observation, never job or artifact admission. */
+export const admitNativeRunObservation = (rawRequest: unknown, rawApi: unknown, trustedControllerLogin: string) =>
+  Effect.gen(function* () {
+    const request = yield* admitNativeRequest(rawRequest);
+    const api = yield* Schema.decodeUnknown(NativeRunEvidence, { onExcessProperty:"error" })(rawApi).pipe(
+      Effect.mapError(() => new NativeReceiptRefused({ reason:"invalid native run evidence" })),
+    );
+    if (!matchesNativeRunIdentity(request, api, trustedControllerLogin))
+      return yield* Effect.fail(new NativeReceiptRefused({ reason:"authentic API run identity mismatch" }));
+    const lifecycle = yield* Schema.decodeUnknown(NativeRunLifecycle)({ status:api.status, conclusion:api.conclusion }).pipe(
+      Effect.mapError(() => new NativeReceiptRefused({ reason:"native run lifecycle malformed" })),
+    );
+    const identity = { runId:api.runId, runAttempt:api.runAttempt };
+    return lifecycle.status === "completed"
+      ? { _tag:"Terminal" as const, conclusion:lifecycle.conclusion, ...identity }
+      : { _tag:"Pending" as const, status:lifecycle.status, ...identity };
+  });
+
 /** Completed API identity admits archive collection independently of workload-authored files. */
 export const admitNativeApiEvidence = (rawRequest: unknown, rawApi: unknown, trustedControllerLogin: string) =>
   Effect.gen(function* () {
@@ -109,11 +147,8 @@ export const admitNativeApiEvidence = (rawRequest: unknown, rawApi: unknown, tru
       Effect.mapError(() => new NativeReceiptRefused({ reason: "invalid native API evidence" })),
     );
     const x64 = request.target === "x86_64-pc-windows-msvc";
-    if (!Schema.is(NativeControllerLogin)(trustedControllerLogin)
-      || api.repo !== request.repo || api.event !== "workflow_dispatch"
-      || api.actorType !== "Bot" || api.actorLogin !== trustedControllerLogin
-      || api.executorRef !== request.executor_ref || api.workflowPath !== ".github/workflows/native-windows.yml"
-      || api.runName !== `native-${request.nonce}` || api.status !== "completed" || api.conclusion !== "success"
+    if (!matchesNativeRunIdentity(request, api, trustedControllerLogin)
+      || api.status !== "completed" || api.conclusion !== "success"
       || api.jobStatus !== "completed" || api.jobConclusion !== "success"
       || api.job !== (x64 ? "x86_64" : "aarch64") || !api.labels.includes(x64 ? "windows-2025" : "windows-11-arm"))
       return yield* Effect.fail(new NativeReceiptRefused({ reason: "authentic API job mismatch or failure" }));
