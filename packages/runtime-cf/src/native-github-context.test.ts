@@ -89,6 +89,9 @@ describe("ephemeral native GitHub context", () => {
   it("accepts omission of automatic metadata permission from the response", async () => {
     await expect(read(fixture(installation(),{...grant(),permissions:{actions:"write"}}))).resolves.toBeDefined();
   });
+  it("refuses fractional expiry before returning an ephemeral context", async () => {
+    await expect(read(fixture(installation(),{...grant(),expires_at:"2026-10-08T01:00:00.123Z"}))).rejects.toThrow();
+  });
   it("rejects oversized and non-UTF8 POST responses through the shared receiver", async () => {
     for (const bytes of [new Uint8Array(65537),new Uint8Array([255])]) {
       const ordinary=fixture();
