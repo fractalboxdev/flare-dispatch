@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { crc32 } from "node:zlib";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { nativeCommand, type NativeRequest, type NativeReceiptRefused } from "@fractalboxdev/flare-dispatch-core";
+import { nativeCommand, type NativeRequest, type NativeReceiptRefused, type NativeControllerPolicy } from "@fractalboxdev/flare-dispatch-core";
 import { makeNativeController } from "./native-controller";
 import * as native from "./native";
 import { makeNativeResultR2, nativeResultKey } from "./native-result-r2";
@@ -41,7 +41,7 @@ const archive = (members: { path: string; bytes: Buffer }[]) => {
 };
 const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
   clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; checkpoint?:boolean; undiscovered?:boolean;
-  foreignApp?:boolean; broadGrant?:boolean; clock?: () => number } = {}) => {
+  foreignApp?:boolean; broadGrant?:boolean; policy?:NativeControllerPolicy; clock?: () => number } = {}) => {
   let status = "in_progress", conclusion: string | null = null, posts = 0, downloads = 0, failPut = options.lostPublication;
   let authReads=0, grants=0;
   const run = () => ({ id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
@@ -92,7 +92,7 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
     }) as R2Bucket["put"] } as R2Bucket;
   type Outcome = Effect.Effect.Success<ReturnType<typeof native.advanceNativeController>> | native.NativeControllerCheckpoint;
   const instance: { advance: (raw: unknown) => Effect.Effect<Outcome, NativeReceiptRefused> } = options.authenticated ? { advance:(raw:unknown) =>
-    (options.checkpoint ? native.advanceNativeControllerCheckpoint : native.advanceNativeController)({db:env.RUNS_METADATA,bucket,now: options.clock, auth:{appId:"42",appJwt:"fixture-app-jwt",
+    (options.checkpoint ? native.advanceNativeControllerCheckpoint : native.advanceNativeController)({db:env.RUNS_METADATA,bucket,now: options.clock, policy:options.policy, auth:{appId:"42",appJwt:"fixture-app-jwt",
         repo:options.clientRepo ?? request.repo,fetchImpl}},raw) } :
     makeNativeController({ db: env.RUNS_METADATA, bucket, controller, now: options.clock,
       client: { repo: options.clientRepo ?? request.repo, token: options.emptyToken ? "" : "fixture-installation-token", fetchImpl } });
@@ -102,6 +102,18 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
 };
 
 describe("native controller with actual D1 and R2", () => {
+  it("carries the immutable durable deadline through authenticated running and publication checkpoints", async () => {
+    const f = open({ authenticated:true, checkpoint:true, policy:{timeoutSec:60} });
+    const first = await Effect.runPromise(f.instance.advance(request));
+    const intent = await env.RUNS_METADATA.prepare("SELECT admitted_at,deadline_at FROM native_dispatches WHERE repo=? AND nonce=?")
+      .bind(request.repo,request.nonce).first<{admitted_at:number;deadline_at:number}>();
+    expect(first).toMatchObject({admittedAt:intent!.admitted_at,deadlineAt:intent!.admitted_at+60});
+    expect(intent!.deadline_at).toBe(intent!.admitted_at+60);
+    f.finish();
+    expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({_tag:"Published",admittedAt:intent!.admitted_at,deadlineAt:intent!.deadline_at});
+    expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({_tag:"Published",deadlineAt:intent!.deadline_at});
+    expect(f.posts()).toBe(1);expect(f.downloads()).toBe(1);
+  });
   it("checkpoints authenticated replay as metadata without result bodies or credentials", async () => {
     const f = open({ authenticated: true, checkpoint: true, lostDispatch: true });
     const pending = await Effect.runPromise(f.instance.advance(request));
