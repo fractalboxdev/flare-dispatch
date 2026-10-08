@@ -35,7 +35,7 @@ describe("D1ExecutionsLive", () => {
       yield* executions.startExecution({ id: EXECUTION_ID, run: "fixture-command", startedAt: 1000 });
     }).pipe(Effect.provide(layer)));
     await bindings.db.prepare(`CREATE TRIGGER fixture_refuse_execution_finish BEFORE UPDATE OF completed_at ON executions
-      BEGIN SELECT RAISE(ABORT, 'fixture finalization refusal'); END;`).run();
+      BEGIN SELECT RAISE(ABORT, 'SQLITE_TOOBIG: fixture-private-canary'); END;`).run();
     const summaryJson = JSON.stringify({ exitCode: 0, durationMs: 10, logUri: "/v1/artifacts/fixture/check.log" });
     const exit = await Effect.runPromiseExit(Effect.gen(function* () {
       const executions = yield* Executions;
@@ -45,7 +45,13 @@ describe("D1ExecutionsLive", () => {
       onFailure: cause => Option.getOrUndefined(Cause.dieOption(cause)) });
     expect(defect).toBeInstanceOf(Error);
     const wrapper = defect as Error;
-    expect(wrapper.message).toBe("D1ExecutionsLive: finishExecution failed");
+    expect(wrapper.message).toContain('"operation":"finishExecution"');
+    expect(wrapper.message).toContain('"errorClass":"Error"');
+    expect(wrapper.message).toContain('"d1PrefixHint":"D1_ERROR"');
+    expect(wrapper.message).toContain('"sqliteCodeHint":"SQLITE_CONSTRAINT"');
+    expect(wrapper.message).toContain('"summaryUtf8Bytes":73');
+    for (const forbidden of ["fixture-private-canary", "SQLITE_TOOBIG", "UPDATE", "owner/name", "check.log"])
+      expect(wrapper.message).not.toContain(forbidden);
     expect(wrapper.cause).toBeInstanceOf(Error);
     const cause = wrapper.cause as Error;
     console.log(JSON.stringify({ operation: "finishExecution", errorClass: cause instanceof Error ? "Error" : "Other",
@@ -54,6 +60,36 @@ describe("D1ExecutionsLive", () => {
       summaryUtf8Bytes: new TextEncoder().encode(summaryJson).byteLength }));
     expect(await bindings.db.prepare("SELECT status,completed_at,summary_json FROM executions WHERE id=?")
       .bind(EXECUTION_ID).first()).toEqual({ status: "running", completed_at: null, summary_json: null });
+  });
+  it("keeps diagnostic metadata generic without invoking hostile provider getters", async () => {
+    let getterCalls = 0;
+    const provider = new Error("fixture-private-canary");
+    for (const property of ["name", "message", "code", "cause"])
+      Object.defineProperty(provider, property, { get: () => { getterCalls++; throw new Error("fixture getter forbidden"); } });
+    const db = new Proxy(bindings.db, { get(target, key) {
+      if (key === "prepare") return (sql: string) => {
+        const wrap = (statement: D1PreparedStatement): D1PreparedStatement => new Proxy(statement, { get(inner, method) {
+          if (method === "bind") return (...values: Parameters<D1PreparedStatement["bind"]>) => wrap(inner.bind(...values));
+          if (method === "run" && sql.startsWith("UPDATE executions")) return async () => { throw provider; };
+          const value = Reflect.get(inner, method); return typeof value === "function" ? value.bind(inner) : value;
+        } });
+        return wrap(target.prepare(sql));
+      };
+      const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const exit = await Effect.runPromiseExit(Effect.gen(function* () {
+      const executions = yield* Executions;
+      yield* executions.startExecution({ id: EXECUTION_ID, run: "fixture-command", startedAt: 1000 });
+      yield* executions.finishExecution({ id: EXECUTION_ID, completedAt: 2000, status: "failure", summaryJson: "é💥\ud800" });
+    }).pipe(Effect.provide(makeD1ExecutionsLive(db, CTX))));
+    const defect = Exit.match(exit, { onSuccess: () => undefined, onFailure: cause => Option.getOrUndefined(Cause.dieOption(cause)) });
+    expect(defect).toBeInstanceOf(Error);
+    const message = (defect as Error).message;
+    expect(message).toContain('"errorClass":"Error"');
+    expect(message).toContain('"d1PrefixHint":"unknown"');
+    expect(message).toContain('"sqliteCodeHint":"unknown"');
+    expect(message).toContain('"summaryUtf8Bytes":9');
+    expect(message).not.toContain("fixture-private-canary"); expect(getterCalls).toBe(0);
   });
 
   it("writes one executions row spanning start → finish", async () => {
