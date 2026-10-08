@@ -3,6 +3,7 @@ import { Effect, Schema } from "effect";
 const Revision = Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/));
 const Digest = Schema.String.pipe(Schema.pattern(/^[0-9a-f]{64}$/));
 const Target = Schema.Literal("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc");
+export const NativeControllerLogin = Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$/));
 const ArtifactPath = Schema.String.pipe(Schema.filter((path) => path.split("/").every((segment) =>
   /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment)
     && !segment.endsWith(".")
@@ -72,7 +73,7 @@ export const bindNativeReceipt = (
   admitted: NativeRequest, rawReceipt: unknown, rawApi: unknown, verifiedArtifacts: unknown,
   trustedControllerLogin: string,
 ) => Effect.gen(function* () {
-  if (!/^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$/.test(trustedControllerLogin))
+  if (!Schema.is(NativeControllerLogin)(trustedControllerLogin))
     return yield* Effect.fail(new NativeReceiptRefused({ reason: "configured native controller identity is invalid" }));
   const decode = <A, I>(schema: Schema.Schema<A, I>, raw: unknown) =>
     Schema.decodeUnknown(schema, { onExcessProperty: "error" })(raw).pipe(

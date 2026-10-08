@@ -51,7 +51,7 @@ export const readNativeControllerIdentity = async (opts: Options): Promise<{
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   let body: unknown;
-  try { body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch {
+  try { body = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)); } catch {
     throw refuse("native controller authenticated identity encoding refused");
   }
   if (typeof body !== "object" || body === null || !("id" in body) || !("slug" in body)
