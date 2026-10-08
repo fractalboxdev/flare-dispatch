@@ -81,6 +81,8 @@ import {
 } from "@fractalboxdev/flare-dispatch-runtime-cf";
 import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
+import { contextfulReleaseCell } from "@fractalboxdev/flare-dispatch-runs";
+import { makeNativeReleaseLayer } from "./native-release-layer";
 import { preAssertedApproval, resolveTargets, runGrant, runsOnFacade } from "./grant-catalog";
 import { selectSandboxNs } from "./sandbox-routing";
 import { queuedSummary, serialQueuedSummary } from "./admission-summary";
@@ -480,6 +482,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         : undefined;
 
     const runtime = makeCFRuntimeLive({
+      ...(payload.run === contextfulReleaseCell.name ? {
+        nativeExecution: makeNativeReleaseLayer(this.env, { executionId: event.instanceId,
+          repo: payload.github.repo, head: payload.github.sha }),
+      } : {}),
       db,
       bucket: this.env.RUNS_STORAGE,
       // Exactly one of these is set: a run executes wholly on the substrate or

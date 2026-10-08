@@ -8,6 +8,7 @@
 // Spec: specs/03-dsl.md § Errors.
 
 import { Schema } from "effect";
+import type { NativeReceiptRefused } from "./native-windows";
 
 export class CheckoutFailed extends Schema.TaggedError<CheckoutFailed>()("CheckoutFailed", {
   repo: Schema.String,
@@ -322,6 +323,7 @@ export class ChildWaitTimeout extends Schema.TaggedError<ChildWaitTimeout>()("Ch
 
 /** The closed union of every error a run can fail with. */
 export type RunError =
+  | NativeReceiptRefused
   | CheckoutFailed
   | ExecFailed
   | ExecTimeout

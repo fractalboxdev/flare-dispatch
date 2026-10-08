@@ -29,7 +29,7 @@
 
 import { Effect, Exit, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Executions, type RunContext } from "@fractalboxdev/flare-dispatch-core";
+import { Executions, NativeExecutionUnavailable, type RunContext } from "@fractalboxdev/flare-dispatch-core";
 import {
   CacheFake,
   sandboxFakeProgram,
@@ -95,6 +95,7 @@ const makeRuntimeUnderTest = (
   const stepRunner = makeStepRunnerCloudflare(fakeWorkflowStep, executionId);
 
   return Layer.mergeAll(
+    NativeExecutionUnavailable,
     sandboxFakeProgram(sandboxProgram),
     BrowserDeferred,
     // `offload-test` never touches `cache`; the fake satisfies the Tag without

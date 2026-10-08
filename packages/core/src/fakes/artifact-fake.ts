@@ -40,7 +40,14 @@ export const makeArtifactFake = (opts?: {
   const state: ArtifactFakeState = { urls: new Map(), uploads: [] };
   const failUploads = new Set(opts?.failUploads ?? []);
 
-  const service: ArtifactService = {
+const service: ArtifactService = {
+    uploadVerified: ({ name, body }) => Effect.tryPromise({
+      try: async () => {
+        await body.cancel();
+        throw new Error("verified stream import requires the real artifact owner in tests");
+      },
+      catch: cause => new ArtifactUploadFailed({ name, cause }),
+    }),
     upload: ({ name, path, contentType, container }) =>
       failUploads.has(name)
         ? Effect.fail(new ArtifactUploadFailed({ name, cause: "artifact fake: forced failure" }))

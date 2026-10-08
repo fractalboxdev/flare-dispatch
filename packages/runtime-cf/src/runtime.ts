@@ -18,6 +18,7 @@
 import { type Sandbox } from "@cloudflare/sandbox";
 import { Layer } from "effect";
 import type { RunContext } from "@fractalboxdev/flare-dispatch-core";
+import { NativeExecutionUnavailable, type NativeExecution } from "@fractalboxdev/flare-dispatch-core";
 import { makeR2ArtifactLive } from "./artifact-r2";
 import { type BrowserRenderingConfig, makeBrowserRenderingLive } from "./browser-cf";
 import { makeCacheR2Live } from "./cache-r2";
@@ -66,6 +67,7 @@ type WorkflowStepLike = {
 
 /** Everything `makeCFRuntimeLive` needs to wire the per-execution runtime. */
 export type CFRuntimeLiveOptions<T extends Sandbox = Sandbox> = {
+  readonly nativeExecution?: Layer.Layer<NativeExecution>;
   /** D1 binding — `env.RUNS_METADATA`. */
   readonly db: D1Database;
   /** R2 binding — `env.RUNS_STORAGE`. */
@@ -425,6 +427,7 @@ export const makeCFRuntimeLive = <T extends Sandbox>(
         });
 
   return Layer.mergeAll(
+    opts.nativeExecution ?? NativeExecutionUnavailable,
     sandbox,
     browser,
     cache,
