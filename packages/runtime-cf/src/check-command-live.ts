@@ -90,7 +90,7 @@ export function makeCheckCommandService(
             opts.redactValues,
           );
           const operation = await commandFingerprint(
-            `${executionId}\0${opts.stepName}\0${fingerprint}`,
+            `${executionId}\0${opts.stepName}`,
             opts.container?.id ?? defaultContainer,
           );
           const startedAt = Date.now();

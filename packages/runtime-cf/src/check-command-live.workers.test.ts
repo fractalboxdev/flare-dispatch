@@ -7,6 +7,7 @@ import type {
   ExecResult,
 } from "@fractalboxdev/flare-dispatch-core";
 import { makeCheckCommandService } from "./check-command-live";
+import { makeCheckCommandOwner } from "./check-command";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv {
@@ -15,6 +16,63 @@ declare module "cloudflare:test" {
 }
 
 describe("durable command bounded log publication", () => {
+  it("discarded preparation with changed inputs refuses the same execution intent instead of launching twice", async () => {
+    const records = new Map<string, unknown>();
+    const processes = new Set<string>();
+    let launches = 0;
+    const owner = makeCheckCommandOwner(
+      {
+        async load(key) {
+          return records.get(key);
+        },
+        async reserve(key, value) {
+          if (records.has(key)) return false;
+          records.set(key, value);
+          return true;
+        },
+        async save(key, value, expected) {
+          if (JSON.stringify(records.get(key)) !== JSON.stringify(expected)) return false;
+          records.set(key, value);
+          return true;
+        },
+      },
+      {
+        async writeFile() {
+          return { success: true };
+        },
+        async startProcess(_command, options) {
+          launches++;
+          processes.add(options.processId);
+        },
+        async getProcess(id) {
+          return processes.has(id) ? { status: "running" } : null;
+        },
+        async exec() {
+          throw new Error("no spool read before admission");
+        },
+      },
+    );
+    const service = makeCheckCommandService(
+      "same-logical-execution",
+      "box",
+      () => owner,
+      env.CHECK_COMMAND_LOGS,
+      async () => {},
+      (text) => text,
+    );
+    const opts = { command: "command", env: { TOKEN: "original" }, timeoutSec: 1800 };
+    const initial = await Effect.runPromise(service.prepare({ ...opts, stepName: "exec" }));
+    await Effect.runPromise(service.start(initial, opts));
+    const changed = { ...opts, env: { TOKEN: "changed" } };
+    const reconstructed = await Effect.runPromise(
+      service.prepare({ ...changed, stepName: "exec" }),
+    );
+    await expect(Effect.runPromise(service.start(reconstructed, changed))).rejects.toThrow(
+      "identity",
+    );
+    expect(launches).toBe(1);
+    expect(reconstructed.id).toBe(initial.id);
+  });
   it.each([
     { action: "observe", change: "env" },
     { action: "finalize", change: "env" },
