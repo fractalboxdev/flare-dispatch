@@ -1,7 +1,41 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { dispatchNativeWindows, readNativeWindowsRuns, readNativeWindowsJobs, readNativeWindowsArtifacts, streamNativeWindowsArchive } from "./native-windows";
 
 const options = { repo: "owner/name", token: "installation-token", executorRef: "a".repeat(40), request: { nonce: "native-0123456789abcdef" } };
+
+it("refuses native evidence exceeding its byte ceiling before parsing page metadata", async () => {
+  await expect(readNativeWindowsRuns({ ...options,
+    fetchImpl: async () => Response.json({ workflow_runs: [], extra: "x".repeat(1024 * 1024) }),
+  })).rejects.toMatchObject({ name: "GithubApiError", body: "" });
+});
+
+it("refuses invalid UTF-8 in unused native evidence fields", async () => {
+  const start = new TextEncoder().encode('{"workflow_runs":[],"extra":"');
+  const end = new TextEncoder().encode('"}');
+  const bytes = new Uint8Array(start.length + 1 + end.length);
+  bytes.set(start); bytes[start.length] = 255; bytes.set(end, start.length + 1);
+  await expect(readNativeWindowsRuns({ ...options, fetchImpl: async () => new Response(bytes) }))
+    .rejects.toMatchObject({ name: "GithubApiError", body: "" });
+});
+
+it("bounds native evidence fetch and body reads even when a provider ignores its abort signal", async () => {
+  vi.useFakeTimers();
+  try {
+    for (const stalledBody of [false, true]) {
+      let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const fetchImpl: typeof fetch = stalledBody
+        ? async () => new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }))
+        : async () => new Promise<Response>(() => {});
+      const outcome = readNativeWindowsRuns({ ...options, fetchImpl }).then(
+        () => ({ done: true, refused: false }), () => ({ done: true, refused: true }),
+      );
+      await vi.advanceTimersByTimeAsync(10001);
+      const observed = await Promise.race([outcome, Promise.resolve({ done: false, refused: false })]);
+      controller?.error(new Error("fixture finished"));
+      expect(observed, String(stalledBody)).toEqual({ done: true, refused: true });
+    }
+  } finally { vi.useRealTimers(); }
+});
 
 it("dispatches the fixed native executor exactly once and never retries an ambiguous POST", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];

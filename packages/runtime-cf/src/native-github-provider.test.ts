@@ -47,6 +47,19 @@ describe("authenticated native GitHub provider", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
+  it("collects the exact bound run attempt even after workflow history exceeds the discovery budget", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/runs/456/attempts/1")) return Response.json(completedRun());
+      if (path.endsWith("/attempts/1/jobs")) return Response.json({ total_count: 1, jobs: [completedJob()] });
+      if (path.endsWith("/runs/456/artifacts")) return Response.json({ total_count: 1, artifacts: [artifact()] });
+      return Response.json({ total_count: 101, workflow_runs: [completedRun()] });
+    });
+    const provider = makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl });
+    expect((await runEffect(provider.collect(request, bound, "native-controller[bot]"))).artifactId).toBe(987);
+    expect(fetchImpl.mock.calls.every(([url]) => !String(url).includes("/workflows/"))).toBe(true);
+  });
+
   it("refuses changed or ambiguous run bindings and authentic failed or live jobs", async () => {
     for (const runs of [[], [completedRun(), completedRun()],
       [{ ...completedRun(), id: 455 }], [{ ...completedRun(), run_attempt: 2 }],
