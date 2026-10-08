@@ -5,8 +5,8 @@ import { Artifact, NativeExecution, nativeCommand, type NativeRequest } from "@f
 import { makeTestBindings } from "@fractalboxdev/flare-dispatch-runtime-cf/testing";
 import { makeNativeFilesR2, makeNativeResultR2, makeR2ArtifactLive, nativeResultKey } from "@fractalboxdev/flare-dispatch-runtime-cf/native";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import { contextfulRelease, contextfulReleaseCell } from "@fractalboxdev/flare-dispatch-runs";
-import { makeNativeReleaseLayer } from "./native-release-layer";
+import { contextfulRelease, contextfulReleaseCell, nativeGate } from "@fractalboxdev/flare-dispatch-runs";
+import { makeNativeGateLayer, makeNativeReleaseLayer } from "./native-release-layer";
 import { makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "./test-helpers";
 import type { Env } from "./env";
 
@@ -55,6 +55,56 @@ const publish = async (bucket: R2Bucket, request: NativeRequest, path: string, b
   return { _tag: "Published", admittedAt: now, deadlineAt: now + 600, runId: 123, runAttempt: 1, manifestKey: nativeResultKey(request) };
 };
 describe("native release owner", () => {
+  it("binds gate comparison scope and refuses release authority on the gate port", async () => {
+    const f = fixture(), base = "2".repeat(40);
+    const layer = makeNativeGateLayer({ ...f.env, GITHUB_APP_PRIVATE_KEY: credential }, { ...source, base });
+    await Effect.runPromise(Effect.gen(function* () {
+      const owner = yield* NativeExecution;
+      for (const compared of [source.head, "3".repeat(40)])
+        expect(Exit.isFailure(yield* Effect.exit(owner.admitGate({ head: source.head, base: compared, target: input.target })))).toBe(true);
+      expect(Exit.isFailure(yield* Effect.exit(owner.admitRelease(input)))).toBe(true);
+      const handle = yield* owner.admitGate({ head: source.head, base, target: input.target });
+      expect(handle.request).toMatchObject({ mode: "gate", profile: "", base });
+      expect(nativeCommand(handle.request)).toEqual(["cargo", "+1.97.0", "run", "--locked", "-q", "-p", "contextful-ci", "--", "gate", "--stage", "windows.aarch64-msvc", "--base", base]);
+      for (const patch of [{ base: source.head }, { mode: "release", profile: "contextful-edge" }, { command_sha256: "f".repeat(64) }])
+        expect(Exit.isFailure(yield* Effect.exit(owner.observeGate({ request: { ...handle.request, ...patch } } as typeof handle)))).toBe(true);
+    }).pipe(Effect.provide(layer)));
+    expect(f.workflow.calls).toHaveLength(1);
+  });
+
+  it("executes the declared gate leaf only after the authentic immutable result owner admits it", async () => {
+    const raw = await makeTestBindings();
+    const bucket = { get: raw.bucket.get.bind(raw.bucket), put: ((key, value, options) => raw.bucket.put(key, value, {
+      ...options, ...(options?.onlyIf instanceof Headers ? { onlyIf: { etagDoesNotMatch: options.onlyIf.get("if-none-match")! } } : {}),
+    })) as R2Bucket["put"] } as R2Bucket;
+    const f = fixture(), base = "2".repeat(40);
+    let checkpoint: unknown;
+    const create = f.workflow.binding.create.bind(f.workflow.binding), get = f.workflow.binding.get.bind(f.workflow.binding);
+    vi.spyOn(f.workflow.binding, "create").mockImplementation(async opts => {
+      if (opts === undefined || opts.params === undefined) throw new Error("fixture native request missing");
+      checkpoint = await publish(bucket, (opts.params as { request: NativeRequest }).request, "gate.txt", new TextEncoder().encode("fixture owning tests pass\n"));
+      return create(opts);
+    });
+    vi.spyOn(f.workflow.binding, "get").mockImplementation(async id => {
+      const instance = await get(id); vi.spyOn(instance, "status").mockResolvedValue({ status: "complete", output: checkpoint }); return instance;
+    });
+    const runtime = makeCFRuntimeTest();
+    const env = { ...f.env, RUNS_STORAGE: bucket, GITHUB_APP_PRIVATE_KEY: credential };
+    const layer = makeNativeGateLayer(env, { ...source, base }, { fetchImpl: fetchFor(source.repo) });
+    try {
+      for (const cell of [
+        { target: "x86_64-pc-windows-msvc", checkLabel: "windows.x86_64-msvc" },
+        { target: "aarch64-pc-windows-msvc", checkLabel: "windows.aarch64-msvc" },
+      ] as const) {
+        const result = await Effect.runPromise(nativeGate.run({ repo: source.repo, sha: source.head, baseSha: base,
+          ...cell }).pipe(Effect.provide(layer), Effect.provide(runtime.layer)));
+        expect({ ...result, files: [...result.files].sort() }).toEqual({ head: source.head, base, target: cell.target, files: ["command.log", "gate.txt"] });
+      }
+      expect(runtime.handles.sandbox.execs).toHaveLength(0);
+      expect(f.workflow.calls).toHaveLength(2);
+    } finally { vi.restoreAllMocks(); await raw.dispose(); }
+  });
+
   it("reconciles an uncertain admission only with a live matching Workflow", async () => {
     const f = fixture();
     vi.spyOn(f.workflow.binding, "create").mockRejectedValue(new Error("fixture response lost"));

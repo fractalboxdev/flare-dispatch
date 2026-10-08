@@ -116,7 +116,7 @@ export {
 export { browser, Browser, type BrowserService, type CDPSession } from "./services/browser";
 export { cache, Cache, type CacheService } from "./services/cache";
 export { artifact, Artifact, type ArtifactService, type ArtifactInfo } from "./services/artifact";
-export { NativeExecution, NativeExecutionUnavailable, NativeReleaseInput, NativeReleaseHandle, NativeReleaseObservation, nativeExecution, type NativeExecutionService } from "./services/native-execution";
+export { NativeExecution, NativeExecutionUnavailable, NativeReleaseInput, NativeReleaseHandle, NativeReleaseObservation, NativeGateInput, NativeGateHandle, nativeExecution, type NativeExecutionService } from "./services/native-execution";
 export { io, IO, type IOService, type LogLevel, type PriorExecution } from "./services/io";
 export { config, Config, type ConfigService } from "./services/config";
 export { secrets, Secrets, type SecretsService } from "./services/secrets";

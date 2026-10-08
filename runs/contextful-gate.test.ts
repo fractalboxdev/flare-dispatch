@@ -42,6 +42,18 @@ describe("contextful-gate", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("refuses an unknown native leaf or absent Linux inventory before fanout", () => {
+    return Effect.gen(function* () {
+      for (const parts of ["pins\nwindows.unknown\n", "windows.x86_64-msvc\n"]) {
+        const { layer, handles } = makeCFRuntimeTest({ sandboxProgram: {
+          [DISCOVER_HEAD]: { stdout: parts, exitCode: 0 }, [DISCOVER]: { stdout: parts, exitCode: 0 },
+        } });
+        expect(Exit.isFailure(yield* Effect.exit(contextfulGate.run(input).pipe(Effect.provide(layer))))).toBe(true);
+        expect(handles.childRuns.spawned).toHaveLength(0);
+      }
+    });
+  });
+
   it.effect("joins a successful child beyond the native ten-minute checkpoint ceiling", () => {
     let now = 0;
     const sleeps: number[] = [];
