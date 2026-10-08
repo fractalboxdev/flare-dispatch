@@ -119,3 +119,4 @@ export {
   dispatchNativeWindows, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs,
   readNativeWindowsArtifacts, streamNativeWindowsArchive,
 } from "./native-windows";
+export { readNativeJson } from "./native-json";
