@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Match } from "effect";
 import { admitNativeReadBinding, admitNativeRequest, NativeReceiptRefused } from "@fractalboxdev/flare-dispatch-core";
 import { streamNativeWindowsArchive } from "@fractalboxdev/flare-dispatch-github-app";
 import { makeNativeDispatchD1 } from "./native-dispatch-d1";
@@ -41,20 +41,25 @@ export const makeNativeController = ({ db, bucket, controller, client, now: cloc
     }
     const run = { runId: state.runId, runAttempt: state.runAttempt };
     const observed = yield* provider.observeRun(request, run, controller.actorLogin);
-    if (observed._tag === "Pending") return { ...observed, _tag: "Running" as const };
-    if (observed.conclusion !== "success") return { ...observed, _tag: "Failed" as const };
-    const evidence = yield* provider.collect(request, run, controller.actorLogin);
-    const response = yield* Effect.tryPromise({ try: () => streamNativeWindowsArchive({ ...client, artifactId: evidence.artifactId }),
-      catch: () => refused("native authenticated archive download unavailable") });
-    const result = yield* Effect.acquireUseRelease(
-      makeNativeArchiveDownload(bucket).stage(response),
-      (archive) => Effect.gen(function* () {
-        const captured = yield* makeNativeArchiveR2(bucket).verify({ request, api: evidence.api, controllerLogin: controller.actorLogin }, archive.key);
-        return yield* results.publish({ request, api: evidence.api, ...captured, verifiedAt: clock() }, clock());
-      }),
-      (archive) => Effect.tryPromise({ try: () => bucket.delete(archive.key), catch: () => refused("native temporary archive disposal unavailable") }).pipe(Effect.orDie),
+    return yield* Match.value(observed).pipe(
+      Match.tag("Pending", (pending) => Effect.succeed({ ...pending, _tag: "Running" as const })),
+      Match.tag("Terminal", (terminal) => Effect.gen(function* () {
+        if (terminal.conclusion !== "success") return { ...terminal, _tag: "Failed" as const };
+        const evidence = yield* provider.collect(request, run, controller.actorLogin);
+        const response = yield* Effect.tryPromise({ try: () => streamNativeWindowsArchive({ ...client, artifactId: evidence.artifactId }),
+          catch: () => refused("native authenticated archive download unavailable") });
+        const result = yield* Effect.acquireUseRelease(
+          makeNativeArchiveDownload(bucket).stage(response),
+          (archive) => Effect.gen(function* () {
+            const captured = yield* makeNativeArchiveR2(bucket).verify({ request, api: evidence.api, controllerLogin: controller.actorLogin }, archive.key);
+            return yield* results.publish({ request, api: evidence.api, ...captured, verifiedAt: clock() }, clock());
+          }),
+          (archive) => Effect.tryPromise({ try: () => bucket.delete(archive.key), catch: () => refused("native temporary archive disposal unavailable") }).pipe(Effect.orDie),
+        );
+        return { _tag: "Published" as const, result };
+      })),
+      Match.exhaustive,
     );
-    return { _tag: "Published" as const, result };
   });
   return { advance };
 };
