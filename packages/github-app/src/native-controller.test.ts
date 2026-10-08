@@ -18,7 +18,7 @@ describe("native controller identity", () => {
     const [url, init] = fetchImpl.mock.calls[0]! as unknown as [string, RequestInit];
     expect(url).toBe("https://api.github.com/app");
     expect(init.method).toBe("GET");
-    expect(init.redirect).toBe("error");
+    expect(init.redirect).toBe("manual");
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer fixture-app-jwt");
   });
 

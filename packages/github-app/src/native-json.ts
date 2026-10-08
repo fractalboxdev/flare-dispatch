@@ -17,7 +17,7 @@ export const readNativeJson = async (opts: { readonly token: string; readonly ap
     return await Promise.race([deadline, (async () => {
       const client=resolveClient(opts);
       const response = await client.doFetch(url.startsWith("/") ? `${client.apiBase}${url}` : url, {
-        method: request?.method ?? "GET", body:request?.body, redirect: "error",
+        method: request?.method ?? "GET", body:request?.body, redirect: "manual",
         headers: ghHeaders(opts.token,{json:request !== undefined}), signal: abort.signal,
       });
       if (abort.signal.aborted || response.status !== (request?.status ?? 200) || response.body === null) {

@@ -25,7 +25,7 @@ export const dispatchNativeWindows = async (opts: NativeClient & {
     throw new GithubApiError("native executor revision is not immutable", 0, "");
   const url = endpoint(opts, "workflows/native-windows.yml/dispatches");
   const response = await resolveClient(opts).doFetch(url, {
-    method: "POST", redirect: "error", headers: ghHeaders(opts.token, { json: true }),
+    method: "POST", redirect: "manual", headers: ghHeaders(opts.token, { json: true }),
     body: JSON.stringify({ ref: opts.executorRef, inputs: { request: JSON.stringify(opts.request) } }),
   });
   void response.body?.cancel().catch(() => {});
@@ -122,7 +122,7 @@ export const streamNativeWindowsArchive = async (opts: NativeClient & {
   const target = new URL(location);
   if (target.protocol !== "https:" || target.username || target.password)
     throw new GithubApiError("native archive redirect is unsafe", 0, "");
-  const archive = await doFetch(target, { method: "GET", redirect: "error" });
+  const archive = await doFetch(target, { method: "GET", redirect: "manual" });
   if (archive.status !== 200 || !archive.body) {
     void archive.body?.cancel().catch(() => {});
     throw new GithubApiError("native archive body is absent", archive.status, "");

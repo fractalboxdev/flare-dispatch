@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
 import { NativeControllerPolicy, NativeReceiptRefused, NativeRequest, admitNativeRequest } from "@fractalboxdev/flare-dispatch-core";
 
-/** Operator configuration supplies both queue duration and polling cadence; neither has an implicit default. */
+/** Operator configuration supplies native executor queue/execution duration and polling cadence; neither has an implicit default. */
 export const NativeWorkflowPolicy = Schema.Struct({
   repo: NativeRequest.fields.repo,
   executor_ref: NativeRequest.fields.executor_ref,

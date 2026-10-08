@@ -61,7 +61,7 @@ it("dispatches the fixed native executor exactly once and never retries an ambig
   expect(calls).toHaveLength(1);
   expect(calls[0]?.url).toBe("https://api.github.com/repos/owner/name/actions/workflows/native-windows.yml/dispatches");
   expect(calls[0]?.init?.method).toBe("POST");
-  expect(calls[0]?.init?.redirect).toBe("error");
+  expect(calls[0]?.init?.redirect).toBe("manual");
   expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ ref: options.executorRef, inputs: { request: JSON.stringify(options.request) } });
 });
 
@@ -80,7 +80,7 @@ it("binds finite job and artifact reads to the exact API run and attempt", async
   const fetchImpl: typeof fetch = async (url, init) => {
     urls.push(String(url));
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer installation-token");
-    expect(init?.redirect).toBe("error");
+    expect(init?.redirect).toBe("manual");
     return Response.json({ jobs: [{ id: 4, labels: ["windows-11-arm"] }], artifacts: [{ id: 5 }] });
   };
   expect(await readNativeWindowsJobs({ ...options, fetchImpl, runId: 42, attempt: 2 })).toEqual([{ id: 4, labels: ["windows-11-arm"] }]);
@@ -114,7 +114,7 @@ it("streams the API-bound archive without forwarding the installation credential
   expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe("Bearer installation-token");
   expect(calls[0]?.init?.redirect).toBe("manual");
   expect(new Headers(calls[1]?.init?.headers).has("authorization")).toBe(false);
-  expect(calls[1]?.init?.redirect).toBe("error");
+  expect(calls[1]?.init?.redirect).toBe("manual");
 });
 
 it("refuses unsafe archive redirects before contacting a second endpoint", async () => {

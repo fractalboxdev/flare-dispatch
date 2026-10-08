@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
-import { admitNativeRequest } from "@fractalboxdev/flare-dispatch-core";
+import { NativeReceiptRefused, admitNativeRequest } from "@fractalboxdev/flare-dispatch-core";
+import { parseNativeControllerAppId } from "@fractalboxdev/flare-dispatch-github-app";
 import type { Env } from "../env";
 import { SIGNATURE_HEADER, verify } from "../hmac";
 import { NativeBodyRefused, decodeNativeBody, readNativeBody } from "../native-body";
@@ -18,6 +19,9 @@ export const handleNativeDispatch = (request: Request, env: Env) => Effect.runPr
     || !env.HMAC_SECRET || !env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY)
     return json({ error: "native_dispatch_not_configured" }, 503);
   const policy = yield* readNativeWorkflowPolicy(env.NATIVE_EXECUTION_POLICY);
+  const configuredAppId = env.GITHUB_APP_ID;
+  yield* Effect.try({ try: () => parseNativeControllerAppId(configuredAppId),
+    catch: () => new NativeReceiptRefused({ reason: "native Workflow operator identity unavailable" }) });
   const bytes = yield* readNativeBody(request);
   const valid = yield* Effect.tryPromise({ try: () => verify(env.HMAC_SECRET, request.headers.get(SIGNATURE_HEADER), bytes),
     catch: () => new NativeBodyRefused({ status: 400 }) });

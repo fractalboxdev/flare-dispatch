@@ -71,8 +71,9 @@ describe("authenticated native execution trigger",()=>{
   it("refuses a foreign instance returned by ambiguous create observation", async () => {
     const f = open();
     const create = vi.spyOn(f.workflow.binding, "create").mockRejectedValue(new Error("fixture acknowledgement lost"));
-    vi.spyOn(f.workflow.binding, "get").mockImplementation(async () => ({ id: "foreign-instance", status: async () => ({status:"running"}) })
-      as Awaited<ReturnType<typeof f.workflow.binding.get>>);
+    vi.spyOn(f.workflow.binding, "get").mockImplementation(async () => {
+      return { id: "foreign-instance", status: async () => ({status:"running"}) } as Awaited<ReturnType<typeof f.workflow.binding.get>>;
+    });
     expect((await handleRequest(await post(request), f.env)).status).toBe(503);
     expect(create).toHaveBeenCalledTimes(1); expect(f.db).not.toHaveBeenCalled();
   });

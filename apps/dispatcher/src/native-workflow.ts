@@ -6,7 +6,7 @@ import { parseNativeControllerAppId, signAppJwt } from "@fractalboxdev/flare-dis
 import { NativeControllerCheckpoint, NATIVE_CONTROLLER_CHECKPOINT_MAX_BYTES,
   advanceNativeControllerCheckpoint, preflightNativeDispatchD1 } from "@fractalboxdev/flare-dispatch-runtime-cf/native";
 import type { Env } from "./env";
-import { NativeWorkflowParams, admitNativeWorkflowRequest, nativeWorkflowId, readNativeWorkflowPolicy } from "./native-workflow-policy";
+import { NativeWorkflowParams, NativeWorkflowPolicy, admitNativeWorkflowRequest, nativeWorkflowId, readNativeWorkflowPolicy } from "./native-workflow-policy";
 
 /** Only lifecycle metadata and the next bounded poll time cross native Workflow checkpoints. */
 export const NativeWorkflowPoll = Schema.Struct({
@@ -17,6 +17,7 @@ type NativeWorkflowPoll = typeof NativeWorkflowPoll.Type;
 const refusal = () => new NativeReceiptRefused({ reason: "native Workflow admission or execution refused" });
 
 export const nativeWorkflowPoll = (raw: unknown, pollIntervalSec: number, now: number) => Effect.gen(function* () {
+  const interval = yield* Schema.decodeUnknown(NativeWorkflowPolicy.fields.pollIntervalSec)(pollIntervalSec).pipe(Effect.mapError(refusal));
   const checkpoint = yield* Schema.decodeUnknown(NativeControllerCheckpoint, { onExcessProperty: "error" })(raw).pipe(Effect.mapError(refusal));
   if (checkpoint.deadlineAt === undefined) return yield* Effect.fail(refusal());
   yield* assertNativeControllerDeadline(checkpoint.deadlineAt, now);
@@ -24,11 +25,11 @@ export const nativeWorkflowPoll = (raw: unknown, pollIntervalSec: number, now: n
     Match.tags({ WaitingForRun: () => true, Running: () => true, Failed: () => false, Published: () => false }),
     Match.exhaustive,
   );
-  const nextPollAt = pending ? now + Math.min(pollIntervalSec, checkpoint.deadlineAt - now) : null;
+  const nextPollAt = pending ? now + Math.min(interval, checkpoint.deadlineAt - now) : null;
   return yield* Schema.decodeUnknown(NativeWorkflowPoll, { onExcessProperty: "error" })({ checkpoint, nextPollAt }).pipe(Effect.mapError(refusal));
 });
 
-/** Native orchestration uses GitHub's executor; it owns no sandbox or container lease. */
+/** Duration starts at D1 admission, not platform scheduling. Every refused step is terminal, including transient provider failures. */
 export class NativeWorkflow extends WorkflowEntrypoint<Env, NativeWorkflowParams> {
   async run(event: WorkflowEvent<NativeWorkflowParams>, step: WorkflowStep): Promise<NativeControllerCheckpoint> {
     for (let index = 0; ; index++) {
