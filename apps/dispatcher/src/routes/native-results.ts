@@ -3,12 +3,9 @@ import { NativeArtifactPath, NativeReadBinding, NativeReceiptRefused } from "@fr
 import { makeNativeResultR2, readNativeResultOwnerD1 } from "@fractalboxdev/flare-dispatch-runtime-cf/native";
 import type { Env } from "../env";
 import { verifyNativeResultToken } from "../native-result-token";
+import { NativeBodyRefused, decodeNativeBody, readNativeBody } from "../native-body";
 
 const Input = Schema.Struct({ binding: NativeReadBinding, path: Schema.optional(NativeArtifactPath) });
-const MAX_BODY_BYTES = 4096;
-class BodyRefused extends Schema.TaggedError<BodyRefused>()("NativeReaderBodyRefused", {
-  status: Schema.Literal(400, 408, 413),
-}) {}
 const headers = { "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" };
 const json = (value: unknown, status: number) => new Response(JSON.stringify(value), {
   status, headers: { ...headers, "content-type": "application/json" },
@@ -16,28 +13,9 @@ const json = (value: unknown, status: number) => new Response(JSON.stringify(val
 
 /** A bounded receiver owns cancellation; the web-request JSON helper buffers without a byte limit. */
 const readInput = (request: Request) => Effect.gen(function* () {
-  if (request.body === null) return yield* Effect.fail(new BodyRefused({ status: 400 }));
-  const text = yield* Effect.acquireUseRelease(
-    Effect.sync(() => request.body!.getReader()),
-    (reader) => Effect.gen(function* () {
-      const bytes = new Uint8Array(MAX_BODY_BYTES);
-      let size = 0;
-      for (;;) {
-        const { done, value } = yield* Effect.tryPromise({ try: () => reader.read(), catch: () => new BodyRefused({ status: 400 }) });
-        if (done) break;
-        if (!(value instanceof Uint8Array) || value.byteLength === 0)
-          return yield* Effect.fail(new BodyRefused({ status: 400 }));
-        if (size + value.byteLength > MAX_BODY_BYTES)
-          return yield* Effect.fail(new BodyRefused({ status: 413 }));
-        bytes.set(value, size); size += value.byteLength;
-      }
-      return yield* Effect.try({ try: () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes.subarray(0, size)),
-        catch: () => new BodyRefused({ status: 400 }) });
-    }),
-    (reader) => Effect.sync(() => { void reader.cancel().catch(() => {}); reader.releaseLock(); }),
-  ).pipe(Effect.timeoutFail({ duration: "10 seconds", onTimeout: () => new BodyRefused({ status: 408 }) }));
+  const text = yield* decodeNativeBody(yield* readNativeBody(request));
   return yield* Schema.decodeUnknown(Schema.parseJson(Input), { onExcessProperty: "error" })(text).pipe(
-    Effect.mapError(() => new BodyRefused({ status: 400 })),
+    Effect.mapError(() => new NativeBodyRefused({ status: 400 })),
   );
 });
 
@@ -75,7 +53,7 @@ export const handleNativeResultRead = (request: Request, env: Env): Promise<Resp
     return new Response(file.body, { status: 200, headers: { ...headers,
       "content-type": "application/octet-stream", "content-length": String(file.bytes), "x-native-sha256": file.sha256 } });
   }).pipe(
-    Effect.catchTag("NativeReaderBodyRefused", ({ status }) => Effect.succeed(json({ error: "invalid_native_reader_request" }, status))),
+    Effect.catchTag("NativeBodyRefused", ({ status }) => Effect.succeed(json({ error: "invalid_native_reader_request" }, status))),
     Effect.catchTag("NativeReceiptRefused", () => Effect.succeed(json({ error: "native_result_unavailable" }, 503))),
   ),
 );

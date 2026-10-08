@@ -110,6 +110,11 @@ export interface Env {
   /** Workflow binding — instantiates RunWorkflow executions. */
   readonly RUNS_WORKFLOW: Workflow;
 
+  /** Dedicated native orchestration binding; native runs never acquire container leases. */
+  readonly NATIVE_WORKFLOW?: Workflow;
+  /** Explicit repository, executor, immutable duration and polling policy encoded as JSON. */
+  readonly NATIVE_EXECUTION_POLICY?: string;
+
   /**
    * Container binding — the LEAN sandbox image, one instance per execution.
    * Typed as a `DurableObjectNamespace<Sandbox>` so `getSandbox(env.RUNS_SANDBOX,

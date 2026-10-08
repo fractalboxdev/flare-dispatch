@@ -14,5 +14,7 @@ declare module "cloudflare:test" {
     RUNS_STORAGE: R2Bucket;
     CONFIG_KV: KVNamespace;
     TEST_MIGRATIONS: D1Migration[];
+    NATIVE_WORKFLOW: Workflow;
+    NATIVE_FIXTURE_CONTROL: Fetcher;
   }
 }

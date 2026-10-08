@@ -41,6 +41,7 @@ import { handleInstallLlms, handleInstallNew, handleInstalled } from "./routes/g
 import { handleLogFile, handleLogsAggregate, handleLogViewer } from "./routes/logs";
 import { handleMailboxRead } from "./routes/mailbox";
 import { handleNativeResultRead } from "./routes/native-results";
+import { handleNativeDispatch } from "./routes/native-dispatch";
 import { handleOidcDiscovery, handleOidcJwks } from "./routes/oidc";
 import { handleProductDemo } from "./routes/product-demos";
 import { handleReplay } from "./routes/replay";
@@ -484,6 +485,7 @@ const baseRouter = HttpRouter.empty.pipe(
   ),
   HttpRouter.all("/deploy", deployRoute),
   HttpRouter.all("/v1/native-results/read", route("POST", ({ request, env }) => handleNativeResultRead(request, env))),
+  HttpRouter.all("/v1/native-runs", route("POST", ({ request, env }) => handleNativeDispatch(request, env))),
   HttpRouter.all(
     "/replay/:sessionId",
     route("GET", ({ env, params }) => handleReplay(env, decode(params, "sessionId")), {
