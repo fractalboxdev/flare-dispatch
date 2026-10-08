@@ -53,7 +53,7 @@ const TARBALL_PATH = "/tmp/fd-cache.tar.gz";
  * binding. Cache entries are reused across executions but isolated per repo.
  *
  * @param bucket  the R2 binding (`env.RUNS_STORAGE`).
- * @param ns      the `RUNS_SANDBOX` DurableObjectNamespace<Sandbox>.
+ * @param ns      the `RUNS_SANDBOX` namespace for the supplied Sandbox subclass.
  * @param repo    the `owner/name` slug — scopes the archive key per repo.
  */
 export const makeCacheR2Live = <T extends Sandbox>(
