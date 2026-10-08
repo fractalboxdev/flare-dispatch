@@ -125,6 +125,30 @@ export class AdmissionTimedOut extends Schema.TaggedError<AdmissionTimedOut>()(
 }
 
 /**
+ * A run's body outlived `limits.maxDurationSec` (issue #42). The clock starts
+ * at a checkpointed time when the body begins, so a Workflow replay resumes
+ * the countdown rather than restarting it; admission and serialization waits
+ * have their own ceilings and do not count.
+ */
+export class RunDurationExceeded extends Schema.TaggedError<RunDurationExceeded>()(
+  "RunDurationExceeded",
+  {
+    /** The declared ceiling, seconds. */
+    maxDurationSec: Schema.Number,
+    /** Body wall time when the ceiling fired, seconds. */
+    elapsedSec: Schema.Number,
+  },
+) {
+  // The Workflows attempt record persists only error.name + error.message (#88).
+  override get message(): string {
+    return (
+      `run exceeded its ${Math.round(this.maxDurationSec / 60)} min ceiling ` +
+      `(limits.maxDurationSec = ${this.maxDurationSec})`
+    );
+  }
+}
+
+/**
  * A run declaring `serialize` waited its whole ceiling behind an in-flight
  * execution of the same group, which kept heartbeating the entire time. The
  * run **never started**. Distinct from `AdmissionTimedOut`: the pool may have
@@ -330,6 +354,7 @@ export type RunError =
   | ContainerBusy
   | AdmissionTimedOut
   | SerialQueueTimedOut
+  | RunDurationExceeded
   | PortNeverOpened
   | ExposePortFailed
   | BrowserUnavailable

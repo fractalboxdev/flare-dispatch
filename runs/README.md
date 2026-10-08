@@ -374,8 +374,9 @@ timeout would otherwise reach `sandbox.exec` as `NaN` — a timeout that never
 fires, i.e. a hung run holding a container indefinitely.
 
 `timeoutSec` is enforced per exec by the sandbox's own deadline. The run's
-`maxDurationSec` (1800) is validated at definition time only — it is not a
-runtime kill.
+`maxDurationSec` (3600) bounds the whole body above it: the dispatcher fails the
+run `RunDurationExceeded` once the ceiling elapses from the body's start, and the
+exec's retries draw on that same budget.
 
 ```mermaid
 flowchart TB

@@ -1862,3 +1862,11 @@ describe("offload-test source determinism", () => {
     }),
   );
 });
+
+describe("run ceiling (issue #42)", () => {
+  it("covers one documented 1800 s exec plus setup, and bounds its retries", () => {
+    // Four aligned 1800 s exec attempts ran 3h11m; the ceiling ends that at an hour.
+    expect(offloadTest.limits.maxDurationSec).toBeGreaterThanOrEqual(3600);
+    expect(offloadTest.limits.maxDurationSec).toBeLessThan(4 * 1800);
+  });
+});

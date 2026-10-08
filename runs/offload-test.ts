@@ -55,10 +55,10 @@
 //
 // Staging makes earlier stages' logs DURABLE — it does not buy a long suite
 // more wall time. Each stage runs under its own exec ceiling (the labelled /
-// unlabelled `timeoutSec` rungs), and those per-exec ceilings are the only
-// runtime enforcement there is: `limits.maxDurationSec` is validated at
-// definition time and never read again at runtime. Size the stage ceilings to
-// the suite; staging alone does not stretch them.
+// unlabelled `timeoutSec` rungs), and every stage, with its retries, draws on
+// the one run ceiling: the dispatcher fails the run `RunDurationExceeded` once
+// `limits.maxDurationSec` elapses from the body's start. Size the stage
+// ceilings to the suite and their sum to the run ceiling.
 //
 // --- Isolated stages (`offload-test.stageConcurrency:<repo>` > 1) -------------
 //
@@ -261,10 +261,10 @@ const TIMEOUT_SEC_DEFAULT = 600;
  * streamed so far) instead of the platform hard-killing the step at the same
  * instant (`WorkflowTimeoutError`, no log, nothing for `upload-log` to serve).
  * Same idea as playwright-demo's headroom, with one deliberate difference: NOT
- * clamped to `maxDurationSec`. At the documented `offload-test.timeoutSec =
- * 1800` config the clamp would collapse the headroom to zero — step and exec
- * expire together and the platform kill wins, which is exactly the failure
- * this exists to prevent.
+ * clamped to `maxDurationSec`. At an exec timeout equal to the run ceiling the
+ * clamp would collapse the headroom to zero — step and exec expire together
+ * and the platform kill wins, which is exactly the failure this exists to
+ * prevent. The run ceiling bounds the body as a whole, never one step.
  */
 const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
@@ -340,9 +340,9 @@ const repoCommandKey = (repo: string): string => `offload-test.command:${repo}`;
  *   wrangler kv key put --binding=CONFIG_KV "offload-test.timeoutSec:owner/repo" "1800"
  *
  * An explicit dispatch value always wins; these only fill the gap the trigger
- * leaves. `timeoutSec` is enforced per exec by the sandbox's own deadline —
- * there is no additional runtime wall-clock clamp (`limits.maxDurationSec` is
- * a definition-time validation only).
+ * leaves. `timeoutSec` is enforced per exec by the sandbox's own deadline, and
+ * the run's `limits.maxDurationSec` bounds the whole body above it: the exec,
+ * its retries and every other step share that one ceiling.
  */
 const repoInstallKey = (repo: string): string => `offload-test.install:${repo}`;
 const repoTimeoutKey = (repo: string): string => `offload-test.timeoutSec:${repo}`;
@@ -507,11 +507,10 @@ export const offloadTest = defineRun({
   outputs: OffloadTestOutput,
 
   limits: {
-    // Wall-time ceiling — specs/02-runs.md § 1. Single container, no
-    // concurrency parameter. Validated at definition time (define-run.ts);
-    // the runtime enforcement a stage actually meets is its per-exec
-    // `timeoutSec` ceiling — see header § Staged mode.
-    maxDurationSec: 1800,
+    // Run-body wall-time ceiling — specs/02-runs.md § 1, enforced by the
+    // dispatcher. One documented 1800 s exec plus checkout, install and
+    // upload fits; aligned retries of that exec do not (issue #42).
+    maxDurationSec: 3600,
   },
 
   run: (input) =>

@@ -215,7 +215,8 @@ const commandKeys = (repo: string, checkLabel: string | undefined): readonly str
  *
  * `offload-test` already resolves `offload-test.timeoutSec:<repo>` for the same
  * reason; this is that key, one run over. A dispatch that passes `timeoutSec`
- * still wins, and the value stays clamped by the run's `maxDurationSec`.
+ * still wins. The run's `maxDurationSec` bounds the whole body, so a timeout
+ * above what remains of it ends as `RunDurationExceeded`, not `ExecTimeout`.
  */
 const timeoutKeys = (repo: string, checkLabel: string | undefined): readonly string[] =>
   checkLabel === undefined
@@ -276,8 +277,10 @@ export const check = defineRun({
   ],
 
   limits: {
-    // Wall-time ceiling — headroom for cold install + slow linters.
-    maxDurationSec: 1800,
+    // Run-body wall-time ceiling, enforced by the dispatcher: one full 1800 s
+    // exec (the per-stage ceiling a fan-out gate passes) plus checkout, upload
+    // and the step headroom, with every retry drawing on the same budget.
+    maxDurationSec: 3600,
     admissionMaxQueueAgeSec: (input) =>
       Math.min(90 * 60, Math.max(20 * 60, input.admissionMaxQueueAgeSec ?? 20 * 60)),
   },
