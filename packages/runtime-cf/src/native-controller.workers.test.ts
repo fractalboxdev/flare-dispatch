@@ -41,7 +41,8 @@ const archive = (members: { path: string; bytes: Buffer }[]) => {
 };
 const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
   clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; checkpoint?:boolean; undiscovered?:boolean;
-  foreignApp?:boolean; broadGrant?:boolean; delayArchive?:boolean; delayVerification?:boolean; policy?:NativeControllerPolicy; clock?: () => number } = {}) => {
+  foreignApp?:boolean; broadGrant?:boolean; delayArchive?:boolean; delayVerification?:boolean; policy?:NativeControllerPolicy; clock?: () => number;
+  db?:D1Database;appId?:string } = {}) => {
   let status = "in_progress", conclusion: string | null = null, posts = 0, downloads = 0, failPut = options.lostPublication;
   let authReads=0, grants=0;
   const run = () => ({ id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
@@ -97,7 +98,7 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
     }) as R2Bucket["put"] } as R2Bucket;
   type Outcome = Effect.Effect.Success<ReturnType<typeof native.advanceNativeController>> | native.NativeControllerCheckpoint;
   const instance: { advance: (raw: unknown) => Effect.Effect<Outcome, NativeReceiptRefused> } = options.authenticated ? { advance:(raw:unknown) =>
-    (options.checkpoint ? native.advanceNativeControllerCheckpoint : native.advanceNativeController)({db:env.RUNS_METADATA,bucket,now: options.clock, policy:options.policy, auth:{appId:"42",appJwt:"fixture-app-jwt",
+    (options.checkpoint ? native.advanceNativeControllerCheckpoint : native.advanceNativeController)({db:options.db ?? env.RUNS_METADATA,bucket,now: options.clock, policy:options.policy, auth:{appId:options.appId ?? "42",appJwt:"fixture-app-jwt",
         repo:options.clientRepo ?? request.repo,fetchImpl}},raw) } :
     makeNativeController({ db: env.RUNS_METADATA, bucket, controller, now: options.clock,
       client: { repo: options.clientRepo ?? request.repo, token: options.emptyToken ? "" : "fixture-installation-token", fetchImpl } });
@@ -107,6 +108,82 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
 };
 
 describe("native controller with actual D1 and R2", () => {
+  it.each(["", "042", " 42", "4e1", "9007199254740992"])("refuses malformed configured App ID %j before D1 or authentication",async appId=>{
+    let reads=0;
+    const db=new Proxy(env.RUNS_METADATA,{get(target,key){
+      if(key === "prepare") return (sql:string)=>{reads++;return target.prepare(sql);};
+      const value=Reflect.get(target,key);return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const f=open({authenticated:true,policy:{timeoutSec:60},db,appId});
+    await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
+    expect(reads).toBe(0);expect(f.authReads()).toBe(0);expect(f.grants()).toBe(0);expect(f.posts()).toBe(0);
+  });
+  it("refuses D1 errors rather than treating them as absent intent before authentication",async()=>{
+    const db=new Proxy(env.RUNS_METADATA,{get(target,key){
+      if(key === "prepare") return ()=>{throw new Error("fixture D1 unavailable");};
+      const value=Reflect.get(target,key);return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const f=open({authenticated:true,policy:{timeoutSec:60},db});
+    await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
+    expect(f.authReads()).toBe(0);expect(f.grants()).toBe(0);expect(f.posts()).toBe(0);
+  });
+  it("refuses an expired reserved row after a lost actual INSERT acknowledgement before authentication",async()=>{
+    const wrap=(statement:D1PreparedStatement,sql:string):D1PreparedStatement=>new Proxy(statement,{get(target,key){
+      if(key === "bind") return (...values:Parameters<D1PreparedStatement["bind"]>)=>wrap(target.bind(...values),sql);
+      if(key === "run" && sql.includes("INSERT OR IGNORE")) return async()=>{await target.run();throw new Error("fixture INSERT acknowledgement lost");};
+      const value=Reflect.get(target,key);return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const db=new Proxy(env.RUNS_METADATA,{get(target,key){
+      if(key === "prepare") return (sql:string)=>wrap(target.prepare(sql),sql);
+      const value=Reflect.get(target,key);return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const first=open({authenticated:true,policy:{timeoutSec:1},db});
+    await expect(Effect.runPromise(first.instance.advance(request))).rejects.toThrow();
+    expect(await env.RUNS_METADATA.prepare("SELECT state FROM native_dispatches WHERE repo=? AND nonce=?")
+      .bind(request.repo,request.nonce).first("state")).toBe("reserved");
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    const replay=open({authenticated:true,policy:{timeoutSec:1}});
+    await expect(Effect.runPromise(replay.instance.advance(request))).rejects.toThrow();
+    expect(replay.authReads()).toBe(0);expect(replay.grants()).toBe(0);expect(replay.posts()).toBe(0);
+  });
+  it("admits a genuinely absent intent to fresh authentication without manufacturing an owner",async()=>{
+    const f=open({authenticated:true,policy:{timeoutSec:60}});
+    expect(await env.RUNS_METADATA.prepare("SELECT state FROM native_dispatches WHERE repo=? AND nonce=?")
+      .bind(request.repo,request.nonce).first()).toBeNull();
+    expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({_tag:"Running"});
+    expect(f.authReads()).toBe(2);expect(f.grants()).toBe(1);expect(f.posts()).toBe(1);
+  });
+  it.each(["head","controller","corrupt"])("refuses persisted %s identity before authentication",async kind=>{
+    const stored=kind === "head" ? {...request,head:"4".repeat(40)} : request;
+    await env.RUNS_METADATA.prepare(`INSERT INTO native_dispatches
+      (repo,nonce,request_json,controller_app_id,controller_login,state,admitted_at,timeout_sec,deadline_at)
+      VALUES(?,?,?,?,?,'reserved',unixepoch('now'),60,unixepoch('now')+60)`)
+      .bind(request.repo,request.nonce,kind === "corrupt" ? "{}" : JSON.stringify(stored),kind === "controller" ? 43 : 42,controller.actorLogin).run();
+    const f=open({authenticated:true,policy:{timeoutSec:60}});
+    await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
+    expect(f.authReads()).toBe(0);expect(f.grants()).toBe(0);expect(f.posts()).toBe(0);
+  });
+  it("refuses an expired authenticated replay before reading App identity or minting a grant",async()=>{
+    const f=open({authenticated:true,policy:{timeoutSec:1}});
+    await Effect.runPromise(f.instance.advance(request));
+    expect(f.authReads()).toBe(2);expect(f.grants()).toBe(1);expect(f.posts()).toBe(1);
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
+    expect(f.authReads()).toBe(2);expect(f.grants()).toBe(1);expect(f.posts()).toBe(1);
+  });
+  it.each([undefined,{timeoutSec:120}])("refuses persisted policy omission or widening before fresh authentication: %j",async policy=>{
+    const first=open({authenticated:true,policy:{timeoutSec:60}});
+    await Effect.runPromise(first.instance.advance(request));
+    const replay=open({authenticated:true,policy});
+    await expect(Effect.runPromise(replay.instance.advance(request))).rejects.toThrow();
+    expect(replay.authReads()).toBe(0);expect(replay.grants()).toBe(0);expect(replay.posts()).toBe(0);
+  });
+  it("refuses adoption of a legacy intent before fresh authentication",async()=>{
+    await Effect.runPromise(open({authenticated:true}).instance.advance(request));
+    const replay=open({authenticated:true,policy:{timeoutSec:60}});
+    await expect(Effect.runPromise(replay.instance.advance(request))).rejects.toThrow();
+    expect(replay.authReads()).toBe(0);expect(replay.grants()).toBe(0);expect(replay.posts()).toBe(0);
+  });
   it("refuses the immutable result PUT after actual chunk verification crosses the deadline",async()=>{
     const f=open({authenticated:true,checkpoint:true,policy:{timeoutSec:1},delayVerification:true});f.finish();
     await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
