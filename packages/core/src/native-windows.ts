@@ -68,6 +68,18 @@ export const nativeCommandDigest = (request: NativeRequest) => Effect.tryPromise
   catch: () => new NativeReceiptRefused({ reason: "command digest unavailable" }),
 });
 
+/** Every native transport and receipt uses this complete request and canonical literal command. */
+export const admitNativeRequest = (raw: unknown) => Effect.gen(function* () {
+  const request = yield* Schema.decodeUnknown(NativeRequest, { onExcessProperty: "error" })(raw).pipe(
+    Effect.mapError(() => new NativeReceiptRefused({ reason: "invalid native request" })),
+  );
+  if ((request.mode === "gate") !== (request.profile === ""))
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "mode/profile mismatch" }));
+  if (request.command_sha256 !== (yield* nativeCommandDigest(request)))
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "command mismatch" }));
+  return request;
+});
+
 /** Reviewed same-repository execution is trusted; an API conclusion is still independent of its files. */
 export const bindNativeReceipt = (
   admitted: NativeRequest, rawReceipt: unknown, rawApi: unknown, verifiedArtifacts: unknown,
@@ -79,16 +91,14 @@ export const bindNativeReceipt = (
     Schema.decodeUnknown(schema, { onExcessProperty: "error" })(raw).pipe(
       Effect.mapError(() => new NativeReceiptRefused({ reason: "invalid native evidence" })),
     );
-  const request = yield* decode(NativeRequest, admitted);
+  const request = yield* admitNativeRequest(admitted);
   const receipt = yield* decode(NativeReceipt, rawReceipt);
   const api = yield* decode(NativeApiEvidence, rawApi);
   const artifacts = yield* decode(Schema.Array(Artifact), verifiedArtifacts);
   const command = nativeCommand(request);
-  const digest = yield* nativeCommandDigest(request);
   const x64 = request.target === "x86_64-pc-windows-msvc";
   const fail = (reason: string) => Effect.fail(new NativeReceiptRefused({ reason }));
-  if ((request.mode === "gate") !== (request.profile === "")) return yield* fail("mode/profile mismatch");
-  if (request.command_sha256 !== digest || JSON.stringify(receipt.command) !== JSON.stringify(command))
+  if (JSON.stringify(receipt.command) !== JSON.stringify(command))
     return yield* fail("command mismatch");
   for (const key of ["repo", "head", "base", "executor_ref", "nonce", "target", "command_sha256"] as const) {
     if (receipt[key] !== request[key]) return yield* fail(`receipt ${key} mismatch`);

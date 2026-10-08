@@ -3,6 +3,8 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { NativeReceiptRefused, type NativeRequest } from "@fractalboxdev/flare-dispatch-core";
 import { makeNativeDispatchD1 } from "./native-dispatch-d1";
+import { makeNativeGithubProvider } from "./native-github-provider";
+import { readNativeControllerIdentity } from "@fractalboxdev/flare-dispatch-github-app";
 
 const controller = { appId: 123, actorLogin: "native-controller[bot]" };
 const request: NativeRequest = {
@@ -148,5 +150,39 @@ describe("durable native dispatch in workerd", () => {
     expect((await runEffect(jobs.start(request))).state).toBe("accepted");
     expect((await runEffect(jobs.reconcile(request))).state).toBe("bound");
     expect(posts).toBe(1);
+  });
+
+  it("reconciles actual GitHub transport decoding and authenticated App identity through durable D1", async () => {
+    let posts = 0;
+    let reads = 0;
+    const fetchImpl: typeof fetch = async (url, init) => {
+      const headers = new Headers(init?.headers);
+      if (String(url) === "https://api.github.com/app") {
+        expect(headers.get("authorization")).toBe("Bearer fixture-app-jwt");
+        return Response.json({ id: 123, slug: "native-controller" });
+      }
+      expect(headers.get("authorization")).toBe("Bearer fixture-installation");
+      if (init?.method === "POST") {
+        posts++;
+        expect(JSON.parse(String(init.body))).toEqual({
+          ref: request.executor_ref, inputs: { request: JSON.stringify(request) },
+        });
+        throw new Error("fixture POST response lost after provider accepts request");
+      }
+      reads++;
+      return Response.json({ total_count: 1, workflow_runs: [{
+        id: 456, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
+        path: ".github/workflows/native-windows.yml", display_title: `native-${request.nonce}`,
+        repository: { full_name: request.repo }, actor: { login: "native-controller[bot]", type: "Bot" },
+      }] });
+    };
+    const authenticated = await readNativeControllerIdentity({ appId: "123", appJwt: "fixture-app-jwt", fetchImpl });
+    const jobs = makeNativeDispatchD1(env.RUNS_METADATA, authenticated,
+      makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl }));
+    expect((await runEffect(jobs.start(request))).state).toBe("dispatching");
+    await runEffect(jobs.start(request));
+    expect(await runEffect(jobs.reconcile(request))).toEqual({ state: "bound", runId: 456, runAttempt: 1 });
+    expect(posts).toBe(1);
+    expect(reads).toBe(1);
   });
 });

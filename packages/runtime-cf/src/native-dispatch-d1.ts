@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
 import {
   NativeApiEvidence, NativeControllerLogin, NativeReceiptRefused, NativeRequest,
-  nativeCommandDigest,
+  admitNativeRequest,
 } from "@fractalboxdev/flare-dispatch-core";
 
 const Controller = Schema.Struct({
@@ -40,10 +40,7 @@ const refuse = (reason: string) => Effect.fail(new NativeReceiptRefused({ reason
 export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured: Controller, provider: Provider) => {
   const identity = (raw: unknown) => Effect.gen(function* () {
     const controller = yield* decode(Controller, configured);
-    const request = yield* decode(NativeRequest, raw);
-    if ((request.mode === "gate") !== (request.profile === "")
-      || request.command_sha256 !== (yield* nativeCommandDigest(request)))
-      return yield* refuse("native dispatch command or mode mismatch");
+    const request = yield* admitNativeRequest(raw);
     return { request, controller, text: JSON.stringify(request) };
   });
   type Identity = Effect.Effect.Success<ReturnType<typeof identity>>;
