@@ -12,6 +12,48 @@ const DISCOVER_HEAD = `${DISCOVER} --base ${BASE_SHA}`;
 const input = { repo: "fractalboxdev/contextful", sha: SHA, baseSha: BASE_SHA } as const;
 
 describe("contextful-gate", () => {
+  it.effect("routes discovered native leaves outside the Linux command executor", () => {
+    const parts = "pins\nwindows.x86_64-msvc\nwindows.aarch64-msvc\n";
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DISCOVER_HEAD]: { stdout: parts, exitCode: 0 }, [DISCOVER]: { stdout: "pins\n", exitCode: 0 } },
+      childRuns: { pollFn: ids => ids.map(executionId => ({ executionId, status: "success" })) },
+    });
+    return Effect.gen(function* () {
+      expect(yield* contextfulGate.run(input)).toEqual({ stages: 3, failed: [] });
+      const native = handles.childRuns.spawned.filter(child => String((child.input as { checkLabel?: string }).checkLabel).startsWith("windows."));
+      expect(native).toHaveLength(2);
+      expect(native.every(child => child.run === "native-gate")).toBe(true);
+      expect(native.map(child => child.input)).toEqual([
+        expect.objectContaining({ repo: input.repo, sha: SHA, baseSha: BASE_SHA, target: "x86_64-pc-windows-msvc", checkLabel: "windows.x86_64-msvc" }),
+        expect.objectContaining({ repo: input.repo, sha: SHA, baseSha: BASE_SHA, target: "aarch64-pc-windows-msvc", checkLabel: "windows.aarch64-msvc" }),
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses native admission when any discovered Linux predecessor fails", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DISCOVER_HEAD]: { stdout: "pins\nwindows.x86_64-msvc\n", exitCode: 0 }, [DISCOVER]: { stdout: "pins\n", exitCode: 0 } },
+      childRuns: { pollFn: ids => ids.map(executionId => ({ executionId, status: "failure" })) },
+    });
+    return Effect.gen(function* () {
+      expect(Exit.isFailure(yield* Effect.exit(contextfulGate.run(input)))).toBe(true);
+      expect(handles.childRuns.spawned).toHaveLength(1);
+      expect(handles.childRuns.spawned[0]?.input).toEqual(expect.objectContaining({ checkLabel: "pins" }));
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses an unknown native leaf or absent Linux inventory before fanout", () => {
+    return Effect.gen(function* () {
+      for (const parts of ["pins\nwindows.unknown\n", "windows.x86_64-msvc\n"]) {
+        const { layer, handles } = makeCFRuntimeTest({ sandboxProgram: {
+          [DISCOVER_HEAD]: { stdout: parts, exitCode: 0 }, [DISCOVER]: { stdout: parts, exitCode: 0 },
+        } });
+        expect(Exit.isFailure(yield* Effect.exit(contextfulGate.run(input).pipe(Effect.provide(layer))))).toBe(true);
+        expect(handles.childRuns.spawned).toHaveLength(0);
+      }
+    });
+  });
+
   it.effect("joins a successful child beyond the native ten-minute checkpoint ceiling", () => {
     let now = 0;
     const sleeps: number[] = [];

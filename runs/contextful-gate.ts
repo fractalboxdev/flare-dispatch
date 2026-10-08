@@ -12,6 +12,10 @@ import {
   waitForChildrenDurably,
   workspace,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
+import { nativeGate, NATIVE_GATE_JOIN_MILLISECONDS } from "./native-gate";
+
+const nativeTarget = (stage: string) => stage === "windows.x86_64-msvc" ? "x86_64-pc-windows-msvc" as const
+  : stage === "windows.aarch64-msvc" ? "aarch64-pc-windows-msvc" as const : undefined;
 
 const REPO = "fractalboxdev/contextful";
 const DISCOVER = "cargo run --locked -q -p contextful-ci -- stages --parts";
@@ -166,9 +170,16 @@ export const contextfulGate = defineRun({
         );
       }
 
+      if (stages.some(stage => stage.startsWith("windows.") && nativeTarget(stage) === undefined))
+        return yield* Effect.fail(new AcceptanceFailed({ exitCode: 1, summaryMd: "The declared native gate part has no configured executor." }));
+
       const failed: string[] = [];
-      for (let offset = 0; offset < stages.length; offset += STAGE_CONCURRENCY) {
-        const batch = stages.slice(offset, offset + STAGE_CONCURRENCY);
+      const linux = stages.filter(stage => nativeTarget(stage) === undefined);
+      const native = stages.filter(stage => nativeTarget(stage) !== undefined);
+      if (native.length > 0 && linux.length === 0)
+        return yield* Effect.fail(new AcceptanceFailed({ exitCode: 1, summaryMd: "The native gate has no declared Linux predecessor inventory." }));
+      for (let offset = 0; offset < linux.length; offset += STAGE_CONCURRENCY) {
+        const batch = linux.slice(offset, offset + STAGE_CONCURRENCY);
         const handles = yield* step(`spawn-stages-${offset}`, () =>
           fanOut({
             run: "check",
@@ -207,6 +218,20 @@ export const contextfulGate = defineRun({
           }),
         );
       }
+      for (let offset = 0; offset < native.length; offset += STAGE_CONCURRENCY) {
+        const batch = native.slice(offset, offset + STAGE_CONCURRENCY);
+        const handles = yield* step(`spawn-native-stages-${offset}`, () => fanOut({
+          run: nativeGate.name, items: batch, concurrency: STAGE_CONCURRENCY,
+          toInput: stage => ({ repo: input.repo, sha: input.sha, baseSha: input.baseSha,
+            target: nativeTarget(stage)!, checkLabel: stage }),
+        }));
+        if (linux.length === 0 && offset === 0) yield* step("handoff-admission", () => handoffChildAdmission());
+        const results = yield* waitForChildrenDurably({ name: `await-native-stages-${offset}`,
+          ids: handles.map(handle => handle.executionId), timeout: NATIVE_GATE_JOIN_MILLISECONDS });
+        results.forEach((result, index) => { if (result.status !== "success") failed.push(batch[index]!); });
+      }
+      if (failed.length > 0) return yield* Effect.fail(new AcceptanceFailed({ exitCode: 1,
+        summaryMd: `Gate stages failed: ${failed.join(", ")}` }));
       return { stages: stages.length, failed };
     }),
 });

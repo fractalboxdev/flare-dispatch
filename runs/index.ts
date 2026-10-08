@@ -31,6 +31,7 @@ export { contextfulRelease, contextfulReleaseCell, contextfulReleaseFormula } fr
 export { oxlint } from "./oxlint";
 export { check } from "./check";
 export { contextfulGate } from "./contextful-gate";
+export { nativeGate } from "./native-gate";
 export { emailOtpLogin } from "./email-otp-login";
 export { finopsAudit } from "./finops-audit";
 export { contextfulMeasures } from "./contextful-measures";

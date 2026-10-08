@@ -4,9 +4,9 @@
 
 ## Decision
 
-The release-only `NativeExecution` adapter binds `base` to `head`. Release commands build one immutable revision and perform no differential gate comparison. Gate requests retain their independently supplied comparison base; a release handle grants no gate scope.
+The release-only `NativeExecution` port binds `base` to `head`. Release commands build one immutable revision and perform no differential gate comparison. Gate requests retain their independently supplied comparison base; a release handle grants no gate scope.
 
-The configured runtime supplies repository, source revision, execution identity and native executor policy. The adapter binds mode, target, profile, literal command digest, executor revision and a deterministic nonce. Only the registered release-cell runtime receives this capability. Absent native policy or App configuration refuses admission. NativeWorkflow remains the sole dispatch and reconciliation owner.
+The configured runtime supplies repository, source revision, execution identity and native executor policy. The adapter binds mode, target, profile, literal command digest, executor revision and a deterministic nonce. Only the registered release-cell runtime receives the release port. Absent native policy or App configuration refuses admission. NativeWorkflow remains the sole dispatch and reconciliation owner.
 
 A completed native Workflow projection grants no file authority. The reader requires controller-verified immutable evidence, authentic API job success and exact request identity. Its artifact importer checks the complete byte count and SHA-256 before committing a usable single or multipart object. Interrupted, truncated or mismatched streams cannot publish a new usable artifact.
 
