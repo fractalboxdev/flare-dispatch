@@ -47,9 +47,10 @@ The constraints that decide it are ours, not Cloudflare's.
 
 Three repo facts the decision has to account for:
 
-- **`limits.maxDurationSec` bounds the run body, not a step.** The dispatcher measures it
-  from a checkpointed start (`packages/core/src/run-ceiling.ts`) and fails the run
-  `RunDurationExceeded` when it elapses. Below it, `waitForExit` is a bare wait with no
+- **`limits.maxDurationSec` bounds the run body, not a step.** `RunWorkflow` checkpoints
+  the body's start in a `run-ceiling-start` step (`apps/dispatcher/src/workflow.ts`), and
+  `withRunCeiling` (`packages/core/src/run-ceiling.ts`) fails the run
+  `RunDurationExceeded` when the ceiling elapses from it. Below it, `waitForExit` is a bare wait with no
   timeout (`packages/runtime-cf/src/sandbox-cf.ts:518-547`) and step wall-clock is
   unlimited, so a wedged step holds its sandbox until the run ceiling fires.
 - **The instance id is the idempotency key.** A duplicate `create({ id })` raising
