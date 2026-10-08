@@ -62,6 +62,7 @@ export const makeNativeController = ({ db, bucket, controller, client, policy, n
       return { _tag: "Published" as const, result, ...durableClock };
     }
     const run = { runId: state.runId, runAttempt: state.runAttempt };
+    yield* dispatch.observe(request);
     const observed = yield* provider.observeRun(request, run, controller.actorLogin);
     return yield* Match.value(observed).pipe(
       Match.tag("Pending", (pending) => Effect.succeed({ ...pending, _tag: "Running" as const, ...durableClock })),
@@ -74,6 +75,7 @@ export const makeNativeController = ({ db, bucket, controller, client, policy, n
           makeNativeArchiveDownload(bucket).stage(response),
           (archive) => Effect.gen(function* () {
             const captured = yield* makeNativeArchiveR2(bucket).verify({ request, api: evidence.api, controllerLogin: controller.actorLogin }, archive.key);
+            yield* dispatch.observe(request);
             return yield* results.publish({ request, api: evidence.api, ...captured, verifiedAt: clock() }, clock());
           }),
           (archive) => Effect.tryPromise({ try: () => bucket.delete(archive.key), catch: () => refused("native temporary archive disposal unavailable") }).pipe(Effect.orDie),

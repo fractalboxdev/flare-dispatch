@@ -130,6 +130,8 @@ export const makeNativeDispatchD1 = (
     ).bind(id.request.repo, id.request.nonce, id.text, id.controller.appId, id.controller.actorLogin,
       id.policy?.timeoutSec ?? null, id.policy?.timeoutSec ?? null).run());
     if (claim.meta.changes !== 1) return yield* read(id);
+    // A successful claim response can be delayed; immutable admission still precedes the actual POST.
+    yield* read(id);
     return yield* provider.dispatch(id.request).pipe(Effect.matchEffect({
       onFailure: () => read(id),
       onSuccess: () => Effect.gen(function* () {
