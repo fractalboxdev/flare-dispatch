@@ -302,9 +302,16 @@ export type TicketRejected = {
 };
 
 /** Infrastructure failure surfaced as a typed fact, never a naked throw. */
+export type RevokeFailure = {
+  operation: "remove-admission" | "remove-handler" | "deny-catch-all";
+  errorClass: "Error" | "TypeError" | "RangeError" | "DOMException" | "unknown";
+  /** Validated HTTP status only; provider text and host identity stay internal. */
+  status?: number;
+};
 export type SandboxUnavailable = {
   kind: "sandbox-unavailable";
   reason: string;
+  revokeFailures?: readonly RevokeFailure[];
 };
 
 export type SubstrateRefusal =
