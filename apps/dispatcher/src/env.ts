@@ -213,6 +213,14 @@ export interface Env {
   readonly GITHUB_WEBHOOK_SECRET?: string;
 
   /**
+   * Comma-separated GitHub webhook event allowlist. Absent allows every event;
+   * empty allows none. Action-mode deployments can accept only
+   * `check_run,check_suite` for manual reruns while the App retains its broader
+   * subscriptions. Excluded signed deliveries receive 202 without side effects.
+   */
+  readonly GITHUB_WEBHOOK_EVENTS?: string;
+
+  /**
    * Admin bearer token — Worker secret. Gates `POST /v1/admin/events/:wf_id`
    * (the `step.waitForEvent` signalling surface, specs/03-dsl.md
    * § Human-in-the-loop). Production deploys put Cloudflare Access in front

@@ -135,6 +135,15 @@ export const handleGithubWebhook = async (request: Request, env: Env): Promise<R
     return json({ error: "missing_event", message: "X-GitHub-Event is required" }, 400);
   }
 
+  // The deploy's allowlist applies before dedup, signals, reruns, and triggers.
+  // App subscriptions can stay broad while Action mode owns PR-triggered work.
+  if (
+    env.GITHUB_WEBHOOK_EVENTS !== undefined &&
+    !env.GITHUB_WEBHOOK_EVENTS.split(",").some((allowed) => allowed.trim() === event)
+  ) {
+    return json({ event, deliveryId, ignored: true, reason: "event_not_allowed" }, 202);
+  }
+
   // 5. Receiver-level dedup short-circuit on X-GitHub-Delivery.
   const deliveryKey = `gh-delivery:${deliveryId}`;
   if (env.IDEMPOTENCY_KV !== undefined) {
