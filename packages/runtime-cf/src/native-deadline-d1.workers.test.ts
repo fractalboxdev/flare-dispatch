@@ -71,4 +71,13 @@ describe("native immutable admission deadline in actual D1", () => {
     await expect(Effect.runPromise(makeNativeDispatchD1(env.RUNS_METADATA, controller, backend, policy).start(request))).rejects.toThrow();
     expect(posts).toBe(1);
   });
+  it("refuses to POST when a successful claim acknowledgement arrives after the immutable deadline", async () => {
+    let posts = 0;
+    const db = wrapWrite("SET state='dispatching'", async (statement) => {
+      const result = await statement.run(); await new Promise((resolve) => setTimeout(resolve, 1100)); return result;
+    });
+    await expect(Effect.runPromise(makeNativeDispatchD1(db, controller, provider(() => Effect.sync(() => { posts++; })),
+      { timeoutSec: 1 }).start(request))).rejects.toThrow();
+    expect(posts).toBe(0); expect((await row())?.state).toBe("dispatching");
+  });
 });

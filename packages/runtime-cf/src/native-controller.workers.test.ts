@@ -41,7 +41,7 @@ const archive = (members: { path: string; bytes: Buffer }[]) => {
 };
 const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
   clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; checkpoint?:boolean; undiscovered?:boolean;
-  foreignApp?:boolean; broadGrant?:boolean; policy?:NativeControllerPolicy; clock?: () => number } = {}) => {
+  foreignApp?:boolean; broadGrant?:boolean; delayArchive?:boolean; policy?:NativeControllerPolicy; clock?: () => number } = {}) => {
   let status = "in_progress", conclusion: string | null = null, posts = 0, downloads = 0, failPut = options.lostPublication;
   let authReads=0, grants=0;
   const run = () => ({ id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
@@ -78,6 +78,7 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
     if (target.pathname.endsWith("/789/zip")) return new Response(null, { status: 302, headers: { location: "https://archive.example/bytes" } });
     if (target.hostname === "archive.example") {
       expect(new Headers(init?.headers).has("authorization")).toBe(false); downloads++;
+      if(options.delayArchive) await new Promise((resolve)=>setTimeout(resolve,1100));
       return new Response(archive([{ path: "command.log", bytes: options.corrupt ? Buffer.from("altered bytes") : log },
         { path: "receipt.json", bytes: Buffer.from(JSON.stringify(receipt(options.foreignReceipt ? "native-ffffffffffffffff" : undefined))) }]));
     }
@@ -102,6 +103,14 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
 };
 
 describe("native controller with actual D1 and R2", () => {
+  it("refuses publication after archive capture crosses the durable deadline and removes its temporary archive", async () => {
+    const f = open({ authenticated:true,checkpoint:true,policy:{timeoutSec:1},delayArchive:true });
+    f.finish();
+    await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
+    expect(f.posts()).toBe(1); expect(f.downloads()).toBe(1);
+    expect(await env.RUNS_STORAGE.head(nativeResultKey(readerBinding()))).toBeNull();
+    expect((await env.RUNS_STORAGE.list({prefix:"native-archive-pending/"})).objects).toEqual([]);
+  });
   it("carries the immutable durable deadline through authenticated running and publication checkpoints", async () => {
     const f = open({ authenticated:true, checkpoint:true, policy:{timeoutSec:60} });
     const first = await Effect.runPromise(f.instance.advance(request));
