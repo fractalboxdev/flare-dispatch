@@ -3,7 +3,7 @@ import {
   admitNativeApiEvidence, admitNativeRequest, NativeApiEvidence, NativeControllerLogin, NativeReceiptRefused,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
-  dispatchNativeWindows, readNativeWindowsRuns, readNativeWindowsJobs, readNativeWindowsArtifacts,
+  dispatchNativeWindows, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs, readNativeWindowsArtifacts,
 } from "@fractalboxdev/flare-dispatch-github-app";
 import { NATIVE_ARCHIVE_MAX_BYTES } from "./native-archive-r2";
 
@@ -71,12 +71,10 @@ export const makeNativeGithubProvider = (client: Client) => {
     );
     if (!Schema.is(NativeControllerLogin)(controllerLogin))
       return yield* Effect.fail(refuse("native controller identity invalid"));
-    const rawRuns = yield* Effect.tryPromise({ try: () => readNativeWindowsRuns(client),
+    const rawRun = yield* Effect.tryPromise({
+      try: () => readNativeWindowsRun({ ...client, runId: binding.runId, attempt: binding.runAttempt }),
       catch: () => refuse("complete native GitHub run evidence unavailable") });
-    const runs = yield* Effect.forEach(rawRuns, (entry) => decode(CompletedRun, entry));
-    const matches = runs.filter((run) => run.display_title === `native-${request.nonce}`);
-    if (matches.length !== 1) return yield* Effect.fail(refuse("native run identity absent or ambiguous"));
-    const run = matches[0]!;
+    const run = yield* decode(CompletedRun, rawRun);
     if (run.id !== binding.runId || run.run_attempt !== binding.runAttempt)
       return yield* Effect.fail(refuse("native run differs from durable binding"));
     const rawJobs = yield* Effect.tryPromise({

@@ -28,6 +28,7 @@ describe("authenticated native GitHub provider", () => {
       const path = String(url);
       if (path.includes("/attempts/1/jobs")) return Response.json({ total_count: jobs.length, jobs });
       if (path.includes("/runs/456/artifacts")) return Response.json({ total_count: artifacts.length, artifacts });
+      if (path.endsWith("/runs/456/attempts/1")) return Response.json(runs.length === 1 ? runs[0] : null);
       return Response.json({ total_count: runs.length, workflow_runs: runs });
     });
     return { provider: makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl }), fetchImpl };
@@ -92,6 +93,7 @@ describe("authenticated native GitHub provider", () => {
       const fetchImpl = vi.fn(async (url: string | URL | Request) => {
         const path = String(url);
         if (path.includes("/attempts/1/jobs")) return Response.json({ total_count: 1, jobs: [completedJob()] });
+        if (path.endsWith("/runs/456/attempts/1")) return Response.json(completedRun());
         if (path.includes("/runs/456/artifacts")) {
           if (new URL(path).searchParams.get("page") === "2") return Response.json({ total_count: 2, artifacts: [artifact()] });
           const next = broken === "foreign" ? "https://other.example/artifacts?page=2"

@@ -116,6 +116,6 @@ export {
 export { GithubApiError } from "./errors";
 export { readNativeControllerIdentity } from "./native-controller";
 export {
-  dispatchNativeWindows, readNativeWindowsRuns, readNativeWindowsJobs,
+  dispatchNativeWindows, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs,
   readNativeWindowsArtifacts, streamNativeWindowsArchive,
 } from "./native-windows";

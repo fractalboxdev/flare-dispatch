@@ -1,5 +1,6 @@
 import { GithubApiError } from "./errors";
-import { assertOk, ghHeaders, resolveClient } from "./http";
+import { ghHeaders, resolveClient } from "./http";
+import { readNativeJson } from "./native-json";
 
 type NativeClient = {
   readonly repo: string; readonly token: string;
@@ -27,7 +28,7 @@ export const dispatchNativeWindows = async (opts: NativeClient & {
     method: "POST", redirect: "error", headers: ghHeaders(opts.token, { json: true }),
     body: JSON.stringify({ ref: opts.executorRef, inputs: { request: JSON.stringify(opts.request) } }),
   });
-  await assertOk(response, "native executor dispatch failed");
+  void response.body?.cancel().catch(() => {});
   if (response.status !== 204) throw new GithubApiError("native executor dispatch has an unexpected response", response.status, "");
 };
 
@@ -38,11 +39,7 @@ const readPages = async (opts: NativeClient, suffix: string, key: string): Promi
   for (let page = 1; page <= 4; page++) {
     const url = new URL(first);
     if (page > 1) url.searchParams.set("page", String(page));
-    const response = await resolveClient(opts).doFetch(url.toString(), {
-      method: "GET", redirect: "error", headers: ghHeaders(opts.token),
-    });
-    await assertOk(response, "native executor evidence read failed");
-    const body: unknown = await response.json();
+    const { body, headers } = await readNativeJson(opts, url.toString(), 1024 * 1024);
     if (typeof body !== "object" || body === null || !(key in body))
       throw new GithubApiError("native executor evidence page is malformed", 0, "");
     const object = body as Record<string, unknown>;
@@ -54,7 +51,7 @@ const readPages = async (opts: NativeClient, suffix: string, key: string): Promi
     if (total !== undefined && (typeof total !== "number" || !Number.isSafeInteger(total) || total < records.length))
       throw new GithubApiError("native executor evidence count is inconsistent", 0, "");
 
-    const header = response.headers.get("link");
+    const header = headers.get("link");
     const next: string[] = [];
     if (header !== null) {
       if (header.length > 8192) throw new GithubApiError("native evidence pagination is malformed", 0, "");
@@ -91,6 +88,12 @@ const readPages = async (opts: NativeClient, suffix: string, key: string): Promi
 export const readNativeWindowsRuns = async (opts: NativeClient): Promise<readonly unknown[]> =>
   readPages(opts, "workflows/native-windows.yml/runs?event=workflow_dispatch&per_page=25", "workflow_runs");
 
+/** A durable binding selects one immutable run attempt without scanning workflow history. */
+export const readNativeWindowsRun = async (opts: NativeClient & {
+  readonly runId: number; readonly attempt: number;
+}): Promise<unknown> => (await readNativeJson(opts,
+  endpoint(opts, `runs/${positiveId(opts.runId)}/attempts/${positiveId(opts.attempt)}`), 1024 * 1024)).body;
+
 export const readNativeWindowsJobs = async (opts: NativeClient & {
   readonly runId: number; readonly attempt: number;
 }): Promise<readonly unknown[]> =>
@@ -117,8 +120,9 @@ export const streamNativeWindowsArchive = async (opts: NativeClient & {
   if (target.protocol !== "https:" || target.username || target.password)
     throw new GithubApiError("native archive redirect is unsafe", 0, "");
   const archive = await doFetch(target, { method: "GET", redirect: "error" });
-  await assertOk(archive, "native archive download failed");
-  if (archive.status !== 200 || !archive.body)
+  if (archive.status !== 200 || !archive.body) {
+    void archive.body?.cancel().catch(() => {});
     throw new GithubApiError("native archive body is absent", archive.status, "");
+  }
   return archive;
 };
