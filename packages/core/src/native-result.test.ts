@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { expect } from "vitest";
-import { bindNativeResult, type NativeReadBinding } from "./native-result";
+import { bindNativeResult, NATIVE_FILE_CHUNK_BYTES, NATIVE_FILES_MAX_BYTES, NATIVE_RESULT_MAX_BYTES, type NativeReadBinding } from "./native-result";
 import { nativeCommand, type NativeRequest } from "./native-windows";
 
 const now = 1_791_417_602;
@@ -34,10 +34,24 @@ const result = () => ({
     actorLogin: "native-controller[bot]", actorType: "Bot", labels: ["windows-11-arm"],
   },
 });
+const withFiles = () => ({ ...result(), files: [{ path: "command.log", sha256: "5".repeat(64), bytes: 20,
+  chunks: [{ sha256: "5".repeat(64), bytes: 20 }] }] });
 
 it.effect("accepts only the controller-owned result matching the reader binding", () => Effect.gen(function* () {
-  const accepted = yield* bindNativeResult(reader, result(), "native-controller[bot]", now);
+  const accepted = yield* bindNativeResult(reader, withFiles(), "native-controller[bot]", now);
   expect(accepted.receipt.exit_code).toBe(0);
+}));
+
+it.effect("binds complete bounded file manifests and refuses missing, aliased or malformed chunk inventories", () => Effect.gen(function* () {
+  const good = withFiles();
+  const file = good.files[0]!;
+  const variants = [{ ...good, files: [] }, { ...good, files: [file, file] },
+    { ...good, files: [{ ...file, path: "other.log" }] },
+    { ...good, files: [{ ...file, chunks: [] }] },
+    { ...good, files: [{ ...file, chunks: [{ sha256: file.sha256, bytes: 19 }] }] },
+    { ...good, files: [{ ...file, chunks: [{ sha256: file.sha256, bytes: 10 }, { sha256: file.sha256, bytes: 10 }] }] },
+    { ...good, files: [{ ...file, chunks: [{ sha256: "BAD", bytes: 20 }] }] }];
+  for (const raw of variants) expect(yield* bindNativeResult(reader, raw, "native-controller[bot]", now).pipe(Effect.either)).toHaveProperty("left");
 }));
 
 it.effect("refuses a receipt-only result without verified file locations", () => Effect.gen(function* () {
@@ -45,13 +59,29 @@ it.effect("refuses a receipt-only result without verified file locations", () =>
 }));
 
 it.effect("refuses missing, expired, future, malformed and non-API-bound results", () => Effect.gen(function* () {
-  const variants = [null, { ...result(), verified_at: now + 1 }, { ...result(), verified_at: Infinity },
-    { ...result(), verified_at: 0 }, { ...result(), request: { ...request, mode: "release" } },
-    { ...result(), api: { ...result().api, jobConclusion: "failure" } },
-    { ...result(), receipt: { ...result().receipt, exit_code: 1 } },
-    { ...result(), request: { ...request, nonce: "native-other-0123456789" } }];
+  const good = withFiles();
+  const variants = [null, { ...good, verified_at: now + 1 }, { ...good, verified_at: Infinity },
+    { ...good, verified_at: 0 }, { ...good, request: { ...request, mode: "release" } },
+    { ...good, api: { ...good.api, jobConclusion: "failure" } },
+    { ...good, receipt: { ...good.receipt, exit_code: 1 } },
+    { ...good, request: { ...request, nonce: "native-other-0123456789" } }];
   for (const raw of variants) {
     expect(yield* bindNativeResult(reader, raw, "native-controller[bot]", now).pipe(Effect.either)).toHaveProperty("left");
   }
-  expect(yield* bindNativeResult(reader, result(), "native-controller[bot]", reader.expires_at).pipe(Effect.either)).toHaveProperty("left");
+  expect(yield* bindNativeResult(reader, good, "native-controller[bot]", reader.expires_at).pipe(Effect.either)).toHaveProperty("left");
+}));
+
+it.effect("represents the maximum admitted byte inventory within the bounded compact result record", () => Effect.gen(function* () {
+  const good = withFiles();
+  const bytes = NATIVE_FILES_MAX_BYTES - good.files[0]!.bytes;
+  const chunks = Array.from({ length: Math.ceil(bytes / NATIVE_FILE_CHUNK_BYTES) }, (_, index) => ({
+    sha256: "6".repeat(64), bytes: Math.min(NATIVE_FILE_CHUNK_BYTES, bytes - index * NATIVE_FILE_CHUNK_BYTES),
+  }));
+  const binary = { path: "dist/tool.exe", sha256: "7".repeat(64), bytes, chunks };
+  const large = { ...good, files: [...good.files, binary], receipt: { ...good.receipt,
+    artifacts: [...good.receipt.artifacts, { path: binary.path, sha256: binary.sha256, bytes }] } };
+  const accepted = yield* bindNativeResult(reader, large, "native-controller[bot]", now);
+  expect(new TextEncoder().encode(JSON.stringify(accepted)).byteLength).toBeLessThan(NATIVE_RESULT_MAX_BYTES);
+  const overflow = { ...binary, bytes: bytes + 1, chunks: [...chunks.slice(0, -1), { ...chunks.at(-1)!, bytes: chunks.at(-1)!.bytes + 1 }] };
+  expect(yield* bindNativeResult(reader, { ...large, files: [good.files[0]!, overflow] }, "native-controller[bot]", now).pipe(Effect.either)).toHaveProperty("left");
 }));

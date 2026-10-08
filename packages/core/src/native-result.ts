@@ -11,6 +11,39 @@ export const NativeReadBinding = Schema.Struct({
 });
 export type NativeReadBinding = typeof NativeReadBinding.Type;
 
+export const NATIVE_FILE_CHUNK_BYTES = 8 * 1024 * 1024;
+export const NATIVE_FILES_MAX_COUNT = 128;
+export const NATIVE_FILES_MAX_BYTES = 8 * 1024 * 1024 * 1024;
+export const NATIVE_RESULT_MAX_BYTES = 1024 * 1024;
+
+export const NativeFileChunk = Schema.Struct({
+  sha256: NativeReceipt.fields.artifacts.value.fields.sha256,
+  bytes: Schema.Number.pipe(Schema.filter((value) => Number.isSafeInteger(value) && value > 0 && value <= NATIVE_FILE_CHUNK_BYTES)),
+});
+export const NativeResultFile = Schema.Struct({
+  ...NativeReceipt.fields.artifacts.value.fields,
+  chunks: Schema.Array(NativeFileChunk),
+});
+export type NativeResultFile = typeof NativeResultFile.Type;
+export const NativeCapturedFile = Schema.Struct({
+  ...NativeReceipt.fields.artifacts.value.fields,
+  chunks: Schema.Array(Schema.Struct({ ...NativeFileChunk.fields, key: Schema.String })),
+});
+export type NativeCapturedFile = typeof NativeCapturedFile.Type;
+
+/** Chunk addresses derive from the complete admitted request and the chunk digest. */
+export const nativeFileChunkKey = (identity: NativeRequest | NativeReadBinding, digest: string): string =>
+  `native-file-chunks/v1/${identity.repo}/${identity.head}/${identity.base}/${identity.nonce}/${identity.target}/${identity.command_sha256}/${identity.executor_ref}/${digest}`;
+
+export const admitNativeReadBinding = (raw: unknown, now: number) => Effect.gen(function* () {
+  const binding = yield* Schema.decodeUnknown(NativeReadBinding, { onExcessProperty: "error" })(raw).pipe(
+    Effect.mapError(() => new NativeReceiptRefused({ reason: "invalid native reader identity" })),
+  );
+  if (!Number.isSafeInteger(now) || now <= 0 || now >= binding.expires_at)
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native result reader deadline mismatch" }));
+  return binding;
+});
+
 export const nativeReadMessage = (binding: NativeReadBinding): string => JSON.stringify([
   binding.version, binding.repo, binding.head, binding.base, binding.nonce, binding.target,
   binding.command_sha256, binding.executor_ref, binding.expires_at,
@@ -29,6 +62,7 @@ export const NativeVerifiedResult = Schema.Struct({
   request: NativeRequest,
   receipt: NativeReceipt,
   api: NativeApiEvidence,
+  files: Schema.Array(NativeResultFile),
   verified_at: Schema.Number.pipe(Schema.filter((value) => Number.isSafeInteger(value) && value > 0)),
 });
 export type NativeVerifiedResult = typeof NativeVerifiedResult.Type;
@@ -41,7 +75,7 @@ export const bindNativeResult = (
     Schema.decodeUnknown(schema, { onExcessProperty: "error" })(raw).pipe(
       Effect.mapError(() => new NativeReceiptRefused({ reason: "invalid verified native result" })),
     );
-  const binding = yield* decode(NativeReadBinding, rawBinding);
+  const binding = yield* admitNativeReadBinding(rawBinding, now);
   const result = yield* decode(NativeVerifiedResult, rawResult);
   const refuse = (reason: string) => Effect.fail(new NativeReceiptRefused({ reason }));
   if (!Number.isSafeInteger(now) || now <= 0 || now >= binding.expires_at
@@ -51,6 +85,15 @@ export const bindNativeResult = (
   for (const key of ["repo", "head", "base", "nonce", "target", "command_sha256", "executor_ref"] as const) {
     if (binding[key] !== result.request[key]) return yield* refuse(`native reader ${key} mismatch`);
   }
-  yield* bindNativeReceipt(result.request, result.receipt, result.api, result.receipt.artifacts, trustedControllerLogin);
+  if (result.files.length > NATIVE_FILES_MAX_COUNT
+    || result.files.reduce((sum, file) => sum + file.bytes, 0) > NATIVE_FILES_MAX_BYTES)
+    return yield* refuse("native result exceeds file or byte bound");
+  for (const file of result.files) {
+    if (file.chunks.reduce((sum, chunk) => sum + chunk.bytes, 0) !== file.bytes
+      || file.chunks.some((chunk, index) => index < file.chunks.length - 1 && chunk.bytes !== NATIVE_FILE_CHUNK_BYTES))
+      return yield* refuse("native file chunk inventory mismatch");
+  }
+  yield* bindNativeReceipt(result.request, result.receipt, result.api,
+    result.files.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })), trustedControllerLogin);
   return result;
 });
