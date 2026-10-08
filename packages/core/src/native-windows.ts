@@ -67,6 +67,20 @@ export class NativeReceiptRefused extends Schema.TaggedError<NativeReceiptRefuse
 export const NATIVE_DISCOVERY_CLOCK_ALLOWANCE_SECONDS = 300;
 export const NativeAdmissionTime = Schema.Number.pipe(Schema.filter((time) => Number.isSafeInteger(time)
   && time >= NATIVE_DISCOVERY_CLOCK_ALLOWANCE_SECONDS && Number.isFinite(new Date(time * 1000).getTime())));
+/** The deploying operator chooses a positive controller duration; no implicit timeout grants admission. */
+export const NativeControllerPolicy = Schema.Struct({
+  timeoutSec: Schema.Number.pipe(Schema.filter((seconds) => Number.isSafeInteger(seconds) && seconds > 0)),
+});
+export type NativeControllerPolicy = typeof NativeControllerPolicy.Type;
+
+/** The admission and immutable policy determine one absolute deadline, never a resumed poll. */
+export const nativeControllerDeadline = (rawPolicy: unknown, rawAdmission: unknown) => Effect.gen(function* () {
+  const fail = () => new NativeReceiptRefused({ reason: "native controller deadline policy invalid" });
+  const policy = yield* Schema.decodeUnknown(NativeControllerPolicy, { onExcessProperty: "error" })(rawPolicy).pipe(Effect.mapError(fail));
+  const admittedAt = yield* Schema.decodeUnknown(NativeAdmissionTime)(rawAdmission).pipe(Effect.mapError(fail));
+  const deadlineAt = yield* Schema.decodeUnknown(NativeAdmissionTime)(admittedAt + policy.timeoutSec).pipe(Effect.mapError(fail));
+  return { ...policy, admittedAt, deadlineAt };
+});
 export const NativeRunCreatedAt = Schema.String.pipe(Schema.filter((time) =>
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(time)
   && Number.isFinite(Date.parse(time))

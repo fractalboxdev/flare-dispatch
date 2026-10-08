@@ -4,6 +4,7 @@ import {
   admitNativeRequest,
   NativeAdmissionTime, NativeRunCreatedAt, nativeDiscoveryWindow,
   admitNativeReadBinding, bindNativeReadRequest,
+  NativeControllerPolicy, nativeControllerDeadline,
 } from "@fractalboxdev/flare-dispatch-core";
 
 const Controller = Schema.Struct({
@@ -45,11 +46,13 @@ const refuse = (reason: string) => Effect.fail(new NativeReceiptRefused({ reason
 const readDispatchRecord = (db: Pick<D1Database, "prepare">, repo: string, nonce: string) => Effect.gen(function* () {
   const row = yield* query(() => db.prepare(
     `SELECT request_json, controller_app_id, controller_login, state,
-            run_id AS runId, run_attempt AS runAttempt, admitted_at AS admittedAt
+            run_id AS runId, run_attempt AS runAttempt, admitted_at AS admittedAt,
+            timeout_sec AS timeoutSec, deadline_at AS deadlineAt, unixepoch('now') AS observedAt
        FROM native_dispatches WHERE repo=? AND nonce=?`,
   ).bind(repo, nonce).first<{
     request_json:string; controller_app_id:number; controller_login:string;
     state:string; runId:number | null; runAttempt:number | null; admittedAt:number | null;
+    timeoutSec:number | null; deadlineAt:number | null; observedAt:number;
   }>());
   if (row === null) return yield* refuse("native dispatch intent absent");
   const controller = yield* decode(Controller, { appId:row.controller_app_id, actorLogin:row.controller_login });
@@ -59,7 +62,12 @@ const readDispatchRecord = (db: Pick<D1Database, "prepare">, repo: string, nonce
     return yield* refuse("native dispatch stored run identity invalid");
   const request = yield* admitNativeRequest(yield* decode(Schema.parseJson(NativeRequest), row.request_json));
   if (request.repo !== repo || request.nonce !== nonce) return yield* refuse("native dispatch stored request identity conflicts");
-  return { request, controller, snapshot, text:row.request_json };
+  const policy = row.timeoutSec === null && row.deadlineAt === null ? undefined
+    : yield* nativeControllerDeadline({ timeoutSec:row.timeoutSec }, snapshot.admittedAt);
+  if (policy !== undefined && row.deadlineAt !== policy.deadlineAt)
+    return yield* refuse("native dispatch stored deadline conflicts");
+  const observedAt = yield* decode(NativeAdmissionTime, row.observedAt);
+  return { request, controller, snapshot, policy, observedAt, text:row.request_json };
 });
 
 /** HMAC verification belongs to the route; durable controller authority remains a D1 fact. */
@@ -77,11 +85,14 @@ export const readNativeResultOwnerD1 = (
 });
 
 /** A dispatching intent never grants a second POST, including after a lost response or process eviction. */
-export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured: Controller, provider: Provider) => {
+export const makeNativeDispatchD1 = (
+  db: Pick<D1Database, "prepare">, configured: Controller, provider: Provider, configuredPolicy?: NativeControllerPolicy,
+) => {
   const identity = (raw: unknown) => Effect.gen(function* () {
     const controller = yield* decode(Controller, configured);
     const request = yield* admitNativeRequest(raw);
-    return { request, controller, text: JSON.stringify(request) };
+    const policy = configuredPolicy === undefined ? undefined : yield* decode(NativeControllerPolicy, configuredPolicy);
+    return { request, controller, policy, text: JSON.stringify(request) };
   });
   type Identity = Effect.Effect.Success<ReturnType<typeof identity>>;
 
@@ -90,6 +101,10 @@ export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured
     if (record.text !== id.text || record.controller.appId !== id.controller.appId
       || record.controller.actorLogin !== id.controller.actorLogin)
       return yield* refuse("native dispatch nonce or controller ownership conflicts");
+    if (id.policy?.timeoutSec !== record.policy?.timeoutSec)
+      return yield* refuse("native controller deadline policy conflicts or is absent");
+    if (record.policy !== undefined && record.observedAt >= record.policy.deadlineAt)
+      return yield* refuse("native controller admission deadline expired");
     return record.snapshot;
   });
   const observe = (raw: unknown) => Effect.gen(function* () { return yield* read(yield* identity(raw)); });
@@ -98,16 +113,21 @@ export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured
     const id = yield* identity(raw);
     yield* query(() => db.prepare(
       `INSERT OR IGNORE INTO native_dispatches
-         (repo, nonce, request_json, controller_app_id, controller_login, state, admitted_at)
-       VALUES (?, ?, ?, ?, ?, 'reserved', unixepoch('now'))`,
-    ).bind(id.request.repo, id.request.nonce, id.text, id.controller.appId, id.controller.actorLogin).run());
+         (repo, nonce, request_json, controller_app_id, controller_login, state, admitted_at, timeout_sec, deadline_at)
+       VALUES (?, ?, ?, ?, ?, 'reserved', unixepoch('now'), ?,
+         CASE WHEN ? IS NULL THEN NULL ELSE unixepoch('now') + ? END)`,
+    ).bind(id.request.repo, id.request.nonce, id.text, id.controller.appId, id.controller.actorLogin,
+      id.policy?.timeoutSec ?? null, id.policy?.timeoutSec ?? null, id.policy?.timeoutSec ?? null).run());
     const prior = yield* read(id);
     if (prior.state !== "reserved") return prior;
     const claim = yield* query(() => db.prepare(
       `UPDATE native_dispatches SET state='dispatching'
        WHERE repo=? AND nonce=? AND request_json=? AND controller_app_id=?
-         AND controller_login=? AND state='reserved'`,
-    ).bind(id.request.repo, id.request.nonce, id.text, id.controller.appId, id.controller.actorLogin).run());
+         AND controller_login=? AND state='reserved'
+         AND ((timeout_sec IS NULL AND deadline_at IS NULL AND ? IS NULL)
+           OR (timeout_sec=? AND deadline_at=admitted_at+timeout_sec AND deadline_at>unixepoch('now')))`,
+    ).bind(id.request.repo, id.request.nonce, id.text, id.controller.appId, id.controller.actorLogin,
+      id.policy?.timeoutSec ?? null, id.policy?.timeoutSec ?? null).run());
     if (claim.meta.changes !== 1) return yield* read(id);
     return yield* provider.dispatch(id.request).pipe(Effect.matchEffect({
       onFailure: () => read(id),
