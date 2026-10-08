@@ -13,7 +13,7 @@ export { ensureWorkspace, workspace, type Workspace } from "./workspace";
 export { installCached } from "./install-cached";
 export { sharded, type Shard } from "./sharded";
 export { fanOut, type FanOutShard } from "./fan-out";
-export { waitForChildren } from "./wait-for-children";
+export { waitForChildren, waitForChildrenDurably } from "./wait-for-children";
 export { bootApp } from "./boot-app";
 export { probeHttp, type ProbeResult } from "./probe-http";
 export { loadSecrets } from "./load-secrets";

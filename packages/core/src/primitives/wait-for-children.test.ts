@@ -1,8 +1,12 @@
-import { Effect, Exit, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import type { ChildStatusRecord } from "../services/child-runs";
-import { IOFake, makeChildRunsFake } from "../testing";
-import { waitForChildren } from "./wait-for-children";
+import { IOFake, makeChildRunsFake, makeCFRuntimeTest } from "../testing";
+import { IO } from "../services/io";
+import { StepRunner, type StepRunnerService } from "../services/step-runner";
+import { StepFailed } from "../errors";
+import type { RunContext } from "../context";
+import { waitForChildren, waitForChildrenDurably } from "./wait-for-children";
 
 /** Run `waitForChildren` against a ChildRuns fake + the (no-op-sleep) IO fake. */
 const run = (
@@ -89,5 +93,72 @@ describe("waitForChildren", () => {
     if (Exit.isSuccess(result)) expect(result.value).toEqual([]);
     // Never polled.
     expect(child.state.polls).toBe(0);
+  });
+});
+
+describe("waitForChildrenDurably", () => {
+  const fixture = (poll: (ids: readonly string[], clock: { now: number }) => readonly ChildStatusRecord[]) => {
+    const clock = { now: 0 };
+    const sleeps: number[] = [];
+    const checkpoints = new Map<string, unknown>();
+    let interruptSleep = false;
+    const { layer, handles } = makeCFRuntimeTest({ childRuns: { pollFn: (ids) => poll(ids, clock) } });
+    const program = (timeout = 100) => Effect.gen(function* () {
+      const ordinary = yield* StepRunner;
+      const io = yield* IO;
+      const runner: StepRunnerService = {
+        ...ordinary,
+        run: <A, E>(name: string, body: () => Effect.Effect<A, E, RunContext>) =>
+          checkpoints.has(name) ? Effect.succeed(checkpoints.get(name) as A)
+            : body().pipe(Effect.tap((value) => Effect.sync(() => { checkpoints.set(name, value); }))),
+        sleep: (name, ms) => Effect.suspend(() => {
+          if (interruptSleep) return Effect.fail(new StepFailed({ step: name, cause: "interrupted" }));
+          sleeps.push(ms);
+          clock.now += ms;
+          return Effect.void;
+        }),
+      };
+      return yield* waitForChildrenDurably({ name: "join", ids: ["a", "b"], timeout, pollEvery: 40 }).pipe(
+        Effect.provideService(StepRunner, runner), Effect.provideService(IO, { ...io, now: Effect.sync(() => clock.now) }),
+      );
+    }).pipe(Effect.provide(layer));
+    return { clock, sleeps, handles, program, interrupt: () => { interruptSleep = true; }, resume: () => { interruptSleep = false; } };
+  };
+
+  it("returns terminal failures in input order and preserves summaries", async () => {
+    const f = fixture(() => [{ executionId: "b", status: "failure" }, { executionId: "a", status: "success", summaryJson: "{}" }]);
+    const result = await Effect.runPromise(f.program());
+    expect(result.map((record) => record.executionId)).toEqual(["a", "b"]);
+    expect(result[0]?.summaryJson).toBe("{}");
+    expect(result[1]?.status).toBe("failure");
+    expect(f.sleeps).toEqual([]);
+  });
+
+  it("refuses missing records at the original deadline and bounds the final sleep", async () => {
+    const f = fixture(() => [{ executionId: "a", status: "success" }]);
+    const exit = await Effect.runPromiseExit(f.program());
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("ChildWaitTimeout");
+    expect(f.sleeps).toEqual([40, 40, 20]);
+    expect(f.clock.now).toBe(100);
+  });
+
+  it("refuses a terminal result whose status read crosses the deadline", async () => {
+    const f = fixture((ids, clock) => { clock.now = 101; return ids.map((executionId) => ({ executionId, status: "success" })); });
+    const exit = await Effect.runPromiseExit(f.program());
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("ChildWaitTimeout");
+  });
+
+  it("replays the persisted deadline instead of renewing it after interruption", async () => {
+    const f = fixture((ids, clock) => ids.map((executionId) => ({ executionId, status: clock.now > 100 ? "success" : "running" })));
+    f.interrupt();
+    expect(Exit.isFailure(await Effect.runPromiseExit(f.program()))).toBe(true);
+    f.clock.now = 200;
+    f.resume();
+    const exit = await Effect.runPromiseExit(f.program());
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("ChildWaitTimeout");
+    expect(f.handles.childRuns.polls).toBe(1);
   });
 });
