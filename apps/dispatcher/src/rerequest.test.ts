@@ -98,7 +98,11 @@ describe("check_run.rerequested", () => {
       instances: { [ROOT]: "errored" },
     });
 
-    const { status, body } = await deliver(env, "check_run", checkRunPayload());
+    const { status, body } = await deliver(
+      { ...env, GITHUB_WEBHOOK_EVENTS: "check_run,check_suite" },
+      "check_run",
+      checkRunPayload(),
+    );
 
     expect(status).toBe(202);
     const expectedId = retryExecutionId(ROOT, 2);
@@ -285,7 +289,11 @@ describe("check_suite.rerequested", () => {
       ],
     });
 
-    const { body } = await deliver(env, "check_suite", suitePayload);
+    const { body } = await deliver(
+      { ...env, GITHUB_WEBHOOK_EVENTS: "check_run,check_suite" },
+      "check_suite",
+      suitePayload,
+    );
 
     expect(body["rerun"]).toEqual(
       expect.arrayContaining([

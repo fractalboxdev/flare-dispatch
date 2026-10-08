@@ -149,6 +149,71 @@ describe("POST /v1/webhooks/github — headers", () => {
   });
 });
 
+describe("POST /v1/webhooks/github — event allowlist", () => {
+  const prPayload = {
+    action: "synchronize",
+    pull_request: {
+      number: 7,
+      draft: false,
+      labels: [],
+      user: { login: "octocat" },
+      head: { sha: "aaaa111122223333" },
+      base: { sha: "base000000000000" },
+    },
+    repository: { full_name: "owner/test-repo" },
+    installation: { id: 99999 },
+  };
+
+  it.each(["pull_request", "push", "deployment_status"])(
+    "check-only mode ignores %s without dispatching or recording dedup",
+    async (event) => {
+      const { env, workflow, idempotencyKv } = fixture({ withKv: true });
+      const res = await handleRequest(
+        await webhookRequest(event === "pull_request" ? prPayload : deploymentStatusPayload, {
+          event,
+        }),
+        { ...env, GITHUB_WEBHOOK_EVENTS: "check_run,check_suite" },
+      );
+      expect(res.status).toBe(202);
+      expect(await res.json()).toMatchObject({ ignored: true, reason: "event_not_allowed" });
+      expect(workflow.calls).toHaveLength(0);
+      expect(workflow.events).toHaveLength(0);
+      expect(
+        await idempotencyKv!.binding.get("gh-delivery:12345678-1234-1234-1234-123456789012"),
+      ).toBeNull();
+    },
+  );
+
+  it("authenticates excluded deliveries before ignoring them", async () => {
+    const { env } = fixture();
+    const res = await handleRequest(await webhookRequest(prPayload, { sign: false }), {
+      ...env,
+      GITHUB_WEBHOOK_EVENTS: "check_run,check_suite",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("trims event names and dispatches allowed triggers", async () => {
+    const { env, workflow } = fixture();
+    const res = await handleRequest(await webhookRequest(deploymentStatusPayload), {
+      ...env,
+      GITHUB_WEBHOOK_EVENTS: " check_run, deployment_status ",
+    });
+    expect(res.status).toBe(202);
+    expect(workflow.calls).toHaveLength(1);
+  });
+
+  it("an empty allowlist dispatches nothing", async () => {
+    const { env, workflow } = fixture();
+    const res = await handleRequest(await webhookRequest(deploymentStatusPayload), {
+      ...env,
+      GITHUB_WEBHOOK_EVENTS: "",
+    });
+    expect(res.status).toBe(202);
+    expect(workflow.calls).toHaveLength(0);
+  });
+});
+
 describe("POST /v1/webhooks/github — trigger evaluation", () => {
   it("preserves the pushed tag ref and commit for release triggers", () => {
     expect(
