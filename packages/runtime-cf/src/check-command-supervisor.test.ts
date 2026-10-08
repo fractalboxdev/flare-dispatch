@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { commandSupervisor, commandSpool } from "./check-command";
 
@@ -27,7 +27,48 @@ async function stopped(pid: number): Promise<boolean> {
   }
 }
 
+async function recordedDescendant(dir:string):Promise<number> {
+  const echo=(await readFile(`${dir}/stdout`,"utf8")).trim();
+  const pid=Number(echo);
+  if(!/^[1-9][0-9]*$/.test(echo)||!Number.isSafeInteger(pid))
+    throw new Error("owned descendant echo is not a canonical positive PID");
+  return pid;
+}
+async function cleanupRecordedDescendant(dir:string, descendant:number, closed:Promise<void>, beforeRemove?:()=>Promise<void>):Promise<void> {
+  const owned=await recordedDescendant(dir);
+  if(descendant>0 && descendant !== owned)throw new Error("owned descendant echo conflicts with captured PID");
+  try{process.kill(owned,"SIGKILL");}catch(error){
+    if(!(error instanceof Error && "code" in error && error.code === "ESRCH"))throw error;
+  }
+  await closed;
+  for(let attempt=0;attempt<500 && !(await stopped(owned));attempt++)
+    await new Promise((resolve)=>setTimeout(resolve,10));
+  expect(await stopped(owned)).toBe(true);
+  await beforeRemove?.();
+  await rm(dir,{recursive:true,force:true});
+}
+
 describe("native check command supervisor", () => {
+  it("cleans the own echoed descendant when an assertion precedes PID assignment",async()=>{
+    const dir=commandSpool({id:`native-${crypto.randomUUID()}`,container:{id:"explicit"},fingerprint:"native",
+      startedAt:Date.now(),deadline:Date.now()+5000});
+    await mkdir(dir,{recursive:true});
+    const owned=spawn(process.execPath,["-e","console.log(process.pid);setInterval(()=>{},1000)"],{stdio:["ignore","pipe","ignore"]});
+    const closed=new Promise<void>((resolve,reject)=>{owned.on("error",reject);owned.on("close",()=>resolve());});
+    try{
+      const echo=await new Promise<string>((resolve,reject)=>{
+        owned.stdout!.once("data",(bytes)=>resolve(String(bytes)));owned.once("error",reject);
+      });
+      await writeFile(`${dir}/stdout`,echo);
+      try{expect(undefined).toBeDefined();}catch{
+        // The supervisor has closed while its redirected descendant remains live.
+        await cleanupRecordedDescendant(dir,0,Promise.resolve());
+      }
+      expect(await stopped(owned.pid!)).toBe(true);
+    }finally{
+      owned.kill("SIGKILL");await closed;await rm(dir,{recursive:true,force:true});
+    }
+  });
   it("a live process fails the stopped-process probe until its actual exit is reaped", async () => {
     const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"]);
     const closed = new Promise<void>((resolve, reject) => {
@@ -55,7 +96,13 @@ describe("native check command supervisor", () => {
     const dir = commandSpool(handle);
     const command = `node -e 'process.on("SIGTERM",()=>{});require("node:fs").writeFileSync("${dir}/ready","ready");setInterval(()=>{},1000)' >/dev/null 2>&1 & echo $!; while [ ! -f '${dir}/ready' ]; do sleep 0.01; done; exit 0`;
     const delayed = `const realKill=process.kill.bind(process);process.kill=(pid,signal)=>{if(signal==='SIGKILL'){setTimeout(()=>{try{realKill(pid,signal)}catch{}},200);return true;}return realKill(pid,signal);};`;
-    const child = spawn(process.execPath, ["-e", delayed + commandSupervisor(handle, command)]);
+    const diagnostics = `const diagnosticFs=require('node:fs'),diagnosticCp=require('node:child_process');
+const diagnosticDir=${JSON.stringify(dir)};diagnosticFs.mkdirSync(diagnosticDir,{recursive:true});let diagnosticCount=0;
+const diagnostic=(value)=>{if(diagnosticCount++<128)diagnosticFs.appendFileSync(diagnosticDir+'/diagnostic.jsonl',JSON.stringify(value)+'\\n')};
+const diagnosticSpawn=diagnosticCp.spawn;diagnosticCp.spawn=(...args)=>{const owned=diagnosticSpawn(...args);owned.on('exit',(code,signal)=>diagnostic({operation:'owned-child-exit',code,signal}));owned.on('close',(code,signal)=>diagnostic({operation:'owned-child-close',code,signal}));return owned};
+const diagnosticProbe=diagnosticCp.spawnSync;diagnosticCp.spawnSync=(...args)=>{const started=Date.now();const result=diagnosticProbe(...args);diagnostic({operation:'owned-group-probe',status:result.status,signal:result.signal,errorCode:['ETIMEDOUT','ENOENT','EACCES','EINVAL'].includes(result.error?.code)?result.error.code:result.error?'other':null,elapsedMs:Date.now()-started,stdoutChars:typeof result.stdout==='string'?result.stdout.length:null});return result};
+const diagnosticExit=process.exit.bind(process);process.exit=(code)=>{diagnostic({operation:'supervisor-exit',code});return diagnosticExit(code)};`;
+    const child = spawn(process.execPath, ["-e", diagnostics + delayed + commandSupervisor(handle, command)]);
     const closed = new Promise<void>((resolve, reject) => {
       child.on("error", reject);
       child.on("close", () => resolve());
@@ -71,19 +118,17 @@ describe("native check command supervisor", () => {
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
       }
-      expect(terminal).toMatchObject({ exitCode: 0, timedOut: false });
-      descendant = Number((await readFile(`${dir}/stdout`, "utf8")).trim());
+      descendant = await recordedDescendant(dir);
       expect(descendant).toBeGreaterThan(0);
+      expect(terminal).toMatchObject({ exitCode: 0, timedOut: false });
       expect(await stopped(descendant)).toBe(true);
       await closed;
     } finally {
-      if (descendant > 0) {
-        try {
-          process.kill(descendant, "SIGKILL");
-        } catch {}
-      }
-      await closed;
-      await rm(dir, { recursive: true, force: true });
+      await cleanupRecordedDescendant(dir,descendant,closed,async()=>{
+        const recorded=await readFile(`${dir}/diagnostic.jsonl`,"utf8").catch(()=>"");
+        console.info("owned supervisor diagnostic",{supervisorExit:child.exitCode,supervisorSignal:child.signalCode,
+          events:recorded.split("\n").filter(Boolean).map((line)=>JSON.parse(line))});
+      });
     }
   });
 
