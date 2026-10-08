@@ -53,6 +53,44 @@ describe("authenticated native GitHub provider", () => {
     return { provider: makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl }), fetchImpl };
   };
 
+  const observe = (provider: ReturnType<typeof makeNativeGithubProvider>, binding: unknown = bound) =>
+    (provider as unknown as { observeRun:(request:NativeRequest, binding:unknown, controller:string) => Effect.Effect<unknown, unknown> })
+      .observeRun(request, binding, "native-controller[bot]");
+
+  it("distinguishes authentic pending states without reading jobs or artifacts", async () => {
+    for (const status of ["queued", "in_progress", "requested", "waiting", "pending"]) {
+      const { provider, fetchImpl } = collector([{ ...apiRun(), status, conclusion:null }]);
+      expect(await runEffect(observe(provider))).toEqual({ _tag:"Pending", status, runId:456, runAttempt:1 });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(String(fetchImpl.mock.calls[0]![0])).toBe("https://api.github.com/repos/owner/context/actions/runs/456/attempts/1");
+      await expect(runEffect(provider.collect(request, bound, "native-controller[bot]"))).rejects.toThrow();
+    }
+  });
+
+  it("reports terminal conclusions without turning run success into artifact or job admission", async () => {
+    for (const conclusion of ["success", "failure", "cancelled", "timed_out", "neutral", "skipped", "action_required", "stale", "startup_failure"]) {
+      const { provider, fetchImpl } = collector([{ ...apiRun(), status:"completed", conclusion }]);
+      expect(await runEffect(observe(provider))).toEqual({ _tag:"Terminal", conclusion, runId:456, runAttempt:1 });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      if (conclusion !== "success") await expect(runEffect(provider.collect(request, bound, "native-controller[bot]"))).rejects.toThrow();
+    }
+  });
+
+  it("refuses malformed lifecycle or changed authority instead of returning pending", async () => {
+    for (const patch of [
+      { status:"unknown", conclusion:null }, { status:"queued", conclusion:"success" },
+      { status:"completed", conclusion:null }, { status:"completed", conclusion:"unknown" },
+      { id:457 }, { run_attempt:2 }, { display_title:"native-other-nonce" },
+      { repository:{ full_name:"another/context" } }, { actor:{ login:"another[bot]", type:"Bot" } },
+      { actor:{ login:"native-controller[bot]", type:"User" } }, { head_sha:"4".repeat(40) },
+      { path:".github/workflows/another.yml" }, { event:"push" },
+    ]) {
+      const { provider, fetchImpl } = collector([{ ...apiRun(), status:"queued", conclusion:null, ...patch }]);
+      await expect(runEffect(observe(provider))).rejects.toThrow();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("revalidates a bound run through its exact attempt without listing history", async () => {
     const { provider, fetchImpl } = collector();
     expect(await runEffect(provider.readRun(request, bound))).toMatchObject({ runId:456, runAttempt:1 });
