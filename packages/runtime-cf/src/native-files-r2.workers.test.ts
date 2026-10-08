@@ -9,12 +9,12 @@ const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("he
 const log = new TextEncoder().encode("actual command output\n");
 const controller = "native-controller[bot]";
 const fixture = async (files = [{ path: "command.log", bytes: log }]) => {
-  const request: NativeRequest = {
+  const candidate: NativeRequest = {
     repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
     nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc", mode: "gate", profile: "",
     command_sha256: "0".repeat(64),
   };
-  request.command_sha256 = await Effect.runPromise(nativeCommandDigest(request));
+  const request = { ...candidate, command_sha256: await Effect.runPromise(nativeCommandDigest(candidate)) };
   return { request, controllerLogin: controller, receipt: {
     version: 1, ...request, mode: undefined, profile: undefined,
     command: nativeCommand(request), runner_os: "Windows", runner_arch: "ARM64",
@@ -45,7 +45,7 @@ describe("native file bytes in actual R2", () => {
     const files = [{ path: "command.log", bytes: log }, { path: "dist/context.exe", bytes: binary }];
     const store = makeNativeFilesR2(env.RUNS_STORAGE);
     const result = await Effect.runPromise(store.verify(await evidence(files), entries(files)));
-    expect(result.files[1].chunks).toHaveLength(2);
+    expect(result.files[1]!.chunks).toHaveLength(2);
     for (const file of result.files) {
       const pieces = await Promise.all(file.chunks.map(async (chunk) => new Uint8Array(await (await env.RUNS_STORAGE.get(chunk.key))!.arrayBuffer())));
       expect(pieces.reduce((size, bytes) => size + bytes.byteLength, 0)).toBe(file.bytes);
@@ -82,7 +82,7 @@ describe("native file bytes in actual R2", () => {
     await expect(Effect.runPromise(makeNativeFilesR2(lossy).verify(input, source()))).rejects.toThrow();
     expect(writes).toBe(1);
     const store = makeNativeFilesR2(env.RUNS_STORAGE), result = await Effect.runPromise(store.verify(input, source()));
-    const key = result.files[0].chunks[0].key;
+    const key = result.files[0]!.chunks[0]!.key;
     await env.RUNS_STORAGE.put(key, "corrupt");
     await expect(Effect.runPromise(store.verify(input, source()))).rejects.toThrow();
     expect(await (await env.RUNS_STORAGE.get(key))!.text()).toBe("corrupt");
