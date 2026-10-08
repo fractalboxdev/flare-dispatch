@@ -110,13 +110,14 @@ export function makeCheckCommandService(
             opts.container?.id ?? defaultContainer,
           );
           const startedAt = Date.now();
-          return {
+          const candidate: CheckCommandHandle = {
             id: `check-${operation.slice(0, 48)}`,
             container: opts.container ?? { id: defaultContainer },
             fingerprint,
             startedAt,
             deadline: startedAt + (opts.timeoutSec ?? 600) * 1000,
           };
+          return ownerFor(candidate.container).prepare(candidate);
         },
         catch: failed(opts),
       }),

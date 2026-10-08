@@ -32,6 +32,7 @@ describe("durable command bounded log publication", () => {
         stderr: "",
       };
       const owner: CheckCommandOwner = {
+        async prepare(candidate) { return candidate; },
         async start() {
           calls.push("reserve-and-launch");
         },
@@ -79,6 +80,7 @@ describe("durable command bounded log publication", () => {
         redactValues: [],
       };
       const handle = await Effect.runPromise(service.prepare({ ...declared, stepName: "exec" }));
+      calls.length = 0;
       const invalid =
         policy === "omitted"
           ? { command: declared.command, env: declared.env, timeoutSec: declared.timeoutSec }
@@ -114,6 +116,7 @@ describe("durable command bounded log publication", () => {
       stderr: "",
     };
     const owner: CheckCommandOwner = {
+      async prepare(candidate) { return candidate; },
       async start() {
         starts++;
       },
@@ -149,7 +152,7 @@ describe("durable command bounded log publication", () => {
     expect(await Effect.runPromise(service.finalize(handle, opts))).toEqual(receipt);
     expect(starts).toBe(1);
   });
-  it("discarded preparation with changed inputs refuses the same execution intent instead of launching twice", async () => {
+  it.each([false, true])("discarded preparation preserves the intent; changed inputs=%s", async (change) => {
     const records = new Map<string, unknown>();
     const processes = new Set<string>();
     let launches = 0;
@@ -201,15 +204,17 @@ describe("durable command bounded log publication", () => {
     };
     const initial = await Effect.runPromise(service.prepare({ ...opts, stepName: "exec" }));
     await Effect.runPromise(service.start(initial, opts));
-    const changed = { ...opts, env: { TOKEN: "changed" } };
-    const reconstructed = await Effect.runPromise(
-      service.prepare({ ...changed, stepName: "exec" }),
-    );
-    await expect(Effect.runPromise(service.start(reconstructed, changed))).rejects.toThrow(
-      "identity",
-    );
+    await Effect.runPromise(Effect.sleep("5 millis"));
+    const changed = change ? { ...opts, env: { TOKEN: "changed" } } : opts;
+    if (change) {
+      await expect(Effect.runPromise(service.prepare({ ...changed, stepName: "exec" }))).rejects.toThrow("identity");
+    } else {
+      const reconstructed = await Effect.runPromise(service.prepare({ ...changed, stepName: "exec" }));
+      expect(reconstructed).toEqual(initial);
+      expect(reconstructed.id).toBe(initial.id);
+      await Effect.runPromise(service.start(reconstructed, changed));
+    }
     expect(launches).toBe(1);
-    expect(reconstructed.id).toBe(initial.id);
   });
   it.each([
     { action: "observe", change: "env" },
@@ -223,6 +228,7 @@ describe("durable command bounded log publication", () => {
     async ({ action, change }) => {
       const calls: string[] = [];
       const owner: CheckCommandOwner = {
+        async prepare(candidate) { return candidate; },
         async start() {
           calls.push("start");
         },
@@ -305,6 +311,7 @@ describe("durable command bounded log publication", () => {
       let terminal = false;
       const containers: string[] = [];
       const owner: CheckCommandOwner = {
+        async prepare(candidate) { return candidate; },
         async start() {},
         async observe() {
           return terminal
