@@ -4,6 +4,7 @@
 // here is a type error.
 
 import { Match } from "effect";
+import { NativeReceiptRefused } from "./native-windows";
 import { describe, expect, it } from "vitest";
 import {
   AcceptanceFailed,
@@ -43,6 +44,7 @@ const summarize = (e: RunError): string =>
     // the many-`Match.tag` form pushed `pipe` past its 20-arg typed overload
     // once the union grew past ~18 members. Same exhaustiveness guarantee.
     Match.tags({
+      NativeReceiptRefused: ({ reason }) => `native ${reason}`,
       CheckoutFailed: ({ repo, sha }) => `checkout ${repo}@${sha}`,
       ExecFailed: ({ exitCode }) => `exec exited ${exitCode}`,
       ExecTimeout: ({ timeoutSec }) => `exec timeout ${timeoutSec}s`,
@@ -72,6 +74,7 @@ const summarize = (e: RunError): string =>
   );
 
 const samples: ReadonlyArray<{ name: string; err: RunError; expect: string }> = [
+  { name: "NativeReceiptRefused", err: new NativeReceiptRefused({ reason: "missing evidence" }), expect: "native missing evidence" },
   {
     name: "CheckoutFailed",
     err: new CheckoutFailed({ repo: "o/n", sha: "abc", cause: "x" }),

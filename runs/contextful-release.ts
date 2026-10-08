@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { artifact, defineRun, github, handoffChildAdmission, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
+import { artifact, defineRun, github, handoffChildAdmission, io, nativeExecution, NativeReceiptRefused, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
 import { fanOut, waitForChildren, workspace } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const REPO = "fractalboxdev/contextful";
@@ -10,12 +10,6 @@ const LINUX = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"] as con
 const DARWIN = ["x86_64-apple-darwin", "aarch64-apple-darwin"] as const;
 const RELEASE_BUILD_TIMEOUT_SEC = 14400;
 const RELEASE_STEP_HEADROOM_SEC = 60;
-const CELLS = PROFILES.flatMap((profile) =>
-  (profile === "contextful-control" ? LINUX : [...LINUX, ...DARWIN]).map((target) => ({
-    profile,
-    target,
-  })),
-);
 
 const DeclaredReleaseCell = Schema.Struct({
   profile: Schema.Literal(...PROFILES),
@@ -94,6 +88,64 @@ const requireValidRequest = (repo: string, tag: string, sha: string): void => {
   }
 };
 
+const nativeRelease = (input: typeof ReleaseCellInput.Type) => Effect.gen(function* () {
+  if (input.profile !== "contextful-edge" && input.profile !== "contextful-full")
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release profile unsupported" }));
+  if (input.target !== "x86_64-pc-windows-msvc" && input.target !== "aarch64-pc-windows-msvc")
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release target unsupported" }));
+  const handle = yield* step("admit-native-release", () => nativeExecution.admitRelease({ head: input.sha,
+    profile: input.profile as "contextful-edge" | "contextful-full", target: input.target as "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" }));
+  const deadline = yield* step("native-release-deadline", () => io.now.pipe(Effect.map(now => now + RELEASE_BUILD_TIMEOUT_SEC * 1000)));
+  for (let index = 0; ; index++) {
+    const observed = yield* step(`observe-native-release-${index}`, () => nativeExecution.observeRelease(handle));
+    if (observed.status === "ready") break;
+    const now = yield* step(`native-release-clock-${index}`, () => io.now);
+    if (now >= deadline) return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release deadline exceeded" }));
+    yield* step(`sleep-native-release-${index}`, () => io.sleep("30 seconds"));
+  }
+  const name = stem(input.profile, input.tag.slice(1), input.target);
+  const readText = (path: string) => Effect.gen(function* () {
+    const file = yield* nativeExecution.readReleaseFile(handle, path);
+    return yield* Effect.tryPromise({ try: async () => {
+      if (file.size > 65536) { await file.body.cancel(); throw new Error("native release metadata exceeds its bound"); }
+      const reader = file.body.getReader();
+      const bytes = new Uint8Array(file.size); let count = 0;
+      try {
+        for (;;) {
+          const part = await reader.read(); if (part.done) break;
+          if (count + part.value.length > bytes.length) throw new Error("native metadata size mismatch");
+          bytes.set(part.value, count); count += part.value.length;
+        }
+        if (count !== bytes.length) throw new Error("native metadata truncated");
+        return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+      } finally { await reader.cancel(); reader.releaseLock(); }
+    }, catch: () => new NativeReceiptRefused({ reason: "native release metadata refused" }) });
+  });
+  const manifest = yield* step("read-native-release-manifest", () => readText(`dist/${name}.release.json`));
+  const parsed = yield* Schema.decodeUnknown(Schema.parseJson(Schema.Struct({
+    profile: Schema.String, target: Schema.String, archive: Schema.String,
+    sha256: Schema.String.pipe(Schema.pattern(/^[a-f0-9]{64}$/)), sbom: Schema.String,
+  })))(manifest).pipe(Effect.mapError(() => new NativeReceiptRefused({ reason: "native release manifest invalid" })));
+  if (parsed.profile !== input.profile || parsed.target !== input.target || parsed.archive !== `${name}.tar.gz` || parsed.sbom !== `${name}.cdx.json`)
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release manifest conflicts" }));
+  const checksum = yield* step("read-native-release-checksum", () => readText(`dist/${parsed.archive}.sha256`));
+  if (checksum.trim() !== `${parsed.sha256}  ${parsed.archive}`)
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release checksum conflicts" }));
+  const assets = [parsed.archive, `${parsed.archive}.sha256`, parsed.sbom];
+  for (const assetName of assets) yield* step(`import-native-${assetName}`, () => Effect.gen(function* () {
+    const file = yield* nativeExecution.readReleaseFile(handle, `dist/${assetName}`);
+    if (assetName === parsed.archive && file.sha256 !== parsed.sha256) {
+      yield* Effect.promise(() => file.body.cancel());
+      return yield* Effect.fail(new NativeReceiptRefused({ reason: "native archive digest conflicts" }));
+    }
+    yield* artifact.uploadVerified({ name: assetName, body: file.body, size: file.size, sha256: file.sha256,
+      contentType: assetName.endsWith(".json") ? "application/json" : assetName.endsWith(".gz") ? "application/gzip" : "text/plain" });
+    if (!input.dryRun) yield* github.publishReleaseAsset({ repo: input.repo, releaseId: input.releaseId, artifactName: assetName,
+      contentType: assetName.endsWith(".json") ? "application/json" : assetName.endsWith(".gz") ? "application/gzip" : "text/plain", sha256: file.sha256 });
+  }));
+  return { profile: input.profile, target: input.target, manifest, assets };
+});
+
 export const contextfulReleaseCell = defineRun({
   name: "contextful-release-cell",
   version: "1.0.0",
@@ -101,13 +153,17 @@ export const contextfulReleaseCell = defineRun({
   inputs: ReleaseCellInput,
   outputs: ReleaseCellOutput,
   limits: { maxDurationSec: 21600, admissionMaxQueueAgeSec: 21600 },
-  run: (input) =>
-    step("build-and-upload", () =>
+  run: (input) => Effect.gen(function* () {
+    requireValidRequest(input.repo, input.tag, input.sha);
+    const cells = yield* step("discover-release-plan", () => discoverReleasePlan(input.repo, input.sha));
+    if (!cells.some(cell => cell.profile === input.profile && cell.target === input.target))
+      return yield* Effect.die(new Error("release cell is outside the authoritative head plan"));
+    if (!Number.isSafeInteger(input.releaseId) || (!input.dryRun && input.releaseId <= 0))
+      return yield* Effect.die(new Error("release cell requires a valid draft release id"));
+    if (input.target.endsWith("-pc-windows-msvc")) return yield* nativeRelease(input);
+    return yield* step("build-and-upload", () =>
       Effect.gen(function* () {
         requireValidRequest(input.repo, input.tag, input.sha);
-        if (!CELLS.some((cell) => cell.profile === input.profile && cell.target === input.target)) {
-          return yield* Effect.die(new Error("release cell is outside the ten-cell matrix"));
-        }
         if (!Number.isSafeInteger(input.releaseId) || (!input.dryRun && input.releaseId <= 0)) {
           return yield* Effect.die(new Error("release cell requires a valid draft release id"));
         }
@@ -187,7 +243,8 @@ export const contextfulReleaseCell = defineRun({
       // sandbox's bounded four-hour command timeout and leave upload headroom;
       // retrying would restart an expensive build from scratch.
       { timeoutSec: RELEASE_BUILD_TIMEOUT_SEC + RELEASE_STEP_HEADROOM_SEC, retries: 0 },
-    ),
+    );
+  }),
 });
 
 export const contextfulReleaseFormula = defineRun({
@@ -200,7 +257,13 @@ export const contextfulReleaseFormula = defineRun({
   run: (input) => step("generate-and-upload", () => Effect.gen(function* () {
     requireValidRequest(input.repo, input.tag, input.sha);
     const manifests = JSON.parse(input.manifests) as unknown[];
-    if (manifests.length !== CELLS.length) return yield* Effect.die(new Error("formula needs ten release manifests"));
+    const cells = yield* discoverReleasePlan(input.repo, input.sha);
+    const keys = manifests.map(raw => {
+      const parsed = Schema.decodeUnknownSync(DeclaredReleaseCell)(raw);
+      return `${parsed.profile}/${parsed.target}`;
+    });
+    if (keys.length !== cells.length || new Set(keys).size !== keys.length || cells.some(cell => !keys.includes(`${cell.profile}/${cell.target}`)))
+      return yield* Effect.die(new Error("formula needs exactly the authoritative release inventory"));
     const checkout = yield* workspace({ repo: input.repo, sha: input.sha });
     const formula = yield* sandbox.exec({
       container: checkout.container, cwd: checkout.dir,

@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import { contextfulRelease, contextfulReleaseCell } from "./contextful-release";
+import { contextfulRelease, contextfulReleaseCell, contextfulReleaseFormula } from "./contextful-release";
 
 const sha = "a".repeat(40);
 const repo = "fractalboxdev/contextful";
@@ -14,6 +14,30 @@ const planText = (cells: readonly { profile: string; target: string }[]) =>
   cells.map(cell => `${cell.profile} ${cell.target}`).join("\n") + "\n";
 
 describe("contextful-release", () => {
+  it.effect("requires exact declared formula inventory and refuses missing, duplicate or foreign cells", () => {
+    const cells = [...legacyCells, ...["contextful-edge", "contextful-full"].flatMap(profile =>
+      ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"].map(target => ({ profile, target })))];
+    const cases = [cells.slice(0, -1), [...cells.slice(0, -1), cells[0]],
+      [...cells.slice(0, -1), { profile: "contextful-full", target: "unsupported-target" }]];
+    return Effect.gen(function* () {
+      for (const manifests of cases) {
+        const fixture = makeCFRuntimeTest({ sandboxProgram: { "release --plan": { exitCode: 0, stdout: planText(cells) } } });
+        const result = yield* Effect.exit(contextfulReleaseFormula.run({ repo, tag: "v0.5.0", sha, releaseId: 0, dryRun: true,
+          manifests: JSON.stringify(manifests) }).pipe(Effect.provide(fixture.layer)));
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(fixture.handles.artifact.uploads).toHaveLength(0);
+        expect(fixture.handles.sandbox.execs.some(exec => exec.command.includes("formula --manifest"))).toBe(false);
+      }
+      const fixture = makeCFRuntimeTest({ sandboxProgram: {
+        "release --plan": { exitCode: 0, stdout: planText(cells) }, "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  fixture\n` },
+      } });
+      const output = yield* contextfulReleaseFormula.run({ repo, tag: "v0.5.0", sha, releaseId: 0, dryRun: true,
+        manifests: JSON.stringify(cells) }).pipe(Effect.provide(fixture.layer));
+      expect(output.assets).toHaveLength(6);
+      expect(fixture.handles.artifact.uploads).toHaveLength(6);
+    });
+  });
+
   for (const [label, stdout] of [
     ["empty", ""], ["malformed", "contextful-edge\n"],
     ["unknown target", "contextful-edge unsupported-target\n"],
@@ -93,7 +117,7 @@ describe("contextful-release", () => {
     const manifest = JSON.stringify({ profile, target, archive: `${stem}.tar.gz`,
       sha256: "a".repeat(64), sbom: `${stem}.cdx.json` });
     const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
+      sandboxProgram: { "release --plan": { exitCode: 0, stdout: planText(legacyCells) }, "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
       sandboxFiles: { [`/workspace/contextful/dist/${stem}.release.json`]: manifest,
         [`/workspace/contextful/dist/${stem}.tar.gz.sha256`]: `${"a".repeat(64)}  ${stem}.tar.gz\n` },
     });
@@ -102,7 +126,7 @@ describe("contextful-release", () => {
         profile, target, releaseId: 0, dryRun: true });
       expect(result.assets).toEqual([`${stem}.tar.gz`, `${stem}.tar.gz.sha256`, `${stem}.cdx.json`]);
       expect(result.imageLayer).toBeUndefined();
-      expect(handles.sandbox.execs[0]?.command).toContain("release --builder zigbuild");
+      expect(handles.sandbox.execs.some(exec => exec.command.includes("release --builder zigbuild"))).toBe(true);
       expect(handles.artifact.uploads).toHaveLength(3);
       const buildStep = handles.executions.steps.find((entry) => entry.name === "build-and-upload");
       expect(buildStep?.metadata?.["stepOpts.timeoutSec"]).toBe(14460);
@@ -116,7 +140,7 @@ describe("contextful-release", () => {
     const manifest = JSON.stringify({ profile: "contextful-control", target,
       archive: `${name}.tar.gz`, sha256: "b".repeat(64), sbom: `${name}.cdx.json` });
     const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
+      sandboxProgram: { "release --plan": { exitCode: 0, stdout: planText(legacyCells) }, "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
       sandboxFiles: { [`/workspace/contextful/dist/${name}.release.json`]: manifest,
         [`/workspace/contextful/dist/${name}.tar.gz.sha256`]: `${"b".repeat(64)}  ${name}.tar.gz\n` },
     });
@@ -134,7 +158,7 @@ describe("contextful-release", () => {
     const manifest = JSON.stringify({ profile: "contextful-control", target,
       archive: `${name}.tar.gz`, sha256: "a".repeat(64), sbom: `${name}.cdx.json` });
     const { layer, handles } = makeCFRuntimeTest({
-      sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
+      sandboxProgram: { "release --plan": { exitCode: 0, stdout: planText(legacyCells) }, "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
       sandboxFiles: { [`/workspace/contextful/dist/${name}.release.json`]: manifest,
         [`/workspace/contextful/dist/${name}.tar.gz.sha256`]: `${"b".repeat(64)}  ${name}.tar.gz\n` },
     });
