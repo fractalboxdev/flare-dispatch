@@ -51,6 +51,27 @@ export class NativeReceiptRefused extends Schema.TaggedError<NativeReceiptRefuse
   "NativeReceiptRefused", { reason: Schema.String },
 ) {}
 
+/** Chosen clock policy: include five minutes before the durable controller admission. */
+export const NATIVE_DISCOVERY_CLOCK_ALLOWANCE_SECONDS = 300;
+export const NativeAdmissionTime = Schema.Number.pipe(Schema.filter((time) => Number.isSafeInteger(time)
+  && time >= NATIVE_DISCOVERY_CLOCK_ALLOWANCE_SECONDS && Number.isFinite(new Date(time * 1000).getTime())));
+export const NativeRunCreatedAt = Schema.String.pipe(Schema.filter((time) =>
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(time)
+  && Number.isFinite(Date.parse(time))
+  && new Date(time).toISOString() === (time.includes(".") ? time : time.replace("Z", ".000Z")),
+));
+/** The lower bound remains tied to the admission, never to a poll or workload receipt. */
+export const nativeDiscoveryWindow = (raw: unknown) => Effect.gen(function* () {
+  const admittedAt = yield* Schema.decodeUnknown(NativeAdmissionTime)(raw).pipe(
+    Effect.mapError(() => new NativeReceiptRefused({ reason: "native admission timestamp invalid or absent" })),
+  );
+  const lowerSeconds = admittedAt - NATIVE_DISCOVERY_CLOCK_ALLOWANCE_SECONDS;
+  const createdAfter = new Date(lowerSeconds * 1000).toISOString().replace(".000Z", "Z");
+  if (!Schema.is(NativeRunCreatedAt)(createdAfter))
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native discovery timestamp is not canonical" }));
+  return { admittedAt, lowerSeconds, createdAfter };
+});
+
 /** This array is also the wrapper's literal subprocess argv, never shell text. */
 export const nativeCommand = (request: NativeRequest): readonly string[] => {
   const cargo = ["cargo", "+1.97.0", "run", "--locked", "-q", "-p", "contextful-ci", "--"];

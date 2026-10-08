@@ -16,6 +16,7 @@ const run = (id = 456) => ({
   repo: request.repo, runId: id, runAttempt: 1, event: "workflow_dispatch",
   executorRef: request.executor_ref, workflowPath: ".github/workflows/native-windows.yml",
   runName: `native-${request.nonce}`, actorLogin: controller.actorLogin, actorType: "Bot",
+  createdAt: new Date().toISOString(),
 });
 const runEffect = Effect.runPromise;
 const loseWriteResponse = (matching: string): Pick<D1Database, "prepare"> => {
@@ -61,7 +62,7 @@ describe("durable native dispatch in workerd", () => {
     expect(posts).toBe(1);
     const row = await env.RUNS_METADATA.prepare("SELECT admitted_at FROM native_dispatches WHERE repo=? AND nonce=?")
       .bind(request.repo, request.nonce).first<{ admitted_at:number }>();
-    expect(created).toBe(`>=${new Date((row!.admitted_at - 300) * 1000).toISOString()}`);
+    expect(created).toBe(`>=${new Date((row!.admitted_at - 300) * 1000).toISOString().replace(".000Z", "Z")}`);
   });
 
   it("persists immutable database admission time before POST and refuses legacy time-less intents", async () => {
@@ -112,6 +113,56 @@ describe("durable native dispatch in workerd", () => {
     expect((await runEffect(jobs.observe(request))).state).toBe("accepted");
     await runEffect(makeNativeDispatchD1(env.RUNS_METADATA, controller, provider).start(request));
     expect(posts).toBe(1);
+  });
+
+  it("rejects old API candidates and caller timestamps without changing the durable window or sending another POST", async () => {
+    let posts = 0;
+    const observed: number[] = [];
+    const jobs = makeNativeDispatchD1(env.RUNS_METADATA, controller, {
+      dispatch: () => Effect.sync(() => { posts++; }),
+      listRuns: (_, admittedAt) => Effect.sync(() => {
+        observed.push(admittedAt);
+        return [{ ...run(), createdAt:new Date((admittedAt - 301) * 1000).toISOString() }];
+      }),
+    });
+    await runEffect(jobs.start(request));
+    const before = await runEffect(jobs.observe(request));
+    await expect(runEffect(jobs.reconcile(request))).rejects.toThrow();
+    await expect(runEffect(jobs.start({ ...request, admittedAt:1 }))).rejects.toThrow();
+    await expect(runEffect(jobs.reconcile(request))).rejects.toThrow();
+    expect(observed).toEqual([before.admittedAt, before.admittedAt]);
+    expect(await runEffect(jobs.observe(request))).toEqual(before);
+    expect(posts).toBe(1);
+  });
+
+  it("keeps scoped partial pagination and over-budget recent history unresolved without redispatch", async () => {
+    for (const overflow of [false, true]) {
+      const ownRequest = { ...request, nonce:`native-window-${overflow ? "overflow" : "partial"}-0123456789` };
+      let posts = 0, reads = 0;
+      const fetchImpl: typeof fetch = async (raw, init) => {
+        if (init?.method === "POST") { posts++; return new Response(null, { status:204 }); }
+        reads++;
+        const url = new URL(String(raw));
+        expect(url.searchParams.has("created")).toBe(true);
+        const page = Number(url.searchParams.get("page") ?? 1);
+        const candidate = { id:456, run_attempt:1, event:"workflow_dispatch", head_sha:request.executor_ref,
+          path:".github/workflows/native-windows.yml", display_title:`native-${ownRequest.nonce}`,
+          repository:{ full_name:request.repo }, actor:{ login:controller.actorLogin, type:"Bot" }, created_at:new Date().toISOString() };
+        url.searchParams.set("page", String(page + 1));
+        return overflow
+          ? Response.json({ total_count:101, workflow_runs:Array.from({ length:25 }, (_, i) => ({ ...candidate, id:1000 + page * 25 + i })) },
+            { headers:{ link:`<${url}>; rel="next"` } })
+          : Response.json({ total_count:2, workflow_runs:[candidate] });
+      };
+      const jobs = makeNativeDispatchD1(env.RUNS_METADATA, controller,
+        makeNativeGithubProvider({ repo:request.repo, token:"fixture-installation", fetchImpl }));
+      await runEffect(jobs.start(ownRequest));
+      await expect(runEffect(jobs.reconcile(ownRequest))).rejects.toThrow();
+      expect((await runEffect(jobs.observe(ownRequest))).state).toBe("accepted");
+      await runEffect(jobs.start(ownRequest));
+      expect(posts).toBe(1);
+      expect(reads).toBe(overflow ? 4 : 1);
+    }
   });
 
   it("preserves an ambiguous POST and reconciles authentic API identity without another POST", async () => {
@@ -234,6 +285,7 @@ describe("durable native dispatch in workerd", () => {
         id: 456, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
         path: ".github/workflows/native-windows.yml", display_title: `native-${request.nonce}`,
         repository: { full_name: request.repo }, actor: { login: "native-controller[bot]", type: "Bot" },
+        created_at: new Date().toISOString(),
       }] });
     };
     const authenticated = await readNativeControllerIdentity({ appId: "123", appJwt: "fixture-app-jwt", fetchImpl });
@@ -241,7 +293,7 @@ describe("durable native dispatch in workerd", () => {
       makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl }));
     expect((await runEffect(jobs.start(request))).state).toBe("dispatching");
     await runEffect(jobs.start(request));
-    expect(await runEffect(jobs.reconcile(request))).toEqual({ state: "bound", runId: 456, runAttempt: 1 });
+    expect(await runEffect(jobs.reconcile(request))).toMatchObject({ state: "bound", runId: 456, runAttempt: 1 });
     expect(posts).toBe(1);
     expect(reads).toBe(1);
   });

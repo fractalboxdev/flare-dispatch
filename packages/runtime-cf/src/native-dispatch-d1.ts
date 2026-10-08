@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import {
   NativeApiEvidence, NativeControllerLogin, NativeReceiptRefused, NativeRequest,
   admitNativeRequest,
+  NativeAdmissionTime, NativeRunCreatedAt, nativeDiscoveryWindow,
 } from "@fractalboxdev/flare-dispatch-core";
 
 const Controller = Schema.Struct({
@@ -14,17 +15,19 @@ const Run = Schema.Struct({
   executorRef: NativeApiEvidence.fields.executorRef, workflowPath: NativeApiEvidence.fields.workflowPath,
   runName: NativeApiEvidence.fields.runName, actorLogin: NativeApiEvidence.fields.actorLogin,
   actorType: NativeApiEvidence.fields.actorType,
+  createdAt: NativeRunCreatedAt,
 });
 const Snapshot = Schema.Struct({
   state: Schema.Literal("reserved", "dispatching", "accepted", "bound"),
   runId: Schema.NullOr(Run.fields.runId), runAttempt: Schema.NullOr(Run.fields.runAttempt),
+  admittedAt: NativeAdmissionTime,
 });
 type Snapshot = typeof Snapshot.Type;
 type Controller = typeof Controller.Type;
 type Provider = {
   readonly dispatch: (request: NativeRequest) => Effect.Effect<void, NativeReceiptRefused>;
   /** Complete bounded API evidence; partial pages refuse inside the provider. */
-  readonly listRuns: (request: NativeRequest) => Effect.Effect<readonly unknown[], NativeReceiptRefused>;
+  readonly listRuns: (request: NativeRequest, admittedAt: number) => Effect.Effect<readonly unknown[], NativeReceiptRefused>;
 };
 const decode = <A, I>(schema: Schema.Schema<A, I>, input: unknown) =>
   Schema.decodeUnknown(schema, { onExcessProperty: "error" })(input).pipe(
@@ -48,17 +51,19 @@ export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured
   const read = (id: Identity): Effect.Effect<Snapshot, NativeReceiptRefused> => Effect.gen(function* () {
     const row = yield* query(() => db.prepare(
       `SELECT request_json, controller_app_id, controller_login, state,
-              run_id AS runId, run_attempt AS runAttempt
+              run_id AS runId, run_attempt AS runAttempt, admitted_at AS admittedAt
          FROM native_dispatches WHERE repo=? AND nonce=?`,
     ).bind(id.request.repo, id.request.nonce).first<{
       request_json: string; controller_app_id: number; controller_login: string;
       state: string; runId: number | null; runAttempt: number | null;
+      admittedAt: number | null;
     }>());
     if (row === null) return yield* refuse("native dispatch intent absent");
     if (row.request_json !== id.text || row.controller_app_id !== id.controller.appId
       || row.controller_login !== id.controller.actorLogin)
       return yield* refuse("native dispatch nonce or controller ownership conflicts");
-    const snapshot = yield* decode(Snapshot, { state: row.state, runId: row.runId, runAttempt: row.runAttempt });
+    const snapshot = yield* decode(Snapshot, { state: row.state, runId: row.runId, runAttempt: row.runAttempt, admittedAt: row.admittedAt });
+    yield* nativeDiscoveryWindow(snapshot.admittedAt);
     if ((snapshot.state === "bound") !== (snapshot.runId !== null && snapshot.runAttempt !== null))
       return yield* refuse("native dispatch stored run identity invalid");
     return snapshot;
@@ -69,8 +74,8 @@ export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured
     const id = yield* identity(raw);
     yield* query(() => db.prepare(
       `INSERT OR IGNORE INTO native_dispatches
-         (repo, nonce, request_json, controller_app_id, controller_login, state)
-       VALUES (?, ?, ?, ?, ?, 'reserved')`,
+         (repo, nonce, request_json, controller_app_id, controller_login, state, admitted_at)
+       VALUES (?, ?, ?, ?, ?, 'reserved', unixepoch('now'))`,
     ).bind(id.request.repo, id.request.nonce, id.text, id.controller.appId, id.controller.actorLogin).run());
     const prior = yield* read(id);
     if (prior.state !== "reserved") return prior;
@@ -96,9 +101,12 @@ export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured
     const id = yield* identity(raw);
     const prior = yield* read(id);
     if (prior.state === "reserved") return prior;
-    const rawRuns = yield* provider.listRuns(id.request);
+    const window = yield* nativeDiscoveryWindow(prior.admittedAt);
+    const rawRuns = yield* provider.listRuns(id.request, prior.admittedAt);
     if (rawRuns.length > 100) return yield* refuse("native dispatch API evidence exceeds its page budget");
     const runs = yield* Effect.forEach(rawRuns, (rawRun) => decode(Run, rawRun));
+    if (runs.some((run) => Date.parse(run.createdAt) < window.lowerSeconds * 1000))
+      return yield* refuse("native dispatch API candidate predates admission window");
     const matches = runs.filter((run) => run.runName === `native-${id.request.nonce}`);
     if (matches.length === 0) return prior;
     if (matches.length !== 1) return yield* refuse("native dispatch API identity is ambiguous");
