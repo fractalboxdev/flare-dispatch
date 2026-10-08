@@ -7,6 +7,7 @@
 import { Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Artifact } from "@fractalboxdev/flare-dispatch-core";
+import { createHash } from "node:crypto";
 import { makeR2ArtifactLive } from "./artifact-r2";
 import { makeTestBindings, type TestBindings } from "./test-support";
 
@@ -20,6 +21,28 @@ describe("R2ArtifactLive", () => {
   });
   afterEach(async () => {
     await bindings.dispose();
+  });
+
+  it("imports verified bytes and leaves no usable artifact after refused streams", async () => {
+    const bytes = new TextEncoder().encode("MZ\0fixture");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const layer = makeR2ArtifactLive(bindings.bucket, EXECUTION_ID);
+    const body = () => new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+    await Effect.runPromise(Effect.gen(function* () {
+      const owner = yield* Artifact;
+      yield* owner.uploadVerified({ name: "good.exe", body: body(), size: bytes.length, sha256, contentType: "application/octet-stream" });
+      for (const [name, size, digest] of [["wrong.exe", bytes.length, "0".repeat(64)], ["truncated.exe", bytes.length + 1, sha256]] as const) {
+        const result = yield* Effect.exit(owner.uploadVerified({ name, body: body(), size, sha256: digest, contentType: "application/octet-stream" }));
+        expect(Exit.isFailure(result)).toBe(true);
+      }
+      const broken = new ReadableStream<Uint8Array>({ pull(controller) { controller.error(new Error("fixture stream failed")); } });
+      expect(Exit.isFailure(yield* Effect.exit(owner.uploadVerified({ name: "broken.exe", body: broken, size: bytes.length, sha256, contentType: "application/octet-stream" })))).toBe(true);
+    }).pipe(Effect.provide(layer)));
+    const stored = await bindings.bucket.get(`artifacts/${EXECUTION_ID}/good.exe`);
+    expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(bytes);
+    for (const name of ["wrong.exe", "truncated.exe", "broken.exe"]) {
+      expect(await bindings.bucket.get(`artifacts/${EXECUTION_ID}/${name}`)).toBeNull();
+    }
   });
 
   it("promotes a source log object to the stable artifact key", async () => {
