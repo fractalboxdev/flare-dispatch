@@ -4,13 +4,13 @@ const Revision = Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/));
 const Digest = Schema.String.pipe(Schema.pattern(/^[0-9a-f]{64}$/));
 const Target = Schema.Literal("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc");
 export const NativeControllerLogin = Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$/));
-const ArtifactPath = Schema.String.pipe(Schema.filter((path) => path.split("/").every((segment) =>
+export const NativeArtifactPath = Schema.String.pipe(Schema.filter((path) => path.split("/").every((segment) =>
   /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment)
     && !segment.endsWith(".")
     && !/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(segment),
 )));
 const Artifact = Schema.Struct({
-  path: ArtifactPath,
+  path: NativeArtifactPath,
   sha256: Digest,
   bytes: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
 });

@@ -7,14 +7,14 @@ import { describe, expect, it } from "vitest";
 import { nativeCommand, nativeCommandDigest, type NativeRequest } from "@fractalboxdev/flare-dispatch-core";
 import { makeNativeArchiveR2 } from "./native-archive-r2";
 
-type Member = { path: string; bytes: Uint8Array; method?: number; attrs?: number; flags?: number; size?: number };
+type Member = { path: string; bytes: Uint8Array; method?: number; attrs?: number; flags?: number; size?: number; checksum?: number };
 // Deterministic test-only ZIP fixture, including forced ZIP64 central records.
 const zip = (members: Member[], zip64 = false) => {
   const bodies: Buffer[] = [], records: Buffer[] = []; let offset = 0;
   for (const member of members) {
     const name = Buffer.from(member.path), method = member.method ?? 8;
     const compressed = method === 8 ? deflateRawSync(member.bytes) : Buffer.from(member.bytes);
-    const checksum = crc32(member.bytes), size = member.size ?? member.bytes.length;
+    const checksum = member.checksum ?? crc32(member.bytes), size = member.size ?? member.bytes.length;
     const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4);
     local.writeUInt16LE(member.flags ?? 0, 6); local.writeUInt16LE(method, 8); local.writeUInt32LE(checksum, 14);
     local.writeUInt32LE(compressed.length, 18); local.writeUInt32LE(Math.min(size, 0xffffffff), 22); local.writeUInt16LE(name.length, 26);
@@ -97,5 +97,10 @@ describe("bounded native ZIP extraction in workerd", () => {
         return env.RUNS_STORAGE.get(...args);
       } };
     await expect(Effect.runPromise(makeNativeArchiveR2(bucket).verify(f.input, key))).rejects.toThrow();
+  });
+  it("refuses CRC corruption despite matching SHA bytes and expanded ZIP64 size bombs", async () => {
+    const f = await fixture();
+    await expect(run(f.input, zip(f.members.map((m) => m.path === "command.log" ? { ...m, checksum: 1 } : m)))).rejects.toThrow();
+    await expect(run(f.input, zip([...f.members, { path: "bomb", bytes: Buffer.from("x"), size: 8 * 1024 * 1024 * 1024 + 1 }], true))).rejects.toThrow();
   });
 });
