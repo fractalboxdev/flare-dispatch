@@ -20,7 +20,7 @@ const decode = <A, I>(schema: Schema.Schema<A, I>, input: unknown) =>
   );
 
 /** Reader deadlines share this immutable namespace without changing its request identity. */
-export const nativeResultKey = (binding: NativeReadBinding): string =>
+export const nativeResultKey = (binding: NativeReadBinding | NativeRequest): string =>
   `native-results/v1/${binding.repo}/${binding.head}/${binding.base}/${binding.nonce}/${binding.target}/${binding.command_sha256}/${binding.executor_ref}.json`;
 
 /** Only the authenticated controller publishes here; workload artifacts have a separate namespace. */

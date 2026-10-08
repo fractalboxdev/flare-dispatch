@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { crc32 } from "node:zlib";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { nativeCommand, type NativeRequest } from "@fractalboxdev/flare-dispatch-core";
+import { nativeCommand, type NativeRequest, type NativeReceiptRefused } from "@fractalboxdev/flare-dispatch-core";
 import { makeNativeController } from "./native-controller";
 import * as native from "./native";
 import { makeNativeResultR2, nativeResultKey } from "./native-result-r2";
@@ -90,7 +90,8 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
       if (failPut && args[0].startsWith("native-results/")) { failPut = false; throw new Error("publication acknowledgement lost"); }
       return value;
     }) as R2Bucket["put"] } as R2Bucket;
-  const instance = options.authenticated ? { advance:(raw:unknown) =>
+  type Outcome = Effect.Effect.Success<ReturnType<typeof native.advanceNativeController>> | native.NativeControllerCheckpoint;
+  const instance: { advance: (raw: unknown) => Effect.Effect<Outcome, NativeReceiptRefused> } = options.authenticated ? { advance:(raw:unknown) =>
     (options.checkpoint ? native.advanceNativeControllerCheckpoint : native.advanceNativeController)({db:env.RUNS_METADATA,bucket,now: options.clock, auth:{appId:"42",appJwt:"fixture-app-jwt",
         repo:options.clientRepo ?? request.repo,fetchImpl}},raw) } :
     makeNativeController({ db: env.RUNS_METADATA, bucket, controller, now: options.clock,
