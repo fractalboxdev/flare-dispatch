@@ -61,7 +61,8 @@ describe("D1ExecutionsLive", () => {
     expect(await bindings.db.prepare("SELECT status,completed_at,summary_json FROM executions WHERE id=?")
       .bind(EXECUTION_ID).first()).toEqual({ status: "running", completed_at: null, summary_json: null });
   });
-  it("keeps diagnostic metadata generic without invoking hostile provider getters", async () => {
+  it.each([{ summaryJson: "é💥\ud800", bytes: 9 }, { summaryJson: `${"a".repeat(4095)}💥é`, bytes: 4101 }])
+    ("keeps diagnostic metadata generic without invoking hostile provider getters (%$)", async ({ summaryJson, bytes }) => {
     let getterCalls = 0;
     const provider = new Error("fixture-private-canary");
     for (const property of ["name", "message", "code", "cause"])
@@ -80,7 +81,7 @@ describe("D1ExecutionsLive", () => {
     const exit = await Effect.runPromiseExit(Effect.gen(function* () {
       const executions = yield* Executions;
       yield* executions.startExecution({ id: EXECUTION_ID, run: "fixture-command", startedAt: 1000 });
-      yield* executions.finishExecution({ id: EXECUTION_ID, completedAt: 2000, status: "failure", summaryJson: "é💥\ud800" });
+      yield* executions.finishExecution({ id: EXECUTION_ID, completedAt: 2000, status: "failure", summaryJson });
     }).pipe(Effect.provide(makeD1ExecutionsLive(db, CTX))));
     const defect = Exit.match(exit, { onSuccess: () => undefined, onFailure: cause => Option.getOrUndefined(Cause.dieOption(cause)) });
     expect(defect).toBeInstanceOf(Error);
@@ -88,7 +89,7 @@ describe("D1ExecutionsLive", () => {
     expect(message).toContain('"errorClass":"Error"');
     expect(message).toContain('"d1PrefixHint":"unknown"');
     expect(message).toContain('"sqliteCodeHint":"unknown"');
-    expect(message).toContain('"summaryUtf8Bytes":9');
+    expect(message).toContain(`"summaryUtf8Bytes":${bytes}`);
     expect(message).not.toContain("fixture-private-canary"); expect(getterCalls).toBe(0);
   });
 
