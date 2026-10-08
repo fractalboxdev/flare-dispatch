@@ -13,10 +13,29 @@ const apiRun = (id = 456) => ({
   path: ".github/workflows/native-windows.yml", display_title: `native-${request.nonce}`,
   repository: { full_name: request.repo }, actor: { login: "native-controller[bot]", type: "Bot" },
   extra_api_field: "unused metadata",
+  created_at:"2026-10-08T00:00:00Z",
 });
+const admission = Date.parse("2026-10-08T00:05:00Z") / 1000;
 const runEffect = Effect.runPromise;
 
 describe("authenticated native GitHub provider", () => {
+  it("refuses omitted or invalid durable admission time before any discovery HTTP", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ total_count:0, workflow_runs:[] }));
+    const provider = makeNativeGithubProvider({ repo:request.repo, token:"fixture-installation", fetchImpl });
+    for (const value of [undefined, null, "2026-10-08T00:05:00Z", 0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER])
+      await expect(runEffect(provider.listRuns(request, value))).rejects.toThrow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses pagination that drops the immutable created filter", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ total_count:2, workflow_runs:[apiRun()] }, { headers:{
+      link:'<https://api.github.com/repos/owner/context/actions/workflows/native-windows.yml/runs?event=workflow_dispatch&per_page=25&page=2>; rel="next"',
+    } }));
+    const provider = makeNativeGithubProvider({ repo:request.repo, token:"fixture-installation", fetchImpl });
+    await expect(runEffect(provider.listRuns(request, admission))).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   const completedRun = () => ({ ...apiRun(), status: "completed", conclusion: "success" });
   const completedJob = () => ({ id: 789, run_id: 456, head_sha: request.executor_ref,
     name: "aarch64", status: "completed", conclusion: "success", labels: ["windows-11-arm"] });
@@ -33,6 +52,17 @@ describe("authenticated native GitHub provider", () => {
     });
     return { provider: makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl }), fetchImpl };
   };
+
+  it("revalidates a bound run through its exact attempt without listing history", async () => {
+    const { provider, fetchImpl } = collector();
+    expect(await runEffect(provider.readRun(request, bound))).toMatchObject({ runId:456, runAttempt:1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]![0])).toBe("https://api.github.com/repos/owner/context/actions/runs/456/attempts/1");
+    for (const altered of [apiRun(457), { ...apiRun(), run_attempt:2 }]) {
+      const alteredProvider = collector([altered]).provider;
+      await expect(runEffect(alteredProvider.readRun(request, bound))).rejects.toThrow();
+    }
+  });
 
   it("collects independent terminal API evidence and the exact artifact under the durable run binding", async () => {
     const { provider, fetchImpl } = collector();
@@ -133,21 +163,25 @@ describe("authenticated native GitHub provider", () => {
 
   it("decodes complete paginated API run identity without using workload metadata", async () => {
     let pages = 0;
-    const fetchImpl = vi.fn(async () => {
+    const fetchImpl = vi.fn(async (raw: string | URL | Request) => {
+      const url = new URL(String(raw));
+      expect(url.searchParams.get("created")).toBe(">=2026-10-08T00:00:00Z");
       pages++;
+      url.searchParams.set("page", "2");
       return pages === 1
         ? Response.json({ total_count: 2, workflow_runs: [{ ...apiRun(455), display_title: "native-unrelated" }] }, {
-          headers: { link: '<https://api.github.com/repos/owner/context/actions/workflows/native-windows.yml/runs?event=workflow_dispatch&per_page=25&page=2>; rel="next"' },
+          headers: { link: `<${url}>; rel="next"` },
         })
         : Response.json({ total_count: 2, workflow_runs: [apiRun()] });
     });
     const provider = makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl });
-    const runs = await runEffect(provider.listRuns(request));
+    const runs = await runEffect(provider.listRuns(request, admission));
     expect(runs).toHaveLength(2);
     expect(runs[1]).toEqual({
       repo: request.repo, runId: 456, runAttempt: 1, event: "workflow_dispatch",
       executorRef: request.executor_ref, workflowPath: ".github/workflows/native-windows.yml",
       runName: `native-${request.nonce}`, actorLogin: "native-controller[bot]", actorType: "Bot",
+      createdAt:apiRun().created_at,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
@@ -160,7 +194,7 @@ describe("authenticated native GitHub provider", () => {
       { ...request, head: "main" }, { ...request, profile: "contextful-full" },
     ]) {
       await expect(runEffect(provider.dispatch(invalid))).rejects.toThrow();
-      await expect(runEffect(provider.listRuns(invalid))).rejects.toThrow();
+      await expect(runEffect(provider.listRuns(invalid, admission))).rejects.toThrow();
     }
     await expect(runEffect(makeNativeGithubProvider({ repo: request.repo, token: "", fetchImpl })
       .dispatch(request))).rejects.toThrow();
@@ -176,7 +210,7 @@ describe("authenticated native GitHub provider", () => {
     ]) {
       const provider = makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation",
         fetchImpl: async () => Response.json(body) });
-      await expect(runEffect(provider.listRuns(request))).rejects.toThrow();
+      await expect(runEffect(provider.listRuns(request, admission))).rejects.toThrow();
     }
   });
 

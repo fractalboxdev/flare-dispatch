@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import {
   admitNativeApiEvidence, admitNativeRequest, NativeApiEvidence, NativeControllerLogin, NativeReceiptRefused,
+  NativeRunCreatedAt, nativeDiscoveryWindow,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
   dispatchNativeWindows, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs, readNativeWindowsArtifacts,
@@ -21,6 +22,7 @@ const ApiRun = Schema.Struct({
 });
 const CompletedRun = Schema.Struct({ ...ApiRun.fields,
   status: NativeApiEvidence.fields.status, conclusion: NativeApiEvidence.fields.conclusion });
+const DiscoveryRun = Schema.Struct({ ...ApiRun.fields, created_at: NativeRunCreatedAt });
 const Binding = Schema.Struct({ runId: PositiveId, runAttempt: PositiveId });
 const ApiJob = Schema.Struct({ id: PositiveId, run_id: PositiveId,
   head_sha: NativeApiEvidence.fields.executorRef, name: NativeApiEvidence.fields.job,
@@ -30,6 +32,11 @@ const ApiArtifact = Schema.Struct({ id: PositiveId, name: Schema.String, expired
   size_in_bytes: Schema.Number.pipe(Schema.filter((n) => Number.isSafeInteger(n) && n >= 22 && n <= NATIVE_ARCHIVE_MAX_BYTES)),
   workflow_run: Schema.Struct({ id: PositiveId, head_sha: NativeApiEvidence.fields.executorRef }) });
 const refuse = (reason: string) => new NativeReceiptRefused({ reason });
+const discoveryEvidence = (run: typeof DiscoveryRun.Type) => ({
+  repo: run.repository.full_name, runId: run.id, runAttempt: run.run_attempt, event: run.event,
+  executorRef: run.head_sha, workflowPath: run.path, runName: run.display_title,
+  actorLogin: run.actor.login, actorType: run.actor.type, createdAt: run.created_at,
+});
 const decode = <A, I>(schema: Schema.Schema<A, I>, raw: unknown) => Schema.decodeUnknown(schema)(raw).pipe(
   Effect.mapError(() => refuse("native GitHub evidence malformed")),
 );
@@ -49,20 +56,29 @@ export const makeNativeGithubProvider = (client: Client) => {
       catch: () => new NativeReceiptRefused({ reason: "native GitHub dispatch outcome uncertain" }),
     });
   });
-  const listRuns = (raw: unknown) => Effect.gen(function* () {
+  const listRuns = (raw: unknown, rawAdmission: unknown) => Effect.gen(function* () {
     yield* scoped(raw);
+    const window = yield* nativeDiscoveryWindow(rawAdmission);
     const entries = yield* Effect.tryPromise({
-      try: () => readNativeWindowsRuns(client),
+      try: () => readNativeWindowsRuns({ ...client, createdAfter: window.createdAfter }),
       catch: () => new NativeReceiptRefused({ reason: "complete native GitHub run evidence unavailable" }),
     });
-    const runs = yield* Effect.forEach(entries, (entry) => Schema.decodeUnknown(ApiRun)(entry).pipe(
+    const runs = yield* Effect.forEach(entries, (entry) => Schema.decodeUnknown(DiscoveryRun)(entry).pipe(
       Effect.mapError(() => new NativeReceiptRefused({ reason: "native GitHub run evidence malformed" })),
     ));
-    return runs.map((run) => ({
-      repo: run.repository.full_name, runId: run.id, runAttempt: run.run_attempt, event: run.event,
-      executorRef: run.head_sha, workflowPath: run.path, runName: run.display_title,
-      actorLogin: run.actor.login, actorType: run.actor.type,
-    }));
+    return runs.map(discoveryEvidence);
+  });
+  const readRun = (raw: unknown, rawBinding: unknown) => Effect.gen(function* () {
+    yield* scoped(raw);
+    const binding = yield* decode(Binding, rawBinding);
+    const rawRun = yield* Effect.tryPromise({
+      try: () => readNativeWindowsRun({ ...client, runId: binding.runId, attempt: binding.runAttempt }),
+      catch: () => refuse("complete native GitHub run evidence unavailable"),
+    });
+    const run = yield* decode(DiscoveryRun, rawRun);
+    if (run.id !== binding.runId || run.run_attempt !== binding.runAttempt)
+      return yield* Effect.fail(refuse("native run differs from durable binding"));
+    return discoveryEvidence(run);
   });
   const collect = (raw: unknown, rawBinding: unknown, controllerLogin: string) => Effect.gen(function* () {
     const request = yield* scoped(raw);
@@ -105,5 +121,5 @@ export const makeNativeGithubProvider = (client: Client) => {
       return yield* Effect.fail(refuse("native archive expired or run identity mismatch"));
     return { api, artifactId: artifact.id };
   });
-  return { dispatch, listRuns, collect };
+  return { dispatch, listRuns, readRun, collect };
 };

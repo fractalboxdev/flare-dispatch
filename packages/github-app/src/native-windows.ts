@@ -85,8 +85,11 @@ const readPages = async (opts: NativeClient, suffix: string, key: string): Promi
   throw new GithubApiError("native executor evidence exceeds its pagination budget", 0, "");
 };
 
-export const readNativeWindowsRuns = async (opts: NativeClient): Promise<readonly unknown[]> =>
-  readPages(opts, "workflows/native-windows.yml/runs?event=workflow_dispatch&per_page=25", "workflow_runs");
+export const readNativeWindowsRuns = async (opts: NativeClient & { readonly createdAfter?: string }): Promise<readonly unknown[]> => {
+  const query = new URLSearchParams({ event:"workflow_dispatch", per_page:"25" });
+  if (opts.createdAfter !== undefined) query.set("created", `>=${opts.createdAfter}`);
+  return readPages(opts, `workflows/native-windows.yml/runs?${query}`, "workflow_runs");
+};
 
 /** A durable binding selects one immutable run attempt without scanning workflow history. */
 export const readNativeWindowsRun = async (opts: NativeClient & {

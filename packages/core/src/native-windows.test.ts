@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { expect } from "vitest";
-import { admitNativeApiEvidence, bindNativeReceipt, nativeCommand, type NativeRequest } from "./native-windows";
+import { admitNativeApiEvidence, bindNativeReceipt, nativeCommand, nativeDiscoveryWindow, NativeRunCreatedAt, type NativeRequest } from "./native-windows";
 
 const request: NativeRequest = {
   repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
@@ -23,6 +23,16 @@ const api = () => ({
   actorLogin: "native-controller[bot]", actorType: "Bot",
   labels: ["windows-11-arm"],
 });
+
+it.effect("discovery derives a fixed UTC lower bound only from valid admission seconds", () => Effect.gen(function* () {
+  const admission = Date.parse("2026-10-08T00:05:00Z") / 1000;
+  expect(yield* nativeDiscoveryWindow(admission)).toEqual({ admittedAt:admission, lowerSeconds:admission - 300, createdAfter:"2026-10-08T00:00:00Z" });
+  for (const value of [undefined, null, "2026-10-08T00:05:00Z", { admittedAt:admission }, 0, -1, 1.5, admission * 1000, Infinity])
+    expect(yield* nativeDiscoveryWindow(value).pipe(Effect.either)).toHaveProperty("left");
+  for (const value of ["2026-10-08T00:05:00Z", "2026-10-08T00:05:00.000Z"]) expect(Schema.is(NativeRunCreatedAt)(value)).toBe(true);
+  for (const value of ["2026-02-30T00:00:00Z", "2026-10-08", "2026-10-08T00:05:00+01:00", "private-metadata"])
+    expect(Schema.is(NativeRunCreatedAt)(value)).toBe(false);
+}));
 
 it.effect("admits independent completed API evidence before reading workload receipts", () => Effect.gen(function* () {
   const admitted = yield* admitNativeApiEvidence(request, api(), "native-controller[bot]");

@@ -14,8 +14,8 @@
 //
 // Spec: specs/pm/plan.md § PR4 acceptance.
 
-import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { readD1Migrations } from "@cloudflare/vitest-pool-workers/config";
 import { Miniflare } from "miniflare";
 
 /** A booted Miniflare instance plus its D1 / R2 / KV bindings. */
@@ -35,11 +35,7 @@ export type TestBindings = {
  * gone).
  */
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../../infra/migrations/", import.meta.url));
-const D1_SCHEMA = readdirSync(MIGRATIONS_DIR)
-  .filter((f) => f.endsWith(".sql"))
-  .sort()
-  .map((f) => readFileSync(new URL(f, `file://${MIGRATIONS_DIR}`), "utf8"))
-  .join("\n");
+const D1_MIGRATIONS = readD1Migrations(MIGRATIONS_DIR);
 
 /**
  * Boot a Miniflare instance with a D1 database + R2 bucket + KV namespace,
@@ -61,19 +57,12 @@ export const makeTestBindings = async (): Promise<TestBindings> => {
   const bucket = (await mf.getR2Bucket("RUNS_STORAGE")) as unknown as R2Bucket;
   const kv = (await mf.getKVNamespace("CONFIG_KV")) as unknown as KVNamespace;
 
-  // Apply the migrations. D1's `exec` runs one statement per line, so the
-  // multi-line `CREATE TABLE`s are collapsed to single lines. Comments are
-  // stripped BEFORE splitting on ";" — splitting first turned a semicolon
-  // inside a comment into a corrupted next statement.
-  const statements = D1_SCHEMA.split("\n")
-    .map((line) => line.replace(/--.*$/, "").trim())
-    .filter(Boolean)
-    .join(" ")
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  for (const statement of statements) {
-    await db.exec(statement);
+  // Wrangler's parser preserves compound statements such as trigger bodies.
+  // Prepared execution accepts each complete query without D1 exec's line splitting.
+  for (const migration of await D1_MIGRATIONS) {
+    for (const statement of migration.queries) {
+      await db.prepare(statement).run();
+    }
   }
 
   return { db, bucket, kv, dispose: () => mf.dispose() };
