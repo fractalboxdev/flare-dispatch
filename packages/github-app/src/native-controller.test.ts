@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { readNativeControllerIdentity } from "./index";
+import { parseNativeControllerAppId, readNativeControllerIdentity } from "./index";
 
 const opts = { appId: "123", appJwt: "fixture-app-jwt" };
 const response = (body: unknown) => Response.json(body);
 
 describe("native controller identity", () => {
+  it("admits only canonical safe decimal App configuration for local and authenticated lookup",()=>{
+    expect(parseNativeControllerAppId("123")).toBe(123);
+    for(const value of [123, null, {toString:()=>"123"}, "", "00123", " 123", "1e2", "9007199254740992"])
+      expect(()=>parseNativeControllerAppId(value)).toThrow();
+  });
   it("reads the authenticated configured App rather than a caller's public slug", async () => {
     const fetchImpl = vi.fn(async () => response({ id: 123, slug: "fixture-controller", owner: {} }));
     expect(await readNativeControllerIdentity({ ...opts, fetchImpl })).toEqual({

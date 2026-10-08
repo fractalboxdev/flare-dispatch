@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import {
   NativeApiEvidence, NativeControllerLogin, NativeReceiptRefused, NativeRequest,
   admitNativeRequest,
@@ -44,7 +44,7 @@ const query = <A>(operation: () => Promise<A>) => Effect.tryPromise({
 const refuse = (reason: string) => Effect.fail(new NativeReceiptRefused({ reason }));
 
 /** Dispatch and reader admission use the same persisted ownership and state validation. */
-const readDispatchRecord = (db: Pick<D1Database, "prepare">, repo: string, nonce: string) => Effect.gen(function* () {
+const readOptionalDispatchRecord = (db: Pick<D1Database, "prepare">, repo: string, nonce: string) => Effect.gen(function* () {
   const row = yield* query(() => db.prepare(
     `SELECT request_json, controller_app_id, controller_login, state,
             run_id AS runId, run_attempt AS runAttempt, admitted_at AS admittedAt,
@@ -55,7 +55,7 @@ const readDispatchRecord = (db: Pick<D1Database, "prepare">, repo: string, nonce
     state:string; runId:number | null; runAttempt:number | null; admittedAt:number | null;
     timeoutSec:number | null; deadlineAt:number | null; observedAt:number;
   }>());
-  if (row === null) return yield* refuse("native dispatch intent absent");
+  if (row === null) return Option.none();
   const controller = yield* decode(Controller, { appId:row.controller_app_id, actorLogin:row.controller_login });
   const snapshot = yield* decode(Snapshot, { state:row.state, runId:row.runId, runAttempt:row.runAttempt, admittedAt:row.admittedAt });
   yield* nativeDiscoveryWindow(snapshot.admittedAt);
@@ -68,7 +68,45 @@ const readDispatchRecord = (db: Pick<D1Database, "prepare">, repo: string, nonce
   if (policy !== undefined && row.deadlineAt !== policy.deadlineAt)
     return yield* refuse("native dispatch stored deadline conflicts");
   const observedAt = yield* decode(NativeAdmissionTime, row.observedAt);
-  return { request, controller, snapshot, policy, observedAt, text:row.request_json };
+  return Option.some({ request, controller, snapshot, policy, observedAt, text:row.request_json });
+});
+
+const readDispatchRecord = (db: Pick<D1Database, "prepare">, repo: string, nonce: string) =>
+  readOptionalDispatchRecord(db, repo, nonce).pipe(Effect.flatMap(Option.match({
+    onNone: () => refuse("native dispatch intent absent"),
+    onSome: Effect.succeed,
+  })));
+
+const assertDispatchPolicy = (
+  stored: Effect.Effect.Success<ReturnType<typeof nativeControllerDeadline>> | undefined,
+  requested: NativeControllerPolicy | undefined, observedAt: number,
+) => Effect.gen(function* () {
+  if (requested?.timeoutSec !== stored?.timeoutSec)
+    return yield* refuse("native controller deadline policy conflicts or is absent");
+  if (stored !== undefined) {
+    yield* assertNativeControllerDeadline(stored.deadlineAt, observedAt);
+    // Database responses can arrive late; the live trusted clock admits the next side effect after the response.
+    yield* assertNativeControllerDeadline(stored.deadlineAt, Math.floor(Date.now() / 1000));
+  }
+});
+
+/** A refusal-only lookup grants neither dispatch nor binding authority; fresh App login admission follows it. */
+export const preflightNativeDispatchD1 = (
+  db: Pick<D1Database, "prepare">, rawRequest: unknown, configuredAppId: number, configuredPolicy?: NativeControllerPolicy,
+) => Effect.gen(function* () {
+  const request = yield* admitNativeRequest(rawRequest);
+  const appId = yield* decode(Controller.fields.appId, configuredAppId);
+  const policy = configuredPolicy === undefined ? undefined : yield* decode(NativeControllerPolicy, configuredPolicy);
+  if (policy !== undefined) yield* nativeControllerDeadline(policy, Math.floor(Date.now() / 1000));
+  const record = yield* readOptionalDispatchRecord(db, request.repo, request.nonce);
+  return yield* Option.match(record, {
+    onNone: () => Effect.void,
+    onSome: (stored) => Effect.gen(function* () {
+      if (stored.text !== JSON.stringify(request) || stored.controller.appId !== appId)
+        return yield* refuse("native dispatch nonce or controller ownership conflicts");
+      yield* assertDispatchPolicy(stored.policy, policy, stored.observedAt);
+    }),
+  });
 });
 
 /** HMAC verification belongs to the route; durable controller authority remains a D1 fact. */
@@ -103,13 +141,7 @@ export const makeNativeDispatchD1 = (
     if (record.text !== id.text || record.controller.appId !== id.controller.appId
       || record.controller.actorLogin !== id.controller.actorLogin)
       return yield* refuse("native dispatch nonce or controller ownership conflicts");
-    if (id.policy?.timeoutSec !== record.policy?.timeoutSec)
-      return yield* refuse("native controller deadline policy conflicts or is absent");
-    if (record.policy !== undefined) {
-      yield* assertNativeControllerDeadline(record.policy.deadlineAt, record.observedAt);
-      // Database responses can arrive late; the trusted live clock admits the next side effect after the response.
-      yield* assertNativeControllerDeadline(record.policy.deadlineAt, Math.floor(Date.now() / 1000));
-    }
+    yield* assertDispatchPolicy(record.policy, id.policy, record.observedAt);
     return record.policy === undefined ? record.snapshot : { ...record.snapshot, deadlineAt: record.policy.deadlineAt };
   });
   const observe = (raw: unknown) => Effect.gen(function* () { return yield* read(yield* identity(raw)); });

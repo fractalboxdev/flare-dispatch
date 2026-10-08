@@ -1,7 +1,7 @@
 import { Effect, Match, Redacted } from "effect";
 import { admitNativeReadBinding, admitNativeRequest, NativeReceiptRefused, type NativeControllerPolicy } from "@fractalboxdev/flare-dispatch-core";
-import { streamNativeWindowsArchive } from "@fractalboxdev/flare-dispatch-github-app";
-import { makeNativeDispatchD1 } from "./native-dispatch-d1";
+import { parseNativeControllerAppId, streamNativeWindowsArchive } from "@fractalboxdev/flare-dispatch-github-app";
+import { makeNativeDispatchD1, preflightNativeDispatchD1 } from "./native-dispatch-d1";
 import { makeNativeGithubProvider } from "./native-github-provider";
 import { makeNativeArchiveDownload } from "./native-archive-download";
 import { makeNativeArchiveR2 } from "./native-archive-r2";
@@ -24,12 +24,15 @@ type AuthenticatedOptions = {
   readonly policy?:NativeControllerPolicy;
 };
 
-/** App authentication precedes durable admission; credentials exist only in the live provider. */
+/** Durable refusal precedes fresh App authentication; credentials exist only in the live provider. */
 export const advanceNativeController = (options:AuthenticatedOptions, rawRequest:unknown) => Effect.gen(function* () {
   const request=yield* admitNativeRequest(rawRequest);
   if(request.repo !== options.auth.repo)
     return yield* Effect.fail(refused("native controller credential scope invalid"));
   const clock=options.now ?? (()=>Math.floor(Date.now()/1000));
+  const appId=yield* Effect.try({try:()=>parseNativeControllerAppId(options.auth.appId),
+    catch:()=>refused("native controller configured App identity invalid")});
+  yield* preflightNativeDispatchD1(options.db,request,appId,options.policy);
   const context=yield* readNativeGithubContext(options.auth,clock());
   return yield* makeNativeController({db:options.db,bucket:options.bucket,controller:context.controller,now:clock,policy:options.policy,
     client:{repo:context.repo,token:Redacted.value(context.token),apiBase:options.auth.apiBase,fetchImpl:options.auth.fetchImpl},

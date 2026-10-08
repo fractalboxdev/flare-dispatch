@@ -114,7 +114,7 @@ export {
   type FetchAppRegistrationOptions,
 } from "./registration";
 export { GithubApiError } from "./errors";
-export { readNativeControllerIdentity } from "./native-controller";
+export { parseNativeControllerAppId, readNativeControllerIdentity } from "./native-controller";
 export {
   dispatchNativeWindows, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs,
   readNativeWindowsArtifacts, streamNativeWindowsArchive,
