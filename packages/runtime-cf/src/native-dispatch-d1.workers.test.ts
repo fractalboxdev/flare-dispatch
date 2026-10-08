@@ -257,6 +257,30 @@ describe("durable native dispatch in workerd", () => {
     expect((await runEffect(jobs.observe(request))).runId).toBe(456);
   });
 
+  it("refuses every altered exact-response identity after binding and keeps absent unbound discovery pending", async () => {
+    let exact = run(), listings = 0;
+    const jobs = makeNativeDispatchD1(env.RUNS_METADATA, controller, {
+      dispatch: () => Effect.void,
+      listRuns: () => Effect.sync(() => { listings++; return [run()]; }),
+      readRun: () => Effect.succeed(exact),
+    });
+    await runEffect(jobs.start(request));
+    const bound = await runEffect(jobs.reconcile(request));
+    for (const patch of [
+      { runName:"native-another-nonce" }, { repo:"another/context" },
+      { actorLogin:"another-controller[bot]" }, { actorType:"User" },
+      { executorRef:"4".repeat(40) }, { workflowPath:".github/workflows/another.yml" },
+    ]) {
+      exact = { ...run(), ...patch };
+      await expect(runEffect(jobs.reconcile(request))).rejects.toThrow();
+      expect(await runEffect(jobs.observe(request))).toEqual(bound);
+    }
+    expect(listings).toBe(1);
+    const other = { ...request, nonce:"native-pending-0123456789" };
+    await runEffect(jobs.start(other));
+    expect((await runEffect(jobs.reconcile(other))).state).toBe("accepted");
+  });
+
   it("reopens a committed reservation after its response is lost", async () => {
     let posts = 0;
     const provider = { dispatch: () => Effect.sync(() => { posts++; }), listRuns: () => Effect.succeed([]) };
