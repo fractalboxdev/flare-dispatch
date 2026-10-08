@@ -26,8 +26,11 @@ export const nativeGate = defineRun({
       const now = yield* step(`native-gate-clock-${index}`, () => io.now);
       if (now >= deadline) return yield* Effect.fail(new NativeReceiptRefused({ reason: "native gate deadline exceeded" }));
       const observed = yield* step(`observe-native-gate-${index}`, () => nativeExecution.observeGate(handle));
-      if (observed.status === "ready") return { target: input.target, head: input.sha, base: input.baseSha,
-        files: observed.files.map(file => file.path) };
+      if (observed.status === "ready") {
+        const completedAt = yield* step(`native-gate-ready-clock-${index}`, () => io.now);
+        if (completedAt >= deadline) return yield* Effect.fail(new NativeReceiptRefused({ reason: "native gate deadline exceeded" }));
+        return { target: input.target, head: input.sha, base: input.baseSha, files: observed.files.map(file => file.path) };
+      }
       yield* step(`sleep-native-gate-${index}`, () => io.sleep("30 seconds"));
     }
   }),
