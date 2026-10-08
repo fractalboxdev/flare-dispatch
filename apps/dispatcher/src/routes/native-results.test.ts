@@ -2,10 +2,8 @@ import { createHash } from "node:crypto";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { nativeCommand, type NativeReadBinding, type NativeRequest } from "@fractalboxdev/flare-dispatch-core";
-import { makeTestBindings } from "../../../../packages/runtime-cf/src/test-support";
-import { makeNativeDispatchD1 } from "../../../../packages/runtime-cf/src/native-dispatch-d1";
-import { makeNativeFilesR2 } from "../../../../packages/runtime-cf/src/native-files-r2";
-import { makeNativeResultR2 } from "../../../../packages/runtime-cf/src/native-result-r2";
+import { makeTestBindings } from "@fractalboxdev/flare-dispatch-runtime-cf/testing";
+import { makeNativeDispatchD1, makeNativeFilesR2, makeNativeResultR2 } from "@fractalboxdev/flare-dispatch-runtime-cf/native";
 import { handleRequest } from "../router";
 import { signNativeResultToken } from "../native-result-token";
 import { makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
@@ -65,9 +63,36 @@ const post = (body: unknown, authorization?: string, query = "") => new Request(
   method: "POST", headers: { "content-type": "application/json", ...(authorization === undefined ? {} : { authorization }) },
   body: JSON.stringify(body),
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("authenticated native result HTTP reads", () => {
+  it.each(["stalled", "oversized"] as const)("bounds %s body disposal even when cancellation never settles", async (kind) => {
+    let canceled = false, finishCancel: (() => void) | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { if (kind === "oversized") controller.enqueue(new Uint8Array(4097)); },
+      cancel() { canceled = true; return new Promise<void>((resolve) => { finishCancel = resolve; }); },
+    });
+    const storage = makeFakeR2();
+    const get = vi.spyOn(storage.binding, "get");
+    const prepare = vi.fn(() => { throw new Error("fixture storage accessed before body admission"); });
+    const env = { ...makeFakeEnv({ hmacSecret: "fixture-key", workflow: makeFakeWorkflow(), storage }),
+      RUNS_METADATA: { prepare } as unknown as D1Database };
+    const input = new Request("https://worker.test/v1/native-results/read", { method: "POST",
+      headers: { authorization: `Bearer ${"a".repeat(22)}`, "content-type": "application/json" },
+      body, duplex: "half" } as RequestInit);
+    vi.useFakeTimers();
+    let response: Response | undefined;
+    const completed = handleRequest(input, env).then((value) => { response = value; });
+    try {
+      await vi.advanceTimersByTimeAsync(kind === "stalled" ? 10_001 : 1);
+      expect(canceled).toBe(true);
+      expect(response?.status).toBe(kind === "stalled" ? 408 : 413);
+      expect(prepare).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
+    } finally {
+      finishCancel?.(); vi.useRealTimers(); await completed;
+    }
+  });
+
   it("serves verified metadata and actual file bytes through the typed HTTP router", async () => {
     const f = await open();
     try {
