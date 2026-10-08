@@ -1,5 +1,5 @@
 import { Effect, Match, Redacted } from "effect";
-import { admitNativeReadBinding, admitNativeRequest, NativeReceiptRefused } from "@fractalboxdev/flare-dispatch-core";
+import { admitNativeReadBinding, admitNativeRequest, NativeReceiptRefused, type NativeControllerPolicy } from "@fractalboxdev/flare-dispatch-core";
 import { streamNativeWindowsArchive } from "@fractalboxdev/flare-dispatch-github-app";
 import { makeNativeDispatchD1 } from "./native-dispatch-d1";
 import { makeNativeGithubProvider } from "./native-github-provider";
@@ -13,6 +13,7 @@ type Options = {
   readonly controller: { readonly appId: number; readonly actorLogin: string };
   readonly client: Parameters<typeof makeNativeGithubProvider>[0];
   readonly now?: () => number;
+  readonly policy?: NativeControllerPolicy;
 };
 const refused = (reason: string) => new NativeReceiptRefused({ reason });
 
@@ -20,6 +21,7 @@ type AuthenticatedOptions = {
   readonly db:D1Database;readonly bucket:R2Bucket;
   readonly auth:Parameters<typeof readNativeGithubContext>[0];
   readonly now?:()=>number;
+  readonly policy?:NativeControllerPolicy;
 };
 
 /** App authentication precedes durable admission; credentials exist only in the live provider. */
@@ -29,15 +31,15 @@ export const advanceNativeController = (options:AuthenticatedOptions, rawRequest
     return yield* Effect.fail(refused("native controller credential scope invalid"));
   const clock=options.now ?? (()=>Math.floor(Date.now()/1000));
   const context=yield* readNativeGithubContext(options.auth,clock());
-  return yield* makeNativeController({db:options.db,bucket:options.bucket,controller:context.controller,now:clock,
+  return yield* makeNativeController({db:options.db,bucket:options.bucket,controller:context.controller,now:clock,policy:options.policy,
     client:{repo:context.repo,token:Redacted.value(context.token),apiBase:options.auth.apiBase,fetchImpl:options.auth.fetchImpl},
   }).advance(request);
 });
 
 /** An authenticated caller owns ephemeral credentials; durable dispatch alone owns the POST claim. */
-export const makeNativeController = ({ db, bucket, controller, client, now: clock = () => Math.floor(Date.now() / 1000) }: Options) => {
+export const makeNativeController = ({ db, bucket, controller, client, policy, now: clock = () => Math.floor(Date.now() / 1000) }: Options) => {
   const provider = makeNativeGithubProvider(client);
-  const dispatch = makeNativeDispatchD1(db, controller, provider);
+  const dispatch = makeNativeDispatchD1(db, controller, provider, policy);
   const results = makeNativeResultR2(bucket, controller.actorLogin);
   const advance = (rawRequest: unknown) => Effect.gen(function* () {
     const request = yield* admitNativeRequest(rawRequest);
@@ -45,8 +47,9 @@ export const makeNativeController = ({ db, bucket, controller, client, now: cloc
       return yield* Effect.fail(refused("native controller credential scope invalid"));
     yield* dispatch.start(request);
     const state = yield* dispatch.reconcile(request);
+    const durableClock = { admittedAt:state.admittedAt, ...(state.deadlineAt === undefined ? {} : { deadlineAt:state.deadlineAt }) };
     if (state.state !== "bound" || state.runId === null || state.runAttempt === null)
-      return { _tag: "WaitingForRun" as const, admittedAt: state.admittedAt };
+      return { _tag: "WaitingForRun" as const, ...durableClock };
     const now = clock();
     const binding = yield* admitNativeReadBinding({ version: 1, repo: request.repo, head: request.head, base: request.base,
       nonce: request.nonce, target: request.target, command_sha256: request.command_sha256,
@@ -56,14 +59,14 @@ export const makeNativeController = ({ db, bucket, controller, client, now: cloc
       const result = yield* results.read(binding, now);
       if (result.receipt.run_id !== String(state.runId) || result.receipt.run_attempt !== String(state.runAttempt))
         return yield* Effect.fail(refused("native publication conflicts with durable run"));
-      return { _tag: "Published" as const, result, admittedAt: state.admittedAt };
+      return { _tag: "Published" as const, result, ...durableClock };
     }
     const run = { runId: state.runId, runAttempt: state.runAttempt };
     const observed = yield* provider.observeRun(request, run, controller.actorLogin);
     return yield* Match.value(observed).pipe(
-      Match.tag("Pending", (pending) => Effect.succeed({ ...pending, _tag: "Running" as const, admittedAt: state.admittedAt })),
+      Match.tag("Pending", (pending) => Effect.succeed({ ...pending, _tag: "Running" as const, ...durableClock })),
       Match.tag("Terminal", (terminal) => Effect.gen(function* () {
-        if (terminal.conclusion !== "success") return { ...terminal, _tag: "Failed" as const, admittedAt: state.admittedAt };
+        if (terminal.conclusion !== "success") return { ...terminal, _tag: "Failed" as const, ...durableClock };
         const evidence = yield* provider.collect(request, run, controller.actorLogin);
         const response = yield* Effect.tryPromise({ try: () => streamNativeWindowsArchive({ ...client, artifactId: evidence.artifactId }),
           catch: () => refused("native authenticated archive download unavailable") });
@@ -75,7 +78,7 @@ export const makeNativeController = ({ db, bucket, controller, client, now: cloc
           }),
           (archive) => Effect.tryPromise({ try: () => bucket.delete(archive.key), catch: () => refused("native temporary archive disposal unavailable") }).pipe(Effect.orDie),
         );
-        return { _tag: "Published" as const, result, admittedAt: state.admittedAt };
+        return { _tag: "Published" as const, result, ...durableClock };
       })),
       Match.exhaustive,
     );

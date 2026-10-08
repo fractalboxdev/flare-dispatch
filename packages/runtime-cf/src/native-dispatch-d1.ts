@@ -23,6 +23,7 @@ const Snapshot = Schema.Struct({
   state: Schema.Literal("reserved", "dispatching", "accepted", "bound"),
   runId: Schema.NullOr(Run.fields.runId), runAttempt: Schema.NullOr(Run.fields.runAttempt),
   admittedAt: NativeAdmissionTime,
+  deadlineAt: Schema.optional(NativeAdmissionTime),
 });
 type Snapshot = typeof Snapshot.Type;
 type Controller = typeof Controller.Type;
@@ -105,7 +106,7 @@ export const makeNativeDispatchD1 = (
       return yield* refuse("native controller deadline policy conflicts or is absent");
     if (record.policy !== undefined && record.observedAt >= record.policy.deadlineAt)
       return yield* refuse("native controller admission deadline expired");
-    return record.snapshot;
+    return record.policy === undefined ? record.snapshot : { ...record.snapshot, deadlineAt: record.policy.deadlineAt };
   });
   const observe = (raw: unknown) => Effect.gen(function* () { return yield* read(yield* identity(raw)); });
 

@@ -5,7 +5,7 @@ import {
 import { advanceNativeController } from "./native-controller";
 import { nativeResultKey } from "./native-result-r2";
 
-const Clock = { admittedAt: NativeAdmissionTime };
+const Clock = { admittedAt: NativeAdmissionTime, deadlineAt: Schema.optional(NativeAdmissionTime) };
 const Run = { runId: NativeApiEvidence.fields.runId, runAttempt: NativeApiEvidence.fields.runAttempt };
 /** Cloudflare's non-stream step result ceiling, measured as serialized UTF8 bytes. */
 export const NATIVE_CONTROLLER_CHECKPOINT_MAX_BYTES = 2 ** 20;
@@ -19,6 +19,8 @@ export const NativeControllerCheckpoint = Schema.Union(
 ).pipe(Schema.filter((checkpoint) => new TextEncoder().encode(JSON.stringify(checkpoint)).byteLength
   <= NATIVE_CONTROLLER_CHECKPOINT_MAX_BYTES));
 export type NativeControllerCheckpoint = typeof NativeControllerCheckpoint.Type;
+const durableClock = ({ admittedAt, deadlineAt }: Pick<NativeControllerCheckpoint, "admittedAt" | "deadlineAt">) =>
+  ({ admittedAt, ...(deadlineAt === undefined ? {} : { deadlineAt }) });
 
 /** Only the authenticated controller produces a published checkpoint; projection confers no result-reader authority. */
 export const advanceNativeControllerCheckpoint = (
@@ -26,12 +28,12 @@ export const advanceNativeControllerCheckpoint = (
 ) => Effect.gen(function* () {
   const outcome = yield* advanceNativeController(options, rawRequest);
   const checkpoint = Match.value(outcome).pipe(
-    Match.tag("WaitingForRun", ({ admittedAt }) => ({ _tag: "WaitingForRun" as const, admittedAt })),
-    Match.tag("Running", ({ admittedAt, runId, runAttempt, status }) => ({ _tag: "Running" as const, admittedAt, runId, runAttempt, status })),
-    Match.tag("Failed", ({ admittedAt, runId, runAttempt, conclusion }) => ({ _tag: "Failed" as const, admittedAt, runId, runAttempt, conclusion })),
-    Match.tag("Published", ({ admittedAt, result }) => ({
-      _tag: "Published" as const, admittedAt, runId: Number(result.receipt.run_id), runAttempt: Number(result.receipt.run_attempt),
-      manifestKey: nativeResultKey(result.request),
+    Match.tag("WaitingForRun", (outcome) => ({ _tag: "WaitingForRun" as const, ...durableClock(outcome) })),
+    Match.tag("Running", (outcome) => ({ _tag: "Running" as const, ...durableClock(outcome), runId:outcome.runId, runAttempt:outcome.runAttempt, status:outcome.status })),
+    Match.tag("Failed", (outcome) => ({ _tag: "Failed" as const, ...durableClock(outcome), runId:outcome.runId, runAttempt:outcome.runAttempt, conclusion:outcome.conclusion })),
+    Match.tag("Published", (outcome) => ({
+      _tag: "Published" as const, ...durableClock(outcome), runId: Number(outcome.result.receipt.run_id), runAttempt: Number(outcome.result.receipt.run_attempt),
+      manifestKey: nativeResultKey(outcome.result.request),
     })),
     Match.exhaustive,
   );
