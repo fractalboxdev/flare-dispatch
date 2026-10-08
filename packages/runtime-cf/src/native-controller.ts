@@ -46,7 +46,7 @@ export const makeNativeController = ({ db, bucket, controller, client, now: cloc
     yield* dispatch.start(request);
     const state = yield* dispatch.reconcile(request);
     if (state.state !== "bound" || state.runId === null || state.runAttempt === null)
-      return { _tag: "WaitingForRun" as const };
+      return { _tag: "WaitingForRun" as const, admittedAt: state.admittedAt };
     const now = clock();
     const binding = yield* admitNativeReadBinding({ version: 1, repo: request.repo, head: request.head, base: request.base,
       nonce: request.nonce, target: request.target, command_sha256: request.command_sha256,
@@ -56,14 +56,14 @@ export const makeNativeController = ({ db, bucket, controller, client, now: cloc
       const result = yield* results.read(binding, now);
       if (result.receipt.run_id !== String(state.runId) || result.receipt.run_attempt !== String(state.runAttempt))
         return yield* Effect.fail(refused("native publication conflicts with durable run"));
-      return { _tag: "Published" as const, result };
+      return { _tag: "Published" as const, result, admittedAt: state.admittedAt };
     }
     const run = { runId: state.runId, runAttempt: state.runAttempt };
     const observed = yield* provider.observeRun(request, run, controller.actorLogin);
     return yield* Match.value(observed).pipe(
-      Match.tag("Pending", (pending) => Effect.succeed({ ...pending, _tag: "Running" as const })),
+      Match.tag("Pending", (pending) => Effect.succeed({ ...pending, _tag: "Running" as const, admittedAt: state.admittedAt })),
       Match.tag("Terminal", (terminal) => Effect.gen(function* () {
-        if (terminal.conclusion !== "success") return { ...terminal, _tag: "Failed" as const };
+        if (terminal.conclusion !== "success") return { ...terminal, _tag: "Failed" as const, admittedAt: state.admittedAt };
         const evidence = yield* provider.collect(request, run, controller.actorLogin);
         const response = yield* Effect.tryPromise({ try: () => streamNativeWindowsArchive({ ...client, artifactId: evidence.artifactId }),
           catch: () => refused("native authenticated archive download unavailable") });
@@ -75,7 +75,7 @@ export const makeNativeController = ({ db, bucket, controller, client, now: cloc
           }),
           (archive) => Effect.tryPromise({ try: () => bucket.delete(archive.key), catch: () => refused("native temporary archive disposal unavailable") }).pipe(Effect.orDie),
         );
-        return { _tag: "Published" as const, result };
+        return { _tag: "Published" as const, result, admittedAt: state.admittedAt };
       })),
       Match.exhaustive,
     );
