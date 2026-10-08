@@ -8,6 +8,21 @@ const sha = "a".repeat(40);
 const repo = "fractalboxdev/contextful";
 
 describe("contextful-release", () => {
+  it.effect("refuses failed authoritative plan discovery before any release cell admission", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
+      sandboxProgram: { "release --plan": { exitCode: 1, stdout: "" } },
+      childRuns: { pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "failure" })) },
+    });
+    return Effect.gen(function* () {
+      const result = yield* Effect.exit(contextfulRelease.run({ repo, tag: "v0.5.0", sha, dryRun: true }));
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(handles.childRuns.spawned).toHaveLength(0);
+      expect(handles.sandbox.execs.some((exec) => exec.command.includes("release --plan"))).toBe(true);
+      expect(handles.github.createReleaseCalls).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
   it("subscribes only to live version-tag pushes from the release repository", () => {
     const trigger = contextfulRelease.triggers![0]!;
     const base = { repository: { full_name: repo }, ref: "refs/tags/v0.5.0", after: sha };
