@@ -214,7 +214,7 @@ describe("authenticated native GitHub provider", () => {
     expect(url).toBe("https://api.github.com/repos/owner/context/actions/workflows/native-windows.yml/dispatches");
     expect(JSON.parse(String(init.body))).toEqual({ ref: request.executor_ref, inputs: { request: JSON.stringify(request) } });
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer fixture-installation");
-    expect(init.redirect).toBe("error");
+    expect(init.redirect).toBe("manual");
   });
 
   it("decodes complete paginated API run identity without using workload metadata", async () => {

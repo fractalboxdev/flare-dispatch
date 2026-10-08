@@ -15,7 +15,7 @@ const read = (fetchImpl:typeof fetch, at:number = now, override = {}) =>
     expiresAt:number;repo:string},unknown>}).readNativeGithubContext({...options,...override,fetchImpl},at));
 const fixture = (install:unknown = installation(), token:unknown = grant()) => {
   const fetchImpl = vi.fn(async (url:string | URL | Request, init?:RequestInit) => {
-    expect(init?.redirect).toBe("error");
+    expect(init?.redirect).toBe("manual");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-app-jwt");
     if (String(url).endsWith("/app")) return Response.json({id:42,slug:"native-controller"});
     if (String(url).endsWith("/repos/owner/context/installation")) return Response.json(install);
