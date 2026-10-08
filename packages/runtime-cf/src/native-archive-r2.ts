@@ -10,7 +10,7 @@ import {
 import { makeNativeFilesR2 } from "./native-files-r2";
 
 const Input = Schema.Struct({ request: NativeRequest, api: NativeApiEvidence, controllerLogin: NativeControllerLogin });
-const MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024;
+export const NATIVE_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024 * 1024;
 const MAX_ENTRIES = 257;
 const MAX_RECEIPT_BYTES = 128 * 1024;
 const refused = () => new NativeReceiptRefused({ reason: "native ZIP archive unavailable, malformed or exceeds extraction bounds" });
@@ -28,6 +28,7 @@ class R2Reader extends RandomAccessReader {
       try {
         for (;;) {
           const { done, value } = await reader.read(); if (done) break;
+          if (!(value instanceof Uint8Array)) throw refused();
           for (let offset = 0; offset < value.byteLength; offset += 65536)
             yield Buffer.from(value.subarray(offset, offset + 65536));
         }
@@ -62,7 +63,7 @@ export const makeNativeArchiveR2 = (bucket: Pick<R2Bucket, "head" | "get" | "put
     yield* admitNativeRequest(input.request);
     if (!key.startsWith("native-archive-pending/v1/")) return yield* Effect.fail(refused());
     const object = yield* Effect.tryPromise({ try: () => bucket.head(key), catch: refused });
-    if (object === null || !Number.isSafeInteger(object.size) || object.size < 22 || object.size > MAX_ARCHIVE_BYTES)
+    if (object === null || !Number.isSafeInteger(object.size) || object.size < 22 || object.size > NATIVE_ARCHIVE_MAX_BYTES)
       return yield* Effect.fail(refused());
     const zip = yield* Effect.tryPromise({
       try: () => fromRandomAccessReaderPromise(new R2Reader(bucket, key, object.size, object.etag), object.size,
@@ -82,7 +83,7 @@ export const makeNativeArchiveR2 = (bucket: Pick<R2Bucket, "head" | "get" | "put
               || (directory ? (kind !== 0 && kind !== 0x4000) || entry.uncompressedSize !== 0 : kind !== 0 && kind !== 0x8000)
               || !Number.isSafeInteger(entry.uncompressedSize) || entry.uncompressedSize < 0) throw refused();
             names.add(path.toLowerCase()); expanded += entry.uncompressedSize;
-            if (expanded > MAX_ARCHIVE_BYTES) throw refused();
+            if (expanded > NATIVE_ARCHIVE_MAX_BYTES) throw refused();
             if (!directory) members.push(entry);
           }
           return members;

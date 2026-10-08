@@ -16,7 +16,7 @@ describe("native archive download staging in actual R2", () => {
     const object = await env.RUNS_STORAGE.get(staged.key);
     expect(object!.size).toBe(size);
     const body = object!.body.getReader(); let count = 0;
-    for (;;) { const next = await body.read(); if (next.done) break; count += next.value.byteLength; expect(next.value.every((byte) => byte === 71)).toBe(true); }
+    for (;;) { const next = await body.read(); if (next.done) break; count += next.value.byteLength; expect(next.value.every((byte: number) => byte === 71)).toBe(true); }
     body.releaseLock(); expect(count).toBe(size);
   });
   it("admits declared HTTP length only when every body byte matches it", async () => {
@@ -30,7 +30,10 @@ describe("native archive download staging in actual R2", () => {
   it("aborts and removes owned staging after an unknown-length limit or producer failure", async () => {
     const store = makeNativeArchiveDownload(env.RUNS_STORAGE, 9 * MiB);
     await expect(Effect.runPromise(store.stage(new Response(bytes(10 * MiB))))).rejects.toThrow();
-    const failing = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(8 * MiB)); }, pull() { throw new Error("fixture download disconnected"); } });
+    let produced = 0;
+    const failing = new ReadableStream<Uint8Array>({ pull(c) {
+      if (produced++ < 128) c.enqueue(new Uint8Array(65536)); else throw new Error("fixture download disconnected");
+    } });
     await expect(Effect.runPromise(store.stage(new Response(failing)))).rejects.toThrow();
     expect((await env.RUNS_STORAGE.list()).objects).toHaveLength(0);
   });
@@ -42,5 +45,10 @@ describe("native archive download staging in actual R2", () => {
     const second = await Effect.runPromise(store.stage(new Response(bytes(23))));
     expect(first.key).not.toBe(second.key);
     expect((await env.RUNS_STORAGE.list()).objects).toHaveLength(2);
+  });
+  it("refuses oversized transport chunks before retaining their bytes", async () => {
+    const stream = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(256 * 1024 + 1)); c.close(); } });
+    await expect(Effect.runPromise(makeNativeArchiveDownload(env.RUNS_STORAGE).stage(new Response(stream)))).rejects.toThrow();
+    expect((await env.RUNS_STORAGE.list()).objects).toHaveLength(0);
   });
 });

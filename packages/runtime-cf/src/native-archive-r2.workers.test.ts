@@ -6,6 +6,7 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { nativeCommand, nativeCommandDigest, type NativeRequest } from "@fractalboxdev/flare-dispatch-core";
 import { makeNativeArchiveR2 } from "./native-archive-r2";
+import { makeNativeArchiveDownload } from "./native-archive-download";
 
 type Member = { path: string; bytes: Uint8Array; method?: number; attrs?: number; flags?: number; size?: number; checksum?: number };
 // Deterministic test-only ZIP fixture, including forced ZIP64 central records.
@@ -60,8 +61,8 @@ const fixture = async () => {
 };
 const key = "native-archive-pending/v1/fixture.zip";
 const run = async (input: unknown, bytes: Uint8Array) => {
-  await env.RUNS_STORAGE.put(key, bytes);
-  return Effect.runPromise(makeNativeArchiveR2(env.RUNS_STORAGE).verify(input, key));
+  const staged = await Effect.runPromise(makeNativeArchiveDownload(env.RUNS_STORAGE).stage(new Response(bytes)));
+  return Effect.runPromise(makeNativeArchiveR2(env.RUNS_STORAGE).verify(input, staged.key));
 };
 
 describe("bounded native ZIP extraction in workerd", () => {
