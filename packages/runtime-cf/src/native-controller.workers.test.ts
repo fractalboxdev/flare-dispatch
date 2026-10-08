@@ -40,7 +40,8 @@ const archive = (members: { path: string; bytes: Buffer }[]) => {
   return Buffer.concat([...bodies, records, end]);
 };
 const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
-  clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; foreignApp?:boolean; broadGrant?:boolean; clock?: () => number } = {}) => {
+  clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; checkpoint?:boolean; undiscovered?:boolean;
+  foreignApp?:boolean; broadGrant?:boolean; clock?: () => number } = {}) => {
   let status = "in_progress", conclusion: string | null = null, posts = 0, downloads = 0, failPut = options.lostPublication;
   let authReads=0, grants=0;
   const run = () => ({ id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
@@ -67,7 +68,8 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
     if (target.hostname !== "archive.example")
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-installation-token");
     if (init?.method === "POST") { posts++; if (options.lostDispatch) throw new Error("accepted response lost"); return new Response(null, { status: 204 }); }
-    if (target.pathname.endsWith("/native-windows.yml/runs")) return Response.json({ total_count: 1, workflow_runs: [run()] });
+    if (target.pathname.endsWith("/native-windows.yml/runs")) return Response.json({ total_count: options.undiscovered ? 0 : 1,
+      workflow_runs: options.undiscovered ? [] : [run()] });
     if (target.pathname.endsWith("/attempts/1")) return Response.json(run());
     if (target.pathname.endsWith("/jobs")) return Response.json({ total_count: 1, jobs: [{ id: 456, run_id: 123,
       head_sha: request.executor_ref, name: "aarch64", status: "completed", conclusion: "success", labels: ["windows-11-arm"] }] });
@@ -89,7 +91,7 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
       return value;
     }) as R2Bucket["put"] } as R2Bucket;
   const instance = options.authenticated ? { advance:(raw:unknown) =>
-    native.advanceNativeController({db:env.RUNS_METADATA,bucket,now: options.clock, auth:{appId:"42",appJwt:"fixture-app-jwt",
+    (options.checkpoint ? native.advanceNativeControllerCheckpoint : native.advanceNativeController)({db:env.RUNS_METADATA,bucket,now: options.clock, auth:{appId:"42",appJwt:"fixture-app-jwt",
         repo:options.clientRepo ?? request.repo,fetchImpl}},raw) } :
     makeNativeController({ db: env.RUNS_METADATA, bucket, controller, now: options.clock,
       client: { repo: options.clientRepo ?? request.repo, token: options.emptyToken ? "" : "fixture-installation-token", fetchImpl } });
@@ -99,6 +101,34 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
 };
 
 describe("native controller with actual D1 and R2", () => {
+  it("checkpoints authenticated replay as metadata without result bodies or credentials", async () => {
+    const f = open({ authenticated: true, checkpoint: true, lostDispatch: true });
+    const pending = await Effect.runPromise(f.instance.advance(request));
+    expect(pending).toEqual({ _tag: "Running", runId: 123, runAttempt: 1, status: "in_progress", admittedAt: expect.any(Number) });
+    f.finish();
+    const published = await Effect.runPromise(f.instance.advance(request));
+    expect(published).toEqual({ _tag: "Published", runId: 123, runAttempt: 1,
+      admittedAt: pending.admittedAt, manifestKey: nativeResultKey(readerBinding()) });
+    expect(await Effect.runPromise(f.instance.advance(request))).toEqual(published);
+    expect(f.posts()).toBe(1); expect(f.downloads()).toBe(1); expect(f.grants()).toBe(3);
+    for (const forbidden of ["fixture-app-jwt", "fixture-installation-token", "receipt", "files", "verified native command"])
+      expect(JSON.stringify(published)).not.toContain(forbidden);
+    const file = await Effect.runPromise(makeNativeResultR2(f.bucket, controller.actorLogin)
+      .readFile(readerBinding(), "command.log", Math.floor(Date.now() / 1000)));
+    expect(Buffer.from(await new Response(file.body).arrayBuffer())).toEqual(log);
+  });
+  it("checkpoints an undiscovered accepted dispatch without inventing a run or result", async () => {
+    const f = open({ authenticated: true, checkpoint: true, undiscovered: true });
+    expect(await Effect.runPromise(f.instance.advance(request))).toEqual({ _tag: "WaitingForRun", admittedAt: expect.any(Number) });
+    expect(f.posts()).toBe(1); expect(f.downloads()).toBe(0);
+  });
+  it("checkpoints authentic terminal failure without a result manifest", async () => {
+    const f = open({ authenticated: true, checkpoint: true }); f.finish("cancelled");
+    expect(await Effect.runPromise(f.instance.advance(request))).toEqual({ _tag: "Failed", admittedAt: expect.any(Number),
+      runId: 123, runAttempt: 1, conclusion: "cancelled" });
+    expect(f.downloads()).toBe(0);
+    expect(await env.RUNS_STORAGE.head(nativeResultKey(readerBinding()))).toBeNull();
+  });
   it("keeps the persisted admission clock across delayed polling and publication", async () => {
     let now = Math.floor(Date.now() / 1000);
     const f = open({ clock: () => now });
