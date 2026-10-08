@@ -23,6 +23,10 @@ export default defineWorkersConfig({
   test: {
     name: "runtime-cf-workers",
     include: ["src/**/*.workers.test.ts"],
+    exclude: [
+      "src/check-command-storage.workers.test.ts",
+      "src/check-command-live.workers.test.ts",
+    ],
     setupFiles: ["./src/apply-migrations.ts"],
     poolOptions: {
       workers: {

@@ -96,10 +96,10 @@ const artifactUrl = (executionId: string, name: string, publicOrigin?: string): 
  *                     returned artifact URLs so they survive GitHub's
  *                     markdown base-URL resolution. `undefined` → relative.
  */
-export const makeR2ArtifactLive = (
+export const makeR2ArtifactLive = <T extends Sandbox>(
   bucket: R2Bucket,
   executionId: string,
-  ns?: DurableObjectNamespace<Sandbox>,
+  ns?: DurableObjectNamespace<T>,
   publicOrigin?: string,
 ): Layer.Layer<Artifact> => {
   const service: ArtifactService = {

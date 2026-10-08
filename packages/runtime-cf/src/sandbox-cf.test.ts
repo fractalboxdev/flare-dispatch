@@ -640,6 +640,31 @@ describe("makeSandboxCloudflareLive — exec result folding (D)", () => {
     }),
   );
 
+  it.effect("short exec retains the baseline ordering of overlapping redaction values", () =>
+    Effect.gen(function* () {
+      for (const [values, expected] of [
+        [["abc", "abcdef"], "***def"],
+        [["abcdef", "abc"], "***"],
+      ] as const) {
+        currentBox = makeFakeBox({ proc: null });
+        currentBox.exec = vi.fn(async () => ({
+          exitCode: 0,
+          duration: 1,
+          stdout: "abcdef",
+          stderr: "abcdef",
+        }));
+        const { bucket, puts } = makeBucket();
+        const layer = makeSandboxCloudflareLive(ns, bucket, "short-overlap");
+        const result = yield* Effect.flatMap(SandboxTag, (s) =>
+          s.exec({ command: "echo abcdef", cwd: "/w", env: {}, redactValues: values }),
+        ).pipe(Effect.provide(layer));
+        expect(result.stdout).toBe(expected);
+        expect(result.stderr).toBe(expected);
+        expect(puts.map((p) => String(p.body)).join("")).toContain(expected);
+      }
+    }),
+  );
+
   it.effect("redactValues scrubs secret values from both the R2 log and the inline tail", () =>
     Effect.gen(function* () {
       currentBox = makeFakeBox({ proc: null });

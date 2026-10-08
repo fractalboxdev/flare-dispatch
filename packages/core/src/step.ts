@@ -152,3 +152,8 @@ const waitForEvent = <P, I>(
   Effect.flatMap(StepRunner, (runner) => runner.waitForEvent(name, opts));
 
 export const step: StepFn = Object.assign(stepImpl, { waitForEvent });
+/** Native Workflow sleep persists its wake-up; inline tests use the Effect clock. */
+export const checkpointSleep = (name: string, milliseconds: number) =>
+  Effect.flatMap(StepRunner, (runner) =>
+    runner.sleep !== undefined ? runner.sleep(name, milliseconds) : Effect.sleep(milliseconds),
+  );

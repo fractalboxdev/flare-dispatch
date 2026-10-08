@@ -25,8 +25,17 @@ export {
   type ScheduleContext,
   type WebhookPayload,
 } from "./define-run";
-export { step, runEffect, type StepOpts } from "./step";
+export { step, checkpointSleep, runEffect, type StepOpts } from "./step";
 export { CurrentStep, type CurrentStepInfo } from "./current-step";
+export {
+  CheckCommandHandle,
+  CheckCommandObservation,
+  CheckCommandLogState,
+  CheckCommandChunk,
+  type CheckCommandOwner,
+  type CheckCommandPrepare,
+  type CheckCommandOpts,
+} from "./check-command";
 export { type RunContext } from "./context";
 
 // --- Writeback (run-declared "propose a diff as a PR") -----------------------
@@ -99,6 +108,8 @@ export {
   type Container,
   type DetachedHandle,
   type ExecResult,
+  ExecResultSchema,
+  type CheckCommandService,
   type ExecOpts,
   type ExposeResult,
 } from "./services/sandbox";

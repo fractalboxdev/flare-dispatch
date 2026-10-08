@@ -499,7 +499,23 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
               approvalFor: (command, scope) => preAssertedApproval(payload.run, command, scope),
             },
           }
-        : { sandboxNs }),
+        : {
+            sandboxNs,
+            checkCommandOwner: (container) => {
+              const box = getSandbox(sandboxNs, container.id);
+              return {
+                start: (opts) => box.startCheckCommand(opts),
+                observe: (handle) => box.observeCheckCommand(handle),
+                read: (handle, stream, offset, length) =>
+                  box.readCheckCommand(handle, stream, offset, length),
+                logs: (handle) => box.checkCommandLogs(handle),
+                advanceLogs: (handle, expected, next) =>
+                  box.advanceCheckCommandLogs(handle, expected, next),
+                receipt: (handle) => box.checkCommandReceipt(handle),
+                finish: (handle, result) => box.finishCheckCommand(handle, result),
+              };
+            },
+          }),
       workflowStep: step,
       // The `Workflow` binding backs the `childRuns` capability — a run can
       // `spawnChildRun` / `fanOut` to independent child `RunWorkflow` instances.

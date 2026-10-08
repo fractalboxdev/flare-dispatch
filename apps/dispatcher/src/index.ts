@@ -17,7 +17,7 @@
 //
 // Spec: specs/pm/plan.md § PR5, specs/04-gha-integration.md § Schedule mode.
 
-import { proxyToSandbox } from "@cloudflare/sandbox";
+import { proxyToSandbox, type SandboxEnv } from "@cloudflare/sandbox";
 
 import type { Env } from "./env";
 import { handleRequest } from "./router";
@@ -45,7 +45,9 @@ export default {
     // never exposes a port, so RUNS_SANDBOX_BROWSER has no preview surface. If a
     // future browser-image run needs `exposePort`, the proxy must learn to pick
     // the binding from the preview host (tracked in issue #68).
-    const proxied = await proxyToSandbox(request, { Sandbox: env.RUNS_SANDBOX });
+    const proxied = await proxyToSandbox<RunSandbox, SandboxEnv<RunSandbox>>(request, {
+      Sandbox: env.RUNS_SANDBOX,
+    });
     if (proxied !== null) return proxied;
     return handleRequest(request, env);
   },
