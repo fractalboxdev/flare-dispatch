@@ -17,6 +17,31 @@ const CELLS = PROFILES.flatMap((profile) =>
   })),
 );
 
+const DeclaredReleaseCell = Schema.Struct({
+  profile: Schema.Literal(...PROFILES),
+  target: Schema.Literal(...LINUX, ...DARWIN, "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"),
+});
+
+const discoverReleasePlan = (repo: string, sha: string) => Effect.gen(function* () {
+  const checkout = yield* workspace({ repo, sha });
+  const result = yield* sandbox.exec({ container: checkout.container, cwd: checkout.dir,
+    command: ["cargo", "run", "--locked", "-q", "-p", "contextful-ci", "--", "release", "--plan"],
+    timeoutSec: 1800 });
+  if (result.exitCode !== 0 || result.stdout.length > 65536)
+    return yield* Effect.die(new Error("authoritative release plan unavailable"));
+  const lines = result.stdout.trim().split("\n");
+  if (lines.length === 0 || lines.length > 64)
+    return yield* Effect.die(new Error("authoritative release plan inventory invalid"));
+  const cells = yield* Effect.forEach(lines, (line) => {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length !== 2) return Effect.die(new Error("authoritative release plan cell invalid"));
+    return Schema.decodeUnknown(DeclaredReleaseCell)({ profile: fields[0], target: fields[1] }).pipe(Effect.orDie);
+  });
+  if (new Set(cells.map(cell => `${cell.profile}/${cell.target}`)).size !== cells.length)
+    return yield* Effect.die(new Error("authoritative release plan contains duplicate cells"));
+  return cells;
+});
+
 const ReleaseInput = Schema.Struct({
   repo: Schema.String,
   tag: Schema.String,
@@ -231,6 +256,7 @@ export const contextfulRelease = defineRun({
     if (sourceVersion !== input.tag.slice(1)) {
       return yield* Effect.die(new Error("release tag version differs from Cargo.toml"));
     }
+    const cells = yield* step("discover-release-plan", () => discoverReleasePlan(input.repo, tag.commitSha));
     const release = dryRun ? { id: 0 } : yield* step("draft-release", () => Effect.gen(function* () {
       const existing = yield* github.releaseByTag({ repo: input.repo, tag: input.tag });
       if (existing !== undefined) {
@@ -242,8 +268,8 @@ export const contextfulRelease = defineRun({
     }));
     if (!dryRun && release.id <= 0) return yield* Effect.die(new Error("draft release was not created"));
     const children: Array<{ executionId: string; status: string; summaryJson?: string }> = [];
-    for (let offset = 0; offset < CELLS.length; offset += 3) {
-      const batch = CELLS.slice(offset, offset + 3);
+    for (let offset = 0; offset < cells.length; offset += 3) {
+      const batch = cells.slice(offset, offset + 3);
       const handles = yield* step(`spawn-release-cells-${offset}`, () => fanOut({
         run: contextfulReleaseCell.name,
         items: batch,
@@ -258,7 +284,7 @@ export const contextfulRelease = defineRun({
         return yield* Effect.die(new Error(`release cell batch ${offset / 3 + 1} failed`));
       }
     }
-    if (children.length !== CELLS.length || children.some((child) => child.status !== "success" || !child.summaryJson)) {
+    if (children.length !== cells.length || children.some((child) => child.status !== "success" || !child.summaryJson)) {
       return yield* Effect.die(new Error("one or more release cells failed"));
     }
     const manifests = children.map((child) => {
@@ -293,7 +319,7 @@ export const contextfulRelease = defineRun({
       return output.imageLayer?.archiveName !== `${output.profile}-${input.tag.slice(1)}-linux-amd64.oci.tar`;
     })) return yield* Effect.die(new Error("release needs three Linux amd64 OCI image archives"));
     if (dryRun) return { tag: input.tag, sha: tag.commitSha, dryRun: true, releaseId: 0,
-      cells: CELLS.length, assets: CELLS.length * 3 + formulaAssets.length };
+      cells: cells.length, assets: cells.length * 3 + formulaAssets.length };
     for (const child of imageChildren) {
       const output = JSON.parse(child.summaryJson!) as {
         profile: string; imageLayer?: { name: string; archiveName: string; size: number; digest: string; diffId: string };
@@ -312,6 +338,6 @@ export const contextfulRelease = defineRun({
     }
     yield* step("publish-release", () => github.publishRelease({ repo: input.repo, releaseId: release.id }));
     return { tag: input.tag, sha: tag.commitSha, dryRun: false, releaseId: release.id,
-      cells: CELLS.length, assets: CELLS.length * 3 + formulaAssets.length };
+      cells: cells.length, assets: cells.length * 3 + formulaAssets.length };
   }),
 });

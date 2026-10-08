@@ -6,8 +6,61 @@ import { contextfulRelease, contextfulReleaseCell } from "./contextful-release";
 
 const sha = "a".repeat(40);
 const repo = "fractalboxdev/contextful";
+const legacyCells = ["contextful-control", "contextful-edge", "contextful-full"].flatMap(profile =>
+  (profile === "contextful-control" ? ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"] :
+    ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "aarch64-apple-darwin"])
+    .map(target => ({ profile, target })));
+const planText = (cells: readonly { profile: string; target: string }[]) =>
+  cells.map(cell => `${cell.profile} ${cell.target}`).join("\n") + "\n";
 
 describe("contextful-release", () => {
+  for (const [label, stdout] of [
+    ["empty", ""], ["malformed", "contextful-edge\n"],
+    ["unknown target", "contextful-edge unsupported-target\n"],
+    ["duplicate", "contextful-edge x86_64-pc-windows-msvc\ncontextful-edge x86_64-pc-windows-msvc\n"],
+    ["oversized", "x".repeat(65537)],
+  ]) {
+    it.effect(`refuses ${label} authoritative inventory before fan-out`, () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
+        sandboxProgram: { "release --plan": { exitCode: 0, stdout } },
+        childRuns: { pollFn: ids => ids.map(executionId => ({ executionId, status: "failure" })) },
+      });
+      return Effect.gen(function* () {
+        const result = yield* Effect.exit(contextfulRelease.run({ repo, tag: "v0.5.0", sha, dryRun: true }));
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(handles.childRuns.spawned).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    });
+  }
+
+  it.effect("consumes the built head's fourteen declared cells including native targets", () => {
+    const cells = [...legacyCells, ...["contextful-edge", "contextful-full"].flatMap(profile =>
+      ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"].map(target => ({ profile, target })))];
+    const { layer, handles } = makeCFRuntimeTest({
+      github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
+      sandboxProgram: { "release --plan": { exitCode: 0, stdout: planText(cells) } },
+      childRuns: { pollFn: ids => ids.map(id => {
+        if (id.startsWith("contextful-release-formula")) return { executionId: id, status: "success",
+          summaryJson: JSON.stringify({ assets: ["contextful-control.rb", "contextful-edge.rb", "contextful-full.rb", "contextful.rb", "SHA256SUMS", "install.sh"] }) };
+        const cell = cells[Number(id.split(":").at(-1))]!;
+        return { executionId: id, status: "success", summaryJson: JSON.stringify({ ...cell,
+          manifest: JSON.stringify(cell),
+          ...(cell.target === "x86_64-unknown-linux-musl" ? { imageLayer: {
+            archiveName: `${cell.profile}-0.5.0-linux-amd64.oci.tar`,
+          } } : {}),
+        }) };
+      }) },
+    });
+    return Effect.gen(function* () {
+      const result = yield* contextfulRelease.run({ repo, tag: "v0.5.0", sha, dryRun: true });
+      expect(result.cells).toBe(14);
+      expect(handles.childRuns.spawned.filter(child => child.run === "contextful-release-cell")
+        .map(child => child.input)).toEqual(cells.map(cell => ({ ...cell, repo, tag: "v0.5.0", sha, releaseId: 0, dryRun: true })));
+      expect(handles.sandbox.clones.every(clone => clone.sha === sha)).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("refuses failed authoritative plan discovery before any release cell admission", () => {
     const { layer, handles } = makeCFRuntimeTest({
       github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
@@ -95,6 +148,7 @@ describe("contextful-release", () => {
 
   it.effect("manual dry-run joins ten cells and a formula child without a release write", () => {
     const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "release --plan": { exitCode: 0, stdout: planText(legacyCells) } },
       github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
       childRuns: { pollFn: (ids) => ids.map((id) => {
         if (id.startsWith("contextful-release-formula")) {
@@ -136,6 +190,7 @@ describe("contextful-release", () => {
         ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "aarch64-apple-darwin"])
         .map((target) => ({ profile, target })));
     const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "release --plan": { exitCode: 0, stdout: planText(cells) } },
       github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
       childRuns: { pollFn: (ids) => ids.map((id) => {
         if (id.startsWith("contextful-release-formula")) return { executionId: id, status: "success",
