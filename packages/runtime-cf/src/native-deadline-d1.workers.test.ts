@@ -23,6 +23,28 @@ const wrapWrite = (sqlMatch: string, intercept: (statement: D1PreparedStatement)
 };
 
 describe("native immutable admission deadline in actual D1", () => {
+  it("refuses an unrepresentable duration before reserving any durable intent", async () => {
+    let posts=0;
+    await expect(Effect.runPromise(makeNativeDispatchD1(env.RUNS_METADATA,controller,provider(()=>Effect.sync(()=>{posts++;})),
+      {timeoutSec:Number.MAX_SAFE_INTEGER}).start(request))).rejects.toThrow();
+    expect(posts).toBe(0);expect(await row()).toBeNull();
+  });
+  it("refuses POST after a pre-cutoff SELECT response is delayed past the cutoff", async () => {
+    let posts=0,delayed=false;
+    const wrap=(statement:D1PreparedStatement,sql:string):D1PreparedStatement=>new Proxy(statement,{get(target,key){
+      if(key==="bind") return (...values:Parameters<D1PreparedStatement["bind"]>)=>wrap(target.bind(...values),sql);
+      if(key==="first" && sql.includes("SELECT request_json")) return async()=>{
+        const value=await target.first<{state:string}>();
+        if(value?.state==="dispatching" && !delayed){delayed=true;await new Promise(resolve=>setTimeout(resolve,1100));}
+        return value;
+      };
+      const value=Reflect.get(target,key);return typeof value==="function"?value.bind(target):value;
+    }});
+    const db={prepare:(sql:string)=>wrap(env.RUNS_METADATA.prepare(sql),sql)};
+    await expect(Effect.runPromise(makeNativeDispatchD1(db,controller,provider(()=>Effect.sync(()=>{posts++;})),
+      {timeoutSec:1}).start(request))).rejects.toThrow();
+    expect(delayed).toBe(true);expect(posts).toBe(0);expect((await row())?.state).toBe("dispatching");
+  });
   it("persists the chosen duration and database-derived deadline before the single POST", async () => {
     let posts = 0;
     const jobs = makeNativeDispatchD1(env.RUNS_METADATA, controller, provider(() => Effect.promise(async () => {

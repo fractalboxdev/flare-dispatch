@@ -41,7 +41,7 @@ const archive = (members: { path: string; bytes: Buffer }[]) => {
 };
 const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
   clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; checkpoint?:boolean; undiscovered?:boolean;
-  foreignApp?:boolean; broadGrant?:boolean; delayArchive?:boolean; policy?:NativeControllerPolicy; clock?: () => number } = {}) => {
+  foreignApp?:boolean; broadGrant?:boolean; delayArchive?:boolean; delayVerification?:boolean; policy?:NativeControllerPolicy; clock?: () => number } = {}) => {
   let status = "in_progress", conclusion: string | null = null, posts = 0, downloads = 0, failPut = options.lostPublication;
   let authReads=0, grants=0;
   const run = () => ({ id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
@@ -84,7 +84,11 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
     }
     throw new Error(`unexpected fixture path ${target.pathname}`);
   };
-  const bucket = { head: env.RUNS_STORAGE.head.bind(env.RUNS_STORAGE), get: env.RUNS_STORAGE.get.bind(env.RUNS_STORAGE),
+  const bucket = { head: env.RUNS_STORAGE.head.bind(env.RUNS_STORAGE), get: (async(...args:Parameters<R2Bucket["get"]>)=>{
+      const object=await env.RUNS_STORAGE.get(...args);
+      if(options.delayVerification && args[0].startsWith("native-file-chunks/")) await new Promise(resolve=>setTimeout(resolve,1100));
+      return object;
+    }) as R2Bucket["get"],
     delete: env.RUNS_STORAGE.delete.bind(env.RUNS_STORAGE), createMultipartUpload: env.RUNS_STORAGE.createMultipartUpload.bind(env.RUNS_STORAGE),
     put: (async (...args: Parameters<R2Bucket["put"]>) => {
       const value = await env.RUNS_STORAGE.put(...args);
@@ -103,6 +107,13 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
 };
 
 describe("native controller with actual D1 and R2", () => {
+  it("refuses the immutable result PUT after actual chunk verification crosses the deadline",async()=>{
+    const f=open({authenticated:true,checkpoint:true,policy:{timeoutSec:1},delayVerification:true});f.finish();
+    await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
+    expect(f.posts()).toBe(1);expect(f.downloads()).toBe(1);
+    expect(await env.RUNS_STORAGE.head(nativeResultKey(readerBinding()))).toBeNull();
+    expect((await env.RUNS_STORAGE.list({prefix:"native-archive-pending/"})).objects).toEqual([]);
+  });
   it("refuses publication after archive capture crosses the durable deadline and removes its temporary archive", async () => {
     const f = open({ authenticated:true,checkpoint:true,policy:{timeoutSec:1},delayArchive:true });
     f.finish();
