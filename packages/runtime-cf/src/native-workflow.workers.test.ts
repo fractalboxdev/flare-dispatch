@@ -19,6 +19,11 @@ const seed = async (secondsAgo: number, nonce = request.nonce) => {
 beforeEach(async () => { await env.NATIVE_FIXTURE_CONTROL.fetch("https://fixture.test/reset"); });
 
 describe("production NativeWorkflow with actual local Workflow and D1 bindings", () => {
+  it("refuses a native authenticated redirect without following or forwarding credentials",async()=>{
+    await env.NATIVE_FIXTURE_CONTROL.fetch("https://fixture.test/reset?redirect=1");
+    expect((await SELF.fetch("https://fixture.test/fixture/default-context")).status).toBe(503);
+    expect((await apiCalls()).calls).toEqual([{method:"GET",path:"/app"}]);
+  });
   it("admits the default SDK fetch transport in workerd without an injected client function",async()=>{
     expect((await SELF.fetch("https://fixture.test/fixture/direct-fetch")).status).toBe(401);
     expect((await apiCalls()).calls).toEqual([{method:"GET",path:"/app"}]);

@@ -6,8 +6,10 @@ const migrations = await readD1Migrations(fileURLToPath(new URL("../../infra/mig
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048,
   privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
 let calls: { method: string; path: string }[] = [];
+let redirectApp = false;
 const fixtureControl = async (request: Request) => {
-  if (new URL(request.url).pathname === "/reset") calls = [];
+  const url = new URL(request.url);
+  if (url.pathname === "/reset") { calls = []; redirectApp = url.searchParams.get("redirect") === "1"; }
   return Response.json({ calls });
 };
 const nativeApi = async (request: Request) => {
@@ -21,7 +23,9 @@ const nativeApi = async (request: Request) => {
     && verify("RSA-SHA256", Buffer.from(`${parts[0]}.${parts[1]}`), publicKey, Buffer.from(parts[2]!, "base64url"));
   if (app ? !validApp : authorization !== "Bearer fixture-native-installation-token")
     return new Response(null, { status: 401 });
-  if (url.pathname === "/app") return Response.json({ id: 42, slug: "native-controller" });
+  if (url.pathname === "/app") return redirectApp
+    ? new Response(null, { status: 302, headers: { location: "https://redirect.example/secret" } })
+    : Response.json({ id: 42, slug: "native-controller" });
   if (url.pathname === "/repos/owner/context/installation") return Response.json({ id: 77, app_id: 42,
     account: { login: "owner" }, suspended_at: null, permissions: { actions: "write" } });
   if (url.pathname === "/app/installations/77/access_tokens") return Response.json({ token: "fixture-native-installation-token",

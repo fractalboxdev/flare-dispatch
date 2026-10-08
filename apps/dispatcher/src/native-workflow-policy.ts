@@ -25,7 +25,10 @@ export const admitNativeWorkflowRequest = (raw: unknown, policy: NativeWorkflowP
 });
 
 /** Complete admitted request identity determines one instance across ambiguous create acknowledgements. */
-export const nativeWorkflowId = async (request: NativeRequest) => {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(request)));
+export const nativeWorkflowId = async (raw: unknown) => {
+  const request = await Effect.runPromise(admitNativeRequest(raw));
+  const fields = Object.keys(NativeRequest.fields).sort() as (keyof NativeRequest)[];
+  const identity = fields.map(field => [field, request[field]]);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(identity)));
   return `native-${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("")}`;
 };

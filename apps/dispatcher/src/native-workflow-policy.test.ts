@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { nativeWorkflowId, readNativeWorkflowPolicy } from "./native-workflow-policy";
+import { nativeCommandDigest } from "@fractalboxdev/flare-dispatch-core";
 
 const request = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
   nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc" as const, mode: "gate" as const, profile: "" as const,
@@ -13,7 +14,11 @@ describe("native Workflow configured identity", () => {
     expect(await nativeWorkflowId(reverse)).toBe(await nativeWorkflowId(request));
     for(const changed of [{head:"4".repeat(40)},{base:"4".repeat(40)},{executor_ref:"4".repeat(40)},
       {nonce:"native-ffffffffffffffff"},{repo:"owner/other"}])
-      expect(await nativeWorkflowId({...request,...changed})).not.toBe(await nativeWorkflowId(request));
+      {
+        const candidate={...request,...changed};
+        const command_sha256=await Effect.runPromise(nativeCommandDigest(candidate));
+        expect(await nativeWorkflowId({...candidate,command_sha256})).not.toBe(await nativeWorkflowId(request));
+      }
   });
   it("requires explicit positive duration and polling configuration",async()=>{
     expect(await Effect.runPromise(readNativeWorkflowPolicy(JSON.stringify(policy)))).toEqual(policy);
