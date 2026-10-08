@@ -38,7 +38,8 @@ const archive = (members: { path: string; bytes: Buffer }[]) => {
   end.writeUInt32LE(records.length, 12); end.writeUInt32LE(offset, 16);
   return Buffer.concat([...bodies, records, end]);
 };
-const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean } = {}) => {
+const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
+  clientRepo?: string; emptyToken?: boolean } = {}) => {
   let status = "in_progress", conclusion: string | null = null, posts = 0, downloads = 0, failPut = options.lostPublication;
   const run = () => ({ id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
     path: ".github/workflows/native-windows.yml", display_title: `native-${request.nonce}`, repository: { full_name: request.repo },
@@ -68,12 +69,18 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
       return value;
     }) as R2Bucket["put"] } as R2Bucket;
   const instance = makeNativeController({ db: env.RUNS_METADATA, bucket, controller,
-    client: { repo: request.repo, token: "fixture-installation-token", fetchImpl } });
+    client: { repo: options.clientRepo ?? request.repo, token: options.emptyToken ? "" : "fixture-installation-token", fetchImpl } });
   return { instance, bucket, posts: () => posts, downloads: () => downloads,
     finish: (value = "success") => { status = "completed"; conclusion = value; } };
 };
 
 describe("native controller with actual D1 and R2", () => {
+  it.each([{ clientRepo: "other/context" }, { emptyToken: true }])("refuses invalid credential scope before reserving a dispatch intent", async (options) => {
+    const f = open(options);
+    await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
+    expect(f.posts()).toBe(0); expect(f.downloads()).toBe(0);
+    expect(await env.RUNS_METADATA.prepare("SELECT count(*) AS count FROM native_dispatches").first("count")).toBe(0);
+  });
   it("reconciles an accepted lost POST, waits, publishes bytes and replays without another dispatch or download", async () => {
     const f = open({ lostDispatch: true });
     expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({ _tag: "Running", runId: 123, runAttempt: 1 });
@@ -104,5 +111,6 @@ describe("native controller with actual D1 and R2", () => {
     await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
     expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({ _tag: "Published" });
     expect(f.posts()).toBe(1); expect(f.downloads()).toBe(1);
+    expect((await env.RUNS_STORAGE.list({ prefix: "native-archive-pending/" })).objects).toEqual([]);
   });
 });
