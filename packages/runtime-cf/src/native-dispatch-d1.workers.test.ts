@@ -35,6 +35,28 @@ const loseWriteResponse = (matching: string): Pick<D1Database, "prepare"> => {
 };
 
 describe("durable native dispatch in workerd", () => {
+  it("replays a bound identity without redispatch or rescanning growing workflow history", async () => {
+    let posts = 0, listings = 0;
+    const provider = {
+      dispatch: () => Effect.sync(() => { posts++; }),
+      readRun: () => Effect.succeed(run()),
+      listRuns: () => Effect.suspend(() => {
+        listings++;
+        return listings === 1 ? Effect.succeed([run()])
+          : Effect.fail(new NativeReceiptRefused({ reason:"fixture recent history now exceeds page budget" }));
+      }),
+    };
+    const jobs = makeNativeDispatchD1(env.RUNS_METADATA, controller, provider);
+    await runEffect(jobs.start(request));
+    const bound = await runEffect(jobs.reconcile(request));
+    const reopened = makeNativeDispatchD1(env.RUNS_METADATA, controller, provider);
+    expect(await runEffect(reopened.reconcile(request))).toEqual(bound);
+    expect(await runEffect(reopened.start(request))).toEqual(bound);
+    expect(posts).toBe(1);
+    expect(listings).toBe(1);
+    await expect(runEffect(reopened.reconcile({ ...request, base:"4".repeat(40) }))).rejects.toThrow();
+  });
+
   it("reconciles an ambiguous POST after old workflow history exceeds one hundred runs", async () => {
     let posts = 0;
     let created: string | null = null;
