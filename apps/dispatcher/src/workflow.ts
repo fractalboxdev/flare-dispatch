@@ -504,6 +504,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             checkCommandOwner: (container) => {
               const box = getSandbox(sandboxNs, container.id);
               return {
+                prepare: (candidate) => box.prepareCheckCommand(candidate),
                 start: (opts) => box.startCheckCommand(opts),
                 observe: (handle) => box.observeCheckCommand(handle),
                 read: (handle, stream, offset, length) =>

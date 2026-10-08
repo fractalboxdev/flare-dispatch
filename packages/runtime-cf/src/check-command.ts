@@ -40,6 +40,7 @@ const Terminal = Schema.Struct({
 });
 const Intent = Schema.Struct({
   handle: CheckCommandHandle,
+  launched: Schema.optional(Schema.Boolean),
   receipt: Schema.optional(ExecResultSchema),
   logs: CheckCommandLogState,
 });
@@ -135,6 +136,19 @@ export function makeCheckCommandOwner(
     return JSON.parse(result.stdout);
   };
   return {
+    async prepare(candidate) {
+      const h = Schema.decodeUnknownSync(CheckCommandHandle)(candidate);
+      if (!/^[a-zA-Z0-9_-]{1,100}$/.test(h.id) || !Number.isSafeInteger(h.startedAt)
+        || !Number.isSafeInteger(h.deadline) || h.deadline <= h.startedAt)
+        throw new Error("invalid check command identity");
+      if (await storage.reserve(key(h), { handle: h, launched: false, logs: emptyLogs })) return h;
+      const entry = Schema.decodeUnknownSync(Intent)(await storage.load(key(h)));
+      if (entry.handle.id !== h.id || entry.handle.container.id !== h.container.id
+        || entry.handle.fingerprint !== h.fingerprint
+        || entry.handle.deadline - entry.handle.startedAt !== h.deadline - h.startedAt)
+        throw new Error("check command identity changed");
+      return entry.handle;
+    },
     async start(opts) {
       const h = Schema.decodeUnknownSync(CheckCommandHandle)(opts.handle);
       if (
@@ -160,15 +174,20 @@ export function makeCheckCommandOwner(
         ))
       )
         throw new Error("check command identity changed");
-      const claimed = await storage.reserve(key(h), { handle: h, logs: emptyLogs });
+      const claimed = await storage.reserve(key(h), { handle: h, launched: true, logs: emptyLogs });
       if (!claimed) {
         const entry = await load(h);
         if (entry.receipt !== undefined) return;
-        if ((await box.getProcess(h.id)) === null)
+        // An absent flag is an existing launch intent from an earlier schema.
+        if (entry.launched !== false) {
+          if ((await box.getProcess(h.id)) === null)
           throw new Error(
             "uncertain check command: launch response or process was lost; no relaunch",
           );
-        return;
+          return;
+        }
+        if (!(await storage.save(key(h), { ...entry, launched: true }, entry)))
+          throw new Error("check command launch reservation changed concurrently");
       }
       if (now() >= h.deadline) throw new Error("check command deadline expired before launch");
       const file = `${path(h)}.cjs`;
