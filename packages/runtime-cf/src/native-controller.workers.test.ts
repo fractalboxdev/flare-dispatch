@@ -6,6 +6,7 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { nativeCommand, type NativeRequest } from "@fractalboxdev/flare-dispatch-core";
 import { makeNativeController } from "./native-controller";
+import * as native from "./native";
 import { makeNativeResultR2, nativeResultKey } from "./native-result-r2";
 
 const controller = { appId: 42, actorLogin: "native-controller[bot]" };
@@ -39,13 +40,32 @@ const archive = (members: { path: string; bytes: Buffer }[]) => {
   return Buffer.concat([...bodies, records, end]);
 };
 const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
-  clientRepo?: string; emptyToken?: boolean } = {}) => {
+  clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; foreignApp?:boolean; broadGrant?:boolean } = {}) => {
   let status = "in_progress", conclusion: string | null = null, posts = 0, downloads = 0, failPut = options.lostPublication;
+  let authReads=0, grants=0;
   const run = () => ({ id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
     path: ".github/workflows/native-windows.yml", display_title: `native-${request.nonce}`, repository: { full_name: request.repo },
     actor: { login: controller.actorLogin, type: "Bot" }, created_at: new Date().toISOString(), status, conclusion });
   const fetchImpl = async (url: RequestInfo | URL, init?: RequestInit) => {
     const target = new URL(String(url));
+    if (target.pathname === "/app") {
+      authReads++; expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-app-jwt");
+      return Response.json({id:options.foreignApp ? 43 : 42,slug:"native-controller"});
+    }
+    if (target.pathname.endsWith("/installation")) {
+      authReads++; expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-app-jwt");
+      return Response.json({id:77,app_id:42,account:{login:"owner"},suspended_at:null,permissions:{actions:"write"}});
+    }
+    if (target.pathname.endsWith("/access_tokens")) {
+      grants++; expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-app-jwt");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({repositories:["context"],permissions:{actions:"write",metadata:"read"}});
+      return Response.json({token:"fixture-installation-token",expires_at:new Date(Date.now()+3600_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+        repository_selection:options.broadGrant ? "all" : "selected",repositories:[{name:"context",full_name:request.repo}],
+        permissions:{actions:"write",metadata:"read"}},{status:201});
+    }
+    if (target.hostname !== "archive.example")
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-installation-token");
     if (init?.method === "POST") { posts++; if (options.lostDispatch) throw new Error("accepted response lost"); return new Response(null, { status: 204 }); }
     if (target.pathname.endsWith("/native-windows.yml/runs")) return Response.json({ total_count: 1, workflow_runs: [run()] });
     if (target.pathname.endsWith("/attempts/1")) return Response.json(run());
@@ -68,13 +88,48 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
       if (failPut && args[0].startsWith("native-results/")) { failPut = false; throw new Error("publication acknowledgement lost"); }
       return value;
     }) as R2Bucket["put"] } as R2Bucket;
-  const instance = makeNativeController({ db: env.RUNS_METADATA, bucket, controller,
-    client: { repo: options.clientRepo ?? request.repo, token: options.emptyToken ? "" : "fixture-installation-token", fetchImpl } });
+  const instance = options.authenticated ? { advance:(raw:unknown) =>
+    (native as unknown as {advanceNativeController:(options:unknown,request:unknown)=>Effect.Effect<unknown,unknown>})
+      .advanceNativeController({db:env.RUNS_METADATA,bucket,auth:{appId:"42",appJwt:"fixture-app-jwt",
+        repo:options.clientRepo ?? request.repo,fetchImpl}},raw) } :
+    makeNativeController({ db: env.RUNS_METADATA, bucket, controller,
+      client: { repo: options.clientRepo ?? request.repo, token: options.emptyToken ? "" : "fixture-installation-token", fetchImpl } });
   return { instance, bucket, posts: () => posts, downloads: () => downloads,
+    authReads:()=>authReads,grants:()=>grants,
     finish: (value = "success") => { status = "completed"; conclusion = value; } };
 };
 
 describe("native controller with actual D1 and R2", () => {
+  it("authenticates each advance and preserves single dispatch/archive publication across replay", async () => {
+    const f=open({authenticated:true,lostDispatch:true});
+    expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({_tag:"Running",runId:123,runAttempt:1});
+    f.finish();
+    const result=await Effect.runPromise(f.instance.advance(request));
+    expect(result).toMatchObject({_tag:"Published",result:{receipt:{exit_code:0}}});
+    expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({_tag:"Published"});
+    expect(f.posts()).toBe(1);expect(f.downloads()).toBe(1);
+    expect(f.authReads()).toBe(6);expect(f.grants()).toBe(3);
+    expect(JSON.stringify(result)).not.toContain("fixture-app-jwt");
+    expect(JSON.stringify(result)).not.toContain("fixture-installation-token");
+    const persisted=await env.RUNS_METADATA.prepare("SELECT * FROM native_dispatches").all();
+    expect(JSON.stringify(persisted)).not.toContain("fixture-app-jwt");
+    expect(JSON.stringify(persisted)).not.toContain("fixture-installation-token");
+    const file=await Effect.runPromise(makeNativeResultR2(f.bucket,controller.actorLogin).readFile(readerBinding(),"command.log",Math.floor(Date.now()/1000)));
+    expect(Buffer.from(await new Response(file.body).arrayBuffer())).toEqual(log);
+  });
+  it.each([{foreignApp:true},{broadGrant:true},{clientRepo:"other/context"}])("rejects untrusted authenticated scope without dispatch reservation",async(options)=>{
+    const f=open({...options,authenticated:true});
+    await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
+    expect(f.posts()).toBe(0);expect(f.downloads()).toBe(0);
+    expect(await env.RUNS_METADATA.prepare("SELECT count(*) AS count FROM native_dispatches").first("count")).toBe(0);
+    if(options.clientRepo !== undefined){expect(f.authReads()).toBe(0);expect(f.grants()).toBe(0);}
+  });
+  it("rejects a malformed native request before authentication",async()=>{
+    const f=open({authenticated:true});
+    await expect(Effect.runPromise(f.instance.advance({...request,command_sha256:"0".repeat(64)}))).rejects.toThrow();
+    expect(f.authReads()).toBe(0);expect(f.grants()).toBe(0);expect(f.posts()).toBe(0);
+    expect(await env.RUNS_METADATA.prepare("SELECT count(*) AS count FROM native_dispatches").first("count")).toBe(0);
+  });
   it.each([{ clientRepo: "other/context" }, { emptyToken: true }])("refuses invalid credential scope before reserving a dispatch intent", async (options) => {
     const f = open(options);
     await expect(Effect.runPromise(f.instance.advance(request))).rejects.toThrow();
