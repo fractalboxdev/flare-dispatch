@@ -18,6 +18,20 @@ it("refuses invalid UTF-8 in unused native evidence fields", async () => {
     .rejects.toMatchObject({ name: "GithubApiError", body: "" });
 });
 
+it("refuses empty producer chunks before they accumulate metadata without consuming the byte budget", async () => {
+  let pulls = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls++;
+      if (pulls <= 50) controller.enqueue(new Uint8Array());
+      else { controller.enqueue(new TextEncoder().encode('{"workflow_runs":[]}')); controller.close(); }
+    },
+  });
+  await expect(readNativeWindowsRuns({ ...options, fetchImpl: async () => new Response(body) }))
+    .rejects.toMatchObject({ name: "GithubApiError", body: "" });
+  expect(pulls).toBeLessThan(5);
+});
+
 it("bounds native evidence fetch and body reads even when a provider ignores its abort signal", async () => {
   vi.useFakeTimers();
   try {
