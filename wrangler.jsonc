@@ -122,6 +122,11 @@
       "binding": "RUNS_WORKFLOW",
       "class_name": "RunWorkflow",
     },
+    {
+      "name": "native-workflow",
+      "binding": "NATIVE_WORKFLOW",
+      "class_name": "NativeWorkflow",
+    },
   ],
 
   // ===========================================================================

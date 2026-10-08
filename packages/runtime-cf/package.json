@@ -7,7 +7,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./model-gateway": "./src/model-gateway-cf.ts"
+    "./model-gateway": "./src/model-gateway-cf.ts",
+    "./native": "./src/native.ts",
+    "./testing": "./src/test-support.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -19,13 +21,15 @@
     "@fractalboxdev/flare-dispatch-core": "workspace:*",
     "@fractalboxdev/flare-dispatch-github-app": "workspace:*",
     "@fractalboxdev/flare-dispatch-substrate-contract": "workspace:*",
-    "effect": "^3.21.0"
+    "effect": "^3.21.0",
+    "yauzl": "3.4.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.21",
     "@cloudflare/workers-types": "^4.20260518.1",
     "@effect/vitest": "^0.29.0",
     "@fractalboxdev/flare-dispatch-runs": "workspace:*",
+    "@types/yauzl": "3.4.0",
     "miniflare": "4.20260515.0",
     "msw": "^2.7.0",
     "typescript": "^5.6.3",

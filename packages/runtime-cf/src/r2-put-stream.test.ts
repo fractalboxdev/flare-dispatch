@@ -114,4 +114,19 @@ describe("putStream", () => {
     ).rejects.toThrow();
     expect(state.aborted).toBe(true);
   });
+
+  it("refuses declared lengths before publishing truncated or excess small bytes", async () => {
+    for (const declared of [2, 4]) {
+      const { bucket, puts } = makeFakeBucket();
+      await expect(putStream(bucket, "length", streamOf([fill(3, 7)]), declared, {})).rejects.toThrow();
+      expect(puts).toHaveLength(0);
+    }
+  });
+
+  it("keeps multipart parts bounded even when one producer chunk spans several parts", async () => {
+    const { bucket, parts } = makeFakeBucket();
+    await putStream(bucket, "large-chunk", streamOf([fill(20 * MiB, 7)]), 20 * MiB, {});
+    expect(parts.every((part) => part.bytes.length <= 8 * MiB)).toBe(true);
+    expect(parts.reduce((sum, part) => sum + part.bytes.length, 0)).toBe(20 * MiB);
+  });
 });

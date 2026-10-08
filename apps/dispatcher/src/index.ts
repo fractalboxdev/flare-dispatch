@@ -27,6 +27,7 @@ import { RunSandbox, RunSandboxBrowser, RunSandboxAgent, RunSandboxRelease } fro
 
 // Re-export the binding classes so wrangler's `main` entry resolves them.
 export { RunWorkflow } from "./workflow";
+export { NativeWorkflow } from "./native-workflow";
 export { AgentBudget } from "./agent-budget-do";
 export { RunSandbox, RunSandboxBrowser, RunSandboxAgent, RunSandboxRelease };
 
