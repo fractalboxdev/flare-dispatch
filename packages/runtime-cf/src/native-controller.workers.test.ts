@@ -1,13 +1,13 @@
 import { env } from "cloudflare:test";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { crc32 } from "node:zlib";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { nativeCommand, type NativeRequest, type NativeReceiptRefused, type NativeControllerPolicy } from "@fractalboxdev/flare-dispatch-core";
 import { makeNativeController } from "./native-controller";
 import * as native from "./native";
 import { makeNativeResultR2, nativeResultKey } from "./native-result-r2";
+import { nativeTestArchive as archive } from "./testing/native-archive";
 
 const controller = { appId: 42, actorLogin: "native-controller[bot]" };
 const request: NativeRequest = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40),
@@ -22,23 +22,6 @@ const receipt = (nonce = request.nonce) => ({ version: 1, repo: request.repo, he
   runner_os: "Windows", runner_arch: "ARM64", run_id: "123", run_attempt: "1", job: "aarch64",
   exit_code: 0, failure: null, started_at: "2026-10-08T00:00:00Z", completed_at: "2026-10-08T00:00:01Z", artifacts: [artifact] });
 
-// Small stored ZIP fixture gives the actual range reader, CRC verifier and R2 publisher their bytes.
-const archive = (members: { path: string; bytes: Buffer }[]) => {
-  const bodies: Buffer[] = [], directory: Buffer[] = []; let offset = 0;
-  for (const member of members) {
-    const name = Buffer.from(member.path), size = member.bytes.length, checksum = crc32(member.bytes);
-    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4);
-    local.writeUInt32LE(checksum, 14); local.writeUInt32LE(size, 18); local.writeUInt32LE(size, 22); local.writeUInt16LE(name.length, 26);
-    const central = Buffer.alloc(46); central.writeUInt32LE(0x02014b50); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6);
-    central.writeUInt32LE(checksum, 16); central.writeUInt32LE(size, 20); central.writeUInt32LE(size, 24);
-    central.writeUInt16LE(name.length, 28); central.writeUInt32LE(offset, 42);
-    bodies.push(local, name, member.bytes); directory.push(central, name); offset += local.length + name.length + size;
-  }
-  const records = Buffer.concat(directory), end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50);
-  end.writeUInt16LE(members.length, 8); end.writeUInt16LE(members.length, 10);
-  end.writeUInt32LE(records.length, 12); end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...bodies, records, end]);
-};
 const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
   clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; checkpoint?:boolean; undiscovered?:boolean;
   foreignApp?:boolean; broadGrant?:boolean; delayArchive?:boolean; delayVerification?:boolean; policy?:NativeControllerPolicy; clock?: () => number;

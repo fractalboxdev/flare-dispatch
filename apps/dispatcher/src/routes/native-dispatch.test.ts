@@ -54,4 +54,35 @@ describe("authenticated native execution trigger",()=>{
     const f=open();const response=await handleRequest(await post(request),{...f.env,GITHUB_APP_ID:appId});
     expect(response.status).toBe(503);expect(f.workflow.calls).toHaveLength(0);expect(f.db).not.toHaveBeenCalled();
   });
+  it.each(["running", "complete", "errored", "terminated", "unknown"])("reconciles an ambiguous create only through the same instance: %s", async status => {
+    const f = open();
+    const create = vi.spyOn(f.workflow.binding, "create").mockRejectedValue(new Error("fixture acknowledgement lost"));
+    const seen: string[] = [];
+    const get = vi.spyOn(f.workflow.binding, "get").mockImplementation(async id => {
+      seen.push(id);
+      return { id, status: async () => ({ status }) } as Awaited<ReturnType<typeof f.workflow.binding.get>>;
+    });
+    const response = await handleRequest(await post(request), f.env);
+    expect(response.status).toBe(status === "unknown" ? 503 : status === "errored" || status === "terminated" ? 409 : 202);
+    expect(create).toHaveBeenCalledTimes(1); expect(get).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([create.mock.calls[0]![0]!.id]); expect(f.db).not.toHaveBeenCalled();
+    expect(await response.text()).not.toContain("fixture acknowledgement lost");
+  });
+  it("refuses a foreign instance returned by ambiguous create observation", async () => {
+    const f = open();
+    const create = vi.spyOn(f.workflow.binding, "create").mockRejectedValue(new Error("fixture acknowledgement lost"));
+    vi.spyOn(f.workflow.binding, "get").mockImplementation(async () => ({ id: "foreign-instance", status: async () => ({status:"running"}) })
+      as Awaited<ReturnType<typeof f.workflow.binding.get>>);
+    expect((await handleRequest(await post(request), f.env)).status).toBe(503);
+    expect(create).toHaveBeenCalledTimes(1); expect(f.db).not.toHaveBeenCalled();
+  });
+  it("refuses signed invalid UTF8 and query claims before creating an instance", async () => {
+    const f = open(), bytes = new Uint8Array([0xff]);
+    const invalid = new Request("https://worker.test/v1/native-runs", { method:"POST", body:bytes,
+      headers:{ "x-flaredispatch-signature":await sign(key,bytes) } });
+    expect((await handleRequest(invalid,f.env)).status).toBe(400);
+    const query = await post(request);
+    expect((await handleRequest(new Request(`${query.url}?token=fixture-forbidden`,query),f.env)).status).toBe(400);
+    expect(f.workflow.calls).toHaveLength(0);expect(f.db).not.toHaveBeenCalled();
+  });
 });

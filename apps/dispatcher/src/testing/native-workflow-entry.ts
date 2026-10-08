@@ -3,10 +3,18 @@ import { NativeReceiptRefused, admitNativeRequest } from "@fractalboxdev/flare-d
 import { nativeWorkflowId } from "../native-workflow-policy";
 import { readNativeControllerIdentity, signAppJwt } from "@fractalboxdev/flare-dispatch-github-app";
 import type { Env } from "../env";
+import { nativeWorkflowPoll } from "../native-workflow";
 
 /** Local bindings execute the production class; this fixture exposes only its admitted instance-ID owner. */
 export { NativeWorkflow } from "../native-workflow";
 export default { fetch: async (request: Request, env: Env) => {
+  if(new URL(request.url).pathname === "/fixture/poll") {
+    const raw = await request.json() as { checkpoint: unknown; pollIntervalSec: number; now: number };
+    return Effect.runPromise(nativeWorkflowPoll(raw.checkpoint, raw.pollIntervalSec, raw.now).pipe(
+      Effect.map(value => Response.json(value)),
+      Effect.catchTag("NativeReceiptRefused", () => Effect.succeed(new Response(null, { status: 503 }))),
+    ));
+  }
   if(new URL(request.url).pathname === "/fixture/default-context") {
     return Effect.runPromise(Effect.tryPromise({try:async()=>{
       const appId=env.GITHUB_APP_ID!;
