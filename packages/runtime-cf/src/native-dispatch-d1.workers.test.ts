@@ -34,6 +34,66 @@ const loseWriteResponse = (matching: string): Pick<D1Database, "prepare"> => {
 };
 
 describe("durable native dispatch in workerd", () => {
+  it("reconciles an ambiguous POST after old workflow history exceeds one hundred runs", async () => {
+    let posts = 0;
+    let created: string | null = null;
+    const fetchImpl: typeof fetch = async (raw, init) => {
+      const url = new URL(String(raw));
+      if (init?.method === "POST") { posts++; throw new Error("fixture accepted POST lost its response"); }
+      created = url.searchParams.get("created");
+      const candidate = { id:456, run_attempt:1, event:"workflow_dispatch", head_sha:request.executor_ref,
+        path:".github/workflows/native-windows.yml", display_title:`native-${request.nonce}`,
+        repository:{ full_name:request.repo }, actor:{ login:controller.actorLogin, type:"Bot" },
+        created_at:new Date().toISOString() };
+      if (created !== null) return Response.json({ total_count:1, workflow_runs:[candidate] });
+      const page = Number(url.searchParams.get("page") ?? 1);
+      url.searchParams.set("page", String(page + 1));
+      return Response.json({ total_count:101, workflow_runs:Array.from({ length:25 }, (_, i) => ({
+        ...candidate, id:1000 + page * 25 + i, display_title:"native-old-history", created_at:"2020-01-01T00:00:00Z",
+      })) }, { headers:{ link:`<${url}>; rel="next"` } });
+    };
+    const provider = makeNativeGithubProvider({ repo:request.repo, token:"fixture-installation", fetchImpl });
+    const jobs = makeNativeDispatchD1(env.RUNS_METADATA, controller, provider);
+    expect((await runEffect(jobs.start(request))).state).toBe("dispatching");
+    const reopened = makeNativeDispatchD1(env.RUNS_METADATA, controller, provider);
+    await runEffect(reopened.start(request));
+    expect(await runEffect(reopened.reconcile(request))).toMatchObject({ state:"bound", runId:456, runAttempt:1 });
+    expect(posts).toBe(1);
+    const row = await env.RUNS_METADATA.prepare("SELECT admitted_at FROM native_dispatches WHERE repo=? AND nonce=?")
+      .bind(request.repo, request.nonce).first<{ admitted_at:number }>();
+    expect(created).toBe(`>=${new Date((row!.admitted_at - 300) * 1000).toISOString()}`);
+  });
+
+  it("persists immutable database admission time before POST and refuses legacy time-less intents", async () => {
+    let admittedAt: number | undefined;
+    let posts = 0;
+    const provider = {
+      dispatch: () => Effect.promise(async () => {
+        const row = await env.RUNS_METADATA.prepare("SELECT admitted_at FROM native_dispatches WHERE repo=? AND nonce=?")
+          .bind(request.repo, request.nonce).first<{ admitted_at:number }>();
+        admittedAt = row!.admitted_at;
+        expect(Number.isSafeInteger(admittedAt)).toBe(true);
+        posts++;
+      }),
+      listRuns: () => Effect.succeed([]),
+    };
+    const jobs = makeNativeDispatchD1(env.RUNS_METADATA, controller, provider);
+    await runEffect(jobs.start(request));
+    await expect(env.RUNS_METADATA.prepare("UPDATE native_dispatches SET admitted_at=admitted_at+1 WHERE repo=? AND nonce=?")
+      .bind(request.repo, request.nonce).run()).rejects.toThrow();
+    await runEffect(makeNativeDispatchD1(env.RUNS_METADATA, controller, provider).start(request));
+    expect(posts).toBe(1);
+    const row = await env.RUNS_METADATA.prepare("SELECT admitted_at FROM native_dispatches WHERE repo=? AND nonce=?")
+      .bind(request.repo, request.nonce).first<{ admitted_at:number }>();
+    expect(row!.admitted_at).toBe(admittedAt);
+    const legacy = { ...request, nonce:"native-legacy-0123456789" };
+    await env.RUNS_METADATA.prepare("INSERT INTO native_dispatches(repo,nonce,request_json,controller_app_id,controller_login,state) VALUES(?,?,?,?,?,'reserved')")
+      .bind(legacy.repo, legacy.nonce, JSON.stringify(legacy), controller.appId, controller.actorLogin).run();
+    await expect(runEffect(jobs.start(legacy))).rejects.toThrow();
+    await expect(runEffect(jobs.reconcile(legacy))).rejects.toThrow();
+    expect(posts).toBe(1);
+  });
+
   it("reserves before POST and sends exactly once across concurrent starts and reopening", async () => {
     let posts = 0;
     const provider = {
