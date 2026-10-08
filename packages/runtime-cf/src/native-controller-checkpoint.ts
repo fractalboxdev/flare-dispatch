@@ -7,6 +7,8 @@ import { nativeResultKey } from "./native-result-r2";
 
 const Clock = { admittedAt: NativeAdmissionTime };
 const Run = { runId: NativeApiEvidence.fields.runId, runAttempt: NativeApiEvidence.fields.runAttempt };
+/** Cloudflare's non-stream step result ceiling, measured as serialized UTF8 bytes. */
+export const NATIVE_CONTROLLER_CHECKPOINT_MAX_BYTES = 2 ** 20;
 
 /** Checkpoints contain lifecycle metadata; credentials and verified file bodies remain outside Workflow state. */
 export const NativeControllerCheckpoint = Schema.Union(
@@ -14,7 +16,8 @@ export const NativeControllerCheckpoint = Schema.Union(
   Schema.Struct({ _tag: Schema.Literal("Running"), ...Clock, ...Run, status: NativePendingStatus }),
   Schema.Struct({ _tag: Schema.Literal("Failed"), ...Clock, ...Run, conclusion: NativeTerminalConclusion }),
   Schema.Struct({ _tag: Schema.Literal("Published"), ...Clock, ...Run, manifestKey: Schema.String.pipe(Schema.nonEmptyString()) }),
-);
+).pipe(Schema.filter((checkpoint) => new TextEncoder().encode(JSON.stringify(checkpoint)).byteLength
+  <= NATIVE_CONTROLLER_CHECKPOINT_MAX_BYTES));
 export type NativeControllerCheckpoint = typeof NativeControllerCheckpoint.Type;
 
 /** Only the authenticated controller produces a published checkpoint; projection confers no result-reader authority. */
