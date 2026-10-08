@@ -27,9 +27,23 @@ async function stopped(pid: number): Promise<boolean> {
   }
 }
 
+async function recordedDescendant(dir:string):Promise<number> {
+  const echo=(await readFile(`${dir}/stdout`,"utf8")).trim();
+  const pid=Number(echo);
+  if(!/^[1-9][0-9]*$/.test(echo)||!Number.isSafeInteger(pid))
+    throw new Error("owned descendant echo is not a canonical positive PID");
+  return pid;
+}
 async function cleanupRecordedDescendant(dir:string, descendant:number, closed:Promise<void>, beforeRemove?:()=>Promise<void>):Promise<void> {
-  if(descendant>0){try{process.kill(descendant,"SIGKILL");}catch{}}
+  const owned=await recordedDescendant(dir);
+  if(descendant>0 && descendant !== owned)throw new Error("owned descendant echo conflicts with captured PID");
+  try{process.kill(owned,"SIGKILL");}catch(error){
+    if(!(error instanceof Error && "code" in error && error.code === "ESRCH"))throw error;
+  }
   await closed;
+  for(let attempt=0;attempt<500 && !(await stopped(owned));attempt++)
+    await new Promise((resolve)=>setTimeout(resolve,10));
+  expect(await stopped(owned)).toBe(true);
   await beforeRemove?.();
   await rm(dir,{recursive:true,force:true});
 }
@@ -104,9 +118,9 @@ const diagnosticExit=process.exit.bind(process);process.exit=(code)=>{diagnostic
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
       }
-      expect(terminal).toMatchObject({ exitCode: 0, timedOut: false });
-      descendant = Number((await readFile(`${dir}/stdout`, "utf8")).trim());
+      descendant = await recordedDescendant(dir);
       expect(descendant).toBeGreaterThan(0);
+      expect(terminal).toMatchObject({ exitCode: 0, timedOut: false });
       expect(await stopped(descendant)).toBe(true);
       await closed;
     } finally {
