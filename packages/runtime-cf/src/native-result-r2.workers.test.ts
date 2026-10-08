@@ -37,6 +37,21 @@ const evidence = (runId = 123) => ({
 });
 
 describe("immutable native result storage in workerd", () => {
+  it("refuses publication based only on a claimed byte inventory", async () => {
+    const repository = makeNativeResultR2(env.RUNS_STORAGE, controller);
+    await expect(Effect.runPromise(repository.publish(evidence(), now))).rejects.toThrow();
+    expect(await env.RUNS_STORAGE.get(nativeResultKey(binding))).toBeNull();
+  });
+
+  it("rejects expired reader authority before any R2 access", async () => {
+    let gets = 0;
+    const observed: Pick<R2Bucket, "get" | "put"> = {
+      get: async (...args) => { gets++; return env.RUNS_STORAGE.get(...args); },
+      put: env.RUNS_STORAGE.put.bind(env.RUNS_STORAGE),
+    };
+    await expect(Effect.runPromise(makeNativeResultR2(observed, controller).read(binding, binding.expires_at))).rejects.toThrow();
+    expect(gets).toBe(0);
+  });
   it("publishes bound controller evidence and reads it through the complete identity", async () => {
     const repository = makeNativeResultR2(env.RUNS_STORAGE, controller);
     await Effect.runPromise(repository.publish(evidence(), now));

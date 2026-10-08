@@ -40,6 +40,10 @@ it.effect("accepts only the controller-owned result matching the reader binding"
   expect(accepted.receipt.exit_code).toBe(0);
 }));
 
+it.effect("refuses a receipt-only result without verified file locations", () => Effect.gen(function* () {
+  expect(yield* bindNativeResult(reader, result(), "native-controller[bot]", now).pipe(Effect.either)).toHaveProperty("left");
+}));
+
 it.effect("refuses missing, expired, future, malformed and non-API-bound results", () => Effect.gen(function* () {
   const variants = [null, { ...result(), verified_at: now + 1 }, { ...result(), verified_at: Infinity },
     { ...result(), verified_at: 0 }, { ...result(), request: { ...request, mode: "release" } },
