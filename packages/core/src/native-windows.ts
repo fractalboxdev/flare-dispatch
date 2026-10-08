@@ -81,6 +81,13 @@ export const nativeControllerDeadline = (rawPolicy: unknown, rawAdmission: unkno
   const deadlineAt = yield* Schema.decodeUnknown(NativeAdmissionTime)(admittedAt + policy.timeoutSec).pipe(Effect.mapError(fail));
   return { ...policy, admittedAt, deadlineAt };
 });
+/** Every deadline admission shares the same strict cutoff; a sampled database clock is not a refreshed policy. */
+export const assertNativeControllerDeadline = (rawDeadline: unknown, rawNow: unknown) => Effect.gen(function* () {
+  const invalid = () => new NativeReceiptRefused({ reason:"native controller deadline clock invalid" });
+  const deadlineAt = yield* Schema.decodeUnknown(NativeAdmissionTime)(rawDeadline).pipe(Effect.mapError(invalid));
+  const now = yield* Schema.decodeUnknown(NativeAdmissionTime)(rawNow).pipe(Effect.mapError(invalid));
+  if(now >= deadlineAt) return yield* Effect.fail(new NativeReceiptRefused({ reason:"native controller admission deadline expired" }));
+});
 export const NativeRunCreatedAt = Schema.String.pipe(Schema.filter((time) =>
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(time)
   && Number.isFinite(Date.parse(time))

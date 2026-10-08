@@ -40,11 +40,11 @@ export const advanceNativeController = (options:AuthenticatedOptions, rawRequest
 export const makeNativeController = ({ db, bucket, controller, client, policy, now: clock = () => Math.floor(Date.now() / 1000) }: Options) => {
   const provider = makeNativeGithubProvider(client);
   const dispatch = makeNativeDispatchD1(db, controller, provider, policy);
-  const results = makeNativeResultR2(bucket, controller.actorLogin);
   const advance = (rawRequest: unknown) => Effect.gen(function* () {
     const request = yield* admitNativeRequest(rawRequest);
     if (request.repo !== client.repo || client.token.length === 0)
       return yield* Effect.fail(refused("native controller credential scope invalid"));
+    const results = makeNativeResultR2(bucket, controller.actorLogin, () => dispatch.observe(request).pipe(Effect.asVoid));
     yield* dispatch.start(request);
     const state = yield* dispatch.reconcile(request);
     const durableClock = { admittedAt:state.admittedAt, ...(state.deadlineAt === undefined ? {} : { deadlineAt:state.deadlineAt }) };
@@ -75,7 +75,6 @@ export const makeNativeController = ({ db, bucket, controller, client, policy, n
           makeNativeArchiveDownload(bucket).stage(response),
           (archive) => Effect.gen(function* () {
             const captured = yield* makeNativeArchiveR2(bucket).verify({ request, api: evidence.api, controllerLogin: controller.actorLogin }, archive.key);
-            yield* dispatch.observe(request);
             return yield* results.publish({ request, api: evidence.api, ...captured, verifiedAt: clock() }, clock());
           }),
           (archive) => Effect.tryPromise({ try: () => bucket.delete(archive.key), catch: () => refused("native temporary archive disposal unavailable") }).pipe(Effect.orDie),

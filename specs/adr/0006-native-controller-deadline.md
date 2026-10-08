@@ -12,7 +12,7 @@ The deploying operator supplies an explicit positive controller duration. Core's
 
 A policy-aware controller refuses a legacy policy-less intent, a different duration, or an expired deadline. A policy-less client cannot adopt a policy-bearing intent. Existing policy-less intents retain their existing behavior; neither adapter infers a missing policy. Verified-result reader expiry remains a separate signed capability.
 
-The reserved-to-dispatching CAS tests the absolute deadline against database time. The dispatch adapter rechecks after a delayed claim acknowledgement before POST. Controller observation and publication admission reuse the same D1 owner; Workflow checkpoints carry the stored deadline rather than choosing one.
+The reserved-to-dispatching CAS tests the absolute deadline against database time. The dispatch adapter rechecks after a delayed claim acknowledgement before POST. The live trusted clock rejects a database response that arrives after expiry. The sole result publisher checks admission after chunk verification, immediately before immutable PUT. Observation and publication reuse the same D1 owner; checkpoints carry the stored deadline rather than choosing one.
 
 ## Rationale
 
@@ -24,7 +24,7 @@ The reserved-to-dispatching CAS tests the absolute deadline against database tim
 
 ## Consequences
 
-Migration `0011_native_controller_deadline.sql` leaves legacy policy columns null and rejects inconsistent insertion or policy updates. An expired intent does not grant another POST or a successful controller publication.
+Migration `0011_native_controller_deadline.sql` leaves legacy policy columns null and rejects inconsistent insertion or policy updates. An expired intent grants neither another POST nor new controller publication admission. Unrepresentable durations refuse before durable reservation.
 
 Deadline admission checks do not impose a hard process wall-clock bound. Archive/R2 stream reads and disposal include unbounded awaits; expiry refuses the next admitted side effect after they return. Workflow eviction does not imply cancellation of the external GitHub job.
 

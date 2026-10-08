@@ -24,7 +24,10 @@ export const nativeResultKey = (binding: NativeReadBinding | NativeRequest): str
   `native-results/v1/${binding.repo}/${binding.head}/${binding.base}/${binding.nonce}/${binding.target}/${binding.command_sha256}/${binding.executor_ref}.json`;
 
 /** Only the authenticated controller publishes here; workload artifacts have a separate namespace. */
-export const makeNativeResultR2 = (bucket: Pick<R2Bucket, "get" | "put">, controllerLogin: string) => {
+export const makeNativeResultR2 = (
+  bucket: Pick<R2Bucket, "get" | "put">, controllerLogin: string,
+  beforePublish?: () => Effect.Effect<void, NativeReceiptRefused>,
+) => {
   const chunkBytes = async (identity: NativeReadBinding, chunk: NativeResultFile["chunks"][number]) => {
     const object = await bucket.get(nativeFileChunkKey(identity, chunk.sha256));
     if (object === null) throw refused("native file chunk absent");
@@ -123,6 +126,7 @@ export const makeNativeResultR2 = (bucket: Pick<R2Bucket, "get" | "put">, contro
     if (new TextEncoder().encode(text).byteLength > NATIVE_RESULT_MAX_BYTES)
       return yield* Effect.fail(new NativeReceiptRefused({ reason: "native result exceeds storage bound" }));
     const key = nativeResultKey(binding);
+    if(beforePublish !== undefined) yield* beforePublish();
     const object = yield* Effect.tryPromise({
       try: () => bucket.put(key, text, {
         onlyIf: new Headers({ "if-none-match": "*" }),

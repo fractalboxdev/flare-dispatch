@@ -4,7 +4,7 @@ import {
   admitNativeRequest,
   NativeAdmissionTime, NativeRunCreatedAt, nativeDiscoveryWindow,
   admitNativeReadBinding, bindNativeReadRequest,
-  NativeControllerPolicy, nativeControllerDeadline,
+  NativeControllerPolicy, nativeControllerDeadline, assertNativeControllerDeadline,
 } from "@fractalboxdev/flare-dispatch-core";
 
 const Controller = Schema.Struct({
@@ -93,6 +93,7 @@ export const makeNativeDispatchD1 = (
     const controller = yield* decode(Controller, configured);
     const request = yield* admitNativeRequest(raw);
     const policy = configuredPolicy === undefined ? undefined : yield* decode(NativeControllerPolicy, configuredPolicy);
+    if (policy !== undefined) yield* nativeControllerDeadline(policy, Math.floor(Date.now() / 1000));
     return { request, controller, policy, text: JSON.stringify(request) };
   });
   type Identity = Effect.Effect.Success<ReturnType<typeof identity>>;
@@ -104,8 +105,11 @@ export const makeNativeDispatchD1 = (
       return yield* refuse("native dispatch nonce or controller ownership conflicts");
     if (id.policy?.timeoutSec !== record.policy?.timeoutSec)
       return yield* refuse("native controller deadline policy conflicts or is absent");
-    if (record.policy !== undefined && record.observedAt >= record.policy.deadlineAt)
-      return yield* refuse("native controller admission deadline expired");
+    if (record.policy !== undefined) {
+      yield* assertNativeControllerDeadline(record.policy.deadlineAt, record.observedAt);
+      // Database responses can arrive late; the trusted live clock admits the next side effect after the response.
+      yield* assertNativeControllerDeadline(record.policy.deadlineAt, Math.floor(Date.now() / 1000));
+    }
     return record.policy === undefined ? record.snapshot : { ...record.snapshot, deadlineAt: record.policy.deadlineAt };
   });
   const observe = (raw: unknown) => Effect.gen(function* () { return yield* read(yield* identity(raw)); });
