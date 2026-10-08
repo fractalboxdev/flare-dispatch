@@ -9,7 +9,7 @@ import {
 import {
   ensureWorkspace,
   fanOut,
-  waitForChildren,
+  waitForChildrenDurably,
   workspace,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
 
@@ -190,12 +190,11 @@ export const contextfulGate = defineRun({
         if (offset === 0) {
           yield* step("handoff-admission", () => handoffChildAdmission());
         }
-        const results = yield* step(`await-stages-${offset}`, () =>
-          waitForChildren({
+        const results = yield* waitForChildrenDurably({
+            name: `await-stages-${offset}`,
             ids: handles.map((handle) => handle.executionId),
             timeout: "130 minutes",
-          }),
-        );
+          });
         results.forEach((result, index) => {
           if (result.status !== "success") failed.push(batch[index]!);
         });

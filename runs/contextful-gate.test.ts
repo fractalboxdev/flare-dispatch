@@ -1,7 +1,8 @@
 import { it } from "@effect/vitest";
-import { Cause, Effect, Exit } from "effect";
+import { Cause, Duration, Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
+import { IO, StepFailed, StepRunner, type StepRunnerService } from "@fractalboxdev/flare-dispatch-core";
 import { contextfulGate, mergeStages, parseStages } from "./contextful-gate";
 
 const SHA = "a".repeat(40);
@@ -11,6 +12,54 @@ const DISCOVER_HEAD = `${DISCOVER} --base ${BASE_SHA}`;
 const input = { repo: "fractalboxdev/contextful", sha: SHA, baseSha: BASE_SHA } as const;
 
 describe("contextful-gate", () => {
+  it.effect("joins a successful child beyond the native ten-minute checkpoint ceiling", () => {
+    let now = 0;
+    const sleeps: number[] = [];
+    const callbacks: { name: string; elapsed: number; timeout: number }[] = [];
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "pins\n", exitCode: 0 },
+        [DISCOVER]: { stdout: "pins\n", exitCode: 0 },
+      },
+      childRuns: {
+        pollFn: (ids) => ids.map((executionId) => ({ executionId,
+          status: now < 610_000 ? "running" : "success" })),
+      },
+    });
+    return Effect.gen(function* () {
+      const ordinary = yield* StepRunner;
+      const io = yield* IO;
+      const bounded: StepRunnerService = {
+        ...ordinary,
+        run: (name, body, opts) => Effect.gen(function* () {
+          const start = now;
+          const result = yield* ordinary.run(name, body, opts);
+          const timeout = (opts?.timeoutSec ?? 600) * 1000;
+          callbacks.push({ name, elapsed: now - start, timeout });
+          if (now - start > timeout) {
+            return yield* Effect.fail(new StepFailed({ step: name,
+              cause: new Error("WorkflowTimeoutError: native checkpoint ceiling") }));
+          }
+          return result;
+        }),
+        sleep: (_name, milliseconds) => Effect.sync(() => { sleeps.push(milliseconds); now += milliseconds; }),
+      };
+      const result = yield* contextfulGate.run(input).pipe(
+        Effect.provideService(StepRunner, bounded),
+        Effect.provideService(IO, { ...io,
+          now: Effect.sync(() => now),
+          sleep: (duration) => Effect.sync(() => { now += Duration.toMillis(Duration.decode(duration as Duration.DurationInput)); }),
+        }),
+      );
+      expect(result).toEqual({ stages: 1, failed: [] });
+      expect(now).toBeGreaterThan(600_000);
+      expect(sleeps.length).toBeGreaterThan(0);
+      expect(callbacks.every((call) => call.elapsed <= call.timeout)).toBe(true);
+      expect(handles.childRuns.spawned).toHaveLength(1);
+      expect(handles.childRuns.admissionHandoffs).toBe(1);
+    }).pipe(Effect.provide(layer));
+  });
+
   it("accepts one unique check label per stage", () => {
     expect(parseStages("pins\nworkspace.compile\nbudget.full\n")).toEqual([
       "pins",
@@ -193,9 +242,11 @@ describe("contextful-gate", () => {
         "release-discovery-container",
         "spawn-stages-0",
         "handoff-admission",
-        "await-stages-0",
+        "await-stages-0-deadline",
+        "await-stages-0-poll-0",
         "spawn-stages-2",
-        "await-stages-2",
+        "await-stages-2-deadline",
+        "await-stages-2-poll-0",
       ]);
       expect(handles.sandbox.destroyed).toHaveLength(1);
       expect(handles.childRuns.admissionHandoffs).toBe(1);

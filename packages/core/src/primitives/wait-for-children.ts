@@ -8,9 +8,9 @@
 //
 // Shaped exactly like `cdp-acceptance`'s `pollSentinelExit`: short, cheap polls
 // (a single D1 read each) separated by `io.sleep`, never a long-held connection.
-// Wall-clock per step is unbounded in CF Workflows, so a parent can wait out a
-// 25-minute matrix from inside one `step("await-children", ...)`; only CPU is
-// bounded, and a poll is I/O. The loop is bounded by `maxAttempts` derived from
+// A native checkpoint has a finite wall-clock timeout. Long joins use
+// `waitForChildrenDurably` outside a containing checkpoint. This inline loop
+// is bounded by `maxAttempts` derived from
 // `timeout / pollEvery` (a count, not a wall-clock read) so it stays
 // replay-deterministic — `io.now` drift across a checkpoint resume cannot change
 // how many polls run.
@@ -22,9 +22,54 @@ import { Duration, Effect } from "effect";
 import { ChildWaitTimeout } from "../errors";
 import { type ChildStatusRecord, ChildRuns, isTerminalChildStatus } from "../services/child-runs";
 import { IO, io } from "../services/io";
+import { StepRunner } from "../services/step-runner";
+import { step } from "../step";
 
 const POLL_EVERY_DEFAULT = "5 seconds";
 const TIMEOUT_DEFAULT = "30 minutes";
+
+/** Short status checkpoints and durable sleeps share one persisted deadline. */
+export const waitForChildrenDurably = (opts: {
+  readonly name: string;
+  readonly ids: readonly string[];
+  readonly pollEvery?: Duration.DurationInput;
+  readonly timeout?: Duration.DurationInput;
+}) => Effect.gen(function* () {
+  if (opts.ids.length === 0) return [] as readonly ChildStatusRecord[];
+  const pollMs = Math.max(1, Duration.toMillis(Duration.decode(opts.pollEvery ?? "2 minutes")));
+  const timeoutMs = Duration.toMillis(Duration.decode(opts.timeout ?? TIMEOUT_DEFAULT));
+  const deadline = yield* step(`${opts.name}-deadline`, () =>
+    io.now.pipe(Effect.map((startedAt) => ({ startedAt, expiresAt: startedAt + timeoutMs }))),
+    { timeoutSec: 60 },
+  );
+  const children = yield* ChildRuns;
+  const runner = yield* StepRunner;
+  const attempts = Math.max(1, Math.ceil(timeoutMs / pollMs) + 1);
+  let pending = [...opts.ids];
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const observed = yield* step(`${opts.name}-poll-${attempt}`, () => Effect.gen(function* () {
+      const before = yield* io.now;
+      const records = before > deadline.expiresAt ? [] : yield* children.poll({ ids: opts.ids });
+      return { records, observedAt: yield* io.now };
+    }), { timeoutSec: 60 });
+    const ordered = opts.ids.map((id) => observed.records.find((record) => record.executionId === id)
+      ?? { executionId: id, status: "missing" as const });
+    pending = ordered.filter((record) => !isTerminalChildStatus(record.status)).map((record) => record.executionId);
+    if (observed.observedAt <= deadline.expiresAt && pending.length === 0) return ordered;
+    if (observed.observedAt >= deadline.expiresAt || attempt === attempts - 1) {
+      return yield* Effect.fail(new ChildWaitTimeout({
+        pending: pending.length > 0 ? pending : [...opts.ids],
+        waitedMs: Math.max(0, observed.observedAt - deadline.startedAt),
+      }));
+    }
+    const delay = Math.min(pollMs, deadline.expiresAt - observed.observedAt);
+    // Live runtimes persist the wake-up; inline runtimes use the injected clock.
+    yield* runner.sleep !== undefined
+      ? runner.sleep(`${opts.name}-sleep-${attempt}`, delay)
+      : io.sleep(Duration.millis(delay));
+  }
+  return yield* Effect.fail(new ChildWaitTimeout({ pending, waitedMs: timeoutMs }));
+});
 
 /**
  * Wait until every child in `ids` reaches a terminal status, returning their
