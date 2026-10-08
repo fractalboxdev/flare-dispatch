@@ -37,7 +37,7 @@ export const readNativeGithubContext = (options:Options, now:number) => Effect.g
   const grant=yield* Schema.decodeUnknown(Grant)(grantRaw.body).pipe(Effect.mapError(refusal));
   const expiresAt=Date.parse(grant.expires_at)/1000;
   if (grant.repositories.length !== 1 || grant.repositories[0]?.full_name !== repo
-    || grant.repositories[0]?.name !== name || expiresAt <= now
+    || grant.repositories[0]?.name !== name || !Number.isSafeInteger(expiresAt) || expiresAt <= now
     || grant.permissions.actions !== "write"
     || Object.entries(grant.permissions).some(([key,value])=>key !== "actions" && !(key === "metadata" && value === "read")))
     return yield* Effect.fail(refusal());
