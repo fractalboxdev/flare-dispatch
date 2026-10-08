@@ -74,6 +74,36 @@ describe("authenticated native GitHub provider", () => {
     }
   });
 
+  it("consumes every artifact page and refuses partial absence or changed authenticated scope", async () => {
+    for (const broken of [false, "missing", "foreign"] as const) {
+      const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+        const path = String(url);
+        if (path.includes("/attempts/1/jobs")) return Response.json({ total_count: 1, jobs: [completedJob()] });
+        if (path.includes("/runs/456/artifacts")) {
+          if (new URL(path).searchParams.get("page") === "2") return Response.json({ total_count: 2, artifacts: [artifact()] });
+          const next = broken === "foreign" ? "https://other.example/artifacts?page=2"
+            : "https://api.github.com/repos/owner/context/actions/runs/456/artifacts?per_page=25&page=2";
+          return Response.json({ total_count: 2, artifacts: [{ ...artifact(), id: 986, name: "unrelated" }] },
+            broken === "missing" ? undefined : { headers: { link: `<${next}>; rel="next"` } });
+        }
+        return Response.json({ total_count: 1, workflow_runs: [completedRun()] });
+      });
+      const provider = makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl });
+      if (broken) await expect(runEffect(provider.collect(request, bound, "native-controller[bot]"))).rejects.toThrow();
+      else expect((await runEffect(provider.collect(request, bound, "native-controller[bot]"))).artifactId).toBe(987);
+      expect(fetchImpl.mock.calls.every(([url]) => String(url).startsWith("https://api.github.com/repos/owner/context/"))).toBe(true);
+    }
+  });
+
+  it("refuses malformed durable bindings and controller identity before any API request", async () => {
+    const { provider, fetchImpl } = collector();
+    for (const value of [{ ...bound, runId: 0 }, { ...bound, runAttempt: 0 },
+      { ...bound, runId: Number.MAX_SAFE_INTEGER + 1 }, { ...bound, extra: true }])
+      await expect(runEffect(provider.collect(request, value, "native-controller[bot]"))).rejects.toThrow();
+    await expect(runEffect(provider.collect(request, bound, ""))).rejects.toThrow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("POSTs one admitted literal request at its fixed executor revision", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
     const provider = makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl });

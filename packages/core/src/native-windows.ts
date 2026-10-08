@@ -38,8 +38,8 @@ export const NativeReceipt = Schema.Struct({
 export type NativeReceipt = typeof NativeReceipt.Type;
 
 export const NativeApiEvidence = Schema.Struct({
-  repo: NativeRequest.fields.repo, runId: Schema.Number.pipe(Schema.int(), Schema.positive()),
-  runAttempt: Schema.Number.pipe(Schema.int(), Schema.positive()), event: Schema.String,
+  repo: NativeRequest.fields.repo, runId: Schema.Number.pipe(Schema.filter((id) => Number.isSafeInteger(id) && id > 0)),
+  runAttempt: Schema.Number.pipe(Schema.filter((id) => Number.isSafeInteger(id) && id > 0)), event: Schema.String,
   executorRef: Revision, workflowPath: Schema.String, runName: Schema.String,
   status: Schema.String, conclusion: Schema.NullOr(Schema.String), job: Schema.String,
   actorLogin: Schema.String, actorType: Schema.Literal("Bot", "User"),
@@ -80,6 +80,25 @@ export const admitNativeRequest = (raw: unknown) => Effect.gen(function* () {
   return request;
 });
 
+/** Completed API identity admits archive collection independently of workload-authored files. */
+export const admitNativeApiEvidence = (rawRequest: unknown, rawApi: unknown, trustedControllerLogin: string) =>
+  Effect.gen(function* () {
+    const request = yield* admitNativeRequest(rawRequest);
+    const api = yield* Schema.decodeUnknown(NativeApiEvidence, { onExcessProperty: "error" })(rawApi).pipe(
+      Effect.mapError(() => new NativeReceiptRefused({ reason: "invalid native API evidence" })),
+    );
+    const x64 = request.target === "x86_64-pc-windows-msvc";
+    if (!Schema.is(NativeControllerLogin)(trustedControllerLogin)
+      || api.repo !== request.repo || api.event !== "workflow_dispatch"
+      || api.actorType !== "Bot" || api.actorLogin !== trustedControllerLogin
+      || api.executorRef !== request.executor_ref || api.workflowPath !== ".github/workflows/native-windows.yml"
+      || api.runName !== `native-${request.nonce}` || api.status !== "completed" || api.conclusion !== "success"
+      || api.jobStatus !== "completed" || api.jobConclusion !== "success"
+      || api.job !== (x64 ? "x86_64" : "aarch64") || !api.labels.includes(x64 ? "windows-2025" : "windows-11-arm"))
+      return yield* Effect.fail(new NativeReceiptRefused({ reason: "authentic API job mismatch or failure" }));
+    return api;
+  });
+
 /** Reviewed same-repository execution is trusted; an API conclusion is still independent of its files. */
 export const bindNativeReceipt = (
   admitted: NativeRequest, rawReceipt: unknown, rawApi: unknown, verifiedArtifacts: unknown,
@@ -93,7 +112,7 @@ export const bindNativeReceipt = (
     );
   const request = yield* admitNativeRequest(admitted);
   const receipt = yield* decode(NativeReceipt, rawReceipt);
-  const api = yield* decode(NativeApiEvidence, rawApi);
+  const api = yield* admitNativeApiEvidence(request, rawApi, trustedControllerLogin);
   const artifacts = yield* decode(Schema.Array(Artifact), verifiedArtifacts);
   const command = nativeCommand(request);
   const x64 = request.target === "x86_64-pc-windows-msvc";
@@ -103,13 +122,7 @@ export const bindNativeReceipt = (
   for (const key of ["repo", "head", "base", "executor_ref", "nonce", "target", "command_sha256"] as const) {
     if (receipt[key] !== request[key]) return yield* fail(`receipt ${key} mismatch`);
   }
-  if (api.repo !== request.repo || api.event !== "workflow_dispatch"
-    || api.actorType !== "Bot" || api.actorLogin !== trustedControllerLogin
-    || api.executorRef !== request.executor_ref || api.workflowPath !== ".github/workflows/native-windows.yml"
-    || api.runName !== `native-${request.nonce}` || String(api.runId) !== receipt.run_id
-    || String(api.runAttempt) !== receipt.run_attempt || api.status !== "completed" || api.conclusion !== "success"
-    || api.jobStatus !== "completed" || api.jobConclusion !== "success" || api.job !== receipt.job
-    || api.job !== (x64 ? "x86_64" : "aarch64") || !api.labels.includes(x64 ? "windows-2025" : "windows-11-arm")
+  if (String(api.runId) !== receipt.run_id || String(api.runAttempt) !== receipt.run_attempt || api.job !== receipt.job
     || receipt.runner_arch !== (x64 ? "X64" : "ARM64")) return yield* fail("authentic API job mismatch or failure");
   if (receipt.exit_code !== 0 || receipt.failure !== null) return yield* fail("native subprocess failed");
   const completed = Date.parse(receipt.completed_at), started = Date.parse(receipt.started_at);
