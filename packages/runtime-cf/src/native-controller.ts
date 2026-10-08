@@ -1,4 +1,4 @@
-import { Effect, Match } from "effect";
+import { Effect, Match, Redacted } from "effect";
 import { admitNativeReadBinding, admitNativeRequest, NativeReceiptRefused } from "@fractalboxdev/flare-dispatch-core";
 import { streamNativeWindowsArchive } from "@fractalboxdev/flare-dispatch-github-app";
 import { makeNativeDispatchD1 } from "./native-dispatch-d1";
@@ -6,6 +6,7 @@ import { makeNativeGithubProvider } from "./native-github-provider";
 import { makeNativeArchiveDownload } from "./native-archive-download";
 import { makeNativeArchiveR2 } from "./native-archive-r2";
 import { makeNativeResultR2, nativeResultKey } from "./native-result-r2";
+import { readNativeGithubContext } from "./native-github-context";
 
 type Options = {
   readonly db: D1Database; readonly bucket: R2Bucket;
@@ -14,6 +15,24 @@ type Options = {
   readonly now?: () => number;
 };
 const refused = (reason: string) => new NativeReceiptRefused({ reason });
+
+type AuthenticatedOptions = {
+  readonly db:D1Database;readonly bucket:R2Bucket;
+  readonly auth:Parameters<typeof readNativeGithubContext>[0];
+  readonly now?:()=>number;
+};
+
+/** App authentication precedes durable admission; credentials exist only in the live provider. */
+export const advanceNativeController = (options:AuthenticatedOptions, rawRequest:unknown) => Effect.gen(function* () {
+  const request=yield* admitNativeRequest(rawRequest);
+  if(request.repo !== options.auth.repo)
+    return yield* Effect.fail(refused("native controller credential scope invalid"));
+  const clock=options.now ?? (()=>Math.floor(Date.now()/1000));
+  const context=yield* readNativeGithubContext(options.auth,clock());
+  return yield* makeNativeController({db:options.db,bucket:options.bucket,controller:context.controller,now:clock,
+    client:{repo:context.repo,token:Redacted.value(context.token),apiBase:options.auth.apiBase,fetchImpl:options.auth.fetchImpl},
+  }).advance(request);
+});
 
 /** An authenticated caller owns ephemeral credentials; durable dispatch alone owns the POST claim. */
 export const makeNativeController = ({ db, bucket, controller, client, now: clock = () => Math.floor(Date.now() / 1000) }: Options) => {
