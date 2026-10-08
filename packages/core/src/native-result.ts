@@ -49,6 +49,15 @@ export const nativeReadMessage = (binding: NativeReadBinding): string => JSON.st
   binding.command_sha256, binding.executor_ref, binding.expires_at,
 ]);
 
+/** The reader capability and persisted request share one complete identity comparison. */
+export const bindNativeReadRequest = (binding: NativeReadBinding, request: NativeRequest) => Effect.gen(function* () {
+  for (const key of ["repo", "head", "base", "nonce", "target", "command_sha256", "executor_ref"] as const) {
+    if (binding[key] !== request[key])
+      return yield* Effect.fail(new NativeReceiptRefused({ reason:`native reader ${key} mismatch` }));
+  }
+  return request;
+});
+
 /** The token travels only in Authorization and the runtime's declared, scrubbed secret environment. */
 export const NativeReadCapability = Schema.Struct({
   binding: NativeReadBinding,
@@ -82,9 +91,7 @@ export const bindNativeResult = (
     || result.verified_at > now || result.verified_at * 1000 < Date.parse(result.receipt.completed_at)) {
     return yield* refuse("native result reader deadline or verification time mismatch");
   }
-  for (const key of ["repo", "head", "base", "nonce", "target", "command_sha256", "executor_ref"] as const) {
-    if (binding[key] !== result.request[key]) return yield* refuse(`native reader ${key} mismatch`);
-  }
+  yield* bindNativeReadRequest(binding, result.request);
   if (result.files.length > NATIVE_FILES_MAX_COUNT
     || result.files.reduce((sum, file) => sum + file.bytes, 0) > NATIVE_FILES_MAX_BYTES)
     return yield* refuse("native result exceeds file or byte bound");

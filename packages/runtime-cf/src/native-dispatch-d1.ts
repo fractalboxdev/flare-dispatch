@@ -3,6 +3,7 @@ import {
   NativeApiEvidence, NativeControllerLogin, NativeReceiptRefused, NativeRequest,
   admitNativeRequest,
   NativeAdmissionTime, NativeRunCreatedAt, nativeDiscoveryWindow,
+  admitNativeReadBinding, bindNativeReadRequest,
 } from "@fractalboxdev/flare-dispatch-core";
 
 const Controller = Schema.Struct({
@@ -40,6 +41,41 @@ const query = <A>(operation: () => Promise<A>) => Effect.tryPromise({
 });
 const refuse = (reason: string) => Effect.fail(new NativeReceiptRefused({ reason }));
 
+/** Dispatch and reader admission use the same persisted ownership and state validation. */
+const readDispatchRecord = (db: Pick<D1Database, "prepare">, repo: string, nonce: string) => Effect.gen(function* () {
+  const row = yield* query(() => db.prepare(
+    `SELECT request_json, controller_app_id, controller_login, state,
+            run_id AS runId, run_attempt AS runAttempt, admitted_at AS admittedAt
+       FROM native_dispatches WHERE repo=? AND nonce=?`,
+  ).bind(repo, nonce).first<{
+    request_json:string; controller_app_id:number; controller_login:string;
+    state:string; runId:number | null; runAttempt:number | null; admittedAt:number | null;
+  }>());
+  if (row === null) return yield* refuse("native dispatch intent absent");
+  const controller = yield* decode(Controller, { appId:row.controller_app_id, actorLogin:row.controller_login });
+  const snapshot = yield* decode(Snapshot, { state:row.state, runId:row.runId, runAttempt:row.runAttempt, admittedAt:row.admittedAt });
+  yield* nativeDiscoveryWindow(snapshot.admittedAt);
+  if ((snapshot.state === "bound") !== (snapshot.runId !== null && snapshot.runAttempt !== null))
+    return yield* refuse("native dispatch stored run identity invalid");
+  const request = yield* admitNativeRequest(yield* decode(Schema.parseJson(NativeRequest), row.request_json));
+  if (request.repo !== repo || request.nonce !== nonce) return yield* refuse("native dispatch stored request identity conflicts");
+  return { request, controller, snapshot, text:row.request_json };
+});
+
+/** HMAC verification belongs to the route; durable controller authority remains a D1 fact. */
+export const readNativeResultOwnerD1 = (
+  db: Pick<D1Database, "prepare">, rawBinding: unknown, configuredAppId: number, now: number,
+) => Effect.gen(function* () {
+  const binding = yield* admitNativeReadBinding(rawBinding, now);
+  const appId = yield* decode(Controller.fields.appId, configuredAppId);
+  const record = yield* readDispatchRecord(db, binding.repo, binding.nonce);
+  if (record.controller.appId !== appId) return yield* refuse("native reader controller ownership conflicts");
+  if (record.snapshot.state !== "bound" || record.snapshot.runId === null || record.snapshot.runAttempt === null)
+    return yield* refuse("native reader run binding absent");
+  const request = yield* bindNativeReadRequest(binding, record.request);
+  return { request, controllerLogin:record.controller.actorLogin, runId:record.snapshot.runId, runAttempt:record.snapshot.runAttempt };
+});
+
 /** A dispatching intent never grants a second POST, including after a lost response or process eviction. */
 export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured: Controller, provider: Provider) => {
   const identity = (raw: unknown) => Effect.gen(function* () {
@@ -50,24 +86,11 @@ export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured
   type Identity = Effect.Effect.Success<ReturnType<typeof identity>>;
 
   const read = (id: Identity): Effect.Effect<Snapshot, NativeReceiptRefused> => Effect.gen(function* () {
-    const row = yield* query(() => db.prepare(
-      `SELECT request_json, controller_app_id, controller_login, state,
-              run_id AS runId, run_attempt AS runAttempt, admitted_at AS admittedAt
-         FROM native_dispatches WHERE repo=? AND nonce=?`,
-    ).bind(id.request.repo, id.request.nonce).first<{
-      request_json: string; controller_app_id: number; controller_login: string;
-      state: string; runId: number | null; runAttempt: number | null;
-      admittedAt: number | null;
-    }>());
-    if (row === null) return yield* refuse("native dispatch intent absent");
-    if (row.request_json !== id.text || row.controller_app_id !== id.controller.appId
-      || row.controller_login !== id.controller.actorLogin)
+    const record = yield* readDispatchRecord(db, id.request.repo, id.request.nonce);
+    if (record.text !== id.text || record.controller.appId !== id.controller.appId
+      || record.controller.actorLogin !== id.controller.actorLogin)
       return yield* refuse("native dispatch nonce or controller ownership conflicts");
-    const snapshot = yield* decode(Snapshot, { state: row.state, runId: row.runId, runAttempt: row.runAttempt, admittedAt: row.admittedAt });
-    yield* nativeDiscoveryWindow(snapshot.admittedAt);
-    if ((snapshot.state === "bound") !== (snapshot.runId !== null && snapshot.runAttempt !== null))
-      return yield* refuse("native dispatch stored run identity invalid");
-    return snapshot;
+    return record.snapshot;
   });
   const observe = (raw: unknown) => Effect.gen(function* () { return yield* read(yield* identity(raw)); });
 

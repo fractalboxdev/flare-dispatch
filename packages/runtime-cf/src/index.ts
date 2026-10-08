@@ -124,3 +124,4 @@ export {
 export { Sandbox as SandboxContainer } from "@cloudflare/sandbox";
 export { makeCheckCommandOwner } from "./check-command";
 export { checkCommandStorage } from "./check-command-storage";
+export { readNativeResultOwnerD1 } from "./native-dispatch-d1";

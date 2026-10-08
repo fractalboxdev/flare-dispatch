@@ -76,6 +76,8 @@ describe("native result authority from real D1", () => {
     for (const id of [1.5, Number.MAX_SAFE_INTEGER + 1]) {
       await env.RUNS_METADATA.prepare("UPDATE native_dispatches SET run_id=?").bind(id).run();
       await expect(Effect.runPromise(readOwner(env.RUNS_METADATA, binding, controller.appId, now))).rejects.toThrow();
+      await env.RUNS_METADATA.prepare("UPDATE native_dispatches SET run_id=456, run_attempt=?").bind(id).run();
+      await expect(Effect.runPromise(readOwner(env.RUNS_METADATA, binding, controller.appId, now))).rejects.toThrow();
     }
   });
 });
