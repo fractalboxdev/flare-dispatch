@@ -43,6 +43,7 @@
 //       specs/04-gha-integration.md § Check-runs callback,
 //       specs/pm/plan.md § PR4 + § PR6.
 
+import { checkConclusion } from "./terminal-verdict";
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { getSandbox } from "@cloudflare/sandbox";
@@ -1037,12 +1038,25 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         onFailure: () => undefined,
       });
 
-      yield* executions.finishExecution({
-        id: payload.executionId,
-        completedAt,
-        status,
-        ...(summaryJson !== undefined ? { summaryJson } : {}),
-      });
+      // A terminal write that still fails after the layer's retries leaves the
+      // row `running`. The check-run is concluded regardless — as a failure,
+      // since no verdict is on record — and the instance then fails, so a
+      // fan-out parent reading the engine status settles instead of waiting
+      // out its deadline.
+      const recorded = yield* Effect.exit(
+        executions.finishExecution({
+          id: payload.executionId,
+          completedAt,
+          status,
+          ...(summaryJson !== undefined ? { summaryJson } : {}),
+        }),
+      );
+      const unrecorded = Exit.isFailure(recorded);
+      if (unrecorded) {
+        yield* Effect.logError(
+          `finishExecution failed for ${payload.executionId} — concluding the check-run as failure`,
+        );
+      }
 
       // Per-execution cost rollup — METERED model tokens (summed from
       // `execution_model_usage`, written by the modelGateway wrapper) + MODELED
@@ -1071,7 +1085,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // Runs in its own durable `step.do` so a Worker eviction mid-commit
       // replays the recorded outcome rather than re-committing.
       let writebackLine: string | undefined;
-      if (run.writeback !== undefined && status === "success") {
+      if (run.writeback !== undefined && status === "success" && !unrecorded) {
         const spec = run.writeback;
         if (githubAppConfig === undefined) {
           writebackLine =
@@ -1129,12 +1143,13 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         // `skipped` has no check-run conclusion of its own in the Checks
         // service — it lands as `neutral` (passes branch protection, renders
         // grey), with the skip reason as the whole summary.
-        conclusion: status === "skipped" ? "neutral" : status,
+        conclusion: checkConclusion(status, !unrecorded),
         ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
         output: {
           title: checkRunTitle,
-          summary:
-            skipReason !== undefined
+          summary: unrecorded
+            ? `✗ ${payload.run} — the execution record could not be written; no verdict is on record.${logsSuffix}`
+            : skipReason !== undefined
               ? `⊘ ${payload.run} — skipped: ${skipReason}.${logsSuffix}`
               : Exit.match(exit, {
                   onSuccess: () =>
@@ -1244,6 +1259,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           }
         }
       }
+
+      // Re-raise the unrecorded terminal write once every report is out: the
+      // instance ends `errored`, which is what a polling parent reads.
+      if (Exit.isFailure(recorded)) yield* Effect.failCause(recorded.cause);
     });
 
     try {
