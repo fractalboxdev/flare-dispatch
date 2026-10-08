@@ -115,6 +115,9 @@ abstract class RecordingSandbox extends Sandbox<Env> {
   private checkOwner() {
     return makeCheckCommandOwner(checkCommandStorage(this.ctx.storage), this);
   }
+  async prepareCheckCommand(candidate: CheckCommandHandle) {
+    return this.checkOwner().prepare(candidate);
+  }
   async startCheckCommand(opts: {
     handle: CheckCommandHandle;
     command: string;

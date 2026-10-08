@@ -28,6 +28,7 @@ export type CheckCommandChunk = typeof CheckCommandChunk.Type;
 
 /** The process owner's RPC boundary; process identity survives Workflow retries. */
 export interface CheckCommandOwner {
+  prepare(candidate: CheckCommandHandle): Promise<CheckCommandHandle>;
   start(opts: {
     handle: CheckCommandHandle;
     command: string;

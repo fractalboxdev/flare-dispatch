@@ -76,6 +76,52 @@ function fixture() {
 }
 
 describe("durable check command", () => {
+  it("preparation persists one deadline without launching and survives reconstructed owners", async () => {
+    const f = fixture();
+    expect(await f.owner().prepare(request)).toEqual(request);
+    expect(f.launches()).toBe(0);
+    expect(await f.owner().prepare({ ...request, startedAt: 2000, deadline: 62000 })).toEqual(request);
+    await f.owner().start(opts);
+    await f.owner().start(opts);
+    expect(f.launches()).toBe(1);
+  });
+  it("concurrent preparations and starts reserve one launch", async () => {
+    const f = fixture();
+    const handles = await Promise.all(Array.from({ length: 12 }, (_, n) => f.owner().prepare({
+      ...request, startedAt: request.startedAt + n, deadline: request.deadline + n,
+    })));
+    expect(handles.every((handle) => JSON.stringify(handle) === JSON.stringify(handles[0]))).toBe(true);
+    await Promise.allSettled(handles.map((handle) => f.owner().start({ ...opts, handle })));
+    expect(f.launches()).toBe(1);
+  });
+  it("prepared expired intents never renew their deadline or reach a launch", async () => {
+    const f = fixture();
+    await f.owner().prepare(request);
+    f.advance(61000);
+    expect(await f.owner().prepare({ ...request, startedAt: 62000, deadline: 122000 })).toEqual(request);
+    await expect(f.owner().start(opts)).rejects.toThrow("deadline");
+    expect(f.launches()).toBe(0);
+  });
+  it("preparation refuses changed fingerprint, container and timeout without another launch", async () => {
+    const f = fixture();
+    await f.owner().prepare(request);
+    for (const changed of [
+      { ...request, fingerprint: "different" },
+      { ...request, container: { id: "another-box" } },
+      { ...request, deadline: request.deadline + 1 },
+    ]) await expect(f.owner().prepare(changed)).rejects.toThrow("identity");
+    expect(f.launches()).toBe(0);
+  });
+  it("preparation preserves legacy launch intents and never relaunches a lost process", async () => {
+    const f = fixture();
+    await f.owner().start(opts);
+    const stored = f.records.get(`check-command:${request.id}`) as Record<string, unknown>;
+    delete stored.launched;
+    expect(await f.owner().prepare({ ...request, startedAt: 2000, deadline: 62000 })).toEqual(request);
+    f.gone();
+    await expect(f.owner().start(opts)).rejects.toThrow("uncertain");
+    expect(f.launches()).toBe(1);
+  });
   it("changed environment cannot recover an old command receipt", async () => {
     const f = fixture();
     await f.owner().start(opts);
