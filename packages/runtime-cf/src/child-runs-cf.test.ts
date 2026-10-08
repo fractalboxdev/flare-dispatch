@@ -293,4 +293,99 @@ describe("makeChildRunsLive.poll (live D1 via Miniflare)", () => {
   it("returns [] for an empty id list without touching D1", async () => {
     expect(await poll([])).toEqual([]);
   });
+
+  // A child whose Workflow instance ended without writing its terminal row
+  // (the terminal D1 write itself failed) never settles in D1. The engine's
+  // instance status is the ground truth the parent joins on instead.
+  describe("non-terminal rows consult the Workflow instance", () => {
+    const engine = (statuses: Record<string, string | Error>): WorkflowBindingLike => ({
+      create: async () => ({}),
+      get: async (id) => {
+        const s = statuses[id];
+        if (s instanceof Error) throw s;
+        return { status: async () => ({ status: s ?? "running" }) };
+      },
+    });
+    const pollWith = (workflow: WorkflowBindingLike, ids: readonly string[]) =>
+      Effect.runPromise(
+        Effect.flatMap(ChildRuns, (c) => c.poll({ ids })).pipe(
+          Effect.provide(
+            makeChildRunsLive({
+              workflow,
+              db: bindings.db,
+              parentExecutionId: "parent-1",
+              github: { repo: "o/n", ref: "refs/heads/main", sha: "sha" },
+            }),
+          ),
+        ),
+      );
+
+    it("reports failure for a running row whose instance errored or terminated", async () => {
+      await insertRow({ id: "c-errored", status: "running" });
+      await insertRow({ id: "c-terminated", status: "running" });
+      await insertRow({ id: "c-live", status: "running" });
+      const records = await pollWith(
+        engine({ "c-errored": "errored", "c-terminated": "terminated", "c-live": "running" }),
+        ["c-errored", "c-terminated", "c-live"],
+      );
+      expect(records).toEqual([
+        { executionId: "c-errored", status: "failure" },
+        { executionId: "c-terminated", status: "failure" },
+        { executionId: "c-live", status: "running" },
+      ]);
+    });
+
+    it("reports failure for an instance that completed without a terminal row", async () => {
+      await insertRow({ id: "c-unrecorded", status: "running" });
+      const [rec] = await pollWith(engine({ "c-unrecorded": "complete" }), ["c-unrecorded"]);
+      expect(rec).toEqual({ executionId: "c-unrecorded", status: "failure" });
+    });
+
+    it("re-reads the row when the child records its verdict between the two reads", async () => {
+      await insertRow({ id: "c-racing", status: "running" });
+      const workflow: WorkflowBindingLike = {
+        create: async () => ({}),
+        get: async () => ({
+          status: async () => {
+            await bindings.db
+              .prepare(`UPDATE executions SET status = 'success', summary_json = '{}' WHERE id = ?`)
+              .bind("c-racing")
+              .run();
+            return { status: "complete" };
+          },
+        }),
+      };
+      const [rec] = await pollWith(workflow, ["c-racing"]);
+      expect(rec).toEqual({ executionId: "c-racing", status: "success", summaryJson: "{}" });
+    });
+
+    it("reports failure for a missing row whose instance errored before writing it", async () => {
+      const [rec] = await pollWith(engine({ "c-boot": "errored" }), ["c-boot"]);
+      expect(rec).toEqual({ executionId: "c-boot", status: "failure" });
+    });
+
+    it("keeps waiting when the instance lookup fails or is still queued", async () => {
+      await insertRow({ id: "c-lookup", status: "running" });
+      const records = await pollWith(
+        engine({ "c-lookup": new Error("instance.not_found"), "c-new": "queued" }),
+        ["c-lookup", "c-new"],
+      );
+      expect(records).toEqual([
+        { executionId: "c-lookup", status: "running" },
+        { executionId: "c-new", status: "missing" },
+      ]);
+    });
+
+    it("never consults the engine for a terminal row", async () => {
+      await insertRow({ id: "c-done", status: "success", summaryJson: "{}" });
+      const workflow: WorkflowBindingLike = {
+        create: async () => ({}),
+        get: async () => {
+          throw new Error("terminal rows must not reach the engine");
+        },
+      };
+      const [rec] = await pollWith(workflow, ["c-done"]);
+      expect(rec).toEqual({ executionId: "c-done", status: "success", summaryJson: "{}" });
+    });
+  });
 });
