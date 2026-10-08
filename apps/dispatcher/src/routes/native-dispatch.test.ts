@@ -50,4 +50,8 @@ describe("authenticated native execution trigger",()=>{
     expect((await handleRequest(await post(request),noWorkflow)).status).toBe(503);
     expect(f.workflow.calls).toHaveLength(0);expect(f.db).not.toHaveBeenCalled();
   });
+  it.each(["042","4e1","9007199254740992"])("refuses malformed configured App identity %s before creating an instance",async appId=>{
+    const f=open();const response=await handleRequest(await post(request),{...f.env,GITHUB_APP_ID:appId});
+    expect(response.status).toBe(503);expect(f.workflow.calls).toHaveLength(0);expect(f.db).not.toHaveBeenCalled();
+  });
 });
