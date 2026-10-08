@@ -5,7 +5,7 @@
 // `executions` + `steps` rows the service writes, and pins the per-step D1
 // write count (plan § 6 flags D1 hot-path writes — PR4 keeps it bounded).
 
-import { Effect } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Executions } from "@fractalboxdev/flare-dispatch-core";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
@@ -27,6 +27,33 @@ describe("D1ExecutionsLive", () => {
   });
   afterEach(async () => {
     await bindings.dispose();
+  });
+  it("preserves a real D1 finalization defect and leaves the execution unfinished", async () => {
+    const layer = makeD1ExecutionsLive(bindings.db, CTX);
+    await Effect.runPromise(Effect.gen(function* () {
+      const executions = yield* Executions;
+      yield* executions.startExecution({ id: EXECUTION_ID, run: "fixture-command", startedAt: 1000 });
+    }).pipe(Effect.provide(layer)));
+    await bindings.db.prepare(`CREATE TRIGGER fixture_refuse_execution_finish BEFORE UPDATE OF completed_at ON executions
+      BEGIN SELECT RAISE(ABORT, 'fixture finalization refusal'); END;`).run();
+    const summaryJson = JSON.stringify({ exitCode: 0, durationMs: 10, logUri: "/v1/artifacts/fixture/check.log" });
+    const exit = await Effect.runPromiseExit(Effect.gen(function* () {
+      const executions = yield* Executions;
+      yield* executions.finishExecution({ id: EXECUTION_ID, completedAt: 2000, status: "success", summaryJson });
+    }).pipe(Effect.provide(layer)));
+    const defect = Exit.match(exit, { onSuccess: () => undefined,
+      onFailure: cause => Option.getOrUndefined(Cause.dieOption(cause)) });
+    expect(defect).toBeInstanceOf(Error);
+    const wrapper = defect as Error;
+    expect(wrapper.message).toBe("D1ExecutionsLive: finishExecution failed");
+    expect(wrapper.cause).toBeInstanceOf(Error);
+    const cause = wrapper.cause as Error;
+    console.log(JSON.stringify({ operation: "finishExecution", errorClass: cause instanceof Error ? "Error" : "Other",
+      ownPropertyNames: Object.getOwnPropertyNames(cause).filter(name => ["name","message","stack","cause","code"].includes(name)),
+      codeFieldPresent: Object.hasOwn(cause, "code"), sqliteConstraint: cause.message.includes("SQLITE_CONSTRAINT"),
+      summaryUtf8Bytes: new TextEncoder().encode(summaryJson).byteLength }));
+    expect(await bindings.db.prepare("SELECT status,completed_at,summary_json FROM executions WHERE id=?")
+      .bind(EXECUTION_ID).first()).toEqual({ status: "running", completed_at: null, summary_json: null });
   });
 
   it("writes one executions row spanning start → finish", async () => {
