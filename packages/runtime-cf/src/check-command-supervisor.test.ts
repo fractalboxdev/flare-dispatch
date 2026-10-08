@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFile, rm, stat } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { commandSupervisor, commandSpool } from "./check-command";
@@ -9,6 +9,12 @@ async function stopped(pid: number): Promise<boolean> {
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ESRCH") return true;
     throw error;
+  }
+  if (process.platform === "darwin") {
+    const result = spawnSync("/bin/ps", ["-p", String(pid), "-o", "state="], { encoding: "utf8", timeout: 1000, maxBuffer: 4096 });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error("fixture process state unavailable");
+    return result.stdout.trim().startsWith("Z");
   }
   if (process.platform !== "linux") return false;
   try {
@@ -122,6 +128,25 @@ describe("native check command supervisor", () => {
             process.kill(descendant, "SIGKILL");
           } catch {}
         }
+        await rm(commandSpool(handle), { recursive: true, force: true });
+      }
+    },
+  );
+  it.each(["unavailable", "malformed", "live"] as const)(
+    "a %s Darwin process-group probe refuses terminal publication",
+    async (mode) => {
+      const handle = { id: `native-${crypto.randomUUID()}`, container: { id: "explicit" }, fingerprint: "native",
+        startedAt: Date.now(), deadline: Date.now() + 5000 };
+      const override = `Object.defineProperty(process,'platform',{value:'darwin'});const cp=require('node:child_process'),realSpawn=cp.spawn;let ownedPid;cp.spawn=(...args)=>{const child=realSpawn(...args);ownedPid=child.pid;return child};cp.spawnSync=()=>${mode === "unavailable" ? "{throw new Error('probe unavailable')}" : "({status:0,stdout:" + (mode === "malformed" ? "'malformed'" : "ownedPid+' S'") + "})"};`;
+      const child = spawn(process.execPath, ["-e", override + commandSupervisor(handle, "sleep 30 >/dev/null 2>&1 & echo $!; sleep 0.05; exit 0")]);
+      let descendant = 0;
+      try {
+        const actual = await new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
+        descendant = Number((await readFile(`${commandSpool(handle)}/stdout`, "utf8")).trim());
+        expect(actual).toBe(1);
+        await expect(readFile(`${commandSpool(handle)}/terminal.json`, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        if (descendant > 0) { try { process.kill(descendant, "SIGKILL"); } catch {} }
         await rm(commandSpool(handle), { recursive: true, force: true });
       }
     },
