@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import {
   ExecFailed,
   ExecTimeout,
@@ -7,7 +7,7 @@ import {
   type CheckCommandService,
   type CheckCommandHandle,
   type Container,
-  type ExecOpts,
+  type CheckCommandOpts,
   type ExecResult,
 } from "@fractalboxdev/flare-dispatch-core";
 import { commandFingerprint } from "./check-command";
@@ -22,16 +22,31 @@ export function makeCheckCommandService(
   writeLog: (key: string, command: string, stdout: string, stderr: string) => Promise<void>,
   tail: (text: string) => string,
 ): CheckCommandService {
-  const failed = (opts: ExecOpts) => (cause: unknown) =>
-    new ExecFailed({
+  const policyRequired = "check command requires an explicit string-array redaction policy";
+  const policy = (opts: CheckCommandOpts): readonly string[] => {
+    try {
+      return Schema.decodeUnknownSync(Schema.Array(Schema.String))(opts.redactValues);
+    } catch {
+      throw new Error(policyRequired);
+    }
+  };
+  const failed = (opts: CheckCommandOpts) => (cause: unknown) => {
+    let values: readonly string[];
+    try {
+      values = policy(opts);
+    } catch {
+      return new ExecFailed({ exitCode: -1, stderrTail: policyRequired });
+    }
+    return new ExecFailed({
       exitCode: -1,
-      stderrTail: redact(
-        cause instanceof Error ? cause.message : String(cause),
-        opts.redactValues,
-      ).slice(-4096),
+      stderrTail: redact(cause instanceof Error ? cause.message : String(cause), values).slice(
+        -4096,
+      ),
     });
+  };
   const root = (h: CheckCommandHandle) => `logs/${executionId}/check-${h.id}`;
-  const validate = async (h: CheckCommandHandle, opts: ExecOpts) => {
+  const validate = async (h: CheckCommandHandle, opts: CheckCommandOpts) => {
+    const values = policy(opts);
     const containerId = opts.container?.id ?? defaultContainer;
     const fingerprint = await commandFingerprint(
       flattenCommand(opts.command),
@@ -39,7 +54,7 @@ export function makeCheckCommandService(
       opts.env,
       opts.timeoutSec ?? 600,
       containerId,
-      opts.redactValues,
+      values,
     );
     if (
       h.container.id !== containerId ||
@@ -48,7 +63,7 @@ export function makeCheckCommandService(
     )
       throw new Error("check command identity changed before replay");
   };
-  const capture = async (h: CheckCommandHandle, opts: ExecOpts, terminal: boolean) => {
+  const capture = async (h: CheckCommandHandle, opts: CheckCommandOpts, terminal: boolean) => {
     const owner = ownerFor(h.container);
     for (const stream of ["stdout", "stderr"] as const) {
       // One bounded chunk per observation; finalization drains the finite spool.
@@ -81,13 +96,14 @@ export function makeCheckCommandService(
     prepare: (opts) =>
       Effect.tryPromise({
         try: async () => {
+          const values = policy(opts);
           const fingerprint = await commandFingerprint(
             flattenCommand(opts.command),
             opts.cwd,
             opts.env,
             opts.timeoutSec ?? 600,
             opts.container?.id ?? defaultContainer,
-            opts.redactValues,
+            values,
           );
           const operation = await commandFingerprint(
             `${executionId}\0${opts.stepName}`,
@@ -113,7 +129,7 @@ export function makeCheckCommandService(
             command: flattenCommand(opts.command),
             ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
             ...(opts.env !== undefined ? { env: opts.env } : {}),
-            ...(opts.redactValues !== undefined ? { redactValues: opts.redactValues } : {}),
+            redactValues: opts.redactValues,
           });
         },
         catch: failed(opts),

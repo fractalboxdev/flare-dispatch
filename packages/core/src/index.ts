@@ -34,6 +34,7 @@ export {
   CheckCommandChunk,
   type CheckCommandOwner,
   type CheckCommandPrepare,
+  type CheckCommandOpts,
 } from "./check-command";
 export { type RunContext } from "./context";
 

@@ -11,6 +11,7 @@ import type {
   CheckCommandHandle,
   CheckCommandObservation,
   CheckCommandPrepare,
+  CheckCommandOpts,
 } from "../check-command";
 import type {
   CheckoutFailed,
@@ -45,16 +46,17 @@ export const ExecResultSchema = Schema.Struct({
 });
 export type ExecResult = typeof ExecResultSchema.Type;
 
+/** Durable command boundaries require an explicit policy, including deliberate []. */
 export interface CheckCommandService {
   prepare(opts: CheckCommandPrepare): Effect.Effect<CheckCommandHandle, ExecFailed>;
-  start(handle: CheckCommandHandle, opts: ExecOpts): Effect.Effect<void, ExecFailed>;
+  start(handle: CheckCommandHandle, opts: CheckCommandOpts): Effect.Effect<void, ExecFailed>;
   observe(
     handle: CheckCommandHandle,
-    opts: ExecOpts,
+    opts: CheckCommandOpts,
   ): Effect.Effect<CheckCommandObservation, ExecFailed>;
   finalize(
     handle: CheckCommandHandle,
-    opts: ExecOpts,
+    opts: CheckCommandOpts,
   ): Effect.Effect<ExecResult, ExecFailed | ExecTimeout>;
 }
 

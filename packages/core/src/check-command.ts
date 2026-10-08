@@ -51,4 +51,6 @@ export interface CheckCommandOwner {
   receipt(handle: CheckCommandHandle): Promise<ExecResult | undefined>;
   finish(handle: CheckCommandHandle, result: ExecResult): Promise<ExecResult>;
 }
-export type CheckCommandPrepare = ExecOpts & { readonly stepName: string };
+/** Durable commands declare their log-redaction policy; [] declares no secret values. */
+export type CheckCommandOpts = ExecOpts & { readonly redactValues: readonly string[] };
+export type CheckCommandPrepare = CheckCommandOpts & { readonly stepName: string };

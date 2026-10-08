@@ -16,6 +16,139 @@ declare module "cloudflare:test" {
 }
 
 describe("durable command bounded log publication", () => {
+  it.each(
+    (["prepare", "start", "observe", "finalize"] as const).flatMap((action) =>
+      (["omitted", "malformed"] as const).map((policy) => ({ action, policy })),
+    ),
+  )(
+    "$action refuses an $policy policy before any owner or publication access",
+    async ({ action, policy }) => {
+      const calls: string[] = [];
+      const receipt = {
+        exitCode: 0,
+        durationMs: 27,
+        logPath: "cached.ndjson",
+        stdout: "",
+        stderr: "",
+      };
+      const owner: CheckCommandOwner = {
+        async start() {
+          calls.push("reserve-and-launch");
+        },
+        async observe() {
+          calls.push("observe");
+          return { state: "running" };
+        },
+        async read() {
+          calls.push("read");
+          return { text: "credential-fixture", bytes: 18 };
+        },
+        async logs() {
+          calls.push("logs");
+          return { stdoutOffset: 0, stderrOffset: 0, stdoutTail: "", stderrTail: "", chunks: [] };
+        },
+        async advanceLogs() {
+          calls.push("advance");
+        },
+        async receipt() {
+          calls.push("receipt");
+          return receipt;
+        },
+        async finish() {
+          calls.push("finish");
+          return receipt;
+        },
+      };
+      const service = makeCheckCommandService(
+        "policy-boundary",
+        "box",
+        () => {
+          calls.push("owner");
+          return owner;
+        },
+        env.CHECK_COMMAND_LOGS,
+        async () => {
+          calls.push("upload");
+        },
+        (text) => text,
+      );
+      const declared = {
+        command: "print credential",
+        env: { TOKEN: "credential-fixture" },
+        timeoutSec: 1800,
+        redactValues: [],
+      };
+      const handle = await Effect.runPromise(service.prepare({ ...declared, stepName: "exec" }));
+      const invalid =
+        policy === "omitted"
+          ? { command: declared.command, env: declared.env, timeoutSec: declared.timeoutSec }
+          : { ...declared, redactValues: [7] };
+      const attempt = (() => {
+        if (action === "prepare") {
+          // @ts-expect-error The durable API requires a declared string-array policy.
+          return service.prepare({ ...invalid, stepName: "exec" }).pipe(Effect.asVoid);
+        }
+        if (action === "start") {
+          // @ts-expect-error Runtime callers cannot bypass the typed policy boundary.
+          return service.start(handle, invalid).pipe(Effect.asVoid);
+        }
+        if (action === "observe") {
+          // @ts-expect-error Runtime callers cannot bypass the typed policy boundary.
+          return service.observe(handle, invalid).pipe(Effect.asVoid);
+        }
+        // @ts-expect-error Runtime callers cannot bypass the typed policy boundary.
+        return service.finalize(handle, invalid).pipe(Effect.asVoid);
+      })();
+      await expect(Effect.runPromise(attempt)).rejects.toThrow("redaction policy");
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it("an explicit empty policy permits no-secret commands and cached receipt reuse", async () => {
+    let starts = 0;
+    const receipt = {
+      exitCode: 0,
+      durationMs: 27,
+      logPath: "cached.ndjson",
+      stdout: "public",
+      stderr: "",
+    };
+    const owner: CheckCommandOwner = {
+      async start() {
+        starts++;
+      },
+      async observe() {
+        return { state: "running" };
+      },
+      async read() {
+        return { text: "", bytes: 0 };
+      },
+      async logs() {
+        return { stdoutOffset: 0, stderrOffset: 0, stdoutTail: "", stderrTail: "", chunks: [] };
+      },
+      async advanceLogs() {},
+      async receipt() {
+        return receipt;
+      },
+      async finish() {
+        return receipt;
+      },
+    };
+    const service = makeCheckCommandService(
+      "explicit-empty-policy",
+      "box",
+      () => owner,
+      env.CHECK_COMMAND_LOGS,
+      async () => {},
+      (text) => text,
+    );
+    const opts = { command: "print public", env: { MODE: "public" }, redactValues: [] };
+    const handle = await Effect.runPromise(service.prepare({ ...opts, stepName: "exec" }));
+    await Effect.runPromise(service.start(handle, opts));
+    expect(await Effect.runPromise(service.observe(handle, opts))).toEqual({ state: "running" });
+    expect(await Effect.runPromise(service.finalize(handle, opts))).toEqual(receipt);
+    expect(starts).toBe(1);
+  });
   it("discarded preparation with changed inputs refuses the same execution intent instead of launching twice", async () => {
     const records = new Map<string, unknown>();
     const processes = new Set<string>();
@@ -60,7 +193,12 @@ describe("durable command bounded log publication", () => {
       async () => {},
       (text) => text,
     );
-    const opts = { command: "command", env: { TOKEN: "original" }, timeoutSec: 1800 };
+    const opts = {
+      command: "command",
+      env: { TOKEN: "original" },
+      timeoutSec: 1800,
+      redactValues: ["original"],
+    };
     const initial = await Effect.runPromise(service.prepare({ ...opts, stepName: "exec" }));
     await Effect.runPromise(service.start(initial, opts));
     const changed = { ...opts, env: { TOKEN: "changed" } };
