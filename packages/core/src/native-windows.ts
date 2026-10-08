@@ -72,6 +72,8 @@ export const bindNativeReceipt = (
   admitted: NativeRequest, rawReceipt: unknown, rawApi: unknown, verifiedArtifacts: unknown,
   trustedControllerLogin: string,
 ) => Effect.gen(function* () {
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$/.test(trustedControllerLogin))
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "configured native controller identity is invalid" }));
   const decode = <A, I>(schema: Schema.Schema<A, I>, raw: unknown) =>
     Schema.decodeUnknown(schema, { onExcessProperty: "error" })(raw).pipe(
       Effect.mapError(() => new NativeReceiptRefused({ reason: "invalid native evidence" })),

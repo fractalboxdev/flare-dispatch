@@ -30,6 +30,14 @@ it.effect("binds native receipt to authentic API job, fixed executor and actual 
   expect(accepted.target).toBe("aarch64-pc-windows-msvc");
 }));
 
+it.effect("refuses absent or malformed configured controller identity even when evidence repeats it", () => Effect.gen(function* () {
+  for (const login of ["", "[bot]", "native-controller", "other/controller[bot]", "native-controller[bot]extra"]) {
+    const result = yield* bindNativeReceipt(request, receipt(), { ...api(), actorLogin: login },
+      receipt().artifacts, login).pipe(Effect.either);
+    expect(result, login).toHaveProperty("left");
+  }
+}));
+
 it.effect("refuses failed API jobs, failed exits, reused nonces and mismatched artifacts", () => Effect.gen(function* () {
   const variants = [
     { receipt: receipt(), api: { ...api(), jobConclusion: "failure" } },
