@@ -3,7 +3,8 @@ import { ghHeaders, resolveClient } from "./http";
 
 /** Native authenticated metadata shares a strict byte ceiling and a complete-read deadline. */
 export const readNativeJson = async (opts: { readonly token: string; readonly apiBase?: string;
-  readonly fetchImpl?: typeof fetch }, url: string, maxBytes: number): Promise<{ body: unknown; headers: Headers }> => {
+  readonly fetchImpl?: typeof fetch }, url: string, maxBytes: number,
+  request?: { readonly method:"POST"; readonly body:string; readonly status:201 }): Promise<{ body: unknown; headers: Headers }> => {
   const refused = () => new GithubApiError("native authenticated metadata unavailable or exceeds its read bounds", 0, "");
   const abort = new AbortController();
   const until = Date.now() + 10_000;
@@ -14,10 +15,12 @@ export const readNativeJson = async (opts: { readonly token: string; readonly ap
   });
   try {
     return await Promise.race([deadline, (async () => {
-      const response = await resolveClient(opts).doFetch(url, {
-        method: "GET", redirect: "error", headers: ghHeaders(opts.token), signal: abort.signal,
+      const client=resolveClient(opts);
+      const response = await client.doFetch(url.startsWith("/") ? `${client.apiBase}${url}` : url, {
+        method: request?.method ?? "GET", body:request?.body, redirect: "error",
+        headers: ghHeaders(opts.token,{json:request !== undefined}), signal: abort.signal,
       });
-      if (abort.signal.aborted || response.status !== 200 || response.body === null) {
+      if (abort.signal.aborted || response.status !== (request?.status ?? 200) || response.body === null) {
         void response.body?.cancel().catch(() => {}); throw refused();
       }
       reader = response.body.getReader();

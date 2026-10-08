@@ -47,6 +47,26 @@ describe("ephemeral native GitHub context", () => {
     await expect(read(fetchImpl,now,{repo:"owner/context/other"})).rejects.toThrow();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+  it("rejects a foreign authenticated App before installation access", async () => {
+    const fetchImpl=vi.fn(async()=>Response.json({id:43,slug:"foreign-controller"}));
+    await expect(read(fetchImpl)).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it("does not reuse another App's grant for the same repository and installation", async () => {
+    for (const id of [42,43]) {
+      const jwt=`fixture-app-${id}`;
+      const fetchImpl=vi.fn(async(url:string | URL | Request,init?:RequestInit)=> {
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${jwt}`);
+        if(String(url).endsWith("/app"))return Response.json({id,slug:`controller-${id}`});
+        if(String(url).endsWith("/installation"))return Response.json({...installation(),app_id:id});
+        return Response.json({...grant(),token:`app-${id}-token`},{status:201});
+      });
+      const result=await read(fetchImpl,now,{appId:String(id),appJwt:jwt});
+      expect(result.controller.appId).toBe(id);
+      expect(Redacted.value(result.token)).toBe(`app-${id}-token`);
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+    }
+  });
   it.each([
     {...installation(),app_id:43}, {...installation(),id:0}, {...installation(),account:{login:"foreign"}},
     {...installation(),suspended_at:"2026-10-07T00:00:00Z"},
