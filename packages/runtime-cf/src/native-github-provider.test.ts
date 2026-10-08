@@ -17,6 +17,63 @@ const apiRun = (id = 456) => ({
 const runEffect = Effect.runPromise;
 
 describe("authenticated native GitHub provider", () => {
+  const completedRun = () => ({ ...apiRun(), status: "completed", conclusion: "success" });
+  const completedJob = () => ({ id: 789, run_id: 456, head_sha: request.executor_ref,
+    name: "aarch64", status: "completed", conclusion: "success", labels: ["windows-11-arm"] });
+  const artifact = () => ({ id: 987, name: `native-${request.nonce}`, expired: false,
+    size_in_bytes: 123, workflow_run: { id: 456, head_sha: request.executor_ref } });
+  const bound = { runId: 456, runAttempt: 1 };
+  const collector = (runs: unknown[] = [completedRun()], jobs: unknown[] = [completedJob()], artifacts: unknown[] = [artifact()]) => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const path = String(url);
+      if (path.includes("/attempts/1/jobs")) return Response.json({ total_count: jobs.length, jobs });
+      if (path.includes("/runs/456/artifacts")) return Response.json({ total_count: artifacts.length, artifacts });
+      return Response.json({ total_count: runs.length, workflow_runs: runs });
+    });
+    return { provider: makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl }), fetchImpl };
+  };
+
+  it("collects independent terminal API evidence and the exact artifact under the durable run binding", async () => {
+    const { provider, fetchImpl } = collector();
+    const evidence = await runEffect(provider.collect(request, bound, "native-controller[bot]"));
+    expect(evidence.artifactId).toBe(987);
+    expect(evidence.api).toEqual({
+      repo: request.repo, runId: 456, runAttempt: 1, event: "workflow_dispatch",
+      executorRef: request.executor_ref, workflowPath: ".github/workflows/native-windows.yml",
+      runName: `native-${request.nonce}`, actorLogin: "native-controller[bot]", actorType: "Bot",
+      status: "completed", conclusion: "success", job: "aarch64", jobStatus: "completed",
+      jobConclusion: "success", labels: ["windows-11-arm"],
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses changed or ambiguous run bindings and authentic failed or live jobs", async () => {
+    for (const runs of [[], [completedRun(), completedRun()],
+      [{ ...completedRun(), id: 455 }], [{ ...completedRun(), run_attempt: 2 }],
+      [{ ...completedRun(), actor: { login: "other-controller[bot]", type: "Bot" } }],
+      [{ ...completedRun(), status: "in_progress", conclusion: null }],
+      [{ ...completedRun(), conclusion: "failure" }],
+    ]) await expect(runEffect(collector(runs).provider.collect(request, bound, "native-controller[bot]"))).rejects.toThrow();
+    for (const jobs of [[], [completedJob(), completedJob()],
+      [{ ...completedJob(), run_id: 455 }], [{ ...completedJob(), head_sha: request.head }],
+      [{ ...completedJob(), name: "x86_64" }], [{ ...completedJob(), labels: ["windows-2025"] }],
+      [{ ...completedJob(), status: "in_progress", conclusion: null }], [{ ...completedJob(), conclusion: "failure" }],
+    ]) await expect(runEffect(collector(undefined, jobs).provider.collect(request, bound, "native-controller[bot]"))).rejects.toThrow();
+  });
+
+  it("refuses missing, duplicate, expired, oversized or foreign artifact identities before download", async () => {
+    for (const artifacts of [[], [artifact(), artifact()],
+      [{ ...artifact(), name: "native-unrelated" }], [{ ...artifact(), expired: true }],
+      [{ ...artifact(), size_in_bytes: 8589934593 }],
+      [{ ...artifact(), workflow_run: { id: 455, head_sha: request.executor_ref } }],
+      [{ ...artifact(), workflow_run: { id: 456, head_sha: request.head } }],
+    ]) {
+      const { provider, fetchImpl } = collector(undefined, undefined, artifacts);
+      await expect(runEffect(provider.collect(request, bound, "native-controller[bot]"))).rejects.toThrow();
+      expect(fetchImpl.mock.calls.every(([url]) => !String(url).includes("/zip"))).toBe(true);
+    }
+  });
+
   it("POSTs one admitted literal request at its fixed executor revision", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
     const provider = makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl });

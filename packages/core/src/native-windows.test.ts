@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { expect } from "vitest";
-import { bindNativeReceipt, nativeCommand, type NativeRequest } from "./native-windows";
+import { admitNativeApiEvidence, bindNativeReceipt, nativeCommand, type NativeRequest } from "./native-windows";
 
 const request: NativeRequest = {
   repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
@@ -23,6 +23,24 @@ const api = () => ({
   actorLogin: "native-controller[bot]", actorType: "Bot",
   labels: ["windows-11-arm"],
 });
+
+it.effect("admits independent completed API evidence before reading workload receipts", () => Effect.gen(function* () {
+  const admitted = yield* admitNativeApiEvidence(request, api(), "native-controller[bot]");
+  expect(admitted).toEqual(api());
+  for (const patch of [
+    { repo: "other/context" }, { event: "push" }, { executorRef: "4".repeat(40) },
+    { workflowPath: ".github/workflows/other.yml" }, { runName: "native-wrong-nonce" },
+    { actorType: "User" }, { actorLogin: "other-controller[bot]" },
+    { status: "in_progress" }, { conclusion: "failure" }, { job: "x86_64" },
+    { jobStatus: "queued" }, { jobConclusion: "cancelled" }, { labels: ["windows-2025"] },
+    { runId: Number.MAX_SAFE_INTEGER + 1 }, { runAttempt: Number.MAX_SAFE_INTEGER + 1 },
+  ]) {
+    const result = yield* admitNativeApiEvidence(request, { ...api(), ...patch }, "native-controller[bot]").pipe(Effect.either);
+    expect(result, JSON.stringify(patch)).toHaveProperty("left");
+  }
+  const result = yield* admitNativeApiEvidence(request, { ...api(), actorLogin: "" }, "").pipe(Effect.either);
+  expect(result).toHaveProperty("left");
+}));
 
 it.effect("binds native receipt to authentic API job, fixed executor and actual command", () => Effect.gen(function* () {
   const accepted = yield* bindNativeReceipt(request, receipt(), api(), receipt().artifacts, "native-controller[bot]");
