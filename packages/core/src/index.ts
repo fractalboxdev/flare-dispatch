@@ -86,6 +86,9 @@ export {
   type AdmissionDecision,
 } from "./run-admission";
 
+// --- Run ceiling (limits.maxDurationSec, replay-stable) ----------------------
+export { withRunCeiling, type RunCeiling } from "./run-ceiling";
+
 // --- Agent token-budget (pure decision logic for the AgentBudget DO) ----------
 export {
   AGENT_TOKEN_BUDGET_DEFAULT,

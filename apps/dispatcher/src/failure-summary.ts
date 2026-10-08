@@ -14,6 +14,7 @@ import type {
   AdmissionTimedOut,
   ExecFailed,
   ExecTimeout,
+  RunDurationExceeded,
   RunError,
   SecretsMissing,
   SerialQueueTimedOut,
@@ -61,6 +62,16 @@ export const serialQueueTimedOutMd = (e: SerialQueueTimedOut): string =>
   `${e.holderRevision !== "" ? `\`${e.holderRevision.slice(0, 12)}\`` : "a peer"}.\n\n` +
   `The execution **never started**. Runs of this group never overlap, and the ` +
   `holder was still alive when the wait gave up. Re-run once it finishes.`;
+
+/**
+ * Render a `RunDurationExceeded`: the run started and was cut at its declared
+ * wall-clock ceiling (issue #42), whatever its steps were still doing.
+ */
+export const runDurationExceededMd = (e: RunDurationExceeded): string =>
+  `⏱ **Exceeded the run ceiling** of ${Math.round(e.maxDurationSec / 60)} min ` +
+  `(\`limits.maxDurationSec: ${e.maxDurationSec}\`).\n\n` +
+  `The run was stopped and its sandbox destroyed. Retries inside the run share ` +
+  `this one ceiling; a suite that needs longer needs a larger \`maxDurationSec\`.`;
 
 const execFailedMd = (e: ExecFailed): string =>
   `**Exec failed** (exit \`${e.exitCode}\`):\n\n\`\`\`\n${clip(e.stderrTail)}\n\`\`\``;
@@ -116,7 +127,7 @@ export const runSkippedReason = (exit: Exit.Exit<unknown, RunError>): string | u
  * present. `undefined` on success, on a defect/interrupt (`Cause.failureOption`
  * is none — there is no typed failure to read), and on typed failures we have
  * not opted into rendering. `AcceptanceFailed` carries run-authored markdown;
- * `AdmissionTimedOut` / `ExecFailed` / `ExecTimeout` / `StepFailed` /
+ * `AdmissionTimedOut` / `RunDurationExceeded` / `ExecFailed` / `ExecTimeout` / `StepFailed` /
  * `SecretsMissing` render structured infra explanations so a red check is not
  * only a Cloudflare workflow link.
  *
@@ -136,6 +147,7 @@ export const failureSummaryMd = (exit: Exit.Exit<unknown, RunError>): string | u
             Match.tag("AcceptanceFailed", (e) => e.summaryMd),
             Match.tag("AdmissionTimedOut", (e) => admissionTimedOutMd(e)),
             Match.tag("SerialQueueTimedOut", (e) => serialQueueTimedOutMd(e)),
+            Match.tag("RunDurationExceeded", (e) => runDurationExceededMd(e)),
             Match.tag("ExecFailed", (e) => execFailedMd(e)),
             Match.tag("ExecTimeout", (e) => execTimeoutMd(e)),
             Match.tag("StepFailed", (e) => stepFailedMd(e)),

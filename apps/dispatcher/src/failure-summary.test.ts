@@ -13,6 +13,7 @@ import {
   AdmissionTimedOut,
   ExecFailed,
   ExecTimeout,
+  RunDurationExceeded,
   RunSkipped,
   SecretsMissing,
   SerialQueueTimedOut,
@@ -28,6 +29,15 @@ import {
 } from "./failure-summary";
 
 describe("failureSummaryMd", () => {
+  it("renders a RunDurationExceeded naming the ceiling it crossed (issue #42)", () => {
+    const md = failureSummaryMd(
+      Exit.fail(new RunDurationExceeded({ maxDurationSec: 1800, elapsedSec: 1800 })),
+    );
+    expect(md).toContain("Exceeded the run ceiling");
+    expect(md).toContain("30 min");
+    expect(md).toContain("`limits.maxDurationSec: 1800`");
+  });
+
   it("extracts the markdown from a failed Exit carrying AcceptanceFailed.summaryMd", () => {
     const exit = Exit.fail(
       new AcceptanceFailed({

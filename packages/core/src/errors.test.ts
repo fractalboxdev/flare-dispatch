@@ -27,6 +27,7 @@ import {
   OidcSigningFailed,
   PortNeverOpened,
   type RunError,
+  RunDurationExceeded,
   RunSkipped,
   SecretsMissing,
   StepFailed,
@@ -67,6 +68,7 @@ const summarize = (e: RunError): string =>
       StsAssumeRoleFailed: ({ provider, reason }) => `sts ${provider} ${reason}`,
       ChildSpawnFailed: ({ run, instanceId }) => `child spawn ${run} ${instanceId}`,
       ChildWaitTimeout: ({ pending }) => `child wait ${pending.length} pending`,
+      RunDurationExceeded: ({ maxDurationSec }) => `ceiling ${maxDurationSec}s`,
     }),
     Match.exhaustive,
   );
@@ -214,6 +216,11 @@ const samples: ReadonlyArray<{ name: string; err: RunError; expect: string }> = 
       waitedMs: 1_800_000,
     }),
     expect: "child wait 2 pending",
+  },
+  {
+    name: "RunDurationExceeded",
+    err: new RunDurationExceeded({ maxDurationSec: 1800, elapsedSec: 1800 }),
+    expect: "ceiling 1800s",
   },
 ];
 

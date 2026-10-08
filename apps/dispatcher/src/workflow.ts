@@ -56,6 +56,7 @@ import {
   decideAdmission,
   Email,
   Executions,
+  withRunCeiling,
   type RunContext,
   type RunError,
 } from "@fractalboxdev/flare-dispatch-core";
@@ -897,15 +898,25 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             Effect.asVoid,
           );
         yield* Effect.forkScoped(heartbeatLoop);
+        // The run ceiling (`limits.maxDurationSec`, issue #42) starts here,
+        // once admission and the lease are held — those waits carry their own
+        // ceilings. The start time is a checkpointed step, so a replay resumes
+        // the countdown, and the ceiling bounds the body's step retries as one
+        // budget. On `RunDurationExceeded` the interrupted body still meets the
+        // teardown below, then lands as a recorded `failure`.
+        const { startedAt: bodyStartedAt } = yield* stepDo("run-ceiling-start", async () => ({
+          startedAt: Date.now(),
+        }));
         // Finalizer order matters: `ensuring`s run inner-first, so the
         // container is destroyed BEFORE the lease is released — a waiting
         // peer never sees its freshly-acquired container torn down.
-        return yield* run
-          .run(input)
-          .pipe(
-            Effect.ensuring(destroySandbox),
-            Effect.ensuring(lease.release().pipe(Effect.ignore)),
-          );
+        return yield* withRunCeiling(run.run(input), {
+          maxDurationSec: run.limits.maxDurationSec,
+          startedAt: bodyStartedAt,
+        }).pipe(
+          Effect.ensuring(destroySandbox),
+          Effect.ensuring(lease.release().pipe(Effect.ignore)),
+        );
       }).pipe(Effect.scoped);
 
       // The admitted slot, held live for the WHOLE post-gate window. The beat

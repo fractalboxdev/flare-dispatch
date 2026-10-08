@@ -47,12 +47,11 @@ The constraints that decide it are ours, not Cloudflare's.
 
 Three repo facts the decision has to account for:
 
-- **`limits.maxDurationSec` bounds nothing.** It is validated as positive at
-  construction (`packages/core/src/define-run.ts:186`) and read by no runtime.
-  `waitForExit` is a bare wait with no timeout (`packages/runtime-cf/src/sandbox-cf.ts:518-547`),
-  and step wall-clock is unlimited, so a wedged step runs until something external kills
-  it. (`runs/offload-test.ts:170`'s comment claiming `timeoutSec` "is still clamped by the
-  run's `maxDurationSec`" is wrong.)
+- **`limits.maxDurationSec` bounds the run body, not a step.** The dispatcher measures it
+  from a checkpointed start (`packages/core/src/run-ceiling.ts`) and fails the run
+  `RunDurationExceeded` when it elapses. Below it, `waitForExit` is a bare wait with no
+  timeout (`packages/runtime-cf/src/sandbox-cf.ts:518-547`) and step wall-clock is
+  unlimited, so a wedged step holds its sandbox until the run ceiling fires.
 - **The instance id is the idempotency key.** A duplicate `create({ id })` raising
   `instance.already_exists` is swallowed as a successful dispatch
   (`apps/dispatcher/src/routes/webhook.ts:259-268`). Dedup is therefore a property of how
@@ -136,8 +135,8 @@ flowchart TB
 
 Corollary to rules 3 and 4: wall-clock bounds must be written explicitly (`timeoutSec`
 on exec, `Effect.timeoutFail` around waits, as `waitForPort` already does at
-`sandbox-cf.ts:565-577`). Declaring `maxDurationSec` is documentation, not enforcement,
-until that changes.
+`sandbox-cf.ts:565-577`). `maxDurationSec` is the backstop for the whole body; a wait
+bounded only by it reports `RunDurationExceeded` instead of naming the wait that hung.
 
 ## Rationale
 
@@ -214,8 +213,8 @@ anyway.
   reconstruct cheaply.
 - We integrate a system of record with no writable status field, leaving nowhere external
   to keep entity state.
-- `maxDurationSec` becomes enforced, or Workflows introduces an instance-level wall-clock
-  bound, changing what rule 2's corollary has to do by hand.
+- Workflows introduces an instance-level wall-clock bound, replacing the dispatcher's
+  `maxDurationSec` enforcement and changing what rule 2's corollary has to do by hand.
 - The `FileRef` capture-and-restore chokepoint lands, making the mutated-tree case
   serviceable. Rule 5's exclusion exists only because a re-clone is the wrong repair
   there, and restoring captured bytes would let those steps recover too.

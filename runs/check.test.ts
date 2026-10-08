@@ -616,3 +616,11 @@ describe("check source determinism", () => {
     }).pipe(Effect.provide(layer));
   });
 });
+
+describe("run ceiling (issue #42)", () => {
+  it("covers a full 1800 s exec — the gate's per-stage ceiling — plus checkout and upload", () => {
+    // A ceiling at the exec ceiling cuts every stage that uses its full exec
+    // budget before the sandbox's own deadline reports `ExecTimeout`.
+    expect(check.limits.maxDurationSec).toBeGreaterThanOrEqual(3600);
+  });
+});
