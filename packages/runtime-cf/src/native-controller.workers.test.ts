@@ -40,7 +40,7 @@ const archive = (members: { path: string; bytes: Buffer }[]) => {
   return Buffer.concat([...bodies, records, end]);
 };
 const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignReceipt?: boolean; lostPublication?: boolean;
-  clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; foreignApp?:boolean; broadGrant?:boolean } = {}) => {
+  clientRepo?: string; emptyToken?: boolean; authenticated?:boolean; foreignApp?:boolean; broadGrant?:boolean; clock?: () => number } = {}) => {
   let status = "in_progress", conclusion: string | null = null, posts = 0, downloads = 0, failPut = options.lostPublication;
   let authReads=0, grants=0;
   const run = () => ({ id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,
@@ -89,10 +89,9 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
       return value;
     }) as R2Bucket["put"] } as R2Bucket;
   const instance = options.authenticated ? { advance:(raw:unknown) =>
-    (native as unknown as {advanceNativeController:(options:unknown,request:unknown)=>Effect.Effect<unknown,unknown>})
-      .advanceNativeController({db:env.RUNS_METADATA,bucket,auth:{appId:"42",appJwt:"fixture-app-jwt",
+    native.advanceNativeController({db:env.RUNS_METADATA,bucket,now: options.clock, auth:{appId:"42",appJwt:"fixture-app-jwt",
         repo:options.clientRepo ?? request.repo,fetchImpl}},raw) } :
-    makeNativeController({ db: env.RUNS_METADATA, bucket, controller,
+    makeNativeController({ db: env.RUNS_METADATA, bucket, controller, now: options.clock,
       client: { repo: options.clientRepo ?? request.repo, token: options.emptyToken ? "" : "fixture-installation-token", fetchImpl } });
   return { instance, bucket, posts: () => posts, downloads: () => downloads,
     authReads:()=>authReads,grants:()=>grants,
@@ -100,6 +99,20 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
 };
 
 describe("native controller with actual D1 and R2", () => {
+  it("keeps the persisted admission clock across delayed polling and publication", async () => {
+    let now = Math.floor(Date.now() / 1000);
+    const f = open({ clock: () => now });
+    const first = await Effect.runPromise(f.instance.advance(request));
+    expect(first).toMatchObject({ _tag: "Running", admittedAt: expect.any(Number) });
+    const admittedAt = Number("admittedAt" in first ? first.admittedAt : NaN);
+    expect(await env.RUNS_METADATA.prepare("SELECT admitted_at FROM native_dispatches WHERE repo=? AND nonce=?")
+      .bind(request.repo, request.nonce).first("admitted_at")).toBe(admittedAt);
+    now += 1800;
+    expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({ _tag: "Running", admittedAt });
+    f.finish();
+    expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({ _tag: "Published", admittedAt });
+    expect(f.posts()).toBe(1);
+  });
   it("authenticates each advance and preserves single dispatch/archive publication across replay", async () => {
     const f=open({authenticated:true,lostDispatch:true});
     expect(await Effect.runPromise(f.instance.advance(request))).toMatchObject({_tag:"Running",runId:123,runAttempt:1});
