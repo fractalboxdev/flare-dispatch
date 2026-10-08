@@ -22,7 +22,7 @@ Nonce discovery uses GitHub's documented `created` filter with a fixed lower bou
 
 ## Consequences
 
-Every filtered page retains the same authenticated scope. Missing pages, ambiguous matching runs, malformed or out-of-window creation times, and recent history beyond the existing page budget refuse without granting another POST. Exact bound collection retains its run-attempt GET.
+Every filtered page retains the same authenticated scope. Missing pages, ambiguous matching runs, malformed or out-of-window creation times, and recent history beyond the existing page budget refuse without granting another POST. Bound reconciliation and collection revalidate through the exact run-attempt GET without rescanning history; altered run identities still refuse.
 
 Migration `0010_native_admission_time.sql` leaves earlier intents without an inferred timestamp. Those intents refuse admission and require explicit operator reconciliation; a timestamp cannot be refreshed or backfilled through the dispatch adapter.
 

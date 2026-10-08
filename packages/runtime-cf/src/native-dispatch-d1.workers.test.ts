@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { NativeReceiptRefused, type NativeRequest } from "@fractalboxdev/flare-dispatch-core";
-import { makeNativeDispatchD1 } from "./native-dispatch-d1";
+import { makeNativeDispatchD1 as makeDispatch } from "./native-dispatch-d1";
 import { makeNativeGithubProvider } from "./native-github-provider";
 import { readNativeControllerIdentity } from "@fractalboxdev/flare-dispatch-github-app";
 
@@ -19,6 +19,11 @@ const run = (id = 456) => ({
   createdAt: new Date().toISOString(),
 });
 const runEffect = Effect.runPromise;
+type TestProvider = Omit<Parameters<typeof makeDispatch>[2], "readRun"> & Partial<Pick<Parameters<typeof makeDispatch>[2], "readRun">>;
+// Existing unbound fixtures return the same authentic exact run unless a test overrides it.
+const makeNativeDispatchD1 = (
+  db: Parameters<typeof makeDispatch>[0], owner: Parameters<typeof makeDispatch>[1], provider: TestProvider,
+) => makeDispatch(db, owner, { readRun: () => Effect.succeed(run()), ...provider });
 const loseWriteResponse = (matching: string): Pick<D1Database, "prepare"> => {
   const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, {
     get(target, property) {
@@ -243,6 +248,7 @@ describe("durable native dispatch in workerd", () => {
     let runs = [run()];
     const jobs = makeNativeDispatchD1(env.RUNS_METADATA, controller, {
       dispatch: () => Effect.void, listRuns: () => Effect.succeed(runs),
+      readRun: () => Effect.succeed(runs[0]!),
     });
     await runEffect(jobs.start(request));
     await runEffect(jobs.reconcile(request));

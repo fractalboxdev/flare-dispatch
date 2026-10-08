@@ -28,6 +28,7 @@ type Provider = {
   readonly dispatch: (request: NativeRequest) => Effect.Effect<void, NativeReceiptRefused>;
   /** Complete bounded API evidence; partial pages refuse inside the provider. */
   readonly listRuns: (request: NativeRequest, admittedAt: number) => Effect.Effect<readonly unknown[], NativeReceiptRefused>;
+  readonly readRun: (request: NativeRequest, binding: { readonly runId: number; readonly runAttempt: number }) => Effect.Effect<unknown, NativeReceiptRefused>;
 };
 const decode = <A, I>(schema: Schema.Schema<A, I>, input: unknown) =>
   Schema.decodeUnknown(schema, { onExcessProperty: "error" })(input).pipe(
@@ -102,7 +103,9 @@ export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured
     const prior = yield* read(id);
     if (prior.state === "reserved") return prior;
     const window = yield* nativeDiscoveryWindow(prior.admittedAt);
-    const rawRuns = yield* provider.listRuns(id.request, prior.admittedAt);
+    const rawRuns = prior.state === "bound"
+      ? [yield* provider.readRun(id.request, { runId: prior.runId!, runAttempt: prior.runAttempt! })]
+      : yield* provider.listRuns(id.request, prior.admittedAt);
     if (rawRuns.length > 100) return yield* refuse("native dispatch API evidence exceeds its page budget");
     const runs = yield* Effect.forEach(rawRuns, (rawRun) => decode(Run, rawRun));
     if (runs.some((run) => Date.parse(run.createdAt) < window.lowerSeconds * 1000))

@@ -53,6 +53,17 @@ describe("authenticated native GitHub provider", () => {
     return { provider: makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl }), fetchImpl };
   };
 
+  it("revalidates a bound run through its exact attempt without listing history", async () => {
+    const { provider, fetchImpl } = collector();
+    expect(await runEffect(provider.readRun(request, bound))).toMatchObject({ runId:456, runAttempt:1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]![0])).toBe("https://api.github.com/repos/owner/context/actions/runs/456/attempts/1");
+    for (const altered of [apiRun(457), { ...apiRun(), run_attempt:2 }]) {
+      const alteredProvider = collector([altered]).provider;
+      await expect(runEffect(alteredProvider.readRun(request, bound))).rejects.toThrow();
+    }
+  });
+
   it("collects independent terminal API evidence and the exact artifact under the durable run binding", async () => {
     const { provider, fetchImpl } = collector();
     const evidence = await runEffect(provider.collect(request, bound, "native-controller[bot]"));
