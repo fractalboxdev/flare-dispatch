@@ -111,7 +111,10 @@ export const makeNativeDispatchD1 = (db: Pick<D1Database, "prepare">, configured
     if (runs.some((run) => Date.parse(run.createdAt) < window.lowerSeconds * 1000))
       return yield* refuse("native dispatch API candidate predates admission window");
     const matches = runs.filter((run) => run.runName === `native-${id.request.nonce}`);
-    if (matches.length === 0) return prior;
+    if (matches.length === 0) {
+      if (prior.state === "bound") return yield* refuse("native exact run nonce conflicts with durable binding");
+      return prior;
+    }
     if (matches.length !== 1) return yield* refuse("native dispatch API identity is ambiguous");
     const run = matches[0]!;
     if (!Number.isSafeInteger(run.runId) || !Number.isSafeInteger(run.runAttempt)
