@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { rm } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { makeCheckCommandOwner, commandFingerprint } from "./check-command";
+import { makeCheckCommandOwner, commandFingerprint, commandSpool } from "./check-command";
 
 const request = {
   id: "check-fixed",
@@ -10,7 +12,11 @@ const request = {
 };
 const opts = { handle: request, command: "exit 7", cwd: "/workspace", env: {} };
 
-function fixture() {
+/** The pinned SDK's answer for an id its container has never started: a throw, not `null`. */
+const processNotFound = (id: string) =>
+  Object.assign(new Error(`Process ${id} not found`), { name: "ProcessNotFoundError" });
+
+function fixture(sdk: { throwsWhenAbsent?: boolean; execForReal?: boolean } = {}) {
   const records = new Map<string, unknown>();
   let reserved = false;
   let launches = 0;
@@ -46,12 +52,17 @@ function fixture() {
       present = true;
       if (loseResponse) throw new Error("lost launch response");
     },
-    async getProcess() {
+    async getProcess(id: string) {
+      if (!present && sdk.throwsWhenAbsent) throw processNotFound(id);
       return present
         ? { status: exitCode === undefined ? "running" : "completed", exitCode }
         : null;
     },
-    async exec() {
+    async exec(command: string) {
+      if (sdk.execForReal) {
+        const result = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8", timeout: 10000 });
+        return { exitCode: result.status ?? 1, stdout: result.stdout };
+      }
       return { exitCode: 0, stdout: JSON.stringify({ exitCode, timedOut: false, endedAt: now }) };
     },
   };
@@ -183,5 +194,20 @@ describe("durable check command", () => {
     expect(await f.owner().finish(request, result)).toEqual(result);
     expect(await f.owner().finish(request, { ...result, logPath: "different" })).toEqual(result);
     expect(await f.owner().receipt(request)).toEqual(result);
+  });
+  it("a process its recycled container no longer knows observes missing, not an exec failure", async () => {
+    const f = fixture({ throwsWhenAbsent: true });
+    await f.owner().start(opts);
+    f.gone();
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
+    await expect(f.owner().start(opts)).rejects.toThrow("uncertain");
+    expect(f.launches()).toBe(1);
+  });
+  it("a terminal process that published no terminal record observes missing", async () => {
+    const f = fixture({ execForReal: true });
+    await rm(commandSpool(request), { recursive: true, force: true });
+    await f.owner().start(opts);
+    f.exit(1);
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
   });
 });
