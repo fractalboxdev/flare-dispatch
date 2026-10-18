@@ -20,8 +20,26 @@ const ENGINE_GONE = [
   /Durable Object reset because its code was updated/i,
 ];
 
+/** Wrappers a rejection reaches the exit through, at most this deep. */
+const MAX_WRAPPERS = 4;
+
+/**
+ * The error itself, then what it wraps: `stepDo`'s `Effect.tryPromise` turns a
+ * rejected `step.do` into an `UnknownException` with a generic message and the
+ * rejection in `.error`, and an `Error` may carry another in `.cause`.
+ */
+const unwrapped = (error: unknown): Array<Error> => {
+  const chain: Array<Error> = [];
+  let current: unknown = error;
+  while (current instanceof Error && chain.length <= MAX_WRAPPERS) {
+    chain.push(current);
+    current = Cause.isUnknownException(current) ? current.error : current.cause;
+  }
+  return chain;
+};
+
 const isEngineGone = (error: unknown): boolean =>
-  error instanceof Error && ENGINE_GONE.some((pattern) => pattern.test(error.message));
+  unwrapped(error).some((e) => ENGINE_GONE.some((pattern) => pattern.test(e.message)));
 
 /**
  * True when the run's exit is a durable-step rejection the engine raised as

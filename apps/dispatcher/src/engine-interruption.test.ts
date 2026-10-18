@@ -1,4 +1,4 @@
-import { Exit } from "effect";
+import { Effect, Exit } from "effect";
 import { ExecFailed, StepFailed } from "@fractalboxdev/flare-dispatch-core";
 import { describe, expect, it } from "vitest";
 import { isEngineInterruption } from "./engine-interruption";
@@ -21,6 +21,25 @@ describe("isEngineInterruption", () => {
       isEngineInterruption(
         Exit.die(new Error("Durable Object reset because its code was updated.")),
       ),
+    ).toBe(true);
+  });
+
+  // `stepDo` in workflow.ts wraps `step.do` this way: the defect is an
+  // `UnknownException` whose own message is generic, the rejection in `.error`.
+  const wrappedStepDo = (rejection: Error) =>
+    Effect.runPromiseExit(Effect.tryPromise(() => Promise.reject(rejection)).pipe(Effect.orDie));
+
+  it("names the rejection when stepDo's tryPromise wrapping dies with it", async () => {
+    expect(isEngineInterruption(await wrappedStepDo(new Error(inactive)))).toBe(true);
+  });
+
+  it("leaves any other rejection stepDo's wrapping dies with a verdict", async () => {
+    expect(isEngineInterruption(await wrappedStepDo(new Error("boom")))).toBe(false);
+  });
+
+  it("names the rejection when it sits in an Error's cause", () => {
+    expect(
+      isEngineInterruption(Exit.die(new Error("step failed", { cause: new Error(inactive) }))),
     ).toBe(true);
   });
 
