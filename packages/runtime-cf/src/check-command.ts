@@ -190,13 +190,11 @@ export function makeCheckCommandOwner(
         const entry = await load(h);
         if (entry.receipt !== undefined) return;
         // An absent flag is an existing launch intent from an earlier schema.
-        if (entry.launched !== false) {
-          if ((await processOf(h.id)) === null)
-          throw new Error(
-            "uncertain check command: launch response or process was lost; no relaunch",
-          );
-          return;
-        }
+        // A recorded launch is never launched again under this handle. If its
+        // process is gone — the container recycled after `startProcess`
+        // reached it — `observe` reports `missing`, and the run relaunches
+        // under a new identity in a destroyed container.
+        if (entry.launched !== false) return;
         if (!(await storage.save(key(h), { ...entry, launched: true }, entry)))
           throw new Error("check command launch reservation changed concurrently");
       }

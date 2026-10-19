@@ -123,14 +123,15 @@ describe("durable check command", () => {
     ]) await expect(f.owner().prepare(changed)).rejects.toThrow("identity");
     expect(f.launches()).toBe(0);
   });
-  it("preparation preserves legacy launch intents and never relaunches a lost process", async () => {
+  it("preparation preserves legacy launch intents and never relaunches a lost process under its handle", async () => {
     const f = fixture();
     await f.owner().start(opts);
     const stored = f.records.get(`check-command:${request.id}`) as Record<string, unknown>;
     delete stored.launched;
     expect(await f.owner().prepare({ ...request, startedAt: 2000, deadline: 62000 })).toEqual(request);
     f.gone();
-    await expect(f.owner().start(opts)).rejects.toThrow("uncertain");
+    await f.owner().start(opts);
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
     expect(f.launches()).toBe(1);
   });
   it("changed environment cannot recover an old command receipt", async () => {
@@ -152,12 +153,13 @@ describe("durable check command", () => {
     expect(f.launches()).toBe(1);
     expect(await f.owner().observe(request)).toMatchObject({ state: "running" });
   });
-  it("concurrent reservation launches once and a missing uncertain process never relaunches", async () => {
+  it("concurrent reservation launches once and a lost process observes missing without a second launch", async () => {
     const f = fixture();
     await Promise.allSettled([f.owner().start(opts), f.owner().start(opts)]);
     expect(f.launches()).toBe(1);
     f.gone();
-    await expect(f.owner().start(opts)).rejects.toThrow("uncertain");
+    await f.owner().start(opts);
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
     expect(f.launches()).toBe(1);
   });
   it("preserves the original deadline and actual zero/nonzero exit", async () => {
@@ -200,7 +202,8 @@ describe("durable check command", () => {
     await f.owner().start(opts);
     f.gone();
     expect(await f.owner().observe(request)).toEqual({ state: "missing" });
-    await expect(f.owner().start(opts)).rejects.toThrow("uncertain");
+    await f.owner().start(opts);
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
     expect(f.launches()).toBe(1);
   });
   it("a terminal process that published no terminal record observes missing", async () => {
