@@ -106,6 +106,25 @@ describe("a step body that quotes the engine", () => {
     await expect(step.do("next", async () => 1)).resolves.toBe(1);
   });
 
+  it("an engine loss after a failed attempt is still an interruption", async () => {
+    // Attempt 1 throws; the engine then dies during the retry backoff.
+    const retrying = {
+      do: async <T>(_name: string, cb: () => Promise<T>): Promise<T> => {
+        await cb().catch(() => undefined);
+        throw new Error(inactive);
+      },
+    };
+    const { step, lost } = guardWorkflowStep(retrying);
+    await expect(step.do("exec-start", () => Promise.reject(new Error("transient")))).rejects.toThrow(inactive);
+    expect(lost()).toBe(true);
+  });
+
+  it("forwards the platform's arguments to the callback", async () => {
+    const passing = { do: <T>(_name: string, cb: (ctx: string) => Promise<T>): Promise<T> => cb("attempt-1") };
+    const { step } = guardWorkflowStep(passing);
+    await expect(step.do("s", async (ctx: string) => ctx)).resolves.toBe("attempt-1");
+  });
+
   it.effect("reaches the run as its typed failure through StepRunnerCloudflare", () => {
     const executions = makeExecutionsFake();
     const layer = makeStepRunnerCloudflare(liveEngine, "exec-1").pipe(

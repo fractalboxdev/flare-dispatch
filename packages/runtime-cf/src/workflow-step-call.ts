@@ -80,18 +80,19 @@ export const guardWorkflowStep = <S extends StepSurface>(
       ? undefined
       : ((async (...args: Parameters<F>) => {
           if (gone !== undefined) throw gone;
-          // A rejection after the callback's latest attempt threw is that
-          // attempt's error, not the engine's.
-          let threw = false;
+          // The body's own failure reaches `step.do`'s rejection with its
+          // message intact; an engine loss during a retry backoff does not
+          // carry it. Matching the message, not "an attempt threw", keeps a
+          // loss after a failed attempt an interruption.
+          let bodyMessage: string | undefined;
           const last = args.length - 1;
           const callback = args[last] as unknown;
           if (typeof callback === "function") {
-            (args as unknown[])[last] = async () => {
-              threw = false;
+            (args as unknown[])[last] = async (...attempt: unknown[]) => {
               try {
-                return await (callback as () => Promise<unknown>)();
+                return await (callback as (...a: unknown[]) => Promise<unknown>)(...attempt);
               } catch (error) {
-                threw = true;
+                bodyMessage = error instanceof Error ? error.message : String(error);
                 throw error;
               }
             };
@@ -99,7 +100,8 @@ export const guardWorkflowStep = <S extends StepSurface>(
           try {
             return await call.apply(step, args);
           } catch (error) {
-            if (threw && typeof error === "object" && error !== null) bodyRejections.add(error);
+            if (bodyMessage !== undefined && error instanceof Error && error.message === bodyMessage)
+              bodyRejections.add(error);
             if (isEngineGone(error)) gone = error;
             throw error;
           }
