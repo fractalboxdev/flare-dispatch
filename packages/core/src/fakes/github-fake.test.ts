@@ -139,6 +139,7 @@ describe("makeGithubFake — the state-machine writes", () => {
         issue({ number: 7, author: "flare-dispatch[bot]", labels: ["nightly-tier"] }),
         issue({ number: 8, author: "a-maintainer", labels: ["nightly-tier"] }),
         issue({ number: 9, author: "flare-dispatch[bot]", labels: [] }),
+        issue({ number: 10, author: "other-app[bot]", labels: ["nightly-tier"] }),
       ],
     });
     const close = (n: number) =>
@@ -151,7 +152,8 @@ describe("makeGithubFake — the state-machine writes", () => {
     expect(await close(7)).toEqual({ closed: false, reason: "not-open", number: 7 });
     expect(await close(8)).toEqual({ closed: false, reason: "human-owned", number: 8 });
     expect(await close(9)).toEqual({ closed: false, reason: "unlabelled", number: 9 });
-    expect(state.issues.map((i) => i.state)).toEqual(["closed", "open", "open"]);
+    expect(await close(10)).toEqual({ closed: false, reason: "foreign-owned", number: 10 });
+    expect(state.issues.map((i) => i.state)).toEqual(["closed", "open", "open", "open"]);
     expect(state.commentOnIssueCalls).toEqual([{ repo: "owner/repo", issue: 7, body: "green" }]);
   });
 });

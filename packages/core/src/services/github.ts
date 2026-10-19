@@ -180,8 +180,8 @@ export type CloseDraftPullRequest = {
 /**
  * A request to close a ledger issue the loop itself filed, once the condition it
  * reports clears. The live Layer reads the issue and closes it as `completed`
- * only when it is open, a bot account opened it, and it carries `label`; it posts
- * `comment` first. Anything else stays open.
+ * only when it is open, this installation's bot opened it, and it carries
+ * `label`; it posts `comment` first. Anything else stays open.
  */
 export type CloseBotIssue = {
   /** "owner/name". */
@@ -199,8 +199,13 @@ export type CloseBotIssueResult =
   | { readonly closed: true; readonly number: number }
   | {
       readonly closed: false;
-      /** `not-open`, `human-owned`, `unlabelled`: left as found. `uncredentialed`: no App. */
-      readonly reason: "not-open" | "human-owned" | "unlabelled" | "uncredentialed";
+      /** `not-open`, `human-owned`, `foreign-owned`, `unlabelled`: left as found. `uncredentialed`: no App. */
+      readonly reason:
+        | "not-open"
+        | "human-owned"
+        | "foreign-owned"
+        | "unlabelled"
+        | "uncredentialed";
       readonly number: number;
     };
 

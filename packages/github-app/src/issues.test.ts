@@ -101,6 +101,10 @@ const server = setupServer(
     await capture(request, `patch:${String(params.n)}`);
     return HttpResponse.json({ number: Number(params.n) }, { status: 200 });
   }),
+  http.post("https://api.github.com/graphql", async ({ request }) => {
+    await capture(request, "viewer");
+    return HttpResponse.json({ data: { viewer: { login: "our-app[bot]" } } });
+  }),
 );
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -383,14 +387,41 @@ describe("closeBotIssue", () => {
         return HttpResponse.json({ number: Number(params.n), ...issue });
       }),
     );
-  const botIssue = { state: "open", user: { type: "Bot" }, labels: [{ name: "nightly-tier" }] };
+  const botIssue = {
+    state: "open",
+    user: { type: "Bot", login: "our-app[bot]" },
+    labels: [{ name: "nightly-tier" }],
+  };
 
   it("comments, then PATCHes state closed with state_reason completed", async () => {
     serve(botIssue);
     expect(await closeBotIssue(req)).toEqual({ closed: true, number: 41 });
-    expect(calls.map((c) => c.path)).toEqual(["read:41", "comment:41", "patch:41"]);
-    expect(calls[1]?.body).toEqual({ body: "Passed on abc." });
-    expect(calls[2]?.body).toEqual({ state: "closed", state_reason: "completed" });
+    expect(calls.map((c) => c.path)).toEqual(["read:41", "viewer", "comment:41", "patch:41"]);
+    expect(calls[1]?.authorization).toBe("Bearer inst-token-abc");
+    expect(calls[2]?.body).toEqual({ body: "Passed on abc." });
+    expect(calls[3]?.body).toEqual({ state: "closed", state_reason: "completed" });
+  });
+
+  it("leaves another App bot's labelled issue open and silent", async () => {
+    serve({ ...botIssue, user: { type: "Bot", login: "other-app[bot]" } });
+    expect(await closeBotIssue(req)).toEqual({
+      closed: false,
+      reason: "foreign-owned",
+      number: 41,
+    });
+    expect(calls.map((c) => c.path)).toEqual(["read:41", "viewer"]);
+  });
+
+  it("fails closed when the installation's bot identity is unavailable", async () => {
+    serve(botIssue);
+    server.use(
+      http.post("https://api.github.com/graphql", async ({ request }) => {
+        await capture(request, "viewer");
+        return HttpResponse.json({ data: { viewer: null } });
+      }),
+    );
+    await expect(closeBotIssue(req)).rejects.toThrow(/identity unavailable/);
+    expect(calls.map((c) => c.path)).toEqual(["read:41", "viewer"]);
   });
 
   it("leaves a human-opened issue open and silent", async () => {

@@ -171,6 +171,8 @@ export const makeGithubFake = (
      * Lower it to make `maxPages` observable without seeding hundreds of PRs.
      */
     historyPageSize?: number;
+    /** Login returned for the installation-token viewer in bot-owned issue tests. */
+    botLogin?: string;
     /**
      * Head branches keyed `"owner/name#branch"` a human has pushed to — the
      * fake's stand-in for non-bot commits. `openDraftPullRequest` with
@@ -311,6 +313,11 @@ export const makeGithubFake = (
         }
         if (!target.labels.includes(req.label)) {
           return { closed: false, reason: "unlabelled", number } as const;
+        }
+        if (
+          target.author.toLowerCase() !== (opts.botLogin ?? "flare-dispatch[bot]").toLowerCase()
+        ) {
+          return { closed: false, reason: "foreign-owned", number } as const;
         }
         state.commentOnIssueCalls.push({ repo: req.repo, issue: number, body: req.comment });
         state.issues = state.issues.map((i) =>

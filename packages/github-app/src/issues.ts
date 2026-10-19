@@ -44,9 +44,9 @@
 // GitHub's own UI reads.
 //
 // `closeBotIssue` is the one other close, and it closes no reporter's issue: it
-// reads the issue first and closes it as `completed` only when a bot account
-// opened it and it carries the caller's ledger label. A human-opened issue, or a
-// bot issue outside that ledger, answers `closed: false` and stays open.
+// reads the issue first and closes it as `completed` only when the authenticated
+// App bot opened it and it carries the caller's ledger label. Any other issue
+// answers `closed: false` and stays open.
 //
 // --- The list endpoint returns pull requests too -----------------------------
 //
@@ -467,23 +467,23 @@ export type CloseBotIssueResult =
   | { readonly closed: true; readonly number: number }
   | {
       readonly closed: false;
-      /** `not-open`: already closed. `human-owned`: a person opened it. `unlabelled`: not the caller's ledger issue. */
-      readonly reason: "not-open" | "human-owned" | "unlabelled";
+      /** `not-open`: already closed. `human-owned` / `foreign-owned`: another author. `unlabelled`: not this ledger. */
+      readonly reason: "not-open" | "human-owned" | "foreign-owned" | "unlabelled";
       readonly number: number;
     };
 
 /**
- * Close `issue` as completed — only when it is open, a bot account opened it,
- * and it carries `label`. The comment lands first, so the timeline records why
- * before GitHub records `state_reason: "completed"`.
+ * Close `issue` as completed — only when it is open, this installation's bot
+ * opened it, and it carries `label`. The comment lands first, so the timeline
+ * records why before GitHub records `state_reason: "completed"`.
  */
 export const closeBotIssue = async (opts: CloseBotIssueOptions): Promise<CloseBotIssueResult> => {
-  const { doFetch } = resolveClient(opts);
+  const { apiBase, doFetch } = resolveClient(opts);
   const res = await doFetch(issueUrl(opts), { headers: ghHeaders(opts.token) });
   await assertOk(res, `issue read failed for ${opts.repo}#${opts.issue}`);
   const issue = (await res.json()) as {
     state?: string;
-    user?: { type?: string } | null;
+    user?: { type?: string; login?: string } | null;
     labels?: ReadonlyArray<string | { name?: string }>;
   };
   const number = opts.issue;
@@ -491,6 +491,24 @@ export const closeBotIssue = async (opts: CloseBotIssueOptions): Promise<CloseBo
   if (issue.user?.type !== "Bot") return { closed: false, reason: "human-owned", number };
   const labels = (issue.labels ?? []).map((l) => (typeof l === "string" ? l : (l.name ?? "")));
   if (!labels.includes(opts.label)) return { closed: false, reason: "unlabelled", number };
+
+  const viewerRes = await doFetch(`${apiBase}/graphql`, {
+    method: "POST",
+    headers: ghHeaders(opts.token, { json: true }),
+    body: JSON.stringify({ query: "query { viewer { login } }" }),
+  });
+  await assertOk(viewerRes, "GitHub App bot identity lookup failed");
+  const viewer = (await viewerRes.json()) as {
+    data?: { viewer?: { login?: unknown } };
+    errors?: unknown;
+  };
+  const login = viewer.data?.viewer?.login;
+  if (viewer.errors !== undefined || typeof login !== "string" || login.length === 0) {
+    throw new GithubApiError("GitHub App bot identity unavailable", viewerRes.status, "");
+  }
+  if (issue.user.login?.toLowerCase() !== login.toLowerCase()) {
+    return { closed: false, reason: "foreign-owned", number };
+  }
 
   await createIssueComment({ ...opts, body: opts.comment });
   const close = await doFetch(issueUrl(opts), {

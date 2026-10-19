@@ -423,6 +423,18 @@ describe("contextful-measures", () => {
       }).pipe(Effect.provide(layer));
     });
 
+    it.effect("leaves another bot's matching issue untouched", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        github: { issues: [{ ...openNightlyIssue, author: "other-app[bot]" }] },
+      });
+      return Effect.gen(function* () {
+        yield* resolveNightlyIssue({ repo: input.repo, head });
+        expect(handles.github.issues.find((i) => i.number === 41)?.state).toBe("open");
+        expect(handles.github.commentOnIssueCalls).toHaveLength(0);
+        expect(handles.github.removeIssueLabelCalls).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    });
+
     it.effect("ends the streak when nightly discovery succeeds with no parts", () => {
       const { layer, handles } = makeCFRuntimeTest({
         github: {
