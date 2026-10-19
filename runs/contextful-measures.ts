@@ -1,14 +1,17 @@
-import { Effect, Schema } from "effect";
+import { Cause, Effect, Exit, Option, Schema } from "effect";
 import {
   AcceptanceFailed,
+  ChildRuns,
   artifact,
   defineRun,
   github,
   handoffChildAdmission,
   io,
+  isTerminalChildStatus,
   sandbox,
   StepFailed,
   step,
+  type ChildStatusRecord,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
   ensureWorkspace,
@@ -132,7 +135,25 @@ export const parseNightlyParts = (result: {
   return { kind: "parts", parts };
 };
 
-export type NightlyFailure = { readonly part: string; readonly checkUrl?: string };
+export type NightlyFailure = {
+  readonly part: string;
+  readonly checkUrl?: string;
+  /** Why the part has no verdict of its own, when it has none. */
+  readonly note?: string;
+};
+
+/**
+ * A failed part's own check-run page, from the id its child row records; the
+ * head's checks page stands in while the child has posted no check-run.
+ */
+export const checkRunUrl = (opts: {
+  readonly repo: string;
+  readonly head: string;
+  readonly checkRunId: string | undefined;
+}): string =>
+  opts.checkRunId !== undefined && /^\d+$/.test(opts.checkRunId)
+    ? `https://github.com/${opts.repo}/runs/${opts.checkRunId}`
+    : `https://github.com/${opts.repo}/commit/${opts.head}/checks`;
 
 /** The issue body: the change range from the previous measured commit, then each failed part. */
 export const nightlyIssueBody = (opts: {
@@ -145,9 +166,11 @@ export const nightlyIssueBody = (opts: {
     opts.previous === undefined
       ? `No earlier measured commit lies within ${RANGE_DEPTH} first-parent commits of \`${opts.head}\`.`
       : `\`${opts.previous}\`..\`${opts.head}\` ([compare](https://github.com/${opts.repo}/compare/${opts.previous}...${opts.head}))`;
-  const parts = opts.failures.map(({ part, checkUrl }) =>
-    checkUrl === undefined ? `- \`${part}\`` : `- [\`flare-dispatch/check:${part}\`](${checkUrl})`,
-  );
+  const parts = opts.failures.map(({ part, checkUrl, note }) => {
+    const name =
+      checkUrl === undefined ? `\`${part}\`` : `[\`flare-dispatch/check:${part}\`](${checkUrl})`;
+    return note === undefined ? `- ${name}` : `- ${name}: ${note}`;
+  });
   return [
     `The nightly tier failed on \`${opts.head}\`.`,
     "",
@@ -158,20 +181,19 @@ export const nightlyIssueBody = (opts: {
   ].join("\n");
 };
 
+const openNightlyIssues = (repo: string) =>
+  github
+    .issues({ repo, state: "open", labels: [NIGHTLY_ISSUE_LABEL], strict: true })
+    .pipe(Effect.map((open) => open.filter((issue) => issue.title === NIGHTLY_ISSUE_TITLE)));
+
 /**
- * One open issue carries the failing tier. A later failure comments on it, so a
- * red streak is one thread; the read is strict because a truncated list would
+ * One labelled open issue carries a red streak. A later failure comments on it,
+ * so the streak is one thread; the read is strict because a truncated list would
  * read as "no issue yet" and duplicate it.
  */
 export const reportNightlyFailures = (opts: { readonly repo: string; readonly body: string }) =>
   Effect.gen(function* () {
-    const open = yield* github.issues({
-      repo: opts.repo,
-      state: "open",
-      labels: [NIGHTLY_ISSUE_LABEL],
-      strict: true,
-    });
-    const existing = open.find((issue) => issue.title === NIGHTLY_ISSUE_TITLE);
+    const existing = (yield* openNightlyIssues(opts.repo))[0];
     if (existing !== undefined) {
       yield* github.commentOnIssue({ repo: opts.repo, issue: existing.number, body: opts.body });
       return { number: existing.number, url: existing.url, opened: false };
@@ -184,6 +206,41 @@ export const reportNightlyFailures = (opts: { readonly repo: string; readonly bo
     });
     return { number: created.number, url: created.url, opened: true };
   });
+
+/**
+ * A green night ends the streak: the streak's issue records the passing head and
+ * loses the `nightly-tier` label, so the next failure opens a new issue. The
+ * issue stays open for a person to close; the GitHub service closes issues only
+ * as duplicates.
+ */
+export const resolveNightlyIssue = (opts: { readonly repo: string; readonly head: string }) =>
+  Effect.gen(function* () {
+    const open = yield* openNightlyIssues(opts.repo);
+    for (const issue of open) {
+      yield* github.commentOnIssue({
+        repo: opts.repo,
+        issue: issue.number,
+        body: `The nightly tier passed on \`${opts.head}\`. This streak has ended; the next failure opens a new issue.`,
+      });
+      yield* github.removeIssueLabel({
+        repo: opts.repo,
+        issue: issue.number,
+        label: NIGHTLY_ISSUE_LABEL,
+      });
+    }
+    return open.map((issue) => issue.number);
+  });
+
+/** A tagged failure's tag and message, for an issue line or a run summary. */
+const describeFailure = (cause: Cause.Cause<unknown>): string => {
+  const failure = Cause.squash(cause);
+  if (!(failure instanceof Error)) return String(failure);
+  const tag = (failure as { _tag?: unknown })._tag;
+  const label = typeof tag === "string" ? tag : failure.name;
+  return failure.message.length > 0 && failure.message !== label
+    ? `${label}: ${failure.message.slice(0, 200)}`
+    : label;
+};
 
 export const contextfulMeasures = defineRun({
   name: "contextful-measures",
@@ -232,150 +289,225 @@ export const contextfulMeasures = defineRun({
       // A container recycled mid-measure answers `ExecFailed` (exit -1) and takes
       // the checkout with it, so the retry rebuilds the workspace inside the step
       // before measuring again, and the report steps read the workspace it measured.
-      const measured = yield* step(
-        "measure",
-        () =>
-          ensureWorkspace({ current: ws, repo: REPO, sha: commit }).pipe(
-            Effect.flatMap((current) =>
-              sandbox
-                .exec({
-                  container: current.container,
-                  cwd: current.dir,
-                  command: MEASURE_COMMAND,
-                  timeoutSec,
-                })
-                .pipe(Effect.map((result) => ({ exitCode: result.exitCode, workspace: current }))),
+      // A measure that exhausts its retries still lets the nightly tier run.
+      const measuredExit = yield* Effect.exit(
+        step(
+          "measure",
+          () =>
+            ensureWorkspace({ current: ws, repo: REPO, sha: commit }).pipe(
+              Effect.flatMap((current) =>
+                sandbox
+                  .exec({
+                    container: current.container,
+                    cwd: current.dir,
+                    command: MEASURE_COMMAND,
+                    timeoutSec,
+                  })
+                  .pipe(
+                    Effect.map((result) => ({ exitCode: result.exitCode, workspace: current })),
+                  ),
+              ),
             ),
-          ),
-        {
-          timeoutSec: timeoutSec + 100,
-          retries: MEASURE_RETRIES,
-          retryOn: ["ExecFailed", "CheckoutFailed"],
-        },
-      );
-      // A red tier still gets a note. Only report construction or note writing
-      // prevents history from being attached.
-      const report = yield* step("build-report", () =>
-        sandbox.exec({
-          container: measured.workspace.container,
-          cwd: measured.workspace.dir,
-          command: reportCommand,
-          env: {
-            MEASURE_COMMIT: commit,
-            MEASURE_RUN_ID: runId,
-            MEASURE_RUN_ATTEMPT: String(runAttempt(runId)),
-            MEASURE_EXIT: String(measured.exitCode),
+          {
+            timeoutSec: timeoutSec + 100,
+            retries: MEASURE_RETRIES,
+            retryOn: ["ExecFailed", "CheckoutFailed"],
           },
-          timeoutSec: 60,
-        }),
+        ),
       );
-      if (report.exitCode !== 0) {
-        return yield* Effect.fail(new StepFailed({ step: "build-report", cause: report.stderr }));
+      const measured = Exit.isSuccess(measuredExit) ? measuredExit.value : undefined;
+      const ledgerFailures: NightlyFailure[] = Exit.isFailure(measuredExit)
+        ? [{ part: "measures", note: `measure: ${describeFailure(measuredExit.cause)}` }]
+        : [];
+      // A red tier still gets a note. Only report construction or note writing
+      // prevents history from being attached; either failure is reported with the
+      // nightly tier, which runs regardless.
+      const at = (name: string) =>
+        Effect.mapError((error: unknown) => ({ step: name, cause: Cause.fail(error) }));
+      const ledger =
+        measured === undefined
+          ? undefined
+          : yield* Effect.exit(
+              Effect.gen(function* () {
+                const report = yield* step("build-report", () =>
+                  sandbox.exec({
+                    container: measured.workspace.container,
+                    cwd: measured.workspace.dir,
+                    command: reportCommand,
+                    env: {
+                      MEASURE_COMMIT: commit,
+                      MEASURE_RUN_ID: runId,
+                      MEASURE_RUN_ATTEMPT: String(runAttempt(runId)),
+                      MEASURE_EXIT: String(measured.exitCode),
+                    },
+                    timeoutSec: 60,
+                  }),
+                ).pipe(at("build-report"));
+                if (report.exitCode !== 0) {
+                  return yield* Effect.fail({
+                    step: "build-report",
+                    cause: Cause.fail(
+                      new StepFailed({ step: "build-report", cause: report.stderr }),
+                    ),
+                  });
+                }
+                const reportPath = `${measured.workspace.dir}/${REPORT_FILE}`;
+                const url = yield* step("upload-report", () =>
+                  artifact.upload({
+                    name: REPORT_FILE,
+                    path: reportPath,
+                    container: measured.workspace.container,
+                    contentType: "application/json",
+                    signedUrlTTL: "30 days",
+                  }),
+                ).pipe(at("upload-report"));
+                const reportText = yield* step("read-report", () =>
+                  sandbox
+                    .readFile({ path: reportPath, container: measured.workspace.container })
+                    .pipe(
+                      Effect.catchTag("ReadFileFailed", (error) =>
+                        Effect.fail(new StepFailed({ step: "read-report", cause: error.message })),
+                      ),
+                    ),
+                ).pipe(at("read-report"));
+                yield* step("append-note", () =>
+                  github.appendMeasureNote({
+                    repo: REPO,
+                    commit,
+                    text: reportText.trim(),
+                  }),
+                ).pipe(at("append-note"));
+                return url;
+              }),
+            );
+      if (ledger !== undefined && Exit.isFailure(ledger)) {
+        const failed = Cause.failureOption(ledger.cause);
+        ledgerFailures.push({
+          part: "measures",
+          note: Option.isSome(failed)
+            ? `${failed.value.step}: ${describeFailure(failed.value.cause)}`
+            : describeFailure(ledger.cause),
+        });
       }
-      const reportPath = `${measured.workspace.dir}/${REPORT_FILE}`;
-      const reportUrl = yield* step("upload-report", () =>
-        artifact.upload({
-          name: REPORT_FILE,
-          path: reportPath,
-          container: measured.workspace.container,
-          contentType: "application/json",
-          signedUrlTTL: "30 days",
-        }),
-      );
-      const reportText = yield* step("read-report", () =>
-        sandbox
-          .readFile({ path: reportPath, container: measured.workspace.container })
-          .pipe(
-            Effect.catchTag("ReadFileFailed", (error) =>
-              Effect.fail(new StepFailed({ step: "read-report", cause: error.message })),
-            ),
-          ),
-      );
-      yield* step("append-note", () =>
-        github.appendMeasureNote({
-          repo: REPO,
-          commit,
-          text: reportText.trim(),
-        }),
-      );
+      const reportUrl = ledger !== undefined && Exit.isSuccess(ledger) ? ledger.value : undefined;
       // The measured workspace has contextful-ci built, so the range and the
       // nightly discovery reuse it rather than compiling it again elsewhere.
-      const discovered = yield* step(
-        "discover-nightly",
-        () =>
-          ensureWorkspace({ current: measured.workspace, repo: REPO, sha: commit }).pipe(
-            Effect.flatMap((current) =>
-              Effect.all([
-                sandbox.exec({
-                  container: current.container,
-                  cwd: current.dir,
-                  command: rangeCommand,
-                  env: { MEASURE_COMMIT: commit },
-                  timeoutSec: 120,
-                }),
-                sandbox.exec({
-                  container: current.container,
-                  cwd: current.dir,
-                  command: NIGHTLY_DISCOVER,
-                  timeoutSec: 1800,
-                }),
-              ]),
+      const base = measured?.workspace ?? ws;
+      const discoveredExit = yield* Effect.exit(
+        step(
+          "discover-nightly",
+          () =>
+            ensureWorkspace({ current: base, repo: REPO, sha: commit }).pipe(
+              Effect.flatMap((current) =>
+                Effect.all([
+                  sandbox.exec({
+                    container: current.container,
+                    cwd: current.dir,
+                    command: rangeCommand,
+                    env: { MEASURE_COMMIT: commit },
+                    timeoutSec: 120,
+                  }),
+                  sandbox.exec({
+                    container: current.container,
+                    cwd: current.dir,
+                    command: NIGHTLY_DISCOVER,
+                    timeoutSec: 1800,
+                  }),
+                ]),
+              ),
+              // Only the bounded fields reach the checkpoint.
+              Effect.map(([range, parts]) => ({
+                previous: range.exitCode === 0 ? previousMeasured(range.stdout, commit) : undefined,
+                exitCode: parts.exitCode,
+                stdout: parts.stdout.slice(0, MAX_PART_LIST_BYTES + 1),
+                stderr: parts.stderr.slice(-MAX_PART_LIST_BYTES),
+              })),
             ),
-            // Only the bounded fields reach the checkpoint.
-            Effect.map(([range, parts]) => ({
-              previous: range.exitCode === 0 ? previousMeasured(range.stdout, commit) : undefined,
-              exitCode: parts.exitCode,
-              stdout: parts.stdout.slice(0, MAX_PART_LIST_BYTES + 1),
-              stderr: parts.stderr.slice(-MAX_PART_LIST_BYTES),
-            })),
-          ),
-        { timeoutSec: 2100, retries: MEASURE_RETRIES, retryOn: ["ExecFailed", "CheckoutFailed"] },
+          { timeoutSec: 2100, retries: MEASURE_RETRIES, retryOn: ["ExecFailed", "CheckoutFailed"] },
+        ),
       );
-      const nightly = parseNightlyParts(discovered);
+      const discovered = Exit.isSuccess(discoveredExit) ? discoveredExit.value : undefined;
+      const nightly: NightlyDiscovery =
+        discovered === undefined ? { kind: "invalid" } : parseNightlyParts(discovered);
       if (nightly.kind === "unsupported") {
         yield* io.log("warn", "contextful-ci has no --tier; the nightly tier is skipped", {
           commit,
         });
       }
       const parts = nightly.kind === "parts" ? nightly.parts : [];
-      const checkUrl = `https://github.com/${REPO}/commit/${commit}/checks`;
-      const failures: NightlyFailure[] =
-        nightly.kind === "invalid" ? [{ part: "stages --parts --tier nightly" }] : [];
+      const failures: NightlyFailure[] = [...ledgerFailures];
+      if (nightly.kind === "invalid") {
+        failures.push({
+          part: "stages --parts --tier nightly",
+          ...(Exit.isFailure(discoveredExit)
+            ? { note: describeFailure(discoveredExit.cause) }
+            : {}),
+        });
+      }
       if (parts.length > 0) {
         // The parent's own sandbox work ends here: its container and admission
-        // slot go to the parts rather than idling through the wait.
-        yield* step("release-measure-container", () =>
-          sandbox.destroy({ container: measured.workspace.container }),
+        // slot go to the parts rather than idling through the wait. Either
+        // release failing costs capacity, never the tier.
+        yield* Effect.exit(
+          step("release-measure-container", () => sandbox.destroy({ container: base.container })),
         );
-        yield* step("handoff-admission", () => handoffChildAdmission());
+        yield* Effect.exit(step("handoff-admission", () => handoffChildAdmission()));
       }
       for (let offset = 0; offset < parts.length; offset += NIGHTLY_WINDOW) {
         const window = parts.slice(offset, offset + NIGHTLY_WINDOW);
-        const handles = yield* step(`spawn-nightly-${offset}`, () =>
-          fanOut({
-            run: "check",
-            items: window,
-            concurrency: window.length,
-            toInput: (part) => ({
-              repo: REPO,
-              sha: commit,
-              checkLabel: part,
-              command: nightlyPartCommand(part),
-              failOnNonZeroExit: true,
-              timeoutSec: NIGHTLY_TIMEOUT_SEC,
-              admissionMaxQueueAgeSec: NIGHTLY_QUEUE_SEC,
-              install: false,
-              secrets: [],
+        const spawned = yield* Effect.exit(
+          step(`spawn-nightly-${offset}`, () =>
+            fanOut({
+              run: "check",
+              items: window,
+              concurrency: window.length,
+              toInput: (part) => ({
+                repo: REPO,
+                sha: commit,
+                checkLabel: part,
+                command: nightlyPartCommand(part),
+                failOnNonZeroExit: true,
+                timeoutSec: NIGHTLY_TIMEOUT_SEC,
+                admissionMaxQueueAgeSec: NIGHTLY_QUEUE_SEC,
+                install: false,
+                secrets: [],
+              }),
             }),
+          ),
+        );
+        if (Exit.isFailure(spawned)) {
+          const note = `not dispatched: ${describeFailure(spawned.cause)}`;
+          for (const part of window) failures.push({ part, note });
+          continue;
+        }
+        const ids = spawned.value.map((handle) => handle.executionId);
+        const waited = yield* Effect.exit(
+          waitForChildrenDurably({
+            name: `await-nightly-${offset}`,
+            ids,
+            timeout: `${(NIGHTLY_QUEUE_SEC + check.limits.maxDurationSec) / 60} minutes`,
           }),
         );
-        const results = yield* waitForChildrenDurably({
-          name: `await-nightly-${offset}`,
-          ids: handles.map((handle) => handle.executionId),
-          timeout: `${(NIGHTLY_QUEUE_SEC + check.limits.maxDurationSec) / 60} minutes`,
-        });
+        // A window that outlives its deadline reads its children once more, so a
+        // settled part keeps its verdict and an unsettled one is reported as such.
+        const results = Exit.isSuccess(waited)
+          ? waited.value
+          : yield* step(`settle-nightly-${offset}`, () =>
+              Effect.flatMap(ChildRuns, (children) => children.poll({ ids })),
+            ).pipe(
+              Effect.orElseSucceed(() =>
+                ids.map((executionId): ChildStatusRecord => ({ executionId, status: "missing" })),
+              ),
+            );
         results.forEach((result, index) => {
-          if (result.status !== "success") failures.push({ part: window[index]!, checkUrl });
+          if (result.status === "success") return;
+          failures.push({
+            part: window[index]!,
+            checkUrl: checkRunUrl({ repo: REPO, head: commit, checkRunId: result.checkRunId }),
+            ...(isTerminalChildStatus(result.status)
+              ? {}
+              : { note: "did not settle before the window's deadline" }),
+          });
         });
       }
       if (failures.length > 0) {
@@ -384,19 +516,31 @@ export const contextfulMeasures = defineRun({
             repo: REPO,
             body: nightlyIssueBody({
               repo: REPO,
-              previous: discovered.previous,
+              previous: discovered?.previous,
               head: commit,
               failures,
             }),
           }),
         );
+      } else if (parts.length > 0) {
+        yield* step("resolve-nightly", () => resolveNightlyIssue({ repo: REPO, head: commit }));
       }
-      const nightlyFailed = failures.map((failure) => failure.part);
-      if (measured.exitCode !== 0 || nightlyFailed.length > 0) {
+      const nightlyFailed = failures
+        .filter((failure) => failure.part !== "measures")
+        .map((failure) => failure.part);
+      if (
+        measured === undefined ||
+        reportUrl === undefined ||
+        measured.exitCode !== 0 ||
+        nightlyFailed.length > 0
+      ) {
         const lines = [
-          ...(measured.exitCode !== 0
+          ...ledgerFailures.map((failure) => `Measures failed at ${failure.note}.`),
+          ...(measured !== undefined && measured.exitCode !== 0
             ? [
-                `Measures exited ${measured.exitCode}; the report is attached to ${commit} under refs/notes/measures.`,
+                reportUrl === undefined
+                  ? `Measures exited ${measured.exitCode}.`
+                  : `Measures exited ${measured.exitCode}; the report is attached to ${commit} under refs/notes/measures.`,
               ]
             : []),
           ...(nightlyFailed.length > 0
@@ -405,7 +549,7 @@ export const contextfulMeasures = defineRun({
         ];
         return yield* Effect.fail(
           new AcceptanceFailed({
-            exitCode: measured.exitCode || 1,
+            exitCode: measured?.exitCode || 1,
             summaryMd: lines.join("\n"),
           }),
         );

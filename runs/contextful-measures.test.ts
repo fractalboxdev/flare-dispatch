@@ -9,9 +9,11 @@ import {
   nightlyIssueBody,
   parseNightlyParts,
   previousMeasured,
+  checkRunUrl,
   rangeCommand,
   reportCommand,
   reportNightlyFailures,
+  resolveNightlyIssue,
   runAttempt,
 } from "./contextful-measures";
 
@@ -237,10 +239,11 @@ describe("contextful-measures", () => {
         sandboxFiles: { "/workspace/contextful/measure-report.json": report },
         childRuns: {
           pollFn: (ids) =>
-            ids.map((executionId, index) => ({
-              executionId,
-              status: index === 1 ? ("failure" as const) : ("success" as const),
-            })),
+            ids.map((executionId, index) =>
+              index === 1
+                ? { executionId, status: "failure" as const, checkRunId: "777" }
+                : { executionId, status: "success" as const, checkRunId: "776" },
+            ),
         },
       });
       return Effect.gen(function* () {
@@ -255,7 +258,7 @@ describe("contextful-measures", () => {
           `https://github.com/fractalboxdev/contextful/compare/${prior}...${head}`,
         );
         expect(issue.body).toContain(
-          `[\`flare-dispatch/check:formal\`](https://github.com/fractalboxdev/contextful/commit/${head}/checks)`,
+          "[`flare-dispatch/check:formal`](https://github.com/fractalboxdev/contextful/runs/777)",
         );
         expect(issue.body).not.toContain("features.packages");
       }).pipe(Effect.provide(layer));
@@ -292,6 +295,104 @@ describe("contextful-measures", () => {
         yield* Effect.exit(contextfulMeasures.run(input));
         expect(handles.github.openIssueCalls).toHaveLength(0);
         expect(handles.github.commentOnIssueCalls.map((call) => call.issue)).toEqual([41]);
+      }).pipe(Effect.provide(layer));
+    });
+
+    it("links a part to its own check-run, else to the head's checks page", () => {
+      const repo = input.repo;
+      expect(checkRunUrl({ repo, head, checkRunId: "777" })).toBe(
+        "https://github.com/fractalboxdev/contextful/runs/777",
+      );
+      for (const checkRunId of [undefined, "noop"]) {
+        expect(checkRunUrl({ repo, head, checkRunId })).toBe(
+          `https://github.com/fractalboxdev/contextful/commit/${head}/checks`,
+        );
+      }
+    });
+
+    const openNightlyIssue = {
+      repo: input.repo,
+      number: 41,
+      title: NIGHTLY_ISSUE_TITLE,
+      body: "",
+      state: "open" as const,
+      labels: [NIGHTLY_ISSUE_LABEL],
+      author: "flare-dispatch[bot]",
+      authorAssociation: "NONE",
+      url: "https://github.com/fractalboxdev/contextful/issues/41",
+      commentCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+
+    it.effect("ends the streak on a green night so the next failure opens a new issue", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        github: {
+          branchHeads: { "fractalboxdev/contextful:main": sha },
+          issues: [openNightlyIssue],
+        },
+        sandboxProgram: { ...baseProgram, ...nightlyParts(["formal"]) },
+        sandboxFiles: { "/workspace/contextful/measure-report.json": report },
+        childRuns: allSucceed,
+      });
+      return Effect.gen(function* () {
+        yield* contextfulMeasures.run(input);
+        expect(handles.github.commentOnIssueCalls.map((call) => call.issue)).toEqual([41]);
+        expect(handles.github.commentOnIssueCalls[0]?.body).toContain(`passed on \`${head}\``);
+        expect(handles.github.removeIssueLabelCalls).toEqual([
+          { repo: input.repo, issue: 41, label: NIGHTLY_ISSUE_LABEL },
+        ]);
+        const next = yield* reportNightlyFailures({ repo: input.repo, body: "red again" });
+        expect(next.opened).toBe(true);
+        expect(yield* resolveNightlyIssue({ repo: input.repo, head })).toEqual([next.number]);
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("reports a window that outlives its deadline and still runs the next", () => {
+      const parts = Array.from({ length: 12 }, (_, i) => `features.p${i}`);
+      const { layer, handles } = makeCFRuntimeTest({
+        github: { branchHeads: { "fractalboxdev/contextful:main": sha } },
+        sandboxProgram: { ...baseProgram, ...nightlyParts(parts) },
+        sandboxFiles: { "/workspace/contextful/measure-report.json": report },
+        // Each clock read advances an hour, so a window's deadline passes while
+        // its children still run.
+        io: { tickMs: 3_600_000 },
+        childRuns: {
+          pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "running" as const })),
+        },
+      });
+      return Effect.gen(function* () {
+        const result = yield* Effect.exit(contextfulMeasures.run(input));
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(handles.childRuns.spawned).toHaveLength(12);
+        expect(handles.github.openIssueCalls).toHaveLength(1);
+        const body = handles.github.openIssueCalls[0]!.body;
+        for (const part of parts) {
+          expect(body).toContain(
+            `[\`flare-dispatch/check:${part}\`](https://github.com/fractalboxdev/contextful/commit/${head}/checks): did not settle before the window's deadline`,
+          );
+        }
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("runs the tier and files the ledger failure when the report cannot be built", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        github: { branchHeads: { "fractalboxdev/contextful:main": sha } },
+        sandboxProgram: {
+          ...baseProgram,
+          "measure-report": { exitCode: 1, stderr: "no records" },
+          ...nightlyParts(["formal"]),
+        },
+        sandboxFiles: { "/workspace/contextful/measure-report.json": report },
+        childRuns: allSucceed,
+      });
+      return Effect.gen(function* () {
+        const result = yield* Effect.exit(contextfulMeasures.run(input));
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(handles.github.appendMeasureNoteCalls).toHaveLength(0);
+        expect(handles.childRuns.spawned).toHaveLength(1);
+        expect(handles.github.openIssueCalls[0]?.body).toContain("- `measures`: build-report");
+        expect(handles.github.removeIssueLabelCalls).toHaveLength(0);
       }).pipe(Effect.provide(layer));
     });
 
