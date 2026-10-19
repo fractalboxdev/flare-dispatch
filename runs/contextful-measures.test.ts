@@ -264,6 +264,39 @@ describe("contextful-measures", () => {
       }).pipe(Effect.provide(layer));
     });
 
+    it.effect("joins successful spawns after one part fails to dispatch", () => {
+      const parts = Array.from({ length: 12 }, (_, i) => `features.p${i}`);
+      let spawnedAtFirstPoll: number | undefined;
+      const { layer, handles } = makeCFRuntimeTest({
+        github: { branchHeads: { "fractalboxdev/contextful:main": sha } },
+        sandboxProgram: { ...baseProgram, ...nightlyParts(parts) },
+        sandboxFiles: { "/workspace/contextful/measure-report.json": report },
+        childRuns: {
+          failSpawn: ({ input }) =>
+            (input as { checkLabel: string }).checkLabel === "features.p1",
+          pollFn: (ids, call) => {
+            if (call === 0) spawnedAtFirstPoll = handles.childRuns.spawned.length;
+            return ids.map((executionId, index) => ({
+              executionId,
+              status: call === 0 && index === 1 ? ("failure" as const) : ("success" as const),
+            }));
+          },
+        },
+      });
+      return Effect.gen(function* () {
+        const result = yield* Effect.exit(contextfulMeasures.run(input));
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(spawnedAtFirstPoll).toBe(9);
+        expect(handles.childRuns.spawned).toHaveLength(11);
+        expect(handles.childRuns.polls).toBe(2);
+        const body = handles.github.openIssueCalls[0]?.body;
+        expect(body).toContain("`features.p1`: not dispatched:");
+        expect(body).toContain("flare-dispatch/check:features.p2");
+        expect(body).not.toContain("features.p0");
+        expect(body).not.toContain("features.p10");
+      }).pipe(Effect.provide(layer));
+    });
+
     it.effect("comments on the open nightly issue instead of opening a second", () => {
       const { layer, handles } = makeCFRuntimeTest({
         github: {
@@ -325,7 +358,7 @@ describe("contextful-measures", () => {
       updatedAt: 0,
     };
 
-    it.effect("ends the streak on a green night so the next failure opens a new issue", () => {
+    it.effect("closes the streak's issue on a green night; the next failure opens a new one", () => {
       const { layer, handles } = makeCFRuntimeTest({
         github: {
           branchHeads: { "fractalboxdev/contextful:main": sha },
@@ -337,14 +370,56 @@ describe("contextful-measures", () => {
       });
       return Effect.gen(function* () {
         yield* contextfulMeasures.run(input);
+        expect(handles.github.closeBotIssueCalls).toEqual([
+          {
+            repo: input.repo,
+            issue: 41,
+            label: NIGHTLY_ISSUE_LABEL,
+            comment: expect.stringContaining(`passed on \`${head}\``),
+          },
+        ]);
         expect(handles.github.commentOnIssueCalls.map((call) => call.issue)).toEqual([41]);
-        expect(handles.github.commentOnIssueCalls[0]?.body).toContain(`passed on \`${head}\``);
+        expect(handles.github.issues.find((i) => i.number === 41)?.state).toBe("closed");
+        expect(handles.github.removeIssueLabelCalls).toHaveLength(0);
+        expect(handles.github.closeIssueAsDuplicateCalls).toHaveLength(0);
+
+        const next = yield* reportNightlyFailures({ repo: input.repo, body: "red again" });
+        expect(next).toMatchObject({ opened: true });
+        expect(next.number).not.toBe(41);
+        expect(yield* resolveNightlyIssue({ repo: input.repo, head })).toEqual([next.number]);
+        expect(handles.github.issues.find((i) => i.number === next.number)?.state).toBe("closed");
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("closes nothing on a green night with no open streak issue", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        github: {
+          branchHeads: { "fractalboxdev/contextful:main": sha },
+          issues: [{ ...openNightlyIssue, state: "closed" as const }],
+        },
+        sandboxProgram: { ...baseProgram, ...nightlyParts(["formal"]) },
+        sandboxFiles: { "/workspace/contextful/measure-report.json": report },
+        childRuns: allSucceed,
+      });
+      return Effect.gen(function* () {
+        yield* contextfulMeasures.run(input);
+        expect(handles.github.closeBotIssueCalls).toHaveLength(0);
+        expect(handles.github.commentOnIssueCalls).toHaveLength(0);
+        expect(handles.github.removeIssueLabelCalls).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("leaves a person's streak issue open and only drops its label", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        github: { issues: [{ ...openNightlyIssue, author: "a-maintainer" }] },
+      });
+      return Effect.gen(function* () {
+        expect(yield* resolveNightlyIssue({ repo: input.repo, head })).toEqual([41]);
+        expect(handles.github.issues.find((i) => i.number === 41)?.state).toBe("open");
+        expect(handles.github.commentOnIssueCalls.map((call) => call.issue)).toEqual([41]);
         expect(handles.github.removeIssueLabelCalls).toEqual([
           { repo: input.repo, issue: 41, label: NIGHTLY_ISSUE_LABEL },
         ]);
-        const next = yield* reportNightlyFailures({ repo: input.repo, body: "red again" });
-        expect(next.opened).toBe(true);
-        expect(yield* resolveNightlyIssue({ repo: input.repo, head })).toEqual([next.number]);
       }).pipe(Effect.provide(layer));
     });
 
@@ -362,9 +437,7 @@ describe("contextful-measures", () => {
         expect(out).toMatchObject({ nightlyParts: 0, nightlyFailed: [] });
         expect(handles.childRuns.spawned).toHaveLength(0);
         expect(handles.github.commentOnIssueCalls[0]?.body).toContain(`passed on \`${head}\``);
-        expect(handles.github.removeIssueLabelCalls).toEqual([
-          { repo: input.repo, issue: 41, label: NIGHTLY_ISSUE_LABEL },
-        ]);
+        expect(handles.github.issues.find((i) => i.number === 41)?.state).toBe("closed");
       }).pipe(Effect.provide(layer));
     });
 
@@ -430,6 +503,7 @@ describe("contextful-measures", () => {
         expect(handles.childRuns.spawned).toHaveLength(1);
         expect(handles.github.openIssueCalls[0]?.body).toContain("- `measures`: build-report");
         expect(handles.github.removeIssueLabelCalls).toHaveLength(0);
+        expect(handles.github.closeBotIssueCalls).toHaveLength(0);
       }).pipe(Effect.provide(layer));
     });
 

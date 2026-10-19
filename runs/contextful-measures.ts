@@ -9,13 +9,13 @@ import {
   io,
   isTerminalChildStatus,
   sandbox,
+  spawnChildRun,
   StepFailed,
   step,
   type ChildStatusRecord,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
   ensureWorkspace,
-  fanOut,
   waitForChildrenDurably,
   workspace,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
@@ -209,19 +209,24 @@ export const reportNightlyFailures = (opts: { readonly repo: string; readonly bo
 
 /**
  * A green night ends the streak: the streak's issue records the passing head and
- * loses the `nightly-tier` label, so the next failure opens a new issue. The
- * issue stays open for a person to close; the GitHub service closes issues only
- * as duplicates.
+ * closes as completed, so the next failure opens a new issue. The close goes
+ * through `closeBotIssue`, which closes only a bot-opened issue carrying
+ * `nightly-tier`; an issue a person opened with the same title and label instead
+ * loses the label and stays open for that person.
  */
 export const resolveNightlyIssue = (opts: { readonly repo: string; readonly head: string }) =>
   Effect.gen(function* () {
     const open = yield* openNightlyIssues(opts.repo);
+    const comment = `The nightly tier passed on \`${opts.head}\`. This streak has ended; the next failure opens a new issue.`;
     for (const issue of open) {
-      yield* github.commentOnIssue({
+      const result = yield* github.closeBotIssue({
         repo: opts.repo,
         issue: issue.number,
-        body: `The nightly tier passed on \`${opts.head}\`. This streak has ended; the next failure opens a new issue.`,
+        label: NIGHTLY_ISSUE_LABEL,
+        comment,
       });
+      if (result.closed || result.reason !== "human-owned") continue;
+      yield* github.commentOnIssue({ repo: opts.repo, issue: issue.number, body: comment });
       yield* github.removeIssueLabel({
         repo: opts.repo,
         issue: issue.number,
@@ -455,32 +460,39 @@ export const contextfulMeasures = defineRun({
       }
       for (let offset = 0; offset < parts.length; offset += NIGHTLY_WINDOW) {
         const window = parts.slice(offset, offset + NIGHTLY_WINDOW);
-        const spawned = yield* Effect.exit(
-          step(`spawn-nightly-${offset}`, () =>
-            fanOut({
-              run: "check",
-              items: window,
-              concurrency: window.length,
-              toInput: (part) => ({
-                repo: REPO,
-                sha: commit,
-                checkLabel: part,
-                command: nightlyPartCommand(part),
-                failOnNonZeroExit: true,
-                timeoutSec: NIGHTLY_TIMEOUT_SEC,
-                admissionMaxQueueAgeSec: NIGHTLY_QUEUE_SEC,
-                install: false,
-                secrets: [],
-              }),
-            }),
+        const spawned = yield* step(`spawn-nightly-${offset}`, () =>
+          Effect.forEach(
+            window,
+            (part) =>
+              spawnChildRun({
+                run: "check",
+                input: {
+                  repo: REPO,
+                  sha: commit,
+                  checkLabel: part,
+                  command: nightlyPartCommand(part),
+                  failOnNonZeroExit: true,
+                  timeoutSec: NIGHTLY_TIMEOUT_SEC,
+                  admissionMaxQueueAgeSec: NIGHTLY_QUEUE_SEC,
+                  install: false,
+                  secrets: [],
+                },
+              }).pipe(
+                Effect.matchCause({
+                  onFailure: (cause) => ({ part, note: `not dispatched: ${describeFailure(cause)}` }),
+                  onSuccess: (handle) => ({ part, executionId: handle.executionId }),
+                }),
+              ),
+            { concurrency: window.length },
           ),
         );
-        if (Exit.isFailure(spawned)) {
-          const note = `not dispatched: ${describeFailure(spawned.cause)}`;
-          for (const part of window) nightlyFailures.push({ part, note });
-          continue;
+        const launched: { part: string; executionId: string }[] = [];
+        for (const result of spawned) {
+          if ("executionId" in result) launched.push(result);
+          else nightlyFailures.push(result);
         }
-        const ids = spawned.value.map((handle) => handle.executionId);
+        if (launched.length === 0) continue;
+        const ids = launched.map((result) => result.executionId);
         const waited = yield* Effect.exit(
           waitForChildrenDurably({
             name: `await-nightly-${offset}`,
@@ -502,7 +514,7 @@ export const contextfulMeasures = defineRun({
         results.forEach((result, index) => {
           if (result.status === "success") return;
           nightlyFailures.push({
-            part: window[index]!,
+            part: launched[index]!.part,
             checkUrl: checkRunUrl({ repo: REPO, head: commit, checkRunId: result.checkRunId }),
             ...(isTerminalChildStatus(result.status)
               ? {}
