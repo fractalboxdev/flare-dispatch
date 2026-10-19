@@ -348,6 +348,43 @@ describe("contextful-measures", () => {
       }).pipe(Effect.provide(layer));
     });
 
+    it.effect("ends the streak when nightly discovery succeeds with no parts", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        github: {
+          branchHeads: { "fractalboxdev/contextful:main": sha },
+          issues: [openNightlyIssue],
+        },
+        sandboxProgram: { ...baseProgram, ...nightlyParts([]) },
+        sandboxFiles: { "/workspace/contextful/measure-report.json": report },
+      });
+      return Effect.gen(function* () {
+        const out = yield* contextfulMeasures.run(input);
+        expect(out).toMatchObject({ nightlyParts: 0, nightlyFailed: [] });
+        expect(handles.childRuns.spawned).toHaveLength(0);
+        expect(handles.github.commentOnIssueCalls[0]?.body).toContain(`passed on \`${head}\``);
+        expect(handles.github.removeIssueLabelCalls).toEqual([
+          { repo: input.repo, issue: 41, label: NIGHTLY_ISSUE_LABEL },
+        ]);
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("fails the parent when a nightly part is named measures", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        github: { branchHeads: { "fractalboxdev/contextful:main": sha } },
+        sandboxProgram: { ...baseProgram, ...nightlyParts(["measures"]) },
+        sandboxFiles: { "/workspace/contextful/measure-report.json": report },
+        childRuns: {
+          pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "failure" as const })),
+        },
+      });
+      return Effect.gen(function* () {
+        const result = yield* Effect.exit(contextfulMeasures.run(input));
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(handles.childRuns.spawned).toHaveLength(1);
+        expect(handles.github.openIssueCalls[0]?.body).toContain("flare-dispatch/check:measures");
+      }).pipe(Effect.provide(layer));
+    });
+
     it.effect("reports a window that outlives its deadline and still runs the next", () => {
       const parts = Array.from({ length: 12 }, (_, i) => `features.p${i}`);
       const { layer, handles } = makeCFRuntimeTest({

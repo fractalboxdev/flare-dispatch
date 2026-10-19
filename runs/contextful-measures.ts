@@ -435,9 +435,9 @@ export const contextfulMeasures = defineRun({
         });
       }
       const parts = nightly.kind === "parts" ? nightly.parts : [];
-      const failures: NightlyFailure[] = [...ledgerFailures];
+      const nightlyFailures: NightlyFailure[] = [];
       if (nightly.kind === "invalid") {
-        failures.push({
+        nightlyFailures.push({
           part: "stages --parts --tier nightly",
           ...(Exit.isFailure(discoveredExit)
             ? { note: describeFailure(discoveredExit.cause) }
@@ -477,7 +477,7 @@ export const contextfulMeasures = defineRun({
         );
         if (Exit.isFailure(spawned)) {
           const note = `not dispatched: ${describeFailure(spawned.cause)}`;
-          for (const part of window) failures.push({ part, note });
+          for (const part of window) nightlyFailures.push({ part, note });
           continue;
         }
         const ids = spawned.value.map((handle) => handle.executionId);
@@ -501,7 +501,7 @@ export const contextfulMeasures = defineRun({
             );
         results.forEach((result, index) => {
           if (result.status === "success") return;
-          failures.push({
+          nightlyFailures.push({
             part: window[index]!,
             checkUrl: checkRunUrl({ repo: REPO, head: commit, checkRunId: result.checkRunId }),
             ...(isTerminalChildStatus(result.status)
@@ -510,6 +510,7 @@ export const contextfulMeasures = defineRun({
           });
         });
       }
+      const failures = [...ledgerFailures, ...nightlyFailures];
       if (failures.length > 0) {
         yield* step("report-nightly", () =>
           reportNightlyFailures({
@@ -522,12 +523,10 @@ export const contextfulMeasures = defineRun({
             }),
           }),
         );
-      } else if (parts.length > 0) {
+      } else if (nightly.kind === "parts") {
         yield* step("resolve-nightly", () => resolveNightlyIssue({ repo: REPO, head: commit }));
       }
-      const nightlyFailed = failures
-        .filter((failure) => failure.part !== "measures")
-        .map((failure) => failure.part);
+      const nightlyFailed = nightlyFailures.map((failure) => failure.part);
       if (
         measured === undefined ||
         reportUrl === undefined ||
