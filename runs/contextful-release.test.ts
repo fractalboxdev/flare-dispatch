@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect, Exit, Fiber, TestClock } from "effect";
+import { Cause, Effect, Exit, Fiber, TestClock } from "effect";
 import { describe, expect } from "vitest";
 import { Sandbox, type CheckCommandService } from "@fractalboxdev/flare-dispatch-core";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
@@ -94,6 +94,30 @@ describe("contextful-release", () => {
       const longest = Math.max(...handles.executions.steps.map((entry) =>
         Number(entry.metadata?.["stepOpts.timeoutSec"] ?? 0)));
       expect(longest).toBeLessThanOrEqual(1800);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("collect retries a transient upload or read, and a lost build always fits one relaunch", () => {
+    const { profile, target, runtime: { layer, handles } } = cellFixture();
+    return Effect.gen(function* () {
+      yield* contextfulReleaseCell.run({ repo, tag: "v0.5.0", sha, profile, target, releaseId: 0, dryRun: true });
+      const collect = handles.executions.steps.find((entry) => entry.name === "collect");
+      expect(collect?.metadata?.["stepOpts.retryOn"]).toEqual(
+        expect.arrayContaining(["ExecFailed", "StepFailed", "ArtifactUploadFailed"]));
+      expect(contextfulReleaseCell.limits.maxDurationSec).toBeGreaterThanOrEqual(2 * 14400);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a manifest read that fails is a retryable StepFailed, not a defect", () => {
+    const profile = "contextful-control";
+    const target = "aarch64-unknown-linux-musl";
+    const { layer } = makeCFRuntimeTest();
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(contextfulReleaseCell.run({ repo, tag: "v0.5.0", sha,
+        profile, target, releaseId: 0, dryRun: true }));
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) expect(Cause.failureOption(exit.cause)).toMatchObject({
+        _tag: "Some", value: { _tag: "StepFailed", step: "collect" } });
     }).pipe(Effect.provide(layer));
   });
 

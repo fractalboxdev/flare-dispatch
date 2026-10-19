@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect, Fiber, TestClock } from "effect";
+import { Cause, Effect, Exit, Fiber, Option, TestClock } from "effect";
 import { describe, expect } from "vitest";
 import { Sandbox, type CheckCommandService } from "../services/sandbox";
 import { makeCFRuntimeTest } from "../testing";
@@ -75,6 +75,68 @@ describe("durableExec", () => {
       );
       expect(calls).toEqual([]);
       expect(handles.executions.steps.map((s) => s.name)).toEqual(["lint"]);
+    }).pipe(Effect.provide(layer));
+  });
+  /** An owner that loses the first `lost` launches, then exits 0. */
+  const loses = (lost: number, calls: string[]): CheckCommandService => ({
+    prepare: (opts) =>
+      Effect.sync(() => {
+        calls.push(`prepare:${opts.stepName}`);
+        return { id: opts.stepName, container: opts.container!, fingerprint: "f", startedAt: 0, deadline: 1 };
+      }),
+    start: () => Effect.void,
+    observe: (h) =>
+      Effect.succeed(
+        calls.filter((c) => c.startsWith("prepare:")).length <= lost
+          ? { state: "missing" as const }
+          : { state: "exited" as const, exitCode: 0, durationMs: 1 },
+      ).pipe(Effect.tap(() => Effect.sync(() => calls.push(`observe:${h.id}`)))),
+    finalize: (h) =>
+      Effect.sync(() => {
+        calls.push(`finalize:${h.id}`);
+        return { exitCode: 0, durationMs: 1, logPath: "logs/x", stdout: "", stderr: "" };
+      }),
+  });
+
+  it.effect("a lost process relaunches in a destroyed, rebuilt container under its own step names", () => {
+    const { layer, handles } = makeCFRuntimeTest();
+    const calls: string[] = [];
+    let ensured = 0;
+    return Effect.gen(function* () {
+      const original = yield* Sandbox;
+      const { result } = yield* durableExec({
+        name: "build",
+        workspace: ws,
+        ensure: (current) => Effect.sync(() => (ensured++, current)),
+        exec: exec(14_400),
+      }).pipe(Effect.provideService(Sandbox, { ...original, checkCommand: loses(1, calls) }));
+      expect(result.exitCode).toBe(0);
+      expect(calls.filter((c) => c.startsWith("prepare:"))).toEqual(["prepare:build", "prepare:build-relaunch-1"]);
+      expect(calls).toContain("finalize:build-relaunch-1");
+      expect(handles.sandbox.destroyed).toEqual(["fake-container"]);
+      expect(ensured).toBe(2);
+      const workspaceStep = handles.executions.steps.find((s) => s.name === "build-relaunch-1-workspace");
+      expect(workspaceStep?.metadata?.["stepOpts.retries"]).toBe(3);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a process lost on every launch fails SandboxProcessLost and never finalizes", () => {
+    const { layer } = makeCFRuntimeTest();
+    const calls: string[] = [];
+    return Effect.gen(function* () {
+      const original = yield* Sandbox;
+      const exit = yield* Effect.exit(
+        durableExec({ name: "build", workspace: ws, ensure: Effect.succeed, exec: exec(14_400), relaunches: 1 }).pipe(
+          Effect.provideService(Sandbox, { ...original, checkCommand: loses(99, calls) }),
+        ),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit))
+        expect(Option.getOrUndefined(Cause.failureOption(exit.cause))).toMatchObject({
+          _tag: "SandboxProcessLost",
+          launches: 2,
+        });
+      expect(calls.some((c) => c.startsWith("finalize:"))).toBe(false);
     }).pipe(Effect.provide(layer));
   });
 });

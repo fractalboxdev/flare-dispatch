@@ -1,5 +1,7 @@
 import { Effect, Schema } from "effect";
-import { artifact, defineRun, github, handoffChildAdmission, sandbox, step } from "@fractalboxdev/flare-dispatch-core";
+import {
+  artifact, defineRun, github, handoffChildAdmission, sandbox, step, StepFailed,
+} from "@fractalboxdev/flare-dispatch-core";
 import {
   DURABLE_EXEC_RETRY_ON, durableExec, ensureWorkspace, fanOut, waitForChildren, workspace, type Workspace,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
@@ -14,6 +16,23 @@ const DARWIN = ["x86_64-apple-darwin", "aarch64-apple-darwin"] as const;
 const RELEASE_BUILD_TIMEOUT_SEC = 14400;
 /** Rebuilds after a recycled container takes finished outputs before they reach R2. */
 const OUTPUT_REBUILDS = 1;
+/**
+ * A relaunch after a lost process. One fits inside the run ceiling however
+ * late the loss strikes; a second could not, and would end as
+ * `RunDurationExceeded` hours later instead of `SandboxProcessLost` now.
+ */
+const BUILD_RELAUNCHES = 1;
+/**
+ * Two full builds, plus staging and publishing: a lost build always has room
+ * for its one relaunch or rebuild.
+ */
+const CELL_MAX_DURATION_SEC = 2 * RELEASE_BUILD_TIMEOUT_SEC + 3600;
+/**
+ * Platform failures `collect` retries. A retry re-probes the checkout, so a
+ * read or upload that failed because the container was recycled ends as
+ * `lost` and a rebuild, and a transient R2 error simply uploads again.
+ */
+const COLLECT_RETRY_ON = [...DURABLE_EXEC_RETRY_ON, "ArtifactUploadFailed"] as const;
 /** Digests, the image footprint and OCI layer (600 s each), and the R2 uploads. */
 const COLLECT_STEP_TIMEOUT_SEC = 1800;
 const CELLS = PROFILES.flatMap((profile) =>
@@ -98,14 +117,17 @@ const collect = (input: { profile: string; target: string }, version: string, ws
       command: ["test", "-d", `${ws.dir}/.git`], timeoutSec: 30 });
     if (probe.exitCode !== 0) return { kind: "lost" } as Collected;
     const manifestPath = `${ws.dir}/dist/${name}.release.json`;
-    const manifest = yield* sandbox.readFile({ container: ws.container, path: manifestPath }).pipe(Effect.orDie);
+    // A read that fails is the container's, not the build's: `StepFailed`
+    // retries, and the retry's probe decides between staging and `lost`.
+    const readOutput = (path: string) => sandbox.readFile({ container: ws.container, path }).pipe(
+      Effect.mapError((cause) => new StepFailed({ step: "collect", cause })));
+    const manifest = yield* readOutput(manifestPath);
     const parsed = JSON.parse(manifest) as { profile: string; target: string; archive: string; sha256: string; sbom: string };
     if (parsed.profile !== input.profile || parsed.target !== input.target || parsed.archive !== `${name}.tar.gz` ||
       parsed.sbom !== `${name}.cdx.json` || !/^[a-f0-9]{64}$/.test(parsed.sha256)) {
       return yield* Effect.die(new Error("release cell manifest does not match its inputs"));
     }
-    const checksum = yield* sandbox.readFile({ container: ws.container,
-      path: `${ws.dir}/dist/${parsed.archive}.sha256` }).pipe(Effect.orDie);
+    const checksum = yield* readOutput(`${ws.dir}/dist/${parsed.archive}.sha256`);
     if (checksum.trim() !== `${parsed.sha256}  ${parsed.archive}`) {
       return yield* Effect.die(new Error("release checksum file differs from its manifest"));
     }
@@ -152,7 +174,7 @@ export const contextfulReleaseCell = defineRun({
   sandboxImage: "release",
   inputs: ReleaseCellInput,
   outputs: ReleaseCellOutput,
-  limits: { maxDurationSec: 21600, admissionMaxQueueAgeSec: 21600 },
+  limits: { maxDurationSec: CELL_MAX_DURATION_SEC, admissionMaxQueueAgeSec: 21600 },
   run: (input) =>
     Effect.gen(function* () {
       requireValidRequest(input.repo, input.tag, input.sha);
@@ -172,6 +194,7 @@ export const contextfulReleaseCell = defineRun({
         const built = yield* durableExec({
           name: `build${suffix}`,
           workspace: ws,
+          relaunches: BUILD_RELAUNCHES,
           ensure: (current) => ensureWorkspace({ current, repo: input.repo, sha: input.sha }),
           exec: (checkout) => ({
             cwd: checkout.dir,
@@ -190,7 +213,7 @@ export const contextfulReleaseCell = defineRun({
         ws = built.workspace;
         const staged = built.workspace;
         const collected = yield* step(`collect${suffix}`, () => collect(input, version, staged),
-          { timeoutSec: COLLECT_STEP_TIMEOUT_SEC, retries: 3, retryOn: DURABLE_EXEC_RETRY_ON });
+          { timeoutSec: COLLECT_STEP_TIMEOUT_SEC, retries: 3, retryOn: COLLECT_RETRY_ON });
         if (collected.kind === "lost") continue;
         // Each asset publishes from R2 in its own step; an asset already
         // uploaded with the same digest is kept, so a retry is a no-op.
