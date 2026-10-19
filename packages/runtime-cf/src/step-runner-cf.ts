@@ -40,6 +40,7 @@ import {
   type ExecutionsService,
   IO,
   type IOService,
+  isEngineInterruptedCause,
   runEffect,
   type RunContext,
   StepFailed,
@@ -47,6 +48,7 @@ import {
   StepRunner,
   type StepRunnerService,
 } from "@fractalboxdev/flare-dispatch-core";
+import { callWorkflowStep } from "./workflow-step-call";
 
 /**
  * The minimal `WorkflowStep` surface the runner needs. CF's full type covers
@@ -170,14 +172,15 @@ export const makeStepRunnerCloudflare = (
 
       const service: StepRunnerService = {
         sleep: (name, milliseconds) =>
-          Effect.tryPromise({
-            try: async () => {
+          callWorkflowStep(
+            name,
+            async () => {
               if (workflowStep.sleep === undefined)
                 throw new Error("Workflow durable sleep is unavailable");
               await workflowStep.sleep(name, milliseconds);
             },
-            catch: (cause) => new StepFailed({ step: name, cause }),
-          }),
+            (cause) => new StepFailed({ step: name, cause }),
+          ),
         run: (name, body, stepOpts) =>
           Effect.gen(function* () {
             // Capture the ambient RunContext so the body — which still needs
@@ -214,15 +217,23 @@ export const makeStepRunnerCloudflare = (
             // real CF `step.do` also accepts `(name, config, callback)`. Bridge
             // to it via `DoWithConfig` when a step set a timeout/retries.
             const doWithConfig = workflowStep.do as unknown as DoWithConfig;
+            // An engine interruption dies here, before `finishStep`: the
+            // invocation that saw it writes no `steps` row the replay would
+            // contradict.
             const exit = yield* Effect.exit(
-              Effect.tryPromise({
-                try: () =>
+              callWorkflowStep(
+                name,
+                () =>
                   stepConfig === undefined
                     ? workflowStep.do(name, runBody)
                     : doWithConfig(name, stepConfig, runBody),
-                catch: (error): { readonly error: unknown } => ({ error }),
-              }),
+                (error): { readonly error: unknown } => ({ error }),
+              ),
             );
+            // A die carries no typed failure, so the cause narrows to `never`.
+            if (Exit.isFailure(exit) && isEngineInterruptedCause(exit.cause)) {
+              return yield* Effect.failCause(exit.cause as Cause.Cause<never>);
+            }
 
             const completedAt = yield* ioSvc.now;
 
@@ -295,13 +306,14 @@ export const makeStepRunnerCloudflare = (
             // CF Workflows `waitForEvent` accepts either an ISO-8601 duration
             // string or a number-of-seconds. Pass ms-converted-to-seconds for
             // unambiguous behaviour across runtime versions.
-            return Effect.tryPromise({
-              try: () =>
+            return callWorkflowStep(
+              name,
+              () =>
                 workflowStep.waitForEvent!(name, {
                   type,
                   timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
                 }),
-              catch: (cause) => {
+              (cause) => {
                 const message = cause instanceof Error ? cause.message : String(cause);
                 if (/timeout|timed[- ]?out/i.test(message)) {
                   return new ApprovalTimedOut({
@@ -314,7 +326,7 @@ export const makeStepRunnerCloudflare = (
                   reason: message,
                 });
               },
-            }).pipe(
+            ).pipe(
               Effect.flatMap((event) => {
                 const decoded = Schema.decodeUnknownEither(payloadSchema)(event.payload);
                 if (decoded._tag === "Left") {

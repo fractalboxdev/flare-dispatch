@@ -81,6 +81,7 @@ export {
   type SerialDecision,
 } from "./serial-queue-d1";
 export { makeStepRunnerCloudflare } from "./step-runner-cf";
+export { callWorkflowStep, guardWorkflowStep, isEngineGone } from "./workflow-step-call";
 export { makeChecksGithubLive, NOOP_CHECK_RUN_ID, type ChecksGithubConfig } from "./checks-github";
 export { makeGithubLive, type GithubLiveConfig } from "./github-live";
 export {
