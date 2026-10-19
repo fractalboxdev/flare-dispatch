@@ -50,7 +50,7 @@ import { concludeOpenChildCheckRuns, readChildCheckRuns } from "./child-check-ru
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { getSandbox } from "@cloudflare/sandbox";
-import { Duration, Effect, Exit, Runtime, Schedule, Schema } from "effect";
+import { Duration, Effect, Exit, identity, Runtime, Schedule, Schema } from "effect";
 import {
   admissionAcquireAttempts,
   type AdmissionPool,
@@ -67,8 +67,7 @@ import {
   type RunError,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
-  callWorkflowStep,
-  guardWorkflowStep,
+  makeWorkflowEngine,
   ADMISSION_MAX_QUEUE_AGE_MS,
   ADMISSION_POLL_EVERY_MS,
   type BrowserRenderingConfig,
@@ -293,10 +292,9 @@ const resolveEmailConfig = (env: Env): EmailCloudflareConfig | undefined => {
 export class RunWorkflow extends WorkflowEntrypoint<Env> {
   override async run(event: WorkflowEvent<unknown>, platformStep: WorkflowStep): Promise<void> {
     // Every durable call this invocation makes — the run body's, through the
-    // runtime, and the dispatcher's own — goes through the latched step, so
-    // one engine rejection ends all of them (workflow-step-call.ts).
-    const engine = guardWorkflowStep(platformStep);
-    const step = engine.step;
+    // runtime, and the dispatcher's own — goes through one engine, so one
+    // engine rejection ends all of them (runtime-cf's workflow-engine.ts).
+    const engine = Effect.runSync(makeWorkflowEngine(platformStep));
     // Decode the dispatch payload — a malformed event is a hard failure.
     const payload: DispatchPayload = Schema.decodeUnknownSync(DispatchPayload)(event.payload);
 
@@ -538,7 +536,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
               };
             },
           }),
-      workflowStep: step,
+      engine,
       // The `Workflow` binding backs the `childRuns` capability — a run can
       // `spawnChildRun` / `fanOut` to independent child `RunWorkflow` instances.
       runsWorkflow: this.env.RUNS_WORKFLOW,
@@ -674,19 +672,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // re-reads the recorded result. A rejected step promise is
       // platform/infra breakage → defect (`orDie`), keeping the gate's typed
       // error channel a clean `AdmissionTimedOut`; an engine interruption is
-      // the `EngineInterrupted` defect (workflow-step-call.ts).
-      // CF types `step.do<T extends Rpc.Serializable<T>>`; the step results
-      // are plain JSON records, so bridge through the simple
-      // `(name, callback)` view — the same narrowing `step-runner-cf.ts` uses
-      // for its `WorkflowStepLike`.
+      // the `EngineInterrupted` defect (runtime-cf's workflow-engine.ts).
       const stepDo = <T>(name: string, body: () => Promise<T>): Effect.Effect<T> =>
-        callWorkflowStep(
-          name,
-          () => (step.do as unknown as (n: string, cb: () => Promise<T>) => Promise<T>)(name, body),
-          (error) => error,
-        ).pipe(Effect.orDie);
+        engine.do(name, body, identity).pipe(Effect.orDie);
       const stepSleep = (name: string, ms: number): Effect.Effect<void> =>
-        callWorkflowStep(name, () => step.sleep(name, ms), (error) => error).pipe(Effect.orDie);
+        engine.sleep(name, ms, identity).pipe(Effect.orDie);
 
       // Open the check-run (`in_progress`) once per execution — a replay reads
       // the id back (check-run-open.ts). With no App config this resolves to
@@ -904,7 +894,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // re-enters its own lease, admission and serial rows, and keeps using
       // the container this invocation would otherwise destroy under it.
       const unlessLost = (teardown: Effect.Effect<void>): Effect.Effect<void> =>
-        Effect.suspend(() => (engine.lost() ? Effect.void : teardown));
+        Effect.unlessEffect(teardown, engine.lost).pipe(Effect.asVoid);
       const destroySandbox: Effect.Effect<void> = Effect.tryPromise(() =>
         substrateFacade !== undefined
           ? substrateFacade.abort(payload.executionId).then(() => undefined)
@@ -1051,13 +1041,15 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // checkpoint: nothing this invocation writes is the run's verdict, so it
       // writes nothing and ends here (core's engine-interruption.ts). The
       // latch covers a run body that recovered the defect and returned.
-      if (engine.lost() || (Exit.isFailure(exit) && isEngineInterruptedCause(exit.cause))) {
+      if ((yield* engine.lost) || (Exit.isFailure(exit) && isEngineInterruptedCause(exit.cause))) {
         yield* Effect.logWarning(
           `engine interruption in ${payload.executionId} — leaving the verdict to the replay`,
         );
         return yield* Exit.isFailure(exit) && isEngineInterruptedCause(exit.cause)
           ? Effect.failCause(exit.cause)
-          : Effect.die(new EngineInterrupted({ step: "run", reason: "a recovered step lost the instance" }));
+          : Effect.die(
+              new EngineInterrupted({ step: "run", reason: "a recovered step lost the instance" }),
+            );
       }
       const completedAt = yield* Effect.sync(() => Date.now());
 
@@ -1356,8 +1348,8 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       await Effect.runPromise(
         program.pipe(
           Effect.onExit((exit) =>
-            Effect.sync(() => {
-              engineInterrupted = engine.lost() || isEngineInterruption(exit);
+            Effect.map(engine.lost, (lost) => {
+              engineInterrupted = lost || isEngineInterruption(exit);
             }),
           ),
           Effect.provide(runtime),
