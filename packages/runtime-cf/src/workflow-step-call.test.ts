@@ -86,6 +86,44 @@ describe("guardWorkflowStep", () => {
   });
 });
 
+describe("a step body that quotes the engine", () => {
+  /** A live engine: `do` runs the callback and rejects with its error, as Workflows does. */
+  const liveEngine = {
+    do: <T>(_name: string, cb: () => Promise<T>): Promise<T> => cb(),
+  };
+
+  it("is the body's failure: the guard stays open and the call fails typed", async () => {
+    const { step, lost } = guardWorkflowStep(liveEngine);
+    const exit = await Effect.runPromiseExit(
+      callWorkflowStep(
+        "exec-start",
+        () => step.do("exec-start", () => Promise.reject(new Error(`ExecFailed: ${reset}`))),
+        (cause) => new StepFailed({ step: "exec-start", cause }),
+      ),
+    );
+    expect(Exit.isFailure(exit) && isEngineInterruptedCause(exit.cause)).toBe(false);
+    expect(lost()).toBe(false);
+    await expect(step.do("next", async () => 1)).resolves.toBe(1);
+  });
+
+  it.effect("reaches the run as its typed failure through StepRunnerCloudflare", () => {
+    const executions = makeExecutionsFake();
+    const layer = makeStepRunnerCloudflare(liveEngine, "exec-1").pipe(
+      Layer.provide(Layer.merge(executions.layer, makeIOFake().layer)),
+    );
+    return Effect.gen(function* () {
+      const runner = yield* StepRunner;
+      const exit = yield* Effect.exit(
+        runner.run("exec-start", () =>
+          Effect.fail(new StepFailed({ step: "sandbox", cause: inactive })),
+        ) as Effect.Effect<never, StepFailed>,
+      );
+      expect(Exit.isFailure(exit) && isEngineInterruptedCause(exit.cause)).toBe(false);
+      expect(executions.state.steps[0]?.status).toBe("failure");
+    }).pipe(Effect.provide(layer));
+  });
+});
+
 describe("StepRunnerCloudflare on an engine rejection", () => {
   it.effect("run dies EngineInterrupted and records no failed step", () => {
     const { layer, executions } = runnerOver(engineRejects(inactive));

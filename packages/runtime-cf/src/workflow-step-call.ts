@@ -20,8 +20,19 @@ const ENGINE_GONE = [
   /Durable Object reset because its code was updated/i,
 ];
 
+/**
+ * Rejections the step's own callback produced. When a callback fails, `step.do`
+ * rejects with the callback's error, and a body whose own Durable Object call
+ * failed (a Sandbox reset by a deploy) quotes the engine's words while the
+ * engine is alive. Classifying that as an interruption would leave the run
+ * `running` forever: nothing replays an instance whose engine never left.
+ */
+const bodyRejections = new WeakSet<object>();
+
 export const isEngineGone = (error: unknown): error is Error =>
-  error instanceof Error && ENGINE_GONE.some((pattern) => pattern.test(error.message));
+  error instanceof Error &&
+  !bodyRejections.has(error) &&
+  ENGINE_GONE.some((pattern) => pattern.test(error.message));
 
 /**
  * Call a Workflows step API. A rejection the engine raised as it lost the
@@ -69,9 +80,26 @@ export const guardWorkflowStep = <S extends StepSurface>(
       ? undefined
       : ((async (...args: Parameters<F>) => {
           if (gone !== undefined) throw gone;
+          // A rejection after the callback's latest attempt threw is that
+          // attempt's error, not the engine's.
+          let threw = false;
+          const last = args.length - 1;
+          const callback = args[last] as unknown;
+          if (typeof callback === "function") {
+            (args as unknown[])[last] = async () => {
+              threw = false;
+              try {
+                return await (callback as () => Promise<unknown>)();
+              } catch (error) {
+                threw = true;
+                throw error;
+              }
+            };
+          }
           try {
             return await call.apply(step, args);
           } catch (error) {
+            if (threw && typeof error === "object" && error !== null) bodyRejections.add(error);
             if (isEngineGone(error)) gone = error;
             throw error;
           }

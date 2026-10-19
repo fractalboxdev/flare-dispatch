@@ -900,6 +900,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // On the substrate path the same teardown is `abort(key)` — kill + stop,
       // skipping the snapshot, and it releases the admission slot with it. The
       // dispatcher holds no container to destroy there, which is the point.
+      // A lost invocation releases nothing: the replay is the same execution,
+      // re-enters its own lease, admission and serial rows, and keeps using
+      // the container this invocation would otherwise destroy under it.
+      const unlessLost = (teardown: Effect.Effect<void>): Effect.Effect<void> =>
+        Effect.suspend(() => (engine.lost() ? Effect.void : teardown));
       const destroySandbox: Effect.Effect<void> = Effect.tryPromise(() =>
         substrateFacade !== undefined
           ? substrateFacade.abort(payload.executionId).then(() => undefined)
@@ -945,8 +950,8 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           maxDurationSec: run.limits.maxDurationSec,
           startedAt: bodyStartedAt,
         }).pipe(
-          Effect.ensuring(destroySandbox),
-          Effect.ensuring(lease.release().pipe(Effect.ignore)),
+          Effect.ensuring(unlessLost(destroySandbox)),
+          Effect.ensuring(unlessLost(lease.release().pipe(Effect.ignore))),
         );
       }).pipe(Effect.scoped);
 
@@ -977,7 +982,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // failure-summary.ts rendering it unmistakably as an infra-wait timeout.
       const admitted: Effect.Effect<unknown, RunError, RunContext> = admissionGate.pipe(
         Effect.andThen(admissionHeld),
-        Effect.ensuring(admissions.release(payload.executionId).pipe(Effect.ignore)),
+        Effect.ensuring(unlessLost(admissions.release(payload.executionId).pipe(Effect.ignore))),
       );
 
       // --- Per-group serialization (runs that declare `serialize`) ---------
@@ -1036,7 +1041,9 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                     return yield* admitted;
                   }).pipe(Effect.scoped),
                 ),
-                Effect.ensuring(serialQueue.release(payload.executionId).pipe(Effect.ignore)),
+                Effect.ensuring(
+                  unlessLost(serialQueue.release(payload.executionId).pipe(Effect.ignore)),
+                ),
               );
             });
       const exit = yield* Effect.exit(gated);

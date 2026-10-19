@@ -48,7 +48,7 @@ import {
   StepRunner,
   type StepRunnerService,
 } from "@fractalboxdev/flare-dispatch-core";
-import { callWorkflowStep } from "./workflow-step-call";
+import { callWorkflowStep, guardWorkflowStep } from "./workflow-step-call";
 
 /**
  * The minimal `WorkflowStep` surface the runner needs. CF's full type covers
@@ -161,12 +161,15 @@ const errorTagOf = (cause: Cause.Cause<unknown> | undefined): string | undefined
  * @param executionId   the execution the `steps` rows are recorded under.
  */
 export const makeStepRunnerCloudflare = (
-  workflowStep: WorkflowStepLike,
+  platformStep: WorkflowStepLike,
   executionId: string,
 ): Layer.Layer<StepRunner, never, Executions | IO> =>
   Layer.effect(
     StepRunner,
     Effect.gen(function* () {
+      // The guard tells a callback's own error from the engine's; guarding an
+      // already-guarded step is harmless (workflow-step-call.ts).
+      const workflowStep = guardWorkflowStep(platformStep).step;
       const executions: ExecutionsService = yield* Executions;
       const ioSvc: IOService = yield* IO;
 
