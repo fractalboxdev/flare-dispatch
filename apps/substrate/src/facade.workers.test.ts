@@ -34,6 +34,37 @@ const RECIPE = { version: 1, repo: { owner: "acme", name: "widget" } } as const;
 let seq = 0;
 const freshKey = () => `exec-${++seq}-${crypto.randomUUID().slice(0, 8)}`;
 
+describe("exec revoke diagnostics across the service binding", () => {
+  it("keeps revocation fatal, attempts all cleanup and carries only safe evidence", async () => {
+    const key = freshKey(), calls: string[] = [];
+    const stub = env.SANDBOX_LEAN.get(env.SANDBOX_LEAN.idFromName(`dispatcher:${key}`)) as DurableObjectStub<SubstrateSandboxBase>;
+    await runInDurableObject(stub, (instance) => {
+      let executed = false;
+      Object.assign(instance, {
+        ensure: async () => ({ ok:true, generation:1, rebuilt:false }),
+        runTaskCommand: async () => { executed = true; calls.push("exec"); return { exitCode:0, durationMs:1, deduped:false, tail:"ok", truncated:false }; },
+        killFencedProcesses: async () => { calls.push("kill"); return 1; },
+        denyHost: async () => {}, allowHost: async () => {}, setOutboundByHost: async () => {},
+        removeAllowedHost: async (host: string) => {
+          calls.push(`unallow:${host}`);
+          if (executed && host === "github.com") throw Object.assign(new TypeError("Bearer fixture-secret https://private.invalid?token=fixture-secret"), { status:503 });
+        },
+        removeOutboundByHost: async (host: string) => { calls.push(`unmap:${host}`); },
+      });
+    });
+    const outcome = await dispatcher().execUnderGrant(key, { recipe:RECIPE, command:"true", idempotencyKey:"diagnostic-step", logPath:"command.log" });
+    expect(outcome).toMatchObject({ ok:false, refusal:{ kind:"sandbox-unavailable",
+      revokeFailures:[{ operation:"remove-admission", errorClass:"TypeError", status:503 }] } });
+    expect(JSON.stringify(outcome)).not.toMatch(/fixture-secret|private\.invalid|Bearer|github\.com/);
+    expect(structuredClone(outcome)).toEqual(outcome);
+    const afterExec = calls.slice(calls.indexOf("exec") + 1);
+    expect(afterExec[0]).toBe("kill");
+    expect(afterExec).toContain("unallow:codeload.github.com");
+    expect(afterExec).toContain("unmap:github.com");
+    expect(afterExec).toContain("unmap:codeload.github.com");
+  });
+});
+
 describe("poolStatus - the partition a consumer can see", () => {
   it("reports every pool with the deployed caps", async () => {
     const status = await dispatcher().poolStatus();

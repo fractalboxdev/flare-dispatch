@@ -972,12 +972,49 @@ reason: string;
 
 ***
 
+### RevokeFailure
+
+```ts
+type RevokeFailure = {
+  operation: "remove-admission" | "remove-handler" | "deny-catch-all";
+  errorClass: "Error" | "TypeError" | "RangeError" | "DOMException" | "unknown";
+  status?: number;
+};
+```
+
+Sanitized evidence identifies the failed cleanup operation without provider text.
+
+#### Properties
+
+##### operation
+
+```ts
+operation: "remove-admission" | "remove-handler" | "deny-catch-all";
+```
+
+##### errorClass
+
+```ts
+errorClass: "Error" | "TypeError" | "RangeError" | "DOMException" | "unknown";
+```
+
+##### status?
+
+```ts
+optional status?: number;
+```
+
+Validated HTTP status only; provider text and host identity stay internal.
+
+***
+
 ### SandboxUnavailable
 
 ```ts
 type SandboxUnavailable = {
   kind: "sandbox-unavailable";
   reason: string;
+  revokeFailures?: readonly RevokeFailure[];
 };
 ```
 
@@ -995,6 +1032,12 @@ kind: "sandbox-unavailable";
 
 ```ts
 reason: string;
+```
+
+##### revokeFailures?
+
+```ts
+optional revokeFailures?: readonly RevokeFailure[];
 ```
 
 ***
