@@ -1003,7 +1003,12 @@ describe("contextful-gate", () => {
         childRuns: { pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "success" })) },
       });
       return Effect.gen(function* () {
-        expect(yield* contextfulGate.run(input)).toEqual({ stages: 3, failed: [], notAffected: [] });
+        expect(yield* contextfulGate.run(input)).toEqual({
+          stages: 3,
+          failed: [],
+          notAffected: [],
+          deferred: ["workspace.compile"],
+        });
         expect(spawnedLabels(handles)).toEqual(["pins", "formal"]);
         expect(handles.checks.creates).toEqual([]);
       }).pipe(Effect.provide(layer));
@@ -1016,7 +1021,12 @@ describe("contextful-gate", () => {
         childRuns: { pollFn: (ids) => ids.map((executionId) => ({ executionId, status: "success" })) },
       });
       return Effect.gen(function* () {
-        expect(yield* contextfulGate.run(heavyInput)).toEqual({ stages: 3, failed: [], notAffected: [] });
+        expect(yield* contextfulGate.run(heavyInput)).toEqual({
+          stages: 3,
+          failed: [],
+          notAffected: [],
+          deferred: ["pins"],
+        });
         expect(spawnedLabels(handles)).toEqual(["workspace.compile", "formal"]);
         expect(handles.github.commitPullRequestsCalls).toHaveLength(0);
         expect(handles.github.pullRequestCalls).toHaveLength(0);

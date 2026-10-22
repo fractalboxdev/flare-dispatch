@@ -225,6 +225,12 @@ const Output = Schema.Struct({
   stages: Schema.Number,
   failed: Schema.Array(Schema.String),
   notAffected: Schema.Array(Schema.String),
+  /**
+   * The affected parts this tier left to the other one (two-tier gate only):
+   * the heavy parts on a pull request, the light parts on a default-branch
+   * push. Absent when the split is off.
+   */
+  deferred: Schema.optional(Schema.Array(Schema.String)),
 });
 
 /** A malformed or empty discovery cannot quietly remove required checks. */
@@ -714,6 +720,12 @@ export const contextfulGate = defineRun({
           }),
         );
       }
-      return { stages: plan.required.length, failed: failedInOrder, notAffected: plan.notAffected };
+      const deferred = plan.dispatch.filter((stage) => !dispatch.includes(stage));
+      return {
+        stages: plan.required.length,
+        failed: failedInOrder,
+        notAffected: plan.notAffected,
+        ...(lightLabels === null ? {} : { deferred }),
+      };
     }),
 });
