@@ -42,7 +42,7 @@ export const MICRO_USD_PER_USD = 1_000_000;
 // Provisioned vCPU, memory and disk per Cloudflare Containers instance type
 // (specs/05-byoc.md § Wrangler config, "Instance types (2026-05)"). A run's
 // instance type is fixed by the container class its `sandboxImage` selects in
-// wrangler.jsonc — the one table is `SANDBOX_INSTANCE` in runtime-cf
+// wrangler.jsonc — the one table is `SANDBOX_CONTAINER` in runtime-cf
 // execution-cost.ts, checked against that file by its test.
 
 export type InstanceType =
