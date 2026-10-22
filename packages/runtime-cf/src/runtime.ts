@@ -183,6 +183,13 @@ export type CFRuntimeLiveOptions<T extends Sandbox = Sandbox> = {
    */
   readonly sandboxTransport?: "http" | "websocket" | "rpc";
   /**
+   * The Worker-wide `SANDBOX_TRANSPORT` the SDK applies to a container
+   * `sandboxTransport` does not pin. Never pinned onto a container; read only
+   * by the `cache` Layer, which streams an archive in only on `rpc`.
+   * `undefined` is the SDK's own default, `http`.
+   */
+  readonly sandboxTransportDefault?: "http" | "websocket" | "rpc";
+  /**
    * The dispatcher's own public origin (e.g.
    * `https://<worker>.<account>.workers.dev`) — prefixed onto the
    * `/v1/artifacts/...` URLs the `artifact` capability returns so the links
@@ -341,7 +348,12 @@ export const makeCFRuntimeLive = <T extends Sandbox>(
   const cache =
     opts.substrate !== undefined
       ? CacheOnFacade
-      : makeCacheR2Live(opts.bucket, opts.sandboxNs!, opts.execution.repo);
+      : makeCacheR2Live(
+          opts.bucket,
+          opts.sandboxNs!,
+          opts.execution.repo,
+          opts.sandboxTransport ?? opts.sandboxTransportDefault ?? "http",
+        );
   // `Config` is live when the `CONFIG_KV` binding is present; absent, the
   // dying stub keeps a config-reading run from silently mis-behaving.
   const config =

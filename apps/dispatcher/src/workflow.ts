@@ -695,6 +695,13 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       sandboxTransport === "http"
         ? { sandboxTransport }
         : {}),
+      // What the SDK applies to a container nothing pins — the cache needs it
+      // to know whether an archive can stream in (cache-r2.ts § Transport).
+      ...(this.env.SANDBOX_TRANSPORT === "rpc" ||
+      this.env.SANDBOX_TRANSPORT === "websocket" ||
+      this.env.SANDBOX_TRANSPORT === "http"
+        ? { sandboxTransportDefault: this.env.SANDBOX_TRANSPORT }
+        : {}),
       ...(publicOrigin !== undefined ? { publicOrigin } : {}),
       ...(logsBaseUrl !== undefined ? { logsViewerBase: logsBaseUrl } : {}),
       // When the engine created this instance, and which Worker version runs

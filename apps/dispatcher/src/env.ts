@@ -309,6 +309,14 @@ export interface Env {
   readonly SANDBOX_PREVIEW_HOSTNAME?: string;
 
   /**
+   * The Worker-wide sandbox transport the SDK applies to a container no
+   * `sandbox.transport:<repo>` key pins (`http` when unset). Read by the SDK
+   * itself; the dispatcher reads it only to tell the R2 cache whether an
+   * archive can stream into the container. A var, not a secret.
+   */
+  readonly SANDBOX_TRANSPORT?: string;
+
+  /**
    * The dispatcher's own public origin (e.g.
    * `https://flare-dispatch.<account>.workers.dev`, or a custom domain) —
    * prefixed onto the `/v1/artifacts/...` URLs runs upload so the links a
