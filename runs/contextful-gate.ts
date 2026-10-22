@@ -137,8 +137,16 @@ export const tierParts = (
   return dispatch.filter((stage) => light.has(stage) === (tier === "pull-request"));
 };
 
-/** Why a gate stops spawning before every part has run. */
-export type StopReason = "head superseded" | "pull request closed" | "admission backlog";
+/**
+ * Why a gate stops spawning before every part has run. A `spend budget
+ * reached: …` reason is the deploy's monthly budget closing before a window
+ * spawns (specs/adr/0006-spend-guard.md).
+ */
+export type StopReason =
+  | "head superseded"
+  | "pull request closed"
+  | "admission backlog"
+  | `spend budget reached: ${string}`;
 
 /** Whether the gated pull request is still open at the gated commit. */
 export type Liveness = { readonly live: true } | { readonly live: false; readonly reason: StopReason };
@@ -608,7 +616,7 @@ export const contextfulGate = defineRun({
               // A default-branch head has no open pull request to outlive.
               const liveness = tier === "heavy" ? LIVE : yield* readLiveness(input);
               if (!liveness.live) return { stopped: liveness.reason };
-              const handles = yield* fanOut({
+              const fanned = yield* fanOut({
                 run: "check",
                 items: batch,
                 concurrency: batch.length,
@@ -626,8 +634,15 @@ export const contextfulGate = defineRun({
                     : { restore: [{ key: prebuilt.key, base: prebuilt.base, paths: prebuilt.paths }] }),
                   secrets: [],
                 }),
-              });
-              return { handles, spawnedAt: yield* io.now };
+              }).pipe(
+                // The monthly budget closed: spawn nothing more, post the
+                // unrun parts, and end the gate skipped with that reason.
+                Effect.catchTag("RunSkipped", (skip) =>
+                  Effect.succeed({ stopped: skip.reason as StopReason }),
+                ),
+              );
+              if ("stopped" in fanned) return fanned;
+              return { handles: fanned, spawnedAt: yield* io.now };
             }),
           );
           if ("stopped" in spawn) {
