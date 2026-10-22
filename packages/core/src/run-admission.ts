@@ -44,6 +44,12 @@ export type AdmissionObservation = {
   readonly position: number;
   /** Live admitted rows in our pool (slots currently in use). */
   readonly poolBusy: number;
+  /**
+   * The burn ceiling, not the pool cap, held the claim back: our pool had a
+   * free slot, but the admitted hourly rates plus ours exceed the ceiling
+   * (ADR-0006 § Burn ceiling). Absent = false.
+   */
+  readonly ceilingHeld?: boolean;
 };
 
 /**
@@ -69,6 +75,8 @@ export type AdmissionDecision =
       readonly queuedForMs: number;
       readonly position: number;
       readonly poolBusy: number;
+      /** The final attempt saw the burn ceiling, not the pool cap, holding it. */
+      readonly ceilingHeld: boolean;
     };
 
 /**
@@ -96,6 +104,7 @@ export const decideAdmission = (
       queuedForMs,
       position: observed.position,
       poolBusy: observed.poolBusy,
+      ceilingHeld: observed.ceilingHeld === true,
     };
   }
   return {

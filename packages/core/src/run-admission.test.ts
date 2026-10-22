@@ -69,7 +69,18 @@ describe("decideAdmission", () => {
       queuedForMs: MAX_QUEUE_AGE,
       position: 2,
       poolBusy: 16,
+      ceilingHeld: false,
     });
+  });
+
+  it("carries the burn ceiling hold into the timeout", () => {
+    const decision = decideAdmission(
+      { admitted: false, position: 0, poolBusy: 3, ceilingHeld: true },
+      ENQUEUED_AT,
+      ENQUEUED_AT + MAX_QUEUE_AGE,
+      MAX_QUEUE_AGE,
+    );
+    expect(decision).toMatchObject({ _kind: "timeout", ceilingHeld: true });
   });
 
   it("still waits one tick before the ceiling", () => {

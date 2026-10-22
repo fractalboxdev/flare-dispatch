@@ -26,8 +26,25 @@
 // Spec: ADR #109 (global D1-backed run admission semaphore).
 
 import { Effect, Schedule } from "effect";
-import type { AdmissionObservation, AdmissionPool } from "@fractalboxdev/flare-dispatch-core";
+import {
+  type AdmissionObservation,
+  type AdmissionPool,
+  fitsBurnCeiling,
+} from "@fractalboxdev/flare-dispatch-core";
 import { LEASE_TTL_MS } from "./container-lease-d1";
+
+/**
+ * The spend-guard burn ceiling one claimant admits under (ADR-0006 § Burn
+ * ceiling): its own container class's list rate per hour, and the ceiling on
+ * the summed rate of every admitted row across all pools (`null` = unlimited).
+ */
+export type BurnCeiling = {
+  readonly hourlyRateMicroUsd: number;
+  readonly burnMaxMicroUsdPerHour: number | null;
+};
+
+/** No ceiling, no rate — the store as it behaves without a spend guard. */
+export const BURN_UNLIMITED: BurnCeiling = { hourlyRateMicroUsd: 0, burnMaxMicroUsdPerHour: null };
 
 /**
  * Default admission slots per pool — matches each container class's
@@ -158,8 +175,10 @@ export interface RunAdmissionStore {
 
   /**
    * One claim attempt: try the atomic FIFO claim; when it does not land,
-   * refresh our waiter heartbeat and read our queue position + the pool's
-   * busy count. Returns the observation (+ the clock it was taken at) for
+   * refresh our waiter heartbeat and read our queue position, the pool's
+   * busy count, and whether the burn ceiling (not the cap) held us back. A
+   * landed claim also stamps `executions.admitted_at` — the start of the
+   * container-active window the meter prices. Returns the observation (+ the clock it was taken at) for
    * the pure `decideAdmission` — the caller runs the whole attempt inside
    * one durable `step.do`, so everything here is checkpointed together.
    */
@@ -185,12 +204,15 @@ export interface RunAdmissionStore {
  * drive the clock; production passes `Date.now` (always read inside the
  * caller's `step.do`, so replays see the checkpointed value). `cap` is the
  * per-pool slot ceiling — the dispatcher resolves it from the
- * `ADMISSION_CAP` wrangler var via {@link resolveAdmissionCap}.
+ * `ADMISSION_CAP` wrangler var via {@link resolveAdmissionCap}. `burn` is
+ * this claimant's hourly rate and the deploy's burn ceiling; the default
+ * {@link BURN_UNLIMITED} admits on the cap alone.
  */
 export const makeRunAdmissionD1 = (
   db: D1Database,
   now: () => number = Date.now,
   cap: number = ADMISSION_CAP_DEFAULT,
+  burn: BurnCeiling = BURN_UNLIMITED,
 ): RunAdmissionStore => {
   const insertQueued = (
     executionId: string,
@@ -206,15 +228,22 @@ export const makeRunAdmissionD1 = (
           // GC'd waiter row restored mid-loop keeps its original FIFO key) →
           // the parent's row (matrix-children priority inheritance) → now.
           `INSERT OR IGNORE INTO run_admissions
-             (execution_id, pool, state, enqueued_at, heartbeat_at)
+             (execution_id, pool, state, enqueued_at, heartbeat_at, hourly_rate_micro_usd)
            VALUES (?1, ?2, 'queued',
                    COALESCE(?3,
                             (SELECT enqueued_at FROM run_admissions
                               WHERE execution_id = ?4),
                             ?5),
-                   ?5)`,
+                   ?5, ?6)`,
         )
-        .bind(executionId, pool, enqueuedAt ?? null, parentExecutionId ?? null, ts)
+        .bind(
+          executionId,
+          pool,
+          enqueuedAt ?? null,
+          parentExecutionId ?? null,
+          ts,
+          burn.hourlyRateMicroUsd,
+        )
         .run(),
     ).pipe(Effect.asVoid);
 
@@ -247,7 +276,13 @@ export const makeRunAdmissionD1 = (
    *   - the NOT EXISTS is the no-barge FIFO check among LIVE waiters: nobody
    *     with an earlier `enqueued_at` (execution-id ULID as the tiebreak) may
    *     be skipped, but a waiter silent past `ADMISSION_WAITER_TTL_MS` no
-   *     longer blocks the line.
+   *     longer blocks the line;
+   *   - the burn-ceiling clause admits only while the hourly rates of LIVE
+   *     admitted rows in EVERY pool, plus ours, fit under the ceiling. An
+   *     empty admitted set admits anyone, so a claimant whose own rate
+   *     exceeds the ceiling runs alone rather than waiting forever; a NULL
+   *     ceiling disables the clause. `fitsBurnCeiling` (core spend.ts) is its
+   *     pure mirror.
    *
    * `meta.changes === 1` ⇒ our row flipped to 'admitted' — we hold a slot.
    */
@@ -268,7 +303,12 @@ export const makeRunAdmissionD1 = (
                    WHERE o.pool = ?3 AND o.state = 'queued'
                      AND o.heartbeat_at > ?6
                      AND (o.enqueued_at < ?7
-                          OR (o.enqueued_at = ?7 AND o.execution_id < ?1)))`,
+                          OR (o.enqueued_at = ?7 AND o.execution_id < ?1)))
+             AND (?8 IS NULL
+                  OR NOT EXISTS (SELECT 1 FROM run_admissions
+                        WHERE state = 'admitted' AND heartbeat_at > ?4)
+                  OR (SELECT COALESCE(SUM(hourly_rate_micro_usd), 0) FROM run_admissions
+                        WHERE state = 'admitted' AND heartbeat_at > ?4) + ?9 <= ?8)`,
         )
         .bind(
           executionId,
@@ -278,9 +318,26 @@ export const makeRunAdmissionD1 = (
           cap,
           ts - ADMISSION_WAITER_TTL_MS,
           enqueuedAt,
+          burn.burnMaxMicroUsdPerHour,
+          burn.hourlyRateMicroUsd,
         )
         .run(),
     ).pipe(Effect.map((result) => result.meta.changes === 1));
+
+  // Stamp the start of the container-active window on the execution row from
+  // our admitted row. COALESCE keeps the first stamp across a replay.
+  const markAdmitted = (executionId: string): Effect.Effect<void, Error> =>
+    d1(() =>
+      db
+        .prepare(
+          `UPDATE executions
+              SET admitted_at = COALESCE(admitted_at,
+                    (SELECT admitted_at FROM run_admissions WHERE execution_id = ?1))
+            WHERE id = ?1`,
+        )
+        .bind(executionId)
+        .run(),
+    ).pipe(Effect.asVoid);
 
   const attempt = (
     executionId: string,
@@ -302,6 +359,7 @@ export const makeRunAdmissionD1 = (
       );
       if (own?.state === "admitted") {
         yield* heartbeat(executionId);
+        yield* markAdmitted(executionId);
         return { admitted: true, position: 0, poolBusy: 0, now: ts };
       }
       // Self-heal: a waiter paused past the admitted TTL has had its row
@@ -311,11 +369,15 @@ export const makeRunAdmissionD1 = (
         yield* insertQueued(executionId, pool, enqueuedAt, undefined, ts);
       }
       const claimed = yield* tryClaim(executionId, pool, enqueuedAt, ts);
-      if (claimed) return { admitted: true, position: 0, poolBusy: 0, now: ts };
+      if (claimed) {
+        yield* markAdmitted(executionId);
+        return { admitted: true, position: 0, poolBusy: 0, now: ts };
+      }
 
       // Not admitted: refresh our waiter heartbeat (so we keep blocking
       // bargers and counting in peers' position reads), then observe where
-      // we stand — live queued rows ahead of us + live admitted rows.
+      // we stand — live queued rows ahead of us, live admitted rows in our
+      // pool, and the live admitted burn across every pool.
       yield* heartbeat(executionId);
       const counts = yield* d1(() =>
         db
@@ -328,15 +390,31 @@ export const makeRunAdmissionD1 = (
                         OR (enqueued_at = ?3 AND execution_id < ?4))) AS position,
                (SELECT COUNT(*) FROM run_admissions
                  WHERE pool = ?1 AND state = 'admitted'
-                   AND heartbeat_at > ?5) AS busy`,
+                   AND heartbeat_at > ?5) AS busy,
+               (SELECT COUNT(*) FROM run_admissions
+                 WHERE state = 'admitted' AND heartbeat_at > ?5) AS admitted_count,
+               (SELECT COALESCE(SUM(hourly_rate_micro_usd), 0) FROM run_admissions
+                 WHERE state = 'admitted' AND heartbeat_at > ?5) AS admitted_rate`,
           )
           .bind(pool, ts - ADMISSION_WAITER_TTL_MS, enqueuedAt, executionId, ts - ADMISSION_TTL_MS)
-          .first<{ position: number; busy: number }>(),
+          .first<{ position: number; busy: number; admitted_count: number; admitted_rate: number }>(),
       );
+      const poolBusy = counts?.busy ?? 0;
+      // The ceiling held us when our pool had a free slot but the burn did not
+      // fit. A full pool is the cap's hold, whatever the burn.
+      const ceilingHeld =
+        poolBusy < cap &&
+        !fitsBurnCeiling({
+          admittedMicroUsdPerHour: counts?.admitted_rate ?? 0,
+          admittedCount: counts?.admitted_count ?? 0,
+          ownMicroUsdPerHour: burn.hourlyRateMicroUsd,
+          burnMaxMicroUsdPerHour: burn.burnMaxMicroUsdPerHour,
+        });
       return {
         admitted: false,
         position: counts?.position ?? 0,
-        poolBusy: counts?.busy ?? 0,
+        poolBusy,
+        ...(ceilingHeld ? { ceilingHeld } : {}),
         now: ts,
       };
     });

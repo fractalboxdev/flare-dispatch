@@ -72,7 +72,10 @@ import {
   isEngineInterruptedCause,
   isEngineInterruption,
   withRunCeiling,
-  type RunSkipped,
+  RunSkipped,
+  spendCeilingReason,
+  type AdmissionObservation,
+  type SpendLimits,
   type RunContext,
   type RunError,
 } from "@fractalboxdev/flare-dispatch-core";
@@ -84,6 +87,7 @@ import {
   type ChecksGithubConfig,
   describeOutcome,
   type EmailCloudflareConfig,
+  hourlyRateForSandboxImage,
   instanceForSandboxImage,
   LEASE_HEARTBEAT_EVERY_MS,
   makeCFRuntimeLive,
@@ -94,9 +98,13 @@ import {
   makeSerialQueueD1,
   makeWritebackTokenMinter,
   previewSafeSandboxId,
+  readSpendLimits,
+  readSpendStatus,
   recordExecutionCost,
   runSerialGate,
   runWriteback,
+  type SpendStatus,
+  warnSpendOnce,
   type WritebackOutcome,
 } from "@fractalboxdev/flare-dispatch-runtime-cf";
 import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
@@ -614,6 +622,17 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // The `Workflow` binding backs the `childRuns` capability — a run can
       // `spawnChildRun` / `fanOut` to independent child `RunWorkflow` instances.
       runsWorkflow: this.env.RUNS_WORKFLOW,
+      // A fan-out parent reads spend before it spawns children: over the
+      // monthly budget it skips and spawns none (ADR-0006). `fanOut` calls
+      // this inside its spawn step, so a replay reads the checkpoint.
+      spendGate: async () => {
+        const status = await Effect.runPromise(
+          readSpendLimits(this.env.CONFIG_KV, this.env).pipe(
+            Effect.flatMap((limits) => readSpendStatus(this.env.RUNS_METADATA, limits, Date.now())),
+          ),
+        );
+        return status.decision._kind === "closed" ? status.decision.reason : undefined;
+      },
       executionId: payload.executionId,
       execution: {
         repo: payload.github.repo,
@@ -878,12 +897,59 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           });
           return yield* Effect.fail(error);
         });
+      // --- Spend guard (specs/adr/0006-spend-guard.md) -----------------------
+      //
+      // Admission reads month-to-date spend before it enqueues and again
+      // before each claim; at or over the monthly budget the run ends
+      // `RunSkipped` — a neutral check, a `skipped` row. The claim itself
+      // enforces the burn ceiling across every pool, at this run's container
+      // class rate. Every read sits in a `step.do`, so a replay reads the
+      // checkpointed answer.
+      const hourlyRateMicroUsd = hourlyRateForSandboxImage(admissionPool);
+      const spendCheck = (name: string, limits: SpendLimits) =>
+        Effect.gen(function* () {
+          const status: SpendStatus = yield* stepDo(name, () =>
+            Effect.runPromise(readSpendStatus(db, limits, Date.now())),
+          );
+          if (status.decision._kind === "closed") {
+            yield* Effect.logWarning(`spend.closed ${payload.executionId} — ${status.decision.reason}`);
+            return yield* Effect.fail(new RunSkipped({ reason: status.decision.reason }));
+          }
+          return status;
+        });
       const admissionGate: Effect.Effect<void, AdmissionTimedOut | RunSkipped> = Effect.gen(function* () {
+        const limits = yield* stepDo("spend-limits", () =>
+          Effect.runPromise(readSpendLimits(env.CONFIG_KV, env)),
+        );
+        let spend = yield* spendCheck("spend-check-enqueue", limits);
+        const burnMaxMicroUsdPerHour = limits.burnMaxMicroUsdPerHour;
+        const claimer = makeRunAdmissionD1(db, Date.now, admissionCap, {
+          hourlyRateMicroUsd,
+          burnMaxMicroUsdPerHour,
+        });
+        // A queue timeout while the burn ceiling, not the pool cap, held the
+        // run back is a spend skip; under the cap alone it stays a failure.
+        const queueTimeout = (
+          observed: AdmissionObservation & { readonly now: number },
+          timedOut: AdmissionTimedOut,
+        ): Effect.Effect<never, AdmissionTimedOut | RunSkipped> =>
+          observed.ceilingHeld === true && burnMaxMicroUsdPerHour !== null
+            ? Effect.fail(
+                new RunSkipped({
+                  reason: spendCeilingReason({
+                    admittedMicroUsdPerHour: spend.reading.admittedMicroUsdPerHour,
+                    ownMicroUsdPerHour: hourlyRateMicroUsd,
+                    burnMaxMicroUsdPerHour,
+                  }),
+                }),
+              )
+            : admissionTimedOut(timedOut, enqueuedAt, observed.now);
+
         // Enqueue — the row's `enqueued_at` (FIFO key + dispatch-age basis)
         // is read inside the step, so a replay sees the SAME timestamp.
         const { enqueuedAt } = yield* stepDo("admission-enqueue", () =>
           Effect.runPromise(
-            admissions.enqueue(payload.executionId, admissionPool, payload.parentExecutionId),
+            claimer.enqueue(payload.executionId, admissionPool, payload.parentExecutionId),
           ),
         );
 
@@ -899,12 +965,13 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           // A child reads its parent's row before each claim: once a parent
           // that joins its children has ended, the child leaves the queue
           // instead (admission-parent.ts).
+          spend = yield* spendCheck(`spend-check-${i}`, limits);
           const observed = yield* stepDo(`admission-claim-${i}`, () =>
             claimUnlessParentEnded({
               parentExecutionId: payload.parentExecutionId,
               parentRow: (id) => Effect.runPromise(supersessions.row(id)),
               joinsChildren: (name) => lookupRun(name)?.joinsChildren === true,
-              claim: () => Effect.runPromise(admissions.attempt(payload.executionId, admissionPool, enqueuedAt)),
+              claim: () => Effect.runPromise(claimer.attempt(payload.executionId, admissionPool, enqueuedAt)),
             }),
           );
           if (isParentEnded(observed)) {
@@ -941,16 +1008,37 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             admissionMaxQueueAgeMs,
           );
 
-          if (decision._kind === "admit") return;
+          if (decision._kind === "admit") {
+            // The month's one warning, past `SPEND_WARN_RATIO` of the budget.
+            const status = spend;
+            yield* stepDo("spend-warn", () =>
+              Effect.runPromise(
+                warnSpendOnce({
+                  kv: env.CONFIG_KV,
+                  status,
+                  notify: async (text, monthKey) => {
+                    const sent = await emitSlackNotice(env, {
+                      useCase: "spend-warn",
+                      deliveryId: `spend-warn-${monthKey}`,
+                      text,
+                      run: payload.run,
+                      executionId: payload.executionId,
+                    });
+                    if (sent.outcome === "failed") throw new Error(sent.reason);
+                  },
+                }),
+              ),
+            );
+            return;
+          }
           if (decision._kind === "timeout") {
-            return yield* admissionTimedOut(
+            return yield* queueTimeout(
+              observed,
               new AdmissionTimedOut({
                 queuedForMs: decision.queuedForMs,
                 position: decision.position,
                 poolBusy: decision.poolBusy,
               }),
-              enqueuedAt,
-              observed.now,
             );
           }
 
@@ -987,14 +1075,13 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           if (i < maxAttempts - 1) {
             yield* stepSleep(`admission-wait-${i}`, ADMISSION_POLL_EVERY_MS);
           } else {
-            return yield* admissionTimedOut(
+            return yield* queueTimeout(
+              observed,
               new AdmissionTimedOut({
                 queuedForMs: Math.max(0, observed.now - enqueuedAt),
                 position: decision.position,
                 poolBusy: decision.poolBusy,
               }),
-              enqueuedAt,
-              observed.now,
             );
           }
         }
@@ -1343,13 +1430,14 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
 
       // Per-execution cost rollup — METERED model tokens (summed from
       // `execution_model_usage`, written by the modelGateway wrapper) + MODELED
-      // container compute (instance × wall-time). Runs AFTER finishExecution so
-      // the wall-time it reads is complete. Best-effort: a cost failure logs and
-      // never flips the verdict (recordExecutionCost absorbs its own errors).
+      // container compute (the admission pool's instance list rate × admitted
+      // seconds, ADR-0006 § Meter). Runs AFTER finishExecution so the window
+      // it reads is closed. Best-effort: a cost failure logs and never flips
+      // the verdict (recordExecutionCost absorbs its own errors).
       yield* recordExecutionCost({
         db,
         executionId: payload.executionId,
-        instance: instanceForSandboxImage(run.sandboxImage),
+        instance: instanceForSandboxImage(admissionPool),
       });
 
       // --- Post-run writeback (the Worker proposes the diff as a PR) --------

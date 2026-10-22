@@ -16,7 +16,7 @@
 
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { decideAdmission, type AdmissionPool } from "@fractalboxdev/flare-dispatch-core";
+import { containerMicroUsdPerHour, decideAdmission, type AdmissionPool } from "@fractalboxdev/flare-dispatch-core";
 import {
   ADMISSION_CAP_DEFAULT,
   ADMISSION_MAX_QUEUE_AGE_MS,
@@ -351,5 +351,122 @@ describe("resolvePoolAdmissionCap — one cap per pool", () => {
       expect(resolvePoolAdmissionCap(pool, { ADMISSION_CAP: "16", ADMISSION_CAP_AGENT: "8", ADMISSION_CAP_RELEASE: "8" })).toBe(16);
       expect(resolvePoolAdmissionCap(pool, {})).toBe(ADMISSION_CAP_DEFAULT);
     }
+  });
+});
+
+// The burn ceiling inside the claim (specs/adr/0006-spend-guard.md § Burn
+// ceiling): admitted hourly rates across EVERY pool plus the claimant's own
+// must fit, an oversized claimant admits only into an empty set, and a
+// non-landing claim reports whether the ceiling or the cap held it.
+describe("makeRunAdmissionD1 — the burn ceiling", () => {
+  let bindings: TestBindings;
+  beforeEach(async () => {
+    bindings = await makeTestBindings();
+  });
+  afterEach(async () => {
+    await bindings.dispose();
+  });
+
+  const S4 = containerMicroUsdPerHour("standard-4"); // 401_040 µ$/h
+  const S2 = containerMicroUsdPerHour("standard-2"); // 129_024 µ$/h
+  const CEILING = 1_500_000;
+
+  const seedAdmitted = (executionId: string, pool: AdmissionPool, rate: number) =>
+    bindings.db
+      .prepare(
+        `INSERT INTO run_admissions
+           (execution_id, pool, state, enqueued_at, admitted_at, heartbeat_at, hourly_rate_micro_usd)
+         VALUES (?, ?, 'admitted', ?, ?, ?, ?)`,
+      )
+      .bind(executionId, pool, T0 - 1_000, T0 - 1_000, T0, rate)
+      .run();
+
+  const claim = async (executionId: string, pool: AdmissionPool, rate: number, ceiling: number | null = CEILING) => {
+    const store = makeRunAdmissionD1(bindings.db, () => T0, ADMISSION_CAP_DEFAULT, {
+      hourlyRateMicroUsd: rate,
+      burnMaxMicroUsdPerHour: ceiling,
+    });
+    const { enqueuedAt } = await Effect.runPromise(store.enqueue(executionId, pool));
+    return Effect.runPromise(store.attempt(executionId, pool, enqueuedAt));
+  };
+
+  it("records the claimant's hourly rate on its row", async () => {
+    await claim(A, "lean", S4);
+    const row = await bindings.db
+      .prepare(`SELECT hourly_rate_micro_usd FROM run_admissions WHERE execution_id = ?`)
+      .bind(A)
+      .first<{ hourly_rate_micro_usd: number }>();
+    expect(row?.hourly_rate_micro_usd).toBe(S4);
+  });
+
+  it("admits while the admitted burn plus its own fits, across pools", async () => {
+    await seedAdmitted("peer-lean", "lean", S4);
+    await seedAdmitted("peer-release", "release", S4);
+    expect((await claim(A, "browser", S4)).admitted).toBe(true);
+  });
+
+  it("holds a claimant the ceiling cannot fit, with a free slot in its pool", async () => {
+    // Three standard-4 rows admitted in other pools: 1.203 $/h + 0.401 > 1.50.
+    await seedAdmitted("peer-1", "release", S4);
+    await seedAdmitted("peer-2", "release", S4);
+    await seedAdmitted("peer-3", "browser", S4);
+    const observed = await claim(A, "lean", S4);
+    expect(observed).toMatchObject({ admitted: false, poolBusy: 0, ceilingHeld: true });
+    // A cheaper claimant still fits the headroom.
+    expect((await claim(B, "browser", S2)).admitted).toBe(true);
+  });
+
+  it("admits a claimant whose own rate exceeds the ceiling only into an empty admitted set", async () => {
+    expect((await claim(A, "lean", 2_000_000)).admitted).toBe(true);
+    const observed = await claim(B, "lean", 2_000_000);
+    expect(observed).toMatchObject({ admitted: false, ceilingHeld: true });
+  });
+
+  it("stops counting a stale admitted row's burn", async () => {
+    await bindings.db
+      .prepare(
+        `INSERT INTO run_admissions
+           (execution_id, pool, state, enqueued_at, admitted_at, heartbeat_at, hourly_rate_micro_usd)
+         VALUES ('corpse', 'lean', 'admitted', ?, ?, ?, ?)`,
+      )
+      .bind(T0 - 1_000, T0 - 1_000, T0 - ADMISSION_TTL_MS - 1, CEILING)
+      .run();
+    expect((await claim(A, "lean", S4)).admitted).toBe(true);
+  });
+
+  it("admits on the cap alone with no ceiling", async () => {
+    await seedAdmitted("peer-1", "release", 10_000_000);
+    expect((await claim(A, "lean", S4, null)).admitted).toBe(true);
+  });
+
+  it("reports the cap, not the ceiling, when the pool is full", async () => {
+    for (let i = 0; i < ADMISSION_CAP_DEFAULT; i++) {
+      await seedAdmitted(`peer-${String(i).padStart(2, "0")}`, "lean", S4);
+    }
+    const observed = await claim(A, "lean", S4);
+    expect(observed.admitted).toBe(false);
+    expect(observed.ceilingHeld).toBeUndefined();
+  });
+
+  it("stamps executions.admitted_at from the claim, once", async () => {
+    await bindings.db
+      .prepare(
+        `INSERT INTO executions (id, run, repo, ref, sha, status, started_at, input_json)
+         VALUES (?, 'check', 'owner/name', 'refs/heads/main', 'abc', 'running', ?, '{}')`,
+      )
+      .bind(A, T0 - 5_000)
+      .run();
+    let clock = T0;
+    const store = makeRunAdmissionD1(bindings.db, () => clock);
+    const { enqueuedAt } = await Effect.runPromise(store.enqueue(A, "lean"));
+    await Effect.runPromise(store.attempt(A, "lean", enqueuedAt));
+    // A replayed attempt later keeps the first stamp.
+    clock = T0 + 60_000;
+    await Effect.runPromise(store.attempt(A, "lean", enqueuedAt));
+    const row = await bindings.db
+      .prepare(`SELECT admitted_at FROM executions WHERE id = ?`)
+      .bind(A)
+      .first<{ admitted_at: number }>();
+    expect(row?.admitted_at).toBe(T0);
   });
 });
