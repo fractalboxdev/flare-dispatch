@@ -557,9 +557,9 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // Per-repo container transport — the canary knob for `rpc`.
     //
     // The SDK's streaming file APIs exist only on its `rpc` client (`http` is
-    // the "route-based compatibility" path), which is why the R2 dependency
-    // cache misses on every run: its restore hands `writeFile` a stream, the SDK
-    // routes any stream to `writeFileStream`, and that raises off `rpc`.
+    // the "route-based compatibility" path): the R2 cache's restore hands
+    // `writeFile` a stream, the SDK routes any stream to `writeFileStream`, and
+    // that raises off `rpc`, so off `rpc` a stored archive reports `unapplied`.
     // `SANDBOX_TRANSPORT=rpc` as a Worker var would fix it for every repo at
     // once; this lets one prove it first.
     //

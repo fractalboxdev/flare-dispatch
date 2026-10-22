@@ -311,10 +311,10 @@ export const makeSandboxCloudflareLive = <T extends Sandbox>(
    * WHY THIS EXISTS, and why it is per-execution. The SDK's streaming file APIs
    * live only on the `rpc` client — its own comment calls `rpc` the "primary
    * container-control client" and `http`/`websocket` the "route-based
-   * compatibility client". `writeFileStream` is a bare `throw` off `rpc`, which
-   * is why the R2 dependency cache has missed on every run since it was added:
-   * the restore hands `writeFile` a `ReadableStream`, the SDK routes any stream
-   * to `writeFileStream`, and it raises.
+   * compatibility client". `writeFileStream` is a bare `throw` off `rpc`, and
+   * the R2 cache's restore hands `writeFile` a `ReadableStream`, which the SDK
+   * routes to `writeFileStream` — so off `rpc` a stored archive cannot be
+   * applied, and the cache reports it `unapplied` (cache-r2.ts § Transport).
    *
    * `SANDBOX_TRANSPORT=rpc` as a Worker var would fix that in one line and
    * change the control path for EVERY repo this dispatcher serves at once.

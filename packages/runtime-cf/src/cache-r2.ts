@@ -17,7 +17,8 @@
 // on the SDK's `rpc` transport; on `http` / `websocket` it throws. A restore on
 // such a transport reads only the archive's `head` and reports `unapplied`, so
 // the run pays for neither the download nor a re-upload of an archive R2
-// already holds. The transport is logged once per execution.
+// already holds. The transport is logged once per Layer instance: once per
+// execution, again after a Workflow replay rebuilds the runtime.
 //
 // --- Cache key isolation (review fix) ---------------------------------------
 //

@@ -27,7 +27,7 @@ vi.mock("@cloudflare/sandbox", () => ({
 
 const { makeCacheR2Live } = await import("./cache-r2");
 
-const makeBox = (writeFile?: () => Promise<void>): FakeBox => {
+const makeBox = (writeFile?: () => Promise<void>, untarExit = 0): FakeBox => {
   const b: FakeBox = {
     execs: [],
     writes: 0,
@@ -37,6 +37,8 @@ const makeBox = (writeFile?: () => Promise<void>): FakeBox => {
     },
     exec: async (command) => {
       b.execs.push(command);
+      if (command.startsWith("tar xzf") && untarExit !== 0)
+        return { exitCode: untarExit, stdout: "", stderr: "gzip: stdin: unexpected end of file" };
       return { exitCode: 0, stdout: command.startsWith("stat") ? "3\n" : "", stderr: "" };
     },
     readFileStream: async () =>
@@ -151,6 +153,34 @@ describe("makeCacheR2Live restore", () => {
     expect(calls).toEqual([`get ${KEY}`]);
     expect(box.writes).toBe(1);
     expect(box.execs.some((c) => c.startsWith("tar xzf"))).toBe(true);
+  });
+
+  it("websocket transport + stored archive — unapplied from the head alone", async () => {
+    const { bucket, calls } = makeBucket([KEY]);
+    const { onMiss, lines } = await run(makeCacheR2Live(bucket, ns, "o/r", "websocket"));
+    expect(onMiss).toBe(1);
+    expect(calls).toEqual([`head ${KEY}`]);
+    expect(box.writes).toBe(0);
+    expect(lines.some((l) => l.includes("websocket sandbox transport"))).toBe(true);
+  });
+
+  it("rpc transport + no archive — miss: onMiss, pack, upload", async () => {
+    const { bucket, calls } = makeBucket([]);
+    const { onMiss } = await run(makeCacheR2Live(bucket, ns, "o/r", "rpc"));
+    expect(onMiss).toBe(1);
+    expect(calls).toEqual([`get ${KEY}`, `head ${KEY}`, `put ${KEY}`]);
+    expect(box.writes).toBe(0);
+    expect(box.execs.some((c) => c.startsWith("tar czf"))).toBe(true);
+  });
+
+  it("rpc transport + a failing tar xzf — unapplied: onMiss runs, no save", async () => {
+    box = makeBox(undefined, 2);
+    const { bucket, calls } = makeBucket([KEY]);
+    const { onMiss, lines } = await run(makeCacheR2Live(bucket, ns, "o/r", "rpc"));
+    expect(onMiss).toBe(1);
+    expect(calls).toEqual([`get ${KEY}`]);
+    expect(box.execs.some((c) => c.startsWith("tar czf"))).toBe(false);
+    expect(lines.join("\n")).toContain("tar xzf exited 2");
   });
 
   it("rpc transport + a failing apply — unapplied: onMiss runs, body cancelled, no save", async () => {

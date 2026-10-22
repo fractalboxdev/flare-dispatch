@@ -516,10 +516,13 @@ key back if a transport change appears to have had no effect.
 **Why it exists.** The SDK's streaming file APIs live only on its `rpc` client —
 its own comment calls `rpc` the "primary container-control client" and
 `http`/`websocket` the "route-based compatibility client", and `writeFileStream`
-is a bare `throw` off `rpc`. That is why the R2 dependency cache misses on every
-run: `installCached`'s restore hands `writeFile` a `ReadableStream`, the SDK
-routes any stream to `writeFileStream`, it raises, and `composeRestoreOr`
-records a miss.
+is a bare `throw` off `rpc`. `installCached`'s restore hands `writeFile` a
+`ReadableStream`, and the SDK routes any stream to `writeFileStream`, so off
+`rpc` a stored archive cannot be applied. The R2 cache knows the effective
+transport (this pin, else the Worker-wide `SANDBOX_TRANSPORT`, else `http`):
+off `rpc` it reads only the archive's head, reports `unapplied`, runs the
+install and skips the save, so the run pays for neither the download nor a
+second upload.
 
 `SANDBOX_TRANSPORT=rpc` as a Worker var fixes that in one line — and changes the
 control path for every repo this dispatcher serves, at once. This key is the
