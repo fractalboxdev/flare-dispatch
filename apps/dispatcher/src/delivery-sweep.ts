@@ -9,12 +9,17 @@
 //   * only rows that finished at least `DELIVERY_GRACE_MS` ago, so a workflow
 //     still between its terminal row write and its check-run write is not
 //     raced;
-//   * only rows younger than `DELIVERY_MAX_AGE_MS`, so a check-run GitHub
-//     refuses for good (repository gone, App uninstalled) stops being retried;
+//   * only rows younger than `DELIVERY_MAX_AGE_MS`, so a verdict an outage
+//     kept from GitHub for a week stops being retried;
+//   * only rows not yet refused: a write GitHub rejects for the check-run
+//     itself (404 or 422 — repository, installation or commit gone) stamps
+//     `delivery_refused_at` and leaves the queue, so it never holds up the
+//     newer rows behind it;
 //   * at most `DELIVERY_SWEEP_LIMIT` rows a tick;
 //   * inside the verdict reserve: `conclude` spends the reserve and refuses
-//     only an exhausted installation, and the first undelivered row of an
-//     installation stops the sweep for that installation until the next tick.
+//     only an exhausted installation, and the first undelivered (not refused)
+//     row of an installation stops the sweep for that installation until the
+//     next tick.
 //
 // A row whose opener degraded holds the sentinel check-run id; `conclude`
 // creates the check-run with the verdict and the sweep records the new id.
@@ -54,7 +59,10 @@ export type UndeliveredRow = {
 
 /** The I/O the sweep runs against. */
 export type DeliverySweepPorts = {
-  /** Finished rows without `delivered_at`, completed in `[after, before)`, oldest first. */
+  /**
+   * Finished rows with neither `delivered_at` nor `delivery_refused_at`,
+   * completed in `[after, before)`, oldest first.
+   */
   readonly listUndelivered: (opts: {
     readonly completedBefore: number;
     readonly completedAfter: number;
@@ -64,6 +72,8 @@ export type DeliverySweepPorts = {
   readonly conclude: (installationId: number, opts: CheckConcludeOptions) => Promise<CheckDelivery>;
   /** Stamp `delivered_at` and the check-run that holds the verdict. */
   readonly markDelivered: (id: string, checkRunId: string, at: number) => Promise<void>;
+  /** Stamp `delivery_refused_at`: GitHub rejects this row's write for good. */
+  readonly markRefused: (id: string, at: number) => Promise<void>;
   readonly now: () => number;
 };
 
@@ -71,7 +81,9 @@ export type DeliverySweepPorts = {
 export type DeliverySweepResult = {
   readonly delivered: number;
   readonly undelivered: number;
-  /** Rows not attempted because their installation already refused one this tick. */
+  /** Rows GitHub refused for good, taken out of the queue. */
+  readonly refused: number;
+  /** Rows not attempted because their installation already left one undelivered this tick. */
   readonly deferred: number;
 };
 
@@ -117,12 +129,13 @@ export const sweepUndelivered = async (ports: DeliverySweepPorts): Promise<Deliv
     completedAfter: now - DELIVERY_MAX_AGE_MS,
     limit: DELIVERY_SWEEP_LIMIT,
   });
-  const refused = new Set<number>();
+  const held = new Set<number>();
   let delivered = 0;
   let undelivered = 0;
+  let refused = 0;
   let deferred = 0;
   for (const row of rows) {
-    if (refused.has(row.installationId)) {
+    if (held.has(row.installationId)) {
       deferred += 1;
       continue;
     }
@@ -136,11 +149,18 @@ export const sweepUndelivered = async (ports: DeliverySweepPorts): Promise<Deliv
       await ports.markDelivered(row.id, outcome.checkRunId, ports.now()).catch((cause: unknown) => {
         console.warn(`[delivery-sweep] delivered_at not recorded for ${row.id}: ${String(cause)}`);
       });
+    } else if (outcome._tag === "refused") {
+      // The installation still answers; only this row's write is dead.
+      console.warn(`[delivery-sweep] ${row.id} refused: ${outcome.reason}`);
+      refused += 1;
+      await ports.markRefused(row.id, ports.now()).catch((cause: unknown) => {
+        console.warn(`[delivery-sweep] delivery_refused_at not recorded for ${row.id}: ${String(cause)}`);
+      });
     } else {
       console.warn(`[delivery-sweep] ${row.id} undelivered: ${outcome.reason}`);
-      refused.add(row.installationId);
+      held.add(row.installationId);
       undelivered += 1;
     }
   }
-  return { delivered, undelivered, deferred };
+  return { delivered, undelivered, refused, deferred };
 };

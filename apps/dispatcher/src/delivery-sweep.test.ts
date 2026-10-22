@@ -38,6 +38,7 @@ const makePorts = (
 ) => {
   const concluded: { installationId: number; opts: CheckConcludeOptions }[] = [];
   const marked: { id: string; checkRunId: string; at: number }[] = [];
+  const refusedRows: { id: string; at: number }[] = [];
   const listUndelivered = vi.fn<DeliverySweepPorts["listUndelivered"]>(
     async ({ completedBefore, completedAfter, limit }) =>
       rows
@@ -54,9 +55,12 @@ const makePorts = (
     markDelivered: async (id, checkRunId, at) => {
       marked.push({ id, checkRunId, at });
     },
+    markRefused: async (id, at) => {
+      refusedRows.push({ id, at });
+    },
     now: () => NOW,
   };
-  return { ports, concluded, marked, listUndelivered };
+  return { ports, concluded, marked, refusedRows, listUndelivered };
 };
 
 describe("sweepUndelivered", () => {
@@ -83,7 +87,7 @@ describe("sweepUndelivered", () => {
       false,
     ]);
     expect(marked.map((m) => m.id)).toEqual(["older", "newer"]);
-    expect(result).toEqual({ delivered: 2, undelivered: 0, deferred: 0 });
+    expect(result).toEqual({ delivered: 2, undelivered: 0, refused: 0, deferred: 0 });
   });
 
   it("records the check-run created at conclusion for a row whose opener degraded", async () => {
@@ -111,7 +115,27 @@ describe("sweepUndelivered", () => {
 
     expect(concluded.map((c) => c.installationId)).toEqual([1, 2]);
     expect(marked.map((m) => m.id)).toEqual(["b1"]);
-    expect(result).toEqual({ delivered: 1, undelivered: 1, deferred: 1 });
+    expect(result).toEqual({ delivered: 1, undelivered: 1, refused: 0, deferred: 1 });
+  });
+
+  it("takes a refused row out of the queue without holding up its installation", async () => {
+    const { ports, concluded, marked, refusedRows } = makePorts(
+      [
+        row({ id: "gone", installationId: 1, sha: "dead", completedAt: NOW - DELIVERY_GRACE_MS - 2 }),
+        row({ id: "next", installationId: 1, completedAt: NOW - DELIVERY_GRACE_MS - 1 }),
+      ],
+      (_, opts) =>
+        opts.sha === "dead"
+          ? { _tag: "refused", reason: "HTTP 404" }
+          : { _tag: "delivered", checkRunId: opts.checkRunId },
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await sweepUndelivered(ports);
+
+    expect(concluded.map((c) => c.opts.sha)).toEqual(["dead", "abc123"]);
+    expect(refusedRows).toEqual([{ id: "gone", at: NOW }]);
+    expect(marked.map((m) => m.id)).toEqual(["next"]);
+    expect(result).toEqual({ delivered: 1, undelivered: 0, refused: 1, deferred: 0 });
   });
 
   it("counts a rejected conclude as undelivered and a failed stamp as delivered", async () => {
@@ -127,7 +151,7 @@ describe("sweepUndelivered", () => {
         throw new Error("d1 down");
       },
     });
-    expect(result).toEqual({ delivered: 1, undelivered: 1, deferred: 0 });
+    expect(result).toEqual({ delivered: 1, undelivered: 1, refused: 0, deferred: 0 });
     expect(warn).toHaveBeenCalled();
   });
 });

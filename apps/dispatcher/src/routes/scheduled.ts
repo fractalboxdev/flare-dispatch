@@ -130,6 +130,7 @@ export const liveDeliverySweepPorts = (env: Env): DeliverySweepPorts | undefined
           `SELECT id, run, repo, sha, status, attempt, input_json, check_run_id, installation_id, completed_at
              FROM executions
             WHERE delivered_at IS NULL AND installation_id IS NOT NULL
+              AND delivery_refused_at IS NULL
               AND status IN ('success', 'failure', 'skipped')
               AND completed_at < ? AND completed_at >= ?
             ORDER BY completed_at ASC
@@ -157,6 +158,12 @@ export const liveDeliverySweepPorts = (env: Env): DeliverySweepPorts | undefined
         .bind(at, checkRunId, id)
         .run();
     },
+    markRefused: async (id, at) => {
+      await db
+        .prepare(`UPDATE executions SET delivery_refused_at = ? WHERE id = ?`)
+        .bind(at, id)
+        .run();
+    },
     now: Date.now,
   };
 };
@@ -169,9 +176,9 @@ export const liveDeliverySweep =
     if (ports === undefined) return;
     try {
       const result = await sweepUndelivered(ports);
-      if (result.delivered + result.undelivered + result.deferred > 0) {
+      if (result.delivered + result.undelivered + result.refused + result.deferred > 0) {
         console.info(
-          `[delivery-sweep] delivered=${result.delivered} undelivered=${result.undelivered} deferred=${result.deferred}`,
+          `[delivery-sweep] delivered=${result.delivered} undelivered=${result.undelivered} refused=${result.refused} deferred=${result.deferred}`,
         );
       }
     } catch (cause) {

@@ -342,6 +342,20 @@ describe("ChecksGithubLive — rate limits and the verdict reserve", () => {
     expect(delivery).toEqual({ _tag: "undelivered", reason: "HTTP 503" });
   });
 
+  it.each([404, 422])("reports a conclusion GitHub rejects with %i as refused", async (status) => {
+    server.use(
+      http.patch("https://api.github.com/repos/:owner/:repo/check-runs/:id", () =>
+        HttpResponse.json({ message: "no" }, { status }),
+      ),
+    );
+    const delivery = await Effect.runPromise(
+      checks
+        .conclude({ ...REPO, checkRunId: "77", conclusion: "success" })
+        .pipe(Effect.provide(makeChecksGithubLive(CONFIG))),
+    );
+    expect(delivery).toEqual({ _tag: "refused", reason: `HTTP ${status}` });
+  });
+
   it("reports undelivered without a call when the installation is exhausted", async () => {
     server.use(
       http.post("https://api.github.com/repos/:owner/:repo/check-runs", () =>

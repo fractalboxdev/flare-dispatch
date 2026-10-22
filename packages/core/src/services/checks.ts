@@ -29,11 +29,16 @@ export type CheckOutput = {
 /**
  * Whether a concluding write reached GitHub. `delivered` carries the id of the
  * check-run that holds the verdict — a fresh one when the opening create never
- * landed. `undelivered` says why, for the log line beside it.
+ * landed. `undelivered` is a write worth sending again (a rate limit, an
+ * outage, missing credentials); `refused` is one GitHub rejected for this
+ * check-run itself (404 or 422 — the repository, installation or commit is
+ * gone, or the payload is invalid), so the same write fails again. Both carry
+ * the reason for the log line beside them.
  */
 export type CheckDelivery =
   | { readonly _tag: "delivered"; readonly checkRunId: string }
-  | { readonly _tag: "undelivered"; readonly reason: string };
+  | { readonly _tag: "undelivered"; readonly reason: string }
+  | { readonly _tag: "refused"; readonly reason: string };
 
 /** The options a concluding write takes. */
 export type CheckConcludeOptions = {

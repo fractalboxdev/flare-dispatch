@@ -1471,10 +1471,9 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         );
       } else {
         yield* Effect.logWarning(
-          `delivery: verdict for ${payload.executionId} undelivered (${delivery.reason}) — the reconcile sweep re-sends it`,
+          `delivery: verdict for ${payload.executionId} ${delivery._tag} (${delivery.reason}) — the reconcile sweep re-sends it`,
         );
       }
-
 
       // A fan-out parent concludes any child check-run still open — one whose
       // own terminal update never landed (child-check-runs.ts). Best-effort.

@@ -51,7 +51,9 @@
 // `conclude` is the verdict write. It completes the check-run, or creates it
 // already completed when the opener degraded to the sentinel id, and returns
 // whether GitHub took it; it never fails, so the caller records the outcome
-// as `executions.delivered_at` and the reconcile sweep re-sends the rest.
+// as `executions.delivered_at` and the reconcile sweep re-sends the rest. A
+// 404 or 422 comes back as `refused`: GitHub rejects that write for good, and
+// the sweep stops re-sending it.
 //
 // Spec: specs/04-gha-integration.md § Check-runs callback, specs/05-byoc.md
 // § Secrets / § Security posture, specs/pm/plan.md § PR6 / § 6.
@@ -106,6 +108,14 @@ const retryAfterOf = (e: unknown): number | undefined =>
 const isRetryable = (e: unknown): boolean =>
   e instanceof GithubAppApiError &&
   (e.status === 429 || e.status >= 500 || (e.status === 403 && e.retryAfterMs !== undefined));
+
+/**
+ * A failure GitHub returns for this check-run itself — 404 (repository,
+ * installation or commit gone) or 422 (payload rejected). The same write
+ * fails again, unlike a rate limit, an outage or an App-wide 401.
+ */
+const isRefusal = (e: unknown): boolean =>
+  e instanceof GithubAppApiError && (e.status === 404 || e.status === 422);
 
 /** A retryable failure whose signalled wait, if any, fits inside one call. */
 const isRetryableNow = (e: unknown): boolean =>
@@ -329,14 +339,17 @@ export const makeChecksGithubService = (config: ChecksGithubConfig): ChecksServi
               ).pipe(Effect.as(checkRunId));
         return yield* write.pipe(
           Effect.map((id): CheckDelivery => ({ _tag: "delivered", checkRunId: id })),
-          Effect.catchAll((e) =>
-            Effect.as(
+          Effect.catchAll((e) => {
+            const delivery: CheckDelivery = isRefusal(e)
+              ? { _tag: "refused", reason: describeFailure(e) }
+              : { _tag: "undelivered", reason: describeFailure(e) };
+            return Effect.as(
               Effect.logWarning(
-                `checks.conclude undelivered (${describeFailure(e)}) — conclusion "${conclusion}" left for the reconcile sweep`,
+                `checks.conclude ${delivery._tag} (${delivery.reason}) — conclusion "${conclusion}" not posted`,
               ),
-              { _tag: "undelivered", reason: describeFailure(e) } as const,
-            ),
-          ),
+              delivery,
+            );
+          }),
         );
       }),
   };
