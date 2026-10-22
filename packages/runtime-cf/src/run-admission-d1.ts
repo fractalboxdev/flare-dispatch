@@ -57,7 +57,7 @@ export const BURN_UNLIMITED: BurnCeiling = { hourlyRateMicroUsd: 0, burnMaxMicro
  * `ADMISSION_CAP` wrangler var (see {@link resolveAdmissionCap}); this is
  * the fallback when the var is unset.
  */
-export const ADMISSION_CAP_DEFAULT = 16;
+export const ADMISSION_CAP_DEFAULT = 48;
 
 /**
  * Parse the `ADMISSION_CAP` wrangler var (vars are always strings) into the

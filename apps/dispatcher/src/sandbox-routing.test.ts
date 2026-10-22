@@ -55,20 +55,20 @@ const POOL_CLASS = { lean: "RunSandbox", browser: "RunSandboxBrowser", agent: "R
 const bound = { RUNS_SANDBOX_BROWSER: browser, RUNS_SANDBOX_AGENT: agent, RUNS_SANDBOX_RELEASE: release };
 
 describe("selectAdmission — the pool a run is metered against and its slot cap", () => {
-  it("admits no pool past its container's max_instances under the committed vars", () => {
+  it("keeps every pool's cap below its container's max_instances under the committed vars", () => {
     for (const image of ["lean", "browser", "agent", "release"] as const) {
       const { pool, cap } = selectAdmission(image, { ...wrangler.vars, ...bound });
       expect(pool).toBe(image);
       const container = wrangler.containers.find((entry) => entry.class_name === POOL_CLASS[pool])!;
-      expect(cap, `${pool} pool`).toBeLessThanOrEqual(container.max_instances);
+      expect(cap, `${pool} pool`).toBeLessThan(container.max_instances);
     }
   });
 
-  it("admits no pool past its container's max_instances on the code defaults", () => {
+  it("keeps every pool's cap below its container's max_instances on the code defaults", () => {
     for (const image of ["lean", "browser", "agent", "release"] as const) {
       const { pool, cap } = selectAdmission(image, bound);
       const container = wrangler.containers.find((entry) => entry.class_name === POOL_CLASS[pool])!;
-      expect(cap, `${pool} pool`).toBeLessThanOrEqual(container.max_instances);
+      expect(cap, `${pool} pool`).toBeLessThan(container.max_instances);
     }
   });
 

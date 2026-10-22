@@ -475,7 +475,7 @@ export interface Env {
   /**
    * The monthly spend budget in USD (specs/adr/0006-spend-guard.md) — a var.
    * At or over it, admission skips every run with a neutral check. Unset or
-   * unparsable → 90; `unlimited` disables it. CONFIG_KV
+   * unparsable → 50; `unlimited` disables it. CONFIG_KV
    * `spend.budgetMonthlyUsd` overrides it without a deploy. The default lives
    * in code (core spend.ts), because an operator overlay replaces the
    * committed wrangler.jsonc.

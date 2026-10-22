@@ -22,8 +22,8 @@ const LIMITS: SpendLimits = {
 };
 
 describe("resolveSpendLimits", () => {
-  it("caps a deploy that sets nothing at 90 USD a month and 1.50 USD an hour", () => {
-    expect(resolveSpendLimits({})).toEqual(LIMITS);
+  it("caps a deploy that sets nothing at 50 USD a month and 1.50 USD an hour", () => {
+    expect(resolveSpendLimits({})).toEqual({ ...LIMITS, budgetMicroUsd: 50_000_000 });
   });
 
   it("reads the vars, and a CONFIG_KV override wins over them", () => {

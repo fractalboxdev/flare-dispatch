@@ -64,14 +64,14 @@ describe("spend-d1", () => {
   });
 
   it("closes the budget once spend times the overhead reaches it", async () => {
-    await seedFinished("f1", NOW - HOUR, 82_000_000);
+    await seedFinished("f1", NOW - HOUR, 46_000_000);
     const limits = resolveSpendLimits({});
     const status = await Effect.runPromise(readSpendStatus(bindings.db, limits, NOW));
-    // 82 × 1.10 = 90.20 ≥ 90.
-    expect(status.monthToDateMicroUsd).toBe(90_200_000);
+    // 46 × 1.10 = 50.60 ≥ 50.
+    expect(status.monthToDateMicroUsd).toBe(50_600_000);
     expect(status.decision).toEqual({
       _kind: "closed",
-      reason: "spend budget reached: $90.20 of $90.00 this month",
+      reason: "spend budget reached: $50.60 of $50.00 this month",
     });
     expect(status.month.key).toBe("2026-10");
   });
@@ -89,7 +89,7 @@ describe("spend-d1", () => {
   });
 
   it("warns once per month past the warn ratio, marking the month in CONFIG_KV", async () => {
-    await seedFinished("f1", NOW - HOUR, 70_000_000);
+    await seedFinished("f1", NOW - HOUR, 40_000_000);
     const limits: SpendLimits = resolveSpendLimits({});
     const status = await Effect.runPromise(readSpendStatus(bindings.db, limits, NOW));
     const sent: string[] = [];
@@ -100,8 +100,8 @@ describe("spend-d1", () => {
     expect(await Effect.runPromise(warnSpendOnce({ kv: bindings.kv, status, notify }))).toBe(true);
     expect(await Effect.runPromise(warnSpendOnce({ kv: bindings.kv, status, notify }))).toBe(false);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toContain("2026-10: FlareDispatch spend reached $77.00 of the $90.00 monthly budget");
-    expect(await bindings.kv.get("spend.warned:2026-10")).toBe("77000000");
+    expect(sent[0]).toContain("2026-10: FlareDispatch spend reached $44.00 of the $50.00 monthly budget");
+    expect(await bindings.kv.get("spend.warned:2026-10")).toBe("44000000");
   });
 
   it("sends no warning under the warn ratio", async () => {

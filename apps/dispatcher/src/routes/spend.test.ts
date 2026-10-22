@@ -38,10 +38,10 @@ const status = (monthToDateMicroUsd: number, admittedMicroUsdPerHour = 401_040):
 
 describe("a spend skip concludes neutral", () => {
   it("records a budget skip as skipped with its reason, and a neutral check", () => {
-    const decision = decideBudget(90_500_000, resolveSpendLimits({}));
+    const decision = decideBudget(50_500_000, resolveSpendLimits({}));
     if (decision._kind !== "closed") throw new Error("expected a closed budget");
     const exit = Exit.fail(new RunSkipped({ reason: decision.reason }));
-    expect(runSkippedReason(exit)).toBe("spend budget reached: $90.50 of $90.00 this month");
+    expect(runSkippedReason(exit)).toBe("spend budget reached: $50.50 of $50.00 this month");
     expect(checkConclusion("skipped", true)).toBe("neutral");
   });
 
@@ -60,7 +60,7 @@ describe("spendView", () => {
     expect(spendView(status(12_340_000))).toEqual({
       month: "2026-10",
       monthToDateUsd: 12.34,
-      budgetUsd: 90,
+      budgetUsd: 50,
       burnMaxUsdPerHour: 1.5,
       admittedUsdPerHour: 0.40104,
       admittedCount: 1,
@@ -96,7 +96,7 @@ describe("GET /api/spend", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
       monthToDateUsd: 0,
-      budgetUsd: 90,
+      budgetUsd: 50,
       burnMaxUsdPerHour: 1.5,
       budgetReached: false,
     });
@@ -119,11 +119,11 @@ describe("GET /api/spend", () => {
 describe("spendLine", () => {
   it("is the dashboard's one-line summary", () => {
     expect(spendLine(status(12_340_000))).toBe(
-      "Spend 2026-10: $12.34 of $90.00 · burn $0.40/h of $1.50/h · resets 2026-11-01",
+      "Spend 2026-10: $12.34 of $50.00 · burn $0.40/h of $1.50/h · resets 2026-11-01",
     );
   });
 
   it("says when the budget closed", () => {
-    expect(spendLine(status(95_000_000))).toContain("$95.00 of $90.00 — budget reached, runs skip");
+    expect(spendLine(status(55_000_000))).toContain("$55.00 of $50.00 — budget reached, runs skip");
   });
 });

@@ -19,7 +19,7 @@
 import { MICRO_USD_PER_USD } from "./cost";
 
 /** The monthly budget a deploy that sets nothing gets, in USD. */
-export const SPEND_BUDGET_MONTHLY_USD_DEFAULT = 90;
+export const SPEND_BUDGET_MONTHLY_USD_DEFAULT = 50;
 /** The burn ceiling a deploy that sets nothing gets, in USD per hour. */
 export const SPEND_BURN_MAX_USD_PER_HOUR_DEFAULT = 1.5;
 /** Multiplier for Workflow steps and Durable Objects on top of container + model spend. */
