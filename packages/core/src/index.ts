@@ -260,6 +260,8 @@ export {
   type CheckConclusion,
   type CheckOutput,
   type CheckRunState,
+  type CheckDelivery,
+  type CheckConcludeOptions,
 } from "./services/checks";
 export {
   spawnChildRun,
