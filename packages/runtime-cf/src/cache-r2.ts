@@ -14,8 +14,10 @@
 // --- Transport ---------------------------------------------------------------
 //
 // Streaming a body into the container (`writeFile` with a stream) exists only
-// on the SDK's `rpc` transport; on `http` / `websocket` it throws. A restore on
-// such a transport reads only the archive's `head` and reports `unapplied`, so
+// on the SDK's `rpc` transport; on `http` / `websocket` it throws. Containers
+// run on `rpc` unless a repo pin or the Worker-wide var says otherwise
+// (sandbox-transport.ts), so a restore streams by default. A restore on
+// another transport reads only the archive's `head` and reports `unapplied`, so
 // the run pays for neither the download nor a re-upload of an archive R2
 // already holds. The transport is logged once per Layer instance: once per
 // execution, again after a Workflow replay rebuilds the runtime.
@@ -52,6 +54,7 @@ import { Effect, Layer } from "effect";
 import { Cache, CacheError, type CacheService } from "@fractalboxdev/flare-dispatch-core";
 import { readContainerFile } from "./container-file-stream";
 import { putStream } from "./r2-put-stream";
+import type { SandboxTransport } from "./sandbox-transport";
 import {
   composeRestoreOr,
   composeSave,
@@ -74,14 +77,15 @@ const TARBALL_PATH = "/tmp/fd-cache.tar.gz";
  * @param bucket  the R2 binding (`env.RUNS_STORAGE`).
  * @param ns      the `RUNS_SANDBOX` namespace for the supplied Sandbox subclass.
  * @param repo    the `owner/name` slug — scopes the archive key per repo.
- * @param transport the transport this execution's containers run on — only
- *                `rpc` can stream an archive into a container.
+ * @param transport the transport this execution's containers run on, as
+ *                `resolveSandboxTransport` resolved it — only `rpc` can stream
+ *                an archive into a container.
  */
 export const makeCacheR2Live = <T extends Sandbox>(
   bucket: R2Bucket,
   ns: DurableObjectNamespace<T>,
   repo: string,
-  transport: "http" | "websocket" | "rpc" = "http",
+  transport: SandboxTransport,
 ): Layer.Layer<Cache> => {
   const streams = transport === "rpc";
   let transportLogged = false;

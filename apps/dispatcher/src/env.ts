@@ -309,10 +309,10 @@ export interface Env {
   readonly SANDBOX_PREVIEW_HOSTNAME?: string;
 
   /**
-   * The Worker-wide sandbox transport the SDK applies to a container no
-   * `sandbox.transport:<repo>` key pins (`http` when unset). Read by the SDK
-   * itself; the dispatcher reads it only to tell the R2 cache whether an
-   * archive can stream into the container. A var, not a secret.
+   * The Worker-wide sandbox transport for a repo no `sandbox.transport:<repo>`
+   * key pins: `http`, `websocket` or `rpc`, and `rpc` when unset or not a
+   * transport name. The dispatcher pins the resolved transport onto every
+   * container (`resolveSandboxTransport`). A var, not a secret.
    */
   readonly SANDBOX_TRANSPORT?: string;
 
