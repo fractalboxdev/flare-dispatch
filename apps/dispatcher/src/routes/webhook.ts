@@ -294,13 +294,14 @@ export const handleGithubWebhook = async (request: Request, env: Env): Promise<R
     // Opt-in (when declared) — a repo with none of the run's CONFIG_KV keys
     // gets no Workflow, no check-run and no admission slot. Read before the
     // cooldown so an unconfigured repo never arms a window.
-    if (run.optIn !== undefined) {
-      const optIn = await resolveOptIn({
+    const optIn = run.optIn;
+    if (optIn !== undefined) {
+      const verdict = await resolveOptIn({
         configKv: env.CONFIG_KV,
         runName: run.name,
-        keys: run.optIn({ input: inputs }),
+        keys: () => optIn({ input: inputs }),
       });
-      if (optIn === "not-configured") {
+      if (verdict === "not-configured") {
         skipped.push({ run: run.name, reason: "not-configured" });
         continue;
       }

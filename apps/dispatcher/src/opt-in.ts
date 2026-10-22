@@ -6,8 +6,8 @@
 // configured the run costs no Workflow, check-run, admission slot or container
 // (specs/adr/0007-cost-efficient-execution.md § Dispatch only work).
 //
-// The read fails open. A KV error, or a deploy without CONFIG_KV, dispatches
-// exactly as the receiver did before the check existed: the run body still
+// The read fails open. A KV error, a throwing `optIn`, or a deploy without
+// CONFIG_KV dispatches as if the run declared no opt-in: the run body still
 // resolves its own command and no-ops when there is none, so a failed read
 // costs one wasted run, never a configured repo's verdict.
 
@@ -15,20 +15,25 @@
 export type OptInVerdict = "dispatch" | "not-configured";
 
 /**
- * Decide whether to dispatch a run whose `optIn` named `keys`.
+ * Decide whether to dispatch a run whose `optIn` names `keys`.
  *
- * `keys` empty (the inputs carry their own command) or no `configKv` →
+ * No `configKv`, or `keys` empty (the inputs carry their own command) →
  * `dispatch` with no read. Otherwise any present key → `dispatch`; none →
- * `not-configured`. A rejected read logs and answers `dispatch`.
+ * `not-configured`. `keys` is a thunk so a throwing `optIn` lands in the same
+ * fail-open branch as a rejected read: it logs and answers `dispatch`, and
+ * never fails the delivery for the sibling triggers.
  */
 export const resolveOptIn = async (args: {
   readonly configKv: KVNamespace | undefined;
   readonly runName: string;
-  readonly keys: readonly string[];
+  readonly keys: () => readonly string[];
 }): Promise<OptInVerdict> => {
-  const { configKv, runName, keys } = args;
-  if (keys.length === 0 || configKv === undefined) return "dispatch";
+  const { configKv, runName } = args;
+  if (configKv === undefined) return "dispatch";
+  let keys: readonly string[] = [];
   try {
+    keys = args.keys();
+    if (keys.length === 0) return "dispatch";
     const values = await Promise.all(keys.map((key) => configKv.get(key)));
     return values.some((value) => value !== null) ? "dispatch" : "not-configured";
   } catch (cause) {
