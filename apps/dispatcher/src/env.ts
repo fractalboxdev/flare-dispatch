@@ -465,6 +465,14 @@ export interface Env {
   readonly ADMISSION_CAP_AGENT?: string;
 
   /**
+   * The browser pool's admission slots — a var, carried as a string. The
+   * browser pool admits at most the smaller of this and `ADMISSION_CAP`; keep
+   * it ≤ `RunSandboxBrowser`'s `max_instances`. Absent / unparsable → 16
+   * (`BROWSER_ADMISSION_CAP_DEFAULT`).
+   */
+  readonly ADMISSION_CAP_BROWSER?: string;
+
+  /**
    * The monthly spend budget in USD (specs/adr/0006-spend-guard.md) — a var.
    * At or over it, admission skips every run with a neutral check. Unset or
    * unparsable → 90; `unlimited` disables it. CONFIG_KV

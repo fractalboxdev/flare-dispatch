@@ -82,6 +82,13 @@ export {
 export {
   decideAdmission,
   admissionAcquireAttempts,
+  admissionPollSleepMs,
+  admissionJitterMs,
+  ADMISSION_CLASS_DEFAULT,
+  ADMISSION_POLL_MIN_MS,
+  ADMISSION_POLL_MAX_MS,
+  ADMISSION_JITTER_MAX_MS,
+  type AdmissionClass,
   type AdmissionPool,
   type AdmissionObservation,
   type AdmissionDecision,

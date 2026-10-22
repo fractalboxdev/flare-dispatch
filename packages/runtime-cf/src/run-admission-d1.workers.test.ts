@@ -16,7 +16,13 @@
 
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { containerMicroUsdPerHour, decideAdmission, type AdmissionPool } from "@fractalboxdev/flare-dispatch-core";
+import {
+  ADMISSION_POLL_MAX_MS,
+  containerMicroUsdPerHour,
+  decideAdmission,
+  type AdmissionClass,
+  type AdmissionPool,
+} from "@fractalboxdev/flare-dispatch-core";
 import {
   ADMISSION_CAP_DEFAULT,
   ADMISSION_MAX_QUEUE_AGE_MS,
@@ -27,6 +33,7 @@ import {
   resolvePoolAdmissionCap,
   RELEASE_ADMISSION_CAP_DEFAULT,
   AGENT_ADMISSION_CAP_DEFAULT,
+  BROWSER_ADMISSION_CAP_DEFAULT,
 } from "./run-admission-d1";
 import { makeTestBindings, type TestBindings } from "./test-support-workers";
 
@@ -346,11 +353,28 @@ describe("resolvePoolAdmissionCap — one cap per pool", () => {
     expect(resolvePoolAdmissionCap("agent", { ADMISSION_CAP: "4", ADMISSION_CAP_AGENT: "12" })).toBe(4);
   });
 
-  it("leaves the lean and browser pools on the shared cap", () => {
-    for (const pool of ["lean", "browser"] as const) {
-      expect(resolvePoolAdmissionCap(pool, { ADMISSION_CAP: "16", ADMISSION_CAP_AGENT: "8", ADMISSION_CAP_RELEASE: "8" })).toBe(16);
-      expect(resolvePoolAdmissionCap(pool, {})).toBe(ADMISSION_CAP_DEFAULT);
-    }
+  it("caps the browser pool by ADMISSION_CAP_BROWSER under the shared cap", () => {
+    expect(BROWSER_ADMISSION_CAP_DEFAULT).toBe(16);
+    expect(resolvePoolAdmissionCap("browser", { ADMISSION_CAP: "16" })).toBe(16);
+    expect(resolvePoolAdmissionCap("browser", { ADMISSION_CAP: "16", ADMISSION_CAP_BROWSER: "6" })).toBe(6);
+    expect(resolvePoolAdmissionCap("browser", { ADMISSION_CAP: "4", ADMISSION_CAP_BROWSER: "12" })).toBe(4);
+    expect(resolvePoolAdmissionCap("browser", { ADMISSION_CAP: "16", ADMISSION_CAP_BROWSER: "six" })).toBe(16);
+  });
+
+  it("leaves the lean pool on the shared cap", () => {
+    expect(
+      resolvePoolAdmissionCap("lean", {
+        ADMISSION_CAP: "16",
+        ADMISSION_CAP_AGENT: "8",
+        ADMISSION_CAP_BROWSER: "6",
+        ADMISSION_CAP_RELEASE: "8",
+      }),
+    ).toBe(16);
+    expect(resolvePoolAdmissionCap("lean", {})).toBe(ADMISSION_CAP_DEFAULT);
+  });
+
+  it("keeps a waiter live across three of the longest poll sleeps", () => {
+    expect(ADMISSION_WAITER_TTL_MS).toBeGreaterThanOrEqual(3 * ADMISSION_POLL_MAX_MS);
   });
 });
 
@@ -468,5 +492,160 @@ describe("makeRunAdmissionD1 — the burn ceiling", () => {
       .bind(A)
       .first<{ admitted_at: number }>();
     expect(row?.admitted_at).toBe(T0);
+  });
+});
+
+// The interactive admission class (specs/adr/0009-fast-trustworthy-verdicts.md
+// § Interactive admission class): a claim admits the oldest live interactive
+// waiter before any batch waiter; FIFO and the queue position apply within a
+// class, interactive ahead of batch; the burn ceiling never reorders the line.
+describe("makeRunAdmissionD1 — the interactive admission class", () => {
+  let bindings: TestBindings;
+  beforeEach(async () => {
+    bindings = await makeTestBindings();
+  });
+  afterEach(async () => {
+    await bindings.dispose();
+  });
+
+  const BATCH_OLD = "01ARZ3NDEKTSV4RRFFQ69G5F01";
+  const BATCH_NEW = "01ARZ3NDEKTSV4RRFFQ69G5F02";
+  const INTER_1 = "01ARZ3NDEKTSV4RRFFQ69G5F03";
+  const INTER_2 = "01ARZ3NDEKTSV4RRFFQ69G5F04";
+
+  const storeFor = (
+    admissionClass: AdmissionClass,
+    clock: () => number,
+    cap = 1,
+    burn = { hourlyRateMicroUsd: 0, burnMaxMicroUsdPerHour: null as number | null },
+  ) => makeRunAdmissionD1(bindings.db, clock, cap, burn, admissionClass);
+
+  /** Enqueue `id` at `at` in `admissionClass` and return its store + FIFO key. */
+  const enqueueAt = async (
+    id: string,
+    admissionClass: AdmissionClass,
+    at: number,
+    cap = 1,
+    burn?: { hourlyRateMicroUsd: number; burnMaxMicroUsdPerHour: number | null },
+  ) => {
+    const store = storeFor(admissionClass, () => at, cap, burn);
+    const { enqueuedAt } = await Effect.runPromise(store.enqueue(id, "lean"));
+    return { store, enqueuedAt };
+  };
+
+  const attemptAt = (
+    id: string,
+    admissionClass: AdmissionClass,
+    enqueuedAt: number,
+    at: number,
+    cap = 1,
+    burn?: { hourlyRateMicroUsd: number; burnMaxMicroUsdPerHour: number | null },
+  ) => Effect.runPromise(storeFor(admissionClass, () => at, cap, burn).attempt(id, "lean", enqueuedAt));
+
+  const holdSlot = () =>
+    bindings.db
+      .prepare(
+        `INSERT INTO run_admissions (execution_id, pool, state, enqueued_at, admitted_at, heartbeat_at)
+         VALUES ('holder', 'lean', 'admitted', ?, ?, ?)`,
+      )
+      .bind(T0 - 5_000, T0 - 5_000, T0)
+      .run();
+  const freeSlot = () => bindings.db.prepare(`DELETE FROM run_admissions WHERE execution_id = 'holder'`).run();
+
+  it("records the class on the row; a store without one enqueues batch", async () => {
+    await enqueueAt(INTER_1, "interactive", T0);
+    await Effect.runPromise(makeRunAdmissionD1(bindings.db, () => T0).enqueue(BATCH_OLD, "lean"));
+    const classes = await bindings.db
+      .prepare(`SELECT execution_id, admission_class FROM run_admissions ORDER BY execution_id`)
+      .all<{ execution_id: string; admission_class: string }>();
+    expect(classes.results).toEqual([
+      { execution_id: BATCH_OLD, admission_class: "batch" },
+      { execution_id: INTER_1, admission_class: "interactive" },
+    ]);
+  });
+
+  it("admits a later interactive waiter before an earlier batch waiter", async () => {
+    await holdSlot();
+    const batch = await enqueueAt(BATCH_OLD, "batch", T0 - 60_000);
+    const inter = await enqueueAt(INTER_1, "interactive", T0);
+    // Full pool: the interactive waiter is first in line, the batch one second.
+    expect(await attemptAt(INTER_1, "interactive", inter.enqueuedAt, T0 + 1)).toMatchObject({
+      admitted: false,
+      position: 0,
+    });
+    expect(await attemptAt(BATCH_OLD, "batch", batch.enqueuedAt, T0 + 2)).toMatchObject({
+      admitted: false,
+      position: 1,
+    });
+    await freeSlot();
+    // The batch waiter cannot barge past the live interactive one.
+    expect((await attemptAt(BATCH_OLD, "batch", batch.enqueuedAt, T0 + 3)).admitted).toBe(false);
+    expect((await attemptAt(INTER_1, "interactive", inter.enqueuedAt, T0 + 4)).admitted).toBe(true);
+  });
+
+  it("keeps FIFO within the interactive class", async () => {
+    await holdSlot();
+    const first = await enqueueAt(INTER_1, "interactive", T0 - 10_000);
+    const second = await enqueueAt(INTER_2, "interactive", T0);
+    expect((await attemptAt(INTER_2, "interactive", second.enqueuedAt, T0 + 1)).position).toBe(1);
+    await freeSlot();
+    expect((await attemptAt(INTER_2, "interactive", second.enqueuedAt, T0 + 2)).admitted).toBe(false);
+    expect((await attemptAt(INTER_1, "interactive", first.enqueuedAt, T0 + 3)).admitted).toBe(true);
+  });
+
+  it("keeps FIFO within the batch class, behind every interactive waiter", async () => {
+    await holdSlot();
+    await enqueueAt(INTER_1, "interactive", T0);
+    await enqueueAt(BATCH_OLD, "batch", T0 - 20_000);
+    const newer = await enqueueAt(BATCH_NEW, "batch", T0 - 10_000);
+    expect((await attemptAt(BATCH_NEW, "batch", newer.enqueuedAt, T0 + 1)).position).toBe(2);
+  });
+
+  it("ranks a pre-0011 row with no class as batch", async () => {
+    await holdSlot();
+    await bindings.db
+      .prepare(
+        `INSERT INTO run_admissions (execution_id, pool, state, enqueued_at, heartbeat_at)
+         VALUES (?, 'lean', 'queued', ?, ?)`,
+      )
+      .bind(BATCH_OLD, T0 - 60_000, T0)
+      .run();
+    const inter = await enqueueAt(INTER_1, "interactive", T0);
+    expect((await attemptAt(INTER_1, "interactive", inter.enqueuedAt, T0 + 1)).position).toBe(0);
+    const batch = await enqueueAt(BATCH_NEW, "batch", T0);
+    expect((await attemptAt(BATCH_NEW, "batch", batch.enqueuedAt, T0 + 2)).position).toBe(2);
+  });
+
+  it("stops a dead interactive waiter from blocking the batch line", async () => {
+    await enqueueAt(INTER_1, "interactive", T0 - ADMISSION_WAITER_TTL_MS - 10);
+    const batch = await enqueueAt(BATCH_OLD, "batch", T0);
+    expect((await attemptAt(BATCH_OLD, "batch", batch.enqueuedAt, T0 + 1)).admitted).toBe(true);
+  });
+
+  it("holds a batch claimant the ceiling would fit behind an interactive waiter it holds", async () => {
+    // One admitted row at 1.0 $/h; ceiling 1.5 $/h. The interactive waiter at
+    // 0.8 $/h does not fit; the batch waiter at 0.2 $/h would, but stays in line.
+    const ceiling = 1_500_000;
+    await bindings.db
+      .prepare(
+        `INSERT INTO run_admissions
+           (execution_id, pool, state, enqueued_at, admitted_at, heartbeat_at, hourly_rate_micro_usd)
+         VALUES ('holder', 'release', 'admitted', ?, ?, ?, 1000000)`,
+      )
+      .bind(T0 - 5_000, T0 - 5_000, T0)
+      .run();
+    const interBurn = { hourlyRateMicroUsd: 800_000, burnMaxMicroUsdPerHour: ceiling };
+    const batchBurn = { hourlyRateMicroUsd: 200_000, burnMaxMicroUsdPerHour: ceiling };
+    const inter = await enqueueAt(INTER_1, "interactive", T0, 16, interBurn);
+    const batch = await enqueueAt(BATCH_OLD, "batch", T0 - 60_000, 16, batchBurn);
+    expect(await attemptAt(INTER_1, "interactive", inter.enqueuedAt, T0 + 1, 16, interBurn)).toMatchObject({
+      admitted: false,
+      ceilingHeld: true,
+    });
+    expect((await attemptAt(BATCH_OLD, "batch", batch.enqueuedAt, T0 + 2, 16, batchBurn)).admitted).toBe(false);
+    // Burn frees: the interactive waiter admits first, then the batch one fits.
+    await freeSlot();
+    expect((await attemptAt(INTER_1, "interactive", inter.enqueuedAt, T0 + 3, 16, interBurn)).admitted).toBe(true);
+    expect((await attemptAt(BATCH_OLD, "batch", batch.enqueuedAt, T0 + 4, 16, batchBurn)).admitted).toBe(true);
   });
 });

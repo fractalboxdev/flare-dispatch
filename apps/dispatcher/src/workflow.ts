@@ -61,6 +61,9 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { Duration, Effect, Exit, identity, Runtime, Schedule, Schema } from "effect";
 import {
   admissionAcquireAttempts,
+  ADMISSION_CLASS_DEFAULT,
+  admissionJitterMs,
+  admissionPollSleepMs,
   AdmissionTimedOut,
   Checks,
   decideAdmission,
@@ -442,9 +445,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // selection above (browser/agent/release image without a bound container
     // degrades to lean), so a run is always metered against the pool whose
     // container it will actually consume — and that pool's slot cap: the plain
-    // `ADMISSION_CAP` wrangler var (unset/unparsable → 16), and for the agent
-    // and release pools the smaller of that and `ADMISSION_CAP_AGENT` /
-    // `ADMISSION_CAP_RELEASE` (unset → 8). Keep every cap ≤ its container's
+    // `ADMISSION_CAP` wrangler var (unset/unparsable → 16), and for the agent,
+    // browser and release pools the smaller of that and `ADMISSION_CAP_AGENT` /
+    // `ADMISSION_CAP_BROWSER` / `ADMISSION_CAP_RELEASE` (unset → 8, 16, 8).
+    // Keep every cap ≤ its container's
     // `max_instances` (sandbox-routing.test.ts reads wrangler.jsonc to check).
     const { pool: admissionPool, cap: admissionCap } = selectAdmission(run.sandboxImage, this.env);
 
@@ -923,10 +927,16 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         );
         let spend = yield* spendCheck("spend-check-enqueue", limits);
         const burnMaxMicroUsdPerHour = limits.burnMaxMicroUsdPerHour;
-        const claimer = makeRunAdmissionD1(db, Date.now, admissionCap, {
-          hourlyRateMicroUsd,
-          burnMaxMicroUsdPerHour,
-        });
+        // The run's admission class (ADR-0009): interactive waiters are
+        // admitted ahead of batch ones in the same pool. The burn ceiling
+        // applies to both and never reorders the line.
+        const claimer = makeRunAdmissionD1(
+          db,
+          Date.now,
+          admissionCap,
+          { hourlyRateMicroUsd, burnMaxMicroUsdPerHour },
+          run.limits.admissionClass ?? ADMISSION_CLASS_DEFAULT,
+        );
         // A queue timeout while the burn ceiling, not the pool cap, held the
         // run back is a spend skip; under the cap alone it stays a failure.
         const queueTimeout = (
@@ -954,7 +964,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         );
 
         // Bounded claim/sleep loop uses a count, so the bound is replay-stable
-        // and trivial against the Workflows step cap (#83 precedent).
+        // and trivial against the Workflows step cap (#83 precedent). Each
+        // attempt is three steps (spend check, claim, sleep). The count is
+        // derived from the SHORTEST sleep, so it covers the queue age however
+        // the sleeps scale; a waiter sleeping longer reaches the age limit,
+        // read inside its claim step, in fewer attempts.
         const maxAttempts = admissionAcquireAttempts(
           admissionMaxQueueAgeMs,
           ADMISSION_POLL_EVERY_MS,
@@ -1029,6 +1043,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                 }),
               ),
             );
+            // Spread a burst of admissions over up to two seconds before the
+            // container starts (ADR-0009). Derived from the execution id and
+            // slept durably, so a replay neither re-draws nor re-sleeps it.
+            const jitterMs = admissionJitterMs(payload.executionId);
+            if (jitterMs > 0) yield* stepSleep("admission-jitter", jitterMs);
             return;
           }
           if (decision._kind === "timeout") {
@@ -1070,10 +1089,21 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
               );
           }
 
-          // Durable, free hibernation between polls. Don't sleep after the
-          // final attempt — fall straight through to timeout.
+          // Durable, free hibernation between polls, scaled with the position
+          // the claim step observed (ADR-0008): 20 s at the head, up to 60 s
+          // several slots back, never past the age limit by more than one
+          // 20 s poll. Both inputs are checkpointed, so a replay sleeps the
+          // same length. Don't sleep after the final attempt — fall straight
+          // through to timeout.
           if (i < maxAttempts - 1) {
-            yield* stepSleep(`admission-wait-${i}`, ADMISSION_POLL_EVERY_MS);
+            yield* stepSleep(
+              `admission-wait-${i}`,
+              admissionPollSleepMs(
+                decision.position,
+                admissionCap,
+                enqueuedAt + admissionMaxQueueAgeMs - observed.now,
+              ),
+            );
           } else {
             return yield* queueTimeout(
               observed,
