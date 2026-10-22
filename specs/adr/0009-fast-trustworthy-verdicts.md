@@ -60,12 +60,28 @@
 ### Pools sized under the spend guard
 
 - `ADMISSION_CAP` per pool is an upper bound. ADR-0006's burn ceiling sets the
-  operating concurrency.
-- The browser pool has its own `ADMISSION_CAP_BROWSER`, like the agent and
-  release pools.
-- `max_instances` per container class is at least the pool's cap plus
-  headroom for containers still stopping. A test asserts cap ≤ `max_instances`
-  for every pool.
+  operating concurrency: a pool admits at most
+  `min(cap, ceiling / instance hourly rate)` at once, summed across pools.
+- The lean pool's cap is 48 by default. It moves to 64 once a week at 48 shows
+  no container start-rate errors and no placement retries. The browser pool
+  has its own `ADMISSION_CAP_BROWSER`, like the agent and release pools.
+- The caps take effect only as the operator raises the burn ceiling. At the
+  default 1.50 USD an hour the guard admits three `standard-4` containers,
+  whatever the cap. Full use of the cap needs the ceiling below:
+
+  | lean concurrency | burn ceiling (`standard-4` at list rate) |
+  | ---------------- | ---------------------------------------- |
+  | 3                | 1.50 USD/h (default)                     |
+  | 16               | 6.50 USD/h                               |
+  | 48               | 19.50 USD/h                              |
+  | 64               | 26.00 USD/h                              |
+
+  An operator raises the ceiling together with the monthly budget, so a
+  larger pool shortens queues without lifting the cap on the month.
+
+- `max_instances` per container class is the pool's cap plus 8, headroom for
+  containers still stopping. A test asserts cap < `max_instances` for every
+  pool, on the committed vars and on the code defaults.
 - A claim that admits adds a jitter of up to 2 seconds before the container
   starts, so a burst of admissions does not hit the container start-rate
   limit at once.

@@ -47,7 +47,7 @@ times an overhead factor for Workflow steps and Durable Objects
 
 ### Monthly budget
 
-- `SPEND_BUDGET_MONTHLY_USD` sets the budget. Unset, the budget is **90 USD**.
+- `SPEND_BUDGET_MONTHLY_USD` sets the budget. Unset, the budget is **50 USD**.
   `unlimited` disables the monthly check. A `CONFIG_KV` value at
   `spend.budgetMonthlyUsd` overrides the variable, so an operator raises the
   budget without a deploy.
@@ -110,7 +110,7 @@ Billable Usage API shows how far apart the two are.
 
 ## Consequences
 
-- At the defaults, checks skip once a month's estimated spend reaches 90 USD.
+- At the defaults, checks skip once a month's estimated spend reaches 50 USD.
   Wide fan-outs queue behind the burn ceiling and run slower.
 - Raising either limit is a single `CONFIG_KV` write.
 - The meter estimates spend; it is not the invoice. The Billable Usage API
