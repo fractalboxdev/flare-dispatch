@@ -59,7 +59,7 @@ so a budget buys more checks.
 
 ### Prebuilt heavy native dependencies in the image
 
-- The lean sandbox image ships sha256-pinned prebuilt shared libraries and
+- The Rust variant of the lean sandbox image ships sha256-pinned prebuilt shared libraries and
   headers for native dependencies that dominate a cold compile, DuckDB first,
   and exports the paths the dependency's build script reads in linked mode
   (`DUCKDB_LIB_DIR`, `DUCKDB_INCLUDE_DIR`).
