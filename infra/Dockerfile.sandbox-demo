@@ -154,8 +154,13 @@ RUN if [ "$WITH_RUST" = "true" ]; then \
 #   `duckdb_library_version()` against the pinned crate's DuckDB version),
 #   because a linked library of the wrong version compiles cleanly and
 #   misbehaves at runtime;
-# - move DUCKDB_VERSION here and its crate pin together: libduckdb-sys
-#   1.10505.x pairs with DuckDB v1.5.5.
+# - move DUCKDB_VERSION and the digest below together with its crate pin:
+#   libduckdb-sys 1.10505.x pairs with DuckDB v1.5.5.
+#
+# In a linked Linux build DUCKDB_LIB_DIR wins over every other source,
+# `DUCKDB_DOWNLOAD_LIB=1` included: a consumer whose crate pin differs from
+# DUCKDB_VERSION links this library, not the one its crate would download,
+# unless its run command unsets DUCKDB_LIB_DIR first.
 #
 # The ENV paths are set in every variant; with WITH_RUST=false the directory
 # is absent and nothing in the image reads them. The release asset is
