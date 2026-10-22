@@ -17,6 +17,7 @@ export {
   type RunSpec,
   type RunLimits,
   type CooldownSpec,
+  type OptInContext,
   type HumanGateSpec,
   type SandboxImage,
   type SerializeSpec,
@@ -259,6 +260,8 @@ export {
   type CheckConclusion,
   type CheckOutput,
   type CheckRunState,
+  type CheckDelivery,
+  type CheckConcludeOptions,
 } from "./services/checks";
 export {
   spawnChildRun,

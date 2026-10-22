@@ -114,7 +114,7 @@ import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
 import { preAssertedApproval, resolveTargets, runGrant, runsOnFacade } from "./grant-catalog";
 import { selectAdmission, selectSandboxNs } from "./sandbox-routing";
-import { queuedSummary, serialQueuedSummary } from "./admission-summary";
+import { nextPositionReport, type PositionReport, queuedSummary, serialQueuedSummary } from "./admission-summary";
 import {
   appendFailureSummary,
   type FailedStepRow,
@@ -376,7 +376,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             stepDo,
             store,
             cancelTree: (rootId, markerId) =>
-              cancelSupersededTree(rootId, markerId, liveSupersedePorts(env, store, checks)),
+              cancelSupersededTree(rootId, markerId, close.group, liveSupersedePorts(env, store, checks)),
           });
           yield* Effect.logInfo(
             `pull request closed: ${close.group} — cancelled ${cancelled.length} execution(s)${cancelled.length > 0 ? `: ${cancelled.join(", ")}` : ""}`,
@@ -473,6 +473,9 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // output title carries the attempt so a re-run reads as one.
     const attempt = payload.attempt ?? 1;
     const checkRunTitle = checkRunTitleFor(checkRunName, attempt);
+    // The installation the check-run posts under — `null` on a deploy or
+    // dispatch with no live `Checks` Layer, where no verdict is owed.
+    const deliveryInstallationId = resolveChecksConfig(this.env, payload.github)?.installationId ?? null;
     // The Cloudflare Workflows instance page for this execution — the "Details"
     // link on the GitHub check-run + a markdown link in its summary. `undefined`
     // when CLOUDFLARE_ACCOUNT_ID is unset (BYOC default): the check-run renders
@@ -798,9 +801,12 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // The canceller waits for this id before terminating the Workflow.
       // If cancellation won during creation, the opener concludes the check.
       const active = yield* persistCheckRunId(checkRunId, {
+        // The installation rides beside the id: it marks the row as owing a
+        // verdict on GitHub, which the reconcile sweep re-sends if the
+        // concluding write never lands (delivery-sweep.ts).
         persist: (id) => Effect.tryPromise(() =>
-          db.prepare(`UPDATE executions SET check_run_id = ? WHERE id = ?`)
-            .bind(id, payload.executionId).run(),
+          db.prepare(`UPDATE executions SET check_run_id = ?, installation_id = ? WHERE id = ?`)
+            .bind(id, deliveryInstallationId, payload.executionId).run(),
         ).pipe(Effect.retry(Schedule.once.pipe(Schedule.addDelay(() => "500 millis"))), Effect.asVoid, Effect.orDie),
         status: supersessions.status(payload.executionId),
         cancel: (id) => checks.update({
@@ -831,8 +837,8 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         {
           stepDo,
           store: supersessions,
-          cancelTree: (olderId) =>
-            cancelSupersededTree(olderId, payload.executionId, liveSupersedePorts(env, supersessions, checks)),
+          cancelTree: (olderId, group) =>
+            cancelSupersededTree(olderId, payload.executionId, group, liveSupersedePorts(env, supersessions, checks)),
           concludeCancelled: (summary) =>
             checks.update({
               repo: payload.github.repo,
@@ -966,7 +972,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           admissionMaxQueueAgeMs,
           ADMISSION_POLL_EVERY_MS,
         );
-        let lastReportedPosition: number | undefined;
+        let lastReport: PositionReport | undefined;
 
         for (let i = 0; i < maxAttempts; i++) {
           // A child reads its parent's row before each claim: once a parent
@@ -1055,11 +1061,13 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           }
 
           // `wait`: surface the queue position on the in-progress check-run
-          // — only when it CHANGED, bounding GitHub API writes to at most
-          // one per drained peer. Best-effort: a GitHub blip while queued
-          // must never kill the run.
-          if (decision.position !== lastReportedPosition) {
-            lastReportedPosition = decision.position;
+          // — only when its bucket changes, at most once a minute
+          // (admission-summary.ts), and only while the installation's quota
+          // is above the verdict reserve (checks-github.ts). Best-effort: a
+          // GitHub blip while queued must never kill the run.
+          const report = nextPositionReport(lastReport, decision.position, observed.now);
+          if (report !== undefined) {
+            lastReport = report;
             yield* checks
               .progress({
                 repo: payload.github.repo,
@@ -1068,7 +1076,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                 output: {
                   title: checkRunTitle,
                   summary: queuedSummary(
-                    decision.position,
+                    report.bucket,
                     decision.poolBusy,
                     admissionCap,
                     enqueuedAt + admissionMaxQueueAgeMs,
@@ -1528,8 +1536,15 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // has no `summary_json` for `/demos/:execution` to render.
       const demoSuffix = demoUrl !== undefined ? ` — [▶ view product demo ↗](${demoUrl})` : "";
       const writebackSuffix = writebackLine !== undefined ? `\n\n${writebackLine}` : "";
-      yield* checks.update({
+      //
+      // The write runs in a durable step: it may create the check-run (an
+      // opener that degraded left none), and a replay must not create a
+      // second. `delivered_at` records that GitHub took it; a row without one
+      // is re-sent by the reconcile sweep (delivery-sweep.ts).
+      const delivery = yield* stepDo("deliver-verdict", () => Effect.runPromise(checks.conclude({
         repo: payload.github.repo,
+        sha: payload.github.sha,
+        name: checkRunName,
         checkRunId,
         // `skipped` has no check-run conclusion of its own in the Checks
         // service — it lands as `neutral` (passes branch protection, renders
@@ -1555,7 +1570,21 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                     ),
                 }),
         },
-      });
+      })));
+      if (delivery._tag === "delivered") {
+        yield* Effect.tryPromise(() =>
+          db.prepare(`UPDATE executions SET delivered_at = ?, check_run_id = ? WHERE id = ?`)
+            .bind(Date.now(), delivery.checkRunId, payload.executionId).run(),
+        ).pipe(
+          Effect.catchAll((cause) =>
+            Effect.logWarning(`delivery: delivered_at not recorded — ${String(cause)}`),
+          ),
+        );
+      } else {
+        yield* Effect.logWarning(
+          `delivery: verdict for ${payload.executionId} ${delivery._tag} (${delivery.reason}) — the reconcile sweep re-sends it`,
+        );
+      }
 
       // A fan-out parent concludes any child check-run still open — one whose
       // own terminal update never landed (child-check-runs.ts). Best-effort.
