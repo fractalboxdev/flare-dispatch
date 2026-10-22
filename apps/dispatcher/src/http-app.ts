@@ -322,6 +322,7 @@ const dashboardData = Effect.gen(function* () {
         logsUrl: Option.getOrNull(logsUrl),
         demosUrl: Option.getOrNull(demosUrl),
         selfHealPrUrl,
+        supersededBy: row.superseded_by ?? null,
       } satisfies DashboardRow;
     }),
   );

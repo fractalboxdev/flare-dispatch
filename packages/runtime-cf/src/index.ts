@@ -87,6 +87,7 @@ export {
 export {
   makeRunSupersedeD1,
   TERMINAL_EXECUTION_STATUSES,
+  type CancelOutcome,
   type RunSupersedeStore,
   type SupersededRow,
 } from "./run-supersede-d1";
