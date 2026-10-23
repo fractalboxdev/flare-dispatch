@@ -27,7 +27,8 @@
 //
 // A deploy without a durable process owner (`Sandbox.checkCommand` absent),
 // and a command short enough that one step is the honest unit, run as a
-// single retryable `<name>` step with `ensure` inside it.
+// single retryable `<name>` step with `ensure` inside it. A command that must
+// not run twice (a deploy) sets `singleStepRetries: 0` for that step.
 //
 // Layer: 03-dsl § Primitives. Rides on `sandbox`, `step` and `checkpointSleep`.
 
@@ -95,6 +96,13 @@ export type DurableExecOpts<E> = {
   readonly relaunches?: number;
   /** Platform retries per step. Default 3. */
   readonly retries?: number;
+  /**
+   * Platform retries for the single-step form (a command within
+   * `DURABLE_EXEC_MIN_TIMEOUT_SEC`, or no durable owner). That step re-runs the
+   * whole command, so a caller whose command must not run twice passes 0.
+   * Default `retries`.
+   */
+  readonly singleStepRetries?: number;
 };
 
 export type DurableExecResult = { readonly result: ExecResult; readonly workspace: Workspace };
@@ -112,6 +120,7 @@ export const durableExec = <E>(
     const timeoutSec = opts.exec(opts.workspace).timeoutSec;
 
     if (durable === undefined || timeoutSec <= DURABLE_EXEC_MIN_TIMEOUT_SEC) {
+      const singleStepRetries = opts.singleStepRetries ?? retry.retries;
       // The checkpoint stays an `ExecResult` with the workspace beside it, so an
       // instance that checkpointed a bare `ExecResult` replays unchanged.
       const { workspace = opts.workspace, ...result } = yield* step(
@@ -122,7 +131,11 @@ export const durableExec = <E>(
             const result = yield* sandbox.exec({ ...opts.exec(ws), container: ws.container });
             return { ...result, workspace: ws } as ExecResult & { workspace?: Workspace };
           }),
-        { ...retry, timeoutSec: timeoutSec + STEP_TIMEOUT_HEADROOM_SEC },
+        {
+          // With no retries, no failure class applies.
+          ...(singleStepRetries > 0 ? { ...retry, retries: singleStepRetries } : { retries: 0 }),
+          timeoutSec: timeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
+        },
       );
       return { result, workspace };
     }

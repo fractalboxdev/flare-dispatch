@@ -661,10 +661,17 @@ wrangler kv key put --binding=CONFIG_KV \
 
 `timeoutSec` precedence is dispatch value → `worker-deploy.timeoutSec:<repo>` → 900. A malformed value degrades to 900.
 
-**A deploy is never step-retried.** The `exec` step runs with `retries: 0` and a
-Workflow step timeout of the exec timeout + 120s, so the sandbox's deadline —
-not the platform's 600s step default — ends a slow deploy, and a failure is
-reported once instead of re-publishing every Worker on a second attempt.
+**A deploy launches once.** The deploy command runs as one process the sandbox
+owns (`durableExec`), watched by short `exec-start` / `exec-observe-<i>` /
+`exec-finalize` steps. Those steps retry platform failures — a restarted
+Workflow instance, a dropped sandbox connection — and `exec-start` claims the
+launch once, so a retry never starts a second deploy. A process the sandbox
+loses (its container recycled) fails `SandboxProcessLost`, since the deploy may
+already have published; a dispatch whose command may safely run twice — a
+preview publish of one commit — sets `"relaunchOnProcessLoss": true` to
+relaunch it once in a fresh container. Without a durable process owner, or with
+an exec timeout of 600s or less, the command runs as a single `exec` step with
+`retries: 0` and a Workflow step timeout of the exec timeout + 120s.
 
 ```mermaid
 flowchart TB
@@ -675,7 +682,7 @@ flowchart TB
   head --> is{"head is<br/>the dispatched sha?"}
   is -->|"no, requireHead"| skip["**neutral**<br/>superseded by the head"]
   is -->|"yes, or unknown"| checkout["**checkout**<br/>clone the sha"]
-  checkout --> exec["**exec**<br/>secrets loaded inline<br/>retries 0, step timeout +120s"]
+  checkout --> exec["**exec**<br/>secrets loaded inline<br/>one durable process, launched once"]
   exec --> upload["**upload-log**<br/>step.log"]
   upload --> code{"exit code"}
   code -->|0| ok["**success**<br/>deployed"]
