@@ -105,23 +105,35 @@ so a budget buys more checks.
 
 - Every push to contextful's default branch starts `contextful-cache-warm`,
   whatever the two-tier opt-in. It needs no `CONFIG_KV` key.
-- One container per head: checkout with install, the gate's prebuilt
-  `contextful-ci`, then the gate's `workspace.compile` part
-  (`cargo test --workspace --no-run`) under the compile-cache wrapper, with
-  the identical command, checkout path and environment a gate part uses. It
-  spawns no child and posts no part check-run.
-- Its token's lane is `base`. Before any checkout the run reads the default
-  branch's head and skips unless it equals the run's head; an unreadable head
-  skips too. Pull-request gates keep reading `@pr-<n>` then `@base` and
-  writing `@pr-<n>`.
+- The head lists its compile groups with `contextful-ci stages --parts
+  --compile-groups`, once per tier: one gate part per distinct set of
+  `cargo test` invocations, so one CLI shard stands for all eight. Each group
+  compiles through `gate --stage <part> --compile-only`, the part's own cargo
+  invocations with `--no-run`. The command, checkout path, install,
+  prebuilt `contextful-ci` and environment are the ones a gate part uses.
+- The groups spread round-robin, in run order, over at most four children of
+  the run. Each child checks out the head and compiles its share in one
+  container, and it starts no group more than 2 h after it starts. The parent
+  gives its container and admission slot to the children and joins them. No
+  warm posts a part check-run.
+- A tree whose `contextful-ci` lists no groups compiles `workspace.compile`
+  (`cargo test --workspace --no-run`) in the parent's container, as does a
+  head with one group.
+- Its token's lane is `base`. Before any checkout, the run and each child read
+  the default branch's head. Each skips unless that head equals its own, and
+  an unreadable head skips too. Pull-request gates keep reading `@pr-<n>` then
+  `@base` and writing `@pr-<n>`.
 - One supersession group per repository and default branch, ranked by the
-  head commit's timestamp: a newer head cancels the older warm, queued or
-  running. The idempotency key is the head, so an equal head warms once.
-- It skips when the deploy injects no compile-cache access, and when
-  `gate.lightLabels:<repo>` omits `workspace.compile`: the heavy tier then
-  compiles that part into `@base` on the same push.
-- A failed compile concludes the warm green with its exit code; the gate
-  owns the verdict on the head.
+  head commit's timestamp: a newer head cancels the older warm and its
+  children, queued or running. The idempotency key is the head, so an equal
+  head warms once.
+- It skips when the deploy injects no compile-cache access. With
+  `gate.lightLabels:<repo>` set, it leaves out each pull-request group that is
+  heavy, meaning neither the group nor its fold label is light, because the
+  heavy tier compiles that group into `@base` on the same push. Nightly groups
+  always warm.
+- A failed or timed-out compile leaves the warm green with its exit code, and
+  the next group still runs. The gate owns the verdict on the head.
 
 ## Rationale
 
