@@ -152,4 +152,41 @@ describe("durableExec", () => {
       expect(calls.some((c) => c.startsWith("finalize:"))).toBe(false);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect("singleStepRetries: 0 keeps the single step to one attempt; the durable steps still retry", () => {
+    const short = makeCFRuntimeTest();
+    const long = makeCFRuntimeTest();
+    const calls: string[] = [];
+    return Effect.gen(function* () {
+      // No durable owner: the whole command is one step, and it must not re-run.
+      yield* durableExec({
+        name: "deploy",
+        workspace: ws,
+        ensure: Effect.succeed,
+        exec: exec(900),
+        singleStepRetries: 0,
+      }).pipe(Effect.provide(short.layer));
+      const only = short.handles.executions.steps.find((s) => s.name === "deploy");
+      // PRE-FIX: 3
+      expect(only?.metadata?.["stepOpts.retries"]).toBe(0);
+      expect(only?.metadata?.["stepOpts.retryOn"]).toBeUndefined();
+      expect(only?.metadata?.["stepOpts.timeoutSec"]).toBe(1_020);
+
+      // A durable owner: launch and observation are short steps a retry cannot
+      // turn into a second process, so they keep their retries.
+      yield* Effect.gen(function* () {
+        const original = yield* Sandbox;
+        yield* durableExec({
+          name: "deploy",
+          workspace: ws,
+          ensure: Effect.succeed,
+          exec: exec(900),
+          singleStepRetries: 0,
+        }).pipe(Effect.provideService(Sandbox, { ...original, checkCommand: loses(0, calls) }));
+      }).pipe(Effect.provide(long.layer));
+      const start = long.handles.executions.steps.find((s) => s.name === "deploy-start");
+      expect(start?.metadata?.["stepOpts.retries"]).toBe(3);
+      expect(start?.metadata?.["stepOpts.retryOn"]).toEqual(["ExecFailed", "StepFailed", "CheckoutFailed"]);
+    });
+  });
 });
