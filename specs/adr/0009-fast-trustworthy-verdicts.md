@@ -57,13 +57,13 @@
 - Branch protection on the light tier is the repository owner's setting, not
   the dispatcher's.
 - The compile cache's `@base` lane does not wait on this opt-in: every
-  default-branch push warms it (ADR-0007 § Base-lane warm), and the warm
-  stands down when the heavy tier compiles the same part.
+  default-branch push warms it (ADR-0007 § Base-lane warm), and the warm runs
+  independently of whether the heavy tier also compiles the same part.
 
 ### Pools sized under the spend guard
 
-- `ADMISSION_CAP` per pool is an upper bound. ADR-0006's burn ceiling sets the
-  operating concurrency: a pool admits at most
+- `ADMISSION_CAP` per pool is an upper bound. ADR-0006's burn ceiling sets
+  the operating concurrency: a pool admits at most
   `min(cap, ceiling / instance hourly rate)` at once, summed across pools.
 - The lean pool's cap is 48 by default. It moves to 64 once a week at 48 shows
   no container start-rate errors and no placement retries. The browser pool
@@ -92,9 +92,9 @@
 ## Rationale
 
 A class costs nothing when the pool is free and removes the one wait a
-developer feels most. Delivery is the product: a computed verdict that never
+ developer feels most. Delivery is the product: a computed verdict that never
 reaches GitHub costs the same as one that does and reads as a hang. A two-tier
-gate puts the minutes-scale check where the merge decision is made and runs
+ gate puts the minutes-scale check where the merge decision is made and runs
 the slow matrix where it can still catch regressions.
 
 ## Consequences
