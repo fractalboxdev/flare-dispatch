@@ -303,15 +303,20 @@ export type ReleaseAssetResult = {
   readonly downloadUrl: string;
 };
 
+/**
+ * A multi-platform release image: each platform's `.image.json` descriptor,
+ * staged by the release cell that built it, pushed as one image index under
+ * `version`.
+ */
 export type PublishContainerImage = {
   readonly repo: string;
   readonly profile: string;
   readonly version: string;
-  readonly sourceExecutionId: string;
-  readonly layerArtifactName: string;
-  readonly layerSize: number;
-  readonly layerDigest: string;
-  readonly diffId: string;
+  /** In index order, amd64 before arm64. */
+  readonly platforms: ReadonlyArray<{
+    readonly sourceExecutionId: string;
+    readonly imageArtifactName: string;
+  }>;
 };
 
 /**

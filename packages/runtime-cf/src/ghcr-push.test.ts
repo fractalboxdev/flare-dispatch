@@ -1,106 +1,122 @@
 import { describe, expect, it } from "vitest";
-import { classifyGhcrFailure, pushGhcrImage } from "./ghcr-push";
+import { classifyGhcrFailure, pushGhcrImageIndex, type GhcrPlatformImage } from "./ghcr-push";
 
-describe("pushGhcrImage", () => {
-  it("publishes OCI blobs and a versioned manifest without sending credentials in image bytes", async () => {
-    const requests: Array<{ url: string; method: string; auth: string | null; body: Uint8Array }> = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const request = new Request(input, init);
-      const url = new URL(request.url);
-      const bytes = request.body === null ? new Uint8Array() : new Uint8Array(await request.arrayBuffer());
-      requests.push({ url: request.url, method: request.method, auth: request.headers.get("authorization"), body: bytes });
-      if (url.pathname === "/token") return Response.json({ token: "registry-bearer" });
-      if (request.method === "HEAD") return new Response(null, { status: 404 });
-      if (request.method === "POST") return new Response(null, { status: 202, headers: { Location: `/v2/${"fractalboxdev/contextful/contextful-edge"}/blobs/uploads/session` } });
-      if (request.method === "PUT") return new Response(null, { status: 201 });
-      throw new Error(`unexpected ${request.method} ${request.url}`);
-    };
-    await pushGhcrImage({ username: "bot", token: "test-pat", name: "fractalboxdev/contextful/contextful-edge", tag: "0.5.0",
-      layer: new Uint8Array([1, 2, 3]), layerSize: 3,
-      layerDigest: "a".repeat(64), diffId: "b".repeat(64), fetchImpl });
+const hex = async (bytes: Uint8Array): Promise<string> =>
+  Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+const MANIFEST = "application/vnd.oci.image.manifest.v1+json";
+const INDEX = "application/vnd.oci.image.index.v1+json";
+
+/** One platform as `contextful-ci image` describes it: keys sorted, blobs verbatim. */
+const platformImage = async (architecture: "amd64" | "arm64", layerByte: number): Promise<GhcrPlatformImage> => {
+  const layer = new Uint8Array([layerByte, 2, 3]);
+  const layerDigest = `sha256:${await hex(layer)}`;
+  const config = new TextEncoder().encode(JSON.stringify({ architecture, os: "linux" }));
+  const configDigest = `sha256:${await hex(config)}`;
+  const manifest = new TextEncoder().encode(JSON.stringify({
+    config: { digest: configDigest, mediaType: "application/vnd.oci.image.config.v1+json", size: config.byteLength },
+    layers: [{ digest: layerDigest, mediaType: "application/vnd.oci.image.layer.v1.tar+gzip", size: layer.byteLength }],
+    mediaType: MANIFEST, schemaVersion: 2,
+  }));
+  const manifestDigest = `sha256:${await hex(manifest)}`;
+  return { layerDigest, layerSize: layer.byteLength, openLayer: async () => layer, configDigest, config,
+    manifestDigest, manifest, entry: { digest: manifestDigest, mediaType: MANIFEST,
+      platform: { architecture, os: "linux", ...(architecture === "arm64" ? { variant: "v8" } : {}) },
+      size: manifest.byteLength } };
+};
+
+type Recorded = { url: string; method: string; auth: string | null; type: string | null; body: Uint8Array };
+/** A registry that has nothing and accepts every upload, recording each request. */
+const emptyRegistry = (requests: Recorded[], location = "/v2/o/r/p/blobs/uploads/session"): typeof fetch =>
+  async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    const body = request.body === null ? new Uint8Array() : new Uint8Array(await request.arrayBuffer());
+    requests.push({ url: request.url, method: request.method, auth: request.headers.get("authorization"),
+      type: request.headers.get("content-type"), body });
+    if (url.pathname === "/token") return Response.json({ token: "registry-bearer" });
+    if (request.method === "HEAD") return new Response(null, { status: 404 });
+    if (request.method === "POST") return new Response(null, { status: 202, headers: { Location: location } });
+    if (request.method === "PUT") return new Response(null, { status: 201 });
+    throw new Error(`unexpected ${request.method} ${request.url}`);
+  };
+
+describe("pushGhcrImageIndex", () => {
+  it("pushes each platform's blobs and manifest by digest, then the index by tag", async () => {
+    const requests: Recorded[] = [];
+    const platforms = [await platformImage("amd64", 1), await platformImage("arm64", 9)];
+    await pushGhcrImageIndex({ username: "bot", token: "test-pat", name: "o/r/p", tag: "0.5.0", platforms,
+      fetchImpl: emptyRegistry(requests) });
     expect(requests[0]?.auth).toBe(`Basic ${btoa("bot:test-pat")}`);
-    expect(requests.filter((r) => r.method === "PUT")).toHaveLength(3);
-    expect(requests.at(-1)?.url).toContain("/manifests/0.5.0");
-    expect(requests.at(-1)?.auth).toBe("Bearer registry-bearer");
-    expect(new TextDecoder().decode(requests.at(-1)!.body)).not.toContain("test-pat");
+    const manifests = requests.filter((r) => r.method === "PUT" && r.url.includes("/manifests/"));
+    expect(manifests.map((r) => new URL(r.url).pathname)).toEqual([
+      `/v2/o/r/p/manifests/${platforms[0]!.manifestDigest}`,
+      `/v2/o/r/p/manifests/${platforms[1]!.manifestDigest}`,
+      "/v2/o/r/p/manifests/0.5.0",
+    ]);
+    expect(manifests.map((r) => r.type)).toEqual([MANIFEST, MANIFEST, INDEX]);
+    expect(manifests[0]!.body).toEqual(platforms[0]!.manifest);
+    expect(new TextDecoder().decode(manifests[2]!.body)).toBe(`{"manifests":[${
+      platforms.map((p) => JSON.stringify(p.entry)).join(",")}],"mediaType":"${INDEX}","schemaVersion":2}`);
+    expect(requests.every((r) => !new TextDecoder().decode(r.body).includes("test-pat"))).toBe(true);
   });
 
-  it("uploads every blob as application/octet-stream, which GHCR requires, and types only the manifest", async () => {
+  it("uploads every blob as application/octet-stream, which GHCR requires, config verbatim", async () => {
     // GHCR answers 404 to a blob PUT carrying an OCI media type as its Content-Type.
-    const puts: Array<{ path: string; type: string | null }> = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const request = new Request(input, init);
-      const url = new URL(request.url);
-      if (url.pathname === "/token") return Response.json({ token: "registry-bearer" });
-      if (request.method === "HEAD") return new Response(null, { status: 404 });
-      if (request.method === "POST") return new Response(null, { status: 202, headers: { Location: "/v2/o/r/p/blobs/upload/1.session" } });
-      puts.push({ path: url.pathname, type: request.headers.get("content-type") });
-      const blobUpload = url.pathname.includes("/blobs/");
-      return blobUpload && request.headers.get("content-type") !== "application/octet-stream"
-        ? new Response(null, { status: 404 }) : new Response(null, { status: 201 });
-    };
-    await pushGhcrImage({ username: "bot", token: "test-pat", name: "o/r/p", tag: "0.5.0",
-      layer: new Uint8Array([1, 2, 3]), layerSize: 3,
-      layerDigest: "a".repeat(64), diffId: "b".repeat(64), fetchImpl });
-    expect(puts.filter((put) => put.path.includes("/blobs/")).map((put) => put.type))
-      .toEqual(["application/octet-stream", "application/octet-stream"]);
-    expect(puts.at(-1)).toEqual({ path: "/v2/o/r/p/manifests/0.5.0", type: "application/vnd.oci.image.manifest.v1+json" });
+    const requests: Recorded[] = [];
+    const platform = await platformImage("amd64", 1);
+    await pushGhcrImageIndex({ username: "bot", token: "test-pat", name: "o/r/p", tag: "0.5.0",
+      platforms: [platform], fetchImpl: emptyRegistry(requests) });
+    const blobs = requests.filter((r) => r.method === "PUT" && !r.url.includes("/manifests/"));
+    expect(blobs.map((r) => r.type)).toEqual(["application/octet-stream", "application/octet-stream"]);
+    expect(blobs.map((r) => new URL(r.url).searchParams.get("digest"))).toEqual([platform.layerDigest, platform.configDigest]);
+    expect(blobs[1]!.body).toEqual(platform.config);
   });
 
-  it("keeps an existing matching image tag and refuses a conflicting tag", async () => {
-    let manifestDigest: string | undefined;
-    const requests: string[] = [];
+  it("keeps an existing matching index tag and refuses a conflicting one", async () => {
+    let indexDigest: string | undefined;
+    const requests: Recorded[] = [];
+    const registry = emptyRegistry(requests);
     const fetchImpl: typeof fetch = async (input, init) => {
       const request = new Request(input, init);
-      requests.push(`${request.method} ${request.url}`);
-      if (new URL(request.url).pathname === "/token") return Response.json({ token: "registry-bearer" });
-      if (request.method === "HEAD" && request.url.endsWith("/manifests/0.5.0")) {
-        return manifestDigest === undefined ? new Response(null, { status: 404 }) :
-          new Response(null, { status: 200, headers: { "Docker-Content-Digest": manifestDigest } });
+      if (request.url.endsWith("/manifests/0.5.0")) {
+        if (request.method === "HEAD") {
+          return indexDigest === undefined ? new Response(null, { status: 404 }) :
+            new Response(null, { status: 200, headers: { "Docker-Content-Digest": indexDigest } });
+        }
+        indexDigest = `sha256:${await hex(new Uint8Array(await request.clone().arrayBuffer()))}`;
       }
-      if (request.method === "HEAD") return new Response(null, { status: 404 });
-      if (request.method === "POST") return new Response(null, { status: 202,
-        headers: { Location: "/v2/fractalboxdev/contextful/contextful-edge/blobs/uploads/session" } });
-      if (request.method === "PUT" && request.url.endsWith("/manifests/0.5.0")) {
-        const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", await request.arrayBuffer()));
-        manifestDigest = `sha256:${Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-        return new Response(null, { status: 201 });
-      }
-      if (request.method === "PUT") return new Response(null, { status: 201 });
-      throw new Error(`unexpected ${request.method} ${request.url}`);
+      return registry(request);
     };
-    const opts = { username: "bot", token: "test-pat", name: "fractalboxdev/contextful/contextful-edge",
-      tag: "0.5.0", layer: new Uint8Array([1]), layerSize: 1,
-      layerDigest: "a".repeat(64), diffId: "b".repeat(64), fetchImpl };
-    await pushGhcrImage(opts);
+    const opts = { username: "bot", token: "test-pat", name: "o/r/p", tag: "0.5.0",
+      platforms: [await platformImage("amd64", 1), await platformImage("arm64", 9)], fetchImpl };
+    await pushGhcrImageIndex(opts);
     const afterPublish = requests.length;
-    await pushGhcrImage(opts);
-    expect(requests.slice(afterPublish)).toHaveLength(2);
-    manifestDigest = "sha256:" + "c".repeat(64);
-    await expect(pushGhcrImage(opts)).rejects.toThrow("already names a different manifest");
+    await pushGhcrImageIndex(opts);
+    expect(requests.slice(afterPublish)).toHaveLength(1);
+    indexDigest = `sha256:${"c".repeat(64)}`;
+    await expect(pushGhcrImageIndex(opts)).rejects.toThrow("already names a different manifest");
   });
 
-  it("does not forward the registry bearer token to a cross-host upload URL", async () => {
-    const uploads: Request[] = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const request = new Request(input, init);
-      const url = new URL(request.url);
-      if (url.pathname === "/token") return Response.json({ token: "registry-bearer" });
-      if (request.method === "HEAD") return new Response(null, { status: 404 });
-      if (request.method === "POST") return new Response(null, { status: 202,
-        headers: { Location: "https://upload.example.test/blob?signature=test" } });
-      if (request.method === "PUT" && url.hostname === "upload.example.test") {
-        uploads.push(request);
-        return new Response(null, { status: 201 });
-      }
-      if (request.method === "PUT") return new Response(null, { status: 201 });
-      throw new Error(`unexpected ${request.method} ${request.url}`);
-    };
-    await pushGhcrImage({ username: "bot", token: "test-pat", name: "fractalboxdev/contextful/contextful-edge",
-      tag: "0.5.0", layer: new Uint8Array([1]), layerSize: 1,
-      layerDigest: "a".repeat(64), diffId: "b".repeat(64), fetchImpl });
+  it("refuses a platform whose blobs differ from their digests or whose entry names another manifest", async () => {
+    const good = await platformImage("amd64", 1);
+    const push = (platform: GhcrPlatformImage) => pushGhcrImageIndex({ username: "bot", token: "t", name: "o/r/p",
+      tag: "0.5.0", platforms: [platform], fetchImpl: emptyRegistry([]) });
+    await expect(push({ ...good, config: new TextEncoder().encode("{}") })).rejects.toThrow("invalid OCI image");
+    await expect(push({ ...good, layerDigest: `sha256:${"e".repeat(64)}` })).rejects.toThrow("invalid OCI image");
+    await expect(push({ ...good, entry: { ...good.entry, digest: `sha256:${"e".repeat(64)}` } })).rejects.toThrow("invalid OCI image");
+  });
+
+  it("opens a layer only when the registry lacks it, and never forwards the bearer to a cross-host upload", async () => {
+    const requests: Recorded[] = [];
+    let opened = 0;
+    const platform = await platformImage("amd64", 1);
+    await pushGhcrImageIndex({ username: "bot", token: "test-pat", name: "o/r/p", tag: "0.5.0",
+      platforms: [{ ...platform, openLayer: async () => { opened++; return platform.openLayer(); } }],
+      fetchImpl: emptyRegistry(requests, "https://upload.example.test/blob?signature=test") });
+    expect(opened).toBe(1);
+    const uploads = requests.filter((r) => new URL(r.url).hostname === "upload.example.test");
     expect(uploads).toHaveLength(2);
-    expect(uploads.every((request) => request.headers.get("authorization") === null)).toBe(true);
+    expect(uploads.every((r) => r.auth === null)).toBe(true);
   });
 });
 
