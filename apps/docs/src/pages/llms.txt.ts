@@ -10,7 +10,7 @@ export const GET: APIRoute = async ({ site }) => {
   const lines = [
     "# FlareDispatch",
     "",
-    "> BYOC CI/CD that moves the expensive half of GitHub Actions onto a Cloudflare stack you own — Workflows for orchestration, Containers for execution, Browser Rendering for e2e, R2 for cache and artifacts. Runs are typed Effect-TS programs, not YAML. The substrate is its execution environment for agentic work, consumed only through a service-binding facade.",
+    "> Local-first CI/CD deployed into your own Cloudflare account. Cloudflare is the control plane: it classifies, meters and leases each run and reports the verdict to GitHub. Runs execute first on hardware you own and spill to Cloudflare Containers and AWS when owned capacity cannot meet the deadline. Runs are typed Effect v4 programs, not YAML. These pages are the specifications and decision records.",
     "",
     `The full text of every page is at ${new URL("/llms-full.txt", base).href}.`,
     "",

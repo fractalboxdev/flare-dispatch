@@ -1,16 +1,7 @@
-// Section order shared by /llms.txt and /llms-full.txt — the sidebar's order.
-export const SECTIONS = [
-  { key: "index", title: "Overview" },
-  { key: "actions", title: "GitHub Actions" },
-  { key: "runs", title: "Run catalog" },
-  { key: "substrate", title: "Substrate guides" },
-  { key: "reference", title: "API reference" },
-  { key: "design", title: "Design records" },
-] as const;
+// Section order shared by /llms.txt and /llms-full.txt — the sidebar's order (nav.mjs).
+import { SECTIONS, sectionOf } from "./nav.mjs";
 
-// Docs ids live under `docs/`; the section is the segment after it, and `docs` itself is
-// the overview.
-export const sectionOf = (id: string): string => id.replace(/^docs\/?/, "").split("/")[0] || "index";
+export { SECTIONS, sectionOf };
 
 export const sectionRank = (id: string): number => {
   const i = SECTIONS.findIndex((s) => s.key === sectionOf(id));

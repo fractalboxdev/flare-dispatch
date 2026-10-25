@@ -2,170 +2,255 @@
 import { Code } from "@astrojs/starlight/components";
 import Landing from "../layouts/Landing.astro";
 import HeroDiagram from "../components/landing/HeroDiagram.astro";
-import BillingTimeline from "../components/landing/BillingTimeline.astro";
-import { INSTANCE_SPECS, containerMicroUsdPerSec } from "../data/benchmarks";
-import { REPO_URL } from "../lib/llms";
+import Diagram from "../components/landing/Diagram.astro";
+import { fencedLease, lifecycle, placement } from "../components/landing/diagrams";
 
 const DESCRIPTION =
-  "BYOC CI/CD that runs agentic code review, Playwright e2e, acceptance suites, sharded matrices and security scans on Cloudflare — billed per vCPU-second in your own account. Runs are typed Effect-TS programs, not YAML.";
+  "Local-first CI/CD in your own Cloudflare account. Cloudflare is the control plane; executions run first on hardware you own and spill to Cloudflare Containers, with required checks going on to AWS while Containers are unavailable, under a spend guard and a fenced lease. Runs are typed Effect programs, not YAML.";
 
-// §02 cost card. GitHub-hosted Linux x64 per-minute rates
-// (docs.github.com/en/billing/reference/actions-runner-pricing); the FlareDispatch figure
-// prices the vCPU-active minutes on a standard-2 container through the cost engine that
-// meters real executions (src/data/benchmarks.ts).
-const RUN_MINUTES = 10;
-const ACTIVE_SECONDS = 120;
-const instance = INSTANCE_SPECS["standard-2"];
-const fdUsd = (ACTIVE_SECONDS * containerMicroUsdPerSec("standard-2")) / 1_000_000;
-const runners = [
-  { label: "ubuntu-latest", sub: "2-core · GHA", perMin: 0.006 },
-  { label: "4-core larger runner", sub: "4-core · GHA", perMin: 0.012 },
-  { label: "8-core larger runner", sub: "8-core · GHA", perMin: 0.022 },
-];
-const minRatio = Math.floor((runners[0].perMin * RUN_MINUTES) / fdUsd);
-const maxRatio = Math.floor((runners[runners.length - 1].perMin * RUN_MINUTES) / fdUsd);
-
-const value = [
+const why = [
   {
-    id: "01 / Cost",
-    title: "Pay per vCPU-second",
-    body: "Heavy compute bills at Cloudflare Container rates — per vCPU-second, scaled to zero between runs — instead of per GitHub Actions minute. The jobs that dominate a CI bill move to the cheapest place to run them.",
+    id: "01.01 / Warm state",
+    title: "Owned hardware runs first",
+    body: "Dependencies, build outputs, browsers and model weights stay on the device's disk between runs, with R2 as the second cache level. A warm job needs fewer minutes, not only cheaper ones.",
   },
   {
-    id: "02 / Headroom",
-    title: "No platform ceilings",
-    body: "No 6-hour job limit: each run declares its own wall-time ceiling. No 10 GB cache cap: the dependency cache lives in your R2 bucket. Artifact retention is yours to set.",
+    id: "01.02 / Ceiling",
+    title: "A spend ceiling no cloud meter offers",
+    body: "Owned capacity is fixed, so a runaway retry loop or a fan-out bug costs queue time, not money. Cloud spill and hosted model tokens run under the spend guard.",
   },
   {
-    id: "03 / Fit",
-    title: "Install the App, or keep Actions",
-    body: "In webhook mode the GitHub App fires runs on every PR with no workflow file and zero Actions minutes. In Action mode a workflow step dispatches the run, for jobs that interleave with the rest of a pipeline. Either way the verdict lands as a check-run.",
+    id: "01.03 / Floor",
+    title: "The cloud is the floor, not the default",
+    body: "Cloudflare Containers take every guaranteed execution that owned hardware cannot claim before its deadline; AWS takes required (P1) checks while the Containers breaker is open. Releases and fork PRs run in the cloud by rule.",
   },
 ];
 
-const capabilities = [
+const wins = [
+  { dim: "Warm state: deps, builds, browsers", owned: "Stays on local disk between runs", cloud: "Starts cold every execution", verdict: "Owned" },
+  { dim: "Apple-platform builds", owned: "Native macOS guests", cloud: "Not available", verdict: "Owned" },
+  { dim: "Large memory, local models", owned: "Unified memory holds model weights", cloud: "Fixed memory per instance", verdict: "Owned" },
+  { dim: "Worst-case month", owned: "Fixed by the hardware", cloud: "Bounded by the spend guard", verdict: "Owned" },
+  { dim: "Availability", owned: "One machine: sleep, updates, power", cloud: "Provider SLA", verdict: "Cloud" },
+  { dim: "Burst fan-out", owned: "Fixed slot count", cloud: "Elastic up to the pool cap", verdict: "Cloud" },
+  { dim: "Untrusted code (fork PRs)", owned: "Shares hardware with personal credentials", cloud: "Disposable container", verdict: "Cloud only" },
+  { dim: "Release provenance", owned: "Device-signed", cloud: "Cold build, countersigned, logged", verdict: "Cloud" },
+];
+
+const rules = [
   {
-    id: "05.01 / Agentic review",
-    title: "Review runs that read the whole diff",
-    body: "pr-review fans a diff out to per-domain reviewers, or one generalist, and posts a single verdict with a severity table and per-finding blob links.",
+    title: "Fork PR code never runs on owned hardware.",
+    body: "Owned devices run only code from people with write access. Stranger code runs in a disposable cloud container.",
   },
   {
-    id: "05.02 / Writeback",
-    title: "Propose the fix back as a PR",
-    body: "self-heal-pr runs a coding agent in a credential-free sandbox and opens a draft PR only when the repro goes green; spec-drift-pr and improve-pr file their proposals the same way. The Worker holds the App key, never the agent.",
+    title: "Confidential-compute code never leaves owned hardware.",
+    body: "A confidential-compute repository has no cloud floor. With no eligible managed device, its execution waits until its deadline, then concludes failure. A fork-PR, tag or P0 request in such a repository has no eligible executor and concludes failure (placement: no eligible executor) at intake, without waiting.",
   },
   {
-    id: "05.03 / Model routing",
-    title: "Provider-agnostic model gateway",
-    body: "Model calls route to Workers AI, Anthropic or Bedrock, chosen per run from KV config with no redeploy. Bedrock signs with SigV4, with no long-lived AWS keys in the Worker.",
+    title: "Unclassified data never reaches a hosted model.",
+    body: "Confidential-model is the default: model calls start in the job VM on an owned device, and the cloud floor runs the check without model calls.",
   },
   {
-    id: "05.04 / Admission control",
-    title: "Bursts queue instead of failing",
-    body: "A FIFO admission gate caps in-flight runs at the pool size, and the check-run shows the queue position while a run waits. Runs that must not overlap declare a serial group.",
+    title: "Releases build in the cloud.",
+    body: "P0 executions run on Cloudflare Containers from admission, cold from the commit, with provenance under the control plane's key. A release-matrix job that needs macOS runs on GitHub Actions instead.",
   },
   {
-    id: "05.05 / Session replay",
-    title: "Scrub the walkthrough inline",
-    body: "product-demo drives a deployed app over CDP with session recording; reviewers replay it in an rrweb player linked from the check-run and the result email.",
+    title: "Local-first is a delayed cloud claim, not a race.",
+    body: "The placement row holds a local entry claimable at once and a cloud entry eligible at the claim deadline. The first compare-and-set from queued to leased wins the epoch and every later claim at that epoch is refused, so one copy runs; a reclaim increments the epoch.",
+  },
+];
+
+const classes = [
+  { cls: "P0", name: "release", runs: "Release and deploy runs", deadline: "None: cloud at admission", outcome: "failure, named reason" },
+  { cls: "P1", name: "required", runs: "Runs the target branch's ruleset requires", deadline: "60 s", outcome: "Waits until deadline_at, then failure" },
+  { cls: "P2", name: "interactive", runs: "pr-review, self-heal-pr and gating runs whose check is not required", deadline: "5 min", outcome: "failure at its queue age" },
+  { cls: "P3", name: "batch", runs: "Crons, improve-pr, triage", deadline: "Half the run's period", outcome: "Deferred to the next tick" },
+];
+
+const lines = [
+  { cls: "P3", at: "P3 line", note: "stops first", pct: 38 },
+  { cls: "P2", at: "B − R0 − R1", note: "keeps the required reserve", pct: 68 },
+  { cls: "P1", at: "B − R0", note: "required checks and ops runs", pct: 88 },
+  { cls: "P0", at: "B", note: "releases spend to the budget", pct: 100 },
+];
+
+const failures = [
+  { failure: "Sleep, reboot, OS update", detect: "Heartbeat stops", effect: "P1 and P2 work restarts in the cloud; confidential-compute work waits for another device; batch work requeues locally" },
+  { failure: "ISP or power loss", detect: "Heartbeat stops", effect: "Same; batch work waits for the device or its staleness point" },
+  { failure: "Control-plane deploy", detect: "Sockets drop", effect: "The agent reconnects; lease TTLs count from the restart; results replay from its outbox" },
+  { failure: "Job stalled, agent alive", detect: "Progress timeout", effect: "Reclaimed like a dead device" },
+  { failure: "Device returns with stale work", detect: "Epoch mismatch, revoked token", effect: "Result discarded; stale writes blocked" },
+];
+
+const routing = [
+  { step: "Confidentiality", body: "A confidential-model or confidential-compute repository never calls a hosted model, and never falls back to one." },
+  { step: "Task tier", body: "Judgment calls (review, plan, write code) go hosted. Bulk calls (classify, extract, summarize, embed) run locally when their input is on owned hardware." },
+  { step: "Data location", body: "A bulk call inside a spilled cloud step uses a small hosted model instead of pulling data back to the device." },
+  { step: "Budget", body: "Hosted calls reserve their allowance inside the class line. At the line, bulk calls drop to a local model and judgment calls conclude failure, budget." },
+];
+
+const tiers = [
+  { tier: "device-signed", proves: "This attested device produced it, unaltered since", use: "Test verdicts, logs, internal artifacts" },
+  { tier: "platform", proves: "These inputs and this process; the job could not reach the signer", use: "PR artifacts, preview deploys" },
+  { tier: "reproduced", proves: "The source produces exactly this output: a cold rebuild on a dedicated attested device with digests equal to the cloud build's", use: "Releases, published packages and images" },
+];
+
+const recipes = [
+  {
+    id: "08.01 / Gate",
+    title: "check and oxlint",
+    body: "One command per check run in a fresh VM or container. The exit code maps to the conclusion, and the log links from the check.",
+    href: "/docs/runs/gate/",
   },
   {
-    id: "05.06 / Observability signals",
-    title: "Bring your own APM",
-    body: "ci-triage-pr reads the vendor-neutral signals/v1 shape from a small adapter on your side — Datadog, SigNoz, HyperDX or your own — so no observability key sits in the Dispatcher.",
+    id: "08.02 / Gate",
+    title: "Test shards and job matrices",
+    body: "offload-test and the job-matrix primitive fan a suite out as child executions whose class never ranks above the parent's.",
+    href: "/docs/runs/gate/",
+  },
+  {
+    id: "08.03 / Agentic",
+    title: "pr-review",
+    body: "Local embeddings retrieve context and a local pre-pass drops style nits; a hosted judgment model writes the one review the author reads.",
+    href: "/docs/runs/agentic/",
+  },
+  {
+    id: "08.04 / Agentic",
+    title: "self-heal-pr, improve-pr, spec-drift-pr",
+    body: "The agent edits in a job VM that holds no GitHub token. The control plane applies the staged write after a path allowlist and a secret scan.",
+    href: "/docs/runs/agentic/",
+  },
+  {
+    id: "08.05 / Agentic",
+    title: "ci-triage-pr",
+    body: "A bulk model classifies the failed job from its logs; a judgment model writes the fix proposal.",
+    href: "/docs/runs/agentic/",
+  },
+  {
+    id: "08.06 / Rule",
+    title: "The trifecta rule",
+    body: "No agentic run holds private data, untrusted content and outbound communication at once. Every agentic recipe is reviewed against it.",
+    href: "/docs/runs/agentic/",
   },
 ];
 
 const bets = [
   {
-    statement: "<strong>Progressive</strong> offloading.",
-    body: "Move CI one job at a time, heaviest first. GitHub Actions keeps the cheap jobs and the PR gate; nothing is all-or-nothing.",
+    statement: "Cloudflare <strong>schedules</strong>; devices execute.",
+    body: "The control plane owns every guarantee, deadline, spill and check. A device's local scheduler places only unguaranteed work (dev loops, agent swarms, rehearsals) inside a capacity lease, so a device's uptime never becomes the system's.",
+  },
+  {
+    statement: "<strong>Queue</strong>, then fail.",
+    body: "A budget, capacity, deadline or halt outcome never concludes success or neutral. Every red check carries the reason it is red.",
   },
   {
     statement: "Runs are <strong>typed programs</strong>, not YAML.",
-    body: "A run is an Effect-TS program: Schema-typed inputs and outputs, durable steps, tagged errors, exhaustive matching. Fork it, edit it, unit-test it without booting a container.",
+    body: "Effect v4 programs on an engine this repository owns: Schema-typed inputs and outputs, journaled steps, tagged errors. A run tests against a memory engine and a fake executor, with no container.",
   },
   {
     statement: "BYOC <strong>by construction</strong>.",
-    body: "Each organization deploys its own Dispatcher and GitHub App into its own Cloudflare account. There is no multi-tenant operator and no hosted service to trust.",
+    body: "Each organization deploys its own control plane into its own Cloudflare account and registers its own devices. There is no multi-tenant operator and no hosted service to trust.",
   },
 ];
 
-const workflowYaml = `# .github/workflows/ci.yml — Action mode
-- uses: fractalboxdev/flare-dispatch/actions/flare-dispatch-action@<sha>
-  with:
-    run: offload-test
-    endpoint: \${{ vars.FLAREDISPATCH_ENDPOINT }}
-    hmac-secret: \${{ secrets.FLAREDISPATCH_HMAC }}
-    inputs: |
-      { "repo": "\${{ github.repository }}", "sha": "\${{ github.sha }}", "command": "pnpm test" }`;
-
-const runTs = `// runs/oxlint.ts, condensed — webhook mode, no workflow file
-export const oxlint = defineRun({
-  name: "oxlint",
-  triggers: [{ event: "pull_request", actions: ["opened", "synchronize"], inputs }],
-  inputs: OxlintInput,   // Schema.Struct({ repo, sha, args, version, … })
-  outputs: OxlintOutput, // Schema.Struct({ exitCode, durationMs, logUri, skipped })
-  limits: { maxDurationSec: 600 },
-
-  run: (input) =>
+const runTs = `// runs/check.ts, condensed
+export const check = defineRun(
+  {
+    name: "check",
+    version: "1.0.0",
+    input: CheckInput, // Schema.Struct({ repo, sha, entry }); entry is the repo manifest's check entry
+    requires: ["Workspace", "Exec", "Artifact"],
+    limits: { maxDurationSec: 4500, qosClass: "P1", qosCeiling: "P1" },
+    triggers: [pullRequestTrigger], // DispatchEvent => Option<CheckInput>
+  },
+  (input) =>
     Effect.gen(function* () {
-      const { container, dir } = yield* step("checkout", () =>
-        workspace({ repo: input.repo, sha: input.sha, install: false }),
-      );
-      const result = yield* step("exec", () =>
-        sandbox.exec({ container, cwd: dir, command: "npx --yes oxlint@1.79.0" }),
-      );
-      const logUri = yield* step("upload-log", () =>
-        artifact.upload({ name: "oxlint.log", path: result.logPath, signedUrlTTL: "30 days" }),
-      );
+      const { dir } = yield* checkout({ repo: input.repo, sha: input.sha });
+      const result = yield* exec({ cwd: dir, command: input.entry.command, timeoutSec: input.entry.timeoutSec });
+      yield* artifact.upload({ name: \`\${input.entry.label}.log\`, path: result.logPath });
       if (result.exitCode !== 0) {
-        return yield* Effect.fail(new AcceptanceFailed({ exitCode: result.exitCode, summaryMd: logUri }));
+        return yield* Effect.fail(new CheckFailed({ reason: \`exit: \${result.exitCode}\` }));
       }
-      return { exitCode: 0, durationMs: result.durationMs, logUri, skipped: false };
     }),
-});`;
+);`;
+
+const policyJson = `{
+  "default": { "mode": "local-first" },
+  "rules": [
+    { "match": { "trigger": "fork-pr" }, "mode": "cloud-only" },
+    { "match": { "branch": "refs/tags/*" }, "mode": "cloud-only", "authority": "cloud" },
+    { "match": { "repo": "org/confidential-*" }, "constraint": "confidential-compute" },
+    { "match": { "trigger": "local" }, "mode": "local-only", "authority": "advisory" }
+  ]
+}`;
 
 const snippets = [
-  { id: "workflow", label: "ci.yml", lang: "yaml" as const, code: workflowYaml, blurb: "Dispatch a registered run from a workflow step; the verdict arrives as the flare-dispatch/offload-test check-run.", href: "/docs/actions/flare-dispatch-action/" },
-  { id: "run", label: "oxlint.ts", lang: "ts" as const, code: runTs, blurb: "A run is a program: typed contract, durable steps, a tagged failure that turns the check red.", href: "/docs/runs/" },
+  {
+    id: "run",
+    label: "check.ts",
+    lang: "ts" as const,
+    code: runTs,
+    blurb: "A run is a program: a typed contract, journaled steps, a tagged failure that maps to the check's conclusion. The same program runs on every executor.",
+    href: "/docs/run-model/",
+  },
+  {
+    id: "policy",
+    label: "placement policy",
+    lang: "json" as const,
+    code: policyJson,
+    blurb: "Placement is configuration: the first matching rule picks the mode and which result is authoritative. Moving a run between modes changes no code.",
+    href: "/docs/qos-admission/",
+  },
 ];
 ---
 
-<Landing title="FlareDispatch — offload the expensive half of GitHub Actions onto Cloudflare" description={DESCRIPTION}>
+<Landing title="FlareDispatch — local-first CI/CD in your own Cloudflare account" description={DESCRIPTION}>
   <section class="hero">
     <div class="container">
       <div class="hero__meta">
         <span class="section-marker reveal" data-delay="1">§00 / Manifest</span>
-        <span class="section-marker reveal" data-delay="1">BYOC · open source</span>
+        <span class="section-marker reveal" data-delay="1">BYOC · local-first · open source</span>
       </div>
-      <h1 class="hero__title reveal" data-delay="2">
-        Offload the <em>expensive&#160;half</em> of GitHub&#160;Actions onto Cloudflare.
-      </h1>
-      <p class="hero__sub reveal" data-delay="3">
-        FlareDispatch moves agentic code review, Playwright e2e, acceptance suites, sharded matrices and
-        security scans off GitHub-hosted runners and onto Cloudflare — billed per vCPU-second in your own
-        account. Trigger a run from a workflow step or a cron schedule, or install the GitHub App and let
-        runs fire on every PR with zero Actions minutes.
-      </p>
-      <div class="hero__cta reveal" data-delay="4">
-        <a class="btn" href="/docs/actions/flare-dispatch-action/">Offload a job</a>
-        <a class="btn btn--ghost" href="/docs/">Read the docs</a>
-        <a class="btn btn--ghost" href="/docs/runs/">Run catalog</a>
+      <div class="hero__grid">
+        <div>
+          <h1 class="hero__title reveal" data-delay="2">
+            Run CI on <em>hardware you&#160;own</em>. Spill to the cloud on a deadline.
+          </h1>
+          <p class="hero__sub reveal" data-delay="3">
+            FlareDispatch is local-first CI/CD that you deploy into your own Cloudflare account. Cloudflare is the
+            control plane: it verifies each trigger, classifies and meters the execution, leases it to an executor
+            and posts the verdict to GitHub. Executions run first on hardware you own (a Mac running
+            <code>flare-dispatchd</code>, one VM per job) and spill to Cloudflare Containers, with required checks going on to AWS, when owned
+            capacity cannot meet the deadline.
+          </p>
+          <div class="hero__cta reveal" data-delay="4">
+            <a class="btn" href="/docs/">Read the specs</a>
+            <a class="btn btn--ghost" href="/docs/architecture/">Architecture</a>
+            <a class="btn btn--ghost" href="/docs/adr/">Decision records</a>
+          </div>
+        </div>
+        <div class="reveal" data-delay="3">
+          <HeroDiagram />
+        </div>
       </div>
     </div>
-    <HeroDiagram />
   </section>
 
   <section class="tenets">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§01 / Why it pays off</span>
-        <h2>Heavy CI at the price of raw serverless compute.</h2>
+        <span class="section-marker">§01 / Why local-first</span>
+        <h2>The real cost of CI is cold state, not CPU.</h2>
+        <p class="section-lede">
+          An ephemeral runner re-downloads dependencies, rebuilds unchanged packages, re-installs browsers and re-loads
+          model weights on every job. A machine that keeps that state hot beats it on those jobs, and loses on burst
+          fan-out, untrusted code and anything that needs an uptime promise. FlareDispatch routes each kind of work by
+          rule.
+        </p>
       </div>
       <div class="tenets__grid">
         {
-          value.map((v) => (
+          why.map((v) => (
             <article class="tenet">
               <span class="tenet__id">{v.id}</span>
               <h3 class="tenet__title">{v.title}</h3>
@@ -174,99 +259,301 @@ const snippets = [
           ))
         }
       </div>
+      <div class="compare__wrap compare__wrap--spaced">
+        <table class="compare__table">
+          <caption class="sr-only">Where owned hardware wins and where the cloud wins</caption>
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>Owned hardware</th>
+              <th>Cloudflare Containers</th>
+              <th>Runs on</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              wins.map((w) => (
+                <tr>
+                  <td>{w.dim}</td>
+                  <td>{w.owned}</td>
+                  <td>{w.cloud}</td>
+                  <td class:list={[w.verdict === "Owned" ? "compare__yes" : "compare__cloud"]}>{w.verdict}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 
-  <section class="bottleneck">
+  <section class="band">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§02 / The bottleneck</span>
-        <h2>Most of a code-review run is the model thinking, not your CPU working.</h2>
-        <p class="bottleneck__lede">
-          An agentic review is mostly LLM I/O: the run waits on the model while the vCPU idles. GitHub
-          Actions bills that wait by the wall-clock minute. FlareDispatch bills container vCPU-seconds, and
-          the model wait runs in a Workflow step that accrues no container time — so a run pays for its <em>active</em>
-          slivers, here about a fifth of it.
+        <span class="section-marker">§02 / Placement</span>
+        <h2>Placement rules hold before any deadline does.</h2>
+        <p class="section-lede">
+          Each execution carries a class and a claim deadline from intake. Placement constraints remove executors from
+          the eligible set first; the deadline then decides between owned hardware and the cloud.
         </p>
       </div>
-      <div class="bottleneck__split">
-        <BillingTimeline />
-        <aside class="cost-card" aria-label={`Sample cost for one ${RUN_MINUTES}-minute code-review run`}>
-          <span class="cost-card__eyebrow">Sample cost · one {RUN_MINUTES}-min review</span>
-          <table class="cost-card__table">
+      <div class="split">
+        <Diagram
+          id="placement"
+          source={placement}
+          width={520}
+          caption="Fig. 1 · constraints first, then the claim deadline"
+        />
+        <div>
+          <ol class="rules">
+            {
+              rules.map((r, i) => (
+                <li class="rule-item">
+                  <span class="rule-item__num">§02.0{i + 1}</span>
+                  <div>
+                    <p class="rule-item__title">{r.title}</p>
+                    <p class="rule-item__body">{r.body}</p>
+                  </div>
+                </li>
+              ))
+            }
+          </ol>
+          <p class="more">
+            <a href="/docs/placement-leases/">Placement and leases →</a>
+            <a href="/docs/isolation-egress/">Isolation and egress →</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§03 / Queue, then fail</span>
+        <h2>No budget or capacity outcome turns a check green.</h2>
+        <p class="section-lede">
+          GitHub counts a <code>neutral</code> conclusion as passing for a required check. So an execution that meets its
+          class line or an empty pool queues for a claim until its deadline (a P2 until its queue age), then concludes
+          <code>failure</code> with a named reason: budget, capacity or deadline. An operator halt concludes it
+          <code>failure</code> with reason halt, and supersession concludes <code>cancelled</code>.
+        </p>
+      </div>
+      <div class="split split--reverse">
+        <div class="compare__wrap">
+          <table class="compare__table">
+            <caption class="sr-only">QoS classes, their claim deadlines on owned hardware, and their outcome at the line</caption>
             <thead>
               <tr>
-                <th>Runner</th>
-                <th>$&#8239;/&#8239;min</th>
-                <th>/ run</th>
+                <th>Class</th>
+                <th>Runs</th>
+                <th>Local claim deadline</th>
+                <th>At its line or deadline</th>
               </tr>
             </thead>
             <tbody>
               {
-                runners.map((r) => (
+                classes.map((c) => (
                   <tr>
-                    <th scope="row">
-                      <code>{r.label}</code>
-                      <span class="cost-card__sub">{r.sub}</span>
-                    </th>
-                    <td>{r.perMin.toFixed(3)}</td>
-                    <td>${(r.perMin * RUN_MINUTES).toFixed(3)}</td>
+                    <td>
+                      <span class="class-tag">{c.cls}</span> <code>{c.name}</code>
+                    </td>
+                    <td>{c.runs}</td>
+                    <td>{c.deadline}</td>
+                    <td>{c.outcome}</td>
                   </tr>
                 ))
               }
-              <tr class="cost-card__total">
-                <th scope="row">
-                  <code>flare-dispatch</code>
-                  <span class="cost-card__sub">~{ACTIVE_SECONDS / 60}&#8239;min active · standard-2</span>
-                </th>
-                <td>vCPU-s</td>
-                <td class="cost-card__win">~${fdUsd.toFixed(3)}</td>
-              </tr>
             </tbody>
           </table>
-          <p class="cost-card__verdict">{minRatio}–{maxRatio}× cheaper per run</p>
-          <p class="cost-card__note">
-            Review is I/O-bound and never needs the cores, yet GitHub bills all {RUN_MINUTES}&#8239;minutes at
-            the runner's rate, so a bigger runner only widens the gap. The FlareDispatch figure prices {ACTIVE_SECONDS / 60}&#8239;minutes
-            on a {instance.vcpu}-vCPU, {instance.gib}&#8239;GiB container. CI compute only — model
-            tokens cost the same either way. GitHub rates are Linux x64 list prices; container rates come from
-            the <a href={`${REPO_URL}/blob/main/packages/core/src/cost.ts`}>rate card</a>.
+          <p class="more">
+            <a href="/docs/qos-admission/">QoS and admission →</a>
+            <a href="/docs/github-output/">GitHub output →</a>
           </p>
-        </aside>
+        </div>
+        <Diagram
+          id="lifecycle"
+          source={lifecycle}
+          width={560}
+          caption="Fig. 2 · a guaranteed execution, intake to verdict"
+        />
       </div>
     </div>
   </section>
 
-  <section class="compare">
+  <section class="band">
     <div class="container">
-      <div class="compare__intro">
-        <div>
-          <span class="section-marker">§03 / Positioning</span>
-          <h2>Every other option gives up one of three things.</h2>
-        </div>
-        <p>
-          Hosted runners are easy but bill per minute under hard ceilings. Self-hosted and hybrid runners lift
-          the ceilings and hand you a fleet to operate. FlareDispatch runs on serverless Cloudflare primitives
-          in an account you already own.
+      <div class="tenets__header">
+        <span class="section-marker">§04 / Spend guard</span>
+        <h2>Admission keeps committed spend under the budget; a settle above its hold pages.</h2>
+        <p class="section-lede">
+          Cloudflare has no account-level spending cap. The spend guard admits an execution only when its hold (the
+          executor's rate over the window to its deadline plus the settle margin, plus its model allowance and network
+          estimate) fits under its class line.
+          Month-to-date spend counts settled cost plus open reservations. Execution on owned hardware costs no container
+          time; its hosted model tokens still count.
         </p>
       </div>
-      <div class="compare__wrap">
-        <table class="compare__table">
-          <thead>
-            <tr>
-              <th>Heavy-CI option</th>
-              <th>Serverless, scale-to-zero compute</th>
-              <th>No 6&#8239;h / 10&#8239;GB ceilings</th>
-              <th>No runner fleet to operate</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td>GHA hosted runners</td><td class="compare__no">—</td><td class="compare__no">—</td><td class="compare__yes">✓</td></tr>
-            <tr><td>Self-hosted runners</td><td class="compare__no">—</td><td class="compare__yes">✓</td><td class="compare__no">—</td></tr>
-            <tr><td>Buildkite Agent (hybrid)</td><td class="compare__no">—</td><td class="compare__yes">✓</td><td class="compare__no">—</td></tr>
-            <tr class="is-flare-dispatch"><td>FlareDispatch</td><td class="compare__yes">✓</td><td class="compare__yes">✓</td><td class="compare__yes">✓</td></tr>
-          </tbody>
-        </table>
+      <div class="split">
+        <figure class="lines" aria-labelledby="lines-caption">
+          <ol class="lines__list">
+            {
+              lines.map((l) => (
+                <li class="lines__row">
+                  <span class="lines__cls">{l.cls}</span>
+                  <span class="lines__track">
+                    <span class="lines__bar" style={`width: ${l.pct}%`}>
+                      <code>{l.at}</code>
+                    </span>
+                  </span>
+                  <span class="lines__note">{l.note}</span>
+                </li>
+              ))
+            }
+          </ol>
+          <figcaption id="lines-caption">
+            Fig. 3 · nested class lines on one meter, P3 ≤ P2 ≤ P1 ≤ P0 = B. R0 reserves release spend; R1 covers
+            required checks through a fleet-down spill and is recomputed daily. Widths are illustrative.
+          </figcaption>
+        </figure>
+        <div>
+          <ul class="facts">
+            <li>
+              <strong>Holds, then settle.</strong> Admission reserves the worst case; settling replaces the reservation with
+              the metered cost in one D1 batch.
+            </li>
+            <li>
+              <strong>Burn lanes.</strong> Nested hourly lanes cap the summed list rate each class may admit, so a fleet-down
+              burst cannot spend the month in an afternoon.
+            </li>
+            <li>
+              <strong>Operator halt.</strong> One control stops admission for a scope; the claim statement reads it.
+            </li>
+          </ul>
+          <aside class="formal">
+            <span class="formal__eyebrow">Formal model</span>
+            <p>
+              The spend, placement, outbox, staged-write and fencing kernels have Lean 4 models. Differential random
+              testing runs the TypeScript kernel against the compiled Lean oracle, so the theorem and the code that
+              admits executions answer the same way.
+            </p>
+            <p class="more">
+              <a href="/docs/spend/">Spend →</a>
+              <a href="/docs/adr/0018-formal-models/">Formal models →</a>
+            </p>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§05 / Fenced leases</span>
+        <h2>A dead Mac costs time, never a wrong check.</h2>
+        <p class="section-lede">
+          An executor holds an execution under a lease for one epoch, renewed by heartbeat. When the heartbeat stops, the
+          control plane reclaims the lease, increments the epoch and restarts the execution elsewhere under a hold
+          re-admitted to cover the earlier epochs and the new executor's window. It accepts a result only at the current epoch, mints credentials per lease and revokes them on reclaim,
+          and keys log and cache writes by epoch, so a device that wakes late cannot overwrite the cloud's work.
+        </p>
+      </div>
+      <div class="split">
+        <Diagram
+          id="fenced-lease"
+          source={fencedLease}
+          width={560}
+          caption="Fig. 4 · reclaim, restart, reject the stale result"
+        />
+        <div class="compare__wrap">
+          <table class="compare__table">
+            <caption class="sr-only">Device failures, how the control plane detects them, and their effect</caption>
+            <thead>
+              <tr>
+                <th>Failure</th>
+                <th>Detected by</th>
+                <th>Effect</th>
+              </tr>
+            </thead>
+            <tbody>
+              {
+                failures.map((f) => (
+                  <tr>
+                    <td>{f.failure}</td>
+                    <td>{f.detect}</td>
+                    <td>{f.effect}</td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+          <p class="more">
+            <a href="/docs/placement-leases/">Placement and leases →</a>
+            <a href="/docs/executor-protocol/">Executor protocol →</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§06 / Models and provenance</span>
+        <h2>Move the model to the data, and prove where a build ran.</h2>
+      </div>
+      <div class="split split--even">
+        <div>
+          <h3 class="sub-head">Model routing</h3>
+          <p class="sub-lede">
+            Most AI steps read large inputs (logs, diffs, traces) and write small outputs (a verdict, a comment). Each
+            call is placed in order:
+          </p>
+          <ol class="steps">
+            {
+              routing.map((r) => (
+                <li>
+                  <span>
+                    <strong>{r.step}.</strong> {r.body}
+                  </span>
+                </li>
+              ))
+            }
+          </ol>
+          <p class="more"><a href="/docs/model-gateway/">Model gateway →</a></p>
+        </div>
+        <div>
+          <h3 class="sub-head">Provenance tiers</h3>
+          <p class="sub-lede">
+            Every executor emits the same in-toto statement. Its tier says what it proves; the verification policy decides
+            what counts.
+          </p>
+          <div class="compare__wrap">
+            <table class="compare__table">
+              <caption class="sr-only">Provenance tiers, what each proves and where it is used</caption>
+              <thead>
+                <tr>
+                  <th>Tier</th>
+                  <th>Proves</th>
+                  <th>Used for</th>
+                </tr>
+              </thead>
+              <tbody>
+                {
+                  tiers.map((t) => (
+                    <tr>
+                      <td><code>{t.tier}</code></td>
+                      <td>{t.proves}</td>
+                      <td>{t.use}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+          <p class="more"><a href="/docs/provenance/">Provenance →</a></p>
+        </div>
       </div>
     </div>
   </section>
@@ -274,8 +561,8 @@ const snippets = [
   <section class="snippets">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§04 / The code</span>
-        <h2>One step to dispatch. One program to run.</h2>
+        <span class="section-marker">§07 / The code</span>
+        <h2>One program per run. One policy for where it runs.</h2>
       </div>
       <div class="snippets__widget">
         <div class="snippets__tabs" role="tablist" aria-label="Code samples">
@@ -321,17 +608,17 @@ const snippets = [
   <section class="tenets">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§05 / Platform</span>
-        <h2>More than runs: the platform underneath.</h2>
+        <span class="section-marker">§08 / Recipes</span>
+        <h2>Gate and agentic recipes ship in the catalog.</h2>
       </div>
       <div class="tenets__grid">
         {
-          capabilities.map((c) => (
-            <article class="tenet">
-              <span class="tenet__id">{c.id}</span>
-              <h3 class="tenet__title">{c.title}</h3>
-              <p class="tenet__rationale">{c.body}</p>
-            </article>
+          recipes.map((r) => (
+            <a class="tenet tenet--link" href={r.href}>
+              <span class="tenet__id">{r.id}</span>
+              <h3 class="tenet__title">{r.title}</h3>
+              <p class="tenet__rationale">{r.body}</p>
+            </a>
           ))
         }
       </div>
@@ -341,14 +628,14 @@ const snippets = [
   <section class="manifesto">
     <div class="container">
       <div class="manifesto__header">
-        <span class="section-marker">§06 / Design philosophy</span>
-        <h2>Three bets the design rests on.</h2>
+        <span class="section-marker">§09 / Design philosophy</span>
+        <h2>Four bets the design rests on.</h2>
       </div>
       <ol class="manifesto__list">
         {
           bets.map((b, i) => (
             <li class="manifesto__item">
-              <span class="manifesto__num">§06.0{i + 1}</span>
+              <span class="manifesto__num">§09.0{i + 1}</span>
               <div>
                 <p class="manifesto__statement" set:html={b.statement} />
                 <p class="manifesto__body">{b.body}</p>
@@ -363,13 +650,13 @@ const snippets = [
   <section class="container">
     <div class="cta-band">
       <div>
-        <span class="section-marker">§07 / Start</span>
-        <h2>One Dispatcher per org, in your own Cloudflare account.</h2>
+        <span class="section-marker">§10 / Start</span>
+        <h2>One control plane per organization, in your own Cloudflare account.</h2>
       </div>
       <div class="cta-band__actions">
-        <a class="btn" href="/docs/actions/deploy-dispatcher-action/">Deploy a Dispatcher</a>
-        <a class="btn btn--ghost" href="/docs/actions/flare-dispatch-action/">Offload a job</a>
-        <a class="btn btn--ghost" href="/benchmarks/">Benchmarks</a>
+        <a class="btn" href="/docs/">Read the specs</a>
+        <a class="btn btn--ghost" href="/docs/adr/">Decision records</a>
+        <a class="btn btn--ghost" href="/benchmarks/">Cloud spill prices</a>
       </div>
     </div>
   </section>

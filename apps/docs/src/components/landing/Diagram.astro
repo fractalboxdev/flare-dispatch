@@ -1,0 +1,27 @@
+---
+// A Mermaid diagram rendered to inline SVG at build time by Merlion. The SVG reads
+// --merlion-* tokens; .diagram in landing.css maps them onto the landing palette, so the
+// diagram follows the light and dark themes with the rest of the page.
+import "@fractalbox/merlion-themes/merlion-themes.css";
+import "@fractalbox/merlion-themes/merlion-font.css";
+import { renderDiagram } from "./merlion";
+
+interface Props {
+  /** SVG root id, `[a-z][a-z0-9-]{0,31}`, unique on the page. */
+  id: string;
+  /** Mermaid source: flowchart, sequenceDiagram or stateDiagram-v2. */
+  source: string;
+  /** Container width in px the layout fits. */
+  width?: number;
+  caption?: string;
+  class?: string;
+}
+
+const { id, source, width = 640, caption, class: className } = Astro.props;
+const svg = renderDiagram(source, id, width);
+---
+
+<figure class:list={["diagram", className]}>
+  <Fragment set:html={svg} />
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
