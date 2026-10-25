@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // mameko exports its TypeScript sources with `.ts` import specifiers and
+    // reaches for Node globals (URLSearchParams), so its kernel typechecks here
+    // under these two settings.
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

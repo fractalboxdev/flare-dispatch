@@ -1,0 +1,372 @@
+// FlareDispatch's profile document: the values of specs/qos-admission.md,
+// specs/github-output.md, specs/placement-leases.md and specs/spend.md, in the
+// form of mameko's reference CI profile (mameko specs/profiles.md § The
+// reference CI profile). Where the two disagree, the reference profile's value
+// stands here.
+//
+// The document is plain data so the configuration source can deliver it as
+// one; `loadProfile` decodes and validates it before any value takes effect.
+import type { Predicate, ProfileDocument } from "./schema.ts";
+
+/** P0 to P3. `release` is the only class that stays off devices; `required` is the one firm class. */
+const classes: ProfileDocument["classes"] = [
+  {
+    name: "release",
+    rank: 0,
+    claim_deadline: "none",
+    cloud_kinds: ["cloudflare", "gha"],
+    line: "budget",
+    guaranteed: true,
+    device_eligible: false,
+    terminal_outcome: { outcome: "failure", reason: "budget: release reserve exhausted" },
+    reserve: "release-reserve",
+    queue_age: "run",
+    bounds: { global: 16, per_scope: 8 },
+    sheddable: false,
+    retries: "run",
+    queue_full_alarm: "p0-breach",
+  },
+  {
+    name: "required",
+    rank: 1,
+    claim_deadline: { seconds: 60 },
+    cloud_kinds: ["cloudflare", "aws", "gha"],
+    line: "next-above-less-reserve",
+    guaranteed: true,
+    firm: true,
+    terminal_outcome: { outcome: "failure", reason: "budget: required reserve exhausted" },
+    reserve: "measured",
+    queue_age: "run",
+    bounds: { global: 150, per_scope: 60 },
+    sheddable: false,
+    retries: 1,
+  },
+  {
+    name: "interactive",
+    rank: 2,
+    claim_deadline: { seconds: 300 },
+    cloud_kinds: ["cloudflare", "gha"],
+    line: "next-above-less-reserve",
+    guaranteed: true,
+    terminal_outcome: { outcome: "failure", reason: "budget" },
+    queue_age: { seconds: 1800 },
+    bounds: { global: 40, per_scope: 10 },
+    sheddable: true,
+    retries: 1,
+  },
+  {
+    name: "batch",
+    rank: 3,
+    claim_deadline: "staleness",
+    cloud_kinds: ["cloudflare", "gha"],
+    line: { general_band_ratio: 0.45, floor_ratio: 0.1 },
+    guaranteed: true,
+    terminal_outcome: "deferred",
+    queue_age: "staleness",
+    bounds: { global: 30, per_run_scope: 1 },
+    sheddable: true,
+    retries: "local-only",
+    stale_after: { fraction: 0.5, without_schedule_seconds: 43_200 },
+  },
+];
+
+const checkRunMarker = "external_id equal to the execution id; updates are idempotent";
+const bodyMarker = "<!-- ci:intent <execution_id>/<intent_key> -->";
+
+/**
+ * Every kind the control plane accepts. The four check kinds are the check-run lifecycle: `check.open` at
+ * admission, `check.start` per lease grant, `check.progress` while waiting and `check.conclude` with the outcome,
+ * applied in insertion order per execution.
+ */
+const intent_kinds: ProfileDocument["intent_kinds"] = {
+  "check.open": {
+    origin: "control-plane",
+    on: "admitted",
+    payload: "checkOpenPayload",
+    delivery_tier: "effect",
+    applied_for: "any",
+    draws_reserve: true,
+    priority: 0,
+    opens_surface: true,
+    in_order: true,
+    effect_class: "adoptable",
+    applier: "checkRun",
+    marker: checkRunMarker,
+  },
+  "check.start": {
+    origin: "control-plane",
+    on: "lease-granted",
+    payload: "checkStartPayload",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 1,
+    void_after_outcome: true,
+    in_order: true,
+    effect_class: "adoptable",
+    applier: "checkRun",
+    marker: checkRunMarker,
+  },
+  "check.progress": {
+    origin: "control-plane",
+    delivery_tier: "progress",
+    applied_for: "any",
+    void_after_outcome: true,
+    in_order: true,
+    effect_class: "adoptable",
+    applier: "checkRun",
+    marker: checkRunMarker,
+  },
+  "check.conclude": {
+    origin: "control-plane",
+    delivery_tier: "outcome",
+    applied_for: "any",
+    in_order: true,
+    effect_class: "adoptable",
+    applier: "checkRun",
+    marker: checkRunMarker,
+  },
+  "check.summary": {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "adoptable",
+    applier: "checkRun",
+    marker: "the check run found by external_id",
+  },
+  "check.annotations": {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "adoptable",
+    applier: "checkRun",
+    marker: "annotations read back by check-run id",
+  },
+  comment: {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "adoptable",
+    applier: "issueComment",
+    marker: bodyMarker,
+  },
+  review: {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "adoptable",
+    applier: "pullReview",
+    marker: bodyMarker,
+  },
+  issue: {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "adoptable",
+    applier: "issue",
+    marker: bodyMarker,
+  },
+  "pr.propose": {
+    origin: "control-plane",
+    on: "accepted",
+    payload: "prProposePayload",
+    delivery_tier: "effect",
+    applied_for: ["success"],
+    priority: 2,
+    effect_class: "adoptable",
+    applier: "pullRequest",
+    marker: "the head branch name",
+  },
+  "release.draft": {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: ["success"],
+    priority: 2,
+    effect_class: "adoptable",
+    applier: "release",
+    marker: "the tag name",
+  },
+  "release.publish": {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: ["success"],
+    priority: 2,
+    effect_class: "adoptable",
+    applier: "release",
+    marker: "the tag name",
+  },
+  "canary.push": {
+    origin: "control-plane",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    ops: true,
+    effect_class: "adoptable",
+    applier: "canary",
+    marker: "the tick time in the commit message",
+  },
+  "delivery.redeliver": {
+    origin: "control-plane",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    ops: true,
+    effect_class: "adoptable",
+    applier: "webhookRedelivery",
+    marker: "the delivery's attempts, read back before a repeat",
+  },
+  label: {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "replay-safe",
+    applier: "labels",
+  },
+  "pr.close": {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "replay-safe",
+    applier: "pullRequest",
+  },
+  "dispatch.followOn": {
+    origin: "run",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "replay-safe",
+    applier: "followOn",
+  },
+  "notify.email": {
+    origin: "both",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "replay-safe",
+    applier: "notifyEmail",
+  },
+  "notify.slack": {
+    origin: "both",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "replay-safe",
+    applier: "notifySlack",
+  },
+  "notice.publish": {
+    origin: "both",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "replay-safe",
+    applier: "notice",
+  },
+};
+
+const label = (name: string): Predicate => ({ _tag: "Label", name });
+const isClass = (name: string): Predicate => ({ _tag: "Class", name });
+const not = (predicate: Predicate): Predicate => ({ _tag: "Not", predicate });
+const all = (...predicates: Predicate[]): Predicate => ({ _tag: "All", predicates });
+const anyShape = {
+  class: "any",
+  labels: "any",
+  confidentiality: "any",
+  reachability: "any",
+} as const;
+const withLabels = (...labels: string[]) => ({ ...anyShape, labels });
+
+/**
+ * The generic constraints' parameters, the `gha` launcher and five declared constraints. Every class lists `gha`
+ * last, so a macOS release-matrix job of any class keeps `gha`; the constraints remove `gha` from every other run.
+ */
+const placement: ProfileDocument["placement"] = {
+  cloud_pinned: all(isClass("release"), not(label("release-matrix"))),
+  cloud_only: { _tag: "Trigger", kind: "release-tag-push" },
+  local_only: { _tag: "UndeclaredClass" },
+  cloud_pinned_kinds: ["cloudflare"],
+  launcher_kinds: ["gha"],
+  constraints: [
+    {
+      name: "release-matrix",
+      holds_for: label("release-matrix"),
+      removes: ["cloudflare", "aws", "device"],
+    },
+    { name: "apple-build", holds_for: label("apple-build"), removes: ["cloudflare", "aws"] },
+    {
+      name: "apple-build-gha",
+      holds_for: all(label("apple-build"), not(isClass("required")), not(label("release-matrix"))),
+      removes: ["gha"],
+    },
+    {
+      name: "gha-apple-only",
+      holds_for: all(not(label("apple-build")), not(label("release-matrix"))),
+      removes: ["gha"],
+    },
+    {
+      name: "reproduction",
+      holds_for: label("reproduction"),
+      removes: ["cloudflare", "aws", "gha"],
+      requires_posture: "attested-dedicated",
+    },
+  ],
+  required: [withLabels("release-matrix")],
+  unreachable: [
+    withLabels("reproduction", "untrusted-input"),
+    withLabels("reproduction", "cloud-only"),
+    withLabels("reproduction", "expose-port"),
+    withLabels("apple-build", "expose-port"),
+  ],
+};
+
+export const profileDocument: ProfileDocument = {
+  policy_version: "flare-dispatch.v2.0",
+  classes,
+  reclaim_policy: {
+    release: "restart",
+    required: "restart",
+    interactive: "restart",
+    batch: "restart",
+  },
+  intent_kinds,
+  delivery: {
+    limit_key: "installationOf",
+    ops_class: "required",
+    undelivered_alarm: "undelivered-verdict",
+  },
+  placement,
+  host: {
+    adapter: "host-cloudflare",
+    features: ["cloudflare-containers", "durable-object-alarms"],
+  },
+};
+
+/**
+ * Per-device slot defaults for an 8-slot share. mameko keeps these on the executor's registry row, not in the
+ * profile; each device's row may replace them (FD-LEASE-056, FD-LEASE-057).
+ */
+export const deviceSlotDefaults = {
+  total: 8,
+  /** Kept free for `required`, the highest-rank device class. */
+  headroom: 2,
+  claim_caps: { interactive: 3, batch: 5, interactive_and_batch: 6 },
+} as const;
+
+/**
+ * Spend amounts the class `reserve` and `line` fields name, in micro-USD, with FlareDispatch's defaults; the
+ * operator overlay replaces each (FD-SPD-033).
+ */
+export const spendDefaults = {
+  budget: 50_000_000,
+  fixed: 0,
+  reserves: { "release-reserve": 10_000_000 },
+  ops_reserve: 5_000_000,
+  measured_reserve_min: 20_000_000,
+  measured_reserve_days: 10,
+  overhead_factor: 1.1,
+} as const;
