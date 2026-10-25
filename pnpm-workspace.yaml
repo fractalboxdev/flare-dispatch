@@ -5,12 +5,17 @@ packages:
   - "apps/substrate"
   - "apps/docs"
   - "runs"
+  # The shared coordination library, vendored as a git submodule. Its packages
+  # export TypeScript sources, which the v2 packages consume as `workspace:*`.
+  - "vendor/mameko/packages/*"
 
-# Pin effect to the reference's proven patch. effect 3.21.3+ shifts a type
+# Pin effect 3 to the reference's proven patch. effect 3.21.3+ shifts a type
 # inference (the R channel widens never->any) that trips typecheck in a few
 # suites; 3.21.2 is the version the whole substrate was validated against.
+# The selector covers effect 3 only: the v2 packages and vendor/mameko pin
+# effect at exactly 4.0.6 in their own manifests.
 overrides:
-  effect: 3.21.2
+  "effect@^3": 3.21.2
 
 # The Merlion packages install from tarballs in apps/docs/vendor/merlion and are
 # not on the npm registry, so the release-age check has no publish date to read.
