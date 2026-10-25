@@ -129,7 +129,7 @@ export type GithubFakeState = {
   /** Every `createRelease` call, in order — lets a test assert a release published. */
   readonly createReleaseCalls: CreateRelease[];
   readonly publishReleaseCalls: Array<{ repo: string; releaseId: number }>;
-  readonly publishContainerImageCalls: Array<{ repo: string; profile: string; version: string }>;
+  readonly publishContainerImageCalls: Array<{ repo: string; profile: string; version: string; images: string[] }>;
   readonly releases: Record<string, ReleaseResult>;
   readonly tagCommits: Record<string, string>;
   /** Every label ADD, in order. */
@@ -536,7 +536,8 @@ export const makeGithubFake = (
         downloadUrl: `https://github.com/${req.repo}/releases/download/${req.releaseId}/${req.artifactName}`,
       }),
     publishContainerImage: (req) => Effect.sync(() => {
-      state.publishContainerImageCalls.push({ repo: req.repo, profile: req.profile, version: req.version });
+      state.publishContainerImageCalls.push({ repo: req.repo, profile: req.profile, version: req.version,
+        images: req.platforms.map((platform) => platform.imageArtifactName) });
     }),
   };
 

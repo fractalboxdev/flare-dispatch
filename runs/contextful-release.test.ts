@@ -8,6 +8,17 @@ import { contextfulRelease, contextfulReleaseCell, contextfulReleaseFormula, REL
 const sha = "a".repeat(40);
 const repo = "fractalboxdev/contextful";
 
+/** The `.image.json` `contextful-ci image` writes for a Linux cell, at the path the cell reads. */
+const imageFiles = (profile: string, target: string): Record<string, string> => {
+  const arch = target.startsWith("x86_64") ? "amd64" : "arm64";
+  const name = `${profile}-0.5.0-linux-${arch}`;
+  return { [`/workspace/contextful/dist/${name}.image.json`]: JSON.stringify({
+    profile, version: "0.5.0", target, platform: { architecture: arch, os: "linux" },
+    layer: { digest: `sha256:${"c".repeat(64)}`, diffId: `sha256:${"d".repeat(64)}`, size: 3,
+      path: `${name}.layer.tar.gz`, mediaType: "application/vnd.oci.image.layer.v1.tar+gzip" },
+  }) };
+};
+
 /**
  * The cell verdict a failed release reports: a typed `AcceptanceFailed` whose
  * markdown the check-run renders, one bullet line per outcome.
@@ -47,7 +58,7 @@ describe("contextful-release", () => {
       live!.idempotencyKey!({ payload: { ...base, ref: "refs/tags/v0.5.0" } }));
   });
 
-  it.effect("builds and stages a dry-run cell without publishing", () => {
+  it.effect("builds and stages a dry-run Linux cell and its platform image without publishing", () => {
     const profile = "contextful-control";
     const target = "aarch64-unknown-linux-musl";
     const stem = `contextful-control-0.5.0-${target}`;
@@ -56,16 +67,21 @@ describe("contextful-release", () => {
     const { layer, handles } = makeCFRuntimeTest({
       sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
       sandboxFiles: { [`/workspace/contextful/dist/${stem}.release.json`]: manifest,
-        [`/workspace/contextful/dist/${stem}.tar.gz.sha256`]: `${"a".repeat(64)}  ${stem}.tar.gz\n` },
+        [`/workspace/contextful/dist/${stem}.tar.gz.sha256`]: `${"a".repeat(64)}  ${stem}.tar.gz\n`,
+        ...imageFiles(profile, target) },
     });
     return Effect.gen(function* () {
       const result = yield* contextfulReleaseCell.run({ repo, tag: "v0.5.0", sha,
         profile, target, releaseId: 0, dryRun: true });
       expect(result.assets).toEqual([`${stem}.tar.gz`, `${stem}.tar.gz.sha256`, `${stem}.cdx.json`]);
-      expect(result.imageLayer).toBeUndefined();
-      expect(handles.sandbox.execs.map((exec) => exec.command)).toEqual(
-        expect.arrayContaining([expect.stringContaining("release --builder zigbuild")]));
-      expect(handles.artifact.uploads).toHaveLength(3);
+      expect(result.imageLayer).toEqual({ name: "contextful-control-0.5.0-linux-arm64.layer.tar.gz",
+        imageName: "contextful-control-0.5.0-linux-arm64.image.json", arch: "arm64", size: 3,
+        digest: "c".repeat(64), diffId: "d".repeat(64) });
+      expect(handles.sandbox.execs.map((exec) => exec.command)).toEqual(expect.arrayContaining([
+        expect.stringContaining("release --builder zigbuild"),
+        expect.stringContaining(`image --profile ${profile} --version 0.5.0 --binary ${target}=target/release-artifacts/${target}/release/contextful`),
+      ]));
+      expect(handles.artifact.uploads).toHaveLength(5);
       expect(handles.executions.steps.some((entry) => entry.name.startsWith("publish-"))).toBe(false);
     }).pipe(Effect.provide(layer));
   });
@@ -79,7 +95,8 @@ describe("contextful-release", () => {
     return { profile, target, name, runtime: makeCFRuntimeTest({
       sandboxProgram: { "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  asset\n` } },
       sandboxFiles: { [`/workspace/contextful/dist/${name}.release.json`]: manifest,
-        [`/workspace/contextful/dist/${name}.tar.gz.sha256`]: `${"a".repeat(64)}  ${name}.tar.gz\n` },
+        [`/workspace/contextful/dist/${name}.tar.gz.sha256`]: `${"a".repeat(64)}  ${name}.tar.gz\n`,
+        ...imageFiles(profile, target) },
     }) };
   };
   /** A durable owner whose build runs for `polls` observations, then exits 0. */
@@ -291,11 +308,12 @@ describe("contextful-release", () => {
       .map((target) => ({ profile, target })));
   const FORMULA_ASSETS = ["contextful-control.rb", "contextful-edge.rb", "contextful-full.rb", "contextful.rb", "SHA256SUMS", "install.sh"];
   const cellOutput = (cell: Cell) => {
-    const imageLayer = cell.target === "x86_64-unknown-linux-musl" ? {
-      name: `${cell.profile}-0.5.0-linux-amd64.layer.tar.gz`, size: 3,
-      archiveName: `${cell.profile}-0.5.0-linux-amd64.oci.tar`,
+    const arch = { "x86_64-unknown-linux-musl": "amd64", "aarch64-unknown-linux-musl": "arm64" }[cell.target];
+    const imageLayer = arch === undefined ? undefined : {
+      name: `${cell.profile}-0.5.0-linux-${arch}.layer.tar.gz`, size: 3,
+      imageName: `${cell.profile}-0.5.0-linux-${arch}.image.json`, arch,
       digest: "a".repeat(64), diffId: "b".repeat(64),
-    } : undefined;
+    };
     return JSON.stringify({ ...cell,
       manifest: JSON.stringify({ ...cell, archive: "archive.tar.gz", sha256: "a".repeat(64), sbom: "sbom.cdx.json" }),
       ...(imageLayer === undefined ? {} : { imageLayer }) });
@@ -361,7 +379,7 @@ describe("contextful-release", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("publishes a draft only after ten cells, formula assets, and three images succeed", () => {
+  it.effect("publishes a draft only after ten cells, formula assets, and three two-platform images succeed", () => {
     const { layer, handles } = releaseFixture(() => "success");
     handles.github.tagCommits[`${repo}:v0.5.0`] = sha;
     return Effect.gen(function* () {
@@ -369,7 +387,9 @@ describe("contextful-release", () => {
       expect(result).toMatchObject({ dryRun: false, releaseId: 1, cells: 10, assets: 36 });
       expect(handles.github.createReleaseCalls).toHaveLength(1);
       expect(handles.github.createReleaseCalls[0]?.draft).toBe(true);
-      expect(handles.github.publishContainerImageCalls).toHaveLength(3);
+      expect(handles.github.publishContainerImageCalls.map((call) => call.images)).toEqual(
+        ["contextful-control", "contextful-edge", "contextful-full"].map((profile) =>
+          [`${profile}-0.5.0-linux-amd64.image.json`, `${profile}-0.5.0-linux-arm64.image.json`]));
       expect(handles.github.publishReleaseCalls).toEqual([{ repo, releaseId: 1,
         body: "Release v0.5.0\n\n## Consumer compatibility\n" }]);
       expect(handles.github.releases[`${repo}:v0.5.0`]?.draft).toBe(false);
@@ -522,7 +542,7 @@ describe("contextful-release", () => {
     // The parent queues behind other releases, never behind lean-pool gates.
     expect(contextfulRelease.sandboxImage).toBe("release");
     expect(contextfulReleaseCell.sandboxImage).toBe("release");
-    expect(contextfulRelease.version).toBe("1.3.0");
+    expect(contextfulRelease.version).toBe("1.4.0");
   });
 
   it.effect("window steps share no name with the fixed batches a release in flight checkpointed", () => {
