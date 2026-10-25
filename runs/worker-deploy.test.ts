@@ -29,10 +29,11 @@
 //                          and hands the head to the command as env, empty
 //                          when unknown
 //   (k) durable exec    — with a durable owner the deploy launches once over
-//                          retryable steps; a lost process fails unless the
-//                          dispatch sets `relaunchOnProcessLoss`, which
-//                          relaunches it exactly once; no secret lands in a
-//                          checkpoint
+//                          retryable steps, at any exec timeout; a lost
+//                          process fails unless the dispatch sets
+//                          `relaunchOnProcessLoss`, which relaunches it
+//                          exactly once, and only while the relaunch fits the
+//                          run ceiling; no secret lands in a checkpoint
 //
 // Plus the standard determinism source guard.
 //
@@ -530,6 +531,45 @@ describe("worker-deploy", () => {
       expect(failureOf(exit)).toMatchObject({ _tag: "SandboxProcessLost", launches: 2 });
       expect(startsOf(calls)).toEqual(["start:exec", "start:exec-relaunch-1"]);
       expect(calls.some((c) => c.startsWith("finalize:"))).toBe(false);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("durable exec — a short exec timeout still runs the deploy durably", () => {
+    const { layer, handles } = makeCFRuntimeTest();
+    const calls: string[] = [];
+    return Effect.gen(function* () {
+      yield* runWithOwner({ ...baseInput, timeoutSec: 300 }, owner(0, calls));
+      // PRE-FIX: ["resolve-config", "checkout", "exec", "upload-log"] — one
+      // step that cannot retry, so a lost attempt still reds the deploy
+      expect(handles.executions.steps.map((s) => s.name)).toContain("exec-observe-0");
+      expect(handles.executions.steps.map((s) => s.name)).not.toContain("exec");
+      expect(startsOf(calls)).toEqual(["start:exec"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("relaunchOnProcessLoss — no relaunch the run ceiling would cut short", () => {
+    const { layer, handles } = makeCFRuntimeTest();
+    const calls: string[] = [];
+    const lostLate = owner(1, calls);
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        runWithOwner(
+          { ...baseInput, relaunchOnProcessLoss: true },
+          {
+            ...lostLate,
+            // The process is lost 700 s in: a 900 s relaunch plus its rebuild
+            // would end past the 1800 s ceiling.
+            observe: (h, c) =>
+              Effect.sync(() => void (handles.io.nowCursor += 700_000)).pipe(
+                Effect.zipRight(lostLate.observe(h, c)),
+              ),
+          },
+        ),
+      );
+      // PRE-FIX: success — relaunched, and the ceiling would interrupt it mid-publish
+      expect(failureOf(exit)).toMatchObject({ _tag: "SandboxProcessLost", launches: 1 });
+      expect(startsOf(calls)).toEqual(["start:exec"]);
+      expect(handles.sandbox.destroyed).toEqual([]);
     }).pipe(Effect.provide(layer));
   });
 

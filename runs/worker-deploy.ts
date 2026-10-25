@@ -75,12 +75,16 @@
 // `SandboxProcessLost`, because the deploy may already have published. A
 // dispatch whose command may run twice (one commit published again to the
 // same preview name) sets `relaunchOnProcessLoss`, and the command relaunches
-// once in a fresh container.
+// once in a fresh container — only while the relaunch can still finish inside
+// the run ceiling (`limits.maxDurationSec`), which would otherwise interrupt
+// it mid-publish.
 //
-// Without a durable owner, or with an exec timeout within
-// `DURABLE_EXEC_MIN_TIMEOUT_SEC`, the command runs as a single `exec` step
-// with `retries: 0` and a step timeout of the exec timeout plus headroom: a
-// retry of that step would run the whole deploy again.
+// The durable form applies at every exec timeout, short ones included: a
+// Workflows restart or a dropped connection ends a short deploy's held step
+// as surely as a long one's. Only without a durable owner does the command
+// run as a single `exec` step, with `retries: 0` and a step timeout of the
+// exec timeout plus headroom: a retry of that step would run the whole deploy
+// again.
 //
 // --- Several deploys of one commit: `checkLabel` ------------------------------
 //
@@ -232,6 +236,9 @@ const WorkerDeployOutput = Schema.Struct({
 /** Default `exec` timeout — a build + `wrangler deploy` fits comfortably. */
 const TIMEOUT_SEC_DEFAULT = 900;
 
+/** The run ceiling (`limits.maxDurationSec`); a relaunch must fit inside it. */
+const MAX_DURATION_SEC = 1800;
+
 /** The env names the deploy command reads the dequeue-time branch head from. */
 export const BRANCH_ENV = "FLAREDISPATCH_BRANCH";
 export const BRANCH_HEAD_SHA_ENV = "FLAREDISPATCH_BRANCH_HEAD_SHA";
@@ -359,7 +366,7 @@ export const workerDeploy = defineRun({
     input.command !== undefined ? [] : [commandKey(input.repo, input.checkLabel)],
 
   limits: {
-    maxDurationSec: 1800,
+    maxDurationSec: MAX_DURATION_SEC,
     // A deploy someone waits on: admitted ahead of batch work.
     admissionClass: "interactive",
   },
@@ -369,7 +376,8 @@ export const workerDeploy = defineRun({
       // resolve-config — the per-repo deploy command, exec timeout, and secret
       // key NAMES (never values: this step's return is checkpointed). Missing
       // command → the repo hasn't opted in; no-op green rather than failing
-      // every push of every installed repo.
+      // every push of every installed repo. `startedAt` is the body's first
+      // checkpointed clock, which the relaunch budget counts from.
       const cmdKey = commandKey(input.repo, input.checkLabel);
       const cfg = yield* step("resolve-config", () =>
         Effect.gen(function* () {
@@ -393,7 +401,7 @@ export const workerDeploy = defineRun({
                   .filter((s) => s.length > 0);
           const secretPrefix =
             input.secretPrefix ?? (yield* config.get(secretPrefixKey(input.repo)));
-          return { command, timeoutSec, secretNames, secretPrefix };
+          return { command, timeoutSec, secretNames, secretPrefix, startedAt: yield* io.now };
         }),
       );
       if (cfg.command === undefined || cfg.command.trim().length === 0) {
@@ -498,6 +506,10 @@ export const workerDeploy = defineRun({
           timeoutSec: execTimeoutSec,
         }),
         relaunches: input.relaunchOnProcessLoss ? 1 : 0,
+        // A relaunch the run ceiling would cut short dies mid-publish.
+        relaunchDeadlineMs: cfg.startedAt + MAX_DURATION_SEC * 1000,
+        // Durable at any length: the single step cannot retry a lost attempt.
+        minDurableTimeoutSec: 0,
         singleStepRetries: 0,
       });
 
