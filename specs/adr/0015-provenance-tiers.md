@@ -4,7 +4,7 @@ Status: Accepted · 2026-10-24
 
 ## Context
 
-FlareDispatch runs pull-request and gate work on owned devices first and spills to cloud executors. A verdict or an artifact from a device is only as trustworthy as the device, and three facts bound that trust:
+FlareDispatch runs pull-request and gate work on owned devices first and places it on cloud executors after the claim deadline. A verdict or an artifact from a device is only as trustworthy as the device, and three facts bound that trust:
 
 - An owned device is often a daily workstation. SLSA Build L2 and above require dedicated build infrastructure, so results from a workstation cap at Build L1.
 - Root on a running device can ask its Secure Enclave to sign anything. Managed Device Attestation shows boot and SIP state at enrollment and at each re-attestation, days apart; it does not show the absence of malware.
@@ -15,11 +15,11 @@ Three separate claims are in play: which machine built an output, from which inp
 ## Decision
 
 - **Three tiers, one statement format.** Every executor emits an in-toto statement in a DSSE envelope. `device-signed` proves the attested device produced it. `platform` adds a lease the control plane issued, with a fresh nonce and the epoch, and a job that could not reach the signer. `reproduced` adds a second, cold build of the same inputs on a dedicated attested device, with subject digests equal to the cloud build's. A verifier assigns the tier; the verification policy decides which tier each artifact class needs.
-- **The agent writes the statement, not the job.** The agent hashes outputs from the detached image after the VM exits and signs with the device key in the Secure Enclave.
+- **The statement builder writes the statement, not the job.** FlareDispatch's statement builder, in its device extension, builds the statement from the output digests the device executor takes from the detached output volume after the job sandbox exits; the device executor signs it through the key helper with the device key in the Secure Enclave (mameko [executors.md § Run user and device extensions](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md#run-user-and-device-extensions)).
 - **A separate provenance key countersigns.** The control plane countersigns each accepted statement with an ES256 provenance key distinct from the OIDC key and the log key, and signs cloud-built statements with it as the cloud builder.
 - **Every statement is logged.** Public repositories log to the public Rekor log; every other repository logs to a private Merkle log in R2 whose checkpoints an external witness cosigns. Time comes from the log.
 - **A signed verification policy with key history.** The operator signs each policy version with a policy root key held outside the control plane. The policy keeps every provenance key, log key and device key with its validity window; nothing is removed from it.
-- **Releases are cloud-pinned.** P0 release work builds only on cloud executors, cold, with one builder and a per-execution OIDC identity. The `reproduced` tier is an opt-in per release rule, and its second build runs on a dedicated attested device; the cloud build is always one of the two.
+- **Releases are cloud-pinned.** `release` work builds only on cloud executors, cold, with one builder and a per-execution OIDC identity. The `reproduced` tier is an opt-in per release rule, and its second build runs on a dedicated attested device; the cloud build is always one of the two.
 - **A verification surface, not a relay.** Statements and log entries carry digests, ids and names only, and the control plane serves them by execution id or subject digest, with no search, export or feed.
 
 Requirements: [provenance.md](../provenance.md), FD-PROV-001 to FD-PROV-077.
@@ -52,7 +52,7 @@ Criterion 1 ruled out device-only signing. Criterion 3 decided cloud-pinned rele
 - Cost accepted: the private log is trustworthy only with an external witness, which the operator must choose and keep running.
 - Cost accepted: root on a running device still signs until detected; the tiers bound what it gains, they do not remove it.
 - Cost accepted: the policy root key lives outside the control plane, so every key rotation and device revocation needs an operator signing step.
-- Without a TLS interception CA in the job VM, HTTPS dependencies carry lockfile digests, not digests of fetched bytes.
+- Without a TLS interception CA in the job sandbox, HTTPS dependencies carry lockfile digests, not digests of fetched bytes.
 - A protocol change touches the statement format, the acceptance checks and `formal/provenance.spthy` together ([ADR-0018](0018-formal-models.md)).
 
 ## Revisit triggers

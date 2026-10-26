@@ -6,10 +6,10 @@ This file specifies the two-level cache (L1 on an owned device's local disk, L2 
 
 This file covers cache entries, artifacts and logs from the moment an executor asks to read or write them until a sweep deletes them. It depends on:
 
-- [placement-leases.md](placement-leases.md) for the execution lease and the capacity lease that carry an execution's cache namespaces and epoch;
-- [executor-protocol.md](executor-protocol.md) for the messages that request presigned URLs and commit manifests;
-- [executors.md](executors.md) for each executor's workspace, disk image and free-disk floor, and for the redaction of logs before upload (FD-EXEC-020, FD-EXEC-021);
-- [isolation-egress.md](isolation-egress.md) for the job VM mounts and for the Container outbound handler that carries a `cloudflare` executor's presigned requests (FD-ISO-064);
+- mameko's [placement-leases.md § Execution lease](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md#execution-lease) and [§ Capacity lease](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md#capacity-lease) for the leases that carry an execution's cache namespaces and epoch, set from the profile's `cache_namespaces` and `capacity.grant` bindings ([MAMEKO-LEASE-085](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md), [MAMEKO-LEASE-086](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md));
+- mameko's [executor-protocol.md § Intents and results](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executor-protocol.md#intents-and-results) for `exec.presign`, which FlareDispatch's object-store presigner answers ([MAMEKO-HOST-048](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/hosts.md));
+- mameko's [executors.md § Run user and device extensions](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md#run-user-and-device-extensions) for the device extension that holds L1, and [executors.md](executors.md) for each executor's workspace, disk image and free-disk floor, and for the redaction of logs before upload ([MAMEKO-EXEC-019](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md), [MAMEKO-EXEC-020](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md));
+- [isolation-egress.md](isolation-egress.md) for the job sandbox's cache volumes and for the Container outbound handler that carries a `cloudflare` executor's presigned requests ([MAMEKO-ISO-022](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/isolation-egress.md));
 - [local-scheduler.md](local-scheduler.md) for offline mode and for rehearsal reuse, whose reuse key (base commit, tree hash, run-definition digest) is separate from the cache key in this file;
 - [provenance.md](provenance.md) for the retention of artifacts a provenance statement references;
 - [interfaces.md](interfaces.md) for the route catalog and the viewer gate.
@@ -20,15 +20,16 @@ This file covers cache entries, artifacts and logs from the moment an executor a
 
 | Component | Role |
 | --- | --- |
-| L1 | The agent's cache on a device's local disk: one directory per cache namespace, owned by the agent's user. |
+| L1 | FlareDispatch's device extension's cache on a device's local disk: one directory per cache namespace, served to the device executor through `cache.get`, `cache.put` and `cache.evict` ([MAMEKO-EXEC-109](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)). |
 | L2 | The R2 cache bucket in the control plane. It is the only cache a Cloudflare Container or AWS task reads. |
 | `CacheLedger` | One Durable Object per repository. It reserves bytes before any write and holds the per-object, per-execution and per-repository bounds. |
-| Agent host proxy | The process on a device that serves the compile-cache protocol to job VMs from L1 and reads through to the control plane on a miss. |
+| Extension host proxy | The device extension's proxy that serves the compile-cache protocol to job sandboxes from L1 and reads through to the control plane on a miss; the device executor exposes it to a job as a socket ([MAMEKO-EXEC-111](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)). |
 | Compile-cache route | `/v1/compile-cache/<owner>/<name>/<path>` on the dispatcher: the WebDAV endpoint `sccache` uses. It streams compile-cache objects of at most 100 MiB between the caller and R2 without buffering, the one byte path through the dispatcher Worker. |
+| Object-store presigner | FlareDispatch's implementation of mameko's object-store presigner port: it signs every presigned R2 URL the executor channel hands out ([MAMEKO-HOST-048](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/hosts.md)). |
 | Artifact store | R2 objects under `artifacts/` plus one D1 row per artifact. |
 | Log store | R2 objects under `logs/`, named by step identity and epoch. |
 
-The cache holds caches only: dependency stores, compile-cache objects, prebuilt binaries, browser and toolchain downloads, and model weights. A checkout, a workspace and a job's build-output directory live inside the execution's VM or container and never leave it. A reclaimed execution restarts from an empty workspace on its new executor; the cache only makes that restart faster.
+The cache holds caches only: dependency stores, compile-cache objects, prebuilt binaries, browser and toolchain downloads, and model weights. A checkout, a workspace and a job's build-output directory live inside the execution's job sandbox and never leave it. A reclaimed execution restarts from an empty workspace on its new executor; the cache only makes that restart faster.
 
 **Two levels, caches only: bytes move between an executor and R2 by presigned URL; only manifests and compile-cache objects pass through the dispatcher**
 
@@ -36,9 +37,10 @@ The cache holds caches only: dependency stores, compile-cache objects, prebuilt 
 flowchart LR
   accTitle: Two-level cache data path
   subgraph dev["Owned device"]
-    vm[Job VM]
-    proxy[Agent host proxy]
-    l1[("L1: local disk, one directory per namespace")]
+    vm[Job sandbox]
+    dex[Device executor]
+    proxy[Extension host proxy]
+    l1[("L1: device extension, one directory per namespace")]
   end
   subgraph cp["Control plane"]
     disp["Dispatcher: presign, commit, compile-cache route"]
@@ -48,7 +50,9 @@ flowchart LR
   subgraph floor["Cloudflare Container"]
     job[Cloud job]
   end
-  vm -->|reads read-only mounts, writes one read-write mount| l1
+  dex -->|cache.get fills the read volumes| l1
+  vm -->|commits to its writable cache volume| dex
+  dex -->|cache.put after the job| l1
   vm -->|compile-cache requests| proxy
   proxy -->|serves hit| l1
   proxy e1@-->|read-through on miss| disp
@@ -72,17 +76,17 @@ flowchart LR
 
 ### Cache namespaces and cache tiers
 
-The control plane assigns each execution, at placement, a set of readable namespaces and at most one writable namespace. The executor takes them from its execution lease or capacity lease; a run or a job never names a namespace. Each namespace has one cache tier, which records who may write it.
+The profile's `cache_namespaces` binding gives each execution, at every lease grant, a set of readable namespaces and at most one writable namespace, from the execution and the claiming executor's kind; the `capacity.grant` binding does the same for a capacity lease ([MAMEKO-LEASE-085](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md), [MAMEKO-LEASE-086](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)). The executor takes them from its execution lease or capacity lease; a run or a job never names a namespace. Each namespace has one cache tier, which records who may write it.
 
 | Namespace | Cache tier | Written by | Read by |
 | --- | --- | --- | --- |
-| `protected/<repo>/cloud` | `protected-cloud` | An execution of a protected trigger on executor kind `cloudflare` or `aws` | Every execution of the repository except P0 |
+| `protected/<repo>/cloud` | `protected-cloud` | An execution of a protected trigger on executor kind `cloudflare` or `aws` | Every execution of the repository except `release` |
 | `protected/<repo>/device` | `protected-device` | An execution of a protected trigger on executor kind `device` | Executions on a device |
 | `pr/<repo>/<number>` | `pull-request` | Executions triggered by pull request `<number>` | Executions of pull request `<number>` |
 | `exec/<repo>/<execution_id>` | `execution` | One rehearsal, or one execution on executor kind `gha` | That execution only |
 | `cas/<sha256>` | `content` | Any execution | Any execution that already holds the expected digest from a trusted input |
 
-A **protected trigger** ([README.md](README.md) § Glossary) decides cache writes only; P0 eligibility follows its own trigger list in [qos-admission.md](qos-admission.md) FD-QOS-003. A `merge_group` event and a `gh-readonly-queue/*` push carry code from several pull requests, so their executions read protected tiers and write nothing.
+A **protected trigger** ([README.md](README.md) § Glossary) decides cache writes only; `release` eligibility follows its own trigger list ([profile.md](profile.md) § Class resolution, step 1). A `merge_group` event and a `gh-readonly-queue/*` push carry code from several pull requests, so their executions read protected tiers and write nothing.
 
 **A pull-request writer reaches only its own namespace, so nothing it writes reaches a protected-branch reader**
 
@@ -104,7 +108,7 @@ flowchart LR
   subgraph readers["Readers"]
     rpp[Protected trigger]
     rpr[Pull-request execution]
-    rp0["P0 execution: builds cold, restores nothing"]
+    rp0["release execution: builds cold, restores nothing"]
   end
   wpc -->|commits| npc
   wpd -->|commits| npd
@@ -130,7 +134,7 @@ flowchart LR
 
 *Cache namespaces · the write rule and the read rule together give non-interference (property S6 in [verification.md](verification.md): a pull-request writer cannot change what a protected-branch reader restores).*
 
-A P1 execution on a cloud executor additionally restores only entries whose manifest records a cloud writer kind, so a device-written entry in its own pull-request namespace is a miss there.
+A `required` execution on a cloud executor additionally restores only entries whose manifest records a cloud writer kind, so a device-written entry in its own pull-request namespace is a miss there.
 
 ### Cache entries
 
@@ -143,9 +147,9 @@ An entry is a set of immutable objects plus one manifest. Objects go up first un
 | `writer` | Executor id, executor kind, execution id, epoch |
 | `objects` | Path, size in bytes and SHA-256 digest of each object |
 | `created_at`, `last_read_at` | Control-plane clock |
-| `signature` | The device key's signature for a device writer; the control plane's cache-signing key for a cloud writer |
+| `signature` | The device key's signature under the `cache-entry` signing purpose for a device writer; the control plane's cache-signing key for a cloud writer |
 
-The cache key is the SHA-256 of the canonical JSON of these fields: key-schema version, repository id, cache kind, namespace, platform (OS and architecture), image digest, toolchain versions (including baked native libraries), the producer digest (the producing primitive's name, version and parameters), and the declared-inputs digest (for example the lockfile's SHA-256). An arm64 entry therefore never answers an amd64 read.
+The cache key is the SHA-256 of the canonical JSON of these fields: key-schema version, repository id, cache kind, namespace, platform (OS and architecture), image digest, toolchain versions (including the native libraries built into the image), the producer digest (the producing primitive's name, version and parameters), and the declared-inputs digest (for example the lockfile's SHA-256). An arm64 entry therefore never answers an amd64 read.
 
 **An entry exists only once its manifest commits under the current epoch**
 
@@ -206,21 +210,20 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-001** · phase 0 · `V-UNIT` — The executor must store in the cache only entries of the kinds `dependency`, `compile`, `prebuilt-binary`, `download` and `model-weights`, and must not store a checkout or a workspace there.
 - **FD-CACHE-002** · phase 0 · `V-SIM` `V-CONF` — The control plane must not transfer an execution's checkout, workspace or build-output directory from one executor to another.
 - **FD-CACHE-003** · phase 0 · `V-SIM` `V-CONF` — When an executor starts an execution at an epoch above 1, the executor must start from an empty workspace and fetch the commit again.
-- **FD-CACHE-004** · phase 1 · `V-CONF` — The agent must keep L1 on the device's local disk under the agent's user, with one directory per cache namespace.
-- **FD-CACHE-005** · phase 1 · `V-E2E-LOCAL` `V-CONF` — When the agent starts a job VM, the agent must mount each readable namespace's L1 directory read-only and the writable namespace's L1 directory read-write, and must mount no other cache directory.
-- **FD-CACHE-006** · phase 1 · `V-UNIT` — When a job reads a key that L1 lacks, the agent must fetch the entry from L2 and verify every object's SHA-256 digest against the manifest before it places the entry in L1.
-- **FD-CACHE-007** · phase 1 · `V-UNIT` — When a job on a device commits an entry, the agent must write the entry to L1 and then upload it to L2.
+- **FD-CACHE-004** · phase 1 · `V-CONF` — FlareDispatch's device extension must keep L1 on the device's local disk, with one directory per cache namespace, and must serve `cache.get`, `cache.put` and `cache.evict` to the device executor ([MAMEKO-EXEC-109](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)).
+- **FD-CACHE-006** · phase 1 · `V-UNIT` — When `cache.get` names a key that L1 lacks, the device extension must fetch the entry from L2 and verify every object's SHA-256 digest against the manifest before it places the entry in L1 and returns it ([MAMEKO-EXEC-126](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)).
+- **FD-CACHE-007** · phase 1 · `V-UNIT` — When the device executor passes a committed entry to `cache.put` ([MAMEKO-EXEC-127](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)), the device extension must write the entry to L1 and then upload it to L2.
 - **FD-CACHE-008** · phase 1 · `V-UNIT` `V-CONF` — While a repository's confidentiality mode is `confidential-compute`, the executor must not read from or write to L2 for that repository.
-- **FD-CACHE-009** · phase 1 · `V-UNIT` — The agent must cap L1 at a configurable share of the free disk measured at agent start, default 20%, and must evict the least recently read entry first when a write would exceed the cap.
-- **FD-CACHE-010** · phase 1 · `V-SIM` — If the device's free disk falls below the agent's free-disk floor, set per device with a default of 20 GiB, then the agent must evict L1 entries, least recently read first, until free disk reaches the floor, before it lowers its advertised slots.
+- **FD-CACHE-009** · phase 1 · `V-UNIT` — The device extension must cap L1 at a configurable share of the free disk measured at its start, default 20%, and must evict the least recently read entry first when a write would exceed the cap.
+- **FD-CACHE-010** · phase 1 · `V-SIM` — When the device executor calls `cache.evict(target_bytes)` because free disk fell below the device's free-disk floor, default 20 GiB ([MAMEKO-EXEC-113](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)), the device extension must evict L1 entries, least recently read first, until it has freed `target_bytes` or L1 is empty, and must return the bytes freed.
 - **FD-CACHE-011** · phase 0 · `V-UNIT` `V-CONF` — If a cache read fails at L1, L2, the `CacheLedger` or the compile-cache route, then the reader must treat the read as a miss and the run must continue.
 - **FD-CACHE-012** · phase 0 · `V-UNIT` — If a cache write fails, then the executor must log the failure with the key and continue, and the failure must not change the verdict.
-- **FD-CACHE-013** · phase 1 · `V-UNIT` — While a capacity lease is in offline mode, the local scheduler must treat every L2 read as a miss.
-- **FD-CACHE-014** · phase 2 · `V-UNIT` `V-E2E-LOCAL` — Where peer cache is enabled, a device may fetch an L1 entry from another device of the same member over the tailnet, and must verify the manifest signature and every object digest before it places the entry in its own L1.
+- **FD-CACHE-013** · phase 1 · `V-UNIT` — While a capacity lease is in offline mode, the device extension must treat every L2 read for that lease as a miss.
+- **FD-CACHE-014** · phase 2 · `V-UNIT` `V-E2E-LOCAL` — Where peer cache is enabled, a device extension may fetch an L1 entry from another device of the same member over the tailnet, and must verify the manifest signature and every object digest before it places the entry in its own L1.
 
 ### Namespaces and cache tiers
 
-- **FD-CACHE-015** · phase 0 · `V-UNIT` `V-PROOF` — The control plane must assign an execution's readable namespaces and its writable namespace at placement and record them on the placement row.
+- **FD-CACHE-015** · phase 0 · `V-UNIT` `V-PROOF` — The profile's `cache_namespaces` binding must return an execution's readable namespaces and its writable namespace from the execution and the claiming executor's kind under FD-CACHE-017 to FD-CACHE-028, and the `capacity.grant` binding must return a capacity lease's namespaces under FD-CACHE-021 ([profile.md](profile.md) FD-PROF-062, [MAMEKO-LEASE-085](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md), [MAMEKO-LEASE-086](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)).
 - **FD-CACHE-016** · phase 0 · `V-UNIT` `V-CONF` — The executor must take its namespaces from its execution lease or capacity lease, and must ignore any namespace a run input or a job names.
 - **FD-CACHE-017** · phase 0 · `V-UNIT` `V-PROOF` — The control plane must assign a writable namespace of cache tier `protected-cloud` only to an execution of a protected trigger on executor kind `cloudflare` or `aws`.
 - **FD-CACHE-018** · phase 1 · `V-UNIT` `V-PROOF` — The control plane must assign a writable namespace of cache tier `protected-device` only to an execution of a protected trigger on executor kind `device`.
@@ -232,8 +235,8 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-024** · phase 0 · `V-UNIT` — When a pull-request execution looks up a key, the reader must try its own pull-request namespace before any protected tier.
 - **FD-CACHE-025** · phase 1 · `V-UNIT` — The control plane must give an execution on a cloud executor no readable namespace of cache tier `protected-device`.
 - **FD-CACHE-026** · phase 0 · `V-UNIT` — The control plane must not give an execution a readable or writable namespace of another repository.
-- **FD-CACHE-027** · phase 1 · `V-UNIT` `V-PROOF` — While an execution of class P1 runs on executor kind `cloudflare` or `aws`, the reader must restore only entries whose manifest records a writer of executor kind `cloudflare` or `aws`.
-- **FD-CACHE-028** · phase 0 · `V-UNIT` — When an execution is class P0 or matches a cloud-only rule with cloud authority, the executor must restore no cache entry.
+- **FD-CACHE-027** · phase 1 · `V-UNIT` `V-PROOF` — While an execution of class `required` runs on executor kind `cloudflare` or `aws`, the reader must restore only entries whose manifest records a writer of executor kind `cloudflare` or `aws`.
+- **FD-CACHE-028** · phase 0 · `V-UNIT` — When an execution is class `release` or carries the `cloud-only` constraint, the executor must restore no cache entry.
 - **FD-CACHE-029** · phase 0 · `V-UNIT` `V-PROOF` — If an executor commits an entry to a namespace other than its execution's writable namespace, then the control plane must refuse the commit with `CacheNamespaceDenied`.
 - **FD-CACHE-030** · phase 1 · `V-UNIT` — When a reader restores from the `content` tier, the reader must request only a digest taken from its own image manifest or lockfile, and must treat the entry as a miss unless the restored bytes hash to that digest.
 
@@ -244,7 +247,7 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-033** · phase 0 · `V-UNIT` — The `installCached` primitive must use the SHA-256 of the lockfile as the declared-inputs digest for `pnpm`, `npm`, `cargo` and `uv`, and must cache install outputs only.
 - **FD-CACHE-034** · phase 0 · `V-UNIT` — The prebuilt-binary primitive must take as declared inputs the git object ids of its key files, its path dependencies and its `include!` targets, together with the `rustc` and `cargo` versions.
 - **FD-CACHE-035** · phase 0 · `V-UNIT` — If the prebuilt-binary primitive misses or fails to restore, then the primitive must fall back to `cargo run`, and the miss must not fail the run.
-- **FD-CACHE-036** · phase 1 · `V-UNIT` `V-DEPLOY` — The sandbox image must bake each prebuilt native library for both `linux/amd64` and `linux/arm64`, each pinned by SHA-256, and the library version must be one of the image's toolchain versions in the cache key.
+- **FD-CACHE-036** · phase 1 · `V-UNIT` `V-DEPLOY` — The sandbox image must carry each prebuilt native library for both `linux/amd64` and `linux/arm64`, each pinned by SHA-256, and the library version must be one of the image's toolchain versions in the cache key.
 - **FD-CACHE-037** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — The compile-cache wrapper must set `sccache` as `RUSTC_WRAPPER`, set `CARGO_INCREMENTAL=0` and prefix keys with `<repo>/<rustc version>/<target triple>`.
 - **FD-CACHE-038** · phase 0 · `V-UNIT` — If the compile-cache endpoint is unreachable, then the compile-cache wrapper must compile without the cache, and the outage must not fail the run.
 
@@ -254,23 +257,23 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-040** · phase 0 · `V-UNIT` `V-SIM` — When an executor commits a manifest, the control plane must accept the commit only if it carries the execution's current epoch.
 - **FD-CACHE-041** · phase 0 · `V-UNIT` `V-CONF` — The control plane must write each manifest with `put(key, body, { onlyIf: { etagDoesNotMatch: "*" } })` on the R2 binding, treating a `null` result as an existing manifest, so that the first committed manifest for a key in a namespace stays and every later commit for that key is refused; the conformance test for this requirement must run against a real R2 bucket as well as Miniflare.
 - **FD-CACHE-042** · phase 0 · `V-UNIT` — The control plane must record in each manifest the key, namespace, cache tier, writer executor id and kind, execution id, epoch, creation time, and the path, size and SHA-256 digest of every object.
-- **FD-CACHE-043** · phase 1 · `V-UNIT` — The control plane must accept a manifest from a device only with a valid signature by that device's registered key, and must sign a cloud executor's manifest with the control plane's cache-signing key.
+- **FD-CACHE-043** · phase 1 · `V-UNIT` — The control plane must accept a manifest from a device only with a valid signature by that device's registered key under the `cache-entry` signing purpose the profile lists, and must sign a cloud executor's manifest with the control plane's cache-signing key.
 - **FD-CACHE-044** · phase 0 · `V-UNIT` — If a reader finds objects for a key and no committed manifest, then the reader must treat the key as a miss.
 - **FD-CACHE-045** · phase 0 · `V-UNIT` — If a manifest signature or an object digest fails verification, then the reader must treat the entry as a miss and log `cache.verify_failed` with the key and writer executor id.
 - **FD-CACHE-046** · phase 0 · `V-UNIT` — Before the `save` primitive uploads an entry, it must check for a committed manifest for the key and skip the upload when one exists.
 
 ### Presigned URLs and byte bounds
 
-- **FD-CACHE-047** · phase 0 · `V-UNIT` `V-CONF` — The executor must move cache objects and artifacts between itself and R2 only through presigned URLs, and those bytes must not pass through the dispatcher Worker, except compile-cache objects of at most 100 MiB (FD-CACHE-053), which the compile-cache route streams between the caller and R2 without buffering (FD-CACHE-056); on executor kind `cloudflare` they stream unbuffered through the Container class's outbound handler ([isolation-egress.md](isolation-egress.md) FD-ISO-064).
-- **FD-CACHE-048** · phase 0 · `V-UNIT` — The control plane must mint each presigned URL for one object key and one method, `GET` or `PUT`, with an expiry no later than the earlier of 15 min after minting and the execution's `deadline_at`.
-- **FD-CACHE-049** · phase 0 · `V-UNIT` — The control plane must mint a `PUT` URL only for an object key under the execution's writable namespace and current epoch, with the declared `Content-Length` in the signature.
-- **FD-CACHE-050** · phase 0 · `V-UNIT` — The control plane must mint a `GET` URL only for an object listed in a committed manifest of a namespace the execution may read.
+- **FD-CACHE-047** · phase 0 · `V-UNIT` `V-CONF` — The executor must move cache objects and artifacts between itself and R2 only through presigned URLs from FlareDispatch's object-store presigner ([MAMEKO-HOST-048](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/hosts.md)), and those bytes must not pass through the dispatcher Worker, except compile-cache objects of at most 100 MiB (FD-CACHE-053), which the compile-cache route streams between the caller and R2 without buffering (FD-CACHE-056); on executor kind `cloudflare` they stream unbuffered through the Container class's outbound handler ([MAMEKO-ISO-022](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/isolation-egress.md)).
+- **FD-CACHE-048** · phase 0 · `V-UNIT` — The object-store presigner must mint each presigned URL for one object key and one method, `GET` or `PUT`, with an expiry no later than the earlier of 15 min after minting and the execution's `deadline_at`.
+- **FD-CACHE-049** · phase 0 · `V-UNIT` — The object-store presigner must mint a `PUT` URL only for an object key under the execution's writable namespace and current epoch, with the declared `Content-Length` in the signature.
+- **FD-CACHE-050** · phase 0 · `V-UNIT` — The object-store presigner must mint a `GET` URL only for an object listed in a committed manifest of a namespace the execution may read.
 - **FD-CACHE-051** · phase 0 · `V-SIM` — When the control plane reclaims or revokes an execution lease, it must refuse every later URL request that carries the old epoch; URLs already issued for the old epoch stay valid until their expiry, at most 15 min, and the epoch-scoped object path (FD-CACHE-039) and the epoch-checked manifest commit (FD-CACHE-040) keep their uploads from becoming an entry.
 - **FD-CACHE-052** · phase 0 · `V-UNIT` `V-CONF` — Before the control plane mints a `PUT` URL, it must reserve the object's declared length in the repository's `CacheLedger`.
 - **FD-CACHE-053** · phase 0 · `V-UNIT` — If an object's declared length exceeds the per-object bound, default 100 MiB for a compile-cache object and 4 GiB for any other object, then the control plane must refuse the request with `413`.
 - **FD-CACHE-054** · phase 0 · `V-UNIT` — If a reservation would raise an execution's reserved bytes above the per-execution bound, default 10 GiB, or the repository's stored bytes above the per-repository bound, default 20 GiB, then the `CacheLedger` must refuse it and the control plane must answer `507`.
 - **FD-CACHE-055** · phase 0 · `V-UNIT` — When an execution reaches a terminal status, the control plane must refuse every later write request for that execution with `403` and release its unused reservations in the `CacheLedger`.
-- **FD-CACHE-091** · phase 0 · `V-DEPLOY` `V-UNIT` — The control plane must sign presigned URLs only with an R2 API token scoped to the cache and artifact buckets with Object Read & Write, held as a Worker secret used for nothing else, and must issue them on the bucket's S3 endpoint `<account_id>.r2.cloudflarestorage.com`, because presigned URLs do not work on a custom domain.
+- **FD-CACHE-091** · phase 0 · `V-DEPLOY` `V-UNIT` — The object-store presigner must sign presigned URLs only with an R2 API token scoped to the cache and artifact buckets with Object Read & Write, held as a Worker secret used for nothing else, and must issue them on the bucket's S3 endpoint `<account_id>.r2.cloudflarestorage.com`, because presigned URLs do not work on a custom domain.
 
 ### Compile-cache route
 
@@ -278,7 +281,7 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-057** · phase 0 · `V-UNIT` — The control plane must bind each compile-cache token to the repository, execution id, epoch, readable namespaces, writable namespace and an expiry no later than the execution's `deadline_at`.
 - **FD-CACHE-058** · phase 0 · `V-UNIT` `V-PROOF` — The compile-cache route must take the namespaces from the token and must ignore any namespace in the request path or headers.
 - **FD-CACHE-059** · phase 0 · `V-UNIT` — If a compile-cache token is missing, expired, malformed or bound to another repository, then the compile-cache route must answer `403` and touch no object.
-- **FD-CACHE-060** · phase 1 · `V-E2E-LOCAL` — On a device, the agent host proxy must serve the compile-cache protocol to job VMs from L1 and forward a miss to the compile-cache route under the execution's token.
+- **FD-CACHE-060** · phase 1 · `V-E2E-LOCAL` — On a device, the extension host proxy must serve the compile-cache protocol to job sandboxes from L1 and forward a miss to the compile-cache route under the execution's token.
 
 ### Retention and sweeps
 
@@ -304,7 +307,7 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-077** · phase 0 · `V-UNIT` — The control plane must issue an artifact capability token with an expiry of at most 7 days, derive its key with a domain-separation label for artifacts, and compare it in constant time.
 - **FD-CACHE-078** · phase 0 · `V-UNIT` — The dispatcher must list an execution's artifacts in pages of at most 100 rows with a cursor, and must list artifact rows only, never the files inside a browse expansion.
 - **FD-CACHE-079** · phase 0 · `V-UNIT` — The artifact sweep must delete an artifact and its row when `expires_at` passes, with `expires_at` set to a configurable retention after creation, default 30 days, unless [provenance.md](provenance.md) extends it.
-- **FD-CACHE-080** · phase 1 · `V-UNIT` `V-CONF` — While a repository's confidentiality mode is `confidential-compute`, the executor must keep artifacts in the device's journal, and the control plane must store a row that names the executor and holds no R2 path.
+- **FD-CACHE-080** · phase 1 · `V-UNIT` `V-CONF` — While a repository's confidentiality mode is `confidential-compute`, the executor must keep artifacts on the device, and the control plane must store a row that names the executor and holds no R2 path.
 
 ### Logs
 

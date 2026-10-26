@@ -1,10 +1,12 @@
 # ADR-0010: The agent is TypeScript on Effect v4, with a Swift Secure Enclave helper
 
-Status: Accepted · 2026-10-24
+Status: Superseded by mameko [ADR-0012](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0012-device-executor-implementation.md) · 2026-10-24
+
+Device programs, the device executor and the key helper included, are Rust binaries from mameko's device bundle; FlareDispatch ships no device agent of its own.
 
 ## Context
 
-The agent `flare-dispatchd` runs on every device. It holds the device's connection to the control plane, owns the slot ledger, starts one VM per job, and runs each leased execution's whole run program ([ADR-0003](0003-run-body-in-executor.md)). Run programs are typed Effect programs written with `defineRun`, journaled by the engine in [engine.md](../engine.md), and every boundary type is a `Schema` shared with the control plane.
+The agent `flare-dispatchd` runs on every device. It holds the device's connection to the control plane, owns the slot ledger, starts one VM per job, and runs each leased execution's whole run program ([ADR-0003](0003-run-body-in-executor.md)). Run programs are typed Effect programs written with `defineRun`, journaled by the engine in mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/engine.md), and every boundary type is a `Schema` shared with the control plane.
 
 The agent also needs the device key: the hardware-bound P-256 key that the MDM ACME payload generates in the Secure Enclave, non-exportable, presented with Managed Device Attestation evidence at enrollment ([provenance.md](../provenance.md)). Only native macOS code reaches the Secure Enclave and the keychain through the Security framework; Node has no binding to either.
 
@@ -71,7 +73,7 @@ Criterion 1 decided between the agent languages: only a TypeScript agent runs ru
 - Two toolchains ship per agent release: the Node package and the notarized helper. The helper changes rarely; its designated requirement is part of device enrollment, so a helper re-sign forces re-enrollment.
 - Device authentication has two layers: the edge checks the TLS client certificate, whose key is a file-held P-256 key distinct from the device key, and the executor Durable Object checks the device key's `connect` signature over its challenge ([executor-protocol.md](../executor-protocol.md)). A stolen client-certificate key alone opens no session.
 - Every timer that decides a fence or a deadline reads `continuousTime` from the helper; a helper outage stops new claims.
-- The agent inherits Effect 4.0.6's `@stability unstable` modules (`effect/process`, `effect/cli`, `effect/workflow` and others), so an Effect upgrade is gated by the upgrade gate in [engine.md](../engine.md) (FD-ENG-045).
+- The agent inherits Effect 4.0.6's `@stability unstable` modules (`effect/process`, `effect/cli`, `effect/workflow` and others), so an Effect upgrade is gated by the upgrade gate in mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/engine.md).
 - Each execution's run program costs a Node child process, which counts against the device's memory headroom.
 
 ## Revisit triggers

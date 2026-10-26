@@ -1,6 +1,8 @@
 # ADR-0017: Conformance suites, deterministic simulation and a replay harness are merge gates
 
-Status: Accepted · 2026-10-24
+Status: Superseded in part by mameko [ADR-0015](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0015-verification-strategy.md) · 2026-10-24
+
+mameko's conformance, simulation and replay suites gate mameko's own changes. The merge gates this repository's CI runs on its own pull requests, and the rule that live canaries and phase-gate metrics gate phases rather than merges, stand ([verification.md](../verification.md)).
 
 ## Context
 
@@ -16,7 +18,7 @@ Three suites run on every pull request and block the merge when they fail ([veri
 
 - **Conformance (`V-CONF`).** One suite per interface runs against every backend of that interface: the engine against DO-SQLite, SQLite, Postgres and memory; the executor contract against the Cloudflare Container and the fake, and nightly against an owned device and each launcher; each store against D1, SQLite and Postgres. A fake is a backend and passes the same suite.
 - **Deterministic simulation (`V-SIM`).** The fleet runs under `TestClock` with fault injection: sleep mid-step, executor Durable Object restart during a deploy, a late result after reclaim, the claim-versus-spill race, clock skew and a dropped socket.
-- **Replay (`V-REPLAY`).** Every registered workflow runs twice over its cached journal; any extra GitHub call, D1 write, outbox row or intent fails it ([engine.md](../engine.md)).
+- **Replay (`V-REPLAY`).** Every registered workflow runs twice over its cached journal; any extra GitHub call, D1 write, outbox row or intent fails it (mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/engine.md)).
 
 Unit tests, the local end-to-end stack and the deploy dry run also gate merges. Live canaries and phase-gate metrics gate phases, not merges.
 

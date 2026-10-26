@@ -1,6 +1,6 @@
 # Provenance
 
-This file specifies the provenance statements that executors and the control plane produce, the nonce and epoch that bind each statement to one lease, the control plane's countersignature, the transparency log, the three provenance tiers, the verification policy a verifier checks a statement against, the release rule and the verdict audit.
+This file specifies the provenance statements that FlareDispatch's statement builder and the control plane produce, the nonce and epoch that bind each statement to one lease, the control plane's countersignature, the transparency log, the three provenance tiers, the verification policy a verifier checks a statement against, the release rule and the verdict audit.
 
 ## Scope
 
@@ -8,12 +8,12 @@ A statement answers two questions about an output: which machine built it, and f
 
 This file depends on:
 
-- [placement-leases.md](placement-leases.md) for the execution lease, the epoch, the reclaim and the capacity lease;
-- [executor-protocol.md](executor-protocol.md) for the result submission that carries a statement;
-- [executors.md](executors.md) for the Secure Enclave helper and the agent's client certificate;
+- mameko's [placement-leases.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md) for the execution lease, the epoch, the reclaim, the capacity lease, device registration ([MAMEKO-LEASE-088](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md), [MAMEKO-LEASE-089](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)) and the result-acceptance check ([MAMEKO-LEASE-090](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md));
+- mameko's [executor-protocol.md § Intents and results](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executor-protocol.md#intents-and-results) for the result submission that carries a statement;
+- mameko's [executors.md § Run user and device extensions](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md#run-user-and-device-extensions) for the device extension whose statement builder writes a device statement and the key helper that signs it ([MAMEKO-EXEC-112](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md));
 - [isolation-egress.md](isolation-egress.md) for the egress proxy log and the per-lease credentials;
 - [local-scheduler.md](local-scheduler.md) for `local.register`, the registration that binds local work;
-- [qos-admission.md](qos-admission.md) for the cloud pin on P0 and on fork pull requests;
+- [profile.md](profile.md) for the `cloud-pinned` constraint on `release`, the `untrusted-input` label on fork pull requests and the `reproduction` constraint;
 - [github-output.md](github-output.md) for the check summary;
 - [model-gateway.md](model-gateway.md) for the metering records that name each model call.
 
@@ -25,7 +25,7 @@ Not specified: a search endpoint, push feed or bulk export over statements, verd
 
 | Key | Holder | Algorithm | Signs | Published in |
 | --- | --- | --- | --- | --- |
-| Device key | The agent, inside the Secure Enclave, non-exportable, erased on restore | ECDSA P-256 (ES256) | Statements written on that device | The device registry of the verification policy |
+| Device key | The key helper, inside the Secure Enclave, non-exportable, erased on restore | ECDSA P-256 (ES256) | Statements written on that device, under the `statement` signing purpose | The device registry of the verification policy |
 | Provenance key | The control plane, as a Worker secret | ES256 | Countersignatures, cloud-builder statements, reproduction records | The provenance key history of the verification policy |
 | Log key | The control plane, as a Worker secret | ES256 | Checkpoints of the private log | The log entries of the verification policy |
 | Witness key | An external witness the operator names | Set by the witness | Cosignatures of private-log checkpoints | The log entries of the verification policy |
@@ -42,41 +42,43 @@ Every statement carries a **lease binding**: `execution_id`, `epoch`, `nonce`, `
 | --- | --- | --- |
 | Run name, run-definition digest, repository, ref, commit SHA, inputs digest | The lease or the registration | `buildDefinition.externalParameters` |
 | Lease binding, class, placement `policy_version`, confidentiality mode | The lease or the registration | `buildDefinition.internalParameters` |
-| Commit, image digest, lockfile digest | The lease; the agent hashes the lockfile | `buildDefinition.resolvedDependencies` |
-| Each dependency the job fetched, with digest and digest source (`proxy` or `lockfile`) | The egress proxy log | `buildDefinition.resolvedDependencies` |
-| Each restored cache entry: namespace, key, digest | The cache Layer | `buildDefinition.resolvedDependencies` |
-| Builder id `<executor kind>:<executor_id>` and the agent code-signing hash | The enrollment record | `runDetails.builder` |
+| Commit, image digest, lockfile digest | The lease; the device executor passes the lockfile digest to the statement builder | `buildDefinition.resolvedDependencies` |
+| Each dependency the job fetched, with digest and digest source (`proxy` or `lockfile`) | The egress proxy's records of admitted fetches ([MAMEKO-ISO-038](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/isolation-egress.md)) | `buildDefinition.resolvedDependencies` |
+| Each restored cache entry: namespace, key, digest | The cache entries the device executor reports restored | `buildDefinition.resolvedDependencies` |
+| Builder id `<executor kind>:<executor_id>` and the device's code hash | The registration record ([MAMEKO-LEASE-089](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)) | `runDetails.builder` |
 | `invocationId` = `execution_id` | The lease | `runDetails.metadata` |
-| Egress proxy log digest, step log digest | The agent | `runDetails.byproducts` |
+| Egress proxy log digest, step log digest | The device executor | `runDetails.byproducts` |
 | Each model id with its token count | The gateway metering records | `runDetails.byproducts` |
 
 ### Statement flow
 
-The job VM never holds the device key. The agent launches the job VM, hashes its outputs after it exits, and signs; the control plane checks the statement against the lease it issued, then countersigns and logs it.
+The job sandbox never holds the device key. The device executor starts the job sandbox and passes the lease, the outcome and the output digests to FlareDispatch's statement builder in the device extension; the builder writes the statement, the device executor signs it through the key helper, and the control plane's result-acceptance check verifies it against the lease before the accept compare-and-set, then countersigns and logs it.
 
 ```mermaid
 sequenceDiagram
   accTitle: Statement flow from lease to verification
   participant CP as Control plane
-  participant AG as Agent
-  participant SE as Secure Enclave
-  participant VM as Job VM
+  participant AG as Device executor
+  participant SB as Statement builder
+  participant SE as Key helper
+  participant VM as Job sandbox
   participant LG as Transparency log
   participant VF as Verifier
   CP->>AG: execution lease: execution_id, epoch, nonce, commit, image digest
-  AG->>VM: boot image, mount workspace clone
-  VM-->>AG: exit status, outputs on detached image
-  Note over AG: hash outputs and proxy log, write statement
-  AG->>SE: sign DSSE payload
+  AG->>VM: start sandbox, attach workspace clone
+  VM-->>AG: exit status, outputs on a detached volume
+  AG->>SB: statement(lease, outcome, output digests, admitted fetches, restored cache digests)
+  SB-->>AG: statement bytes
+  AG->>SE: sign DSSE payload, purpose statement
   SE-->>AG: device signature
-  AG->>CP: result submission with signed statement
-  Note over CP: check key, attestation age, nonce, epoch, lease, digests
+  AG->>CP: exec.result with signed statement
+  Note over CP: result-acceptance check: key, attestation age, nonce, epoch, lease, digests
   alt every check passes
-    CP->>CP: countersign with provenance key
+    CP->>CP: accept, countersign with provenance key
     CP->>LG: append envelope
     LG-->>CP: inclusion proof, integrated time
   else any check fails
-    CP-->>AG: reject with reason, reclaim
+    CP->>CP: conclude failure, provenance reason
   end
   VF->>CP: fetch statement, inclusion proof, verification policy
   Note over VF: check policy signature, proof, key windows, tier
@@ -86,7 +88,7 @@ sequenceDiagram
 
 ### Acceptance
 
-The control plane runs the checks below on every statement, in order, and stops at the first failure. Each check has a negative conformance test (FD-PROV-072).
+FlareDispatch's result-acceptance check runs the checks below on every statement, in order, inside the accept compare-and-set, and stops at the first failure ([MAMEKO-LEASE-090](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)). A failure concludes the execution `failure` with the reason `provenance: <reason>`, the reason kind the profile declares in category `policy`. Each check has a negative conformance test (FD-PROV-072).
 
 ```mermaid
 stateDiagram-v2
@@ -106,7 +108,7 @@ stateDiagram-v2
   class logged ok
 ```
 
-*Statement lifecycle · a rejected statement also rejects the result it came with.*
+*Statement lifecycle · a rejected statement concludes the execution it came with `failure`.*
 
 | Order | Check | Reason on failure |
 | --- | --- | --- |
@@ -120,7 +122,7 @@ stateDiagram-v2
 | 8 | The nonce equals the nonce issued for that execution and epoch | `nonce-mismatch` |
 | 9 | The nonce has not been consumed by an accepted statement | `nonce-reused` |
 | 10 | The subject digests equal the artifact digests in the result submission | `digest-mismatch` |
-| 11 | The agent code-signing hash equals the hash recorded at enrollment | `code-hash-mismatch` |
+| 11 | The key helper's code-signing hash equals the code hash recorded at the device's registration | `code-hash-mismatch` |
 | 12 | The model list equals the gateway metering records for that execution and epoch | `model-mismatch` |
 
 ### Provenance tiers
@@ -182,7 +184,7 @@ flowchart LR
   accTitle: Reproduced tier for a release
   tag[Protected tag] --> rel
   subgraph cloud[Control plane and cloud executors]
-    rel[Release execution, P0, cloud builder, caches off] --> sa[(Statement A, logged)]
+    rel[Release execution, class release, cloud builder, caches off] --> sa[(Statement A, logged)]
     cmp{Subject digests equal?}
     pub[Publish release]
   end
@@ -209,13 +211,13 @@ flowchart LR
 
 ### Statements
 
-- **FD-PROV-001** · phase 4 · `V-UNIT` `V-E2E-LOCAL` — When a job VM exits, the agent must compute every subject digest from the detached output disk image and must take no statement field from the job VM other than its exit status.
-- **FD-PROV-002** · phase 4 · `V-E2E-LOCAL` — The agent must keep the device key and its signing interface unreachable from every job VM.
-- **FD-PROV-003** · phase 4 · `V-UNIT` `V-E2E-LOCAL` — When the agent hashes an output image, the agent must not follow symbolic links.
-- **FD-PROV-004** · phase 4 · `V-UNIT` — The agent must sign each statement as a DSSE envelope with payload type `application/vnd.in-toto+json`, using the device key in the Secure Enclave.
-- **FD-PROV-005** · phase 4 · `V-UNIT` — The agent must include in every statement the lease binding, the run-definition digest, the commit SHA, the image digest, the lockfile digest, every restored cache entry, the egress proxy log digest and the step log digest.
-- **FD-PROV-006** · phase 4 · `V-UNIT` — The agent must mark each resolved dependency with the source of its digest: `proxy` when the egress proxy hashed the fetched bytes, `lockfile` otherwise.
-- **FD-PROV-007** · phase 4 · `V-UNIT` — The agent must use the SLSA provenance v1 predicate for statements of build recipes and the in-toto test-result predicate for statements of gate recipes.
+- **FD-PROV-001** · phase 4 · `V-UNIT` `V-E2E-LOCAL` — The statement builder must take every subject digest from the output digests the device executor passes it, which the device executor computes from the detached output volume after the job sandbox exits, and must take no statement field from the job sandbox other than its exit status.
+- **FD-PROV-002** · phase 4 · `V-E2E-LOCAL` — The device extension that holds the statement builder must be unreachable from every job sandbox, and the device key must stay in the key helper ([MAMEKO-EXEC-109](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md), [MAMEKO-EXEC-112](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)).
+- **FD-PROV-003** · phase 4 · `V-UNIT` `V-E2E-LOCAL` — When the device executor hashes an output volume for the statement builder, it must not follow symbolic links.
+- **FD-PROV-004** · phase 4 · `V-UNIT` — The statement builder must produce each statement as the payload of a DSSE envelope with payload type `application/vnd.in-toto+json`, which the device executor signs through the key helper under the `statement` signing purpose ([MAMEKO-EXEC-112](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)).
+- **FD-PROV-005** · phase 4 · `V-UNIT` — The statement builder must include in every statement the lease binding, the run-definition digest, the commit SHA, the image digest, the lockfile digest, every restored cache entry, the egress proxy log digest and the step log digest.
+- **FD-PROV-006** · phase 4 · `V-UNIT` — The statement builder must mark each resolved dependency with the source of its digest: `proxy` when the egress proxy hashed the fetched bytes, `lockfile` otherwise.
+- **FD-PROV-007** · phase 4 · `V-UNIT` — The statement builder must use the SLSA provenance v1 predicate for statements of build recipes and the in-toto test-result predicate for statements of gate recipes.
 - **FD-PROV-008** · phase 4 · `V-UNIT` `V-CONF` — When a cloud executor's result submission is accepted, the control plane must write the statement, compute each subject digest from the artifact bytes it stores in R2, and sign the statement with the provenance key as the cloud builder.
 - **FD-PROV-009** · phase 4 · `V-CONF` `V-PROOF` — The control plane must sign a statement as the cloud builder only for an execution whose current placement is a cloud executor and whose result arrived from that executor at the current epoch.
 
@@ -230,7 +232,7 @@ flowchart LR
 - **FD-PROV-013** · phase 4 · `V-CONF` `V-PROOF` — If a statement's device signature does not verify over its DSSE payload, then the control plane must reject the statement with `bad-signature`.
 - **FD-PROV-014** · phase 4 · `V-CONF` `V-PROOF` — If a statement's signing key is not in the device registry, then the control plane must reject the statement with `unknown-key`.
 - **FD-PROV-015** · phase 4 · `V-CONF` `V-PROOF` — If a statement's signing key is revoked, then the control plane must reject the statement with `revoked-key`.
-- **FD-PROV-016** · phase 4 · `V-CONF` — If the signing device's last attestation is older than `attestation_max_age` (default 10 days, set in the operator overlay), then the control plane must reject the statement with `attestation-expired`.
+- **FD-PROV-016** · phase 4 · `V-CONF` — If the signing device's last accepted attestation ([MAMEKO-LEASE-089](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)) is older than `attestation_max_age` (default 10 days, set in the operator overlay), then the control plane must reject the statement with `attestation-expired`.
 - **FD-PROV-077** · phase 4 · `V-UNIT` `V-DEPLOY` — If the operator overlay sets `attestation_max_age` below `reattest_interval` plus 48 h, then the config validator must reject the overlay.
 - **FD-PROV-017** · phase 4 · `V-CONF` `V-PROOF` — If a statement's `execution_id` names no lease or registration the control plane issued, then the control plane must reject the statement with `unissued-lease`.
 - **FD-PROV-018** · phase 4 · `V-CONF` `V-PROOF` — If a statement's lease or registration was issued to an executor other than the signing device's, then the control plane must reject the statement with `wrong-executor`.
@@ -238,18 +240,18 @@ flowchart LR
 - **FD-PROV-020** · phase 4 · `V-CONF` `V-PROOF` — If a statement's nonce differs from the nonce issued for its execution and epoch, then the control plane must reject the statement with `nonce-mismatch`.
 - **FD-PROV-021** · phase 4 · `V-CONF` `V-PROOF` — If a statement's nonce was consumed by an accepted statement, then the control plane must reject the statement with `nonce-reused`.
 - **FD-PROV-022** · phase 4 · `V-CONF` — If a statement's subject digests differ from the artifact digests in its result submission, then the control plane must reject the statement with `digest-mismatch`.
-- **FD-PROV-023** · phase 4 · `V-CONF` — If a statement's agent code-signing hash differs from the hash recorded at the device's enrollment, then the control plane must reject the statement with `code-hash-mismatch`.
+- **FD-PROV-023** · phase 4 · `V-CONF` — If a statement's key helper code-signing hash differs from the code hash recorded at the device's registration ([MAMEKO-LEASE-089](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)), then the control plane must reject the statement with `code-hash-mismatch`.
 - **FD-PROV-024** · phase 4 · `V-CONF` — If a statement's model list differs from the gateway metering records for its execution and epoch, then the control plane must reject the statement with `model-mismatch`.
 - **FD-PROV-025** · phase 4 · `V-UNIT` — If a statement comes from capacity-lease work with no registration, then the control plane must not countersign it and must keep its result advisory.
-- **FD-PROV-026** · phase 4 · `V-CONF` `V-SIM` — If the control plane rejects the statement of a result submission, then the control plane must reject that result submission with the same reason and reclaim the execution.
+- **FD-PROV-026** · phase 4 · `V-CONF` `V-SIM` — If a check of the acceptance table fails, then FlareDispatch's result-acceptance check must reject the result with the reason `provenance: <reason>`, so that the execution concludes `failure` with that reason ([MAMEKO-LEASE-090](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)).
 - **FD-PROV-027** · phase 4 · `V-UNIT` — When the control plane rejects a statement with `bad-signature`, `revoked-key`, `wrong-executor` or `code-hash-mismatch`, the control plane must quarantine the signing executor and raise a page alarm.
 
 ### Enrollment and attestation
 
-- **FD-PROV-028** · phase 4 · `V-CONF` — When a device enrolls its device key, the control plane must register the key only with a Managed Device Attestation that chains to the Apple Enterprise Attestation Root CA.
-- **FD-PROV-029** · phase 4 · `V-CONF` — If a device's attestation reports SIP disabled or a Secure Boot level other than full, then the control plane must reject the enrollment with `posture-failed`.
+- **FD-PROV-028** · phase 4 · `V-CONF` — FlareDispatch's attestation verifier, which the profile selects with `registration.attestation: verifier` ([MAMEKO-LEASE-088](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)), must accept a device key's evidence only as a Managed Device Attestation that chains to the Apple Enterprise Attestation Root CA.
+- **FD-PROV-029** · phase 4 · `V-CONF` — If a device's attestation reports SIP disabled or a Secure Boot level other than full, then the attestation verifier must reject the evidence with `posture-failed`.
 - **FD-PROV-030** · phase 4 · `V-SIM` — While a device key is registered, the control plane must request re-attestation with a fresh freshness code every `reattest_interval`, set in the operator overlay with a default and a minimum of 7 days, the interval at which a device generates a new `DeviceInformation` attestation.
-- **FD-PROV-031** · phase 4 · `V-UNIT` — The control plane must record the agent code-signing hash from the code-signing requirement it checks at enrollment, never from the agent's own report.
+- **FD-PROV-031** · phase 4 · `V-UNIT` — The attestation verifier must return as the device's code hash the key helper's code-signing hash from the code-signing requirement it checks at registration, never from the device's own report ([MAMEKO-LEASE-089](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md)).
 
 ### Countersignature and transparency log
 
@@ -297,7 +299,7 @@ flowchart LR
 
 - **FD-PROV-062** · phase 4 · `V-UNIT` `V-E2E-LOCAL` — If a release recipe's publish step finds no logged `platform` statement from a cloud builder for an artifact's digest, then the control plane must refuse the publish and conclude the release `failure` with reason `provenance: release statement missing`.
 - **FD-PROV-063** · phase 4 · `V-UNIT` — If a release statement lists a restored cache entry, then the control plane must refuse the publish and conclude the release `failure` with reason `provenance: release built warm`.
-- **FD-PROV-064** · phase 4 · `V-UNIT` — Where a release rule sets `reproduce: true`, the control plane must create a reproduction execution with the release's recipe, commit, run-definition digest and image digest, caches off, at class P2 with the `reproduction` placement constraint, which removes `cloudflare`, `aws` and `gha` and every device below the `attested-dedicated` posture tier ([qos-admission.md](qos-admission.md)).
+- **FD-PROV-064** · phase 4 · `V-UNIT` — Where a release rule sets `reproduce: true`, the control plane must create a reproduction execution with the release's recipe, commit, run-definition digest and image digest, caches off, at class `interactive` with the `reproduction` placement constraint, which removes `cloudflare`, `aws` and `gha` and every device below the `attested-dedicated` posture tier ([profile.md](profile.md) § Placement).
 - **FD-PROV-065** · phase 4 · `V-UNIT` `V-REPLAY` — The control plane must apply no intent from a reproduction execution other than appending its statement.
 - **FD-PROV-066** · phase 4 · `V-UNIT` — When the release statement and the reproduction statement are both logged with equal subject digests, the control plane must countersign a reproduction record naming both envelope digests and append it to the transparency log.
 - **FD-PROV-067** · phase 4 · `V-UNIT` — If the release statement and the reproduction statement differ in any subject digest, then the control plane must refuse the publish, conclude the release `failure` with reason `provenance: reproduction mismatch` and raise a page alarm.
@@ -305,7 +307,7 @@ flowchart LR
 
 ### Verdict audit
 
-- **FD-PROV-069** · phase 1 · `V-UNIT` `V-MEASURE` — When a device execution of a gate recipe concludes, the control plane must select it for a verdict audit with probability `audit_rate` (default 5%, set in the operator overlay) and admit a cloud execution of the same run, commit and inputs, charged to the ops reserve.
+- **FD-PROV-069** · phase 1 · `V-UNIT` `V-MEASURE` — When a device execution of a gate recipe concludes, the control plane must select it for a verdict audit with probability `audit_rate` (default 5%, set in the operator overlay) and admit a cloud execution of the same run, commit and inputs as an ops run charged to the ops reserve ([MAMEKO-SPD-063](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/spend.md)).
 - **FD-PROV-070** · phase 1 · `V-UNIT` `V-MEASURE` — When an audit verdict differs from the device verdict, the control plane must write a `verdict_audits` row naming both executions and executors and raise a notify alarm, and must leave the posted conclusion unchanged.
 
 ### Read access
@@ -330,4 +332,4 @@ flowchart LR
 ## Open items
 
 - TODO(operator): name the external witness for the private log (FD-PROV-039, FD-PROV-055).
-- TODO(maintainer): decide whether the egress proxy installs a TLS interception CA inside the job VM; without one, HTTPS dependencies carry `lockfile` digests only (FD-PROV-006).
+- TODO(maintainer): decide whether the egress proxy installs a TLS interception CA inside the job sandbox; without one, HTTPS dependencies carry `lockfile` digests only (FD-PROV-006).

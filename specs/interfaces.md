@@ -4,14 +4,14 @@ This file specifies the surfaces people, workflows and coding agents use to reac
 
 ## Scope
 
-The HTTP API is declared once with `effect/http-api`: every route, request schema, response schema and error union is a `Schema`, and every error is a `Schema.TaggedError` class. The dispatcher implements the declaration; `fd`, built with `effect/cli`, and the MCP tools derive their clients and tool schemas from it. In Effect 4.0.6, `effect/http-api`, `effect/cli` and the `effect/ai` MCP server are `@stability unstable`, and the upgrade gate of FD-IFC-082 covers them.
+The HTTP API is declared once with `effect/http-api`: every route, request schema, response schema and error union is a `Schema`, and every error is a `Schema.TaggedError` class. The dispatcher implements the declaration; the `fd-<subcommand>` executables, built with `effect/cli`, and the MCP tools derive their clients and tool schemas from it. `fd` itself is mameko's `<cli>` built with the command name `fd` ([mameko releases.md § Device command](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md#device-command)). In Effect 4.0.6, `effect/http-api`, `effect/cli` and the `effect/ai` MCP server are `@stability unstable`, and the upgrade gate of FD-IFC-082 covers them.
 
 This file depends on:
 
 - [intake.md](intake.md) for webhook signature checks, atomic dedup, repo manifests and the installation lookup behind a dispatch;
-- [qos-admission.md](qos-admission.md) for `resolveClass`, cancellation and supersession;
-- [operability.md](operability.md) for the semantics of operator controls, the dashboard, `fd deploy` and `fd doctor`;
-- [executor-protocol.md](executor-protocol.md) for the executor connect route;
+- [profile.md](profile.md) for `resolveClass`, and mameko's [admission-qos.md § Supersession](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/admission-qos.md#supersession) for cancellation and supersession;
+- [operability.md](operability.md) for the operator operations each `/v1/ops/*` route surfaces, the dashboard, `fd deploy` and `fd doctor`;
+- mameko's [executor-protocol.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executor-protocol.md) for the executor connect route;
 - [local-scheduler.md](local-scheduler.md) for the local MCP endpoint, its tools and the submit port;
 - [provenance.md](provenance.md) for the statements and policy the provenance routes serve;
 - [run-model.md](run-model.md) for `RunResult` and the verdict union;
@@ -31,10 +31,10 @@ Every surface passes exactly one identity check before any route logic runs.
 | HTTP API, `/v1/*` | Dispatcher | People, `fd`, automation | Cloudflare Access JWT (people and service tokens) | 0 |
 | `POST /v1/dispatch/:run` | Dispatcher | A GitHub Actions workflow step, or a member or service token through `fd` | GitHub Actions OIDC token, or Access JWT of an identity in `dispatchers` | 0 |
 | `POST /v1/webhooks/github` | Dispatcher | GitHub | HMAC-SHA256 over the raw body ([intake.md](intake.md)) | 0 |
-| `/v1/executors/connect` | Executor Durable Object | Agents | Client certificate over mTLS, whose key is a file-held P-256 key distinct from the Secure Enclave device key ([executors.md](executors.md) FD-EXEC-101), and a device-key `connect` signature ([executor-protocol.md](executor-protocol.md)) | 1 |
+| `/v1/executors/connect` | `ExecutorChannel` Durable Object | Device executors and `gha` runners | Client certificate over mTLS whose SHA-256 fingerprint equals the executor row's `key_fingerprint` ([MAMEKO-PROTO-002](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executor-protocol.md)); for a `gha` runner, the launcher port's `verify` of its OIDC token ([executors.md](executors.md)) | 1 |
 | `/v1/executions/:id/logs/:file`, `/v1/artifacts/:artifact_id` | Dispatcher | Anyone holding a link | Link token, or Access JWT | 0 |
 | `/v1/compile-cache/*` | Dispatcher | `sccache` in a job | Compile-cache token ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-057) | 0 |
-| `POST /v1/model/completions` | Dispatcher | An executor's egress proxy, a local scheduler's host proxy | The execution's per-lease token with its epoch, or a capacity-lease proof of possession ([model-gateway.md](model-gateway.md) FD-MDL-042, FD-MDL-043, FD-MDL-068) | 0 |
+| `POST /v1/model/completions` | Dispatcher | An executor's egress proxy, a local scheduler's host proxy | The execution's per-lease token with its epoch, or a capacity-lease proof of possession ([MAMEKO-MDL-040](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/model-gateway.md), [MAMEKO-MDL-041](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/model-gateway.md), [MAMEKO-MDL-043](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/model-gateway.md)) | 0 |
 | `/.well-known/*`, `/health` | Dispatcher | Anyone | None | 0 |
 | `/v1/provenance/*` | Dispatcher | Verifiers | None for public repositories, Access JWT otherwise | 4 |
 | `/mcp` | Dispatcher | Coding agents | Access JWT | 2 |
@@ -47,16 +47,16 @@ flowchart LR
   gha[GitHub Actions step]
   gh[GitHub]
   agents[Coding agents]
-  agentd[Agent on a device]
+  agentd[Device executor]
   subgraph cp[Control plane]
     access{Access JWT}
     oidc{Actions OIDC token}
     hmac{Webhook HMAC}
-    mtls{Client certificate and device-key signature}
+    mtls{Client certificate}
     api[HTTP API handlers]
     mcp[MCP server]
     intake[Intake]
-    hub[Executor Durable Object]
+    hub[ExecutorChannel]
   end
   people --> access
   agents --> access
@@ -85,7 +85,7 @@ flowchart LR
 
 ### Error model
 
-Every error response is a JSON object `{ "error": <code>, "message": <text>, "request_id": <id> }`. The codes form a closed set:
+Every error response is a JSON object `{ "error": <code>, "message": <text>, "request_id": <id> }`. The codes form a closed set. Four codes carry an error mameko's coordinator raises: `conflict` (an `Idempotency-Key` reused with a different body, [MAMEKO-ADM-028](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/admission-qos.md)), `intake_unavailable` ([MAMEKO-ADM-029](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/admission-qos.md)), `spend_unreadable` ([MAMEKO-SPD-059](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/spend.md)) and `misconfigured` ([MAMEKO-OPS-002](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/operability.md)).
 
 | Status | Codes |
 | --- | --- |
@@ -95,7 +95,7 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | 403 | `forbidden`, `repository_mismatch`, `link_expired`, `link_revoked`, `model_route_refused` |
 | 404 | `not_found`, `run_not_found`, `execution_not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `not_failed`, `not_finished` |
+| 409 | `conflict`, `not_failed`, `not_finished` |
 | 413 | `payload_too_large` |
 | 422 | `installation_not_found` |
 | 429 | `rate_limited`, with `Retry-After` |
@@ -119,10 +119,11 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `POST /v1/ops/halt` | Set the control state: `run`, `halt-cloud`, `halt-all` | 0 |
 | `POST /v1/ops/quarantine` | Quarantine one executor or one repository | 0 |
 | `POST /v1/ops/release` | Release a quarantined or drained executor, or a quarantined repository | 0 |
-| `POST /v1/ops/force-admit` | Admit one stuck P1 execution above its line until an expiry | 0 |
-| `POST /v1/ops/top-up` | Top up `R1` until an expiry | 0 |
+| `POST /v1/ops/force-admit` | Admit one stuck `required` execution above its line until an expiry | 0 |
+| `POST /v1/ops/top-up` | Top up the `required` reserve until an expiry | 0 |
 | `POST /v1/ops/drain` | Drain one executor | 1 |
 | `POST /v1/ops/revoke` | Revoke one device key | 1 |
+| `POST /v1/ops/pause-key`, `POST /v1/ops/resume-key` | Pause or resume one delivery key: an installation's `limit_key` | 1 |
 | `GET /v1/ops/health` | Installation, delivery, cron, executor, outbox and control-state health ([operability.md](operability.md) FD-OPS-036) | 0 |
 | `GET /v1/spend` | Month-to-date spend per class line ([spend.md](spend.md)) | 0 |
 | `GET /.well-known/openid-configuration`, `GET /.well-known/jwks.json` | OIDC discovery and keys | 0 |
@@ -178,7 +179,7 @@ stateDiagram-v2
   class done ok
 ```
 
-*Reported status · `queued` reports the stored status `pending`; `done` carries the verdict `success`, `failure(reason)`, `cancelled` or `skipped`, or no verdict for an execution recorded `deferred` ([architecture.md](architecture.md) FD-ARCH-034).*
+*Reported status · `queued` covers an execution before its first lease and after a reclaim; `done` carries the verdict `success`, `failure(reason)`, `cancelled` or `skipped`, or no verdict for an execution that ended `deferred` or `expired` ([MAMEKO-ARCH-061](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/architecture.md) to [MAMEKO-ARCH-063](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/architecture.md)).*
 
 ### `fd` commands
 
@@ -191,9 +192,9 @@ stateDiagram-v2
 | `fd logs <id>` | `GET /v1/executions/:id/logs/:file` | 0 |
 | `fd cancel <id>` | `POST /v1/executions/:id/cancel`, or the local scheduler for a local id | 0 |
 | `fd ls` | `GET /v1/executions` | 0 |
-| `fd ops halt`, `drain`, `quarantine`, `release`, `force-admit`, `top-up`, `revoke` | `/v1/ops/*` | 0 |
+| `fd ops halt`, `drain`, `quarantine`, `release`, `force-admit`, `top-up`, `revoke`, `pause-key`, `resume-key` | `/v1/ops/*` | 0 |
 | `fd deploy`, `fd doctor` | As [operability.md](operability.md) specifies | 0 |
-| `fd rehearse <run>`, `fd queue`, `fd lease` | The local scheduler socket | 1 |
+| `fd rehearse <run>`, `fd queue`, `fd lease` | The local scheduler socket; commands mameko's `<cli>` defines | 1 |
 | `fd mcp` | Stdio MCP shim over both | 1 |
 | `fd verify <artifact>` | Offline, with a policy and a statement bundle | 4 |
 
@@ -285,12 +286,10 @@ flowchart LR
 - **FD-IFC-028** · phase 0 · `V-UNIT` — If the dispatched run is not in the catalog or the repository's manifest, then the dispatcher must answer 404 `run_not_found`.
 - **FD-IFC-029** · phase 0 · `V-UNIT` — If a dispatch's inputs fail the run's input schema, then the dispatcher must answer 400 `invalid_inputs`.
 - **FD-IFC-030** · phase 0 · `V-UNIT` — If a dispatch's `signals` exceed the `signals/v1` caps (source 120, title 200, detail 2000 and url 1000 characters; at most 50 entries), then the dispatcher must answer 400 `invalid_signals`.
-- **FD-IFC-031** — Removed; see [run-model.md](run-model.md) FD-RUN-054.
 - **FD-IFC-032** · phase 0 · `V-UNIT` — If the dispatched repository has no installation of the GitHub App, then the dispatcher must answer 422 `installation_not_found` and create no execution.
-- **FD-IFC-033** · phase 0 · `V-UNIT` — When a dispatch names a `class`, the dispatcher must pass it to `resolveClass` as the explicit override and return the resolved class in the response.
-- **FD-IFC-034** — Removed; see [intake.md](intake.md) FD-INT-011.
-- **FD-IFC-035** · phase 0 · `V-UNIT` — When intake accepts a dispatch, the dispatcher must answer 202 with `execution_id`, `class`, `details_url` and `logs_url`.
-- **FD-IFC-036** · phase 0 · `V-UNIT` — When intake finds the dispatch's semantic key already present, the dispatcher must answer 202 with the existing `execution_id` and `duplicate: true`.
+- **FD-IFC-033** · phase 0 · `V-UNIT` — When a dispatch names a `class`, the dispatcher must pass it to `resolveClass` as the `class` input and return the resolved class in the response.
+- **FD-IFC-035** · phase 0 · `V-UNIT` — When admission admits a dispatch, the dispatcher must answer 202 with `execution_id`, `class`, `details_url` and `logs_url`.
+- **FD-IFC-036** · phase 0 · `V-UNIT` — When admission answers a dispatch `duplicate` or `conflict`, the dispatcher must answer as [intake.md](intake.md) FD-INT-003 specifies: 202 with the existing `execution_id` and `duplicate: true`, or 409 `conflict` with the existing `execution_id`.
 
 ### Executions API
 
@@ -307,10 +306,10 @@ flowchart LR
 
 ### Operator API
 
-- **FD-IFC-047** · phase 0 · `V-UNIT` — If a `/v1/ops/*` request carries no `reason` or a `reason` outside 1 to 500 characters, then the dispatcher must answer 400 `reason_required`.
-- **FD-IFC-048** · phase 0 · `V-UNIT` `V-CONF` — When the dispatcher applies an operator request, the dispatcher must write an audit row with the identity, action, target, reason, request id and time in the same D1 batch (`db.batch()`) as the change.
-- **FD-IFC-049** · phase 0 · `V-UNIT` — If the D1 batch of an operator request fails, then the dispatcher must answer 503 `unavailable` and leave the control state unchanged.
-- **FD-IFC-050** · phase 0 · `V-UNIT` — If a force-admit or top-up request carries no `expires_at` or one more than 7 days ahead ([operability.md](operability.md) FD-OPS-081), then the dispatcher must answer 400 `invalid_body`.
+- **FD-IFC-047** · phase 0 · `V-UNIT` — If the coordinator rejects a `/v1/ops/*` request for its `reason` ([MAMEKO-OPS-031](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/operability.md)), then the dispatcher must answer 400 `reason_required`.
+- **FD-IFC-049** · phase 0 · `V-UNIT` — If the store transaction of an operator operation fails, then the dispatcher must answer 503 `unavailable`, and the control state stays unchanged.
+- **FD-IFC-050** · phase 0 · `V-UNIT` — If the coordinator rejects a force-admit or top-up request for its `expires_at` ([MAMEKO-OPS-033](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/operability.md)), then the dispatcher must answer 400 `invalid_body`.
+- **FD-IFC-083** · phase 0 · `V-UNIT` — The dispatcher must pass the request id it assigns to every `/v1/ops/*` call, the operator's Access identity and the `reason` to the coordinator's operation, which writes them on the audit row ([MAMEKO-OPS-032](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/operability.md)).
 
 ### Well-known and provenance routes
 
@@ -332,7 +331,8 @@ flowchart LR
 
 ### `fd`
 
-- **FD-IFC-063** · phase 0 · `V-UNIT` — `fd` must be one binary that serves the commands in the `fd` commands table, each mapped to the one route or local scheduler tool the table names.
+- **FD-IFC-063** · phase 1 · `V-UNIT` `V-DEPLOY` — `fd` must be mameko's `<cli>` built with the command name `fd` from the source archive of `crates/` of the mameko release FlareDispatch pins, with that release's embedded version, and installed in the same device bundle as that release's device executor, local scheduler and key helper ([MAMEKO-REL-036](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md), [MAMEKO-REL-037](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md), [MAMEKO-REL-038](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md), [MAMEKO-REL-049](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md)).
+- **FD-IFC-084** · phase 0 · `V-UNIT` — Every `fd` command that mameko's `<cli>` does not define must be an `fd-<subcommand>` executable on `PATH` that `fd` runs with the remaining arguments ([MAMEKO-REL-039](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md)), each mapped to the one route the `fd` commands table names.
 - **FD-IFC-064** · phase 0 · `V-UNIT` — When a command runs with `--json`, `fd` must write exactly one JSON document matching the route's response schema to stdout and every diagnostic to stderr.
 - **FD-IFC-065** · phase 0 · `V-UNIT` — `fd` must exit with the code the exit-code table assigns to the outcome.
 - **FD-IFC-066** · phase 0 · `V-UNIT` — `fd dispatch` must retry a 5xx or network failure up to 3 attempts in total with a backoff of attempt × 5 s, and must treat every 4xx as final.
@@ -348,7 +348,7 @@ flowchart LR
 - **FD-IFC-073** · phase 2 · `V-UNIT` — If an `/mcp` request carries no valid Access JWT, then the dispatcher must answer 401 `unauthenticated`.
 - **FD-IFC-074** · phase 2 · `V-UNIT` — The dispatcher must apply to the MCP `dispatch` tool the same identity, dedup, class and catalog rules as `POST /v1/dispatch/:run`.
 - **FD-IFC-075** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — `fd mcp` must serve the union of the dispatcher's and the local scheduler's tools over stdio, routing `rehearse`, `lease_status` and `local-` ids to the local scheduler socket and every other call to the HTTP API with the developer's own Access token.
-- **FD-IFC-076** · phase 0 · `V-UNIT` — The local scheduler must issue local execution ids as `local-` followed by a ULID; control-plane execution ids follow [intake.md](intake.md) FD-INT-008.
+- **FD-IFC-076** · phase 0 · `V-UNIT` — The local scheduler must issue local execution ids as `local-` followed by a ULID; control-plane execution ids follow [MAMEKO-ADM-033](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/admission-qos.md).
 - **FD-IFC-077** · phase 1 · `V-UNIT` — Every MCP tool must take its input and output schemas from the `Schema` of the route or local scheduler operation it wraps.
 - **FD-IFC-078** · phase 1 · `V-UNIT` — If `wait_seconds` exceeds 60 on `get_verdict` or `dispatch`, or 600 on `rehearse`, then the MCP tool must return the `invalid_wait` tool error.
 - **FD-IFC-079** · phase 1 · `V-UNIT` — Every MCP tool must keep its serialized result at or below 16 KiB.
@@ -357,7 +357,7 @@ flowchart LR
 
 ### Upgrade gate
 
-- **FD-IFC-082** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — A change to the `effect` version must merge only when the HTTP API, `fd` and MCP test suites pass, in addition to the engine upgrade gate of [engine.md](engine.md) FD-ENG-045.
+- **FD-IFC-082** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — A change to the `effect` version must merge only when the HTTP API, `fd-<subcommand>` and MCP test suites pass over the `@stability unstable` modules they use ([MAMEKO-ENG-086](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/engine.md)).
 
 ## Open items
 

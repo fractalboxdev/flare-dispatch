@@ -1,16 +1,20 @@
 # Verification
 
-This file specifies how FlareDispatch proves that each requirement holds: the harness behind each verification tag, where it lives and when it runs, the merge gate and the phase gates that read the harness results, the check that every `must` carries a tag, the map from the formal properties F1–F7 and S1–S8 to requirement IDs, theorems and the assumption tests each proof depends on, and the coverage of tags by area and phase.
+This file specifies how FlareDispatch proves that each of its requirements holds: the harness behind each verification tag, where it lives and when it runs, the merge gate and the phase gates that read the harness results, the `spec-tags` check over FlareDispatch's requirement lines and its moved-ID table, the run of mameko's conformance suite on FlareDispatch's composed control plane, the diff of FlareDispatch's profile against mameko's reference CI profile, and the formal properties FlareDispatch proves itself: the staged-write gate, the cache namespaces and the provenance protocol.
 
 ## Scope
 
-This file covers the ten verification tags of [README.md](README.md), the CI jobs that run them, the merge gate, the phase gates, the `spec-tags` check, the formal gate (Lean 4, Tamarin and differential testing) and the coverage counts. Tags are inline on each requirement, so this file holds no row per requirement: a requirement's tags name its harnesses, and its phase names the gate that requires those harnesses to pass. It depends on [README.md](README.md) for the requirement format, the area table and the tag table; on [roadmap.md](roadmap.md) for the phases, the `V-MEASURE` thresholds and the kill lines; on [operability.md](operability.md) for the deploy workflow, the drift check, the canary and the alarms; on [provenance.md](provenance.md) for the Tamarin gate (FD-PROV-072, FD-PROV-073); and on [adr/0018-formal-models.md](adr/0018-formal-models.md) for the choice of Lean 4, differential testing, Veil and Tamarin.
+This file covers the ten verification tags of [README.md](README.md), the CI jobs that run them, the merge gate, the phase gates, the `spec-tags` check, FlareDispatch's formal gate (Lean 4 for the staged-write gate and the cache namespaces, Tamarin for provenance, differential testing of `stagedWriteGate`) and the coverage counts. Tags are inline on each requirement, so this file holds no row per requirement: a requirement's tags name its harnesses, and its phase names the gate that requires those harnesses to pass.
+
+mameko's [verification.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md) specifies the harnesses for mameko's own requirements: the coordinator conformance suite, the kernels' Lean models and differential testing, the fleet simulation and the replay check. FlareDispatch runs mameko's conformance suite against its own composed control plane (FD-VER-032) and cites mameko's theorems for the properties of the mechanism it inherits; it does not re-prove them.
+
+It depends on [README.md](README.md) for the requirement format, the area table, the tag table and the moved-ID table; on [roadmap.md](roadmap.md) for the phases, the `V-MEASURE` thresholds and the kill lines; on [operability.md](operability.md) for the deploy workflow, the drift check, the canary and the alarms; on [profile.md](profile.md) for the profile the reference diff reads; on [provenance.md](provenance.md) for the Tamarin gate (FD-PROV-072, FD-PROV-073); and on [adr/0018-formal-models.md](adr/0018-formal-models.md) for the Tamarin model.
 
 ## Model
 
 ### From requirement to gate
 
-A requirement line carries its phase and one or more tags. Each tag names one harness family. A harness entry covers a requirement when it names the requirement's ID: a test title that contains `[FD-<AREA>-NNN]`, a Lean theorem or a Veil invariant whose docstring lists the ID, or a Tamarin lemma whose comment lists it. The `spec-tags` check joins requirement lines to harness entries and reports, per tag, each requirement with no entry. The merge gate requires every harness that runs per pull request to pass. The phase gate for phase n requires, for every requirement of phase n or lower, a passing entry for each of its tags.
+A requirement line carries its phase and one or more tags. Each tag names one harness family. A harness entry covers a requirement when it names the requirement's ID: a test title that contains `[FD-<AREA>-NNN]`, a Lean theorem whose docstring lists the ID, or a Tamarin lemma whose comment lists it. The `spec-tags` check joins requirement lines to harness entries and reports, per tag, each requirement with no entry. The merge gate requires every harness that runs per pull request to pass. The phase gate for phase n requires, for every requirement of phase n or lower, a passing entry for each of its tags.
 
 The current phase is the single digit in `.github/phase`. A pull request that changes it is a phase-gate pull request.
 
@@ -18,27 +22,26 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-UNIT`
 
-- **Runs:** `@effect/vitest` suites over test Layers: the memory engine, a fake GitHub that records every call, and a fake executor that returns scripted results. It covers logic, verdict mapping, `resolveClass`, validators and pure functions.
-- **Lives:** `test/unit/` in each workspace package and app, run by `pnpm test`.
+- **Runs:** `@effect/vitest` suites over test Layers: mameko's memory runtime adapter, a fake GitHub that records every call, and a fake executor that returns scripted results. It covers the appliers, `checkConclusion`, the installation rate limit, `resolveClass`, the profile's bindings, validators and pure functions.
+- **Lives:** `test/unit/` or `src/*.test.ts` in each workspace package and app, run by `pnpm test`.
 - **Runs when:** every pull request and every push to the default branch, in the `unit` job.
 - **Failure blocks:** the merge.
 
 #### `V-CONF`
 
 - **Runs:** one conformance suite per interface, run unchanged against every backend of that interface:
-  - `WorkflowEngine`: DO-SQLite, SQLite, Postgres and memory;
-  - executors: `cloudflare` Container, `device`, `aws`, `gha` and the fake executor;
-  - stores: D1, SQLite and Postgres;
+  - mameko's coordinator suite of `packages/conformance`, against FlareDispatch's composed control plane: `host-cloudflare` under workerd with FlareDispatch's profile, its appliers on the fake GitHub, and the fake executor (FD-VER-032);
+  - executors: the `gha` launcher and the fake executor;
   - provenance acceptance: one negative test per acceptance check and per verifier rejection (FD-PROV-072).
-- **Lives:** `packages/conformance/`, with one directory per interface and one backend adapter per backend.
+- **Lives:** mameko's suite as an installed package; FlareDispatch's own suites in `packages/conformance/`.
 - **Runs when:**
-  - every pull request, in the `conf` job, for memory, SQLite, D1 under workerd, Postgres in a service container, the `cloudflare` executor under workerd and the fake executor;
+  - every pull request, in the `conf` job, for the composed control plane, the R2 conditional writes of [cache-artifacts.md](cache-artifacts.md) and the fake executor;
   - nightly and on every phase-gate pull request, for the `device` executor on an owned device from phase 1, the `aws` executor from phase 3 and the `gha` executor from phase 4.
 - **Failure blocks:** the merge for the per-pull-request backends; the phase gate for the nightly backends.
 
 #### `V-SIM`
 
-- **Runs:** a deterministic simulation of the fleet on `TestClock` with fault injection: sleep mid-step, executor DO restart during a deploy, a late result after reclaim, the claim-versus-spill race, clock skew, a socket drop, a D1 batch failure and a model call refused at its allowance. Each scenario takes a seed that fixes every interleaving.
+- **Runs:** a deterministic simulation on `TestClock` with fault injection, over FlareDispatch's composed control plane: a late result after reclaim, a webhook redelivery, a `401` and a `Retry-After` from GitHub, an installation at its reserve, and a D1 transaction failure. Each scenario takes a seed that fixes every interleaving.
 - **Lives:** `test/sim/`, with failing seeds kept in `test/sim/seeds.jsonl`.
 - **Runs when:** every pull request with 100 seeds per scenario plus every kept seed, in the `sim` job; nightly with 10,000 seeds per scenario.
 - **Failure blocks:** the merge (per pull request); the phase gate (nightly).
@@ -52,7 +55,7 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-E2E-LOCAL`
 
-- **Runs:** the full stack on one machine: the Workers under workerd (`wrangler dev`), a local agent, a recorded GitHub fixture server and a local VM.
+- **Runs:** the full stack on one machine: the Workers under workerd (`wrangler dev`), a device executor from mameko's device bundle, a recorded GitHub fixture server and a local job sandbox.
 - **Lives:** `test/e2e-local/`, with the GitHub recordings in `test/e2e-local/fixtures/`.
 - **Runs when:**
   - every pull request, in the `e2e-local` job, for the cloud path (workerd, the fixture server and a local container as the `cloudflare` executor);
@@ -61,37 +64,37 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-DEPLOY`
 
-- **Runs:** `wrangler deploy --dry-run` for every Worker, the placement policy validator and the config validator over the committed configuration, and the overlay drift check of [operability.md](operability.md).
-- **Lives:** the `deploy-dry-run` job and the deploy workflow in `.github/workflows/`; the drift check is `fd doctor`.
+- **Runs:** `wrangler deploy --dry-run` for every Worker, mameko's profile validator and configuration validation over the committed profile and configuration, the reference-profile diff (FD-VER-033), and the overlay drift check of [operability.md](operability.md).
+- **Lives:** the `deploy-dry-run` and `profile-reference` jobs and the deploy workflow in `.github/workflows/`; the drift check is `fd doctor`.
 - **Runs when:** every pull request, against the committed placeholders; every deploy, against the operator overlay; every 24 h, as `fd doctor` (FD-OPS-025).
-- **Failure blocks:** the merge (dry run and validators); the deploy (drift check).
+- **Failure blocks:** the merge (dry run, validators and reference diff); the deploy (drift check).
 
 #### `V-LIVE`
 
-- **Runs:** the synthetic webhook canary every 15 min (FD-OPS-038, FD-OPS-040), the installation probe every 15 min (FD-OPS-041), the webhook delivery scan (FD-OPS-044), the post-deploy probe (FD-OPS-013), `pr-review` on this repository's pull requests, and from phase 3 the daily AWS launcher canary (FD-OPS-051).
-- **Lives:** the control plane's cron and outbox rows; results reach the alert sink and the dashboard.
+- **Runs:** the synthetic webhook canary every 15 min (FD-OPS-038, FD-OPS-040), the installation probe every 15 min (FD-OPS-041), the webhook delivery scan (FD-OPS-044), the post-deploy probe (FD-OPS-013), `pr-review` on this repository's pull requests, and mameko's floor canaries on the deployed control plane.
+- **Lives:** the control plane's cron and ops intents; results reach the alert sink and the dashboard.
 - **Runs when:** live, on every deploying organization's control plane.
 - **Failure blocks:** no merge. It raises the page alarm the requirement names, and the phase gate reads the alarm record of its window.
 
 #### `V-MEASURE`
 
-- **Runs:** a metric computed from the executions table and its siblings (claim latency, spill rate, epoch discards, verdict audit disagreements, time to verdict per run and executor kind, cache hit rate, executor DO GB-s), compared with a threshold.
+- **Runs:** a metric computed from the executions table and its siblings (claim latency, cloud placement rate, epoch discards, verdict audit disagreements, time to verdict per run and executor kind, cache hit rate), compared with a threshold.
 - **Lives:** the control plane's metric queries; the dashboard shows them (FD-OPS-070) and `GET /v1/spend` serves the spend metrics.
 - **Runs when:** live. The phase gate reads each metric over its window; the kill-line monitor reads each metric daily.
 - **Failure blocks:** the phase gate. A crossed kill line raises the `kill-line` notification and stops the next phase until the operator decides.
 
 #### `V-PROOF`
 
-- **Runs:** `lake build` over the Lean 4 project, the forbidden-term scan, `#print axioms` for every theorem, the Veil model checker over the lease protocols, and `tamarin-prover --prove` over the provenance model.
-- **Lives:** `formal/` at the repository root: `formal/FdFormal/*.lean` for the kernels, `formal/FdFormal/Veil/` for the lease protocols, `formal/provenance.spthy` for provenance, `formal/lean-toolchain` and a pinned prover version for the tools.
+- **Runs:** `lake build` over FlareDispatch's Lean 4 project, the forbidden-term scan, `#print axioms` for every theorem, and `tamarin-prover --prove` over the provenance model.
+- **Lives:** `formal/` at the repository root: `formal/FdFormal/*.lean` for the staged-write gate and the cache namespaces, `formal/provenance.spthy` for provenance, `formal/lean-toolchain` and a pinned prover version for the tools. A theorem about mameko's mechanism lives in mameko's `formal/` and is cited by name.
 - **Runs when:** every pull request and every push to the default branch, in the `formal` job.
 - **Failure blocks:** the merge. A proof counts toward a phase gate only while every assumption test of its row in the formal property table passes on the same commit.
 
 #### `V-DIFF`
 
-- **Runs:** `fast-check` traces through a TypeScript kernel and through the native oracle compiled from the Lean model of that kernel, comparing outputs after every event. The kernels are `spendKernel`, `placementPolicy`, `fenceKernel`, `outboxKernel`, `stagedWriteGate` and `routeModelCall`.
+- **Runs:** `fast-check` traces through `stagedWriteGate` and through the native oracle compiled from its Lean model, comparing outputs after every event. mameko's kernels are differentially tested in mameko ([mameko verification.md § Differential testing](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md#differential-testing)).
 - **Lives:** `test/diff/` for the generators and the comparison, the `oracle` executable built by `lake build oracle` in `formal/`, and `formal/regressions.jsonl` for every trace that ever differed.
-- **Runs when:** every pull request with 10,000 traces per kernel, in the `diff` job; nightly with 1,000,000 traces per kernel. Every run first replays every line of `formal/regressions.jsonl`.
+- **Runs when:** every pull request with 10,000 traces, in the `diff` job; nightly with 1,000,000 traces. Every run first replays every line of `formal/regressions.jsonl`.
 - **Failure blocks:** the merge (per pull request); the phase gate (nightly).
 
 ### Merge gate
@@ -102,15 +105,16 @@ The default branch's ruleset requires these checks on every pull request. A pull
 | --- | --- | --- |
 | `lint` | `pnpm lint` | — |
 | `typecheck` | `pnpm typecheck` | — |
-| `spec-tags` | The requirement-line check (FD-VER-001 to FD-VER-013) | all |
-| `unit` | `pnpm test` over `test/unit/` | `V-UNIT` |
-| `conf` | Conformance suites over the per-pull-request backends | `V-CONF` |
+| `spec-tags` | The requirement-line check (FD-VER-001 to FD-VER-013, FD-VER-034 to FD-VER-037) | all |
+| `unit` | `pnpm test` | `V-UNIT` |
+| `conf` | mameko's coordinator suite on the composed control plane, and FlareDispatch's suites over the per-pull-request backends | `V-CONF` |
 | `sim` | 100 seeds per scenario plus every kept seed | `V-SIM` |
 | `replay` | Double run over cached journals | `V-REPLAY` |
 | `e2e-local` | The cloud path of the end-to-end stack | `V-E2E-LOCAL` |
 | `deploy-dry-run` | `wrangler deploy --dry-run` and the validators | `V-DEPLOY` |
-| `formal` | `lake build`, the forbidden-term scan, `#print axioms`, Veil, `tamarin-prover --prove` | `V-PROOF` |
-| `diff` | The regressions file, then 10,000 traces per kernel | `V-DIFF` |
+| `profile-reference` | The comparison of FlareDispatch's profile with mameko's reference CI profile at the pinned commit, outside the listed differences (FD-VER-033, FD-PROF-002) | `V-DEPLOY` |
+| `formal` | `lake build`, the forbidden-term scan, `#print axioms`, `tamarin-prover --prove` | `V-PROOF` |
+| `diff` | The regressions file, then 10,000 traces of `stagedWriteGate` | `V-DIFF` |
 
 `V-LIVE` and `V-MEASURE` run against a deployed control plane and are not merge checks.
 
@@ -134,8 +138,10 @@ flowchart LR
     tests[unit, conf, sim, replay]
     e2e[e2e-local cloud path]
     dry[deploy-dry-run]
-    formal["formal: Lean, Veil, Tamarin"]
+    formal["formal: Lean, Tamarin"]
     diff["diff: 10k traces"]
+    mconf[mameko conformance on the composed host]
+    pref[profile-reference]
   end
   mg{All checks success?}
   refused([Merge refused])
@@ -163,6 +169,8 @@ flowchart LR
   pr --> dry
   pr --> formal
   pr --> diff
+  pr --> mconf
+  pr --> pref
   tags --> mg
   static --> mg
   tests --> mg
@@ -170,6 +178,8 @@ flowchart LR
   dry --> mg
   formal --> mg
   diff --> mg
+  mconf --> mg
+  pref --> mg
   mg e1@-->|no| refused
   mg -->|yes| main
   main --> drift
@@ -204,28 +214,26 @@ The `formal` job fails on any of these:
 - `lake build` in `formal/` fails under the toolchain that `formal/lean-toolchain` pins exactly.
 - A `.lean` file in `formal/` contains `sorry`, `admit`, `native_decide` or an `axiom` declaration.
 - `#print axioms` for a theorem in `formal/` lists an axiom other than `propext`, `Classical.choice` and `Quot.sound`.
-- The Veil model checker finds a counterexample to an invariant of `formal/FdFormal/Veil/`.
 - `tamarin-prover --prove formal/provenance.spthy`, at the pinned prover version, reports a lemma other than `verified`. An expected attack is stated as an `exists-trace` lemma, so the attack trace that lemma finds is a pass (FD-PROV-073).
 
-The `diff` job runs, per kernel, every line of `formal/regressions.jsonl` for that kernel, then 10,000 generated traces per pull request or 1,000,000 nightly, through the TypeScript kernel and the oracle built from the same commit. Each trace uses integer micro-USD and the Lean model's event alphabet. The first trace whose outputs differ fails the job; the harness shrinks it and writes it as one `regressions.jsonl` line.
+The `diff` job runs every line of `formal/regressions.jsonl`, then 10,000 generated traces per pull request or 1,000,000 nightly, through `stagedWriteGate` and the oracle built from the same commit. The first trace whose outputs differ fails the job; the harness shrinks it and writes it as one `regressions.jsonl` line.
 
 ```mermaid
 flowchart TB
   accTitle: Proof, oracle, TypeScript kernel and assumption tests
   subgraph formalZone["formal/"]
-    model[Lean model of the kernel]
+    model[Lean model of stagedWriteGate and the cache namespaces]
     thm[Theorems named by requirement ID]
     oracle[Compiled native oracle]
     spthy[Tamarin lemmas S7a to S7e]
   end
   subgraph cp["Control plane (TypeScript)"]
-    kernel["Pure kernel: state, event to state"]
-    adapter["Storage adapter: claim batch, settle batch, conditional UPDATE"]
-    accept[Statement acceptance checks]
+    kernel["stagedWriteGate: manifest to accept or reject"]
+    accept[Result-acceptance checks]
   end
   subgraph assume["Assumption tests"]
-    conf[V-CONF suites over every backend]
-    sim[V-SIM fleet simulation]
+    conf[V-CONF suites]
+    sim[V-SIM simulation]
   end
   gen[fast-check trace generator]
   cmp{Outputs equal on every trace?}
@@ -240,12 +248,9 @@ flowchart TB
   kernel --> cmp
   cmp e1@-->|no| reg
   reg -.->|replayed first| gen
-  kernel --> adapter
-  thm -.->|assumes atomic admission, deadline, allowance| adapter
   spthy -.->|assumes each check rejects| accept
-  conf -->|tests| adapter
-  sim -->|tests| adapter
   conf -->|negative test per check| accept
+  sim -->|tests| kernel
   cmp -->|yes| counts
   assume -->|every assumption test passes| counts
   assume e2@-->|a test missing or failing| void
@@ -258,28 +263,17 @@ flowchart TB
   class e1,e2 failure
 ```
 
-*Proof to code · the oracle ties the theorem to the TypeScript kernel through differential testing, and the conformance and simulation tests tie the model's assumptions to the storage adapter and the acceptance checks.*
+*Proof to code · the oracle ties the staged-write theorem to the TypeScript kernel through differential testing, and the conformance tests tie the Tamarin model's assumptions to the acceptance checks.*
 
 ### Formal properties
 
-Each row maps one property to the requirements it covers, the theorem or lemma that proves it and the `V-CONF` or `V-SIM` requirements that test the assumptions the proof uses. A name marked *proved* checks under the formal gate; a name marked *planned* is the theorem the requirement's `V-PROOF` tag names before it exists. Lean theorems live in `formal/FdFormal/`, Veil invariants in `formal/FdFormal/Veil/` and Tamarin lemmas in `formal/provenance.spthy`.
+Each row maps one property to the FlareDispatch requirements it covers, the theorem or lemma that proves it and the `V-CONF` or `V-SIM` requirements that test the assumptions the proof uses. A name marked *proved* checks under the formal gate; a name marked *planned* is the theorem the requirement's `V-PROOF` tag names before it exists. Lean theorems live in `formal/FdFormal/` and Tamarin lemmas in `formal/provenance.spthy`. The properties of mameko's mechanism (the spend bound, the lines, fencing, the outbox, placement, credentials and egress) are mameko's rows in [mameko verification.md § Formal properties](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md#formal-properties).
 
 | Property | Statement | Requirements | Theorem or lemma | Assumption tests |
 | --- | --- | --- | --- | --- |
-| F1 | `settled + reserved ≤ B` on every trace of admissions, settles and releases | FD-SPD-002, FD-SPD-003, FD-SPD-007 | `Spend.step_safe`, `Spend.run_safe` *proved*; `Spend.unbounded_settle_overruns` *proved* (a settle above its hold overruns `B`, so the premise is necessary) | FD-QOS-038, FD-SPD-004, FD-SPD-016 (atomic admission and settle); FD-EXEC-002, FD-EXEC-043 (deadline enforced); FD-MDL-027, FD-MDL-033 (allowance enforced) |
-| F2 | The class lines nest, each class stops at its own line, and P3 stops first | FD-SPD-006, FD-SPD-008, FD-SPD-035 | `Spend.lines_nest`, `Spend.line_le_budget`, `Spend.p3_keeps_reserves` *proved*; `Spend.p3_floor_bounded` *planned* | FD-QOS-038, FD-SPD-051 (the claim batch reads the lines and the control state) |
-| F3 | Every reservation ends exactly once, as settled or released | FD-SPD-021, FD-ARCH-028 | `Spend.reservation_ends_once` *planned* | FD-SPD-004, FD-SPD-027, FD-GH-073 (settle batch and settle sweep) |
-| F4 | The admitted list rate of a class and every lower class stays within that class's burn lane | FD-SPD-046 | `Spend.burn_lane_safe` *planned* | FD-QOS-038, FD-SPD-009 (rates read from the rate card at admission) |
-| F5 | A hold is at least the worst-case cost to `deadline_at` plus the model allowance | FD-SPD-014 | `Spend.hold_covers_worst_case` *planned* | FD-EXEC-002, FD-EXEC-043 (deadline enforced); FD-MDL-026, FD-MDL-027 (allowance enforced) |
-| F6 | Device container time costs 0, and hosted model tokens still count against the line | FD-SPD-010 | `Spend.device_container_free` *planned* | FD-SPD-009, FD-SPD-016 (executor kind on the placement row; allowance reserved at claim) |
-| F7 | The AWS worst case per task stays within its hold | FD-SPD-062, FD-EXEC-079 | `Spend.aws_hold_covers_task` *planned* | FD-EXEC-080, FD-EXEC-081, FD-EXEC-082 (entrypoint exit, task stop, reaper) |
-| S1 | At most one result is accepted per execution, and a result from a stale epoch is never accepted, under any delay, sleep or reorder | FD-LEASE-022, FD-LEASE-029, FD-LEASE-037, FD-LEASE-038, FD-LEASE-039, FD-LEASE-043, FD-ARCH-024, FD-GH-030, FD-PROTO-047 | `Fence.accepted_stable`, `Fence.accepted_is_current` *proved*; `LeaseProtocol.single_acceptance` (Veil) *planned* | FD-LEASE-012, FD-ARCH-032 (one conditional `UPDATE` per move; terminal status written once) |
-| S2 | An intent applies at most once under engine replay | FD-GH-034, FD-GH-039, FD-GH-040, FD-RUN-042, FD-ARCH-027 | `Outbox.apply_at_most_once`, `Outbox.lifecycle_closed`, `Outbox.terminal_within_bound` *planned* | FD-GH-032, FD-GH-033, FD-GH-041, FD-ENG-006 (`UNIQUE` key, one batch, claim token, activity re-run on replay) |
-| S3 · executors | Fork-PR, tag-push, P0 and cloud-pinned work never runs on a device; `confidential-compute` and `local-only` work never runs in the cloud; an unplaceable request fails at intake with a named reason | FD-QOS-015, FD-QOS-016, FD-QOS-017, FD-QOS-018, FD-QOS-025, FD-QOS-026, FD-QOS-085, FD-LEASE-009, FD-LEASE-010, FD-LEASE-011, FD-LEASE-014, FD-LEASE-019, FD-LEASE-034, FD-INT-013, FD-INT-014, FD-INT-030, FD-INT-061, FD-GATE-061, FD-GATE-080, FD-OPS-021 | `Placement.fork_never_owned`, `Placement.p0_never_owned`, `Placement.compute_stays_owned`, `Placement.fork_on_confidential_compute_unplaceable`, `Placement.placeable_iff` *proved*; `Placement.p0_cloud_only`, `Placement.local_only_stays_owned`, `Placement.validator_rejects_unplaceable_required` *planned* | FD-LEASE-012, FD-LEASE-013 (the claim CAS re-checks `eligible_kinds`) |
-| S3 · models | Work of a repository that is not `non-confidential` never reaches a hosted model, and a failed local call never falls back to one | FD-MDL-006, FD-MDL-008, FD-MDL-010, FD-MDL-011 | `Placement.unclassified_not_hosted` *proved*; `Model.route_hosted_only_non_confidential` *planned* | FD-ISO-017 (the egress proxy is the job sandbox's only outbound path, so the gateway is the only route to a model) |
-| S4 | A per-lease credential is valid only while its epoch is current, and a capacity lease holds no cloud-spend allowance | FD-ISO-048, FD-MDL-042, FD-LEASE-046, FD-LEASE-048, FD-SPD-049 | `LeaseProtocol.token_epoch_current` (Veil), `CapacityLease.no_cloud_allowance`, `CapacityLease.epoch_changes` *planned* | FD-ISO-047, FD-CACHE-051, FD-MDL-041 (revocation on reclaim, URL refusal at an old epoch, refusal under `halt-cloud`) |
-| S5 | The `setup` egress profile closes before the `agent` phase and never reopens, and no run declaration combines private data, untrusted input and outbound access | FD-ISO-024, FD-ISO-025, FD-AGT-004 | `Egress.setup_closed_before_agent`, `Egress.setup_never_reopens`, `Egress.no_trifecta_declaration` *planned* | FD-ISO-017, FD-ISO-026, FD-AGT-005 (proxy-only egress, `agent` profile grants, runtime trifecta refusal) |
-| S6 | A pull-request-namespace writer cannot change what a protected-trigger reader restores | FD-CACHE-015, FD-CACHE-017, FD-CACHE-018, FD-CACHE-019, FD-CACHE-022, FD-CACHE-023, FD-CACHE-027, FD-CACHE-029, FD-CACHE-058 | `Cache.pr_writer_noninterference` *planned* | FD-CACHE-005, FD-CACHE-016, FD-CACHE-041 (read-only mounts, namespaces from the lease, create-only manifests) |
+| S3 · profile | FlareDispatch's profile keeps `untrusted-input`, `cloud-pinned` and `cloud-only` work off devices and `local-only` work off the cloud, and the profile validator rejects a profile that leaves a `required` request unplaceable | FD-INT-030, FD-INT-061, FD-OPS-021, FD-GATE-061, FD-GATE-080 | mameko's `Placement` theorems over the profile, row S3 · executors of mameko's table | mameko's assumption tests of that row |
+| S5 · trifecta | No run declaration combines private data, untrusted input and outbound access | FD-AGT-004 | `Egress.no_trifecta_declaration` *planned* | FD-AGT-005 (runtime trifecta refusal) |
+| S6 | A pull-request-namespace writer cannot change what a protected-trigger reader restores | FD-CACHE-015, FD-CACHE-017, FD-CACHE-018, FD-CACHE-019, FD-CACHE-022, FD-CACHE-023, FD-CACHE-027, FD-CACHE-029, FD-CACHE-058 | `Cache.pr_writer_noninterference` *planned* | FD-CACHE-016, FD-CACHE-041 (namespaces from the lease, create-only manifests), with read-only cache directories under [MAMEKO-ISO-004](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/isolation-egress.md) |
 | S7a | Injective agreement: an accepted statement was signed by the device its lease was issued to, and no other accepted statement carries its nonce, unless that device key was revealed before it signed | FD-PROV-010, FD-PROV-013, FD-PROV-014, FD-PROV-017, FD-PROV-018, FD-PROV-020, FD-PROV-021, FD-PROV-032 | `injective_agreement` *planned* | FD-PROV-013, FD-PROV-014, FD-PROV-017, FD-PROV-018, FD-PROV-020, FD-PROV-021 |
 | S7b | Freshness: no statement for epoch k is accepted after a reclaim to k + 1, and no statement produced before its lease is accepted | FD-PROV-011, FD-PROV-012, FD-PROV-019 | `freshness` *planned* | FD-PROV-011, FD-PROV-019 |
 | S7c | Compromise scope: a revealed device key yields countersignatures only for that device's leases while it is registered and not revoked, and never the `reproduced` tier | FD-PROV-009, FD-PROV-015, FD-PROV-057, FD-PROV-061 | `compromise_scope` *planned* | FD-PROV-009, FD-PROV-015, FD-PROV-057, FD-PROV-061 |
@@ -298,79 +292,83 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 
 | Phase | Requirements | `V-UNIT` | `V-CONF` | `V-SIM` | `V-REPLAY` | `V-E2E-LOCAL` | `V-DEPLOY` | `V-LIVE` | `V-MEASURE` | `V-PROOF` | `V-DIFF` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 853 | 702 | 114 | 118 | 43 | 36 | 60 | 28 | 6 | 53 | 45 |
-| 1 | 332 | 207 | 48 | 87 | 5 | 63 | 8 | 9 | 6 | 12 | 3 |
-| 2 | 83 | 72 | 3 | 14 | 1 | 8 | 0 | 0 | 1 | 3 | 2 |
-| 3 | 49 | 33 | 3 | 15 | 0 | 2 | 3 | 3 | 0 | 2 | 2 |
-| 4 | 109 | 63 | 33 | 14 | 2 | 9 | 6 | 1 | 0 | 23 | 1 |
-| All | 1426 | 1077 | 201 | 248 | 51 | 118 | 77 | 41 | 13 | 93 | 53 |
+| 0 | 516 | 471 | 22 | 31 | 14 | 29 | 46 | 22 | 4 | 14 | 11 |
+| 1 | 51 | 44 | 8 | 3 | 1 | 6 | 2 | 0 | 2 | 3 | 0 |
+| 2 | 56 | 56 | 0 | 4 | 1 | 4 | 0 | 0 | 0 | 1 | 1 |
+| 3 | 26 | 24 | 0 | 1 | 0 | 2 | 1 | 0 | 0 | 0 | 0 |
+| 4 | 97 | 60 | 30 | 8 | 2 | 6 | 6 | 1 | 0 | 22 | 0 |
+| All | 746 | 655 | 60 | 47 | 18 | 47 | 55 | 23 | 6 | 40 | 12 |
 
 **By area**
 
 | Area | Total | By phase 0 · 1 · 2 · 3 · 4 | `V-UNIT` | `V-CONF` | `V-SIM` | `V-REPLAY` | `V-E2E-LOCAL` | `V-DEPLOY` | `V-LIVE` | `V-MEASURE` | `V-PROOF` | `V-DIFF` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `VER` | 31 | 30 · 1 · 0 · 0 · 0 | 29 | 0 | 0 | 0 | 0 | 1 | 1 | 2 | 0 | 0 |
-| `ARCH` | 37 | 25 · 10 · 0 · 1 · 1 | 18 | 8 | 9 | 5 | 12 | 1 | 0 | 0 | 3 | 3 |
-| `RUN` | 58 | 57 · 1 · 0 · 0 · 0 | 52 | 6 | 6 | 3 | 0 | 1 | 0 | 0 | 1 | 1 |
-| `ENG` | 50 | 45 · 3 · 0 · 0 · 2 | 11 | 34 | 11 | 10 | 1 | 2 | 0 | 0 | 0 | 0 |
-| `INT` | 63 | 57 · 3 · 2 · 1 · 0 | 60 | 7 | 10 | 2 | 5 | 3 | 1 | 0 | 4 | 1 |
-| `QOS` | 80 | 71 · 2 · 2 · 0 · 5 | 69 | 10 | 15 | 1 | 1 | 7 | 3 | 0 | 7 | 6 |
-| `SPD` | 62 | 52 · 5 · 0 · 5 · 0 | 54 | 11 | 15 | 2 | 2 | 2 | 1 | 1 | 12 | 13 |
-| `LEASE` | 65 | 22 · 33 · 6 · 3 · 1 | 38 | 15 | 34 | 1 | 0 | 1 | 0 | 2 | 14 | 6 |
-| `PROTO` | 77 | 20 · 54 · 1 · 1 · 1 | 46 | 14 | 34 | 1 | 10 | 1 | 0 | 3 | 1 | 0 |
-| `EXEC` | 95 | 14 · 56 · 0 · 14 · 11 | 43 | 23 | 20 | 2 | 18 | 8 | 3 | 0 | 1 | 1 |
-| `ISO` | 63 | 2 · 53 · 4 · 1 · 3 | 34 | 12 | 3 | 1 | 17 | 5 | 8 | 0 | 3 | 0 |
-| `CACHE` | 91 | 71 · 19 · 1 · 0 · 0 | 83 | 12 | 7 | 1 | 5 | 3 | 0 | 1 | 9 | 0 |
-| `GH` | 89 | 87 · 1 · 1 · 0 · 0 | 81 | 7 | 15 | 8 | 2 | 1 | 3 | 0 | 4 | 4 |
-| `MDL` | 69 | 47 · 6 · 9 · 0 · 7 | 53 | 8 | 21 | 3 | 3 | 4 | 0 | 0 | 5 | 6 |
-| `LOCAL` | 92 | 0 · 72 · 20 · 0 · 0 | 68 | 1 | 24 | 1 | 17 | 0 | 0 | 1 | 1 | 1 |
-| `IFC` | 80 | 67 · 7 · 3 · 0 · 3 | 79 | 2 | 0 | 0 | 7 | 4 | 2 | 0 | 0 | 0 |
+| `ARCH` | 9 | 7 · 1 · 0 · 1 · 0 | 6 | 1 | 0 | 0 | 6 | 1 | 0 | 0 | 0 | 0 |
+| `CACHE` | 90 | 71 · 18 · 1 · 0 · 0 | 83 | 11 | 7 | 1 | 4 | 3 | 0 | 1 | 9 | 0 |
+| `PROTO` | 1 | 0 · 0 · 0 · 0 · 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `EXEC` | 11 | 0 · 2 · 0 · 1 · 8 | 5 | 2 | 2 | 0 | 1 | 2 | 0 | 0 | 0 | 0 |
+| `GH` | 65 | 63 · 1 · 1 · 0 · 0 | 64 | 4 | 6 | 6 | 2 | 0 | 2 | 0 | 0 | 0 |
+| `INT` | 50 | 46 · 1 · 2 · 1 · 0 | 49 | 2 | 7 | 0 | 5 | 3 | 1 | 0 | 2 | 0 |
+| `IFC` | 81 | 67 · 8 · 3 · 0 · 3 | 80 | 1 | 0 | 0 | 7 | 5 | 2 | 0 | 0 | 0 |
+| `ISO` | 2 | 0 · 0 · 0 · 0 · 2 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `LOCAL` | 23 | 0 · 9 · 14 · 0 · 0 | 22 | 0 | 3 | 1 | 1 | 0 | 0 | 0 | 1 | 1 |
+| `MDL` | 5 | 5 · 0 · 0 · 0 · 0 | 2 | 0 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 0 |
+| `OPS` | 60 | 59 · 1 · 0 · 0 · 0 | 33 | 0 | 0 | 0 | 2 | 28 | 13 | 1 | 1 | 1 |
+| `PROF` | 63 | 46 · 7 · 1 · 1 · 8 | 62 | 5 | 2 | 0 | 2 | 3 | 3 | 0 | 0 | 0 |
 | `PROV` | 77 | 2 · 2 · 0 · 0 · 73 | 46 | 26 | 6 | 2 | 6 | 3 | 1 | 2 | 21 | 0 |
-| `OPS` | 82 | 77 · 4 · 0 · 1 · 0 | 51 | 1 | 4 | 0 | 2 | 28 | 18 | 1 | 1 | 1 |
-| `GATE` | 80 | 79 · 0 · 1 · 0 · 0 | 79 | 0 | 10 | 6 | 8 | 0 | 0 | 0 | 2 | 2 |
+| `RUN` | 4 | 4 · 0 · 0 · 0 · 0 | 4 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `AGT` | 85 | 28 · 0 · 33 · 22 · 2 | 83 | 4 | 4 | 2 | 2 | 2 | 0 | 0 | 4 | 8 |
-
-`V-UNIT` carries most requirements in every area. `ENG` and `PROV` lean on `V-CONF` because each has several backends or acceptance checks; `LEASE` and `PROTO` lean on `V-SIM` because their failures are interleavings; `OPS` leans on `V-DEPLOY` and `V-LIVE` because its failures appear only against a deployed account.
+| `GATE` | 80 | 79 · 0 · 1 · 0 · 0 | 79 | 0 | 10 | 6 | 8 | 0 | 0 | 0 | 2 | 2 |
+| `SPD` | 4 | 4 · 0 · 0 · 0 · 0 | 4 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `VER` | 36 | 35 · 1 · 0 · 0 · 0 | 32 | 1 | 0 | 0 | 0 | 2 | 1 | 2 | 0 | 0 |
 
 ## Requirements
 
 ### Requirement lines
 
 - **FD-VER-001** · phase 0 · `V-UNIT` — On every pull request and every push to the default branch, CI must run the `spec-tags` check over every `.md` file under `specs/` except `specs/adr/`, ignoring lines inside fenced code blocks.
-- **FD-VER-002** · phase 0 · `V-UNIT` — If a line that starts with `- **FD-` matches neither the requirement form `- **FD-<AREA>-NNN** · phase <0–4> · <tags> — <sentence>` nor the removed form `- **FD-<AREA>-NNN** — Removed.` or `- **FD-<AREA>-NNN** — Removed; see <link> FD-<AREA>-NNN[ and FD-<AREA>-NNN].`, then the `spec-tags` check must fail naming the file and line.
+- **FD-VER-002** · phase 0 · `V-UNIT` — If a line that starts with `- **FD-` does not match the requirement form `- **FD-<AREA>-NNN** · phase <0–4> · <tags> — <sentence>`, then the `spec-tags` check must fail naming the file and line.
 - **FD-VER-003** · phase 0 · `V-UNIT` — If a requirement's sentence contains `must` and its tag list holds no tag, then the `spec-tags` check must fail naming the ID.
 - **FD-VER-004** · phase 0 · `V-UNIT` — If a tag list holds a tag outside the ten tags of the tag table in [README.md](README.md), or holds one tag twice, then the `spec-tags` check must fail naming the ID and the tag.
 - **FD-VER-005** · phase 0 · `V-UNIT` — If a requirement's area is not in the area table of [README.md](README.md), or the requirement sits in a file other than the one that table names for its area, then the `spec-tags` check must fail naming the ID and the file.
-- **FD-VER-006** · phase 0 · `V-UNIT` — If an ID occurs as a requirement line or a removed line more than once under `specs/`, then the `spec-tags` check must fail naming every occurrence.
-- **FD-VER-007** · phase 0 · `V-UNIT` — If an ID that has a requirement line or a removed line on the pull request's base commit has neither on the head commit, then the `spec-tags` check must fail naming the ID.
-- **FD-VER-008** · phase 0 · `V-UNIT` — If a reference of the form `FD-<AREA>-NNN` anywhere under `specs/` names an ID that has no requirement line and no removed line, then the `spec-tags` check must fail naming the file, the line and the ID.
+- **FD-VER-006** · phase 0 · `V-UNIT` — If an ID occurs as a requirement line more than once under `specs/`, or as a requirement line and as an `fd_id` of `specs/ids.moved.tsv`, then the `spec-tags` check must fail naming every occurrence.
+- **FD-VER-007** · phase 0 · `V-UNIT` — If an ID that has a requirement line on the pull request's base commit has no requirement line on the head commit and no row in `specs/ids.moved.tsv`, then the `spec-tags` check must fail naming the ID.
+- **FD-VER-008** · phase 0 · `V-UNIT` — If a reference of the form `FD-<AREA>-NNN` anywhere under `specs/` names an ID that has neither a requirement line nor a row in `specs/ids.moved.tsv`, then the `spec-tags` check must fail naming the file, the line and the ID.
+- **FD-VER-034** · phase 0 · `V-UNIT` — If a row of `specs/ids.moved.tsv` does not hold exactly the columns `fd_id`, `disposition` and `target`, has a `disposition` other than `moved`, `profile` and `removed`, or names an `fd_id` twice, then the `spec-tags` check must fail naming the row.
+- **FD-VER-035** · phase 0 · `V-UNIT` — If a `moved` row of `specs/ids.moved.tsv` names a `MAMEKO-<AREA>-NNN` target that has no requirement line in mameko's specifications at the pinned commit, or a `profile` row names a target that has no requirement line in [profile.md](profile.md), then the `spec-tags` check must fail naming the row.
+- **FD-VER-036** · phase 0 · `V-UNIT` — If a link into mameko's repository under `specs/` names a commit other than the one [README.md](README.md) pins, then the `spec-tags` check must fail naming the file and line.
+- **FD-VER-037** · phase 0 · `V-UNIT` — If a requirement line on the head commit carries an ID with an `FD-<AREA>-NNN` number at or below the highest number its area has ever used, and that ID had no requirement line on the base commit, then the `spec-tags` check must fail naming the ID, so that a number is never reused.
 
 ### Coverage and traceability
 
 - **FD-VER-009** · phase 0 · `V-UNIT` — The `spec-tags` check must compute the requirement count per area, phase and tag, and must fail if any count in the coverage tables of this file or in the phase tables of [roadmap.md](roadmap.md) differs from the computed count.
 - **FD-VER-010** · phase 0 · `V-UNIT` — If an ID tagged `V-PROOF` is absent from the Requirements column of the formal property table, or an ID in that column does not carry `V-PROOF`, then the `spec-tags` check must fail naming the ID.
-- **FD-VER-011** · phase 0 · `V-UNIT` — If an ID in the Assumption tests column of the formal property table carries neither `V-CONF` nor `V-SIM`, then the `spec-tags` check must fail naming the ID.
-- **FD-VER-012** · phase 0 · `V-UNIT` — The `spec-tags` check must map each test title that contains `[FD-<AREA>-NNN]`, each Lean theorem or Veil invariant whose docstring lists an ID and each Tamarin lemma whose comment lists an ID to that ID, under the tag of the harness directory the entry lives in, and must report per tag each requirement of the current phase or lower that has no entry.
-- **FD-VER-013** · phase 0 · `V-UNIT` — If the formal property table marks a theorem or lemma *proved* and `formal/` holds no theorem or lemma of that name whose docstring or comment lists every requirement ID of its row, then the `spec-tags` check must fail naming the theorem.
+- **FD-VER-011** · phase 0 · `V-UNIT` — If an FD ID in the Assumption tests column of the formal property table carries neither `V-CONF` nor `V-SIM`, then the `spec-tags` check must fail naming the ID.
+- **FD-VER-012** · phase 0 · `V-UNIT` — The `spec-tags` check must map each test title that contains `[FD-<AREA>-NNN]`, each Lean theorem whose docstring lists an ID and each Tamarin lemma whose comment lists an ID to that ID, under the tag of the harness directory the entry lives in, and must report per tag each requirement of the current phase or lower that has no entry.
+- **FD-VER-013** · phase 0 · `V-UNIT` — If the formal property table marks a theorem or lemma *proved* and FlareDispatch's `formal/` holds no theorem or lemma of that name whose docstring or comment lists every requirement ID of its row, then the `spec-tags` check must fail naming the theorem.
+
+### mameko conformance and the reference profile
+
+- **FD-VER-032** · phase 1 · `V-CONF` — On every pull request, the `conf` job must run mameko's coordinator conformance suite, at the pinned release, against FlareDispatch's composed control plane: `host-cloudflare` under workerd with FlareDispatch's profile, its appliers on the fake GitHub, its application ports and the fake executor, and must fail on any scenario that fails ([MAMEKO-VER-022](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md), [MAMEKO-VER-024](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md)).
+- **FD-VER-033** · phase 0 · `V-DEPLOY` — On every pull request, the `profile-reference` job must run the reference-profile comparison of [profile.md](profile.md) FD-PROF-002 at the pinned mameko commit, which fails only on a difference that profile.md § Differences from the reference CI profile does not list, and the job must fail when that comparison fails.
 
 ### Formal gate
 
 - **FD-VER-014** · phase 0 · `V-UNIT` — On every pull request and every push to the default branch, the `formal` job must run `lake build` in `formal/` under the toolchain that `formal/lean-toolchain` pins to an exact version, and must fail on any build error.
 - **FD-VER-015** · phase 0 · `V-UNIT` — If a `.lean` file in `formal/` contains `sorry`, `admit`, `native_decide` or an `axiom` declaration, then the `formal` job must fail naming the file and line.
 - **FD-VER-016** · phase 0 · `V-UNIT` — If `#print axioms` for any theorem in `formal/` lists an axiom other than `propext`, `Classical.choice` and `Quot.sound`, then the `formal` job must fail naming the theorem and the axiom.
-- **FD-VER-017** · phase 1 · `V-UNIT` — If the Veil model checker finds a counterexample to an invariant in `formal/FdFormal/Veil/` within its configured bound, then the `formal` job must fail and print the counterexample trace.
 - **FD-VER-018** · phase 0 · `V-UNIT` — A `V-PROOF` requirement must count toward a phase gate only while its theorem or lemma passes the formal gate and every assumption test of its row in the formal property table passes on the same commit.
 
 ### Differential testing
 
-- **FD-VER-019** · phase 0 · `V-UNIT` — On every pull request, the `diff` job must, for each of `spendKernel`, `placementPolicy`, `fenceKernel`, `outboxKernel`, `stagedWriteGate` and `routeModelCall`, replay every line of `formal/regressions.jsonl` for that kernel and then run 10,000 generated traces through the TypeScript kernel and the oracle built from the same commit, and must fail on the first trace whose outputs differ.
-- **FD-VER-020** · phase 0 · `V-UNIT` — Every night, CI must run 1,000,000 generated traces per kernel against the oracle on the default branch's head commit.
+- **FD-VER-019** · phase 0 · `V-UNIT` — On every pull request, the `diff` job must replay every line of `formal/regressions.jsonl` and then run 10,000 generated traces through `stagedWriteGate` and the oracle built from the same commit, and must fail on the first trace whose outputs differ.
+- **FD-VER-020** · phase 0 · `V-UNIT` — Every night, CI must run 1,000,000 generated traces of `stagedWriteGate` against the oracle on the default branch's head commit.
 - **FD-VER-021** · phase 0 · `V-UNIT` — When a trace differs, the `diff` job must shrink it and emit one JSON line holding the kernel, the seed, the shrunk trace and both outputs, and the nightly run must open a pull request that appends that line to `formal/regressions.jsonl`.
 - **FD-VER-022** · phase 0 · `V-UNIT` — If a pull request removes or changes a line of `formal/regressions.jsonl`, then the `diff` job must fail.
 
 ### Merge gate
 
-- **FD-VER-023** · phase 0 · `V-DEPLOY` — The default branch's ruleset must require the checks `lint`, `typecheck`, `spec-tags`, `unit`, `conf`, `sim`, `replay`, `e2e-local`, `deploy-dry-run`, `formal` and `diff`, and the drift check must fail if any of them is missing.
+- **FD-VER-023** · phase 0 · `V-DEPLOY` — The default branch's ruleset must require the checks `lint`, `typecheck`, `spec-tags`, `unit`, `conf`, `sim`, `replay`, `e2e-local`, `deploy-dry-run`, `profile-reference`, `formal` and `diff`, and the drift check must fail if any of them is missing.
 - **FD-VER-024** · phase 0 · `V-UNIT` — On every pull request, the `sim` job must run every `V-SIM` scenario with 100 seeds plus every seed in `test/sim/seeds.jsonl`, and the nightly run must run 10,000 seeds per scenario and append each failing seed to `test/sim/seeds.jsonl` through a pull request.
 - **FD-VER-025** · phase 0 · `V-UNIT` — If a workflow's second run over its cached journal makes a GitHub call, a D1 write or an intent that its first run did not, then the `replay` job must fail naming the workflow and the extra effect.
 
@@ -385,6 +383,5 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 
 ## Open items
 
-- TODO(maintainer): pin the Veil release and the Tamarin prover version in `formal/` before FD-VER-017 and FD-PROV-073 run in CI.
+- TODO(maintainer): pin the Tamarin prover version in `formal/` before FD-PROV-073 runs in CI.
 - TODO(maintainer): choose the owned device that runs the nightly device-path `conf` and `e2e-local` harnesses, and the runner label CI uses to reach it.
-- TODO(maintainer): set the Veil bound (executors, epochs and messages in flight) that FD-VER-017 checks.

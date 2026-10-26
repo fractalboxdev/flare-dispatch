@@ -199,7 +199,7 @@ const snippets = [
     lang: "json" as const,
     code: policyJson,
     blurb: "Placement is configuration: the first matching rule picks the mode and which result is authoritative. Moving a run between modes changes no code.",
-    href: "/docs/qos-admission/",
+    href: "/docs/profile/",
   },
 ];
 ---
@@ -220,7 +220,7 @@ const snippets = [
             FlareDispatch is local-first CI/CD that you deploy into your own Cloudflare account. Cloudflare is the
             control plane: it verifies each trigger, classifies and meters the execution, leases it to an executor
             and posts the verdict to GitHub. Executions run first on hardware you own (a Mac running
-            <code>flare-dispatchd</code>, one VM per job) and spill to Cloudflare Containers, with required checks going on to AWS, when owned
+            mameko's device executor, one VM per job) and spill to Cloudflare Containers, with required checks going on to AWS, when owned
             capacity cannot meet the deadline.
           </p>
           <div class="hero__cta reveal" data-delay="4">
@@ -319,7 +319,7 @@ const snippets = [
             }
           </ol>
           <p class="more">
-            <a href="/docs/placement-leases/">Placement and leases →</a>
+            <a href="/docs/profile/">Profile and placement →</a>
             <a href="/docs/isolation-egress/">Isolation and egress →</a>
           </p>
         </div>
@@ -367,7 +367,7 @@ const snippets = [
             </tbody>
           </table>
           <p class="more">
-            <a href="/docs/qos-admission/">QoS and admission →</a>
+            <a href="/docs/profile/">Classes and admission →</a>
             <a href="/docs/github-output/">GitHub output →</a>
           </p>
         </div>
@@ -489,7 +489,7 @@ const snippets = [
             </tbody>
           </table>
           <p class="more">
-            <a href="/docs/placement-leases/">Placement and leases →</a>
+            <a href="/docs/executors/">Executors →</a>
             <a href="/docs/executor-protocol/">Executor protocol →</a>
           </p>
         </div>

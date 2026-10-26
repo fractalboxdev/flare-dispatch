@@ -8,9 +8,9 @@ This file covers what each gate recipe runs, which repo manifest fields it reads
 
 - [run-model.md](../run-model.md) for `defineRun`, `RunResult`, the error taxonomy and intents;
 - [intake.md](../intake.md) for triggers, the repo manifest file and dedup keys;
-- [qos-admission.md](../qos-admission.md) for classes, the child rule, placement constraints, supersession, serial groups and infrastructure retries;
+- [profile.md](../profile.md) for classes, placement constraints and each class's infrastructure retries, and mameko's [admission-qos.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/admission-qos.md) for the child rule, supersession and serial groups;
 - [spend.md](../spend.md) for holds and the budget reasons;
-- [placement-leases.md](../placement-leases.md) for placement, the execution lease and reclaim;
+- mameko's [placement-leases.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/placement-leases.md) for placement, the execution lease and reclaim;
 - [github-output.md](../github-output.md) for check names and the verdict-to-conclusion mapping;
 - [cache-artifacts.md](../cache-artifacts.md) for log artifacts and cache namespaces;
 - [isolation-egress.md](../isolation-egress.md) for egress-attached grants;
@@ -26,16 +26,16 @@ Deferred: dispatching `self-heal-pr` from a red `offload-test` follows [runs/age
 
 ### Recipes
 
-The class in this table is the recipe's default; `resolveClass` in [qos-admission.md](../qos-admission.md) sets the class of each execution. A gate whose check the target branch does not require runs at P2.
+The class in this table is the recipe's default; `resolveClass` ([profile.md](../profile.md) § Class resolution) sets the class of each execution. A gate whose check the target branch does not require runs at `interactive`.
 
 | Recipe | Default class | Run ceiling | Placement | Triggers | Manifest key |
 | --- | --- | --- | --- | --- | --- |
-| `check` | P1 | 4500 s | any eligible executor | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`), `merge_group`, Actions dispatch | `check` |
-| `oxlint` | P1 | 600 s | any eligible executor | as `check` | `oxlint` |
-| `offload-test` | P1 | 3600 s | any eligible executor | as `check` | `offloadTest` |
-| `worker-deploy` | P0 | 1800 s | `cloud-pinned` | `push` to the deploy branch, Actions dispatch | `workerDeploy` |
-| `deploy-smoke` | P0 | 300 s | `control` pool, no container | `worker-deploy` success, `deployment_status` success | `deploySmoke` |
-| `sandbox-image` | P1 on a pull request, P0 on publish | 3600 s | `cloud-pinned` on publish | `pull_request` and `push` to the default branch that change `sandboxImage.paths` | `sandboxImage` |
+| `check` | `required` | 4500 s | any eligible executor | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`), `merge_group`, Actions dispatch | `check` |
+| `oxlint` | `required` | 600 s | any eligible executor | as `check` | `oxlint` |
+| `offload-test` | `required` | 3600 s | any eligible executor | as `check` | `offloadTest` |
+| `worker-deploy` | `release` | 1800 s | `cloud-pinned` | `push` to the deploy branch, Actions dispatch | `workerDeploy` |
+| `deploy-smoke` | `release` | 300 s | `control` pool, no container | `worker-deploy` success, `deployment_status` success | `deploySmoke` |
+| `sandbox-image` | `required` on a pull request, `release` on publish | 3600 s | `cloud-pinned` on publish | `pull_request` and `push` to the default branch that change `sandboxImage.paths` | `sandboxImage` |
 
 A repo manifest entry that these recipes read looks like this:
 
@@ -240,16 +240,14 @@ sequenceDiagram
 - **FD-GATE-004** · phase 0 · `V-UNIT` — The gate recipes and the job matrix must not offer any manifest field, input or default that maps a non-zero exit, a failed job or a failed shard to `success`.
 - **FD-GATE-005** · phase 0 · `V-UNIT` — If a gate job's command ends on a signal, then the recipe must record `failure` with the reason `exit: signal <name>`.
 - **FD-GATE-006** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — If a gate job's command runs past its job timeout, then the executor must kill its process group and the recipe must record `failure` with the reason `timeout: job`.
-- **FD-GATE-007** · phase 0 · `V-UNIT` `V-SIM` — If a gate job's command is still running when the executor stops the job at the execution's `deadline_at` ([../executors.md](../executors.md) FD-EXEC-002), then the recipe must record `failure` with the reason `deadline`.
+- **FD-GATE-007** · phase 0 · `V-UNIT` `V-SIM` — If a gate job's command is still running when the executor stops the job at the execution's `deadline_at` ([MAMEKO-EXEC-002](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)), then the recipe must record `failure` with the reason `deadline`.
 - **FD-GATE-008** · phase 0 · `V-UNIT` — If a gate job's combined stdout and stderr exceed 64 MiB, then the recipe must stop the command, record `failure` with the reason `output: over limit` and derive no verdict from the output.
-- **FD-GATE-009** — Removed; see [../executors.md](../executors.md) FD-EXEC-014 and FD-EXEC-015.
-- **FD-GATE-010** · phase 0 · `V-UNIT` `V-SIM` — If a gate job ends with an infrastructure error after the retries [qos-admission.md](../qos-admission.md) allows for its class, then the recipe must record `failure` with the reason `infra: <error tag>`.
+- **FD-GATE-010** · phase 0 · `V-UNIT` `V-SIM` — If a gate job ends with an infrastructure error after the retries its class allows ([profile.md](../profile.md) § Class catalogue), then the recipe must record `failure` with the reason `infra: <error tag>`.
 - **FD-GATE-011** · phase 0 · `V-UNIT` — When a gate job ends, the recipe must upload the job's redacted output as the artifact `<job key>.log` before it returns its verdict.
 - **FD-GATE-012** · phase 0 · `V-UNIT` — If a gate job's log upload fails, then the recipe must return the same verdict it would return after a successful upload.
 - **FD-GATE-013** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — The recipe must set `FD_REPO`, `FD_SHA`, `FD_REF` and `FD_JOB` in every gate job's environment.
 - **FD-GATE-014** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — The recipe must not place a secret in a gate job's environment, arguments or files; a job reaches a credentialed service only through an egress-attached grant ([isolation-egress.md](../isolation-egress.md)).
 - **FD-GATE-015** · phase 0 · `V-UNIT` — Where a manifest entry names cache keys, the recipe must restore and save them only in the cache namespace the control plane assigns to the execution ([cache-artifacts.md](../cache-artifacts.md)).
-- **FD-GATE-016** — Removed; see [../run-model.md](../run-model.md) FD-RUN-046.
 - **FD-GATE-081** · phase 2 · `V-UNIT` — Where a manifest job declares `writeback { branch, paths }`, when the job's verdict is `success`, the recipe must stage the changed files that match `paths` as one staged write on a branch under `flare-dispatch/`, which the staged-write gate of [runs/agentic.md](agentic.md) checks; a `refresh-fixtures` job that regenerates test fixtures and proposes them as a pull request is the example.
 - **FD-GATE-017** · phase 0 · `V-UNIT` — When a `pull_request` event names a draft pull request, or one whose author is in the manifest's `skipAuthors` list (default `dependabot[bot]`), the `check`, `oxlint` and `offload-test` recipes must run no command and conclude `skipped` with the reason `not-applicable: draft-pr` or `not-applicable: author-excluded`, which [github-output.md](../github-output.md) FD-GH-025 maps to `neutral`.
 - **FD-GATE-018** · phase 0 · `V-UNIT` — If a manifest entry sets `timeoutSec` outside 1 s to the recipe's run ceiling, then the recipe must record `failure` with the reason `config: timeoutSec` and run no command.
@@ -288,7 +286,7 @@ sequenceDiagram
 - **FD-GATE-039** · phase 0 · `V-UNIT` — When every job is terminal and every job recorded `skipped`, the parent must record `skipped` with the reason `not-applicable: every-job-skipped`.
 - **FD-GATE-040** · phase 0 · `V-UNIT` — When every job is terminal and any job recorded `failure` or was not started, the parent must record `failure` with the reason `jobs: <keys>`, listing the first 25 failed or not-started keys in expansion order.
 - **FD-GATE-041** · phase 0 · `V-UNIT` `V-SIM` — If a job's execution ends with no recorded verdict, then the parent must count the job as `failure` with the reason `infra: no verdict`.
-- **FD-GATE-042** · phase 0 · `V-UNIT` `V-SIM` — When the parent is cancelled, the parent must cancel every placed or running job through the cancellation path in [qos-admission.md](../qos-admission.md) and record every pending job as not started.
+- **FD-GATE-042** · phase 0 · `V-UNIT` `V-SIM` — When the parent is cancelled, the parent must cancel every placed or running job through mameko's cancellation path ([admission-qos.md § Supersession](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/admission-qos.md#supersession)) and record every pending job as not started.
 - **FD-GATE-043** · phase 0 · `V-UNIT` — Where a job matrix sets `failFast: true` (default `false`), when a job records `failure`, the parent must start no further job and let running jobs reach their verdicts.
 - **FD-GATE-044** · phase 0 · `V-SIM` — If a job records `failure` with a budget, capacity or operator-halt reason, then the parent must start no further job.
 - **FD-GATE-045** · phase 0 · `V-UNIT` — The parent must make no sandbox call, so its hold carries a container rate of 0 USD per hour.
@@ -301,8 +299,8 @@ sequenceDiagram
 - **FD-GATE-049** · phase 0 · `V-UNIT` — Where a job matrix declares a `discover` command, the parent must take as its job set the union of the jobs the head discovery names and the jobs the base discovery names, so a head commit cannot remove a job the base requires.
 - **FD-GATE-050** · phase 0 · `V-UNIT` — If a discovery command exits with a non-zero code on either commit, then the parent must record `failure` with the reason `discover: exit <code>` and start no job.
 - **FD-GATE-051** · phase 0 · `V-UNIT` — If a discovery output exceeds 4096 bytes, is not a JSON array of job objects or names more than 64 jobs, then the parent must record `failure` with the reason `config: discovery output` and start no job.
-- **FD-GATE-052** · phase 0 · `V-UNIT` — Where a job declares `heavy: true`, the parent must not start it on a `pull_request` or `merge_group` trigger, and must start it on a `push` to the default branch at class P2.
-- **FD-GATE-053** · phase 0 · `V-UNIT` — Where a repo manifest declares a `warm` job, when a `push` to the default branch arrives, the control plane must run it at class P3 writing only the protected namespace that [cache-artifacts.md](../cache-artifacts.md) FD-CACHE-017 or FD-CACHE-018 assigns for its executor kind, post no check for it, and supersede it with the next default-branch head.
+- **FD-GATE-052** · phase 0 · `V-UNIT` — Where a job declares `heavy: true`, the parent must not start it on a `pull_request` or `merge_group` trigger, and must start it on a `push` to the default branch at class `interactive`.
+- **FD-GATE-053** · phase 0 · `V-UNIT` — Where a repo manifest declares a `warm` job, when a `push` to the default branch arrives, the control plane must run it at class `batch` writing only the protected namespace that [cache-artifacts.md](../cache-artifacts.md) FD-CACHE-017 or FD-CACHE-018 assigns for its executor kind, post no check for it, and supersede it with the next default-branch head.
 
 ### Release matrices
 
@@ -333,7 +331,7 @@ sequenceDiagram
 - **FD-GATE-072** · phase 0 · `V-UNIT` — If an endpoint is unhealthy on 3 attempts 10 s apart, then the recipe must record `failure` with the reason `smoke: <host><path> <status or error>` for each unhealthy endpoint.
 - **FD-GATE-073** · phase 0 · `V-UNIT` — If a `deploy-smoke` target host, an `environment_url` host included, is not in `deploySmoke.hosts`, then the recipe must record `failure` with the reason `config: host not allowed` and send no request to it.
 - **FD-GATE-074** · phase 0 · `V-UNIT` — The `deploy-smoke` recipe must not follow a redirect to a host outside `deploySmoke.hosts`.
-- **FD-GATE-075** · phase 0 · `V-UNIT` — The control plane must run `deploy-smoke` in the `control` pool ([../executors.md](../executors.md) FD-EXEC-094), with no container and a container rate of 0 USD per hour.
+- **FD-GATE-075** · phase 0 · `V-UNIT` — The control plane must run `deploy-smoke` in the `control` pool ([MAMEKO-EXEC-043](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)), with no container and a container rate of 0 USD per hour.
 
 ### `sandbox-image`
 
@@ -341,7 +339,7 @@ sequenceDiagram
 - **FD-GATE-077** · phase 0 · `V-UNIT` — When a `push` to the default branch changes a file that matches `sandboxImage.paths`, the recipe must build every image for `linux/arm64` and `linux/amd64`, run each image's smoke commands, publish each image by digest and upload the digests as the artifact `image-digests.json`.
 - **FD-GATE-078** · phase 0 · `V-UNIT` — If an image's build inputs include a base image without an `@sha256:` digest, a download without a SHA-256 checksum or a toolchain named by a channel such as `stable`, then the recipe must record `failure` with the reason `image: unpinned input <name>` before any build starts.
 - **FD-GATE-079** · phase 0 · `V-UNIT` — If any image build or smoke command fails on either architecture, then the recipe must publish no image and record `failure` with the reason `image: <name> <arch> <step>`.
-- **FD-GATE-080** · phase 0 · `V-UNIT` `V-PROOF` `V-DIFF` — The control plane must place a publishing `sandbox-image` execution at class P0 under the `cloud-pinned` constraint on an executor that carries the label `container-artifact` ([executors.md](../executors.md) § Capability labels).
+- **FD-GATE-080** · phase 0 · `V-UNIT` `V-PROOF` `V-DIFF` — The control plane must place a publishing `sandbox-image` execution at class `release` under the `cloud-pinned` constraint on an executor that carries the label `container-artifact` ([executors.md](../executors.md) § Capability labels).
 - **FD-GATE-082** · phase 0 · `V-UNIT` — When a `sandbox-image` execution runs the smoke commands of a `linux/arm64` image on an executor that does not advertise `linux-arm64`, the recipe must run them under QEMU user-mode emulation with `--platform linux/arm64`, and if emulation is unavailable on that executor, then the recipe must record `failure` with the reason `image: <name> linux/arm64 emulation unavailable` and publish no image.
 
 ## Open items

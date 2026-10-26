@@ -6,12 +6,12 @@
 /** @type {ReadonlyArray<{ key: string, title: string, pages: ReadonlyArray<string> }>} */
 export const SECTIONS = [
   { key: "index", title: "Overview", pages: [""] },
-  { key: "system", title: "System", pages: ["architecture", "run-model", "engine"] },
-  { key: "admission", title: "Intake and admission", pages: ["intake", "qos-admission", "spend"] },
+  { key: "system", title: "System", pages: ["architecture", "profile", "run-model"] },
+  { key: "admission", title: "Intake and admission", pages: ["intake", "spend"] },
   {
     key: "execution",
     title: "Placement and execution",
-    pages: ["placement-leases", "executor-protocol", "executors", "isolation-egress", "local-scheduler"],
+    pages: ["executor-protocol", "executors", "isolation-egress", "local-scheduler"],
   },
   { key: "outputs", title: "Outputs", pages: ["github-output", "cache-artifacts", "model-gateway", "provenance"] },
   { key: "runs", title: "Run catalog", pages: ["runs/gate", "runs/agentic"] },

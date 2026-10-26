@@ -1,7 +1,7 @@
 // Mermaid sources for the landing page's diagrams, rendered by Diagram.astro. Each one
 // summarizes, at landing-page size, a mechanism a specification defines: the system shape
-// (specs/architecture.md), placement constraints (specs/qos-admission.md), the execution
-// lifecycle (specs/github-output.md) and the fenced lease (specs/placement-leases.md).
+// (specs/architecture.md), placement constraints (specs/profile.md), the execution
+// lifecycle (specs/github-output.md) and the fenced lease (mameko's placement-leases.md).
 
 export const heroShape = `flowchart TB
   accTitle: Cloudflare schedules; owned hardware runs first; the cloud takes the spill
