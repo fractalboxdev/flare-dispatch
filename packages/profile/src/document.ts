@@ -357,10 +357,10 @@ export const profile: Profile = {
   policy_version: "flare-dispatch.v2.0",
   classes,
   /**
-   * Per-class caps inside each Container pool's admission cap (FD-QOS-039); the admission caps themselves (`lean`
+   * Per-class caps inside each Container pool's admission cap (FD-PROF-032); the admission caps themselves (`lean`
    * 48, `agent` 8, `browser` 16, `release` 8, `control` 16) are the runtime adapter's configuration.
    */
-  // TODO(maintainer): FD-QOS-039 keeps 2 slots for P0 and P1 together; a floor over a group of classes waits on
+  // TODO(maintainer): FD-PROF-032 keeps 2 slots for P0 and P1 together; a floor over a group of classes waits on
   // mameko specs/profiles.md § Open items, so `min: 2` sits on `required` alone.
   pools: [
     { name: "lean", classes: [cap("batch", 4), cap("interactive", 8)] },
@@ -369,7 +369,7 @@ export const profile: Profile = {
     { name: "release", classes: [], reserved_for: "release" },
     { name: "control", classes: [] },
   ],
-  /** FD-QOS-041. FlareDispatch's specs name no total; 10 is a placeholder until the operator sets it. */
+  /** FD-PROF-034. */
   browser_sessions: {
     cap: 10,
     classes: [cap("batch", 1), cap("interactive", 2), cap("required", 10, 1)],
@@ -422,7 +422,7 @@ export const profile: Profile = {
     ops_class: "required",
     undelivered_alarm: "undelivered-verdict",
   },
-  /** No kind is gated, so no key; FlareDispatch's specs name no expiry, and 1 day is a placeholder. */
+  /** FD-PROF-048. No kind is gated, so no key. */
   gate_policy: { keys: [], max_expiry_seconds: 86_400 },
   /** mameko's default list plus FlareDispatch's release surface. */
   approval_floor: [
@@ -480,7 +480,7 @@ export const ConfigurationSourceLive = Layer.succeed(ConfigurationSource, {
 
 /**
  * Per-device slot defaults for an 8-slot share. mameko keeps these on the executor's registry row, not in the
- * profile; each device's row may replace them (FD-LEASE-056, FD-LEASE-057).
+ * profile; each device's row may replace them (FD-PROF-035, FD-PROF-036).
  */
 export const deviceSlotDefaults = {
   total: 8,
@@ -491,7 +491,7 @@ export const deviceSlotDefaults = {
 
 /**
  * Spend amounts the class `reserve` and `line` fields name, in micro-USD, with FlareDispatch's defaults; the
- * operator overlay replaces each (FD-SPD-033).
+ * operator overlay replaces each (FD-PROF-054).
  */
 export const spendDefaults = {
   budget: 50_000_000,

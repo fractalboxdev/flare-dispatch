@@ -375,7 +375,7 @@ export const CheckRunApplierLive = Layer.effect(
       Effect.gen(function* () {
         const { ctx, kind, matching, payload, handler } = yield* resolve(row);
         // A first attempt of `check.open` creates at once. Every later attempt searches by `external_id`
-        // before it writes, and works on the oldest check run it finds (FD-GH-010, FD-GH-044).
+        // before it writes, and works on the oldest check run it finds (FD-GH-010, MAMEKO-OUT-022, MAMEKO-OUT-024).
         const run =
           kind === "check.open" && row.attempts === 0 ? null : ((yield* matching)[0] ?? null);
         return yield* call(ctx.installation, handler.apply(ctx, payload, run));

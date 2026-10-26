@@ -100,7 +100,7 @@ describe("check.open", () => {
     });
   });
 
-  it("FD-GH-044 a repeated apply searches by external_id first and works on the oldest check run", async () => {
+  it("MAMEKO-OUT-022, MAMEKO-OUT-024 a repeated apply searches by external_id first and works on the oldest check run", async () => {
     const gh = await opened();
     gh.runs.push({ ...gh.runs[0]!, id: 999 });
     expect(await apply(gh, row("check.open", ref, { attempts: 2 }))).toEqual({
@@ -143,7 +143,7 @@ describe("check.start and check.progress", () => {
     expect(gh.runs[0]?.output.summary).toContain("1970-01-01T00:00:00.000Z");
   });
 
-  it("FD-GH-051 neither applies after the check run concludes", async () => {
+  it("MAMEKO-OUT-044, MAMEKO-OUT-059, MAMEKO-OUT-060 neither applies after the check run concludes", async () => {
     const gh = await opened();
     await apply(
       gh,
@@ -154,7 +154,7 @@ describe("check.start and check.progress", () => {
     expect(gh.runs[0]).toMatchObject({ status: "completed", conclusion: "success" });
   });
 
-  it("FD-GH-051 check.start before check.open is applied waits instead of creating", async () => {
+  it("MAMEKO-OUT-044, MAMEKO-OUT-059, MAMEKO-OUT-060 check.start before check.open is applied waits instead of creating", async () => {
     expect(await apply(fakeGithub(), row("check.start", start))).toEqual({
       _tag: "retryable",
       reason: "check run not open yet",

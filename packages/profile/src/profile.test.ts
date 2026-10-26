@@ -81,7 +81,7 @@ describe("load", () => {
     expect(rejections(badLine).map((r) => r.item)).toEqual(["document"]);
   });
 
-  it("FD-QOS-039 FD-QOS-041 pool and browser-session caps per class", () => {
+  it("FD-PROF-032 FD-PROF-034 pool and browser-session caps per class", () => {
     expect(
       profile.pools.map((p) => [p.name, p.classes.map((c) => [c.class, c.max, c.min])]),
     ).toEqual([
@@ -176,7 +176,7 @@ describe("load", () => {
 });
 
 describe("class catalogue", () => {
-  it("FD-QOS-001 four classes, release P0 to batch P3, in a strict rank order", () => {
+  it("FD-PROF-003 four classes, release P0 to batch P3, in a strict rank order", () => {
     expect(profile.classes.map((c) => [c.name, c.rank])).toEqual(CLASSES.map((n, i) => [n, i]));
     expect(profile.classes.every((c) => c.guaranteed)).toBe(true);
     expect(profile.classes.filter((c) => c.firm === true).map((c) => c.name)).toEqual(["required"]);
@@ -188,7 +188,7 @@ describe("class catalogue", () => {
     expect(cls("interactive").cloud_kinds).toEqual(["cloudflare", "gha"]);
   });
 
-  it("FD-QOS-032 queue bounds per class", () => {
+  it("FD-PROF-006 queue bounds per class", () => {
     expect(CLASSES.map((n) => cls(n).bounds)).toEqual([
       { global: 16, per_scope: 8 },
       { global: 150, per_scope: 60 },
@@ -197,7 +197,7 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-QOS-033 a full release queue raises p0-breach", () => {
+  it("FD-PROF-007 a full release queue raises p0-breach", () => {
     expect(
       profile.classes
         .filter((c) => c.queue_full_alarm !== undefined)
@@ -205,7 +205,7 @@ describe("class catalogue", () => {
     ).toEqual([["release", "p0-breach"]]);
   });
 
-  it("FD-QOS-045 queue age: the run's for P0 and P1, 1800 s for P2, the staleness span for P3", () => {
+  it("FD-PROF-005 queue age: the run's for P0 and P1, 1800 s for P2, the staleness span for P3", () => {
     expect(CLASSES.map((n) => cls(n).queue_age)).toEqual([
       "run",
       "run",
@@ -214,12 +214,12 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-QOS-049 stale_at is half the schedule period, or 12 h without a schedule", () => {
+  it("FD-PROF-004 stale_at is half the schedule period, or 12 h without a schedule", () => {
     expect(staleAt(cls("batch"), 1_000, 3_600_000)).toBe(1_000 + 1_800_000);
     expect(staleAt(cls("batch"), 1_000, null)).toBe(1_000 + 43_200_000);
   });
 
-  it("FD-QOS-054 release ends failure, budget: release reserve exhausted", () => {
+  it("FD-PROF-008 release ends failure, budget: release reserve exhausted", () => {
     expect(cls("release").terminal_outcome).toEqual({
       outcome: "failure",
       reason: "budget: release reserve exhausted",
@@ -231,22 +231,22 @@ describe("class catalogue", () => {
     expect(cls("interactive").terminal_outcome).toEqual({ outcome: "failure", reason: "budget" });
   });
 
-  it("FD-QOS-055 batch ends deferred", () => {
+  it("MAMEKO-ADM-059 batch ends deferred", () => {
     expect(cls("batch").terminal_outcome).toBe("deferred");
   });
 
-  it("FD-QOS-072 only interactive and batch are sheddable", () => {
+  it("MAMEKO-ADM-073 only interactive and batch are sheddable", () => {
     expect(profile.classes.filter((c) => c.sheddable === true).map((c) => c.name)).toEqual([
       "interactive",
       "batch",
     ]);
   });
 
-  it("FD-QOS-077 retries: the run's for P0, once for P1 and P2, never in the cloud for P3", () => {
+  it("FD-PROF-009 retries: the run's for P0, once for P1 and P2, never in the cloud for P3", () => {
     expect(CLASSES.map((n) => cls(n).retries)).toEqual(["run", 1, 1, "local-only"]);
   });
 
-  it("FD-SPD-006 lines nest from the budget down to a share of the general band", () => {
+  it("MAMEKO-SPD-006 lines nest from the budget down to a share of the general band", () => {
     expect(CLASSES.map((n) => cls(n).line)).toEqual([
       "budget",
       "next-above-less-reserve",
@@ -255,7 +255,7 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-SPD-033 reserves: a configured release reserve and the measured required reserve", () => {
+  it("FD-PROF-054 reserves: a configured release reserve and the measured required reserve", () => {
     expect(cls("release").reserve).toBe("release-reserve");
     expect(cls("required").reserve).toBe("measured");
     expect(spendDefaults.reserves["release-reserve"]).toBe(10_000_000);
@@ -277,41 +277,41 @@ describe("delayed cloud claim", () => {
       staleAt: 99_000,
     });
 
-  it("FD-LEASE-014 release joins the cloud queue at admission", () => {
+  it("MAMEKO-LEASE-019 release joins the cloud queue at admission", () => {
     expect(at("release", {})).toBe(1_000);
   });
 
-  it("FD-LEASE-015 batch joins the cloud queue at stale_at", () => {
+  it("MAMEKO-LEASE-021 batch joins the cloud queue at stale_at", () => {
     expect(at("batch", {})).toBe(99_000);
   });
 
-  it("FD-LEASE-016 interactive waits 300 s for a device claim", () => {
+  it("FD-PROF-004 interactive waits 300 s for a device claim", () => {
     expect(at("interactive", {})).toBe(301_000);
   });
 
-  it("FD-LEASE-017 required waits 60 s for a device claim", () => {
+  it("FD-PROF-004 required waits 60 s for a device claim", () => {
     expect(at("required", {})).toBe(61_000);
   });
 
-  it("FD-LEASE-018 a predicted miss opens the cloud entry at admission", () => {
+  it("MAMEKO-LEASE-022 a predicted miss opens the cloud entry at admission", () => {
     expect(at("required", {}, true)).toBe(1_000);
     expect(at("interactive", {}, true)).toBe(1_000);
   });
 
-  it("FD-LEASE-019 no cloud kind left means no cloud entry", () => {
+  it("MAMEKO-LEASE-023 no cloud kind left means no cloud entry", () => {
     expect(at("required", { confidentiality: "confidential-compute" })).toBeNull();
     expect(at("batch", { declaresClass: false })).toBeNull();
   });
 });
 
 describe("placement", () => {
-  it("FD-QOS-009 a run that declares no class is local-only", () => {
+  it("FD-PROF-018 a run that declares no class is local-only", () => {
     const r = eligibleKinds(profile, { class: "batch", labels: [], declaresClass: false });
     expect(r.kinds).toEqual(["device"]);
     expect(r.constraints).toContain("local-only");
   });
 
-  it("FD-QOS-016 no device for a fork pull request, a release tag push or release", () => {
+  it("FD-PROF-037 no device for a fork pull request, a release tag push or release", () => {
     for (const c of CLASSES) {
       expect(kinds({ class: c, labels: ["untrusted-input"] })).not.toContain("device");
       expect(kinds({ class: c, labels: [], trigger: "tag-push" })).not.toContain("device");
@@ -319,24 +319,24 @@ describe("placement", () => {
     expect(kinds({ class: "release", labels: [] })).not.toContain("device");
   });
 
-  it("FD-QOS-017 confidential-compute leaves only device", () => {
+  it("MAMEKO-ADM-009 confidential-compute leaves only device", () => {
     for (const c of ["required", "interactive", "batch"])
       expect(kinds({ class: c, labels: [], confidentiality: "confidential-compute" })).toEqual([
         "device",
       ]);
   });
 
-  it("FD-QOS-018 release runs only on cloudflare, a macOS release-matrix job only on gha", () => {
+  it("FD-PROF-037 release runs only on cloudflare, a macOS release-matrix job only on gha", () => {
     expect(kinds({ class: "release", labels: [] })).toEqual(["cloudflare"]);
     expect(kinds({ class: "release", labels: ["release-matrix"] })).toEqual(["gha"]);
   });
 
-  it("FD-QOS-022 expose-port leaves at most cloudflare", () => {
+  it("MAMEKO-ADM-012 expose-port leaves at most cloudflare", () => {
     for (const c of CLASSES)
       expect(kinds({ class: c, labels: ["expose-port"] })).toEqual(["cloudflare"]);
   });
 
-  it("FD-QOS-024 apple-build runs on a device, or on gha for required and a release-matrix job", () => {
+  it("FD-PROF-040 apple-build runs on a device, or on gha for required and a release-matrix job", () => {
     expect(kinds({ class: "required", labels: ["apple-build"] })).toEqual(["gha", "device"]);
     expect(kinds({ class: "interactive", labels: ["apple-build"] })).toEqual(["device"]);
     expect(kinds({ class: "batch", labels: ["apple-build"] })).toEqual(["device"]);
@@ -345,7 +345,7 @@ describe("placement", () => {
     ]);
   });
 
-  it("FD-QOS-025 confidential-compute with a fork pull request, a tag push or release is unplaceable", () => {
+  it("MAMEKO-ADM-015 confidential-compute with a fork pull request, a tag push or release is unplaceable", () => {
     const cc = { confidentiality: "confidential-compute" } as const;
     expect(kinds({ class: "required", labels: ["untrusted-input"], ...cc })).toEqual([]);
     expect(kinds({ class: "required", labels: [], trigger: "tag-push", ...cc })).toEqual([]);
@@ -353,7 +353,7 @@ describe("placement", () => {
     expect(kinds({ class: "required", labels: [], ...cc })).not.toEqual([]);
   });
 
-  it("FD-QOS-085 a macOS release-matrix job keeps exactly gha at every class", () => {
+  it("FD-PROF-039 a macOS release-matrix job keeps exactly gha at every class", () => {
     for (const c of CLASSES)
       expect(kinds({ class: c, labels: ["release-matrix"] })).toEqual(["gha"]);
     expect(kinds({ class: "release", labels: ["release-matrix"], trigger: "tag-push" })).toEqual([
@@ -361,7 +361,7 @@ describe("placement", () => {
     ]);
   });
 
-  it("FD-QOS-085 the validator rejects a release matrix whose macOS jobs have no eligible kind", () => {
+  it("FD-PROF-039 the validator rejects a release matrix whose macOS jobs have no eligible kind", () => {
     const doc = mutate((d) => ({
       ...d,
       classes: d.classes.map((c) =>
@@ -377,7 +377,7 @@ describe("placement", () => {
     ]);
   });
 
-  it("FD-QOS-088 reproduction runs only on an attested-dedicated device", () => {
+  it("FD-PROF-041 reproduction runs only on an attested-dedicated device", () => {
     const r = eligibleKinds(profile, { class: "required", labels: ["reproduction"] });
     expect(r.kinds).toEqual(["device"]);
     expect(r.requiresPosture).toBe("attested-dedicated");
@@ -394,7 +394,7 @@ describe("placement", () => {
     ]);
   });
 
-  it("FD-LEASE-056 FD-LEASE-057 device slot defaults on an 8-slot share", () => {
+  it("FD-PROF-035 FD-PROF-036 device slot defaults on an 8-slot share", () => {
     expect(deviceSlotDefaults).toEqual({
       total: 8,
       headroom: 2,
@@ -438,7 +438,7 @@ describe("check-run lifecycle kinds", () => {
     ]);
   });
 
-  it("FD-GH-051 check kinds apply in insertion order; start and progress void after the outcome", () => {
+  it("MAMEKO-OUT-044, MAMEKO-OUT-059, MAMEKO-OUT-060 check kinds apply in insertion order; start and progress void after the outcome", () => {
     const checks = ["check.open", "check.start", "check.progress", "check.conclude"];
     for (const k of checks) expect(kind(k).in_order).toBe(true);
     expect(checks.filter((k) => kind(k).void_after_outcome === true)).toEqual([
@@ -456,7 +456,7 @@ describe("check-run lifecycle kinds", () => {
     expect(drawing.sort()).toEqual(["check.conclude", "check.open"]);
   });
 
-  it("FD-GH-064 permit order: check.conclude, check.open, check.start, the other kinds, check.progress", () => {
+  it("MAMEKO-OUT-042 permit order: check.conclude, check.open, check.start, the other kinds, check.progress", () => {
     const ordered = Object.entries(profile.intent_kinds)
       .sort(([, a], [, b]) => {
         const [ta, pa] = deliveryOrder(a);
