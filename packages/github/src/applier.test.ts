@@ -77,16 +77,38 @@ describe("check.open", () => {
     });
   });
 
-  it("FD-GH-010 a lookup that cannot read answers absent, and the next apply reads before it creates", async () => {
+  it("MAMEKO-OUT-025 a lookup that cannot read answers undetermined, not absent", async () => {
     const gh = await opened();
-    const down = new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false });
-    gh.failures.push(down, down, down, down);
-    expect(await lookup(gh, row("check.open", ref, { attempts: 1 }))).toEqual({ _tag: "absent" });
+    gh.failures.push(
+      new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false }),
+    );
+    expect(await lookup(gh, row("check.open", ref, { attempts: 1 }))).toEqual({
+      _tag: "undetermined",
+      reason: "github 502: bad gateway",
+    });
+    expect(gh.calls).toEqual(["list"]);
+    gh.failures.push(new GithubNetworkError({ sent: false, message: "dns" }));
+    expect((await lookup(gh, row("check.open", ref, { attempts: 1 })))._tag).toBe("undetermined");
+  });
+
+  it("MAMEKO-OUT-025 two check runs carrying the execution id answer undetermined", async () => {
+    const gh = await opened();
+    gh.runs.push({ ...gh.runs[0]!, id: 1001 });
+    expect(await lookup(gh, row("check.open", ref, { attempts: 1 }))).toEqual({
+      _tag: "undetermined",
+      reason: "check run: 2 carry the execution id",
+    });
+  });
+
+  it("FD-GH-044 a repeated apply searches by external_id first and works on the oldest check run", async () => {
+    const gh = await opened();
+    gh.runs.push({ ...gh.runs[0]!, id: 999 });
     expect(await apply(gh, row("check.open", ref, { attempts: 2 }))).toEqual({
       _tag: "applied",
-      externalRef: "1000",
+      externalRef: "999",
     });
-    expect(gh.runs).toHaveLength(1);
+    expect(gh.calls).toEqual(["list"]);
+    expect(gh.runs).toHaveLength(2);
   });
 });
 
@@ -328,7 +350,7 @@ describe("answers", () => {
     expect((await apply(fakeGithub(), row("check.start", ref)))._tag).toBe("refused");
   });
 
-  it("MAMEKO-OUT-025 reconcile answers undetermined when GitHub cannot be read", async () => {
+  it("MAMEKO-OUT-064 reconcile answers undetermined when GitHub cannot be read", async () => {
     const gh = await opened();
     gh.failures.push(http(502));
     expect(await reconcile(gh, open)).toEqual({ _tag: "undetermined", reason: "github 502: m" });

@@ -12,6 +12,7 @@ import {
 
 const permit = (overrides: Partial<PermitRequest> = {}): PermitRequest => ({
   limitKey: "7",
+  call: "apply",
   kind: "comment",
   tier: "effect",
   priority: 2,
@@ -51,7 +52,7 @@ const observe = (key: string, o: Parameters<InstallationQuota["Service"]["observ
   });
 
 describe("applier rate limit", () => {
-  it("MAMEKO-OUT-037 grants one permit per call and counts it against the installation", async () => {
+  it("MAMEKO-OUT-038 grants one permit per call and counts it against the installation", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 12 });
@@ -65,7 +66,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["granted", "granted", "wait"]);
   });
 
-  it("MAMEKO-OUT-037 keys the budget by installation", async () => {
+  it("MAMEKO-OUT-038 keys the budget by installation", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 0, resetAt: NOW + 5000 });
@@ -78,7 +79,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["wait", "granted"]);
   });
 
-  it("FD-GH-058 MAMEKO-OUT-039 at the reserve only check.open and check.conclude rows get a permit", async () => {
+  it("FD-GH-058 MAMEKO-OUT-041 at the reserve only check.open and check.conclude rows get a permit", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 10, resetAt: NOW + 5000 });
@@ -130,16 +131,69 @@ describe("applier rate limit", () => {
     expect(answers).toEqual([{ _tag: "wait", retryAt: NOW + 60_000 }, "granted"]);
   });
 
-  it("FD-GH-062 caps content-creating permits per minute", async () => {
+  it("FD-GH-062 MAMEKO-OUT-038 caps apply permits per minute; lookup and reconcile do not count", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         const tags: string[] = [];
-        for (let i = 0; i < 4; i++) tags.push((yield* acquire(permit()))._tag);
+        for (let i = 0; i < 3; i++) tags.push((yield* acquire(permit()))._tag);
+        tags.push((yield* acquire(permit({ call: "lookup" })))._tag);
+        tags.push((yield* acquire(permit({ call: "reconcile" })))._tag);
+        tags.push((yield* acquire(permit({ call: "apply" })))._tag);
         return tags;
       }),
       { ...quotaOptionsDefault, perMinute: 3 },
     );
-    expect(answers).toEqual(["granted", "granted", "granted", "wait"]);
+    expect(answers).toEqual(["granted", "granted", "granted", "granted", "granted", "wait"]);
+  });
+
+  it("FD-GH-063 MAMEKO-OUT-039 a 9th concurrent call waits until a permit is released", async () => {
+    const result = await withQuota(
+      Effect.gen(function* () {
+        const limit = yield* ApplierRateLimit;
+        const permits: string[] = [];
+        for (let i = 0; i < 8; i++) {
+          const answer = yield* limit.acquire(permit({ call: i % 2 === 0 ? "apply" : "lookup" }));
+          if (answer._tag === "granted") permits.push(answer.permitId);
+        }
+        const ninth = yield* limit.acquire(permit());
+        const other = yield* limit.acquire(permit({ limitKey: "8" }));
+        yield* limit.release(permits[0]!);
+        const afterRelease = yield* limit.acquire(permit());
+        const tenth = yield* limit.acquire(permit());
+        return {
+          permits: new Set(permits).size,
+          ninth,
+          other: other._tag,
+          afterRelease: afterRelease._tag,
+          tenth: tenth._tag,
+        };
+      }),
+    );
+    expect(result).toEqual({
+      permits: 8,
+      ninth: { _tag: "wait", retryAt: NOW + 1000 },
+      other: "granted",
+      afterRelease: "granted",
+      tenth: "wait",
+    });
+  });
+
+  it("MAMEKO-OUT-039 releasing an unknown or already released permit changes nothing", async () => {
+    const tags = await withQuota(
+      Effect.gen(function* () {
+        const limit = yield* ApplierRateLimit;
+        const out: string[] = [];
+        for (let i = 0; i < 8; i++) {
+          const answer = yield* limit.acquire(permit());
+          if (answer._tag === "granted") out.push(answer.permitId);
+        }
+        yield* limit.release(out[0]!);
+        yield* limit.release(out[0]!);
+        yield* limit.release("7:999");
+        return [(yield* limit.acquire(permit()))._tag, (yield* limit.acquire(permit()))._tag];
+      }),
+    );
+    expect(tags).toEqual(["granted", "wait"]);
   });
 });
 

@@ -11,7 +11,7 @@ import {
   type LookupAnswer,
   type ReconcileAnswer,
 } from "@fractalboxdev/mameko-ports";
-import { Context, Effect, Layer, Match, Schedule, Schema } from "effect";
+import { Context, Effect, Layer, Match, Schema } from "effect";
 import {
   GithubClient,
   type Annotation,
@@ -291,6 +291,11 @@ const reasonOf = (e: GithubError): string =>
     Match.exhaustive,
   );
 
+/** More than one check run carries the execution id. */
+class AmbiguousCheckRun extends Schema.TaggedError<AmbiguousCheckRun>()("AmbiguousCheckRun", {
+  count: Schema.Number,
+}) {}
+
 const found = (run: CheckRun | null): LookupAnswer =>
   run === null ? { _tag: "absent" } : { _tag: "found", externalRef: String(run.id) };
 
@@ -355,21 +360,24 @@ export const CheckRunApplierLive = Layer.effect(
         const ctx: Ctx = { installation, repo: row.scopeId, executionId, row };
         // The handler table is keyed by kind, and the payload decoded under that kind's schema.
         const handler = handlers[kind] as unknown as Handler<CheckKind>;
-        const find = call(
+        // Every check run of the execution, oldest first; more than one means an earlier create was doubled.
+        const matching = call(
           installation,
           Effect.map(
             github.listCheckRuns({ ...ctx, ref: payload.head_sha, name: payload.name }),
-            (runs) => runs.find((r) => r.external_id === executionId) ?? null,
+            (runs) => runs.filter((r) => r.external_id === executionId).sort((a, b) => a.id - b.id),
           ),
         );
-        return { ctx, kind, find, payload: payload as never, handler };
+        return { ctx, kind, matching, payload: payload as never, handler };
       });
 
     const apply = (row: IntentRow): Effect.Effect<ApplyAnswer> =>
       Effect.gen(function* () {
-        const { ctx, kind, find, payload, handler } = yield* resolve(row);
-        // A first attempt of `check.open` creates at once; every later attempt reads before it writes.
-        const run = kind === "check.open" && row.attempts === 0 ? null : yield* find;
+        const { ctx, kind, matching, payload, handler } = yield* resolve(row);
+        // A first attempt of `check.open` creates at once. Every later attempt searches by `external_id`
+        // before it writes, and works on the oldest check run it finds (FD-GH-010, FD-GH-044).
+        const run =
+          kind === "check.open" && row.attempts === 0 ? null : ((yield* matching)[0] ?? null);
         return yield* call(ctx.installation, handler.apply(ctx, payload, run));
       }).pipe(
         Effect.catchTags({
@@ -382,28 +390,41 @@ export const CheckRunApplierLive = Layer.effect(
         }),
       );
 
-    /** The check run carrying the row's effect, or null when the effect is not on GitHub. */
-    const adoptedRun = (row: IntentRow): Effect.Effect<CheckRun | null, GithubError> =>
+    /**
+     * The check run carrying the row's effect, or null when the effect is not on GitHub. A read that fails, or
+     * finds the execution's check run more than once, proves neither.
+     */
+    const adoptedRun = (
+      row: IntentRow,
+    ): Effect.Effect<CheckRun | null, GithubError | AmbiguousCheckRun> =>
       Effect.gen(function* () {
-        const { ctx, find, payload, handler } = yield* resolve(row);
-        const run = yield* find;
-        if (run === null) return null;
+        const { ctx, matching, payload, handler } = yield* resolve(row);
+        const runs = yield* matching;
+        if (runs.length > 1)
+          return yield* Effect.fail(new AmbiguousCheckRun({ count: runs.length }));
+        const run = runs[0];
+        if (run === undefined) return null;
         return (yield* call(ctx.installation, handler.adopted(ctx, payload, run))) ? run : null;
       }).pipe(Effect.catchTag("Answered", () => Effect.succeed(null)));
 
+    // Neither read guesses: a failed or ambiguous read answers `undetermined`, the row stays ambiguous and the
+    // drainer asks again after back-off (MAMEKO-OUT-025, MAMEKO-OUT-064).
+    const undetermined = (e: GithubError | AmbiguousCheckRun) =>
+      e instanceof AmbiguousCheckRun ? `check run: ${e.count} carry the execution id` : reasonOf(e);
+
     return {
       apply,
-      // LookupAnswer has no "unknown": after its retries a failed read answers `absent`. That is safe for
-      // these kinds because the repeated `apply` reads before it writes and answers `retryable` if it cannot.
       lookup: (row) =>
         adoptedRun(row).pipe(
-          Effect.retry({ schedule: Schedule.exponential("200 millis"), times: 3 }),
-          Effect.match({ onFailure: (): LookupAnswer => ({ _tag: "absent" }), onSuccess: found }),
+          Effect.match({
+            onFailure: (e): LookupAnswer => ({ _tag: "undetermined", reason: undetermined(e) }),
+            onSuccess: found,
+          }),
         ),
       reconcile: (row) =>
         adoptedRun(row).pipe(
           Effect.match({
-            onFailure: (e): ReconcileAnswer => ({ _tag: "undetermined", reason: reasonOf(e) }),
+            onFailure: (e): ReconcileAnswer => ({ _tag: "undetermined", reason: undetermined(e) }),
             onSuccess: found,
           }),
         ),
