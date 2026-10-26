@@ -1,4 +1,10 @@
-export { deviceSlotDefaults, profileDocument, spendDefaults } from "./document.ts";
+export {
+  ConfigurationSourceLive,
+  deviceSlotDefaults,
+  profile,
+  profileDocument,
+  spendDefaults,
+} from "./document.ts";
 export {
   classNamed,
   classPlacement,
@@ -15,7 +21,7 @@ export {
   ClassEntry,
   IntentKindEntry,
   Predicate,
-  ProfileDocument,
+  Profile,
   ProfileRejected,
   Rejection,
 } from "./schema.ts";

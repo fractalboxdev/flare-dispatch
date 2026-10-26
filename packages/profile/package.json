@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@fractalboxdev/mameko-kernel": "workspace:*",
+    "@fractalboxdev/mameko-ports": "workspace:*",
     "effect": "4.0.6"
   },
   "devDependencies": {

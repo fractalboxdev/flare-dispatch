@@ -1,20 +1,23 @@
 import { reclaimPolicyFor } from "@fractalboxdev/mameko-kernel";
+import { ConfigurationSource } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   classNamed,
   cloudEligibleAt,
+  ConfigurationSourceLive,
   deliveryOrder,
   deviceSlotDefaults,
   drawsReserve,
   eligibleKinds,
   lifecycleKey,
   loadProfile,
+  profile as committed,
   profileDocument,
   spendDefaults,
   staleAt,
   type PlacementRequest,
-  type ProfileDocument,
+  type Profile,
 } from "./index.ts";
 
 const profile = Effect.runSync(loadProfile(profileDocument));
@@ -25,18 +28,34 @@ const cls = (name: string) => {
 };
 const kinds = (r: PlacementRequest) => eligibleKinds(profile, r).kinds;
 const CLASSES = ["release", "required", "interactive", "batch"] as const;
-const rejections = (doc: unknown) => Effect.runSync(Effect.flip(loadProfile(doc))).rejections;
-const mutate = (f: (doc: ProfileDocument) => ProfileDocument) =>
-  f(structuredClone(profileDocument));
+const rejections = (document: unknown, policyVersion = committed.policy_version) =>
+  Effect.runSync(Effect.flip(loadProfile({ document, policyVersion }))).rejections;
+const mutate = (f: (doc: Profile) => Profile) => f(structuredClone(committed));
 
 describe("load", () => {
-  it("decodes and validates with zero rejections", () => {
-    expect(profile.policy_version).toBe("flare-dispatch.v2.0");
+  it("MAMEKO-PROF-002 the configuration source delivers one document at one policy version", () => {
+    const delivered = Effect.runSync(
+      Effect.provide(
+        Effect.gen(function* () {
+          const source = yield* ConfigurationSource;
+          return yield* source.load;
+        }),
+        ConfigurationSourceLive,
+      ),
+    );
+    expect(delivered.policyVersion).toBe("flare-dispatch.v2.0");
+    expect(Effect.runSync(loadProfile(delivered))).toEqual(committed);
   });
 
-  it("rejects a document with a property the schema does not declare", () => {
-    const [r] = rejections({ ...profileDocument, pools: [] });
+  it("MAMEKO-PROF-001 rejects a document with a property the schema does not declare", () => {
+    const [r] = rejections({ ...committed, pools: [] });
     expect(r?.item).toBe("document");
+  });
+
+  it("rejects a document whose policy version differs from the delivered one", () => {
+    expect(rejections(committed, "flare-dispatch.v2.1").map((r) => r.path)).toEqual([
+      "policy_version",
+    ]);
   });
 
   it("reports every rejection, not only the first", () => {

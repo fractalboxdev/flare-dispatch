@@ -3,13 +3,14 @@
 // rejection. The checks that need bindings registered in code, scope
 // manifests or run volumes belong to the coordinator's validator.
 import { validateRuntimeFeatures } from "@fractalboxdev/mameko-kernel";
+import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Schema } from "effect";
 import { eligibleKinds } from "./placement.ts";
-import { ProfileDocument, ProfileRejected, type PlacementShape, type Rejection } from "./schema.ts";
+import { Profile, ProfileRejected, type PlacementShape, type Rejection } from "./schema.ts";
 
 const BUILT_IN_CLOUD_KINDS = ["cloudflare", "aws"] as const;
 
-const ranks = (p: ProfileDocument): Rejection[] => {
+const ranks = (p: Profile): Rejection[] => {
   const sorted = p.classes.map((c) => c.rank).sort((a, b) => a - b);
   return sorted.every((r, i) => r === i)
     ? []
@@ -22,7 +23,7 @@ const ranks = (p: ProfileDocument): Rejection[] => {
       ];
 };
 
-const classes = (p: ProfileDocument): Rejection[] => {
+const classes = (p: Profile): Rejection[] => {
   const cloudKinds = new Set<string>([...BUILT_IN_CLOUD_KINDS, ...p.placement.launcher_kinds]);
   const lowest = Math.max(...p.classes.map((c) => c.rank));
   const measured = p.classes.filter((c) => c.reserve === "measured");
@@ -69,7 +70,7 @@ const classes = (p: ProfileDocument): Rejection[] => {
   return out;
 };
 
-const intentKinds = (p: ProfileDocument): Rejection[] => {
+const intentKinds = (p: Profile): Rejection[] => {
   const out: Rejection[] = [];
   const classNames = new Set(p.classes.map((c) => c.name));
   for (const [kind, k] of Object.entries(p.intent_kinds)) {
@@ -120,7 +121,7 @@ const matches = (shape: PlacementShape, cls: string, labels: readonly string[]):
   (shape.labels === "any" || shape.labels.every((l) => labels.includes(l)));
 
 /** Every `placement.required` shape must leave a non-empty eligible set at every class it covers. */
-const placement = (p: ProfileDocument): Rejection[] => {
+const placement = (p: Profile): Rejection[] => {
   const known = new Set<string>([...BUILT_IN_CLOUD_KINDS, ...p.placement.launcher_kinds]);
   const out: Rejection[] = p.placement.cloud_pinned_kinds
     .filter((k) => !known.has(k))
@@ -151,7 +152,7 @@ const placement = (p: ProfileDocument): Rejection[] => {
   return out;
 };
 
-const runtime = (p: ProfileDocument): Rejection[] =>
+const runtime = (p: Profile): Rejection[] =>
   validateRuntimeFeatures(p.host.adapter, {
     features: p.host.features,
     cloudKinds: p.classes.flatMap((c) => c.cloud_kinds),
@@ -162,7 +163,7 @@ const runtime = (p: ProfileDocument): Rejection[] =>
   }));
 
 /** Every rejection the profile validator finds in a decoded document; empty means accepted. */
-export const validateProfile = (p: ProfileDocument): readonly Rejection[] => [
+export const validateProfile = (p: Profile): readonly Rejection[] => [
   ...ranks(p),
   ...classes(p),
   ...intentKinds(p),
@@ -170,36 +171,35 @@ export const validateProfile = (p: ProfileDocument): readonly Rejection[] => [
   ...runtime(p),
 ];
 
-const decode = Schema.decodeUnknownEffect(ProfileDocument, { onExcessProperty: "error" });
+const decode = Schema.decodeUnknownEffect(Profile, { onExcessProperty: "error" });
+
+const rejected = (policyVersion: string, rejections: readonly Rejection[]) =>
+  new ProfileRejected({ policy_version: policyVersion, rejections });
 
 /**
- * Decodes a delivered document with excess properties rejected, then validates it. A failing decode names its
- * first failing path; a failing validation lists every rejection. Nothing in the document takes effect before
- * both pass.
+ * Decodes the document a configuration source delivers with excess properties rejected, then validates it. A
+ * failing decode names its first failing path; a failing validation lists every rejection. The document's
+ * `policy_version` must equal the envelope's. Nothing in the document takes effect before every check passes.
  */
-export const loadProfile = (input: unknown) =>
+export const loadProfile = ({ document, policyVersion }: ProfileDocument) =>
   Effect.gen(function* () {
-    const doc = yield* decode(input).pipe(
-      Effect.mapError(
-        (e) =>
-          new ProfileRejected({
-            policy_version: policyVersionOf(input),
-            rejections: [{ item: "document", path: "", reason: e.message }],
-          }),
+    const doc = yield* decode(document).pipe(
+      Effect.mapError((e) =>
+        rejected(policyVersion, [{ item: "document", path: "", reason: e.message }]),
       ),
     );
-    const rejections = validateProfile(doc);
-    if (rejections.length > 0)
-      return yield* Effect.fail(
-        new ProfileRejected({ policy_version: doc.policy_version, rejections }),
-      );
+    const rejections: readonly Rejection[] = [
+      ...(doc.policy_version === policyVersion
+        ? []
+        : [
+            {
+              item: "document",
+              path: "policy_version",
+              reason: `the document's policy version differs from the delivered ${policyVersion}`,
+            },
+          ]),
+      ...validateProfile(doc),
+    ];
+    if (rejections.length > 0) return yield* Effect.fail(rejected(policyVersion, rejections));
     return doc;
   });
-
-const policyVersionOf = (input: unknown): string =>
-  typeof input === "object" &&
-  input !== null &&
-  "policy_version" in input &&
-  typeof input.policy_version === "string"
-    ? input.policy_version
-    : "";

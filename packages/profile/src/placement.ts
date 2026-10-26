@@ -15,7 +15,7 @@ import type {
   IntentKindEntry,
   LifecycleTrigger,
   Predicate,
-  ProfileDocument,
+  Profile,
 } from "./schema.ts";
 
 /** What a placement constraint can see of a request. */
@@ -50,7 +50,7 @@ const holds = (p: Predicate, r: PlacementRequest): boolean =>
     Match.exhaustive,
   );
 
-export const classNamed = (profile: ProfileDocument, name: string): ClassEntry | undefined =>
+export const classNamed = (profile: Profile, name: string): ClassEntry | undefined =>
   profile.classes.find((c) => c.name === name);
 
 const POSTURE_ORDER: readonly PostureTier[] = [
@@ -66,7 +66,7 @@ const stricter = (a: PostureTier | null, b: PostureTier): PostureTier =>
  * constraints and the profile's declared constraints, each only removing kinds, intersected with the class's
  * cloud kinds plus `device` where the class is device-eligible. An empty set is unplaceable.
  */
-export const eligibleKinds = (profile: ProfileDocument, request: PlacementRequest): EligibleSet => {
+export const eligibleKinds = (profile: Profile, request: PlacementRequest): EligibleSet => {
   const { placement } = profile;
   const cls = classNamed(profile, request.class);
   let kinds = new Set<ExecutorKind>(["cloudflare", "device", "aws", ...placement.launcher_kinds]);

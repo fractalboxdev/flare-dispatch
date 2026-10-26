@@ -1,12 +1,15 @@
 // The profile items FlareDispatch declares, keyed and bounded as mameko's
-// specs/profiles.md states them. mameko's own `Profile` schema belongs to
-// `@fractalboxdev/mameko-ports`, which exports nothing yet; until it does, this
-// file is the decode boundary for the class catalogue, the reclaim policy, the
-// intent kinds, delivery, placement and the runtime adapter.
+// specs/profiles.md states them. `@fractalboxdev/mameko-ports` defines the
+// envelope the configuration source delivers (`ProfileDocument`: the document
+// and its policy version) and the effect classes; the items inside the
+// document have no mameko schema yet, so this file is their decode boundary:
+// the class catalogue, the reclaim policy, the intent kinds, delivery,
+// placement and the runtime adapter.
 //
 // Two encodings are this package's, because profiles.md fixes their meaning but
 // not their shape: a class `line`, and the predicate a placement constraint
 // holds for.
+import { IntentRow } from "@fractalboxdev/mameko-ports";
 import { Schema } from "effect";
 
 const Name = Schema.String.check(
@@ -131,7 +134,7 @@ export const IntentKindEntry = Schema.Struct({
   void_after_outcome: Schema.optionalKey(Schema.Boolean),
   in_order: Schema.optionalKey(Schema.Boolean),
   ops: Schema.optionalKey(Schema.Boolean),
-  effect_class: Schema.Literals(["replay-safe", "adoptable", "reconcile-only"]),
+  effect_class: IntentRow.fields.effectClass,
   applier: BindingName,
   marker: Schema.optionalKey(Schema.String.check(Schema.isBetweenLength(1, 128))),
   gated: Schema.optionalKey(Schema.Boolean),
@@ -209,11 +212,11 @@ export const Placement = Schema.Struct({
 });
 
 // ---------------------------------------------------------------------------
-// The document
+// The document inside mameko's `ProfileDocument` envelope
 
 export const RuntimeAdapter = Schema.Literals(["host-cloudflare", "host-node"]);
 
-export const ProfileDocument = Schema.Struct({
+export const Profile = Schema.Struct({
   policy_version: Schema.String.check(
     Schema.isPattern(/^[A-Za-z0-9._-]+$/),
     Schema.isBetweenLength(1, 64),
@@ -225,7 +228,7 @@ export const ProfileDocument = Schema.Struct({
   placement: Placement,
   host: Schema.Struct({ adapter: RuntimeAdapter, features: Schema.Array(Schema.String) }),
 });
-export type ProfileDocument = typeof ProfileDocument.Type;
+export type Profile = typeof Profile.Type;
 
 /** One reason the profile is not accepted: the item, the field path and why (MAMEKO-PROF-011). */
 export const Rejection = Schema.Struct({

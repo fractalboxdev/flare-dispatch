@@ -6,10 +6,12 @@
 //
 // The document is plain data so the configuration source can deliver it as
 // one; `loadProfile` decodes and validates it before any value takes effect.
-import type { Predicate, ProfileDocument } from "./schema.ts";
+import { ConfigurationSource, type ProfileDocument } from "@fractalboxdev/mameko-ports";
+import { Effect, Layer } from "effect";
+import type { Predicate, Profile } from "./schema.ts";
 
 /** P0 to P3. `release` is the only class that stays off devices; `required` is the one firm class. */
-const classes: ProfileDocument["classes"] = [
+const classes: Profile["classes"] = [
   {
     name: "release",
     rank: 0,
@@ -71,14 +73,14 @@ const classes: ProfileDocument["classes"] = [
 ];
 
 const checkRunMarker = "external_id equal to the execution id; updates are idempotent";
-const bodyMarker = "<!-- ci:intent <execution_id>/<intent_key> -->";
+const bodyMarker = "<!-- flare-dispatch:intent <execution_id>/<intent_key> -->";
 
 /**
  * Every kind the control plane accepts. The four check kinds are the check-run lifecycle: `check.open` at
  * admission, `check.start` per lease grant, `check.progress` while waiting and `check.conclude` with the outcome,
  * applied in insertion order per execution.
  */
-const intent_kinds: ProfileDocument["intent_kinds"] = {
+const intent_kinds: Profile["intent_kinds"] = {
   "check.open": {
     origin: "control-plane",
     on: "admitted",
@@ -106,6 +108,8 @@ const intent_kinds: ProfileDocument["intent_kinds"] = {
     applier: "checkRun",
     marker: checkRunMarker,
   },
+  // TODO(maintainer): mameko's pending `on: progress` trigger with a coalescing key generates this kind
+  // (FD-GH-012); until it lands the kind declares no `on`.
   "check.progress": {
     origin: "control-plane",
     delivery_tier: "progress",
@@ -285,7 +289,7 @@ const withLabels = (...labels: string[]) => ({ ...anyShape, labels });
  * The generic constraints' parameters, the `gha` launcher and five declared constraints. Every class lists `gha`
  * last, so a macOS release-matrix job of any class keeps `gha`; the constraints remove `gha` from every other run.
  */
-const placement: ProfileDocument["placement"] = {
+const placement: Profile["placement"] = {
   cloud_pinned: all(isClass("release"), not(label("release-matrix"))),
   cloud_only: { _tag: "Trigger", kind: "release-tag-push" },
   local_only: { _tag: "UndeclaredClass" },
@@ -324,7 +328,7 @@ const placement: ProfileDocument["placement"] = {
   ],
 };
 
-export const profileDocument: ProfileDocument = {
+export const profile: Profile = {
   policy_version: "flare-dispatch.v2.0",
   classes,
   reclaim_policy: {
@@ -345,6 +349,17 @@ export const profileDocument: ProfileDocument = {
     features: ["cloudflare-containers", "durable-object-alarms"],
   },
 };
+
+/** The profile as the configuration source delivers it: the document and its policy version. */
+export const profileDocument: ProfileDocument = {
+  document: profile,
+  policyVersion: profile.policy_version,
+};
+
+/** FlareDispatch's configuration source: the committed profile, one document at one policy version. */
+export const ConfigurationSourceLive = Layer.succeed(ConfigurationSource, {
+  load: Effect.succeed(profileDocument),
+});
 
 /**
  * Per-device slot defaults for an 8-slot share. mameko keeps these on the executor's registry row, not in the
