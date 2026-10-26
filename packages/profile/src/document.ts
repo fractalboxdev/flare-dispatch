@@ -10,7 +10,7 @@ import { ConfigurationSource, type ProfileDocument } from "@fractalboxdev/mameko
 import { Effect, Layer } from "effect";
 import type { Predicate, Profile } from "./schema.ts";
 
-/** P0 to P3. `release` is the only class that stays off devices; `required` is the one firm class. */
+/** P0 to P3. `cloud-pinned` keeps `release` off devices; `required` is the one firm class. */
 const classes: Profile["classes"] = [
   {
     name: "release",
@@ -19,7 +19,6 @@ const classes: Profile["classes"] = [
     cloud_kinds: ["cloudflare", "gha"],
     line: "budget",
     guaranteed: true,
-    device_eligible: false,
     terminal_outcome: { outcome: "failure", reason: "budget: release reserve exhausted" },
     reserve: "release-reserve",
     queue_age: "run",
@@ -108,10 +107,13 @@ const intent_kinds: Profile["intent_kinds"] = {
     applier: "checkRun",
     marker: checkRunMarker,
   },
-  // TODO(maintainer): mameko's pending `on: progress` trigger with a coalescing key generates this kind
-  // (FD-GH-012); until it lands the kind declares no `on`.
+  // Generated at each step and placement-state change; one coalescing key per execution, so a newer row voids
+  // the older pending ones and only the latest position applies (FD-GH-012).
   "check.progress": {
     origin: "control-plane",
+    on: "progress",
+    payload: "checkProgressPayload",
+    coalesce_key: "executionProgressKey",
     delivery_tier: "progress",
     applied_for: "any",
     void_after_outcome: true,
@@ -273,10 +275,10 @@ const intent_kinds: Profile["intent_kinds"] = {
   },
 };
 
-const label = (name: string): Predicate => ({ _tag: "Label", name });
-const isClass = (name: string): Predicate => ({ _tag: "Class", name });
-const not = (predicate: Predicate): Predicate => ({ _tag: "Not", predicate });
-const all = (...predicates: Predicate[]): Predicate => ({ _tag: "All", predicates });
+const label = (name: string): Predicate => ({ label: name });
+const isClass = (name: string): Predicate => ({ class: name });
+const not = (predicate: Predicate): Predicate => ({ not: predicate });
+const all = (...predicates: Predicate[]): Predicate => ({ all: predicates });
 const anyShape = {
   class: "any",
   labels: "any",
@@ -291,8 +293,8 @@ const withLabels = (...labels: string[]) => ({ ...anyShape, labels });
  */
 const placement: Profile["placement"] = {
   cloud_pinned: all(isClass("release"), not(label("release-matrix"))),
-  cloud_only: { _tag: "Trigger", kind: "release-tag-push" },
-  local_only: { _tag: "UndeclaredClass" },
+  cloud_only: { trigger: "tag-push" },
+  local_only: { undeclared_class: true },
   cloud_pinned_kinds: ["cloudflare"],
   launcher_kinds: ["gha"],
   constraints: [
@@ -328,9 +330,84 @@ const placement: Profile["placement"] = {
   ],
 };
 
+const cap = (cls: string, max: number, min = 0) => ({ class: cls, max, min });
+
+/** The failure categories of mameko's closed outcome union; each concludes `failure` with its reason. */
+const FAILURE_CATEGORIES = [
+  "finding",
+  "infra",
+  "budget",
+  "capacity",
+  "deadline",
+  "halt",
+  "placement",
+  "unrecorded",
+  "config",
+  "policy",
+] as const;
+const CANCEL_CAUSES = [
+  "superseded",
+  "parent-ended",
+  "operator-cancel",
+  "pr-closed",
+  "merge-group-destroyed",
+] as const;
+
 export const profile: Profile = {
   policy_version: "flare-dispatch.v2.0",
   classes,
+  /**
+   * Per-class caps inside each Container pool's admission cap (FD-QOS-039); the admission caps themselves (`lean`
+   * 48, `agent` 8, `browser` 16, `release` 8, `control` 16) are the runtime adapter's configuration.
+   */
+  pools: [
+    { name: "lean", classes: [cap("batch", 4), cap("interactive", 8)] },
+    { name: "agent", classes: [cap("batch", 6), cap("interactive", 6), cap("required", 8, 2)] },
+    { name: "browser", classes: [cap("batch", 4), cap("interactive", 10), cap("required", 16, 2)] },
+    { name: "release", classes: [], reserved_for: "release" },
+    { name: "control", classes: [] },
+  ],
+  /** FD-QOS-041. FlareDispatch's specs name no total; 10 is a placeholder until the operator sets it. */
+  browser_sessions: {
+    cap: 10,
+    classes: [cap("batch", 1), cap("interactive", 2), cap("required", 10, 1)],
+  },
+  class_resolution: {
+    binding: "resolveClass",
+    inputs: [{ name: "protection-snapshot" }, { name: "policy-rules" }],
+    default_class: "batch",
+  },
+  supersession_key: "supersessionKey",
+  member_partition: true,
+  dedup_recipes: [
+    { name: "idempotency-key", binding: "idempotencyKeyRecipe" },
+    { name: "follow-on", binding: "followOnRecipe" },
+    { name: "commit", binding: "commitRecipe", total: true },
+  ],
+  outcome_mapping: {
+    surface_values: ["success", "failure", "cancelled", "neutral"],
+    silent_values: ["neutral"],
+    by_outcome: {
+      success: "success",
+      ...Object.fromEntries(FAILURE_CATEGORIES.map((c) => [c, "failure"])),
+      ...Object.fromEntries(CANCEL_CAUSES.map((c) => [c, "cancelled"])),
+      "skipped-listed": "neutral",
+      "skipped-other": "failure",
+      deferred: { opened: "failure", unopened: "none" },
+      expired: "failure",
+    },
+    surface_kind: "check.conclude",
+    not_applicable_details: [
+      "draft-pr",
+      "author-excluded",
+      "path-filter",
+      "not-configured",
+      "nothing-to-lint",
+      "every-job-skipped",
+      "empty-range",
+    ],
+    cancel_causes: ["pr-closed", "merge-group-destroyed"],
+  },
   reclaim_policy: {
     release: "restart",
     required: "restart",
@@ -343,7 +420,37 @@ export const profile: Profile = {
     ops_class: "required",
     undelivered_alarm: "undelivered-verdict",
   },
+  /** No kind is gated, so no key; FlareDispatch's specs name no expiry, and 1 day is a placeholder. */
+  gate_policy: { keys: [], max_expiry_seconds: 86_400 },
+  /** mameko's default list plus FlareDispatch's release surface. */
+  approval_floor: [
+    { program: "git", subcommands: ["push"] },
+    { program: "npm", subcommands: ["publish"] },
+    { program: "pnpm", subcommands: ["publish"] },
+    { program: "yarn", subcommands: ["publish"] },
+    { program: "cargo", subcommands: ["publish"] },
+    { program: "wrangler", subcommands: ["deploy"] },
+    { program: "terraform", subcommands: ["apply"] },
+    { program: "kubectl", subcommands: ["apply"] },
+    { program: "kubectl", subcommands: ["delete"] },
+    { program: "terraform", subcommands: ["destroy"] },
+    { program: "wrangler", subcommands: ["secret"] },
+    { program: "iptables", subcommands: [] },
+    { program: "nft", subcommands: [] },
+    { program: "pfctl", subcommands: [] },
+    { program: "networksetup", subcommands: [] },
+    { program: "wrangler", subcommands: ["d1"] },
+    { program: "gh", subcommands: ["release"] },
+  ],
+  egress_profiles: {
+    setup: { grants: ["package-registries", "git-remote"], other_hosts: "declared-methods" },
+    agent: { grants: ["model-gateway", "git-remote"], other_hosts: "read-only" },
+  },
+  signing_purposes: ["statement", "cache-entry"],
   placement,
+  cache_namespaces: "cacheNamespaces",
+  capacity: { grant: "capacityGrant" },
+  registration: { key_stores: ["secure-enclave"], attestation: "verifier" },
   host: {
     adapter: "host-cloudflare",
     features: ["cloudflare-containers", "durable-object-alarms"],
@@ -385,3 +492,10 @@ export const spendDefaults = {
   measured_reserve_days: 10,
   overhead_factor: 1.1,
 } as const;
+
+/**
+ * The reason kinds FlareDispatch declares beyond mameko's, each in one of mameko's failure categories. The
+ * result-acceptance check rejects a result with `provenance: <check>`, and the execution concludes `failure` with
+ * that reason (MAMEKO-LEASE-090). mameko's `ProfileSchema` has no reason-kind item, so the declaration lives here.
+ */
+export const reasonKinds = { provenance: "policy" } as const;

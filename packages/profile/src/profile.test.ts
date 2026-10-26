@@ -14,6 +14,7 @@ import {
   loadProfile,
   profile as committed,
   profileDocument,
+  reasonKinds,
   spendDefaults,
   staleAt,
   type PlacementRequest,
@@ -47,9 +48,78 @@ describe("load", () => {
     expect(Effect.runSync(loadProfile(delivered))).toEqual(committed);
   });
 
-  it("MAMEKO-PROF-001 rejects a document with a property the schema does not declare", () => {
-    const [r] = rejections({ ...committed, pools: [] });
-    expect(r?.item).toBe("document");
+  it("MAMEKO-PROF-001 rejects a property the schema does not declare, at the top or nested", () => {
+    expect(rejections({ ...committed, extra_item: [] }).map((r) => r.item)).toEqual(["document"]);
+    const nested = mutate((d) => ({
+      ...d,
+      classes: d.classes.map((c, i) => (i === 0 ? { ...c, colour: "red" } : c)),
+    }));
+    expect(rejections(nested).map((r) => r.item)).toEqual(["document"]);
+  });
+
+  it("MAMEKO-PROF-001 decodes the line and predicate encodings, rejecting malformed predicates", () => {
+    const withPinned = (cloud_pinned: unknown) =>
+      rejections({ ...committed, placement: { ...committed.placement, cloud_pinned } });
+    for (const bad of [{}, { class: "release", label: "x" }, { colour: "red" }, { not: {} }])
+      expect(withPinned(bad).map((r) => r.item)).toEqual(["document"]);
+    // `{ any: [] }` holds for nothing, and decodes.
+    const none = mutate((d) => ({
+      ...d,
+      placement: { ...d.placement, cloud_pinned: { any: [] } },
+    }));
+    expect(
+      Effect.runSync(loadProfile({ document: none, policyVersion: none.policy_version })).placement
+        .cloud_pinned,
+    ).toEqual({ any: [] });
+    const badLine: unknown = {
+      ...committed,
+      classes: committed.classes.map((c, i): unknown =>
+        i === 0 ? { ...c, line: "everything" } : c,
+      ),
+    };
+    expect(rejections(badLine).map((r) => r.item)).toEqual(["document"]);
+  });
+
+  it("FD-QOS-039 FD-QOS-041 pool and browser-session caps per class", () => {
+    expect(
+      profile.pools.map((p) => [p.name, p.classes.map((c) => [c.class, c.max, c.min])]),
+    ).toEqual([
+      [
+        "lean",
+        [
+          ["batch", 4, 0],
+          ["interactive", 8, 0],
+        ],
+      ],
+      [
+        "agent",
+        [
+          ["batch", 6, 0],
+          ["interactive", 6, 0],
+          ["required", 8, 2],
+        ],
+      ],
+      [
+        "browser",
+        [
+          ["batch", 4, 0],
+          ["interactive", 10, 0],
+          ["required", 16, 2],
+        ],
+      ],
+      ["release", []],
+      ["control", []],
+    ]);
+    expect(profile.pools.find((p) => p.name === "release")?.reserved_for).toBe("release");
+    expect(profile.browser_sessions.classes.map((c) => [c.class, c.max, c.min])).toEqual([
+      ["batch", 1, 0],
+      ["interactive", 2, 0],
+      ["required", 10, 1],
+    ]);
+  });
+
+  it("MAMEKO-LEASE-090 provenance is a reason kind in mameko's policy category", () => {
+    expect(reasonKinds).toEqual({ provenance: "policy" });
   });
 
   it("rejects a document whose policy version differs from the delivered one", () => {
@@ -223,7 +293,7 @@ describe("placement", () => {
   it("FD-QOS-016 no device for a fork pull request, a release tag push or release", () => {
     for (const c of CLASSES) {
       expect(kinds({ class: c, labels: ["untrusted-input"] })).not.toContain("device");
-      expect(kinds({ class: c, labels: [], trigger: "release-tag-push" })).not.toContain("device");
+      expect(kinds({ class: c, labels: [], trigger: "tag-push" })).not.toContain("device");
     }
     expect(kinds({ class: "release", labels: [] })).not.toContain("device");
   });
@@ -257,9 +327,7 @@ describe("placement", () => {
   it("FD-QOS-025 confidential-compute with a fork pull request, a tag push or release is unplaceable", () => {
     const cc = { confidentiality: "confidential-compute" } as const;
     expect(kinds({ class: "required", labels: ["untrusted-input"], ...cc })).toEqual([]);
-    expect(kinds({ class: "required", labels: [], trigger: "release-tag-push", ...cc })).toEqual(
-      [],
-    );
+    expect(kinds({ class: "required", labels: [], trigger: "tag-push", ...cc })).toEqual([]);
     expect(kinds({ class: "release", labels: [], ...cc })).toEqual([]);
     expect(kinds({ class: "required", labels: [], ...cc })).not.toEqual([]);
   });
@@ -267,9 +335,9 @@ describe("placement", () => {
   it("FD-QOS-085 a macOS release-matrix job keeps exactly gha at every class", () => {
     for (const c of CLASSES)
       expect(kinds({ class: c, labels: ["release-matrix"] })).toEqual(["gha"]);
-    expect(
-      kinds({ class: "release", labels: ["release-matrix"], trigger: "release-tag-push" }),
-    ).toEqual(["gha"]);
+    expect(kinds({ class: "release", labels: ["release-matrix"], trigger: "tag-push" })).toEqual([
+      "gha",
+    ]);
   });
 
   it("FD-QOS-085 the validator rejects a release matrix whose macOS jobs have no eligible kind", () => {
@@ -331,6 +399,22 @@ describe("check-run lifecycle kinds", () => {
   it("FD-GH-011 check.start is generated at every lease grant under cp:check:start:<epoch>", () => {
     expect(kind("check.start").on).toBe("lease-granted");
     expect(lifecycleKey("check.start", "lease-granted", 2)).toBe("cp:check:start:2");
+  });
+
+  it("FD-GH-012 check.progress is generated on progress and coalesces per execution", () => {
+    expect(kind("check.progress")).toMatchObject({
+      on: "progress",
+      payload: "checkProgressPayload",
+      coalesce_key: "executionProgressKey",
+      delivery_tier: "progress",
+    });
+    const doc = mutate((d) => {
+      const { coalesce_key: _, ...progress } = d.intent_kinds["check.progress"]!;
+      return { ...d, intent_kinds: { ...d.intent_kinds, "check.progress": progress } };
+    });
+    expect(rejections(doc).map((r) => r.path)).toEqual([
+      "intent_kinds.check.progress.coalesce_key",
+    ]);
   });
 
   it("FD-GH-051 check kinds apply in insertion order; start and progress void after the outcome", () => {

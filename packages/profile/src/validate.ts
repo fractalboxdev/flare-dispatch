@@ -2,13 +2,19 @@
 // the items this package declares. The validator is pure and reports every
 // rejection. The checks that need bindings registered in code, scope
 // manifests or run volumes belong to the coordinator's validator.
-import { validateRuntimeFeatures } from "@fractalboxdev/mameko-kernel";
-import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
-import { Effect, Schema } from "effect";
+import { validateRuntimeFeatures, type ConfidentialityMode } from "@fractalboxdev/mameko-kernel";
+import { decodeProfile, type ProfileDocument } from "@fractalboxdev/mameko-ports";
+import { Effect, Match } from "effect";
 import { eligibleKinds } from "./placement.ts";
-import { Profile, ProfileRejected, type PlacementShape, type Rejection } from "./schema.ts";
+import { ProfileRejected, type PlacementShape, type Profile, type Rejection } from "./schema.ts";
 
 const BUILT_IN_CLOUD_KINDS = ["cloudflare", "aws"] as const;
+const CONFIDENTIALITY_MODES: readonly ConfidentialityMode[] = [
+  "non-confidential",
+  "unclassified",
+  "confidential-model",
+  "confidential-compute",
+];
 
 const ranks = (p: Profile): Rejection[] => {
   const sorted = p.classes.map((c) => c.rank).sort((a, b) => a - b);
@@ -81,14 +87,17 @@ const intentKinds = (p: Profile): Rejection[] => {
         path: `${path}.on`,
         reason: "a run kind declares no lifecycle trigger",
       });
-    if (
-      (k.on === "admitted" || k.on === "lease-granted" || k.on === "accepted") &&
-      k.payload === undefined
-    )
+    if (k.on !== undefined && k.on !== "terminal" && k.payload === undefined)
       out.push({
         item: "intent_kinds",
         path: `${path}.payload`,
         reason: "lifecycle kind without a payload",
+      });
+    if ((k.on === "progress") !== (k.coalesce_key !== undefined))
+      out.push({
+        item: "intent_kinds",
+        path: `${path}.coalesce_key`,
+        reason: "a coalesce_key goes with on: progress, and only with it",
       });
     if (k.ops === true && k.applied_for !== "any")
       out.push({
@@ -132,13 +141,22 @@ const placement = (p: Profile): Rejection[] => {
     }));
   p.placement.required.forEach((shape, i) => {
     const labels = shape.labels === "any" ? [] : shape.labels;
+    const mode = CONFIDENTIALITY_MODES.find((m) => m === shape.confidentiality);
+    if (shape.confidentiality !== "any" && mode === undefined) {
+      out.push({
+        item: "placement",
+        path: `placement.required[${i}].confidentiality`,
+        reason: `unknown confidentiality mode ${shape.confidentiality}`,
+      });
+      return;
+    }
     for (const c of p.classes) {
       if (!matches(shape, c.name, labels)) continue;
       if (p.placement.unreachable.some((u) => matches(u, c.name, labels))) continue;
       const request = {
         class: c.name,
         labels,
-        ...(shape.confidentiality === "any" ? {} : { confidentiality: shape.confidentiality }),
+        ...(mode === undefined ? {} : { confidentiality: mode }),
         deviceLocalInput: shape.reachability === "device-local",
       };
       if (eligibleKinds(p, request).kinds.length === 0)
@@ -171,22 +189,22 @@ export const validateProfile = (p: Profile): readonly Rejection[] => [
   ...runtime(p),
 ];
 
-const decode = Schema.decodeUnknownEffect(Profile, { onExcessProperty: "error" });
-
 const rejected = (policyVersion: string, rejections: readonly Rejection[]) =>
   new ProfileRejected({ policy_version: policyVersion, rejections });
 
 /**
- * Decodes the document a configuration source delivers with excess properties rejected, then validates it. A
- * failing decode names its first failing path; a failing validation lists every rejection. The document's
- * `policy_version` must equal the envelope's. Nothing in the document takes effect before every check passes.
+ * Decodes the document a configuration source delivers through mameko's strict `decodeProfile`, then validates
+ * it. The document's `policy_version` must equal the envelope's. Nothing in the document takes effect before
+ * every check passes.
  */
 export const loadProfile = ({ document, policyVersion }: ProfileDocument) =>
   Effect.gen(function* () {
-    const doc = yield* decode(document).pipe(
-      Effect.mapError((e) =>
-        rejected(policyVersion, [{ item: "document", path: "", reason: e.message }]),
+    const doc = yield* Match.value(decodeProfile(document)).pipe(
+      Match.tag("Accepted", ({ profile }) => Effect.succeed(profile)),
+      Match.tag("Rejected", ({ error }) =>
+        Effect.fail(rejected(policyVersion, [{ item: "document", path: "", reason: error }])),
       ),
+      Match.exhaustive,
     );
     const rejections: readonly Rejection[] = [
       ...(doc.policy_version === policyVersion

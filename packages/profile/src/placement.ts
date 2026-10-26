@@ -38,17 +38,15 @@ export interface EligibleSet {
   readonly requiresPosture: PostureTier | null;
 }
 
-const holds = (p: Predicate, r: PlacementRequest): boolean =>
-  Match.value(p).pipe(
-    Match.tag("Class", ({ name }) => r.class === name),
-    Match.tag("Label", ({ name }) => r.labels.includes(name)),
-    Match.tag("Trigger", ({ kind }) => r.trigger === kind),
-    Match.tag("UndeclaredClass", () => r.declaresClass === false),
-    Match.tag("Not", ({ predicate }) => !holds(predicate, r)),
-    Match.tag("All", ({ predicates }) => predicates.every((q) => holds(q, r))),
-    Match.tag("Any", ({ predicates }) => predicates.some((q) => holds(q, r))),
-    Match.exhaustive,
-  );
+const holds = (p: Predicate, r: PlacementRequest): boolean => {
+  if ("class" in p) return r.class === p.class;
+  if ("label" in p) return r.labels.includes(p.label);
+  if ("trigger" in p) return r.trigger === p.trigger;
+  if ("undeclared_class" in p) return r.declaresClass === false;
+  if ("not" in p) return !holds(p.not, r);
+  if ("all" in p) return p.all.every((q) => holds(q, r));
+  return p.any.some((q) => holds(q, r));
+};
 
 export const classNamed = (profile: Profile, name: string): ClassEntry | undefined =>
   profile.classes.find((c) => c.name === name);

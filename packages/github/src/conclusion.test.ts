@@ -2,15 +2,7 @@ import { describe, expect, it } from "vitest";
 import { checkConclusion, NOT_APPLICABLE_DETAILS, type Verdict } from "./conclusion.ts";
 
 const CAPACITY = ["budget", "capacity", "deadline", "halt", "placement"] as const;
-const CATEGORIES = [
-  "finding",
-  "infra",
-  ...CAPACITY,
-  "unrecorded",
-  "config",
-  "policy",
-  "provenance",
-] as const;
+const CATEGORIES = ["finding", "infra", ...CAPACITY, "unrecorded", "config", "policy"] as const;
 
 describe("checkConclusion", () => {
   it("FD-GH-022 success concludes success", () => {
@@ -23,6 +15,16 @@ describe("checkConclusion", () => {
         conclusion: "failure",
         title: `${category}: x`,
       });
+  });
+
+  it("MAMEKO-LEASE-090 an acceptance-check rejection concludes failure with the reason kind it returns", () => {
+    expect(
+      checkConclusion({
+        _tag: "failure",
+        category: "policy",
+        reason: "provenance: statement digest",
+      }),
+    ).toEqual({ conclusion: "failure", title: "provenance: statement digest" });
   });
 
   it("FD-GH-024 a cancellation concludes cancelled with the cause", () => {

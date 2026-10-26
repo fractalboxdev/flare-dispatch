@@ -3,9 +3,10 @@
 // conclude update carries.
 import { Match, Schema } from "effect";
 
-// TODO(maintainer): mameko's pending `provenance` reason kind for acceptance-check rejections
-// (MAMEKO-LEASE-090) joins its closed outcome union; until it lands, `provenance` is a FlareDispatch
-// failure category that concludes `failure` like every other.
+/**
+ * mameko's closed failure categories. An acceptance-check rejection carries the reason kind the check returns,
+ * `provenance: <check>`, in category `policy` (MAMEKO-LEASE-090).
+ */
 export const FailureCategory = Schema.Literals([
   "finding",
   "infra",
@@ -17,7 +18,6 @@ export const FailureCategory = Schema.Literals([
   "unrecorded",
   "config",
   "policy",
-  "provenance",
 ]);
 
 /** The closed cancel causes of specs/run-model.md § Verdict partition. */

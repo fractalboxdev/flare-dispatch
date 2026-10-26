@@ -3,6 +3,7 @@ export {
   deviceSlotDefaults,
   profile,
   profileDocument,
+  reasonKinds,
   spendDefaults,
 } from "./document.ts";
 export {
@@ -18,11 +19,11 @@ export {
   type PlacementRequest,
 } from "./placement.ts";
 export {
-  ClassEntry,
-  IntentKindEntry,
-  Predicate,
-  Profile,
   ProfileRejected,
   Rejection,
+  type ClassEntry,
+  type IntentKindEntry,
+  type Predicate,
+  type Profile,
 } from "./schema.ts";
 export { loadProfile, validateProfile } from "./validate.ts";
