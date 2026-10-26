@@ -1,0 +1,22 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-github",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FlareDispatch's effect applier for the check-run lifecycle kinds and its applier rate limit keyed by GitHub App installation, on mameko's application ports.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalboxdev/mameko-ports": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "vitest": "^3.2.0"
+  }
+}
