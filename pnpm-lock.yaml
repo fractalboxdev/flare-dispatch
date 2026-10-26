@@ -267,6 +267,9 @@ importers:
 
   packages/profile:
     dependencies:
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
       '@fractalboxdev/mameko-kernel':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/kernel

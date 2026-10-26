@@ -360,6 +360,8 @@ export const profile: Profile = {
    * Per-class caps inside each Container pool's admission cap (FD-QOS-039); the admission caps themselves (`lean`
    * 48, `agent` 8, `browser` 16, `release` 8, `control` 16) are the runtime adapter's configuration.
    */
+  // TODO(maintainer): FD-QOS-039 keeps 2 slots for P0 and P1 together; a floor over a group of classes waits on
+  // mameko specs/profiles.md § Open items, so `min: 2` sits on `required` alone.
   pools: [
     { name: "lean", classes: [cap("batch", 4), cap("interactive", 8)] },
     { name: "agent", classes: [cap("batch", 6), cap("interactive", 6), cap("required", 8, 2)] },
@@ -455,7 +457,15 @@ export const profile: Profile = {
     adapter: "host-cloudflare",
     features: ["cloudflare-containers", "durable-object-alarms"],
   },
+  /**
+   * The result-acceptance check rejects a result with `provenance: <check>`, and the execution concludes `failure`
+   * with that reason (MAMEKO-LEASE-090).
+   */
+  reason_kinds: { provenance: "policy" },
 };
+
+/** The result-acceptance check's reason kinds, which MAMEKO-PROF-032 requires the profile to declare. */
+export const acceptanceReasonKinds: readonly string[] = ["provenance"];
 
 /** The profile as the configuration source delivers it: the document and its policy version. */
 export const profileDocument: ProfileDocument = {
@@ -492,10 +502,3 @@ export const spendDefaults = {
   measured_reserve_days: 10,
   overhead_factor: 1.1,
 } as const;
-
-/**
- * The reason kinds FlareDispatch declares beyond mameko's, each in one of mameko's failure categories. The
- * result-acceptance check rejects a result with `provenance: <check>`, and the execution concludes `failure` with
- * that reason (MAMEKO-LEASE-090). mameko's `ProfileSchema` has no reason-kind item, so the declaration lives here.
- */
-export const reasonKinds = { provenance: "policy" } as const;

@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fractalboxdev/mameko-coordinator": "workspace:*",
     "@fractalboxdev/mameko-kernel": "workspace:*",
     "@fractalboxdev/mameko-ports": "workspace:*",
     "effect": "4.0.6"

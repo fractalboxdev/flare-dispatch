@@ -3,7 +3,7 @@ export {
   deviceSlotDefaults,
   profile,
   profileDocument,
-  reasonKinds,
+  acceptanceReasonKinds,
   spendDefaults,
 } from "./document.ts";
 export {

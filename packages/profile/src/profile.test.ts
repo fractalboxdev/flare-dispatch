@@ -14,9 +14,10 @@ import {
   loadProfile,
   profile as committed,
   profileDocument,
-  reasonKinds,
+  acceptanceReasonKinds,
   spendDefaults,
   staleAt,
+  validateProfile,
   type PlacementRequest,
   type Profile,
 } from "./index.ts";
@@ -118,8 +119,28 @@ describe("load", () => {
     ]);
   });
 
-  it("MAMEKO-LEASE-090 provenance is a reason kind in mameko's policy category", () => {
-    expect(reasonKinds).toEqual({ provenance: "policy" });
+  it("MAMEKO-LEASE-090 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
+    expect(profile.reason_kinds).toEqual({ provenance: "policy" });
+    expect(acceptanceReasonKinds).toEqual(["provenance"]);
+  });
+
+  it("MAMEKO-PROF-032 every terminal reason and acceptance-check reason kind is built in or declared", () => {
+    expect(validateProfile(profile).filter((r) => r.item === "reason_kinds")).toEqual([]);
+    const undeclared = mutate(({ reason_kinds: _, ...d }) => d);
+    expect(rejections(undeclared)).toEqual([
+      {
+        item: "reason_kinds",
+        path: "reason_kinds.provenance",
+        reason: "undeclared reason kind provenance",
+      },
+    ]);
+    const redefined = mutate((d) => ({
+      ...d,
+      reason_kinds: { ...d.reason_kinds, budget: "policy" },
+    }));
+    expect(rejections(redefined).map((r) => r.reason)).toEqual([
+      "redefines the built-in reason kind budget",
+    ]);
   });
 
   it("rejects a document whose policy version differs from the delivered one", () => {

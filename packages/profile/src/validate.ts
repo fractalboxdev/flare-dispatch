@@ -3,8 +3,10 @@
 // rejection. The checks that need bindings registered in code, scope
 // manifests or run volumes belong to the coordinator's validator.
 import { validateRuntimeFeatures, type ConfidentialityMode } from "@fractalboxdev/mameko-kernel";
+import { validateReasonKinds } from "@fractalboxdev/mameko-coordinator";
 import { decodeProfile, type ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Match } from "effect";
+import { acceptanceReasonKinds } from "./document.ts";
 import { eligibleKinds } from "./placement.ts";
 import { ProfileRejected, type PlacementShape, type Profile, type Rejection } from "./schema.ts";
 
@@ -187,7 +189,21 @@ export const validateProfile = (p: Profile): readonly Rejection[] => [
   ...intentKinds(p),
   ...placement(p),
   ...runtime(p),
+  ...reasonKinds(p),
 ];
+
+/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-032). */
+function reasonKinds(p: Profile): Rejection[] {
+  return validateReasonKinds({
+    declared: p.reason_kinds ?? {},
+    terminalReasons: Object.fromEntries(
+      p.classes.flatMap((c) =>
+        typeof c.terminal_outcome === "object" ? [[c.name, c.terminal_outcome.reason]] : [],
+      ),
+    ),
+    acceptanceKinds: acceptanceReasonKinds,
+  }).map(({ path, reason }) => ({ item: "reason_kinds", path, reason }));
+}
 
 const rejected = (policyVersion: string, rejections: readonly Rejection[]) =>
   new ProfileRejected({ policy_version: policyVersion, rejections });
