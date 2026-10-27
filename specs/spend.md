@@ -15,7 +15,7 @@ The decision behind the meter is mameko's [ADR-0008](https://github.com/fractalb
 
 ## Model
 
-The monthly budget `B` counts metered micro-USD: list rate × the overhead factor ([MAMEKO-SPD-011](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/spend.md)). The meter prices a `cloudflare` container at its provisioned list rate, an upper bound on what the platform bills, so `B` admits less billed spend than its figure.
+The monthly budget `B` counts metered micro-USD: list rate × the overhead factor ([MAMEKO-SPD-011](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/spend.md)). The meter prices a `cloudflare` container at its provisioned list rate, an upper bound on what the platform bills, so `B` admits less billed spend than its figure. Admission decides on metered cost because billed usage is reported only after the work runs; billed usage measures the meter's settle error and sets no line.
 
 FlareDispatch's class lines, in the terms of mameko's § Budget, reserves and lines:
 
@@ -45,5 +45,4 @@ A check re-run that exceeds its retry family allowance ([MAMEKO-SPD-031](https:/
 
 ## Open items
 
-- TODO(operator): decide whether `B` counts metered or billed dollars; the meter prices `cloudflare` containers at provisioned list rate, which reads several times the billed amount.
 - TODO(maintainer): the firm holds of `required` ([MAMEKO-SPD-041](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/spend.md) to [MAMEKO-SPD-045](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/spend.md)) count a queued cloud hold against burn headroom at one rate per hold; which rate applies when the eligible kinds differ in rate waits on mameko's rule ([spend.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/spend.md) § Open items), which must be settled before FlareDispatch's phase 3 opens.
