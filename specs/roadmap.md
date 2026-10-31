@@ -16,12 +16,12 @@ Requirement counts and ID ranges come from the requirement lines under `specs/`;
 
 | Phase | Goal | Requirements | Waits on | Gate to the next phase |
 | --- | --- | --- | --- | --- |
-| 0 | Measure the bet: the cloud path on `host-cloudflare` with the profile, the GitHub appliers and the installation rate limit, so no capacity path concludes `neutral`, and warm runs on an owned device measured against the best cloud setup | 516 | mameko phase 0 | A warm run reaches its verdict at least 30% faster than the best cloud setup |
-| 1 | Batch on owned devices: mameko's device bundle and FlareDispatch's device extension, capacity leases and the local scheduler; only `batch` runs locally | 51 | mameko phase 1 | Owned devices take most eligible `batch` executions for 14 days with no verdict audit disagreement |
+| 0 | Measure the bet: the cloud path on `host-cloudflare` with the profile, the GitHub appliers and the installation rate limit, so no capacity path concludes `neutral`, and warm runs on an owned device measured against the best cloud setup | 520 | mameko phase 0 | A warm run reaches its verdict at least 30% faster than the best cloud setup |
+| 1 | Batch on owned devices: mameko's device bundle and FlareDispatch's device extension, capacity leases and the local scheduler; only `batch` runs locally | 56 | mameko phase 1 | Owned devices take most eligible `batch` executions for 14 days with no verdict audit disagreement |
 | 2 | Interactive with cloud placement: `interactive` runs local first with a 300 s claim deadline, egress profiles, staged writeback and rehearsal reuse | 56 | mameko phase 2 | `interactive` p95 time to verdict is no worse than cloud-only |
 | 3 | Required checks: `required` runs local first with a 60 s claim deadline, firm cloud holds, preemption at step boundaries and the AWS launcher as a floor | 26 | mameko phase 3; the firm-hold rate | `required` p95 time to verdict is within 60 s of cloud-only |
 | 4 | Harden and generalise: provenance tiers, confidential mode with local models, macOS VM jobs, the `gha` launcher and device-aware placement | 97 | mameko phase 4; the DSSE signing purpose | — |
-| All | | 746 | | |
+| All | | 755 | | |
 
 ```mermaid
 stateDiagram-v2
@@ -134,11 +134,11 @@ flowchart LR
 
 **Waits on.** mameko phase 0: the kernels, the DO-SQLite engine backend, the `host-cloudflare` stores, admission, the outbox and the spend holds.
 
-**Closes** 516 requirements:
+**Closes** 520 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
-| `ARCH` | 7 | 001–005, 007, 019 |
+| `ARCH` | 9 | 001–005, 007, 019, 039–040 |
 | `CACHE` | 71 | 001–003, 011–012, 015–017, 019–020, 022–024, 026, 028–029, 031–035, 037–042, 044–059, 061–064, 066–079, 081–087, 089–091 |
 | `GH` | 63 | 001–018, 020–029, 031, 045–048, 052, 056–063, 065–068, 075–076, 078–092 |
 | `INT` | 46 | 001, 003–004, 009–011, 015–036, 039–043, 049–058, 064–065, 067 |
@@ -147,7 +147,7 @@ flowchart LR
 | `OPS` | 59 | 001–017, 019–031, 036, 038–046, 050, 053, 056–057, 064, 067–070, 072–078, 083, 088–089 |
 | `PROF` | 46 | 001–024, 026–030, 032–034, 037, 044–048, 054–058, 060, 062–063 |
 | `PROV` | 2 | 049–050 |
-| `RUN` | 4 | 008, 017, 054, 057 |
+| `RUN` | 6 | 008, 017, 054, 057, 061–062 |
 | `AGT` | 28 | 002–003, 008–009, 011–014, 016–028, 034–035, 037–039, 041–042 |
 | `GATE` | 79 | 001–008, 010–015, 017–080, 082 |
 | `SPD` | 4 | 032, 057–058, 060 |
@@ -166,7 +166,7 @@ flowchart LR
 
 **Waits on.** mameko phase 1: the key helper, sandbox isolation with its probe, deny-all egress, per-lease credentials, capacity leases and the local scheduler on `host-cloudflare`.
 
-**Closes** 51 requirements:
+**Closes** 56 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
@@ -175,11 +175,12 @@ flowchart LR
 | `EXEC` | 2 | 007, 059 |
 | `GH` | 1 | 019 |
 | `INT` | 1 | 061 |
-| `IFC` | 8 | 063, 069, 075, 077–081 |
+| `IFC` | 12 | 063, 069, 075, 077–081, 085–088 |
 | `LOCAL` | 9 | 018–020, 038, 055, 067, 071–072, 075 |
 | `OPS` | 1 | 071 |
 | `PROF` | 7 | 035–036, 043, 049–052 |
 | `PROV` | 2 | 069–070 |
+| `RUN` | 1 | 063 |
 | `VER` | 1 | 032 |
 
 **Gate 1.**
