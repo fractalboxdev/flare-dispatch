@@ -6,7 +6,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "typecheck": "pnpm -r --filter \"./packages/*\" --filter \"./apps/dispatcher\" --filter \"./apps/substrate\" --filter \"./runs\" exec tsc --noEmit",
+    "typecheck": "pnpm -r --filter \"./packages/*\" --filter \"./apps/dispatcher\" --filter \"./apps/substrate\" --filter \"./apps/control-plane\" --filter \"./runs\" exec tsc --noEmit",
+    "dogfood": "node --experimental-strip-types --no-warnings packages/dogfood/src/main.ts",
     "docs:reference": "typedoc --options apps/docs/typedoc.json",
     "lint": "oxlint",
     "test": "vitest run --passWithNoTests",
