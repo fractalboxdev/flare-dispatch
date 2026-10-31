@@ -3,8 +3,8 @@ import { docsLoader } from "@astrojs/starlight/loaders";
 import { docsSchema } from "@astrojs/starlight/schema";
 import { pageFrontmatter, pageId } from "./lib/pages.mjs";
 
-// The docs collection is Starlight's glob over src/content/docs/, whose entries are
-// relative symbolic links into the repository. Repository Markdown carries no front
+// The docs collection is Starlight's glob over src/content/docs/, whose `docs` entry is a
+// relative symbolic link to specs/. Repository Markdown carries no front
 // matter: its title comes from the first `# heading` and its description from the
 // first paragraph, and README.md becomes the index of its directory.
 const loader = docsLoader({ generateId: pageId });
