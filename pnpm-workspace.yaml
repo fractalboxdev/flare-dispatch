@@ -3,6 +3,7 @@ packages:
   - "apps/dispatcher"
   - "apps/dashboard"
   - "apps/substrate"
+  - "apps/control-plane"
   - "apps/docs"
   - "runs"
   # The shared coordination library, vendored as a git submodule. Its packages
