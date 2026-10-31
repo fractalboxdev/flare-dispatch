@@ -4,7 +4,7 @@ FlareDispatch runs mameko's spend meter: holds, settle, nested class lines, burn
 
 ## Scope
 
-This file covers the re-run line, the spend view on FlareDispatch's API, the requester attribution FlareDispatch supplies, and the open items on the budget unit and firm holds. It depends on:
+This file covers the re-run line, the spend view on FlareDispatch's API, the requester attribution FlareDispatch supplies, and the open item on firm holds. It depends on:
 
 - [profile.md](profile.md) for the budget, reserves, lines, burn lanes, look-ahead, warn ratio, thresholds and rate card;
 - [intake.md](intake.md) for check re-runs and their families;
@@ -15,16 +15,7 @@ The decision behind the meter is mameko's [ADR-0008](https://github.com/fractalb
 
 ## Model
 
-The monthly budget `B` counts metered micro-USD: list rate × the overhead factor ([MAMEKO-SPD-011](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/spend.md)). The meter prices a `cloudflare` container at its provisioned list rate, an upper bound on what the platform bills, so `B` admits less billed spend than its figure. Admission decides on metered cost because billed usage is reported only after the work runs; billed usage measures the meter's settle error and sets no line.
-
-FlareDispatch's class lines, in the terms of mameko's § Budget, reserves and lines:
-
-| Class | Line on committed spend | Reserve between this line and the next lower one |
-| --- | --- | --- |
-| `release` (P0) | `B` | `R(release)`, the release reserve |
-| `required` (P1) and ops runs | `B − R(release)` | `R_m`, the measured reserve, with `R_ops` inside it |
-| `interactive` (P2) | `B − R(release) − R_m` | 0 |
-| `batch` (P3) | 0.45 × `G`, with the floor `φ` = 0.1 × `G` | — |
+`B` is metered, not billed, as mameko's [§ Budget, reserves and lines](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/spend.md#budget-reserves-and-lines) defines it, and FlareDispatch's class lines are in [profile.md](profile.md) § Spend configuration.
 
 A check re-run that exceeds its retry family allowance ([MAMEKO-SPD-031](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/spend.md)) admits against the `interactive` line and never draws on `R(release)` or `R_m`.
 

@@ -54,7 +54,7 @@ Each term has one meaning in every file. A file that needs a new term adds it he
 | **Verdict** | An execution's outcome as FlareDispatch reports it: `success`, `failure(reason)`, `cancelled(cause)` or `skipped(not-applicable: <detail>)`. |
 | **Not-applicable detail** | The detail of a `skipped` verdict, from the closed set the profile lists. Only a skip with a listed detail concludes `neutral`. |
 | **Conclusion** | The GitHub check-run conclusion `checkConclusion` derives from a verdict. |
-| **Check family** | All attempts of one run's check on one commit. They share a check name; each re-run is a new execution with dedup suffix `:attempt-<n>`. |
+| **Check family** | All attempts of one run's check on one commit. They share a check name; each re-run is a new execution with dedup suffix `:attempt-<n>`. This number counts executions of the family; the `attempt` of a run payload counts earlier leases of one execution. |
 | **InstallationQuota** | The Durable Object, one per GitHub App installation, that implements mameko's applier rate limit for that installation: it records each response's rate-limit headers and grants or defers one permit per applier call. |
 | **Staged write** | The file changes an execution proposes: a manifest (branch, base commit, message, pull-request fields, entries of path, mode and blob digest) plus blobs in the artifact store. It reaches GitHub only through the `pr.propose` applier after the staged-write gate accepts it. |
 | **Staged-write gate** | The pure function `stagedWriteGate(manifest, writebackSpec, modelAuthored)` that the `pr.propose` applier runs before any GitHub call. It checks paths, the deny list, sensitive paths, the allowlist, sizes, modes, branch and the secret and URL scans. |
