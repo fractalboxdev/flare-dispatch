@@ -331,7 +331,7 @@ flowchart LR
 
 ## Open items
 
-- TODO(operator): decide whether FD-PROV-028, FD-PROV-029 and FD-PROV-031 move to phase 1. The profile requires the attestation verifier from phase 1 (FD-PROF-052), `registerDevice` refuses every device while no verifier is supplied, and mameko rejects a control plane that lacks the Layer ([MAMEKO-HOST-043](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md)); these requirements sit in phase 4.
+- TODO(operator): decide whether FD-PROV-028, FD-PROV-029 and FD-PROV-031 move to phase 1. The `production` profile requires the attestation verifier from phase 1 (FD-PROF-052), `registerDevice` refuses every device of that deployment while no verifier is supplied, and mameko rejects a control plane that lacks the Layer ([MAMEKO-HOST-043](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md)); these requirements sit in phase 4.
 - TODO(maintainer): `code_hash` names the digest of the device executor build in mameko's registry and the key helper's code-signing hash in check 11 of § Acceptance; settle which one the row holds before phase 4.
 - TODO(operator): name the external witness for the private log (FD-PROV-039, FD-PROV-055).
 - TODO(maintainer): decide whether the egress proxy installs a TLS interception CA inside the job sandbox; without one, HTTPS dependencies carry `lockfile` digests only (FD-PROV-006).

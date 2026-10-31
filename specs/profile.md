@@ -19,14 +19,14 @@ The decisions behind the mechanisms are mameko's [ADR-0007](https://github.com/f
 
 ### The profile document
 
-`ConfigurationSourceLive` in `packages/profile` implements mameko's configuration source port: it delivers one document, the committed `profile` value of `document.ts`, under the policy version `flare-dispatch.v2.0`. `loadProfile` decodes it under mameko's `Profile` schema and runs the profile validator before any value takes effect ([MAMEKO-PROF-003](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/profiles.md)). The spend amounts and the per-device slot defaults sit beside the document in `spendDefaults` and `deviceSlotDefaults`, because mameko reads spend amounts from the spend configuration and slot counts from the executor's registry row.
+`configurationSourceLayer(deployment)` in `packages/profile` implements mameko's configuration source port: it delivers one document, `buildProfile(deployment)`, at that document's policy version, and `ConfigurationSourceLive` is that Layer for `production`, the default deployment. `development` is one operator's deploy whose device holds the key helper's software key; `buildProfile` differs between the two deployments only in `policy_version` and `registration`. `loadProfile(loader, document)` decodes the document under mameko's `Profile` schema and runs the profile validator through mameko's `ProfileLoader` before any value takes effect ([MAMEKO-PROF-003](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/profiles.md)). The spend amounts, the per-device slot defaults and the pool admission caps sit beside the document in `spendDefaults`, `deviceSlotDefaults` and `poolAdmissionCaps`, because mameko reads spend amounts from the spend configuration, slot counts from the executor's registry row and admission caps from the runtime adapter's configuration.
 
 | Item | Value |
 | --- | --- |
-| `policy_version` | `flare-dispatch.v2.0` |
+| `policy_version` | `flare-dispatch.v2.0`; `flare-dispatch.v2.0-dev` for `development`, because mameko's loader rejects one version carrying two contents |
 | Tenant scope | A GitHub repository, `<owner>/<repo>`; an `exec.lease` names it as the scope id and carries the commit SHA in its inputs, with the lease fields of FD-PROF-063 |
 | `host` | `adapter: host-cloudflare`, `features: [cloudflare-containers, durable-object-alarms]` |
-| `registration` | `key_stores: [secure-enclave]`, `attestation: verifier` |
+| `registration` | `key_stores: [secure-enclave]`, `attestation: verifier`; `key_stores: [software]`, `attestation: none` for `development` |
 | `cache_namespaces` | Binding `cacheNamespaces` ([cache-artifacts.md](cache-artifacts.md)) |
 | `capacity` | `grant: capacityGrant`; `isolation` absent, so `vm` |
 | `member_partition` | `true` |
@@ -113,7 +113,7 @@ Besides the class, `resolveClass` returns the label `untrusted-input` for a requ
 
 ### Pools and browser sessions
 
-Each Container pool's admission cap is the runtime adapter's configuration, strictly below its Container class's `max_instances`. The profile's `pools` partitions it by class.
+Each Container pool's admission cap is the runtime adapter's configuration, which `poolAdmissionCaps` holds, strictly below its Container class's `max_instances`. The profile's `pools` partitions it by class.
 
 | Pool | Admission cap | `batch` at most | `interactive` at most | `required` | Other |
 | --- | --- | --- | --- | --- | --- |
@@ -278,8 +278,8 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f3
 
 ### Profile document
 
-- **FD-PROF-001** · phase 0 · `V-UNIT` — FlareDispatch's configuration source, the implementation of mameko's configuration source port ([MAMEKO-PROF-002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/profiles.md)), must deliver the committed profile of `packages/profile/src/document.ts` as one document under policy version `flare-dispatch.v2.0`, holding the values this file states.
-- **FD-PROF-002** · phase 0 · `V-UNIT` — FlareDispatch's CI must compare the profile of `document.ts` with mameko's § The reference CI profile at the pinned mameko commit, and must fail on any difference that § Differences from the reference CI profile does not list.
+- **FD-PROF-001** · phase 0 · `V-UNIT` — FlareDispatch's configuration source, the implementation of mameko's configuration source port ([MAMEKO-PROF-002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/profiles.md)), must deliver `buildProfile(deployment)` of `packages/profile/src/document.ts` as one document at its policy version, holding the values this file states, with `production` as the deployment unless the composition names `development`.
+- **FD-PROF-002** · phase 0 · `V-UNIT` — FlareDispatch's CI must compare the `production` profile of `document.ts` with mameko's § The reference CI profile at the pinned mameko commit, and must fail on any difference that § Differences from the reference CI profile does not list.
 - **FD-PROF-063** · phase 0 · `V-UNIT` — When the control plane grants an execution lease, it must supply in the application's lease fields the execution's repository as `<owner>/<repo>` for the scope id, the commit SHA the execution verifies among the inputs, the run registry's run version and workflow version, and the request context admission recorded ([MAMEKO-PROTO-032](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md), [MAMEKO-PROTO-083](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md)).
 
 ### Class catalogue
@@ -322,7 +322,7 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f3
 
 ### Pools and browser sessions
 
-- **FD-PROF-032** · phase 0 · `V-UNIT` `V-CONF` — The profile's `pools` must partition the Container pools as § Pools and browser sessions states: `lean` with `batch` at most 4 and `interactive` at most 8; `agent` with `batch` at most 6, `interactive` at most 6 and `required` at most 8 with 2 kept; `browser` with `batch` at most 4, `interactive` at most 10 and `required` at most 16 with 2 kept; `release` reserved for `release`; and `control` with no class cap ([MAMEKO-ADM-046](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/admission-qos.md)).
+- **FD-PROF-032** · phase 0 · `V-UNIT` `V-CONF` — The profile's `pools` must partition the Container pools as § Pools and browser sessions states: `lean` with `batch` at most 4 and `interactive` at most 8; `agent` with `batch` at most 6, `interactive` at most 6 and `required` at most 8 with 2 kept; `browser` with `batch` at most 4, `interactive` at most 10 and `required` at most 16 with 2 kept; `release` reserved for `release`; and `control` with no class cap, and `poolAdmissionCaps` must declare every one of those pools with the admission cap the profile validator reads ([MAMEKO-ADM-046](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/admission-qos.md), [MAMEKO-PROF-030](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/profiles.md)).
 - **FD-PROF-033** · phase 0 · `V-DEPLOY` — The deploy drift check must fail a deploy in which a pool's admission cap (`lean` 48, `agent` 8, `browser` 16, `release` 8, `control` 16 by default) is at or above its Container class's `max_instances` ([MAMEKO-ADM-047](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/admission-qos.md)).
 - **FD-PROF-034** · phase 0 · `V-UNIT` `V-CONF` — The profile must cap browser sessions at 10 in total, `batch` at most 1, `interactive` at most 2 and `required` at most 10 with 1 kept ([MAMEKO-ADM-048](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/admission-qos.md)).
 
@@ -357,7 +357,7 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f3
 - **FD-PROF-049** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — The profile's approval floor must hold mameko's default list plus `wrangler d1` and `gh release` ([MAMEKO-ISO-046](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/isolation-egress.md)).
 - **FD-PROF-050** · phase 1 · `V-UNIT` — The profile's egress profiles must grant `setup` the `package-registries` and `git-remote` grants with other hosts for their declared methods, and `agent` the `model-gateway` and `git-remote` grants with every other granted host read-only.
 - **FD-PROF-051** · phase 1 · `V-UNIT` — The profile must add the signing purposes `statement` and `cache-entry` and no other.
-- **FD-PROF-052** · phase 1 · `V-UNIT` `V-CONF` — The profile must admit only the `secure-enclave` key store at device registration, which excludes the `tpm` and `software` key stores, and must require the attestation verifier ([MAMEKO-LEASE-088](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
+- **FD-PROF-052** · phase 1 · `V-UNIT` `V-CONF` — Where the deployment is `production`, the profile must admit only the `secure-enclave` key store at device registration and must require the attestation verifier, and where the deployment is `development`, the profile must admit only the `software` key store with `attestation: none` ([MAMEKO-LEASE-088](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
 - **FD-PROF-062** · phase 0 · `V-UNIT` `V-CONF` — The profile must name `cacheNamespaces` as the `cache_namespaces` binding, which assigns cache namespaces per executor kind at lease grant ([MAMEKO-LEASE-085](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md), [cache-artifacts.md](cache-artifacts.md)), and `capacityGrant` as the `capacity.grant` binding, which gives each capacity lease its cache namespaces ([MAMEKO-LEASE-086](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
 - **FD-PROF-053** · phase 4 · `V-UNIT` — The profile must declare the reason kind `provenance` in category `policy`, so that a result the result-acceptance check rejects concludes `failure` with reason `provenance: <check>` ([MAMEKO-PROF-032](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/profiles.md), [MAMEKO-LEASE-090](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
 
