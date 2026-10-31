@@ -38,6 +38,7 @@ export const bindings: ValidationContext["bindings"] = {
 };
 
 export const validationContext: ValidationContext = {
+  deployment: "production",
   bindings,
   emittedKinds: Object.keys(profile.intent_kinds),
   runs: [],

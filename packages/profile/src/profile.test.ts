@@ -4,8 +4,10 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { bindings, validationContext } from "./context.test-support.ts";
 import {
+  buildProfile,
   classNamed,
   cloudEligibleAt,
+  configurationSourceLayer,
   ConfigurationSourceLive,
   deliveryOrder,
   deviceSlotDefaults,
@@ -17,6 +19,7 @@ import {
   poolAdmissionCaps,
   profile as committed,
   profileDocument,
+  profileDocumentFor,
   profileLoader,
   acceptanceReasonKinds,
   spendDefaults,
@@ -610,5 +613,57 @@ describe("check-run lifecycle kinds", () => {
     ).toEqual(["canary.push", "delivery.redeliver"]);
     expect(profile.delivery.ops_class).toBe("required");
     expect(profile.delivery.undelivered_alarm).toBe("undelivered-verdict");
+  });
+});
+
+describe("deployments", () => {
+  const development = profileDocumentFor("development");
+  const developmentContext: ValidationContext = { ...validationContext, deployment: "development" };
+
+  it("FD-PROF-052 production admits only attested secure-enclave keys", () => {
+    expect(profile.registration).toEqual({
+      key_stores: ["secure-enclave"],
+      attestation: "verifier",
+    });
+  });
+
+  it("a development deploy admits the key helper's software key without attestation", () => {
+    const accepted = Effect.runSync(loadProfile(loader(developmentContext), development));
+    expect(accepted.registration).toEqual({ key_stores: ["software"], attestation: "none" });
+  });
+
+  it("the development build differs from production only in version and registration", () => {
+    const { policy_version: _pv, registration: _pr, ...prod } = buildProfile("production");
+    const { policy_version: _dv, registration: _dr, ...dev } = buildProfile("development");
+    expect(dev).toEqual(prod);
+    expect(development.policyVersion).not.toBe(profileDocument.policyVersion);
+  });
+
+  it("FD-PROF-052 a production deployment rejects the development document", () => {
+    expect(rejections(development.document, development.policyVersion)).toEqual([
+      {
+        item: "registration",
+        path: "registration.key_stores",
+        reason: "a production deployment admits only secure-enclave keys",
+      },
+      {
+        item: "registration",
+        path: "registration.attestation",
+        reason: "a production deployment requires the attestation verifier",
+      },
+    ]);
+  });
+
+  it("the configuration source delivers the deployment's document", () => {
+    const delivered = Effect.runSync(
+      Effect.provide(
+        Effect.gen(function* () {
+          const source = yield* ConfigurationSource;
+          return yield* source.load;
+        }),
+        configurationSourceLayer("development"),
+      ),
+    );
+    expect(delivered).toEqual(development);
   });
 });

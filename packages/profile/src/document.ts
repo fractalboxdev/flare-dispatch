@@ -11,6 +11,23 @@ import { ConfigurationSource, type ProfileDocument } from "@fractalboxdev/mameko
 import { Effect, Layer } from "effect";
 import type { Predicate, Profile } from "./schema.ts";
 
+/**
+ * Where the profile runs. `production` is the default everywhere. `development` is a single operator's deploy whose
+ * device holds the key helper's software key, so its registration admits that key without attestation.
+ */
+export type Deployment = "production" | "development";
+
+const registrations: { readonly [D in Deployment]: Profile["registration"] } = {
+  production: { key_stores: ["secure-enclave"], attestation: "verifier" },
+  development: { key_stores: ["software"], attestation: "none" },
+};
+
+/** Each deployment has its own version: mameko's loader rejects one version carrying two contents. */
+const policyVersions: { readonly [D in Deployment]: string } = {
+  production: "flare-dispatch.v2.0",
+  development: "flare-dispatch.v2.0-dev",
+};
+
 /** P0 to P3. `cloud-pinned` keeps `release` off devices; `required` is the one firm class. */
 const classes: Profile["classes"] = [
   {
@@ -350,8 +367,9 @@ export const poolAdmissionCaps: Readonly<Record<string, { readonly admission_cap
   control: { admission_cap: 16 },
 };
 
-export const profile: Profile = {
-  policy_version: "flare-dispatch.v2.0",
+/** The profile for a deployment; only the policy version and `registration` differ between deployments. */
+export const buildProfile = (deployment: Deployment): Profile => ({
+  policy_version: policyVersions[deployment],
   classes,
   /** Per-class caps inside each Container pool's admission cap (FD-PROF-032). */
   // TODO(maintainer): FD-PROF-032 keeps 2 slots for P0 and P1 together; a floor over a group of classes waits on
@@ -447,7 +465,7 @@ export const profile: Profile = {
   placement,
   cache_namespaces: "cacheNamespaces",
   capacity: { grant: "capacityGrant" },
-  registration: { key_stores: ["secure-enclave"], attestation: "verifier" },
+  registration: registrations[deployment],
   host: {
     adapter: "host-cloudflare",
     features: ["cloudflare-containers", "durable-object-alarms"],
@@ -457,21 +475,28 @@ export const profile: Profile = {
    * with that reason (MAMEKO-LEASE-090).
    */
   reason_kinds: { provenance: "policy" },
-};
+});
+
+/** The committed production profile. */
+export const profile: Profile = buildProfile("production");
 
 /** The result-acceptance check's reason kinds, which MAMEKO-PROF-032 requires the profile to declare. */
 export const acceptanceReasonKinds: readonly string[] = ["provenance"];
 
 /** The profile as the configuration source delivers it: the document and its policy version. */
-export const profileDocument: ProfileDocument = {
-  document: profile,
-  policyVersion: profile.policy_version,
+export const profileDocumentFor = (deployment: Deployment): ProfileDocument => {
+  const document = buildProfile(deployment);
+  return { document, policyVersion: document.policy_version };
 };
 
-/** FlareDispatch's configuration source: the committed profile, one document at one policy version. */
-export const ConfigurationSourceLive = Layer.succeed(ConfigurationSource, {
-  load: Effect.succeed(profileDocument),
-});
+export const profileDocument: ProfileDocument = profileDocumentFor("production");
+
+/** The configuration source of a deployment: one document at one policy version. */
+export const configurationSourceLayer = (deployment: Deployment) =>
+  Layer.succeed(ConfigurationSource, { load: Effect.succeed(profileDocumentFor(deployment)) });
+
+/** FlareDispatch's configuration source: the committed production profile. */
+export const ConfigurationSourceLive = configurationSourceLayer("production");
 
 /**
  * Per-device slot defaults for an 8-slot share. mameko keeps these on the executor's registry row, not in the

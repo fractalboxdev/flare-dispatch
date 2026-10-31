@@ -16,7 +16,7 @@ import {
 import { classLines, type ConfidentialityMode } from "@fractalboxdev/mameko-kernel";
 import { decodeProfile, type ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Match, Schema } from "effect";
-import { acceptanceReasonKinds, type SpendConfig } from "./document.ts";
+import { acceptanceReasonKinds, type Deployment, type SpendConfig } from "./document.ts";
 import { eligibleKinds } from "./placement.ts";
 import { ProfileRejected, type PlacementShape, type Profile, type Rejection } from "./schema.ts";
 
@@ -31,6 +31,8 @@ const PPM = 1_000_000;
 
 /** What the validator reads beside the document: the registered code and the deployment's configuration. */
 export interface ValidationContext {
+  /** Which registration values the deployment accepts. */
+  readonly deployment: Deployment;
   /** The bindings and appliers registered in code. */
   readonly bindings: Bindings;
   /** The kinds a registered run may emit or the control plane generates. */
@@ -180,6 +182,32 @@ const placement = (p: Profile): Rejection[] => {
   return out;
 };
 
+/** A production deployment keeps FD-PROF-052: a key from the enclave, accepted by the attestation verifier. */
+const registration = (p: Profile, deployment: Deployment): Rejection[] => {
+  if (deployment === "development") return [];
+  const stores = p.registration.key_stores;
+  return [
+    ...(stores.length === 1 && stores[0] === "secure-enclave"
+      ? []
+      : [
+          {
+            item: "registration",
+            path: "registration.key_stores",
+            reason: "a production deployment admits only secure-enclave keys",
+          },
+        ]),
+    ...(p.registration.attestation === "verifier"
+      ? []
+      : [
+          {
+            item: "registration",
+            path: "registration.attestation",
+            reason: "a production deployment requires the attestation verifier",
+          },
+        ]),
+  ];
+};
+
 const context = (p: Profile, c: ValidationContext): Rejection[] =>
   validateProfileContext({
     adapter: p.host.adapter,
@@ -223,6 +251,7 @@ export const validateProfile = (p: Profile, c: ValidationContext): readonly Reje
   ...intentKinds(p),
   ...placement(p),
   ...reasonKinds(p),
+  ...registration(p, c.deployment),
 ];
 
 /**

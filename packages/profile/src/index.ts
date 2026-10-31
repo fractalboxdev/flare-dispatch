@@ -1,11 +1,15 @@
 export {
   acceptanceReasonKinds,
+  buildProfile,
+  configurationSourceLayer,
   ConfigurationSourceLive,
   deviceSlotDefaults,
   poolAdmissionCaps,
   profile,
   profileDocument,
+  profileDocumentFor,
   spendDefaults,
+  type Deployment,
   type SpendConfig,
 } from "./document.ts";
 export {
