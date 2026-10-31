@@ -44,7 +44,7 @@ The GitHub Actions launcher is FlareDispatch's implementation of mameko's launch
 | --- | --- | --- |
 | `start(lease)` | One `workflow_dispatch` run of the runner workflow in the runner repository the operator overlay names, with the execution id, the epoch and the minutes until `deadline_at` as its only inputs | FD-EXEC-085 to FD-EXEC-087 |
 | `cancel(execution_id, epoch)` | Cancels that workflow run through the Actions API | FD-EXEC-092 |
-| `verify(identity claims)` | Accepts the runner job's GitHub Actions OIDC token for the one launch it names | FD-EXEC-088 to FD-EXEC-090, [executor-protocol.md](executor-protocol.md) FD-PROTO-014 |
+| `verify(identity claims)` | Answers `true` for the runner job's GitHub Actions OIDC token of the one launch it names, `false` otherwise | FD-EXEC-088 to FD-EXEC-090, [executor-protocol.md](executor-protocol.md) FD-PROTO-014 |
 
 **The launcher starts a workflow run; the runner job claims its lease with its OIDC token**
 
@@ -60,7 +60,7 @@ sequenceDiagram
   GA->>J: job with timeout-minutes from the input
   J->>CP: open socket with OIDC token, audience the control plane
   CP->>LP: verify(identity claims)
-  LP-->>CP: accepted for (execution_id, epoch)
+  LP-->>CP: true
   CP-->>J: lease
   alt cancel or reclaim
     CP->>LP: cancel(execution_id, epoch)
