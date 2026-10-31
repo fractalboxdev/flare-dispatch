@@ -114,7 +114,7 @@ Every GitHub kind is `adoptable` except `label`, `pr.close`, `dispatch.followOn`
 | `failure(reason)` in any category: `finding`, `infra`, `budget`, `capacity`, `deadline`, `halt`, `placement`, `unrecorded`, `config`, `policy` (`provenance: <check>` included) | `failure`, reason in the title, for every class and whether or not the check is required |
 | Terminal status not recorded (category `unrecorded`) | `failure` "internal: terminal write not recorded" |
 | Execution lost (settle sweep, category `infra`) | `failure` "infra: execution lost" |
-| `cancelled(cause)` with a cause from `superseded`, `pr-closed`, `merge-group-destroyed`, `parent-ended`, `operator-cancel` | `cancelled`, cause in the title |
+| `cancelled(cause)` with any cause: `superseded`, `pr-closed`, `merge-group-destroyed`, `parent-ended`, `operator-cancel`, a cause a run reports, or `cancelled` for a result that names none | `cancelled`, cause in the title |
 | `skipped(not-applicable: <detail>)` with a detail in the closed detail set | `neutral` |
 | `skipped` with any other reason or detail | `failure` "internal: invalid skip reason" |
 | `deferred`, for an execution that opened a check run | `failure` "capacity: deferred" |
