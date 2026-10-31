@@ -24,6 +24,7 @@ export {
   OUTPUT_LIMIT,
   truncate,
   Verdict,
+  verdictOf,
   type Conclusion,
 } from "./conclusion.ts";
 export { githubApplicationLayer } from "./layer.ts";
