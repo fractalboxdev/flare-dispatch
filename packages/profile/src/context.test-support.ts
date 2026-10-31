@@ -34,6 +34,9 @@ export const bindings: ValidationContext["bindings"] = {
     "executionProgressKey",
     "prProposePayload",
     "installationOf",
+    "supersessionKey",
+    "cacheNamespaces",
+    "capacityGrant",
   ],
 };
 

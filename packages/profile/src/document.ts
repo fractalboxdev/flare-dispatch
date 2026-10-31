@@ -7,7 +7,11 @@
 // The document is plain data so the configuration source can deliver it as
 // one; `loadProfile` decodes and validates it before any value takes effect.
 import { CATEGORIES } from "@fractalboxdev/mameko-coordinator";
-import { ConfigurationSource, type ProfileDocument } from "@fractalboxdev/mameko-ports";
+import {
+  ConfigurationSource,
+  GateDecisionSource,
+  type ProfileDocument,
+} from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import type { Predicate, Profile } from "./schema.ts";
 
@@ -497,6 +501,11 @@ export const configurationSourceLayer = (deployment: Deployment) =>
 
 /** FlareDispatch's configuration source: the committed production profile. */
 export const ConfigurationSourceLive = configurationSourceLayer("production");
+
+/** The profile declares no `gated` kind, so no row ever has a decision (FD-ARCH-040, FD-PROF-048). */
+export const GateDecisionSourceLive = Layer.succeed(GateDecisionSource, {
+  decision: () => Effect.succeed(null),
+});
 
 /**
  * Per-device slot defaults for an 8-slot share. mameko keeps these on the executor's registry row, not in the

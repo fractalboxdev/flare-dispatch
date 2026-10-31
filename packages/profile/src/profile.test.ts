@@ -1,5 +1,5 @@
 import { reclaimPolicyFor } from "@fractalboxdev/mameko-kernel";
-import { ConfigurationSource } from "@fractalboxdev/mameko-ports";
+import { ConfigurationSource, GateDecisionSource } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { bindings, validationContext } from "./context.test-support.ts";
@@ -11,6 +11,7 @@ import {
   ConfigurationSourceLive,
   deliveryOrder,
   deviceSlotDefaults,
+  GateDecisionSourceLive,
   drawsReserve,
   eligibleKinds,
   lifecycleKey,
@@ -599,6 +600,19 @@ describe("check-run lifecycle kinds", () => {
       on: "accepted",
       applied_for: ["success"],
     });
+  });
+
+  it("FD-ARCH-040 the gate decision source answers no decision", () => {
+    const decision = Effect.runSync(
+      Effect.provide(
+        Effect.gen(function* () {
+          const source = yield* GateDecisionSource;
+          return yield* source.decision({ executionId: "e", intentKey: "k" });
+        }),
+        GateDecisionSourceLive,
+      ),
+    );
+    expect(decision).toBeNull();
   });
 
   it("no kind is reconcile-only or gated, and the ops kinds take the required class", () => {

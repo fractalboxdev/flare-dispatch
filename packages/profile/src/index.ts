@@ -4,6 +4,7 @@ export {
   configurationSourceLayer,
   ConfigurationSourceLive,
   deviceSlotDefaults,
+  GateDecisionSourceLive,
   poolAdmissionCaps,
   profile,
   profileDocument,
