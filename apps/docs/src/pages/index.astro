@@ -6,7 +6,7 @@ import Diagram from "../components/landing/Diagram.astro";
 import { fencedLease, lifecycle, placement } from "../components/landing/diagrams";
 
 const DESCRIPTION =
-  "Local-first CI/CD in your own Cloudflare account. Cloudflare is the control plane; executions run first on hardware you own and spill to Cloudflare Containers, with required checks going on to AWS while Containers are unavailable, under a spend guard and a fenced lease. Runs are typed Effect programs, not YAML.";
+  "Local-first CI/CD in your own Cloudflare account. Cloudflare is the control plane; executions run first on hardware you own and fall back to Cloudflare Containers, with required checks going on to AWS while Containers are unavailable, under a spend guard and a fenced lease. Runs are typed Effect programs, not YAML.";
 
 const why = [
   {
@@ -17,7 +17,7 @@ const why = [
   {
     id: "01.02 / Ceiling",
     title: "A spend ceiling no cloud meter offers",
-    body: "Owned capacity is fixed, so a runaway retry loop or a fan-out bug costs queue time, not money. Cloud spill and hosted model tokens run under the spend guard.",
+    body: "Owned capacity is fixed, so a runaway retry loop or a fan-out bug costs queue time, not money. Cloud overflow and hosted model tokens run under the spend guard.",
   },
   {
     id: "01.03 / Floor",
@@ -85,7 +85,7 @@ const failures = [
 const routing = [
   { step: "Confidentiality", body: "A confidential-model or confidential-compute repository never calls a hosted model, and never falls back to one." },
   { step: "Task tier", body: "Judgment calls (review, plan, write code) go hosted. Bulk calls (classify, extract, summarize, embed) run locally when their input is on owned hardware." },
-  { step: "Data location", body: "A bulk call inside a spilled cloud step uses a small hosted model instead of pulling data back to the device." },
+  { step: "Data location", body: "A bulk call inside an overflowed cloud step uses a small hosted model instead of pulling data back to the device." },
   { step: "Budget", body: "Hosted calls reserve their allowance inside the class line. At the line, bulk calls drop to a local model and judgment calls conclude failure, budget." },
 ];
 
@@ -137,7 +137,7 @@ const recipes = [
 const bets = [
   {
     statement: "Cloudflare <strong>schedules</strong>; devices execute.",
-    body: "The control plane owns every guarantee, deadline, spill and check. A device's local scheduler places only unguaranteed work (dev loops, agent swarms, rehearsals) inside a capacity lease, so a device's uptime never becomes the system's.",
+    body: "The control plane owns every guarantee, deadline, fallback and check. A device's local scheduler places only unguaranteed work (dev loops, agent swarms, rehearsals) inside a capacity lease, so a device's uptime never becomes the system's.",
   },
   {
     statement: "<strong>Queue</strong>, then fail.",
@@ -214,13 +214,13 @@ const snippets = [
       <div class="hero__grid">
         <div>
           <h1 class="hero__title reveal" data-delay="2">
-            Run CI on <em>hardware you&#160;own</em>. Spill to the cloud on a deadline.
+            Run CI on <em>hardware you&#160;own</em>. Fall back to the cloud on a deadline.
           </h1>
           <p class="hero__sub reveal" data-delay="3">
             FlareDispatch is local-first CI/CD that you deploy into your own Cloudflare account. Cloudflare is the
             control plane: it verifies each trigger, classifies and meters the execution, leases it to an executor
             and posts the verdict to GitHub. Executions run first on hardware you own (a Mac running
-            mameko's device executor, one VM per job) and spill to Cloudflare Containers, with required checks going on to AWS, when owned
+            mameko's device executor, one VM per job) and fall back to Cloudflare Containers, with required checks going on to AWS, when owned
             capacity cannot meet the deadline.
           </p>
           <div class="hero__cta reveal" data-delay="4">
@@ -413,7 +413,7 @@ const snippets = [
           </ol>
           <figcaption id="lines-caption">
             Fig. 3 · nested class lines on one meter, P3 ≤ P2 ≤ P1 ≤ P0 = B. R0 reserves release spend; R1 covers
-            required checks through a fleet-down spill and is recomputed daily. Widths are illustrative.
+            required checks through a fleet-down overflow and is recomputed daily. Widths are illustrative.
           </figcaption>
         </figure>
         <div>
@@ -656,7 +656,7 @@ const snippets = [
       <div class="cta-band__actions">
         <a class="btn" href="/docs/">Read the specs</a>
         <a class="btn btn--ghost" href="/docs/adr/">Decision records</a>
-        <a class="btn btn--ghost" href="/benchmarks/">Cloud spill prices</a>
+        <a class="btn btn--ghost" href="/benchmarks/">Cloud overflow prices</a>
       </div>
     </div>
   </section>
