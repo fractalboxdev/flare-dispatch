@@ -395,6 +395,9 @@ importers:
 
   vendor/mameko/packages/conformance:
     dependencies:
+      '@effect/platform-node':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)(redis@6.3.1)
       '@effect/sql-pg':
         specifier: 4.0.6
         version: 4.0.6(effect@4.0.6)
@@ -417,6 +420,9 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       miniflare:
         specifier: 5.20261019.2-beta
         version: 5.20261019.2-beta(@types/node@22.20.1)
@@ -9788,7 +9794,7 @@ snapshots:
 
   vite@7.3.6(@types/node@22.20.1)(lightningcss@1.33.0)(tsx@4.23.11)(yaml@2.9.0):
     dependencies:
-      esbuild: 0.28.1
+      esbuild: 0.28.2
       fdir: 6.5.0(picomatch@4.0.5)
       picomatch: 4.0.5
       postcss: 8.5.16
@@ -9803,7 +9809,7 @@ snapshots:
 
   vite@7.3.6(@types/node@24.13.6)(lightningcss@1.33.0)(tsx@4.23.11)(yaml@2.9.0):
     dependencies:
-      esbuild: 0.28.1
+      esbuild: 0.28.2
       fdir: 6.5.0(picomatch@4.0.5)
       picomatch: 4.0.5
       postcss: 8.5.16
