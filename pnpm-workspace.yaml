@@ -14,8 +14,13 @@ packages:
 # suites; 3.21.2 is the version the whole substrate was validated against.
 # The selector covers effect 3 only: the v2 packages and vendor/mameko pin
 # effect at exactly 4.0.6 in their own manifests.
+#
+# @effect/platform-node 4.0.6 depends on @effect/platform-node-shared ^4.0.6, and
+# 4.1.0 peers on effect ^4.1.0. vendor/mameko pins effect 4.0.6, so the 4.x line
+# of the shared package stays on the version mameko's own lockfile resolves.
 overrides:
   "effect@^3": 3.21.2
+  "@effect/platform-node-shared@^4": 4.0.6
 
 # The Merlion packages install from tarballs in apps/docs/vendor/merlion and are
 # not on the npm registry, so the release-age check has no publish date to read.
