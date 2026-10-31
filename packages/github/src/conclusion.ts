@@ -1,24 +1,14 @@
 // checkConclusion: the one mapping from verdict to check-run conclusion
 // (specs/github-output.md § Conclusion mapping), and the check-run text the
 // conclude update carries.
+import { CATEGORIES } from "@fractalboxdev/mameko-coordinator";
 import { Match, Schema } from "effect";
 
 /**
  * mameko's closed failure categories. An acceptance-check rejection carries the reason kind the check returns,
  * `provenance: <check>`, in category `policy` (MAMEKO-LEASE-090).
  */
-export const FailureCategory = Schema.Literals([
-  "finding",
-  "infra",
-  "budget",
-  "capacity",
-  "deadline",
-  "halt",
-  "placement",
-  "unrecorded",
-  "config",
-  "policy",
-]);
+export const FailureCategory = Schema.Literals(CATEGORIES);
 
 /** The closed cancel causes of specs/run-model.md § Verdict partition. */
 export const CancelCause = Schema.Literals([
@@ -47,6 +37,8 @@ export const Verdict = Schema.Union([
   Schema.TaggedStruct("skipped", { reason: Schema.String, detail: Schema.String }),
   /** A `batch` execution that opened a check run and ended `deferred`. */
   Schema.TaggedStruct("deferred", {}),
+  /** mameko's terminal outcome `expired`; no FlareDispatch class declares it. */
+  Schema.TaggedStruct("expired", {}),
 ]);
 export type Verdict = typeof Verdict.Type;
 
@@ -69,6 +61,7 @@ export const checkConclusion = (
         : { conclusion: "failure" as const, title: "internal: invalid skip reason" },
     ),
     Match.tag("deferred", () => ({ conclusion: "failure" as const, title: "capacity: deferred" })),
+    Match.tag("expired", () => ({ conclusion: "failure" as const, title: "deadline: expired" })),
     Match.exhaustive,
   );
 

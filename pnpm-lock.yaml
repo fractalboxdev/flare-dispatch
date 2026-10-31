@@ -237,6 +237,9 @@ importers:
 
   packages/github:
     dependencies:
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
       '@fractalboxdev/mameko-ports':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/ports
@@ -244,6 +247,12 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-testkit':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/testkit
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1

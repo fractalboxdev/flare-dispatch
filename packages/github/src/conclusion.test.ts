@@ -64,6 +64,13 @@ describe("checkConclusion", () => {
     });
   });
 
+  it("FD-GH-027 expired concludes failure, deadline: expired", () => {
+    expect(checkConclusion({ _tag: "expired" })).toEqual({
+      conclusion: "failure",
+      title: "deadline: expired",
+    });
+  });
+
   it("FD-GH-028 an unrecorded terminal status concludes failure, internal: terminal write not recorded", () => {
     expect(
       checkConclusion({ _tag: "failure", category: "unrecorded", reason: "unrecorded" }),
@@ -77,6 +84,7 @@ describe("checkConclusion", () => {
       { _tag: "cancelled", cause: "operator-cancel" },
       { _tag: "skipped", reason: "not-applicable", detail: "draft-pr" },
       { _tag: "deferred" },
+      { _tag: "expired" },
     ];
     expect(new Set(verdicts.map((v) => checkConclusion(v).conclusion))).toEqual(
       new Set(["success", "failure", "cancelled", "neutral"]),
