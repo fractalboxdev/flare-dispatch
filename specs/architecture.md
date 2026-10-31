@@ -100,7 +100,7 @@ The dispatcher Worker builds the coordinator's context from two sources. `cloudf
 
 | Port | FlareDispatch's Layer | Required from | Specified in |
 | --- | --- | --- | --- |
-| Effect applier | One applier per intent kind | Phase 0 | [github-output.md](github-output.md) |
+| Effect applier | One `EffectApplier` Layer whose `apply`, `lookup` and `reconcile` select by `row.kind` the handler the profile's `applier` field names | Phase 0 | [github-output.md](github-output.md) |
 | Gate decision source | Answers no decision, because no kind is `gated` | Phase 0 | FD-ARCH-040 |
 | Configuration source | `configurationSourceLayer(deployment)`; `ConfigurationSourceLive` for `production` | Phase 0 | [profile.md](profile.md) FD-PROF-001 |
 | Alarm port | The dashboard and the alert sink | Phase 0 | [operability.md](operability.md) FD-OPS-053 |

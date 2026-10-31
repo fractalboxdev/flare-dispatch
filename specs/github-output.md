@@ -7,7 +7,7 @@ This file specifies how FlareDispatch turns executions into GitHub effects: the 
 mameko's [outbox.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/outbox.md) specifies the outbox: rows and their states, the effect classes, lifecycle and ops intents, the drainer, the applier and applier rate limit ports, and the delivery and settle sweeps. FlareDispatch inherits that mechanism and supplies, as an application:
 
 - the intent kinds and their delivery settings, declared in [profile.md](profile.md);
-- an effect applier per kind, which classifies every GitHub response into one answer of the applier port;
+- one `EffectApplier` Layer that selects a handler by `row.kind` and classifies every GitHub response into one answer of the applier port;
 - the applier rate limit, keyed by installation;
 - the outcome mapping onto check conclusions.
 
@@ -180,7 +180,7 @@ Every call, `lookup` included, spends budget; only `apply` calls count against t
 - **FD-GH-007** · phase 0 · `V-UNIT` — If a run declares a `checkLabel` that does not match `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`, then the control plane must reject the run definition at registration with `InvalidCheckLabel`.
 - **FD-GH-008** · phase 0 · `V-UNIT` — The control plane must keep a check run's name identical across every attempt of its check family, and must append ` (attempt N)` to the title only when N is greater than 1.
 - **FD-GH-009** · phase 0 · `V-UNIT` `V-REPLAY` — The check-run appliers must set every check run's `external_id` to its execution id.
-- **FD-GH-010** · phase 0 · `V-REPLAY` `V-SIM` — The control plane must create at most one check run per execution across engine replays, outbox retries and reclaims: every attempt of a check-run kind after the first searches the check runs of the head SHA and name by `external_id` before it writes, and works on the oldest one it finds.
+- **FD-GH-010** · phase 0 · `V-REPLAY` `V-SIM` — The control plane must create at most one check run per execution across engine replays, outbox retries and reclaims: every attempt of a check-run kind, the first included, searches the check runs of the head SHA and name by `external_id` before it writes, and works on the oldest one it finds, because `IntentRow.attempts` keeps its insertion value and does not tell an applier that an earlier attempt ran.
 - **FD-GH-011** · phase 0 · `V-UNIT` — The `check.start` applier must set the check run's status to `in_progress` and state the executor kind and the epoch in the summary, and must answer `refused` with the reason `superseded: check run already completed` when the check run is `completed`.
 - **FD-GH-012** · phase 0 · `V-UNIT` `V-SIM` — The `check.progress` payload must state the execution's class, its queue-position bucket among `1`, `2–5`, `6–20` and `more than 20`, and its `deadline_at`.
 - **FD-GH-013** · phase 0 · `V-UNIT` — The check-run appliers must set each check run's details URL to the execution's log viewer URL carrying a log capability token ([cache-artifacts.md](cache-artifacts.md)).
