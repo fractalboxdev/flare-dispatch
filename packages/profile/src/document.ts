@@ -6,6 +6,7 @@
 //
 // The document is plain data so the configuration source can deliver it as
 // one; `loadProfile` decodes and validates it before any value takes effect.
+import { CATEGORIES } from "@fractalboxdev/mameko-coordinator";
 import { ConfigurationSource, type ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import type { Predicate, Profile } from "./schema.ts";
@@ -332,19 +333,6 @@ const placement: Profile["placement"] = {
 
 const cap = (cls: string, max: number, min = 0) => ({ class: cls, max, min });
 
-/** The failure categories of mameko's closed outcome union; each concludes `failure` with its reason. */
-const FAILURE_CATEGORIES = [
-  "finding",
-  "infra",
-  "budget",
-  "capacity",
-  "deadline",
-  "halt",
-  "placement",
-  "unrecorded",
-  "config",
-  "policy",
-] as const;
 const CANCEL_CAUSES = [
   "superseded",
   "parent-ended",
@@ -353,13 +341,19 @@ const CANCEL_CAUSES = [
   "merge-group-destroyed",
 ] as const;
 
+/** The Container pools' admission caps, the runtime adapter's configuration (FD-PROF-032). */
+export const poolAdmissionCaps: Readonly<Record<string, { readonly admission_cap: number }>> = {
+  lean: { admission_cap: 48 },
+  agent: { admission_cap: 8 },
+  browser: { admission_cap: 16 },
+  release: { admission_cap: 8 },
+  control: { admission_cap: 16 },
+};
+
 export const profile: Profile = {
   policy_version: "flare-dispatch.v2.0",
   classes,
-  /**
-   * Per-class caps inside each Container pool's admission cap (FD-PROF-032); the admission caps themselves (`lean`
-   * 48, `agent` 8, `browser` 16, `release` 8, `control` 16) are the runtime adapter's configuration.
-   */
+  /** Per-class caps inside each Container pool's admission cap (FD-PROF-032). */
   // TODO(maintainer): FD-PROF-032 keeps 2 slots for P0 and P1 together; a floor over a group of classes waits on
   // mameko specs/profiles.md § Open items, so `min: 2` sits on `required` alone.
   pools: [
@@ -391,7 +385,8 @@ export const profile: Profile = {
     silent_values: ["neutral"],
     by_outcome: {
       success: "success",
-      ...Object.fromEntries(FAILURE_CATEGORIES.map((c) => [c, "failure"])),
+      // Every failure category concludes `failure` with its reason.
+      ...Object.fromEntries(CATEGORIES.map((c) => [c, "failure"])),
       ...Object.fromEntries(CANCEL_CAUSES.map((c) => [c, "cancelled"])),
       "skipped-listed": "neutral",
       "skipped-other": "failure",
@@ -489,11 +484,21 @@ export const deviceSlotDefaults = {
   claim_caps: { interactive: 3, batch: 5, interactive_and_batch: 6 },
 } as const;
 
+export interface SpendConfig {
+  readonly budget: number;
+  readonly fixed: number;
+  readonly reserves: Readonly<Record<string, number>>;
+  readonly ops_reserve: number;
+  readonly measured_reserve_min: number;
+  readonly measured_reserve_days: number;
+  readonly overhead_factor: number;
+}
+
 /**
  * Spend amounts the class `reserve` and `line` fields name, in micro-USD, with FlareDispatch's defaults; the
  * operator overlay replaces each (FD-PROF-054).
  */
-export const spendDefaults = {
+export const spendDefaults: SpendConfig = {
   budget: 50_000_000,
   fixed: 0,
   reserves: { "release-reserve": 10_000_000 },
@@ -501,4 +506,4 @@ export const spendDefaults = {
   measured_reserve_min: 20_000_000,
   measured_reserve_days: 10,
   overhead_factor: 1.1,
-} as const;
+};

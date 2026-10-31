@@ -1,10 +1,12 @@
 export {
+  acceptanceReasonKinds,
   ConfigurationSourceLive,
   deviceSlotDefaults,
+  poolAdmissionCaps,
   profile,
   profileDocument,
-  acceptanceReasonKinds,
   spendDefaults,
+  type SpendConfig,
 } from "./document.ts";
 export {
   classNamed,
@@ -26,4 +28,10 @@ export {
   type Predicate,
   type Profile,
 } from "./schema.ts";
-export { loadProfile, validateProfile } from "./validate.ts";
+export {
+  linesOf,
+  loadProfile,
+  profileLoader,
+  validateProfile,
+  type ValidationContext,
+} from "./validate.ts";

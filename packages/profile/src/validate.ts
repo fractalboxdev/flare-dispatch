@@ -1,12 +1,22 @@
-// The checks of mameko specs/profiles.md § Profile validator that read only
-// the items this package declares. The validator is pure and reports every
-// rejection. The checks that need bindings registered in code, scope
-// manifests or run volumes belong to the coordinator's validator.
-import { validateRuntimeFeatures, type ConfidentialityMode } from "@fractalboxdev/mameko-kernel";
-import { validateReasonKinds } from "@fractalboxdev/mameko-coordinator";
+// The profile validator: mameko's `validateProfile`, `validateProfileContext` and
+// `validateReasonKinds` over the decoded document, plus the checks of mameko
+// specs/profiles.md § Profile validator that those functions leave out. The
+// validator is pure and reports every rejection.
+import {
+  ProfileLoader,
+  projectProfile,
+  resolveLines,
+  validateProfile as validateProjected,
+  validateProfileContext,
+  validateReasonKinds,
+  withDefaults,
+  type Bindings,
+  type ProfileContext,
+} from "@fractalboxdev/mameko-coordinator";
+import { classLines, type ConfidentialityMode } from "@fractalboxdev/mameko-kernel";
 import { decodeProfile, type ProfileDocument } from "@fractalboxdev/mameko-ports";
-import { Effect, Match } from "effect";
-import { acceptanceReasonKinds } from "./document.ts";
+import { Effect, Match, Schema } from "effect";
+import { acceptanceReasonKinds, type SpendConfig } from "./document.ts";
 import { eligibleKinds } from "./placement.ts";
 import { ProfileRejected, type PlacementShape, type Profile, type Rejection } from "./schema.ts";
 
@@ -17,29 +27,58 @@ const CONFIDENTIALITY_MODES: readonly ConfidentialityMode[] = [
   "confidential-model",
   "confidential-compute",
 ];
+const PPM = 1_000_000;
 
-const ranks = (p: Profile): Rejection[] => {
-  const sorted = p.classes.map((c) => c.rank).sort((a, b) => a - b);
-  return sorted.every((r, i) => r === i)
-    ? []
-    : [
-        {
-          item: "classes",
-          path: "classes[].rank",
-          reason: "no highest-rank class: ranks must be 0..n-1, each once",
-        },
-      ];
+/** What the validator reads beside the document: the registered code and the deployment's configuration. */
+export interface ValidationContext {
+  /** The bindings and appliers registered in code. */
+  readonly bindings: Bindings;
+  /** The kinds a registered run may emit or the control plane generates. */
+  readonly emittedKinds: readonly string[];
+  readonly runs: ProfileContext["runs"];
+  /** The runtime adapter's pools with their admission caps. */
+  readonly declaredPools: ProfileContext["declared_pools"];
+  readonly spend: SpendConfig;
+}
+
+const byRank = (p: Profile) => [...p.classes].sort((a, b) => a.rank - b.rank);
+
+const reserveOf = (c: Profile["classes"][number], spend: SpendConfig): number =>
+  c.reserve === undefined
+    ? 0
+    : c.reserve === "measured"
+      ? spend.measured_reserve_min
+      : (spend.reserves[c.reserve] ?? 0);
+
+/** Each class's line in micro-USD under the spend configuration (mameko specs/spend.md § Budget, reserves and lines). */
+export const linesOf = (p: Profile, spend: SpendConfig): Readonly<Record<string, number>> => {
+  const classes = byRank(p);
+  const lowest = classes.at(-1);
+  const ratio = typeof lowest?.line === "object" ? lowest.line : undefined;
+  const { lines } = classLines({
+    budget: spend.budget,
+    fixed: spend.fixed,
+    classes: classes.map((c, i) => ({
+      name: c.name,
+      reserve: i === classes.length - 1 ? null : reserveOf(c, spend),
+    })),
+    lineRatioPpm: Math.round((ratio?.general_band_ratio ?? 0) * PPM),
+    floorRatioPpm: Math.round((ratio?.floor_ratio ?? 0) * PPM),
+  });
+  return resolveLines(p.classes, {
+    budgetMicroUsd: spend.budget,
+    reservesMicroUsd: Object.fromEntries(p.classes.map((c) => [c.name, reserveOf(c, spend)])),
+    lowestLineMicroUsd: lowest === undefined ? 0 : (lines[lowest.name] ?? 0),
+  });
 };
 
+/** Catalogue checks mameko's validator leaves to a decode that does not make them. */
 const classes = (p: Profile): Rejection[] => {
   const cloudKinds = new Set<string>([...BUILT_IN_CLOUD_KINDS, ...p.placement.launcher_kinds]);
   const lowest = Math.max(...p.classes.map((c) => c.rank));
-  const measured = p.classes.filter((c) => c.reserve === "measured");
   const out: Rejection[] = [];
   for (const c of p.classes) {
     const path = `classes[${c.name}]`;
-    if (!c.guaranteed && (c.cloud_kinds.length > 0 || c.firm === true))
-      out.push({ item: "classes", path, reason: "guaranteed flag disagrees with the cloud kinds" });
     for (const k of c.cloud_kinds)
       if (!cloudKinds.has(k))
         out.push({
@@ -69,52 +108,25 @@ const classes = (p: Profile): Rejection[] => {
         reason: `lines do not nest: rank ${c.rank} takes ${expectsLine}`,
       });
   }
-  if (measured.length !== 1 || measured.some((c) => c.rank === lowest))
-    out.push({
-      item: "classes",
-      path: "classes[].reserve",
-      reason: "exactly one class, not the lowest rank, declares reserve: measured",
-    });
   return out;
 };
 
+/** Trigger and tier rules beyond mameko's: its validator checks `admitted` and `lease-granted` payloads only. */
 const intentKinds = (p: Profile): Rejection[] => {
   const out: Rejection[] = [];
-  const classNames = new Set(p.classes.map((c) => c.name));
   for (const [kind, k] of Object.entries(p.intent_kinds)) {
     const path = `intent_kinds.${kind}`;
-    if (k.origin === "run" && k.on !== undefined)
-      out.push({
-        item: "intent_kinds",
-        path: `${path}.on`,
-        reason: "a run kind declares no lifecycle trigger",
-      });
-    if (k.on !== undefined && k.on !== "terminal" && k.payload === undefined)
+    if ((k.on === "accepted" || k.on === "progress") && k.payload === undefined)
       out.push({
         item: "intent_kinds",
         path: `${path}.payload`,
         reason: "lifecycle kind without a payload",
       });
-    if ((k.on === "progress") !== (k.coalesce_key !== undefined))
+    if (k.on !== "progress" && k.coalesce_key !== undefined)
       out.push({
         item: "intent_kinds",
         path: `${path}.coalesce_key`,
         reason: "a coalesce_key goes with on: progress, and only with it",
-      });
-    if (k.ops === true && k.applied_for !== "any")
-      out.push({
-        item: "intent_kinds",
-        path: `${path}.applied_for`,
-        reason: "an ops kind applies for any outcome",
-      });
-    if (
-      k.ops === true &&
-      (p.delivery.ops_class === undefined || !classNames.has(p.delivery.ops_class))
-    )
-      out.push({
-        item: "delivery",
-        path: "delivery.ops_class",
-        reason: `ops kind ${kind} without an ops class`,
       });
   }
   const outcomeKinds = Object.values(p.intent_kinds).filter((k) => k.delivery_tier === "outcome");
@@ -131,16 +143,12 @@ const matches = (shape: PlacementShape, cls: string, labels: readonly string[]):
   (shape.class === "any" || shape.class === cls) &&
   (shape.labels === "any" || shape.labels.every((l) => labels.includes(l)));
 
-/** Every `placement.required` shape must leave a non-empty eligible set at every class it covers. */
+/**
+ * Every `placement.required` shape must leave a non-empty eligible set at every class it covers (MAMEKO-PROF-014,
+ * which mameko's `validateProfile` does not carry).
+ */
 const placement = (p: Profile): Rejection[] => {
-  const known = new Set<string>([...BUILT_IN_CLOUD_KINDS, ...p.placement.launcher_kinds]);
-  const out: Rejection[] = p.placement.cloud_pinned_kinds
-    .filter((k) => !known.has(k))
-    .map((k) => ({
-      item: "placement",
-      path: "placement.cloud_pinned_kinds",
-      reason: `unknown cloud kind ${k}`,
-    }));
+  const out: Rejection[] = [];
   p.placement.required.forEach((shape, i) => {
     const labels = shape.labels === "any" ? [] : shape.labels;
     const mode = CONFIDENTIALITY_MODES.find((m) => m === shape.confidentiality);
@@ -172,29 +180,29 @@ const placement = (p: Profile): Rejection[] => {
   return out;
 };
 
-const runtime = (p: Profile): Rejection[] =>
-  validateRuntimeFeatures(p.host.adapter, {
-    features: p.host.features,
-    cloudKinds: p.classes.flatMap((c) => c.cloud_kinds),
-  }).map(({ feature, adapter }) => ({
-    item: "host",
-    path: "host.features",
-    reason: `runtime-specific feature ${feature} is outside ${adapter}`,
-  }));
-
-/** Every rejection the profile validator finds in a decoded document; empty means accepted. */
-export const validateProfile = (p: Profile): readonly Rejection[] => [
-  ...ranks(p),
-  ...classes(p),
-  ...intentKinds(p),
-  ...placement(p),
-  ...runtime(p),
-  ...reasonKinds(p),
-];
+const context = (p: Profile, c: ValidationContext): Rejection[] =>
+  validateProfileContext({
+    adapter: p.host.adapter,
+    classes: p.classes.map(({ name, guaranteed, cloud_kinds }) => ({
+      name,
+      guaranteed,
+      cloud_kinds: [...cloud_kinds],
+    })),
+    host_features: [...p.host.features],
+    launcher_kinds: [...p.placement.launcher_kinds],
+    cloud_pinned_kinds: [...p.placement.cloud_pinned_kinds],
+    pools: p.pools.map((pool) => ({
+      name: pool.name,
+      classes: pool.classes.map((cap) => cap.class),
+      minimums: Object.fromEntries(pool.classes.map((cap) => [cap.class, cap.min])),
+    })),
+    declared_pools: c.declaredPools,
+    runs: c.runs,
+  }).map(({ path, reason }) => ({ item: path.split(".")[0] ?? path, path, reason }));
 
 /** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-032). */
-function reasonKinds(p: Profile): Rejection[] {
-  return validateReasonKinds({
+const reasonKinds = (p: Profile): Rejection[] =>
+  validateReasonKinds({
     declared: p.reason_kinds ?? {},
     terminalReasons: Object.fromEntries(
       p.classes.flatMap((c) =>
@@ -203,37 +211,63 @@ function reasonKinds(p: Profile): Rejection[] {
     ),
     acceptanceKinds: acceptanceReasonKinds,
   }).map(({ path, reason }) => ({ item: "reason_kinds", path, reason }));
-}
 
-const rejected = (policyVersion: string, rejections: readonly Rejection[]) =>
-  new ProfileRejected({ policy_version: policyVersion, rejections });
+/** Every rejection the profile validator finds in a decoded document; empty means accepted. */
+export const validateProfile = (p: Profile, c: ValidationContext): readonly Rejection[] => [
+  ...validateProjected(
+    withDefaults(projectProfile(p, { emittedKinds: c.emittedKinds, lines: linesOf(p, c.spend) })),
+    c.bindings,
+  ),
+  ...context(p, c),
+  ...classes(p),
+  ...intentKinds(p),
+  ...placement(p),
+  ...reasonKinds(p),
+];
 
 /**
- * Decodes the document a configuration source delivers through mameko's strict `decodeProfile`, then validates
- * it. The document's `policy_version` must equal the envelope's. Nothing in the document takes effect before
- * every check passes.
+ * mameko's loader over the strict `decodeProfile` and this validator. It keeps the accepted snapshot through a
+ * rejection (MAMEKO-PROF-004) and rejects a reused policy version with different content (MAMEKO-PROF-007).
  */
-export const loadProfile = ({ document, policyVersion }: ProfileDocument) =>
-  Effect.gen(function* () {
-    const doc = yield* Match.value(decodeProfile(document)).pipe(
-      Match.tag("Accepted", ({ profile }) => Effect.succeed(profile)),
-      Match.tag("Rejected", ({ error }) =>
-        Effect.fail(rejected(policyVersion, [{ item: "document", path: "", reason: error }])),
+export const profileLoader = (c: ValidationContext): ProfileLoader<Profile> =>
+  new ProfileLoader<Profile>({
+    decode: (raw) =>
+      Match.value(decodeProfile(raw)).pipe(
+        Match.tag("Accepted", ({ profile }) => ({ ok: true as const, value: profile })),
+        Match.tag("Rejected", ({ error }) => ({
+          ok: false as const,
+          rejections: [{ item: "document", path: "", reason: error }],
+        })),
+        Match.exhaustive,
       ),
+    validate: (doc) => validateProfile(doc, c),
+  });
+
+const isVersioned = Schema.is(Schema.Struct({ policy_version: Schema.String }));
+
+/**
+ * Delivers the document a configuration source supplies to the loader and answers the accepted profile. The
+ * document's `policy_version` must equal the envelope's, which mameko's loader does not compare. Nothing in the
+ * document takes effect before every check passes.
+ */
+export const loadProfile = (
+  loader: ProfileLoader<Profile>,
+  { document, policyVersion }: ProfileDocument,
+) =>
+  Effect.gen(function* () {
+    const refuse = (rejections: readonly Rejection[]) =>
+      Effect.fail(new ProfileRejected({ policy_version: policyVersion, rejections }));
+    if (isVersioned(document) && document.policy_version !== policyVersion)
+      return yield* refuse([
+        {
+          item: "document",
+          path: "policy_version",
+          reason: `the document's policy version differs from the delivered ${policyVersion}`,
+        },
+      ]);
+    return yield* Match.value(loader.deliver({ document, policyVersion })).pipe(
+      Match.tag("Accepted", () => Effect.sync(() => loader.begin().document)),
+      Match.tag("Rejected", ({ rejections }) => refuse(rejections)),
       Match.exhaustive,
     );
-    const rejections: readonly Rejection[] = [
-      ...(doc.policy_version === policyVersion
-        ? []
-        : [
-            {
-              item: "document",
-              path: "policy_version",
-              reason: `the document's policy version differs from the delivered ${policyVersion}`,
-            },
-          ]),
-      ...validateProfile(doc),
-    ];
-    if (rejections.length > 0) return yield* Effect.fail(rejected(policyVersion, rejections));
-    return doc;
   });

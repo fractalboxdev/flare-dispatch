@@ -2,6 +2,7 @@ import { reclaimPolicyFor } from "@fractalboxdev/mameko-kernel";
 import { ConfigurationSource } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import { bindings, validationContext } from "./context.test-support.ts";
 import {
   classNamed,
   cloudEligibleAt,
@@ -11,18 +12,23 @@ import {
   drawsReserve,
   eligibleKinds,
   lifecycleKey,
+  linesOf,
   loadProfile,
+  poolAdmissionCaps,
   profile as committed,
   profileDocument,
+  profileLoader,
   acceptanceReasonKinds,
   spendDefaults,
   staleAt,
   validateProfile,
   type PlacementRequest,
   type Profile,
+  type ValidationContext,
 } from "./index.ts";
 
-const profile = Effect.runSync(loadProfile(profileDocument));
+const loader = (context: ValidationContext = validationContext) => profileLoader(context);
+const profile = Effect.runSync(loadProfile(loader(), profileDocument));
 const cls = (name: string) => {
   const c = classNamed(profile, name);
   if (c === undefined) throw new Error(`no class ${name}`);
@@ -30,8 +36,12 @@ const cls = (name: string) => {
 };
 const kinds = (r: PlacementRequest) => eligibleKinds(profile, r).kinds;
 const CLASSES = ["release", "required", "interactive", "batch"] as const;
-const rejections = (document: unknown, policyVersion = committed.policy_version) =>
-  Effect.runSync(Effect.flip(loadProfile({ document, policyVersion }))).rejections;
+const rejections = (
+  document: unknown,
+  policyVersion = committed.policy_version,
+  context: ValidationContext = validationContext,
+) =>
+  Effect.runSync(Effect.flip(loadProfile(loader(context), { document, policyVersion }))).rejections;
 const mutate = (f: (doc: Profile) => Profile) => f(structuredClone(committed));
 
 describe("load", () => {
@@ -46,7 +56,7 @@ describe("load", () => {
       ),
     );
     expect(delivered.policyVersion).toBe("flare-dispatch.v2.0");
-    expect(Effect.runSync(loadProfile(delivered))).toEqual(committed);
+    expect(Effect.runSync(loadProfile(loader(), delivered))).toEqual(committed);
   });
 
   it("MAMEKO-PROF-001 rejects a property the schema does not declare, at the top or nested", () => {
@@ -69,8 +79,8 @@ describe("load", () => {
       placement: { ...d.placement, cloud_pinned: { any: [] } },
     }));
     expect(
-      Effect.runSync(loadProfile({ document: none, policyVersion: none.policy_version })).placement
-        .cloud_pinned,
+      Effect.runSync(loadProfile(loader(), { document: none, policyVersion: none.policy_version }))
+        .placement.cloud_pinned,
     ).toEqual({ any: [] });
     const badLine: unknown = {
       ...committed,
@@ -125,7 +135,9 @@ describe("load", () => {
   });
 
   it("MAMEKO-PROF-032 every terminal reason and acceptance-check reason kind is built in or declared", () => {
-    expect(validateProfile(profile).filter((r) => r.item === "reason_kinds")).toEqual([]);
+    expect(
+      validateProfile(profile, validationContext).filter((r) => r.item === "reason_kinds"),
+    ).toEqual([]);
     const undeclared = mutate(({ reason_kinds: _, ...d }) => d);
     expect(rejections(undeclared)).toEqual([
       {
@@ -143,6 +155,94 @@ describe("load", () => {
     ]);
   });
 
+  it("MAMEKO-PROF-004 a rejected delivery keeps the accepted snapshot", () => {
+    const l = loader();
+    Effect.runSync(loadProfile(l, profileDocument));
+    const next = { document: { ...committed, policy_version: "v2" }, policyVersion: "v2" };
+    const bad = { ...next, document: { ...next.document, classes: [] } };
+    Effect.runSync(Effect.flip(loadProfile(l, bad)));
+    expect(l.current()?.policyVersion).toBe(committed.policy_version);
+  });
+
+  it("MAMEKO-PROF-007 a reused policy version with other content is rejected", () => {
+    const l = loader();
+    Effect.runSync(loadProfile(l, profileDocument));
+    const reused = { ...profileDocument, document: { ...committed, member_partition: false } };
+    expect(Effect.runSync(Effect.flip(loadProfile(l, reused))).rejections).toEqual([
+      { item: "policy_version", path: "policy_version", reason: "policy-version: reused" },
+    ]);
+  });
+
+  it("MAMEKO-PROF-013 an applier without lookup rejects its adoptable kinds", () => {
+    const context = {
+      ...validationContext,
+      bindings: { ...bindings, appliers: { ...bindings.appliers, checkRun: ["apply"] } },
+    };
+    const paths = rejections(committed, committed.policy_version, context).map((r) => r.path);
+    expect(paths).toContain("intent_kinds.check.open.applier");
+    expect(paths).toContain("intent_kinds.check.conclude.applier");
+  });
+
+  it("MAMEKO-PROF-013 an emitted kind without an entry is rejected", () => {
+    const context = { ...validationContext, emittedKinds: ["check.open", "check.unknown"] };
+    expect(rejections(committed, committed.policy_version, context).map((r) => r.path)).toEqual([
+      "intent_kinds.check.unknown",
+    ]);
+  });
+
+  it("MAMEKO-PROF-021 a binding the code does not register is rejected", () => {
+    const context = { ...validationContext, bindings: { ...bindings, functions: [] } };
+    const paths = rejections(committed, committed.policy_version, context).map((r) => r.path);
+    expect(paths).toContain("class_resolution");
+    expect(paths).toContain("delivery.limit_key");
+  });
+
+  it("MAMEKO-PROF-030 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
+    const { lean: _, ...withoutLean } = poolAdmissionCaps;
+    const undeclared = { ...validationContext, declaredPools: withoutLean };
+    expect(rejections(committed, committed.policy_version, undeclared)).toEqual([
+      {
+        item: "pools",
+        path: "pools.lean",
+        reason: "pool lean not declared by the runtime adapter",
+      },
+    ]);
+    const tight = {
+      ...validationContext,
+      declaredPools: { ...poolAdmissionCaps, agent: { admission_cap: 1 } },
+    };
+    expect(rejections(committed, committed.policy_version, tight).map((r) => r.reason)).toEqual([
+      "minimums 2 above the admission cap 1",
+    ]);
+  });
+
+  it("MAMEKO-PROF-016 a device-local run under a cloud-eligible guaranteed class is rejected", () => {
+    const context = {
+      ...validationContext,
+      runs: [
+        {
+          name: "local",
+          class: "required",
+          ceiling: null,
+          inputs: [{ reachability: "device-local" }],
+          requires: [],
+        },
+      ],
+    };
+    expect(rejections(committed, committed.policy_version, context).map((r) => r.path)).toEqual([
+      "runs.local",
+    ]);
+  });
+
+  it("MAMEKO-SPD-006 the lines resolve from the spend configuration and nest", () => {
+    expect(linesOf(committed, spendDefaults)).toEqual({
+      release: 50_000_000,
+      required: 40_000_000,
+      interactive: 20_000_000,
+      batch: 9_000_000,
+    });
+  });
+
   it("rejects a document whose policy version differs from the delivered one", () => {
     expect(rejections(committed, "flare-dispatch.v2.1").map((r) => r.path)).toEqual([
       "policy_version",
@@ -157,8 +257,8 @@ describe("load", () => {
       ),
     }));
     const paths = rejections(doc).map((r) => r.path);
-    expect(paths).toContain("classes[].rank");
-    expect(paths).toContain("classes[].reserve");
+    expect(paths).toContain("classes");
+    expect(paths).toContain("classes.batch.reserve");
   });
 
   it("rejects a lifecycle kind without a payload binding", () => {
@@ -171,7 +271,20 @@ describe("load", () => {
 
   it("rejects a Cloudflare runtime feature under host-node", () => {
     const doc = mutate((d) => ({ ...d, host: { ...d.host, adapter: "host-node" as const } }));
-    expect(rejections(doc).every((r) => r.item === "host")).toBe(true);
+    expect(rejections(doc)).toEqual(
+      expect.arrayContaining([
+        {
+          item: "host",
+          path: "host.features",
+          reason: "durable-object-alarms is provided by host-cloudflare",
+        },
+        {
+          item: "classes",
+          path: "classes.required.cloud_kinds",
+          reason: "cloudflare-containers is provided by host-cloudflare",
+        },
+      ]),
+    );
   });
 });
 
@@ -375,6 +488,10 @@ describe("placement", () => {
         reason: "required placement unplaceable for class interactive",
       },
     ]);
+  });
+
+  it("MAMEKO-ADM-014 needs-local-model leaves only device", () => {
+    expect(kinds({ class: "required", labels: [], needsLocalModel: true })).toEqual(["device"]);
   });
 
   it("FD-PROF-041 reproduction runs only on an attested-dedicated device", () => {
