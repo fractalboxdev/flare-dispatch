@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { checkConclusion, NOT_APPLICABLE_DETAILS, type Verdict } from "./conclusion.ts";
+import type { ExecutionOutcome } from "@fractalboxdev/mameko-coordinator";
+import { checkConclusion, NOT_APPLICABLE_DETAILS, verdictOf, type Verdict } from "./conclusion.ts";
 
 const CAPACITY = ["budget", "capacity", "deadline", "halt", "placement"] as const;
 const CATEGORIES = ["finding", "infra", ...CAPACITY, "unrecorded", "config", "policy"] as const;
@@ -89,5 +90,62 @@ describe("checkConclusion", () => {
     expect(new Set(verdicts.map((v) => checkConclusion(v).conclusion))).toEqual(
       new Set(["success", "failure", "cancelled", "neutral"]),
     );
+  });
+});
+
+describe("verdictOf", () => {
+  const conclude = (outcome: ExecutionOutcome) => checkConclusion(verdictOf(outcome));
+
+  it("FD-GH-022 Success concludes success", () => {
+    expect(conclude({ _tag: "Success", epoch: 1 }).conclusion).toBe("success");
+  });
+
+  it("FD-GH-023 Failure keeps its reason, and its kind names the category", () => {
+    expect(verdictOf({ _tag: "Failure", reason: "budget: x", epoch: 1 })).toEqual({
+      _tag: "failure",
+      category: "budget",
+      reason: "budget: x",
+    });
+    expect(
+      verdictOf(
+        { _tag: "Failure", reason: "provenance: slsa", epoch: null },
+        {
+          provenance: "policy",
+        },
+      ),
+    ).toMatchObject({ category: "policy" });
+  });
+
+  it("FD-GH-028 an unrecorded Failure concludes internal: terminal write not recorded", () => {
+    expect(conclude({ _tag: "Failure", reason: "unrecorded", epoch: null }).title).toBe(
+      "internal: terminal write not recorded",
+    );
+  });
+
+  it("FD-GH-024 Cancelled keeps its cause, a cause outside the closed list included", () => {
+    for (const cause of ["pr-closed", "cancelled"])
+      expect(conclude({ _tag: "Cancelled", cause })).toEqual({
+        conclusion: "cancelled",
+        title: cause,
+      });
+  });
+
+  it("FD-GH-025 Skipped with a listed detail concludes neutral", () => {
+    expect(conclude({ _tag: "Skipped", detail: "draft-pr", epoch: 1 })).toEqual({
+      conclusion: "neutral",
+      title: "not applicable: draft-pr",
+    });
+  });
+
+  it("FD-GH-026 Skipped with any other detail concludes failure", () => {
+    expect(conclude({ _tag: "Skipped", detail: "", epoch: 1 })).toEqual({
+      conclusion: "failure",
+      title: "internal: invalid skip reason",
+    });
+  });
+
+  it("Deferred and Expired conclude failure", () => {
+    expect(conclude({ _tag: "Deferred" }).title).toBe("capacity: deferred");
+    expect(conclude({ _tag: "Expired" }).title).toBe("deadline: expired");
   });
 });

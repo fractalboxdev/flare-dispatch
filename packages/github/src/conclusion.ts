@@ -1,7 +1,13 @@
 // checkConclusion: the one mapping from verdict to check-run conclusion
-// (specs/github-output.md § Conclusion mapping), and the check-run text the
-// conclude update carries.
-import { CATEGORIES } from "@fractalboxdev/mameko-coordinator";
+// (specs/github-output.md § Conclusion mapping), verdictOf: the mapping from
+// mameko's execution outcome to the verdict, and the check-run text the conclude
+// update carries.
+import {
+  BUILT_IN_REASON_KINDS,
+  CATEGORIES,
+  type Category,
+  type ExecutionOutcome,
+} from "@fractalboxdev/mameko-coordinator";
 import { Match, Schema } from "effect";
 
 /**
@@ -9,15 +15,6 @@ import { Match, Schema } from "effect";
  * `provenance: <check>`, in category `policy` (MAMEKO-LEASE-090).
  */
 export const FailureCategory = Schema.Literals(CATEGORIES);
-
-/** The closed cancel causes of specs/run-model.md § Verdict partition. */
-export const CancelCause = Schema.Literals([
-  "superseded",
-  "pr-closed",
-  "merge-group-destroyed",
-  "parent-ended",
-  "operator-cancel",
-]);
 
 /** The not-applicable details that conclude `neutral` (specs/run-model.md). */
 export const NOT_APPLICABLE_DETAILS: readonly string[] = [
@@ -33,7 +30,8 @@ export const NOT_APPLICABLE_DETAILS: readonly string[] = [
 export const Verdict = Schema.Union([
   Schema.TaggedStruct("success", {}),
   Schema.TaggedStruct("failure", { category: FailureCategory, reason: Schema.String }),
-  Schema.TaggedStruct("cancelled", { cause: CancelCause }),
+  /** mameko's `cause` is open: a run reports its own, and a result without one reports `cancelled`. */
+  Schema.TaggedStruct("cancelled", { cause: Schema.String }),
   Schema.TaggedStruct("skipped", { reason: Schema.String, detail: Schema.String }),
   /** A `batch` execution that opened a check run and ended `deferred`. */
   Schema.TaggedStruct("deferred", {}),
@@ -62,6 +60,40 @@ export const checkConclusion = (
     ),
     Match.tag("deferred", () => ({ conclusion: "failure" as const, title: "capacity: deferred" })),
     Match.tag("expired", () => ({ conclusion: "failure" as const, title: "deadline: expired" })),
+    Match.exhaustive,
+  );
+
+/** A failure reason's category: `<kind>[: <detail>]`, the kind built in or declared in `reason_kinds`. */
+const categoryOf = (reason: string, declared: Readonly<Record<string, Category>>): Category => {
+  const kind = reason.split(":")[0]?.trim() ?? "";
+  // A kind of the run catalogue outside both tables concludes the same: the category selects only the
+  // `unrecorded` title.
+  return BUILT_IN_REASON_KINDS[kind] ?? declared[kind] ?? "infra";
+};
+
+/**
+ * The verdict of mameko's execution outcome, one case per tag (MAMEKO-RUN-047). A run's `skipped` carries only the
+ * detail, so its reason is `not-applicable`.
+ */
+export const verdictOf = (
+  outcome: ExecutionOutcome,
+  declared: Readonly<Record<string, Category>> = {},
+): Verdict =>
+  Match.value(outcome).pipe(
+    Match.tag("Success", (): Verdict => ({ _tag: "success" })),
+    Match.tag("Failure", ({ reason }): Verdict => ({
+      _tag: "failure",
+      category: categoryOf(reason, declared),
+      reason,
+    })),
+    Match.tag("Cancelled", ({ cause }): Verdict => ({ _tag: "cancelled", cause })),
+    Match.tag("Skipped", ({ detail }): Verdict => ({
+      _tag: "skipped",
+      reason: "not-applicable",
+      detail,
+    })),
+    Match.tag("Deferred", (): Verdict => ({ _tag: "deferred" })),
+    Match.tag("Expired", (): Verdict => ({ _tag: "expired" })),
     Match.exhaustive,
   );
 
