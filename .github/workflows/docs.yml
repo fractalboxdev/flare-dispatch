@@ -31,6 +31,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # vendor/mameko is a private submodule: a read-only deploy key on that
+      # repository fetches the pinned commit, so a fork's pull request, which
+      # receives no secrets, cannot install the workspace.
+      - name: Fetch vendor/mameko
+        env:
+          MAMEKO_DEPLOY_KEY: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$MAMEKO_DEPLOY_KEY" > ~/.ssh/mameko
+          chmod 600 ~/.ssh/mameko
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/mameko -o IdentitiesOnly=yes" git submodule update --init vendor/mameko
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -55,6 +66,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # vendor/mameko is a private submodule: a read-only deploy key on that
+      # repository fetches the pinned commit, so a fork's pull request, which
+      # receives no secrets, cannot install the workspace.
+      - name: Fetch vendor/mameko
+        env:
+          MAMEKO_DEPLOY_KEY: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$MAMEKO_DEPLOY_KEY" > ~/.ssh/mameko
+          chmod 600 ~/.ssh/mameko
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/mameko -o IdentitiesOnly=yes" git submodule update --init vendor/mameko
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

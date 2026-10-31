@@ -1,0 +1,3 @@
+[submodule "vendor/mameko"]
+	path = vendor/mameko
+	url = git@github.com:fractalboxdev/mameko.git
