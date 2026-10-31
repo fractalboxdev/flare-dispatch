@@ -240,31 +240,12 @@ const reasonKinds = (p: Profile): Rejection[] =>
     acceptanceKinds: acceptanceReasonKinds,
   }).map(({ path, reason }) => ({ item: "reason_kinds", path, reason }));
 
-/**
- * The validator's view of the document. `projectProfile` omits `terminal_outcome` and `bounds`, which mameko's
- * validator reads to refuse `per_run_scope` on a class that does not defer, so they are added here.
- */
-const projected = (p: Profile, c: ValidationContext) => {
-  const view = withDefaults(
-    projectProfile(p, { emittedKinds: c.emittedKinds, lines: linesOf(p, c.spend) }),
-  );
-  const declared = new Map(p.classes.map((d) => [d.name, d]));
-  return {
-    ...view,
-    classes: view.classes.map((v) => {
-      const d = declared.get(v.name);
-      return {
-        ...v,
-        terminal_outcome: d?.terminal_outcome,
-        ...(d?.bounds === undefined ? {} : { bounds: d.bounds }),
-      };
-    }),
-  };
-};
-
 /** Every rejection the profile validator finds in a decoded document; empty means accepted. */
 export const validateProfile = (p: Profile, c: ValidationContext): readonly Rejection[] => [
-  ...validateProjected(projected(p, c), c.bindings),
+  ...validateProjected(
+    withDefaults(projectProfile(p, { emittedKinds: c.emittedKinds, lines: linesOf(p, c.spend) })),
+    c.bindings,
+  ),
   ...context(p, c),
   ...classes(p),
   ...intentKinds(p),
