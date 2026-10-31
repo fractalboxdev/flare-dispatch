@@ -4,7 +4,7 @@ FlareDispatch's runs are mameko run definitions: typed Effect programs written w
 
 ## Scope
 
-mameko's [run-model.md](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/run-model.md) specifies `defineRun` and its bounds, the capability → primitive → run layering, steps, the run ceiling, the outcome partition, the error taxonomy, intents and their keys, child executions and the boundary-contract rule. FlareDispatch inherits them unchanged. Which outcomes each intent kind applies for, the outcome mapping onto check-run conclusions and the cancel causes and not-applicable details the profile declares are profile values ([profile.md](profile.md) § Outcome mapping, § Intent kinds).
+mameko's [run-model.md](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/run-model.md) specifies `defineRun` and its bounds, the capability → primitive → run layering, steps, the run ceiling, the outcome partition, the error taxonomy, intents and their keys, child executions and the boundary-contract rule. FlareDispatch inherits them unchanged. Which outcomes each intent kind applies for, the outcome mapping onto check-run conclusions and the cancel causes and not-applicable details the profile declares are profile values ([profile.md](profile.md) § Outcome mapping, § Intent kinds).
 
 This file depends on:
 
@@ -14,7 +14,7 @@ This file depends on:
 - [runs/gate.md](runs/gate.md) and [runs/agentic.md](runs/agentic.md) for the recipes and the reasons they produce;
 - [interfaces.md](interfaces.md) for the dispatch that carries `signals`.
 
-The decisions behind the run model are mameko's [ADR-0004](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/adr/0004-effect-workflow-owned-backends.md) (`effect/workflow` as the single run model) and [ADR-0005](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/adr/0005-run-body-in-executor.md) (run bodies in the executor, side effects as intents).
+The decisions behind the run model are mameko's [ADR-0004](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/adr/0004-effect-workflow-owned-backends.md) (`effect/workflow` as the single run model) and [ADR-0005](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/adr/0005-run-body-in-executor.md) (run bodies in the executor, side effects as intents).
 
 ## Model
 
@@ -24,7 +24,7 @@ FlareDispatch's run catalogue calls mameko's `defineRun(spec, body, catalogue)`,
 
 ### Runner entry
 
-FlareDispatch's run-catalogue bundle has one entry, which imports the run registry and calls mameko's `runnerMain` with it, so the catalogue and the runner carry one copy of `effect`. On a device, the device configuration pins the bundle ([MAMEKO-EXEC-121](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/executors.md)), and the device executor starts one runner child per lease with a run payload built from the `exec.lease` fields ([MAMEKO-PROTO-084](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/executor-protocol.md)). That payload's `attempt` counts the earlier leases of one execution and is not the attempt number of a check family ([README.md](README.md) § Glossary).
+FlareDispatch's run-catalogue bundle has one entry, which imports the run registry and calls mameko's `runnerMain` with it, so the catalogue and the runner carry one copy of `effect`. On a device, the device configuration pins the bundle ([MAMEKO-EXEC-121](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/executors.md)), and the device executor starts one runner child per lease with a run payload built from the `exec.lease` fields ([MAMEKO-PROTO-084](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/executor-protocol.md)). That payload's `attempt` counts the earlier leases of one execution and is not the attempt number of a check family ([README.md](README.md) § Glossary).
 
 ### Triggers
 
@@ -93,21 +93,21 @@ FlareDispatch's intent kinds, the outcomes each applies for and the GitHub call 
 
 ### Triggers
 
-- **FD-RUN-008** · phase 0 · `V-UNIT` — The decoded request union that FlareDispatch's request decoders take under [MAMEKO-RUN-010](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/run-model.md) must be the `DispatchEvent` union of § Triggers, with one member per trigger kind.
+- **FD-RUN-008** · phase 0 · `V-UNIT` — The decoded request union that FlareDispatch's request decoders take under [MAMEKO-RUN-010](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/run-model.md) must be the `DispatchEvent` union of § Triggers, with one member per trigger kind.
 
 ### Definitions
 
-- **FD-RUN-061** · phase 0 · `V-UNIT` — The run catalogue must pass `defineRun` the rank of each class of the profile as its `catalogue` argument ([MAMEKO-RUN-006](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/run-model.md)).
+- **FD-RUN-061** · phase 0 · `V-UNIT` — The run catalogue must pass `defineRun` the rank of each class of the profile as its `catalogue` argument ([MAMEKO-RUN-006](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/run-model.md)).
 - **FD-RUN-062** · phase 0 · `V-UNIT` — The run catalogue must keep every declaration `defineRun` does not decode in the run's catalogue entry, and must list in `requires` only mameko's capability names, so that `GithubRead` stays out of `requires`.
-- **FD-RUN-063** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — FlareDispatch's run-catalogue bundle must have one entry that calls `runnerMain` with the run registry, the only list of runs ([MAMEKO-RUN-008](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/run-model.md), [MAMEKO-EXEC-121](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/executors.md)).
+- **FD-RUN-063** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — FlareDispatch's run-catalogue bundle must have one entry that calls `runnerMain` with the run registry, the only list of runs ([MAMEKO-RUN-008](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/run-model.md), [MAMEKO-EXEC-121](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/executors.md)).
 
 ### Capabilities
 
-- **FD-RUN-017** · phase 0 · `V-UNIT` `V-CONF` — If a `GithubRead` read fails, then `GithubRead` must fail with `GithubReadFailed` or `GithubUncredentialed` and must not return an empty list, `undefined` or `Option.none` ([MAMEKO-RUN-022](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/run-model.md)).
+- **FD-RUN-017** · phase 0 · `V-UNIT` `V-CONF` — If a `GithubRead` read fails, then `GithubRead` must fail with `GithubReadFailed` or `GithubUncredentialed` and must not return an empty list, `undefined` or `Option.none` ([MAMEKO-RUN-022](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/run-model.md)).
 
 ### Outcomes
 
-- **FD-RUN-057** · phase 0 · `V-UNIT` — FlareDispatch's run catalogue must declare every reason kind of § Reason kinds except `provenance`, each in the category that table gives, so that under [MAMEKO-RUN-055](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/run-model.md) a `failure` reason with any other kind fails typecheck.
+- **FD-RUN-057** · phase 0 · `V-UNIT` — FlareDispatch's run catalogue must declare every reason kind of § Reason kinds except `provenance`, each in the category that table gives, so that under [MAMEKO-RUN-055](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/run-model.md) a `failure` reason with any other kind fails typecheck.
 
 ### Contracts
 

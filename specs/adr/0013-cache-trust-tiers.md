@@ -6,7 +6,7 @@ Status: Accepted · 2026-10-24
 
 - Cloudflare Containers start with an ephemeral disk and have no R2 binding inside the container, so every cloud execution starts cold unless bytes reach it over the network. Owned devices keep dependencies, compile outputs, browsers and model weights on local NVMe between runs; that warm state removes most of the minutes of a typical gate.
 - A cache that trusts any holder of a write credential lets a pull request poison what a protected branch later builds. The CREEP flaw in bucket-backed remote caches (CVE-2025-36852) worked because the CI definition sat outside the cache key. A shared symmetric signature proves only that the writer holds the shared key.
-- Executions move between executors: a reclaim restarts a device's `required` execution on a Cloudflare Container (mameko [ADR-0009](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/adr/0009-fenced-execution-leases.md)). A late device must not overwrite what the new epoch wrote.
+- Executions move between executors: a reclaim restarts a device's `required` execution on a Cloudflare Container (mameko [ADR-0009](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/adr/0009-fenced-execution-leases.md)). A late device must not overwrite what the new epoch wrote.
 - Mac job sandboxes run `linux/arm64`; Cloudflare Containers run `linux/amd64`.
 - Bytes that pass through a Worker or a container SDK file call move at about 1.5–2 MB/s for one archive.
 

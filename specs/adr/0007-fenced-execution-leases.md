@@ -1,6 +1,6 @@
 # ADR-0007: Fenced execution leases with epochs; a reclaim restarts the run
 
-Status: Superseded by mameko [ADR-0009](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/adr/0009-fenced-execution-leases.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0009](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/adr/0009-fenced-execution-leases.md) · 2026-10-24
 
 ## Context
 
@@ -70,7 +70,7 @@ sequenceDiagram
 ## Consequences
 
 - A reclaimed execution pays its full run time again. On a long run (a 45 min compile) a device loss near the end costs up to the whole run plus 90 s. That time is the cost accepted; no reclaim changes a verdict.
-- The control plane carries the restart anchor, the epoch on every lease-scoped credential, and epoch-scoped object keys. Each is a requirement in [placement-leases.md](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/placement-leases.md) and [executor-protocol.md](../executor-protocol.md) with its own test.
+- The control plane carries the restart anchor, the epoch on every lease-scoped credential, and epoch-scoped object keys. Each is a requirement in [placement-leases.md](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/placement-leases.md) and [executor-protocol.md](../executor-protocol.md) with its own test.
 - A partitioned device may run a job whose result is later refused. Its slot and power are spent for nothing; no cloud money is spent by the device.
 - The 90 s TTL delays the reclaim of a crashed device by up to 90 s; a device that announces sleep releases its leases and is reclaimed at once.
 - Changing the epoch rule later is expensive: it touches the Lean model, the TypeScript kernel, the D1 schema and every executor kind.
