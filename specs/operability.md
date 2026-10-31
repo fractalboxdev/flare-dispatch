@@ -39,7 +39,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `github.appId`, `github.fixtureRepo` | GitHub App id; the repository the synthetic webhook canary pushes to |
 | `intake.webhookEvents` | The webhook events intake admits ([intake.md](intake.md) FD-INT-027) |
 | `dispatch.oidcAudience` | The Actions OIDC audience of a dispatch ([interfaces.md](interfaces.md) FD-IFC-024) |
-| `executors.clientCa` | The certificate authority that signs device executors' client certificates ([mameko executor-protocol.md § Connection and authentication](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md#connection-and-authentication)) |
+| `executors.planeId` | This control plane's `plane_id`, which every device's `connect` signature binds ([interfaces.md](interfaces.md) FD-IFC-085); required from phase 1 |
 | `alerts.sink` | An HTTPS webhook URL or an email address |
 | `alerts.webhookSilentHours` | The delivery gap that raises `webhook-silent`, default 24 |
 | `spend.*` | The budget and reserve settings [spend.md](spend.md) defines |

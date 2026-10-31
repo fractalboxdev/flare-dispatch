@@ -24,8 +24,8 @@ The decisions behind the mechanisms are mameko's [ADR-0007](https://github.com/f
 | Item | Value |
 | --- | --- |
 | `policy_version` | `flare-dispatch.v2.0` |
-| Tenant scope | A GitHub repository, `<owner>/<repo>`; an `exec.lease` names it as the scope id and carries the commit SHA in its inputs |
-| `host` | `host-cloudflare`, features `cloudflare-containers` and `durable-object-alarms` |
+| Tenant scope | A GitHub repository, `<owner>/<repo>`; an `exec.lease` names it as the scope id and carries the commit SHA in its inputs, with the lease fields of FD-PROF-063 |
+| `host` | `adapter: host-cloudflare`, `features: [cloudflare-containers, durable-object-alarms]` |
 | `registration` | `key_stores: [secure-enclave]`, `attestation: verifier` |
 | `cache_namespaces` | Binding `cacheNamespaces` ([cache-artifacts.md](cache-artifacts.md)) |
 | `capacity` | `grant: capacityGrant`; `isolation` absent, so `vm` |
@@ -280,7 +280,7 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f3
 
 - **FD-PROF-001** · phase 0 · `V-UNIT` — FlareDispatch's configuration source, the implementation of mameko's configuration source port ([MAMEKO-PROF-002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/profiles.md)), must deliver the committed profile of `packages/profile/src/document.ts` as one document under policy version `flare-dispatch.v2.0`, holding the values this file states.
 - **FD-PROF-002** · phase 0 · `V-UNIT` — FlareDispatch's CI must compare the profile of `document.ts` with mameko's § The reference CI profile at the pinned mameko commit, and must fail on any difference that § Differences from the reference CI profile does not list.
-- **FD-PROF-063** · phase 0 · `V-UNIT` — When the control plane grants an execution lease, it must send in `exec.lease` the execution's repository as `<owner>/<repo>` for the scope id and the commit SHA the execution verifies among the inputs ([MAMEKO-PROTO-032](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md)).
+- **FD-PROF-063** · phase 0 · `V-UNIT` — When the control plane grants an execution lease, it must supply in the application's lease fields the execution's repository as `<owner>/<repo>` for the scope id, the commit SHA the execution verifies among the inputs, the run registry's run version and workflow version, and the request context admission recorded ([MAMEKO-PROTO-032](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md), [MAMEKO-PROTO-083](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md)).
 
 ### Class catalogue
 
@@ -328,8 +328,8 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f3
 
 ### Device slot defaults
 
-- **FD-PROF-035** · phase 1 · `V-UNIT` — FlareDispatch must write a device's registry row with 2 headroom slots kept for `required` on an 8-slot share, unless the operator sets another count for that device ([MAMEKO-LEASE-071](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
-- **FD-PROF-036** · phase 1 · `V-UNIT` — FlareDispatch must write a device's registry row with claim caps of 3 for `interactive`, 5 for `batch` and 6 for their sum on an 8-slot share, unless the operator sets other caps for that device ([MAMEKO-LEASE-072](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
+- **FD-PROF-035** · phase 1 · `V-UNIT` — FlareDispatch's enrollment route must pass `registerDevice` the slots that keep 2 headroom slots for `required` on an 8-slot share, unless the operator sets another count for that device ([MAMEKO-LEASE-071](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md), [interfaces.md](interfaces.md) FD-IFC-086).
+- **FD-PROF-036** · phase 1 · `V-UNIT` — FlareDispatch's enrollment route must pass `registerDevice` claim caps of 3 for `interactive`, 5 for `batch` and 6 for their sum on an 8-slot share, unless the operator sets other caps for that device ([MAMEKO-LEASE-072](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
 
 ### Placement
 
@@ -357,7 +357,7 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f3
 - **FD-PROF-049** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — The profile's approval floor must hold mameko's default list plus `wrangler d1` and `gh release` ([MAMEKO-ISO-046](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/isolation-egress.md)).
 - **FD-PROF-050** · phase 1 · `V-UNIT` — The profile's egress profiles must grant `setup` the `package-registries` and `git-remote` grants with other hosts for their declared methods, and `agent` the `model-gateway` and `git-remote` grants with every other granted host read-only.
 - **FD-PROF-051** · phase 1 · `V-UNIT` — The profile must add the signing purposes `statement` and `cache-entry` and no other.
-- **FD-PROF-052** · phase 1 · `V-UNIT` `V-CONF` — The profile must admit only the `secure-enclave` key store at device registration and must require the attestation verifier ([MAMEKO-LEASE-088](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
+- **FD-PROF-052** · phase 1 · `V-UNIT` `V-CONF` — The profile must admit only the `secure-enclave` key store at device registration, which excludes the `tpm` and `software` key stores, and must require the attestation verifier ([MAMEKO-LEASE-088](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
 - **FD-PROF-062** · phase 0 · `V-UNIT` `V-CONF` — The profile must name `cacheNamespaces` as the `cache_namespaces` binding, which assigns cache namespaces per executor kind at lease grant ([MAMEKO-LEASE-085](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md), [cache-artifacts.md](cache-artifacts.md)), and `capacityGrant` as the `capacity.grant` binding, which gives each capacity lease its cache namespaces ([MAMEKO-LEASE-086](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
 - **FD-PROF-053** · phase 4 · `V-UNIT` — The profile must declare the reason kind `provenance` in category `policy`, so that a result the result-acceptance check rejects concludes `failure` with reason `provenance: <check>` ([MAMEKO-PROF-032](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/profiles.md), [MAMEKO-LEASE-090](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
 

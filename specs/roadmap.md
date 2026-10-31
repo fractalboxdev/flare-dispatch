@@ -162,7 +162,7 @@ flowchart LR
 
 ## Phase 1: batch on owned devices
 
-**Goal.** Run `batch` control-plane work on owned devices with no required check at risk. Each device installs mameko's device bundle, whose device executor connects to its `ExecutorChannel` over mameko's executor protocol, beside FlareDispatch's device extension, which holds L1; `fd` is mameko's `<cli>` built with the name `fd`; capacity leases and the local scheduler run unguaranteed local work. A `batch` execution waits as a D1 row until a device claims it or its staleness point sends it to the cloud below its line; `release`, `required` and `interactive` placement is unchanged.
+**Goal.** Run `batch` control-plane work on owned devices with no required check at risk. Each device enrolls through `POST /v1/executors/register` and installs mameko's device bundle, whose device executor connects to its `ExecutorChannel` with an upgrade the device key signs, beside FlareDispatch's device extension, which holds L1; `fd` is mameko's `<cli>` built with the name `fd`; capacity leases and the local scheduler run unguaranteed local work. A `batch` execution waits as a D1 row until a device claims it or its staleness point sends it to the cloud below its line; `release`, `required` and `interactive` placement is unchanged.
 
 **Waits on.** mameko phase 1: the key helper, sandbox isolation with its probe, deny-all egress, per-lease credentials, capacity leases and the local scheduler on `host-cloudflare`.
 

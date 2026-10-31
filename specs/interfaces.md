@@ -31,7 +31,8 @@ Every surface passes exactly one identity check before any route logic runs.
 | HTTP API, `/v1/*` | Dispatcher | People, `fd`, automation | Cloudflare Access JWT (people and service tokens) | 0 |
 | `POST /v1/dispatch/:run` | Dispatcher | A GitHub Actions workflow step, or a member or service token through `fd` | GitHub Actions OIDC token, or Access JWT of an identity in `dispatchers` | 0 |
 | `POST /v1/webhooks/github` | Dispatcher | GitHub | HMAC-SHA256 over the raw body ([intake.md](intake.md)) | 0 |
-| `/v1/executors/connect` | `ExecutorChannel` Durable Object | Device executors and `gha` runners | Client certificate over mTLS whose SHA-256 fingerprint equals the executor row's `key_fingerprint` ([MAMEKO-PROTO-002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md)); for a `gha` runner, the launcher port's `verify` of its OIDC token ([executors.md](executors.md)) | 1 |
+| `/v1/executors/connect` | Dispatcher, then the `ExecutorChannel` Durable Object | Device executors and `gha` runners | A `connect` signature by the device key on the upgrade, verified against the executor row's `device_public_key` ([MAMEKO-PROTO-002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md)); for a `gha` runner, the launcher port's `verify` of its OIDC token ([executors.md](executors.md)) | 1 |
+| `POST /v1/executors/register` | Dispatcher | An operator enrolling a device | Access JWT of an identity in `operators` | 1 |
 | `/v1/executions/:id/logs/:file`, `/v1/artifacts/:artifact_id` | Dispatcher | Anyone holding a link | Link token, or Access JWT | 0 |
 | `/v1/compile-cache/*` | Dispatcher | `sccache` in a job | Compile-cache token ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-057) | 0 |
 | `POST /v1/model/completions` | Dispatcher | An executor's egress proxy, a local scheduler's host proxy | The execution's per-lease token with its epoch, or a capacity-lease proof of possession ([MAMEKO-MDL-040](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/model-gateway.md), [MAMEKO-MDL-041](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/model-gateway.md), [MAMEKO-MDL-043](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/model-gateway.md)) | 0 |
@@ -52,7 +53,7 @@ flowchart LR
     access{Access JWT}
     oidc{Actions OIDC token}
     hmac{Webhook HMAC}
-    mtls{Client certificate}
+    upgrade{Connect signature}
     api[HTTP API handlers]
     mcp[MCP server]
     intake[Intake]
@@ -62,26 +63,64 @@ flowchart LR
   agents --> access
   gha --> oidc
   gh --> hmac
-  agentd --> mtls
+  agentd --> upgrade
   access --> api
   access --> mcp
   oidc --> intake
   api --> intake
   mcp --> api
   hmac --> intake
-  mtls --> hub
+  upgrade --> hub
   access e1@-->|invalid or missing| deny[401 or 403, no route logic]
   oidc e2@-->|invalid or missing| deny
   hmac e3@-->|mismatch| deny
+  upgrade e4@-->|invalid or missing| deny
   class people,gha,agents accent
   class gh,agentd muted
-  class access,oidc,hmac,mtls warn
+  class access,oidc,hmac,upgrade warn
   class deny danger
   class cp group
-  class e1,e2,e3 failure
+  class e1,e2,e3,e4 failure
 ```
 
 *Identity gates · one gate per surface, and every gate runs before the route looks up a run or an execution.*
+
+### Device connection and enrollment
+
+A device has one credential for this control plane, its device key, and mameko specifies the check: the executor route verifies the `connect` signature on each upgrade before any executor channel runs ([mameko executor-protocol.md § Connection and authentication](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md#connection-and-authentication)). FlareDispatch supplies the route's path, its plane id and the registry row the signature is verified against.
+
+A device reaches the registry through `POST /v1/executors/register`, which mameko leaves to the application. The operator runs `fd identity` on the device ([MAMEKO-EXEC-131](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)) and sends its JSON output, with the executor id and the device's labels, to this route through `fd`. The dispatcher builds the slots from [profile.md](profile.md) § Device slot defaults and calls mameko's `registerDevice` with the profile's `registration`, FlareDispatch's attestation verifier and its posture source ([architecture.md](architecture.md) § Application ports). `registerDevice` answers `Registered`, or `Refused` with one of the reasons `key-store`, `attestation`, `public-key` and `posture`. A `software` key is refused with `key-store`, because the profile admits only `secure-enclave` ([profile.md](profile.md) FD-PROF-052).
+
+**A device enrolls once through an operator, then signs every upgrade with the device key**
+
+```mermaid
+sequenceDiagram
+  accTitle: Device enrollment, then a connect-signed upgrade
+  participant OP as Operator with fd
+  participant H as Key helper
+  participant DP as Dispatcher
+  participant RD as registerDevice
+  participant DX as Device executor
+  participant CH as ExecutorChannel
+  OP->>H: fd identity
+  H-->>OP: public key, key store, certificate chain, evidence
+  OP->>DP: POST /v1/executors/register, Access JWT
+  DP->>RD: identity, labels, slots
+  alt key store, attestation, public key and posture pass
+    RD-->>DP: Registered
+    DP-->>OP: 201 executor id, posture tier
+  else any check fails
+    RD-->>DP: Refused with reason
+    DP-->>OP: 403 registration_refused
+  end
+  DX->>H: sign connect digest for this plane
+  H-->>DX: signature
+  DX->>DP: upgrade on /v1/executors/connect
+  Note over DP: verifies against device_public_key, 403 otherwise
+  DP->>CH: forward to this executor's channel
+```
+
+*Device connection · enrollment writes the device key to the registry; each upgrade proves possession of it.*
 
 ### Error model
 
@@ -92,7 +131,7 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | 400 | `invalid_body`, `invalid_inputs`, `invalid_signals`, `invalid_idempotency_key`, `invalid_wait`, `reason_required`, `model_request_invalid` |
 | 401 | `unauthenticated`, `lease_stale`, `proof_invalid` |
 | 402 | `allowance_exhausted` |
-| 403 | `forbidden`, `repository_mismatch`, `link_expired`, `link_revoked`, `model_route_refused` |
+| 403 | `forbidden`, `repository_mismatch`, `link_expired`, `link_revoked`, `model_route_refused`, `registration_refused` |
 | 404 | `not_found`, `run_not_found`, `execution_not_found` |
 | 405 | `method_not_allowed` |
 | 409 | `conflict`, `not_failed`, `not_finished` |
@@ -116,6 +155,7 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `GET /v1/artifacts/:artifact_id` | One stored artifact and its browse paths ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-075) | 0 |
 | `GET`, `HEAD`, `PUT`, `PROPFIND`, `MKCOL` `/v1/compile-cache/:owner/:name/*` | The compile cache ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-056) | 0 |
 | `POST /v1/model/completions` | One `ModelCompletionRequest` through the model gateway | 0 |
+| `POST /v1/executors/register` | Register one device key ([§ Device connection and enrollment](#device-connection-and-enrollment)) | 1 |
 | `POST /v1/ops/halt` | Set the control state: `run`, `halt-cloud`, `halt-all` | 0 |
 | `POST /v1/ops/quarantine` | Quarantine one executor or one repository | 0 |
 | `POST /v1/ops/release` | Release a quarantined or drained executor, or a quarantined repository | 0 |
@@ -195,6 +235,7 @@ stateDiagram-v2
 | `fd ops halt`, `drain`, `quarantine`, `release`, `force-admit`, `top-up`, `revoke`, `pause-key`, `resume-key` | `/v1/ops/*` | 0 |
 | `fd deploy`, `fd doctor` | As [operability.md](operability.md) specifies | 0 |
 | `fd rehearse <run>`, `fd queue`, `fd lease` | The local scheduler socket; commands mameko's `<cli>` defines | 1 |
+| `fd identity` | The key helper socket; a command mameko's `<cli>` defines ([MAMEKO-EXEC-131](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)) | 1 |
 | `fd mcp` | Stdio MCP shim over both | 1 |
 | `fd verify <artifact>` | Offline, with a policy and a statement bundle | 4 |
 
@@ -255,7 +296,7 @@ flowchart LR
 - **FD-IFC-006** · phase 0 · `V-UNIT` — If a request body exceeds its route's limit (1 MiB by default, 25 MiB on `POST /v1/webhooks/github` as [intake.md](intake.md) FD-INT-023 specifies), then the dispatcher must answer 413 `payload_too_large` without parsing it.
 - **FD-IFC-007** · phase 0 · `V-UNIT` — If a request body fails its schema, then the dispatcher must answer 400 `invalid_body` naming the first failing path.
 - **FD-IFC-008** · phase 0 · `V-UNIT` — If a handler fails with a defect, then the dispatcher must record the defect under a request id and answer 500 `internal` with that id and no stack trace or exception text.
-- **FD-IFC-009** · phase 0 · `V-UNIT` — The dispatcher must answer every error with the JSON shape and a code from the error-model table.
+- **FD-IFC-009** · phase 0 · `V-UNIT` — The dispatcher must answer every error with the JSON shape and a code from the error-model table, except the `403` of a refused device upgrade, whose plain-text body mameko's executor route writes ([MAMEKO-PROTO-003](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md)).
 
 ### Identity gate
 
@@ -311,6 +352,13 @@ flowchart LR
 - **FD-IFC-050** · phase 0 · `V-UNIT` — If the coordinator rejects a force-admit or top-up request for its `expires_at` ([MAMEKO-OPS-033](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/operability.md)), then the dispatcher must answer 400 `invalid_body`.
 - **FD-IFC-083** · phase 0 · `V-UNIT` — The dispatcher must pass the request id it assigns to every `/v1/ops/*` call, the operator's Access identity and the `reason` to the coordinator's operation, which writes them on the audit row ([MAMEKO-OPS-032](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/operability.md)).
 
+### Executor connection and enrollment
+
+- **FD-IFC-085** · phase 1 · `V-CONF` `V-E2E-LOCAL` — The dispatcher must pass every `device` upgrade on `/v1/executors/connect` to mameko's executor route with the overlay's `executors.planeId` as the plane id ([MAMEKO-PROTO-002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md), [MAMEKO-PROTO-003](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md)), and must accept no other device credential.
+- **FD-IFC-086** · phase 1 · `V-UNIT` `V-CONF` — When `POST /v1/executors/register` receives a device's identity, the dispatcher must write the device's executor row only through mameko's `registerDevice`, under the profile's `registration` ([MAMEKO-LEASE-088](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
+- **FD-IFC-087** · phase 1 · `V-UNIT` — If `registerDevice` refuses a registration, then the dispatcher must answer 403 `registration_refused` naming the refusal reason and must write no executor row.
+- **FD-IFC-088** · phase 1 · `V-UNIT` — If the identity on a `POST /v1/executors/register` request is not in the operator overlay's `operators`, then the dispatcher must answer 403 `forbidden`.
+
 ### Well-known and provenance routes
 
 - **FD-IFC-051** · phase 0 · `V-UNIT` — The dispatcher must serve `/.well-known/openid-configuration` and `/.well-known/jwks.json` with `Cache-Control: max-age=3600`, and must answer 503 `not_configured` while no OIDC key is set.
@@ -362,3 +410,4 @@ flowchart LR
 ## Open items
 
 - TODO(maintainer): confirm that the MCP server implementation in Effect 4.0.6 serves the Streamable HTTP transport inside a Worker; FD-IFC-072 assumes it.
+- TODO(operator): decide whether enrollment stays an operator action under an Access identity or a managed device enrolls itself with an enrollment token; mameko leaves the route's authentication to the application.

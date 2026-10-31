@@ -249,9 +249,9 @@ flowchart LR
 ### Enrollment and attestation
 
 - **FD-PROV-028** · phase 4 · `V-CONF` — FlareDispatch's attestation verifier, which the profile selects with `registration.attestation: verifier` ([MAMEKO-LEASE-088](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)), must accept a device key's evidence only as a Managed Device Attestation that chains to the Apple Enterprise Attestation Root CA.
-- **FD-PROV-029** · phase 4 · `V-CONF` — If a device's attestation reports SIP disabled or a Secure Boot level other than full, then the attestation verifier must reject the evidence with `posture-failed`.
+- **FD-PROV-029** · phase 4 · `V-CONF` — If a device's attestation reports SIP disabled or a Secure Boot level other than full, then the attestation verifier must answer `false`, so that `registerDevice` refuses the device with `attestation`.
 - **FD-PROV-030** · phase 4 · `V-SIM` — While a device key is registered, the control plane must request re-attestation with a fresh freshness code every `reattest_interval`, set in the operator overlay with a default and a minimum of 7 days, the interval at which a device generates a new `DeviceInformation` attestation.
-- **FD-PROV-031** · phase 4 · `V-UNIT` — The attestation verifier must return as the device's code hash the key helper's code-signing hash from the code-signing requirement it checks at registration, never from the device's own report ([MAMEKO-LEASE-089](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
+- **FD-PROV-031** · phase 4 · `V-UNIT` — FlareDispatch's enrollment route must pass `registerDevice` as `codeHash` the key helper's code-signing hash from the code-signing requirement the attestation evidence carries, never a hash the device reports ([MAMEKO-LEASE-089](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)).
 
 ### Countersignature and transparency log
 
@@ -331,5 +331,7 @@ flowchart LR
 
 ## Open items
 
+- TODO(operator): decide whether FD-PROV-028, FD-PROV-029 and FD-PROV-031 move to phase 1. The profile requires the attestation verifier from phase 1 (FD-PROF-052), `registerDevice` refuses every device while no verifier is supplied, and mameko rejects a control plane that lacks the Layer ([MAMEKO-HOST-043](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md)); these requirements sit in phase 4.
+- TODO(maintainer): `code_hash` names the digest of the device executor build in mameko's registry and the key helper's code-signing hash in check 11 of § Acceptance; settle which one the row holds before phase 4.
 - TODO(operator): name the external witness for the private log (FD-PROV-039, FD-PROV-055).
 - TODO(maintainer): decide whether the egress proxy installs a TLS interception CA inside the job sandbox; without one, HTTPS dependencies carry `lockfile` digests only (FD-PROV-006).
