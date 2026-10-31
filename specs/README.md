@@ -4,11 +4,11 @@ FlareDispatch is CI/CD that an organization deploys into its own Cloudflare acco
 
 ## Depends on mameko
 
-FlareDispatch depends on mameko at commit `2c30413` (`2c3041335db0cf4a2193e5b11827f20631d54e87`). Every citation of mameko names that commit in full, so a mameko renumbering never changes what a citation means:
+FlareDispatch depends on mameko at commit `3af65c59d5f30123eb55b468966b4975c7395ece`. Every citation of mameko names that commit in full, so a mameko renumbering never changes what a citation means:
 
-- a requirement: `[MAMEKO-<AREA>-NNN](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/<file>.md)`;
+- a requirement: `[MAMEKO-<AREA>-NNN](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/<file>.md)`;
 - a section: the same link with the heading's anchor, written `mameko <file> § <heading>`;
-- an ADR: `https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/<file>.md`.
+- an ADR: `https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/<file>.md`.
 
 Moving the pin is one change that updates every link, rechecks each cited ID against `specs/ids.renames.tsv` at the new commit and passes the `spec-tags` check ([verification.md](verification.md) FD-VER-035, FD-VER-036).
 
@@ -38,7 +38,7 @@ Moving the pin is one change that updates every link, rechecks each cited ID aga
 
 ## Glossary
 
-Each term has one meaning in every file. A file that needs a new term adds it here. Terms of mameko's mechanism keep mameko's meaning and are defined in [mameko's glossary](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/README.md#glossary) and its term index: application, control plane, coordinator, port, profile, tenant scope, executor, executor kind, device, device executor, key helper, device extension, runner, job sandbox, job, workspace, run, request, execution, stage, class, placement, claim, execution lease, capacity lease, epoch, reclaim, hold, reservation, settle, line, burn lane, allowance, halt, control state, outcome, failure reason, cancel cause, intent, intent key, effect class, outbox, drainer, applier, applier rate limit, lifecycle intent, ops intent, ops run, dedup key, shed row, supersession, serial group, placement constraint, claim deadline, predicted miss, `deadline_at`, local class, confidentiality mode, model gateway, egress profile, egress phase, egress proxy, grant, grant catalogue and per-lease credential.
+Each term has one meaning in every file. A file that needs a new term adds it here. Terms of mameko's mechanism keep mameko's meaning and are defined in [mameko's glossary](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/README.md#glossary) and its term index: application, control plane, coordinator, port, profile, tenant scope, executor, executor kind, device, device executor, key helper, device extension, runner, job sandbox, job, workspace, run, request, execution, stage, class, placement, claim, execution lease, capacity lease, epoch, reclaim, hold, reservation, settle, line, burn lane, allowance, halt, control state, outcome, failure reason, cancel cause, intent, intent key, effect class, outbox, drainer, applier, applier rate limit, lifecycle intent, ops intent, ops run, dedup key, shed row, supersession, serial group, placement constraint, claim deadline, predicted miss, `deadline_at`, local class, confidentiality mode, model gateway, egress profile, egress phase, egress proxy, grant, grant catalogue and per-lease credential.
 
 | Term | Meaning |
 | --- | --- |

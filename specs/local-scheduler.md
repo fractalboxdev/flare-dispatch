@@ -4,17 +4,17 @@ Each device runs mameko's local scheduler unchanged. This file specifies FlareDi
 
 ## Scope
 
-mameko's [local-scheduler.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/local-scheduler.md) specifies the local scheduler's process and keys, the local classes, eligibility and admission, submitters and merging, the Unix socket and workspaces, the tailnet submit port, preemption, expiry, drain and offline mode, advisory results and the registration exchange, and its credentials. No device schedules guaranteed work: the control plane schedules every P0 to P3 execution and owns every check, and local work stays advisory unless a registered rehearsal stands in under the reuse policy.
+mameko's [local-scheduler.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/local-scheduler.md) specifies the local scheduler's process and keys, the local classes, eligibility and admission, submitters and merging, the Unix socket and workspaces, the tailnet submit port, preemption, expiry, drain and offline mode, advisory results and the registration exchange, and its credentials. No device schedules guaranteed work: the control plane schedules every P0 to P3 execution and owns every check, and local work stays advisory unless a registered rehearsal stands in under the reuse policy.
 
-On the device, `fd` is mameko's `<cli>` built with the command name `fd` from the source archive of the mameko release the device bundle comes from ([MAMEKO-REL-036](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md), [MAMEKO-REL-037](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md)); the device executor accepts it only when its embedded release version equals its own ([MAMEKO-REL-038](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md)), and the local scheduler's submit group is `fd-submit` ([MAMEKO-REL-040](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md)).
+On the device, `fd` is mameko's `<cli>` built with the command name `fd` from the source archive of the mameko release the device bundle comes from ([MAMEKO-REL-036](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/releases.md), [MAMEKO-REL-037](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/releases.md)); the device executor accepts it only when its embedded release version equals its own ([MAMEKO-REL-038](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/releases.md)), and the local scheduler's submit group is `fd-submit` ([MAMEKO-REL-040](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/releases.md)).
 
-FlareDispatch implements three of mameko's application ports for local work ([hosts.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/hosts.md) § Application ports):
+FlareDispatch implements three of mameko's application ports for local work ([hosts.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md) § Application ports):
 
 | Port | mameko requirement | FlareDispatch's implementation |
 | --- | --- | --- |
-| Local registration port | [MAMEKO-PROTO-081](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executor-protocol.md), [MAMEKO-LOCAL-069](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/local-scheduler.md) | § Rehearsal and registration |
-| Reuse policy | [MAMEKO-LOCAL-075](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/local-scheduler.md) | § Rehearsal reuse |
-| Writeback gate | [MAMEKO-PROTO-082](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executor-protocol.md) | § Writeback from local work |
+| Local registration port | [MAMEKO-PROTO-081](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md), [MAMEKO-LOCAL-069](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/local-scheduler.md) | § Rehearsal and registration |
+| Reuse policy | [MAMEKO-LOCAL-075](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/local-scheduler.md) | § Rehearsal reuse |
+| Writeback gate | [MAMEKO-PROTO-082](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md) | § Writeback from local work |
 
 This file depends on:
 
@@ -24,7 +24,7 @@ This file depends on:
 - [github-output.md](github-output.md) for the draft pull request and the pull-request review a writeback produces;
 - [interfaces.md](interfaces.md) for `fd`, the MCP tool schemas and the execution id grammar.
 
-[ADR-0001](adr/0001-local-first-control-plane.md) and mameko's [ADR-0003](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0003-two-level-scheduling-owned-devices-first.md) record why devices run only unguaranteed work.
+[ADR-0001](adr/0001-local-first-control-plane.md) and mameko's [ADR-0003](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0003-two-level-scheduling-owned-devices-first.md) record why devices run only unguaranteed work.
 
 ## Model
 
@@ -88,17 +88,17 @@ The writeback gate decides each `local.writeback` request of a registered execut
 
 ### Local run context
 
-- **FD-LOCAL-018** · phase 1 · `V-UNIT` — The kinds that only decorate a local execution's own outcome, which the local run context records as logged no-ops under [MAMEKO-LOCAL-017](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/local-scheduler.md), must be exactly `check.summary` and `check.annotations`.
+- **FD-LOCAL-018** · phase 1 · `V-UNIT` — The kinds that only decorate a local execution's own outcome, which the local run context records as logged no-ops under [MAMEKO-LOCAL-017](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/local-scheduler.md), must be exactly `check.summary` and `check.annotations`.
 - **FD-LOCAL-019** · phase 1 · `V-UNIT` — The local run context must turn each `Intents` append of a registered execution of any other kind into a `local.writeback` request.
-- **FD-LOCAL-020** · phase 1 · `V-UNIT` — If an unregistered execution appends an intent of a kind other than `check.summary` or `check.annotations`, then the local run context must fail the step with `RegistrationRequired` ([MAMEKO-LOCAL-018](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/local-scheduler.md)).
-- **FD-LOCAL-055** · phase 1 · `V-UNIT` `V-REPLAY` — The local run context must key each intent of a `local.writeback` request by the execution id and the run-authored key `run:<step name>:<index>` of [MAMEKO-RUN-068](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/run-model.md), so a rerun step never writes twice.
+- **FD-LOCAL-020** · phase 1 · `V-UNIT` — If an unregistered execution appends an intent of a kind other than `check.summary` or `check.annotations`, then the local run context must fail the step with `RegistrationRequired` ([MAMEKO-LOCAL-018](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/local-scheduler.md)).
+- **FD-LOCAL-055** · phase 1 · `V-UNIT` `V-REPLAY` — The local run context must key each intent of a `local.writeback` request by the execution id and the run-authored key `run:<step name>:<index>` of [MAMEKO-RUN-068](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/run-model.md), so a rerun step never writes twice.
 - **FD-LOCAL-067** · phase 1 · `V-UNIT` — While in offline mode, the local scheduler must send no writeback request.
 - **FD-LOCAL-071** · phase 1 · `V-SIM` — If a new grant rejects a registered in-flight execution, then the local scheduler must send no writeback request for it.
 
 ### Rehearsal and registration
 
-- **FD-LOCAL-072** · phase 1 · `V-UNIT` — When the local registration port accepts a rehearsal, it must record the rehearsal's environment names beside the tree hash, base commit SHA, run-definition digest, image digest, platform and inputs digest that [MAMEKO-LOCAL-069](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/local-scheduler.md) passes it.
-- **FD-LOCAL-075** · phase 1 · `V-UNIT` `V-SIM` — A local execution must register under [MAMEKO-LOCAL-068](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/local-scheduler.md) exactly when it requests rehearsal reuse or writeback.
+- **FD-LOCAL-072** · phase 1 · `V-UNIT` — When the local registration port accepts a rehearsal, it must record the rehearsal's environment names beside the tree hash, base commit SHA, run-definition digest, image digest, platform and inputs digest that [MAMEKO-LOCAL-069](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/local-scheduler.md) passes it.
+- **FD-LOCAL-075** · phase 1 · `V-UNIT` `V-SIM` — A local execution must register under [MAMEKO-LOCAL-068](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/local-scheduler.md) exactly when it requests rehearsal reuse or writeback.
 
 ### Rehearsal reuse
 

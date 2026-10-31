@@ -1,6 +1,6 @@
 # ADR-0002: Effect workflow as the single run model, on engine backends built in this repository
 
-Status: Superseded by mameko [ADR-0004](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0004-effect-workflow-owned-backends.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0004](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0004-effect-workflow-owned-backends.md) · 2026-10-24
 
 ## Context
 
@@ -13,8 +13,8 @@ Status: Superseded by mameko [ADR-0004](https://github.com/fractalboxdev/mameko/
 ## Decision
 
 - Every run and the control plane's `Execution` workflow are `effect/workflow` programs: `Workflow.make` for each workflow, `Activity.make` for each step, `DurableDeferred` for each external completion, `DurableClock` for each timed wait.
-- This repository builds four backends of `WorkflowEngine.Encoded`: DO-SQLite (the control plane on Cloudflare), SQLite (every runner and local scheduler), Postgres (the portable control plane) and memory (tests) (mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/engine.md)). The memory backend is built here, not taken from `WorkflowEngine.layerMemory`, because the replay harness reads and replays journal rows, which `layerMemory` does not expose.
-- `effect` is pinned at exactly 4.0.6. An Effect version change merges only through the upgrade gate: the engine conformance suite, the replay of recorded journals, the simulation suite, and the suites of the HTTP API, the `fd` CLI, the MCP tools and the agent's process spawning, which use other `@stability unstable` modules (mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/engine.md) § Upgrade gate).
+- This repository builds four backends of `WorkflowEngine.Encoded`: DO-SQLite (the control plane on Cloudflare), SQLite (every runner and local scheduler), Postgres (the portable control plane) and memory (tests) (mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/engine.md)). The memory backend is built here, not taken from `WorkflowEngine.layerMemory`, because the replay harness reads and replays journal rows, which `layerMemory` does not expose.
+- `effect` is pinned at exactly 4.0.6. An Effect version change merges only through the upgrade gate: the engine conformance suite, the replay of recorded journals, the simulation suite, and the suites of the HTTP API, the `fd` CLI, the MCP tools and the agent's process spawning, which use other `@stability unstable` modules (mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/engine.md) § Upgrade gate).
 - Cloudflare Workflows is not used.
 
 ## Options considered
