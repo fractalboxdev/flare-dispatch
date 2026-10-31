@@ -1,6 +1,6 @@
 # ADR-0006: Executor-aware spend meter with holds, nested lines and burn lanes
 
-Status: Superseded by mameko [ADR-0008](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0008-executor-aware-spend.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0008](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0008-executor-aware-spend.md) · 2026-10-24
 
 ## Context
 
@@ -43,7 +43,7 @@ Status: Superseded by mameko [ADR-0008](https://github.com/fractalboxdev/mameko/
 - Conservative holds: an execution reserves its whole window to `deadline_at` plus the settle margin, well above its typical settle, so lines close earlier than settled spend alone would. Tightening `maxDurationSec` from measured p99 is the lever; the estimate-drift metric shows the gap.
 - `R0 + R1` stays unspent in a normal month and is never lent to P2 or P3.
 - Worst-case hourly burn rises to the P0 lane for P0 and P1 only; P2 and P3 together stay under their lane.
-- The meter overstates container cost, so every line admits less billed spend than its figure until `B` is defined in billed dollars, an open decision recorded in [spend.md](../spend.md).
+- The meter overstates container cost, so every line admits less billed spend than its figure; `B` counts metered dollars ([spend.md](../spend.md)).
 - At a small budget and high required-check volume, `R1` absorbs most of `B` and the `budget-too-small` alarm stays on; P3 cloud spend then stops near 0.
 - The claim batch gains spend, lane, browser-session and control-state subqueries; their D1 cost under load needs measurement.
 - Unknown completions (an evicted container, an offline device) keep their reservation counted as `unresolved` until reconciliation, which can close a line early during an incident.

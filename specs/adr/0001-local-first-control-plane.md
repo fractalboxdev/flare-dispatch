@@ -1,6 +1,6 @@
 # ADR-0001: A Cloudflare-hosted CI application on mameko
 
-Status: Superseded in part by mameko [ADR-0003](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0003-two-level-scheduling-owned-devices-first.md) · 2026-10-24
+Status: Superseded in part by mameko [ADR-0003](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0003-two-level-scheduling-owned-devices-first.md) · 2026-10-24
 
 mameko's ADR-0003 decides fleet-first execution, the two scheduling levels and leases over the device's outbound connection; this record decides what FlareDispatch is and where its control plane runs.
 
@@ -9,13 +9,13 @@ mameko's ADR-0003 decides fleet-first execution, the two scheduling levels and l
 - Cloudflare Containers carry most of the deploying organization's Cloudflare bill for CI; the control plane (Workers, Durable Objects, D1, R2) costs well under one cent per execution.
 - GitHub does not redeliver a failed webhook on its own, and branch protection waits forever on a required check that nobody creates. The component that receives webhooks and posts required checks must stay up when any one machine is down.
 - Teams that adopt FlareDispatch hold idle machines across members (workstations, a dedicated build machine), and want placement by member, device posture and workload class.
-- mameko supplies the scheduling mechanism FlareDispatch needs as libraries: the coordinator, admission, spend, fenced leases, the outbox, the device executor and the `host-cloudflare` runtime adapter ([mameko ADR-0001](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0001-libraries-device-executor-protocol.md), [ADR-0002](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0002-host-neutral-core-two-hosts.md)). An application supplies a profile, appliers and its own deployment.
+- mameko supplies the scheduling mechanism FlareDispatch needs as libraries: the coordinator, admission, spend, fenced leases, the outbox, the device executor and the `host-cloudflare` runtime adapter ([mameko ADR-0001](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0001-libraries-device-executor-protocol.md), [ADR-0002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0002-host-neutral-core-two-hosts.md)). An application supplies a profile, appliers and its own deployment.
 
 ## Decision
 
 - FlareDispatch is a CI application on mameko. It composes mameko's coordinator with `host-cloudflare`, its CI profile ([profile.md](../profile.md)) and its GitHub appliers, and specifies only what an application decides: its triggers, its GitHub output, its interfaces, its cache, its provenance, its implementations of mameko's application ports and its phases ([architecture.md](../architecture.md)).
 - The control plane runs on Cloudflare in the deploying organization's account: the dispatcher Worker, the `host-cloudflare` Durable Object classes, FlareDispatch's own Durable Objects, D1, KV and R2. It receives every trigger, owns every check run and GitHub side effect, and holds every credential that can change GitHub or spend money.
-- FlareDispatch installs mameko at exact versions and copies mameko's templates once ([mameko ADR-0018](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0018-installed-and-copied-code.md)); devices run mameko's device bundle on the platforms and job runtimes mameko supports ([mameko ADR-0019](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0019-device-platforms-and-job-runtimes.md)).
+- FlareDispatch installs mameko at exact versions and copies mameko's templates once ([mameko ADR-0018](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0018-installed-and-copied-code.md)); devices run mameko's device bundle on the platforms and job runtimes mameko supports ([mameko ADR-0019](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0019-device-platforms-and-job-runtimes.md)).
 - FlareDispatch composes `host-cloudflare` only.
 
 ```mermaid

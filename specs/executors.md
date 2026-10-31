@@ -4,7 +4,7 @@ FlareDispatch runs every execution on mameko's executor kinds, and adds one laun
 
 ## Scope
 
-mameko's [executors.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md) specifies the executor contract, the exec contract, capability labels, images and probes, the Cloudflare Container pool, the device executor and its job runtimes, the key helper, the AWS launcher, the device extensions and the breakers. FlareDispatch inherits them unchanged. The class catalogue, each class's cloud executor preference order, the signing purposes, the device key stores and the rate card are profile values ([profile.md](profile.md)).
+mameko's [executors.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md) specifies the executor contract, the exec contract, capability labels, images and probes, the Cloudflare Container pool, the device executor and its job runtimes, the key helper, the AWS launcher, the device extensions and the breakers. FlareDispatch inherits them unchanged. The class catalogue, each class's cloud executor preference order, the signing purposes, the device key stores and the rate card are profile values ([profile.md](profile.md)).
 
 This file depends on:
 
@@ -13,9 +13,9 @@ This file depends on:
 - [executor-protocol.md](executor-protocol.md) for the `verify` method that authenticates a `gha` socket;
 - [isolation-egress.md](isolation-egress.md) for the egress firewall on a `gha` runner job;
 - [operability.md](operability.md) for the deploy drift check;
-- mameko's [hosts.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/hosts.md) § Application ports for the launcher port.
+- mameko's [hosts.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md) § Application ports for the launcher port.
 
-The decisions behind the executors are mameko's [ADR-0005](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0005-run-body-in-executor.md) (the run body executes inside the executor), [ADR-0011](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0011-device-isolation.md) (device isolation), [ADR-0012](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0012-device-executor-implementation.md) (device programs in Rust) and [ADR-0019](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/adr/0019-device-platforms-and-job-runtimes.md) (device platforms and job runtimes).
+The decisions behind the executors are mameko's [ADR-0005](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0005-run-body-in-executor.md) (the run body executes inside the executor), [ADR-0011](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0011-device-isolation.md) (device isolation), [ADR-0012](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0012-device-executor-implementation.md) (device programs in Rust) and [ADR-0019](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0019-device-platforms-and-job-runtimes.md) (device platforms and job runtimes).
 
 ## Model
 
@@ -32,19 +32,19 @@ Each class tries the cloud kinds in the order the profile gives it. Every class 
 
 ### Devices
 
-A device runs mameko's device bundle for its platform: the device executor, the local scheduler, the key helper, the sandbox relay and the runner, all from one mameko release ([MAMEKO-REL-047](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md), [MAMEKO-REL-049](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/releases.md)). The device programs are Rust binaries ([MAMEKO-EXEC-119](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)); FlareDispatch adds only `fd`, mameko's `<cli>` built with the command name `fd` from the same release ([interfaces.md](interfaces.md)). The key helper holds the device key and is the only process that signs with it.
+A device runs mameko's device bundle for its platform: the device executor, the local scheduler, the key helper, the sandbox relay and the runner, all from one mameko release ([MAMEKO-REL-047](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/releases.md), [MAMEKO-REL-049](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/releases.md)), with FlareDispatch's run-catalogue bundle ([run-model.md](run-model.md) § Runner entry) and device extension beside it. The device programs are Rust binaries ([MAMEKO-EXEC-119](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)); FlareDispatch adds only `fd`, mameko's `<cli>` built with the command name `fd` from the same release ([interfaces.md](interfaces.md)). The key helper holds the device key and is the only process that signs with it; that key is the device's only credential for the control plane ([MAMEKO-EXEC-068](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md), [interfaces.md](interfaces.md) § Device connection and enrollment).
 
-FlareDispatch's profile admits device keys only from the `secure-enclave` key store ([profile.md](profile.md) FD-PROF-052), so only a Mac with a Secure Enclave registers. On a Mac the job runtime is `apple-container`, which needs Apple `container` 1.6.0 or later ([MAMEKO-EXEC-129](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)). No FlareDispatch class declares `isolation: container`, so a device under `oci-engine` would also need a VM-backed OCI runtime to advertise `isolation:vm` and take any FlareDispatch execution ([MAMEKO-EXEC-098](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md)).
+FlareDispatch's profile admits device keys only from the `secure-enclave` key store ([profile.md](profile.md) FD-PROF-052), so only a Mac with a Secure Enclave registers. On a Mac the job runtime is `apple-container`, which needs Apple `container` 1.6.0 or later ([MAMEKO-EXEC-129](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)). No FlareDispatch class declares `isolation: container`, so a device under `oci-engine` would also need a VM-backed OCI runtime to advertise `isolation:vm` and take any FlareDispatch execution ([MAMEKO-EXEC-098](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)).
 
 ### The GitHub Actions launcher
 
-The GitHub Actions launcher is FlareDispatch's implementation of mameko's launcher port for the kind `gha` ([MAMEKO-HOST-044](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/hosts.md)):
+The GitHub Actions launcher is FlareDispatch's implementation of mameko's launcher port for the kind `gha` ([MAMEKO-HOST-044](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md)):
 
 | Port method | FlareDispatch's implementation | Requirements |
 | --- | --- | --- |
 | `start(lease)` | One `workflow_dispatch` run of the runner workflow in the runner repository the operator overlay names, with the execution id, the epoch and the minutes until `deadline_at` as its only inputs | FD-EXEC-085 to FD-EXEC-087 |
 | `cancel(execution_id, epoch)` | Cancels that workflow run through the Actions API | FD-EXEC-092 |
-| `verify(identity claims)` | Accepts the runner job's GitHub Actions OIDC token for the one launch it names | FD-EXEC-088 to FD-EXEC-090, [executor-protocol.md](executor-protocol.md) FD-PROTO-014 |
+| `verify(identity claims)` | Answers `true` for the runner job's GitHub Actions OIDC token of the one launch it names, `false` otherwise | FD-EXEC-088 to FD-EXEC-090, [executor-protocol.md](executor-protocol.md) FD-PROTO-014 |
 
 **The launcher starts a workflow run; the runner job claims its lease with its OIDC token**
 
@@ -60,7 +60,7 @@ sequenceDiagram
   GA->>J: job with timeout-minutes from the input
   J->>CP: open socket with OIDC token, audience the control plane
   CP->>LP: verify(identity claims)
-  LP-->>CP: accepted for (execution_id, epoch)
+  LP-->>CP: true
   CP-->>J: lease
   alt cancel or reclaim
     CP->>LP: cancel(execution_id, epoch)
@@ -76,15 +76,15 @@ sequenceDiagram
 
 ### Workspaces
 
-- **FD-EXEC-007** · phase 1 · `V-CONF` — The cache entries from which [MAMEKO-EXEC-007](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md) lets an executor restore a workspace must be only the L1 or L2 entries that [cache-artifacts.md](cache-artifacts.md) admits for a cache namespace the execution may read.
+- **FD-EXEC-007** · phase 1 · `V-CONF` — The cache entries from which [MAMEKO-EXEC-007](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md) lets an executor restore a workspace must be only the L1 or L2 entries that [cache-artifacts.md](cache-artifacts.md) admits for a cache namespace the execution may read.
 
 ### Device CPU priority
 
-- **FD-EXEC-059** · phase 1 · `V-E2E-LOCAL` — Under [MAMEKO-EXEC-055](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md) and the class catalogue of [profile.md](profile.md), the device executor must start `required` (P1) job sandboxes at `user-initiated`, `interactive` (P2) at `utility`, and `batch` (P3) and capacity-lease sandboxes at `background` under `apple-container`.
+- **FD-EXEC-059** · phase 1 · `V-E2E-LOCAL` — Under [MAMEKO-EXEC-055](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md) and the class catalogue of [profile.md](profile.md), the device executor must start `required` (P1) job sandboxes at `user-initiated`, `interactive` (P2) at `utility`, and `batch` (P3) and capacity-lease sandboxes at `background` under `apple-container`.
 
 ### AWS budget check
 
-- **FD-EXEC-083** · phase 3 · `V-DEPLOY` — The drift check in [operability.md](operability.md) must read the AWS Budgets action that [MAMEKO-EXEC-087](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/executors.md) requires in the deploying organization's AWS account, and must fail when it is missing.
+- **FD-EXEC-083** · phase 3 · `V-DEPLOY` — The drift check in [operability.md](operability.md) must read the AWS Budgets action that [MAMEKO-EXEC-087](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md) requires in the deploying organization's AWS account, and must fail when it is missing.
 
 ### GitHub Actions launcher
 

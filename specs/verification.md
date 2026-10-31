@@ -6,7 +6,7 @@ This file specifies how FlareDispatch proves that each of its requirements holds
 
 This file covers the ten verification tags of [README.md](README.md), the CI jobs that run them, the merge gate, the phase gates, the `spec-tags` check, FlareDispatch's formal gate (Lean 4 for the staged-write gate and the cache namespaces, Tamarin for provenance, differential testing of `stagedWriteGate`) and the coverage counts. Tags are inline on each requirement, so this file holds no row per requirement: a requirement's tags name its harnesses, and its phase names the gate that requires those harnesses to pass.
 
-mameko's [verification.md](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md) specifies the harnesses for mameko's own requirements: the coordinator conformance suite, the kernels' Lean models and differential testing, the fleet simulation and the replay check. FlareDispatch runs mameko's conformance suite against its own composed control plane (FD-VER-032) and cites mameko's theorems for the properties of the mechanism it inherits; it does not re-prove them.
+mameko's [verification.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/verification.md) specifies the harnesses for mameko's own requirements: the coordinator conformance suite, the kernels' Lean models and differential testing, the fleet simulation and the replay check. FlareDispatch runs mameko's conformance suite against its own composed control plane (FD-VER-032) and cites mameko's theorems for the properties of the mechanism it inherits; it does not re-prove them.
 
 It depends on [README.md](README.md) for the requirement format, the area table, the tag table and the moved-ID table; on [roadmap.md](roadmap.md) for the phases, the `V-MEASURE` thresholds and the kill lines; on [operability.md](operability.md) for the deploy workflow, the drift check, the canary and the alarms; on [profile.md](profile.md) for the profile the reference diff reads; on [provenance.md](provenance.md) for the Tamarin gate (FD-PROV-072, FD-PROV-073); and on [adr/0018-formal-models.md](adr/0018-formal-models.md) for the Tamarin model.
 
@@ -92,7 +92,7 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-DIFF`
 
-- **Runs:** `fast-check` traces through `stagedWriteGate` and through the native oracle compiled from its Lean model, comparing outputs after every event. mameko's kernels are differentially tested in mameko ([mameko verification.md § Differential testing](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md#differential-testing)).
+- **Runs:** `fast-check` traces through `stagedWriteGate` and through the native oracle compiled from its Lean model, comparing outputs after every event. mameko's kernels are differentially tested in mameko ([mameko verification.md § Differential testing](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/verification.md#differential-testing)).
 - **Lives:** `test/diff/` for the generators and the comparison, the `oracle` executable built by `lake build oracle` in `formal/`, and `formal/regressions.jsonl` for every trace that ever differed.
 - **Runs when:** every pull request with 10,000 traces, in the `diff` job; nightly with 1,000,000 traces. Every run first replays every line of `formal/regressions.jsonl`.
 - **Failure blocks:** the merge (per pull request); the phase gate (nightly).
@@ -267,13 +267,13 @@ flowchart TB
 
 ### Formal properties
 
-Each row maps one property to the FlareDispatch requirements it covers, the theorem or lemma that proves it and the `V-CONF` or `V-SIM` requirements that test the assumptions the proof uses. A name marked *proved* checks under the formal gate; a name marked *planned* is the theorem the requirement's `V-PROOF` tag names before it exists. Lean theorems live in `formal/FdFormal/` and Tamarin lemmas in `formal/provenance.spthy`. The properties of mameko's mechanism (the spend bound, the lines, fencing, the outbox, placement, credentials and egress) are mameko's rows in [mameko verification.md § Formal properties](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md#formal-properties).
+Each row maps one property to the FlareDispatch requirements it covers, the theorem or lemma that proves it and the `V-CONF` or `V-SIM` requirements that test the assumptions the proof uses. A name marked *proved* checks under the formal gate; a name marked *planned* is the theorem the requirement's `V-PROOF` tag names before it exists. Lean theorems live in `formal/FdFormal/` and Tamarin lemmas in `formal/provenance.spthy`. The properties of mameko's mechanism (the spend bound, the lines, fencing, the outbox, placement, credentials and egress) are mameko's rows in [mameko verification.md § Formal properties](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/verification.md#formal-properties).
 
 | Property | Statement | Requirements | Theorem or lemma | Assumption tests |
 | --- | --- | --- | --- | --- |
 | S3 · profile | FlareDispatch's profile keeps `untrusted-input`, `cloud-pinned` and `cloud-only` work off devices and `local-only` work off the cloud, and the profile validator rejects a profile that leaves a `required` request unplaceable | FD-INT-030, FD-INT-061, FD-OPS-021, FD-GATE-061, FD-GATE-080 | mameko's `Placement` theorems over the profile, row S3 · executors of mameko's table | mameko's assumption tests of that row |
 | S5 · trifecta | No run declaration combines private data, untrusted input and outbound access | FD-AGT-004 | `Egress.no_trifecta_declaration` *planned* | FD-AGT-005 (runtime trifecta refusal) |
-| S6 | A pull-request-namespace writer cannot change what a protected-trigger reader restores | FD-CACHE-015, FD-CACHE-017, FD-CACHE-018, FD-CACHE-019, FD-CACHE-022, FD-CACHE-023, FD-CACHE-027, FD-CACHE-029, FD-CACHE-058 | `Cache.pr_writer_noninterference` *planned* | FD-CACHE-016, FD-CACHE-041 (namespaces from the lease, create-only manifests), with read-only cache directories under [MAMEKO-ISO-004](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/isolation-egress.md) |
+| S6 | A pull-request-namespace writer cannot change what a protected-trigger reader restores | FD-CACHE-015, FD-CACHE-017, FD-CACHE-018, FD-CACHE-019, FD-CACHE-022, FD-CACHE-023, FD-CACHE-027, FD-CACHE-029, FD-CACHE-058 | `Cache.pr_writer_noninterference` *planned* | FD-CACHE-016, FD-CACHE-041 (namespaces from the lease, create-only manifests), with read-only cache directories under [MAMEKO-ISO-004](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/isolation-egress.md) |
 | S7a | Injective agreement: an accepted statement was signed by the device its lease was issued to, and no other accepted statement carries its nonce, unless that device key was revealed before it signed | FD-PROV-010, FD-PROV-013, FD-PROV-014, FD-PROV-017, FD-PROV-018, FD-PROV-020, FD-PROV-021, FD-PROV-032 | `injective_agreement` *planned* | FD-PROV-013, FD-PROV-014, FD-PROV-017, FD-PROV-018, FD-PROV-020, FD-PROV-021 |
 | S7b | Freshness: no statement for epoch k is accepted after a reclaim to k + 1, and no statement produced before its lease is accepted | FD-PROV-011, FD-PROV-012, FD-PROV-019 | `freshness` *planned* | FD-PROV-011, FD-PROV-019 |
 | S7c | Compromise scope: a revealed device key yields countersignatures only for that device's leases while it is registered and not revoked, and never the `reproduced` tier | FD-PROV-009, FD-PROV-015, FD-PROV-057, FD-PROV-061 | `compromise_scope` *planned* | FD-PROV-009, FD-PROV-015, FD-PROV-057, FD-PROV-061 |
@@ -292,31 +292,31 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 
 | Phase | Requirements | `V-UNIT` | `V-CONF` | `V-SIM` | `V-REPLAY` | `V-E2E-LOCAL` | `V-DEPLOY` | `V-LIVE` | `V-MEASURE` | `V-PROOF` | `V-DIFF` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 516 | 471 | 22 | 31 | 14 | 29 | 46 | 22 | 4 | 14 | 11 |
-| 1 | 51 | 44 | 8 | 3 | 1 | 6 | 2 | 0 | 2 | 3 | 0 |
+| 0 | 520 | 474 | 23 | 31 | 14 | 29 | 47 | 22 | 4 | 14 | 11 |
+| 1 | 56 | 48 | 10 | 3 | 1 | 8 | 2 | 0 | 2 | 3 | 0 |
 | 2 | 56 | 56 | 0 | 4 | 1 | 4 | 0 | 0 | 0 | 1 | 1 |
 | 3 | 26 | 24 | 0 | 1 | 0 | 2 | 1 | 0 | 0 | 0 | 0 |
 | 4 | 97 | 60 | 30 | 8 | 2 | 6 | 6 | 1 | 0 | 22 | 0 |
-| All | 746 | 655 | 60 | 47 | 18 | 47 | 55 | 23 | 6 | 40 | 12 |
+| All | 755 | 662 | 63 | 47 | 18 | 49 | 56 | 23 | 6 | 40 | 12 |
 
 **By area**
 
 | Area | Total | By phase 0 · 1 · 2 · 3 · 4 | `V-UNIT` | `V-CONF` | `V-SIM` | `V-REPLAY` | `V-E2E-LOCAL` | `V-DEPLOY` | `V-LIVE` | `V-MEASURE` | `V-PROOF` | `V-DIFF` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ARCH` | 9 | 7 · 1 · 0 · 1 · 0 | 6 | 1 | 0 | 0 | 6 | 1 | 0 | 0 | 0 | 0 |
+| `ARCH` | 11 | 9 · 1 · 0 · 1 · 0 | 7 | 2 | 0 | 0 | 6 | 2 | 0 | 0 | 0 | 0 |
 | `CACHE` | 90 | 71 · 18 · 1 · 0 · 0 | 83 | 11 | 7 | 1 | 4 | 3 | 0 | 1 | 9 | 0 |
 | `PROTO` | 1 | 0 · 0 · 0 · 0 · 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `EXEC` | 11 | 0 · 2 · 0 · 1 · 8 | 5 | 2 | 2 | 0 | 1 | 2 | 0 | 0 | 0 | 0 |
 | `GH` | 65 | 63 · 1 · 1 · 0 · 0 | 64 | 4 | 6 | 6 | 2 | 0 | 2 | 0 | 0 | 0 |
 | `INT` | 50 | 46 · 1 · 2 · 1 · 0 | 49 | 2 | 7 | 0 | 5 | 3 | 1 | 0 | 2 | 0 |
-| `IFC` | 81 | 67 · 8 · 3 · 0 · 3 | 80 | 1 | 0 | 0 | 7 | 5 | 2 | 0 | 0 | 0 |
+| `IFC` | 85 | 67 · 12 · 3 · 0 · 3 | 83 | 3 | 0 | 0 | 8 | 5 | 2 | 0 | 0 | 0 |
 | `ISO` | 2 | 0 · 0 · 0 · 0 · 2 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `LOCAL` | 23 | 0 · 9 · 14 · 0 · 0 | 22 | 0 | 3 | 1 | 1 | 0 | 0 | 0 | 1 | 1 |
 | `MDL` | 5 | 5 · 0 · 0 · 0 · 0 | 2 | 0 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 0 |
 | `OPS` | 60 | 59 · 1 · 0 · 0 · 0 | 33 | 0 | 0 | 0 | 2 | 28 | 13 | 1 | 1 | 1 |
 | `PROF` | 63 | 46 · 7 · 1 · 1 · 8 | 62 | 5 | 2 | 0 | 2 | 3 | 3 | 0 | 0 | 0 |
 | `PROV` | 77 | 2 · 2 · 0 · 0 · 73 | 46 | 26 | 6 | 2 | 6 | 3 | 1 | 2 | 21 | 0 |
-| `RUN` | 4 | 4 · 0 · 0 · 0 · 0 | 4 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `RUN` | 7 | 6 · 1 · 0 · 0 · 0 | 7 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `AGT` | 85 | 28 · 0 · 33 · 22 · 2 | 83 | 4 | 4 | 2 | 2 | 2 | 0 | 0 | 4 | 8 |
 | `GATE` | 80 | 79 · 0 · 1 · 0 · 0 | 79 | 0 | 10 | 6 | 8 | 0 | 0 | 0 | 2 | 2 |
 | `SPD` | 4 | 4 · 0 · 0 · 0 · 0 | 4 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
@@ -334,7 +334,7 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 - **FD-VER-006** · phase 0 · `V-UNIT` — If an ID occurs as a requirement line more than once under `specs/`, or as a requirement line and as an `fd_id` of `specs/ids.moved.tsv`, then the `spec-tags` check must fail naming every occurrence.
 - **FD-VER-007** · phase 0 · `V-UNIT` — If an ID that has a requirement line on the pull request's base commit has no requirement line on the head commit and no row in `specs/ids.moved.tsv`, then the `spec-tags` check must fail naming the ID.
 - **FD-VER-008** · phase 0 · `V-UNIT` — If a reference of the form `FD-<AREA>-NNN` anywhere under `specs/` names an ID that has neither a requirement line nor a row in `specs/ids.moved.tsv`, then the `spec-tags` check must fail naming the file, the line and the ID.
-- **FD-VER-034** · phase 0 · `V-UNIT` — If a row of `specs/ids.moved.tsv` does not hold exactly the columns `fd_id`, `disposition` and `target`, has a `disposition` other than `moved`, `profile` and `removed`, or names an `fd_id` twice, then the `spec-tags` check must fail naming the row.
+- **FD-VER-034** · phase 0 · `V-UNIT` — If a row of `specs/ids.moved.tsv` does not hold exactly the columns `fd_id`, `disposition` and `target`, has a `disposition` other than `moved`, `profile`, `merged` and `removed`, or names an `fd_id` twice, then the `spec-tags` check must fail naming the row.
 - **FD-VER-035** · phase 0 · `V-UNIT` — If a `moved` row of `specs/ids.moved.tsv` names a `MAMEKO-<AREA>-NNN` target that has no requirement line in mameko's specifications at the pinned commit, or a `profile` row names a target that has no requirement line in [profile.md](profile.md), then the `spec-tags` check must fail naming the row.
 - **FD-VER-036** · phase 0 · `V-UNIT` — If a link into mameko's repository under `specs/` names a commit other than the one [README.md](README.md) pins, then the `spec-tags` check must fail naming the file and line.
 - **FD-VER-037** · phase 0 · `V-UNIT` — If a requirement line on the head commit carries an ID with an `FD-<AREA>-NNN` number at or below the highest number its area has ever used, and that ID had no requirement line on the base commit, then the `spec-tags` check must fail naming the ID, so that a number is never reused.
@@ -349,7 +349,7 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 
 ### mameko conformance and the reference profile
 
-- **FD-VER-032** · phase 1 · `V-CONF` — On every pull request, the `conf` job must run mameko's coordinator conformance suite, at the pinned release, against FlareDispatch's composed control plane: `host-cloudflare` under workerd with FlareDispatch's profile, its appliers on the fake GitHub, its application ports and the fake executor, and must fail on any scenario that fails ([MAMEKO-VER-022](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md), [MAMEKO-VER-024](https://github.com/fractalboxdev/mameko/blob/2c3041335db0cf4a2193e5b11827f20631d54e87/specs/verification.md)).
+- **FD-VER-032** · phase 1 · `V-CONF` — On every pull request, the `conf` job must run mameko's coordinator conformance suite, at the pinned release, against FlareDispatch's composed control plane: `host-cloudflare` under workerd with FlareDispatch's profile, its appliers on the fake GitHub, its application ports and the fake executor, and must fail on any scenario that fails ([MAMEKO-VER-022](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/verification.md), [MAMEKO-VER-024](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/verification.md)).
 - **FD-VER-033** · phase 0 · `V-DEPLOY` — On every pull request, the `profile-reference` job must run the reference-profile comparison of [profile.md](profile.md) FD-PROF-002 at the pinned mameko commit, which fails only on a difference that profile.md § Differences from the reference CI profile does not list, and the job must fail when that comparison fails.
 
 ### Formal gate
