@@ -20,7 +20,7 @@ Not specified: `finops-audit`, a model-written cost report, because the reservat
 
 ## Model
 
-An **agentic recipe** declares, in its `defineRun` spec:
+An **agentic recipe** declares, in its catalogue entry ([../run-model.md](../run-model.md) § Run definitions):
 
 - the task tier of each model call site;
 - `needsModel`, true when the recipe produces no verdict without a model call;
@@ -158,7 +158,7 @@ flowchart LR
 ### Declaration and catalog
 
 - **FD-AGT-001** · phase 2 · `V-UNIT` — The run catalog must ship the agentic recipes `pr-review`, `improve-pr`, `self-heal-pr`, `spec-drift-pr`, `triage-issues`, `triage-prs`, `ci-triage-pr` and `release-notes`.
-- **FD-AGT-002** · phase 0 · `V-UNIT` `V-DEPLOY` — If an agentic recipe's `defineRun` spec omits the task tier of a model call site, its data classes or its intent kinds, then the registry validator must reject the spec at deploy.
+- **FD-AGT-002** · phase 0 · `V-UNIT` `V-DEPLOY` — If an agentic recipe's catalogue entry omits the task tier of a model call site, its data classes or its intent kinds, then the registry validator must reject the spec at deploy.
 - **FD-AGT-003** · phase 0 · `V-UNIT` — If a run returns an intent whose kind its spec does not declare, then the control plane must apply none of that result's intents and must conclude the execution `failure` with the reason `intent: undeclared kind`.
 
 ### Trifecta rule

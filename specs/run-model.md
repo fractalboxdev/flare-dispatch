@@ -18,6 +18,14 @@ The decisions behind the run model are mameko's [ADR-0004](https://github.com/fr
 
 ## Model
 
+### Run definitions
+
+FlareDispatch's run catalogue calls mameko's `defineRun(spec, body, catalogue)`, with `catalogue.classRanks` read from the profile's classes. `defineRun` decodes the fields mameko bounds, returns only those, and accepts in `requires` only mameko's capability names. FlareDispatch's own declarations therefore sit in each run's catalogue entry beside `defineRun`'s answer: `triggers`, the check label, the cooldown, the `writeback` block, the model call sites, the data classes and the use of `GithubRead`.
+
+### Runner entry
+
+FlareDispatch's run-catalogue bundle has one entry, which imports the run registry and calls mameko's `runnerMain` with it, so the catalogue and the runner carry one copy of `effect`. On a device, the device configuration pins the bundle ([MAMEKO-EXEC-121](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)), and the device executor starts one runner child per lease with a run payload built from the `exec.lease` fields ([MAMEKO-PROTO-084](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executor-protocol.md)). That payload's `attempt` counts the earlier leases of one execution and is not the attempt number of a check family ([README.md](README.md) § Glossary).
+
 ### Triggers
 
 A run's `triggers` are mameko request decoders: functions from the decoded `DispatchEvent` union to `Option` of the run's decoded input. `DispatchEvent` has one member per trigger kind FlareDispatch accepts: a GitHub webhook, an Actions dispatch, a cron tick, a local submit and an MCP call ([intake.md](intake.md)). The missed-webhook sweep, a check re-run and a `dispatch.followOn` intent reach a trigger as one of those members.
@@ -86,6 +94,12 @@ FlareDispatch's intent kinds, the outcomes each applies for and the GitHub call 
 ### Triggers
 
 - **FD-RUN-008** · phase 0 · `V-UNIT` — The decoded request union that FlareDispatch's request decoders take under [MAMEKO-RUN-010](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/run-model.md) must be the `DispatchEvent` union of § Triggers, with one member per trigger kind.
+
+### Definitions
+
+- **FD-RUN-061** · phase 0 · `V-UNIT` — The run catalogue must pass `defineRun` the rank of each class of the profile as its `catalogue` argument ([MAMEKO-RUN-006](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/run-model.md)).
+- **FD-RUN-062** · phase 0 · `V-UNIT` — The run catalogue must keep every declaration `defineRun` does not decode in the run's catalogue entry, and must list in `requires` only mameko's capability names, so that `GithubRead` stays out of `requires`.
+- **FD-RUN-063** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — FlareDispatch's run-catalogue bundle must have one entry that calls `runnerMain` with the run registry, the only list of runs ([MAMEKO-RUN-008](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/run-model.md), [MAMEKO-EXEC-121](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)).
 
 ### Capabilities
 
