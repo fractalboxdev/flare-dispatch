@@ -314,6 +314,36 @@ describe("class catalogue", () => {
     ]);
   });
 
+  it("FD-PROF-006 bounds decode against mameko's two shapes, each from 1 to 10000", () => {
+    const withBounds = (name: string, bounds: unknown): unknown => ({
+      ...committed,
+      classes: committed.classes.map((c) => (c.name === name ? { ...c, bounds } : c)),
+    });
+    for (const bad of [
+      { global: 0, per_scope: 1 },
+      { global: 1, per_scope: 10_001 },
+      { global: 30, per_run_scope: 2 },
+      { global: 30 },
+    ])
+      expect(rejections(withBounds("required", bad)).map((r) => r.item)).toEqual(["document"]);
+  });
+
+  it("FD-PROF-006 per_run_scope is refused on a class that does not defer", () => {
+    const doc = mutate((d) => ({
+      ...d,
+      classes: d.classes.map((c) =>
+        c.name === "interactive" ? { ...c, bounds: { global: 40, per_run_scope: 1 as const } } : c,
+      ),
+    }));
+    expect(rejections(doc)).toEqual([
+      {
+        item: "classes",
+        path: "classes.interactive.bounds",
+        reason: "bounds per (run, scope) on a class that does not defer",
+      },
+    ]);
+  });
+
   it("FD-PROF-007 a full release queue raises p0-breach", () => {
     expect(
       profile.classes
