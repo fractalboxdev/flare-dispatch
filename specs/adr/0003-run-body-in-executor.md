@@ -1,6 +1,6 @@
 # ADR-0003: Run bodies execute in the executor; the control plane applies side effects as intents
 
-Status: Superseded by mameko [ADR-0005](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/adr/0005-run-body-in-executor.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0005](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/adr/0005-run-body-in-executor.md) · 2026-10-24
 
 ## Context
 

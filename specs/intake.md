@@ -4,7 +4,7 @@ Intake turns a trigger into one request to mameko's admission function. It authe
 
 ## Scope
 
-mameko's [admission-qos.md](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md) specifies the admission function: the one door ([MAMEKO-ADM-024](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)), the admission transaction, dedup storage and request digests, placeability, quarantine, intake bounds and `shed` rows. This file covers what FlareDispatch puts in front of it:
+mameko's [admission-qos.md](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md) specifies the admission function: the one door ([MAMEKO-ADM-024](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)), the admission transaction, dedup storage and request digests, placeability, quarantine, intake bounds and `shed` rows. This file covers what FlareDispatch puts in front of it:
 
 - the five trigger kinds (webhook, Actions dispatch, cron, local submit, MCP call) and the three control-plane sources that reuse the same path (the missed-webhook sweep, check re-runs and the `dispatch.followOn` applier of [github-output.md](github-output.md) FD-GH-088);
 - the `DispatchEvent` union, webhook signature and dispatch token checks;
@@ -25,7 +25,7 @@ This file does not specify an external-signals webhook, chat-originated dispatch
 | `webhook` | GitHub App webhook delivery | HMAC-SHA256 over the raw body | `resolveClass` | 0 |
 | `dispatch` | GitHub Actions step or a server caller, `POST /v1/dispatch/:run` | Actions OIDC token, or an Access JWT of a member of the dispatch group ([interfaces.md](interfaces.md) FD-IFC-027) | `resolveClass`, then the `class` input | 0 |
 | `cron` | One minute-tick cron trigger on the control plane | The platform | `resolveClass` (scheduled runs default to `batch`) | 0 |
-| `local` | A device's `local.register` under a capacity lease, through FlareDispatch's local registration port | The capacity lease, checked by mameko ([MAMEKO-PROTO-081](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/executor-protocol.md)) | Always advisory, `local-only` | 1 |
+| `local` | A device's `local.register` under a capacity lease, through FlareDispatch's local registration port | The capacity lease, checked by mameko ([MAMEKO-PROTO-081](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/executor-protocol.md)) | Always advisory, `local-only` | 1 |
 | `mcp` | The control plane's MCP `dispatch` tool | The identity gate of the HTTP API | `resolveClass`, lower-only override | 2 |
 
 The missed-webhook sweep, check re-runs and the `dispatch.followOn` applier are not trigger kinds. The sweep and check re-runs submit the trigger kind of the event they replace (`webhook`) through the same intake function, so they share the dedup key and every check below. The `dispatch.followOn` applier submits its request through the same intake function, where the `follow-on` recipe keys it.
@@ -34,7 +34,7 @@ The missed-webhook sweep, check re-runs and the `dispatch.followOn` applier are 
 
 - **`DispatchEvent`.** A `Schema.Union` tagged by trigger kind, which every trigger function in [run-model.md](run-model.md) receives decoded. Its members: `webhook` {event, action, delivery id, payload decoded per event}, `dispatch` {run, repo, ref, sha, inputs, class, caller}, `cron` {scheduled minute, repo, schedule}, `local` {`lease_id`, epoch, run, tree hash, inputs digest} and `mcp` {caller identity, run, repo, ref, sha, inputs}.
 - **Tenant scope.** The repository, `<owner>/<repo>`; mameko sees it as an opaque scope id.
-- **Dedup key.** The canonical string the first matching recipe of [profile.md](profile.md) § Dedup recipes and supersession returns; mameko stores its SHA-256 under a `UNIQUE` constraint ([MAMEKO-ADM-035](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)).
+- **Dedup key.** The canonical string the first matching recipe of [profile.md](profile.md) § Dedup recipes and supersession returns; mameko stores its SHA-256 under a `UNIQUE` constraint ([MAMEKO-ADM-035](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)).
 
 | Recipe | Trigger | Canonical dedup key |
 | --- | --- | --- |
@@ -45,13 +45,13 @@ The missed-webhook sweep, check re-runs and the `dispatch.followOn` applier are 
 | `commit` | `cron` | `<run>:<owner>/<repo>:cron:<scheduled minute, ISO 8601 UTC>` |
 | `commit` | `local` | `local:<lease_id>:<run>:<tree hash>:<inputs digest>` |
 
-The commit-scoped key omits the trigger kind, so a webhook and an Actions dispatch for one run on one commit resolve to one execution. A child execution's key derives from its parent's ([mameko run-model.md § Children](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/run-model.md#children)).
+The commit-scoped key omits the trigger kind, so a webhook and an Actions dispatch for one run on one commit resolve to one execution. A child execution's key derives from its parent's ([mameko run-model.md § Children](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/run-model.md#children)).
 
 - **Repo manifest.** `.github/flare-dispatch.json` in the consumer repository, decoded by the `RepoManifest` schema (`version: 1`). Each entry names a recipe, an optional label, the triggers it answers, its parameters and, for cron, its schedule. A run dispatches for a repository only when the manifest lists it.
 
 ### Intake path
 
-Every trigger passes the same checks in the same order; the first refusal ends intake for that (trigger, run) pair. A refusal before admission records a `shed` row through `recordShed` ([MAMEKO-ADM-086](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)).
+Every trigger passes the same checks in the same order; the first refusal ends intake for that (trigger, run) pair. A refusal before admission records a `shed` row through `recordShed` ([MAMEKO-ADM-086](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)).
 
 ```mermaid
 flowchart TB
@@ -156,14 +156,14 @@ sequenceDiagram
 
 ### One door
 
-- **FD-INT-001** · phase 0 · `V-UNIT` `V-CONF` — The dispatcher Worker must submit every trigger, the missed-webhook sweep, check re-runs and the `dispatch.followOn` applier included, as one request to mameko's admission function ([MAMEKO-ADM-024](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)), and must write no `executions`, dedup-key or `placements` row itself.
-- **FD-INT-003** · phase 0 · `V-UNIT` `V-CONF` `V-SIM` — When admission answers `duplicate`, the dispatcher Worker must answer `202` with the existing execution's id and `duplicate: true`; when admission answers `conflict`, it must answer `409` with error `conflict` and the existing execution's id ([MAMEKO-ADM-028](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)).
-- **FD-INT-004** · phase 0 · `V-UNIT` `V-SIM` — When admission fails with `intake_unavailable` ([MAMEKO-ADM-029](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)), the dispatcher Worker must answer `503` with error `intake_unavailable` from the error-model table in [interfaces.md](interfaces.md).
+- **FD-INT-001** · phase 0 · `V-UNIT` `V-CONF` — The dispatcher Worker must submit every trigger, the missed-webhook sweep, check re-runs and the `dispatch.followOn` applier included, as one request to mameko's admission function ([MAMEKO-ADM-024](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)), and must write no `executions`, dedup-key or `placements` row itself.
+- **FD-INT-003** · phase 0 · `V-UNIT` `V-CONF` `V-SIM` — When admission answers `duplicate`, the dispatcher Worker must answer `202` with the existing execution's id and `duplicate: true`; when admission answers `conflict`, it must answer `409` with error `conflict` and the existing execution's id ([MAMEKO-ADM-028](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)).
+- **FD-INT-004** · phase 0 · `V-UNIT` `V-SIM` — When admission fails with `intake_unavailable` ([MAMEKO-ADM-029](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)), the dispatcher Worker must answer `503` with error `intake_unavailable` from the error-model table in [interfaces.md](interfaces.md).
 
 ### Dedup keys
 
-- **FD-INT-009** · phase 0 · `V-UNIT` — The `commit` recipe must return `<run>[:<label>]:<owner>/<repo>:<sha>` for a commit-scoped trigger, without the trigger kind, so that one run on one commit yields at most one execution across webhook, dispatch and MCP triggers ([MAMEKO-ADM-034](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)).
-- **FD-INT-010** · phase 0 · `V-UNIT` — Where a dispatch carries an `Idempotency-Key` header of 1 to 128 characters from `[A-Za-z0-9._:-]`, the `idempotency-key` recipe must return `idem:<owner>/<repo>:<Idempotency-Key>` and declare `digest` as the canonical JSON of the dispatch body with `on_mismatch: conflict`, so that a reused key with a different body answers `409` ([MAMEKO-ADM-089](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)).
+- **FD-INT-009** · phase 0 · `V-UNIT` — The `commit` recipe must return `<run>[:<label>]:<owner>/<repo>:<sha>` for a commit-scoped trigger, without the trigger kind, so that one run on one commit yields at most one execution across webhook, dispatch and MCP triggers ([MAMEKO-ADM-034](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)).
+- **FD-INT-010** · phase 0 · `V-UNIT` — Where a dispatch carries an `Idempotency-Key` header of 1 to 128 characters from `[A-Za-z0-9._:-]`, the `idempotency-key` recipe must return `idem:<owner>/<repo>:<Idempotency-Key>` and declare `digest` as the canonical JSON of the dispatch body with `on_mismatch: conflict`, so that a reused key with a different body answers `409` ([MAMEKO-ADM-089](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)).
 - **FD-INT-011** · phase 0 · `V-UNIT` — If an `Idempotency-Key` header is empty, longer than 128 characters or contains a character outside `[A-Za-z0-9._:-]`, the dispatcher Worker must reject the dispatch with `400` and error `invalid_idempotency_key`.
 
 ### Repo manifests
@@ -186,7 +186,7 @@ sequenceDiagram
 - **FD-INT-027** · phase 0 · `V-UNIT` `V-DEPLOY` — Where `intake.webhookEvents` is set, the dispatcher Worker must answer an event outside the list with `202` and `{ignored: true, reason: "event_not_allowed"}` after the signature check and submit nothing; an absent field must admit every supported event and an empty list none.
 - **FD-INT-028** · phase 0 · `V-UNIT` — The dispatcher Worker must take a webhook's commit SHA from the first present field of `deployment.sha`, `pull_request.head.sha`, `merge_group.head_sha`, `head_commit.id` on a tag push or `after` on a branch push, `check_run.head_sha` and `check_suite.head_sha`.
 - **FD-INT-029** · phase 0 · `V-UNIT` — If a webhook event carries none of those SHA fields, the dispatcher Worker must submit nothing for it and record a `shed` row through `recordShed` with reason `intake: no commit`.
-- **FD-INT-030** · phase 0 · `V-UNIT` `V-PROOF` — When a `pull_request` event's `head.repo.full_name` differs from its `base.repo.full_name`, the dispatcher Worker must record the trigger as `fork-pr`, for which class resolution returns the `untrusted-input` label ([profile.md](profile.md) § Class resolution, [MAMEKO-ADM-084](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md)).
+- **FD-INT-030** · phase 0 · `V-UNIT` `V-PROOF` — When a `pull_request` event's `head.repo.full_name` differs from its `base.repo.full_name`, the dispatcher Worker must record the trigger as `fork-pr`, for which class resolution returns the `untrusted-input` label ([profile.md](profile.md) § Class resolution, [MAMEKO-ADM-084](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/admission-qos.md)).
 - **FD-INT-031** · phase 0 · `V-LIVE` — When the dispatcher Worker verifies a webhook signature, it must record the delivery time per installation, which the liveness alarm in [operability.md](operability.md) reads.
 
 ### Missed-webhook sweep

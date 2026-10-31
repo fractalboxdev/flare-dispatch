@@ -1,12 +1,12 @@
 # ADR-0011: A per-installation quota object as the applier rate limit for GitHub effects
 
-Status: Superseded in part by mameko [ADR-0013](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/adr/0013-outbox-and-effect-classes.md) · 2026-10-24
+Status: Superseded in part by mameko [ADR-0013](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/adr/0013-outbox-and-effect-classes.md) · 2026-10-24
 
 mameko's ADR-0013 decides the transactional outbox; this record decides the per-installation quota object.
 
 ## Context
 
-- mameko's outbox delivers every intent through the application's effect applier, one permit per applier call from the applier rate limit the application implements ([mameko outbox.md § The applier port and the applier rate limit](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/outbox.md#the-applier-port-and-the-applier-rate-limit)). FlareDispatch must decide what that limit is for GitHub.
+- mameko's outbox delivers every intent through the application's effect applier, one permit per applier call from the applier rate limit the application implements ([mameko outbox.md § The applier port and the applier rate limit](https://github.com/fractalboxdev/mameko/blob/da1249e8318d7ac67eae38c4d1419613590ad18e/specs/outbox.md#the-applier-port-and-the-applier-rate-limit)). FlareDispatch must decide what that limit is for GitHub.
 - GitHub quota belongs to the App installation, not to an isolate. Every execution of an installation draws on one bucket of primary rate limit plus secondary limits on content-creating requests, so a merge burst on one installation can starve its own verdicts.
 - A required check that never concludes blocks the merge forever, and a verdict GitHub never received looks like a quiet week.
 - GitHub has no idempotency-key header. Re-sending a `POST` after a timeout can create a second check run or comment.
