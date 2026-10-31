@@ -344,6 +344,28 @@ describe("class catalogue", () => {
     ]);
   });
 
+  it("FD-PROF-006 a per_run_scope class passes only while its terminal outcome is deferred", () => {
+    expect(cls("batch")).toMatchObject({
+      bounds: { global: 30, per_run_scope: 1 },
+      terminal_outcome: "deferred",
+    });
+    const doc = mutate((d) => ({
+      ...d,
+      classes: d.classes.map((c) =>
+        c.name === "batch"
+          ? { ...c, terminal_outcome: { outcome: "failure" as const, reason: "budget" } }
+          : c,
+      ),
+    }));
+    expect(rejections(doc)).toEqual([
+      {
+        item: "classes",
+        path: "classes.batch.bounds",
+        reason: "bounds per (run, scope) on a class that does not defer",
+      },
+    ]);
+  });
+
   it("FD-PROF-007 a full release queue raises p0-breach", () => {
     expect(
       profile.classes
