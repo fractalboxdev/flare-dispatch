@@ -1,6 +1,6 @@
 # ADR-0009: Owned-device isolation: a VM per job, a dedicated user, egress profiles
 
-Status: Superseded by mameko [ADR-0011](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0011-device-isolation.md) and [ADR-0019](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/adr/0019-device-platforms-and-job-runtimes.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0011](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/adr/0011-device-isolation.md) and [ADR-0019](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/adr/0019-device-platforms-and-job-runtimes.md) · 2026-10-24
 
 ## Context
 
@@ -8,7 +8,7 @@ An owned device is the most privileged machine in the fleet. A colocated worksta
 
 The constraints:
 
-- Placement already keeps fork-PR code, tags and P0 off owned devices (mameko's [placement-leases.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md)), so a device runs code from people with write access, plus its dependencies.
+- Placement already keeps fork-PR code, tags and P0 off owned devices (mameko's [placement-leases.md](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/placement-leases.md)), so a device runs code from people with write access, plus its dependencies.
 - Devices are Apple silicon Macs. Apple's `container` runs each Linux container as its own lightweight VM on macOS 26. The Virtualization framework allows at most 2 macOS guests per host.
 - Warm state is the reason to run on a device, so the workspace must be fast to create: virtiofs shares are slow for `node_modules`-sized trees.
 - The same egress grants must hold on every executor kind, so a run behaves the same wherever it is placed.

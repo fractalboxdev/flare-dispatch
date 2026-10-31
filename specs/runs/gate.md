@@ -8,9 +8,9 @@ This file covers what each gate recipe runs, which repo manifest fields it reads
 
 - [run-model.md](../run-model.md) for `defineRun`, `RunResult`, the error taxonomy and intents;
 - [intake.md](../intake.md) for triggers, the repo manifest file and dedup keys;
-- [profile.md](../profile.md) for classes, placement constraints and each class's infrastructure retries, and mameko's [admission-qos.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/admission-qos.md) for the child rule, supersession and serial groups;
+- [profile.md](../profile.md) for classes, placement constraints and each class's infrastructure retries, and mameko's [admission-qos.md](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md) for the child rule, supersession and serial groups;
 - [spend.md](../spend.md) for holds and the budget reasons;
-- mameko's [placement-leases.md](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/placement-leases.md) for placement, the execution lease and reclaim;
+- mameko's [placement-leases.md](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/placement-leases.md) for placement, the execution lease and reclaim;
 - [github-output.md](../github-output.md) for check names and the verdict-to-conclusion mapping;
 - [cache-artifacts.md](../cache-artifacts.md) for log artifacts and cache namespaces;
 - [isolation-egress.md](../isolation-egress.md) for egress-attached grants;
@@ -240,7 +240,7 @@ sequenceDiagram
 - **FD-GATE-004** · phase 0 · `V-UNIT` — The gate recipes and the job matrix must not offer any manifest field, input or default that maps a non-zero exit, a failed job or a failed shard to `success`.
 - **FD-GATE-005** · phase 0 · `V-UNIT` — If a gate job's command ends on a signal, then the recipe must record `failure` with the reason `exit: signal <name>`.
 - **FD-GATE-006** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — If a gate job's command runs past its job timeout, then the executor must kill its process group and the recipe must record `failure` with the reason `timeout: job`.
-- **FD-GATE-007** · phase 0 · `V-UNIT` `V-SIM` — If a gate job's command is still running when the executor stops the job at the execution's `deadline_at` ([MAMEKO-EXEC-002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)), then the recipe must record `failure` with the reason `deadline`.
+- **FD-GATE-007** · phase 0 · `V-UNIT` `V-SIM` — If a gate job's command is still running when the executor stops the job at the execution's `deadline_at` ([MAMEKO-EXEC-002](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/executors.md)), then the recipe must record `failure` with the reason `deadline`.
 - **FD-GATE-008** · phase 0 · `V-UNIT` — If a gate job's combined stdout and stderr exceed 64 MiB, then the recipe must stop the command, record `failure` with the reason `output: over limit` and derive no verdict from the output.
 - **FD-GATE-010** · phase 0 · `V-UNIT` `V-SIM` — If a gate job ends with an infrastructure error after the retries its class allows ([profile.md](../profile.md) § Class catalogue), then the recipe must record `failure` with the reason `infra: <error tag>`.
 - **FD-GATE-011** · phase 0 · `V-UNIT` — When a gate job ends, the recipe must upload the job's redacted output as the artifact `<job key>.log` before it returns its verdict.
@@ -286,7 +286,7 @@ sequenceDiagram
 - **FD-GATE-039** · phase 0 · `V-UNIT` — When every job is terminal and every job recorded `skipped`, the parent must record `skipped` with the reason `not-applicable: every-job-skipped`.
 - **FD-GATE-040** · phase 0 · `V-UNIT` — When every job is terminal and any job recorded `failure` or was not started, the parent must record `failure` with the reason `jobs: <keys>`, listing the first 25 failed or not-started keys in expansion order.
 - **FD-GATE-041** · phase 0 · `V-UNIT` `V-SIM` — If a job's execution ends with no recorded verdict, then the parent must count the job as `failure` with the reason `infra: no verdict`.
-- **FD-GATE-042** · phase 0 · `V-UNIT` `V-SIM` — When the parent is cancelled, the parent must cancel every placed or running job through mameko's cancellation path ([admission-qos.md § Supersession](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/admission-qos.md#supersession)) and record every pending job as not started.
+- **FD-GATE-042** · phase 0 · `V-UNIT` `V-SIM` — When the parent is cancelled, the parent must cancel every placed or running job through mameko's cancellation path ([admission-qos.md § Supersession](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/admission-qos.md#supersession)) and record every pending job as not started.
 - **FD-GATE-043** · phase 0 · `V-UNIT` — Where a job matrix sets `failFast: true` (default `false`), when a job records `failure`, the parent must start no further job and let running jobs reach their verdicts.
 - **FD-GATE-044** · phase 0 · `V-SIM` — If a job records `failure` with a budget, capacity or operator-halt reason, then the parent must start no further job.
 - **FD-GATE-045** · phase 0 · `V-UNIT` — The parent must make no sandbox call, so its hold carries a container rate of 0 USD per hour.
@@ -331,7 +331,7 @@ sequenceDiagram
 - **FD-GATE-072** · phase 0 · `V-UNIT` — If an endpoint is unhealthy on 3 attempts 10 s apart, then the recipe must record `failure` with the reason `smoke: <host><path> <status or error>` for each unhealthy endpoint.
 - **FD-GATE-073** · phase 0 · `V-UNIT` — If a `deploy-smoke` target host, an `environment_url` host included, is not in `deploySmoke.hosts`, then the recipe must record `failure` with the reason `config: host not allowed` and send no request to it.
 - **FD-GATE-074** · phase 0 · `V-UNIT` — The `deploy-smoke` recipe must not follow a redirect to a host outside `deploySmoke.hosts`.
-- **FD-GATE-075** · phase 0 · `V-UNIT` — The control plane must run `deploy-smoke` in the `control` pool ([MAMEKO-EXEC-043](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/executors.md)), with no container and a container rate of 0 USD per hour.
+- **FD-GATE-075** · phase 0 · `V-UNIT` — The control plane must run `deploy-smoke` in the `control` pool ([MAMEKO-EXEC-043](https://github.com/fractalboxdev/mameko/blob/88770c64b14818ad32aed9615f1cfaf4bbc1f591/specs/executors.md)), with no container and a container rate of 0 USD per hour.
 
 ### `sandbox-image`
 
