@@ -1,8 +1,11 @@
-// The placement fold over the profile's constraints, the cloud entry a class
-// opens at admission, and the delivery order of intent kinds. Each reads the
-// accepted profile only; the coordinator's own `placementPolicy` replaces the
-// fold once mameko ships it.
+// The eligible executor kinds of a request, the cloud entry a class opens at
+// admission, and the delivery order of intent kinds. Each reads the accepted
+// profile only. mameko's `requestConstraints` and `placementPolicy` fold decide
+// the kinds; this module evaluates the profile's predicates, which mameko takes
+// as facts, and carries `requires_posture`, which mameko's constraints omit.
+import { requestConstraints } from "@fractalboxdev/mameko-coordinator";
 import {
+  eligibleKinds as foldConstraints,
   placeAtAdmission,
   type ClassPlacement,
   type ConfidentialityMode,
@@ -28,6 +31,7 @@ export interface PlacementRequest {
   readonly declaresClass?: boolean;
   readonly confidentiality?: ConfidentialityMode;
   readonly deviceLocalInput?: boolean;
+  readonly needsLocalModel?: boolean;
 }
 
 export interface EligibleSet {
@@ -60,52 +64,45 @@ const stricter = (a: PostureTier | null, b: PostureTier): PostureTier =>
   a === null || POSTURE_ORDER.indexOf(b) > POSTURE_ORDER.indexOf(a) ? b : a;
 
 /**
- * The executor kinds a request may run on: the generic constraints of mameko specs/admission-qos.md § Placement
- * constraints and the profile's declared constraints, each only removing kinds, intersected with the class's
- * cloud kinds plus `device` where the class is device-eligible. An empty set is unplaceable.
+ * The executor kinds a request may run on: mameko's fold of the generic constraints and the profile's declared
+ * constraints, intersected with the class's cloud kinds plus `device` where the class is device-eligible. An empty
+ * set is unplaceable.
  */
 export const eligibleKinds = (profile: Profile, request: PlacementRequest): EligibleSet => {
   const { placement } = profile;
   const cls = classNamed(profile, request.class);
-  let kinds = new Set<ExecutorKind>(["cloudflare", "device", "aws", ...placement.launcher_kinds]);
-  const applied: string[] = [];
-  let requiresPosture: PostureTier | null = null;
-
-  const keepOnly = (name: string, keep: readonly string[]) => {
-    applied.push(name);
-    kinds = new Set([...kinds].filter((k) => keep.includes(k)));
-  };
-  const remove = (name: string, removed: readonly string[]) => {
-    applied.push(name);
-    kinds = new Set([...kinds].filter((k) => !removed.includes(k)));
-  };
-  const cloudKinds = () => [...kinds].filter((k) => k !== "device");
+  const kinds = ["cloudflare", "device", "aws", ...placement.launcher_kinds];
   const has = (label: string) => request.labels.includes(label);
-
-  if (holds(placement.cloud_pinned, request))
-    keepOnly("cloud-pinned", placement.cloud_pinned_kinds);
-  if (has("expose-port")) keepOnly("expose-port", ["cloudflare"]);
-  if (has("untrusted-input")) remove("untrusted-input", ["device"]);
-  if (has("cloud-only") || holds(placement.cloud_only, request)) remove("cloud-only", ["device"]);
-  if (request.confidentiality === "confidential-compute")
-    remove("confidential-compute", cloudKinds());
-  if (has("local-only") || holds(placement.local_only, request)) remove("local-only", cloudKinds());
-  if (request.deviceLocalInput === true) remove("device-local", cloudKinds());
-  for (const c of placement.constraints) {
-    if (!holds(c.holds_for, request)) continue;
-    remove(c.name, c.removes);
-    if (c.requires_posture !== undefined)
-      requiresPosture = stricter(requiresPosture, c.requires_posture);
-  }
-
+  const held = placement.constraints.filter((c) => holds(c.holds_for, request));
+  const constraints = requestConstraints(
+    {
+      labels: request.labels,
+      runLabels: request.labels,
+      confidentiality: request.confidentiality ?? "unclassified",
+      cloudPinned: holds(placement.cloud_pinned, request),
+      cloudOnly: has("cloud-only") || holds(placement.cloud_only, request),
+      localOnly: has("local-only") || holds(placement.local_only, request),
+      deviceLocalInput: request.deviceLocalInput === true,
+      needsLocalModel: request.needsLocalModel === true,
+    },
+    {
+      kinds,
+      cloudPinnedKinds: placement.cloud_pinned_kinds,
+      declared: held.map((c) => ({ name: c.name, holds: true, removes: c.removes })),
+    },
+  );
+  const eligible = foldConstraints(kinds, constraints);
   const classKinds: readonly ExecutorKind[] =
     cls === undefined
       ? []
       : [...cls.cloud_kinds, ...(cls.device_eligible === false ? [] : ["device"])];
   return {
-    kinds: classKinds.filter((k) => kinds.has(k)),
-    constraints: applied,
-    requiresPosture,
+    kinds: classKinds.filter((k) => eligible.includes(k)),
+    constraints: constraints.map((c) => c.name),
+    requiresPosture: held.reduce<PostureTier | null>(
+      (tier, c) => (c.requires_posture === undefined ? tier : stricter(tier, c.requires_posture)),
+      null,
+    ),
   };
 };
 
