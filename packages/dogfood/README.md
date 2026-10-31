@@ -40,6 +40,6 @@ github: output skipped, the control plane has no credentials; 1 outcome intent s
 | 3         | The verdict is `cancelled`                                                                                                   |
 | 5         | No verdict: a process failed to start, no device took the lease within 120 s, or the execution ended `deferred` or `expired` |
 
-The command stops every process it started on each of these paths, and on Ctrl-C. A failure of the checkout is `infra: checkout: ...`, an infrastructure failure rather than a finding about the commit.
+The command stops every process it started on each of these paths, and on Ctrl-C, which exits 130. A failure of the checkout is `infra: checkout: ...`, an infrastructure failure rather than a finding about the commit.
 
 GitHub output is skipped: the control plane holds no credentials, so nothing drains the outcome intent the `Execution` workflow writes to the outbox.
