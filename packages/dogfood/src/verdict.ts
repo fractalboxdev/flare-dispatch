@@ -5,6 +5,7 @@ import type { ExecutionView } from "./client.ts";
 /** The exit codes of specs/interfaces.md § `fd` commands. */
 export const EXIT_FAILURE = 1;
 export const EXIT_CANCELLED = 3;
+export const EXIT_SKIPPED = 4;
 export const EXIT_NO_VERDICT = 5;
 
 export const exitCodeOf = (verdict: string | null): number =>
@@ -12,6 +13,7 @@ export const exitCodeOf = (verdict: string | null): number =>
     Match.when("success", () => 0),
     Match.when("failure", () => EXIT_FAILURE),
     Match.when("cancelled", () => EXIT_CANCELLED),
+    Match.when("skipped", () => EXIT_SKIPPED),
     Match.orElse(() => EXIT_NO_VERDICT),
   );
 

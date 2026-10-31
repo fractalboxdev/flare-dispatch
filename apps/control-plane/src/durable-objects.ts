@@ -8,7 +8,6 @@ import {
 import { Effect, Match } from "effect";
 import {
   channelConfig,
-  deadlineOutcomeOf,
   deployment,
   executionConfig,
   profileOf,
@@ -40,12 +39,8 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
     super(ctx, { ...env, MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)) });
   }
 
-  /**
-   * A `batch` execution has the deadline outcome `deferred`, so admission starts no workflow (MAMEKO-ARCH-035) and it
-   * waits as a D1 row; the first claim starts one before the lease grant, which the workflow's lease wait receives.
-   * `start` is keyed by the execution id, so a later claim of the execution after a reclaim starts nothing new.
-   */
-  protected override leaseFields(executionId: string, className: string): Promise<ClaimedLease> {
+  /** The stored inputs and deadline of a won claim. */
+  protected override leaseFields(executionId: string): Promise<ClaimedLease> {
     const env = this.env;
     return Effect.runPromise(
       Effect.gen(function* () {
@@ -59,15 +54,6 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
         const run = Match.value(lookupRun(deployment(env), row.run)).pipe(
           Match.tag("Available", ({ entry }) => entry.spec),
           Match.orElse(() => null),
-        );
-        yield* Effect.promise(() =>
-          env.EXECUTION.get(env.EXECUTION.idFromName(executionId)).start({
-            workflow_version: 1,
-            executionId,
-            className,
-            deadlineAtMs,
-            deadlineOutcome: deadlineOutcomeOf(profileOf(env), className),
-          }),
         );
         return {
           run: row.run,

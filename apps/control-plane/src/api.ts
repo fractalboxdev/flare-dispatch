@@ -1,6 +1,10 @@
 // The control plane's HTTP routes: enrollment, dispatch and the execution record. Every error answers the JSON shape of
 // specs/interfaces.md § Error model.
-import { classNamed, deviceSlotDefaults } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  classNamed,
+  deviceSlotDefaults,
+  type ClassEntry,
+} from "@fractalboxdev/flare-dispatch-profile";
 import { CheckInput, lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
 import {
   dedupKey,
@@ -148,20 +152,23 @@ const DispatchBody = Schema.Struct({
 });
 type DispatchBody = typeof DispatchBody.Type;
 
-/** A class's `bounds` in the profile, a value mameko's profile schema leaves undecoded. */
-const ClassBounds = Schema.Struct({
-  global: Schema.Number,
-  per_scope: Schema.optionalKey(Schema.Number),
-  per_run_scope: Schema.optionalKey(Schema.Number),
-});
-
-const admissionBounds = (bounds: unknown) => {
-  const decoded = Schema.decodeUnknownSync(ClassBounds)(bounds);
-  return {
-    global: decoded.global,
-    perScope: decoded.per_scope ?? decoded.per_run_scope ?? decoded.global,
-  };
-};
+/**
+ * A class's admission bounds. A `per_run_scope` bound counts one run in one scope; admission counts a scope, which is
+ * the same while the catalogue holds one run of the class.
+ */
+const admissionBounds = (className: string, bounds: ClassEntry["bounds"]) =>
+  bounds === undefined
+    ? Effect.fail(
+        new ApiError({
+          status: 503,
+          code: "misconfigured",
+          message: `class ${className} declares no bounds`,
+        }),
+      )
+    : Effect.succeed({
+        global: bounds.global,
+        perScope: "per_scope" in bounds ? bounds.per_scope : bounds.per_run_scope,
+      });
 
 /** A commit-scoped key, so one commit runs once (FD-INT-009). */
 const dedupRecipes = (run: string): readonly DedupRecipe<DispatchBody>[] => [
@@ -194,7 +201,7 @@ export const dispatch = (run: string, request: Request, env: ControlPlaneEnv) =>
       Effect.flatMap(decodeOr(DispatchBody, "invalid_inputs")),
     );
     const className = entry.spec.limits.qosClass;
-    const bounds = admissionBounds(classNamed(profile, className)?.bounds);
+    const bounds = yield* admissionBounds(className, classNamed(profile, className)?.bounds);
     const now = Date.now();
     const id = executionId(now, Math.random);
     const key = yield* Effect.promise(() => dedupKey(dedupRecipes(run), body));

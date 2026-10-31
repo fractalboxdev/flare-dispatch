@@ -172,6 +172,23 @@ const hello = (executorId: string) => ({
   outbox_depth: 0,
 });
 
+/** A heartbeat ends a device's standing claim, so a later test's dispatch wakes only that test's device. */
+const endStandingClaim = async (socket: Awaited<ReturnType<typeof connect>>) => {
+  socket.send({
+    type: "exec.heartbeat",
+    id: "hb1",
+    leases: [],
+    in_use: {},
+    activity: "unknown",
+    memory_pressure: "unknown",
+    thermal: "unknown",
+    power: "unknown",
+    free_disk_bytes: 0,
+    teardowns: [],
+  });
+  await socket.next("exec.heartbeat.ack");
+};
+
 describe("the operator gate", () => {
   it("FD-IFC-014 answers not_configured with no operator identity set", async () => {
     const r = await post(unconfigured, "/v1/dispatch/check", dispatchBody(SHA));
@@ -293,20 +310,7 @@ describe("a development deployment", () => {
       executor_id: "mac-2",
       outcome_intents: 1,
     });
-    // A heartbeat ends this device's standing claim, so the next test's dispatch wakes only that test's device.
-    socket.send({
-      type: "exec.heartbeat",
-      id: "hb1",
-      leases: [],
-      in_use: {},
-      activity: "unknown",
-      memory_pressure: "unknown",
-      thermal: "unknown",
-      power: "unknown",
-      free_disk_bytes: 0,
-      teardowns: [],
-    });
-    await socket.next("exec.heartbeat.ack");
+    await endStandingClaim(socket);
   });
 
   it("wakes a connected device's standing claim when a dispatch is admitted", async () => {
@@ -320,5 +324,52 @@ describe("a development deployment", () => {
     const admitted = await post(development, "/v1/dispatch/check", dispatchBody("c".repeat(40)));
     const { execution_id: id } = (await admitted.json()) as { execution_id: string };
     expect(await socket.next("exec.lease")).toMatchObject({ execution_id: id });
+    await endStandingClaim(socket);
   });
+
+  it.each([
+    [
+      "skipped",
+      { status: "skipped", reason: "draft-pr" },
+      "skipped",
+      "not-applicable: draft-pr",
+      "d",
+    ],
+    ["cancelled", { status: "cancelled", reason: "superseded" }, "cancelled", "superseded", "e"],
+  ])(
+    "MAMEKO-RUN-046 records a run's %s outcome as itself",
+    async (name, outcome, verdict, reason, shaChar) => {
+      const device = await newDevice();
+      const executor = `mac-${name}`;
+      await post(development, "/v1/executors/register", registration(executor, device.identity));
+      const admitted = await post(
+        development,
+        "/v1/dispatch/check",
+        dispatchBody(shaChar.repeat(40)),
+      );
+      const { execution_id: id } = (await admitted.json()) as { execution_id: string };
+      const socket = await connect(executor, device.keys);
+      socket.send(hello(executor));
+      await socket.next("session.welcome");
+      socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
+      const lease = await socket.next("exec.lease");
+      socket.send({
+        type: "exec.result",
+        id: "r1",
+        execution_id: id,
+        epoch: lease["epoch"],
+        result_id: `${id}:${String(lease["epoch"])}`,
+        outcome,
+        usage: {},
+        artifacts: [],
+      });
+      expect(await socket.next("exec.result.ack")).toMatchObject({ status: "accepted" });
+      expect(await execution(development, id, "?wait=20")).toMatchObject({
+        status: "done",
+        verdict,
+        reason,
+      });
+      await endStandingClaim(socket);
+    },
+  );
 });
