@@ -94,6 +94,25 @@ flowchart LR
 | Compile-cache objects of at most 100 MiB | The dispatcher Worker's compile-cache route, streamed without buffering ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-047) |
 | Every byte on executor kind `cloudflare` | The Container class's outbound handler, streamed without buffering ([MAMEKO-ARCH-016](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/architecture.md)) |
 
+### Composition
+
+The dispatcher Worker builds the coordinator's context from two sources. `cloudflareRuntimeLayer`, the one runtime Layer of `host-cloudflare`, supplies every store and the epoch anchor over the D1 binding and the `EpochAnchor` stub; the journal and the executor channel are the Durable Object classes of § Components. FlareDispatch supplies one Layer for each application port mameko's [hosts.md § Application ports](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md#application-ports) requires of it:
+
+| Port | FlareDispatch's Layer | Required from | Specified in |
+| --- | --- | --- | --- |
+| Effect applier | One applier per intent kind | Phase 0 | [github-output.md](github-output.md) |
+| Gate decision source | Answers no decision, because no kind is `gated` | Phase 0 | FD-ARCH-040 |
+| Configuration source | `ConfigurationSourceLive` | Phase 0 | [profile.md](profile.md) FD-PROF-001 |
+| Alarm port | The dashboard and the alert sink | Phase 0 | [operability.md](operability.md) FD-OPS-053 |
+| Applier rate limit | `InstallationQuota` | Phase 0 | [github-output.md](github-output.md) § Installation quota |
+| Object-store presigner | R2 presigned URLs | Phase 0 | [cache-artifacts.md](cache-artifacts.md) |
+| Credential minter | Read-only per-lease installation tokens | Phase 0 | [github-output.md](github-output.md) FD-GH-002 |
+| Posture source | Open; see § Open items | Phase 1 | — |
+| Attestation verifier | Managed Device Attestation | Phase 1 | [provenance.md](provenance.md) FD-PROV-028 |
+| Local registration port, reuse policy, writeback gate | Rehearsal registration, rehearsal reuse, local writeback | Phase 1 and phase 2 | [local-scheduler.md](local-scheduler.md) |
+| Launcher, kind `gha` | The GitHub Actions launcher | Phase 4 | [executors.md](executors.md) |
+| Result-acceptance check | The acceptance table | Phase 4 | [provenance.md](provenance.md) § Acceptance |
+
 ## Requirements
 
 ### Components
@@ -114,6 +133,11 @@ flowchart LR
 - **FD-ARCH-018** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — Work in a capacity lease must open, update or conclude no check run ([MAMEKO-ARCH-033](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/architecture.md), [MAMEKO-ARCH-034](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/architecture.md)).
 - **FD-ARCH-019** · phase 0 · `V-UNIT` `V-CONF` — The coordinator must run every `Execution` workflow on the DO-SQLite engine backend in `ExecutionEngine`, and must start one at admission for every `release`, `required` and `interactive` execution, the classes whose deadline outcome is not `deferred` ([MAMEKO-ARCH-035](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/architecture.md), [MAMEKO-ENG-026](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/engine.md)).
 
+### Composition
+
+- **FD-ARCH-039** · phase 0 · `V-DEPLOY` `V-CONF` — The dispatcher Worker must run the coordinator on `cloudflareRuntimeLayer` and one Layer for each application port of § Composition that the current phase requires ([MAMEKO-HOST-002](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md), [MAMEKO-HOST-043](https://github.com/fractalboxdev/mameko/blob/3af65c59d5f30123eb55b468966b4975c7395ece/specs/hosts.md)).
+- **FD-ARCH-040** · phase 0 · `V-UNIT` — FlareDispatch's gate decision source must answer no decision for every row, because the profile declares no `gated` kind ([profile.md](profile.md) FD-PROF-048).
+
 ## Open items
 
-None.
+- TODO(operator): name what FlareDispatch's posture source reads to answer `attested-dedicated`, `managed-workstation`, `unmanaged` or `failing` before phase 1. mameko requires the port wherever a plane registers `device` executors, `registerDevice` calls it, and the `reproduction` constraint reads its tier.
