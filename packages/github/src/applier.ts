@@ -280,9 +280,11 @@ export const classify = (e: GithubError): ApplyAnswer =>
     Match.exhaustive,
   );
 
-/** The row is answered before any GitHub call: a refusal or a missing installation. */
-class Answered extends Schema.TaggedError<Answered>()("Answered", { answer: Schema.Unknown }) {}
-const answered = (answer: ApplyAnswer) => Effect.fail(new Answered({ answer }));
+/** The row cannot reach GitHub: a kind this applier does not serve, a bad payload or a missing installation. */
+class Unservable extends Schema.TaggedError<Unservable>()("Unservable", {
+  reason: Schema.String,
+}) {}
+const unservable = (reason: string) => Effect.fail(new Unservable({ reason }));
 
 const reasonOf = (e: GithubError): string =>
   Match.value(e).pipe(
@@ -295,6 +297,8 @@ const reasonOf = (e: GithubError): string =>
 class AmbiguousCheckRun extends Schema.TaggedError<AmbiguousCheckRun>()("AmbiguousCheckRun", {
   count: Schema.Number,
 }) {}
+
+type ReadFailure = GithubError | AmbiguousCheckRun | Unservable;
 
 const found = (run: CheckRun | null): LookupAnswer =>
   run === null ? { _tag: "absent" } : { _tag: "found", externalRef: String(run.id) };
@@ -337,25 +341,17 @@ export const CheckRunApplierLive = Layer.effect(
       Effect.gen(function* () {
         const executionId = row.executionId;
         if (executionId === null)
-          return yield* answered({
-            _tag: "refused",
-            reason: "a check-run kind belongs to an execution",
-          });
+          return yield* unservable("a check-run kind belongs to an execution");
         const kind = row.kind;
         if (!isCheckKind(kind))
-          return yield* answered({
-            _tag: "refused",
-            reason: `applier: ${kind} is not a check-run kind`,
-          });
+          return yield* unservable(`applier: ${kind} is not a check-run kind`);
         const payload = yield* Schema.decodeUnknownEffect(Payloads[kind])(row.payload).pipe(
-          Effect.catchTag("SchemaError", (e) =>
-            answered({ _tag: "refused", reason: `payload: ${e.message}` }),
-          ),
+          Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
         );
         const installation = yield* directory.installationFor(row.scopeId);
         if (installation === null) {
           yield* raiseInstallationLost(row, "installation: not found");
-          return yield* answered({ _tag: "refused", reason: "installation: not found" });
+          return yield* unservable("installation: not found");
         }
         const ctx: Ctx = { installation, repo: row.scopeId, executionId, row };
         // The handler table is keyed by kind, and the payload decoded under that kind's schema.
@@ -368,20 +364,19 @@ export const CheckRunApplierLive = Layer.effect(
             (runs) => runs.filter((r) => r.external_id === executionId).sort((a, b) => a.id - b.id),
           ),
         );
-        return { ctx, kind, matching, payload: payload as never, handler };
+        return { ctx, matching, payload: payload as never, handler };
       });
 
     const apply = (row: IntentRow): Effect.Effect<ApplyAnswer> =>
       Effect.gen(function* () {
-        const { ctx, kind, matching, payload, handler } = yield* resolve(row);
-        // A first attempt of `check.open` creates at once. Every later attempt searches by `external_id`
-        // before it writes, and works on the oldest check run it finds (FD-GH-010, MAMEKO-OUT-022, MAMEKO-OUT-024).
-        const run =
-          kind === "check.open" && row.attempts === 0 ? null : ((yield* matching)[0] ?? null);
+        const { ctx, matching, payload, handler } = yield* resolve(row);
+        // Every attempt searches by `external_id` before it writes and works on the oldest check run it finds
+        // (FD-GH-010). `row.attempts` holds the value from insertion, so it does not mark a repeat.
+        const run = (yield* matching)[0] ?? null;
         return yield* call(ctx.installation, handler.apply(ctx, payload, run));
       }).pipe(
         Effect.catchTags({
-          Answered: (e) => Effect.succeed(e.answer as ApplyAnswer),
+          Unservable: ({ reason }) => Effect.succeed<ApplyAnswer>({ _tag: "refused", reason }),
           GithubHttpError: (e) =>
             e.status === 401
               ? Effect.as(raiseInstallationLost(row, "installation: unauthorized"), classify(e))
@@ -391,12 +386,10 @@ export const CheckRunApplierLive = Layer.effect(
       );
 
     /**
-     * The check run carrying the row's effect, or null when the effect is not on GitHub. A read that fails, or
-     * finds the execution's check run more than once, proves neither.
+     * The check run carrying the row's effect, or null when the effect is not on GitHub. A read that fails, cannot
+     * reach GitHub, or finds the execution's check run more than once, proves neither.
      */
-    const adoptedRun = (
-      row: IntentRow,
-    ): Effect.Effect<CheckRun | null, GithubError | AmbiguousCheckRun> =>
+    const adoptedRun = (row: IntentRow): Effect.Effect<CheckRun | null, ReadFailure> =>
       Effect.gen(function* () {
         const { ctx, matching, payload, handler } = yield* resolve(row);
         const runs = yield* matching;
@@ -405,12 +398,17 @@ export const CheckRunApplierLive = Layer.effect(
         const run = runs[0];
         if (run === undefined) return null;
         return (yield* call(ctx.installation, handler.adopted(ctx, payload, run))) ? run : null;
-      }).pipe(Effect.catchTag("Answered", () => Effect.succeed(null)));
+      });
 
-    // Neither read guesses: a failed or ambiguous read answers `undetermined`, the row stays ambiguous and the
-    // drainer asks again after back-off (MAMEKO-OUT-025, MAMEKO-OUT-064).
-    const undetermined = (e: GithubError | AmbiguousCheckRun) =>
-      e instanceof AmbiguousCheckRun ? `check run: ${e.count} carry the execution id` : reasonOf(e);
+    // Neither read guesses: `absent` sends an adoptable row again and voids a reconcile-only one, so a read without
+    // an answer is `undetermined`, the row stays ambiguous and the drainer asks again after back-off
+    // (MAMEKO-OUT-025, MAMEKO-OUT-064).
+    const undetermined = (e: ReadFailure) =>
+      Match.value(e).pipe(
+        Match.tag("AmbiguousCheckRun", ({ count }) => `check run: ${count} carry the execution id`),
+        Match.tag("Unservable", ({ reason }) => reason),
+        Match.orElse(reasonOf),
+      );
 
     return {
       apply,

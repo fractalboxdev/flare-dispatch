@@ -55,7 +55,7 @@ describe("check.open", () => {
 
   it("FD-GH-010 MAMEKO-OUT-024 lookup adopts the check run an earlier attempt created", async () => {
     const gh = await opened();
-    expect(await lookup(gh, row("check.open", ref, { attempts: 1 }))).toEqual({
+    expect(await lookup(gh, row("check.open", ref))).toEqual({
       _tag: "found",
       externalRef: "1000",
     });
@@ -63,7 +63,7 @@ describe("check.open", () => {
 
   it("FD-GH-010 a repeated apply finds the existing check run instead of creating a second", async () => {
     const gh = await opened();
-    expect(await apply(gh, row("check.open", ref, { attempts: 1 }))).toEqual({
+    expect(await apply(gh, row("check.open", ref))).toEqual({
       _tag: "applied",
       externalRef: "1000",
     });
@@ -71,8 +71,14 @@ describe("check.open", () => {
     expect(gh.calls).toEqual(["list"]);
   });
 
+  it("FD-GH-010 every apply searches by external_id before it creates", async () => {
+    const gh = fakeGithub();
+    await apply(gh, row("check.open", ref));
+    expect(gh.calls).toEqual(["list", "create"]);
+  });
+
   it("MAMEKO-OUT-024 lookup answers absent when no attempt reached GitHub", async () => {
-    expect(await lookup(fakeGithub(), row("check.open", ref, { attempts: 1 }))).toEqual({
+    expect(await lookup(fakeGithub(), row("check.open", ref))).toEqual({
       _tag: "absent",
     });
   });
@@ -82,19 +88,19 @@ describe("check.open", () => {
     gh.failures.push(
       new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false }),
     );
-    expect(await lookup(gh, row("check.open", ref, { attempts: 1 }))).toEqual({
+    expect(await lookup(gh, row("check.open", ref))).toEqual({
       _tag: "undetermined",
       reason: "github 502: bad gateway",
     });
     expect(gh.calls).toEqual(["list"]);
     gh.failures.push(new GithubNetworkError({ sent: false, message: "dns" }));
-    expect((await lookup(gh, row("check.open", ref, { attempts: 1 })))._tag).toBe("undetermined");
+    expect((await lookup(gh, row("check.open", ref)))._tag).toBe("undetermined");
   });
 
   it("MAMEKO-OUT-025 two check runs carrying the execution id answer undetermined", async () => {
     const gh = await opened();
     gh.runs.push({ ...gh.runs[0]!, id: 1001 });
-    expect(await lookup(gh, row("check.open", ref, { attempts: 1 }))).toEqual({
+    expect(await lookup(gh, row("check.open", ref))).toEqual({
       _tag: "undetermined",
       reason: "check run: 2 carry the execution id",
     });
@@ -103,7 +109,7 @@ describe("check.open", () => {
   it("MAMEKO-OUT-022, MAMEKO-OUT-024 a repeated apply searches by external_id first and works on the oldest check run", async () => {
     const gh = await opened();
     gh.runs.push({ ...gh.runs[0]!, id: 999 });
-    expect(await apply(gh, row("check.open", ref, { attempts: 2 }))).toEqual({
+    expect(await apply(gh, row("check.open", ref))).toEqual({
       _tag: "applied",
       externalRef: "999",
     });
@@ -293,7 +299,7 @@ describe("answers", () => {
   it("FD-GH-045 MAMEKO-OUT-017 404 and 422 are refused", async () => {
     for (const status of [404, 422]) {
       const gh = fakeGithub();
-      gh.failures.push(http(status));
+      gh.failures.push(null, http(status));
       expect(await apply(gh, open)).toEqual({ _tag: "refused", reason: `github ${status}: m` });
     }
   });
@@ -301,20 +307,20 @@ describe("answers", () => {
   it("FD-GH-046 MAMEKO-OUT-018 5xx, 429 and a secondary-rate-limit 403 are retryable; a plain 403 is refused", async () => {
     for (const e of [http(500), http(503), http(429, true), http(403, true)]) {
       const gh = fakeGithub();
-      gh.failures.push(e);
+      gh.failures.push(null, e);
       expect((await apply(gh, open))._tag).toBe("retryable");
     }
     const gh = fakeGithub();
-    gh.failures.push(http(403));
+    gh.failures.push(null, http(403));
     expect((await apply(gh, open))._tag).toBe("refused");
   });
 
   it("MAMEKO-OUT-022 a request sent without an answer is unknown; one never sent is retryable", async () => {
     const lost = fakeGithub();
-    lost.failures.push(new GithubNetworkError({ sent: true, message: "reset" }));
+    lost.failures.push(null, new GithubNetworkError({ sent: true, message: "reset" }));
     expect((await apply(lost, open))._tag).toBe("unknown");
     const unsent = fakeGithub();
-    unsent.failures.push(new GithubNetworkError({ sent: false, message: "dns" }));
+    unsent.failures.push(null, new GithubNetworkError({ sent: false, message: "dns" }));
     expect((await apply(unsent, open))._tag).toBe("retryable");
   });
 
@@ -343,6 +349,13 @@ describe("answers", () => {
     });
     expect(gh.alarms[0]).toMatchObject({ name: "installation-lost", severity: "page" });
     expect(gh.calls).toEqual([]);
+  });
+
+  it("MAMEKO-OUT-025 MAMEKO-OUT-064 lookup and reconcile without an installation answer undetermined", async () => {
+    const lost = row("check.open", ref, { scopeId: "acme/other" });
+    const undetermined = { _tag: "undetermined", reason: "installation: not found" };
+    expect(await lookup(fakeGithub(), lost)).toEqual(undetermined);
+    expect(await reconcile(fakeGithub(), lost)).toEqual(undetermined);
   });
 
   it("refuses a kind it does not serve and a payload its kind does not decode", async () => {

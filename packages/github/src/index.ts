@@ -26,6 +26,7 @@ export {
   Verdict,
   type Conclusion,
 } from "./conclusion.ts";
+export { githubApplicationLayer } from "./layer.ts";
 export {
   ApplierRateLimitLive,
   decidePermit,

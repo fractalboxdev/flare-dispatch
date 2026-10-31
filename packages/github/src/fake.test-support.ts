@@ -17,6 +17,8 @@ export interface FakeGithub {
   readonly calls: string[];
   /** Failures the next calls take, in order; a `null` entry lets that call through. */
   readonly failures: (GithubError | null)[];
+  /** Errors answered after the next write takes effect: GitHub did the work and the answer failed. */
+  readonly lostAnswers: GithubError[];
   readonly alarms: Alarm[];
   tokenRefreshes: number;
 }
@@ -26,6 +28,7 @@ export const fakeGithub = (): FakeGithub => ({
   annotations: new Map(),
   calls: [],
   failures: [],
+  lostAnswers: [],
   alarms: [],
   tokenRefreshes: 0,
 });
@@ -47,7 +50,10 @@ export const fakeLayers = (
     Effect.suspend(() => {
       gh.calls.push(name);
       const failure = gh.failures.shift();
-      return failure === undefined || failure === null ? Effect.sync(f) : Effect.fail(failure);
+      if (failure !== undefined && failure !== null) return Effect.fail(failure);
+      const value = f();
+      const lost = name === "create" || name === "update" ? gh.lostAnswers.shift() : undefined;
+      return lost === undefined ? Effect.succeed(value) : Effect.fail(lost);
     });
   const client = Layer.succeed(GithubClient, {
     createCheckRun: ({ body }) =>
