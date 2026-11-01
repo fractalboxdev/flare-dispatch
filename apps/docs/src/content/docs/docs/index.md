@@ -1,20 +1,26 @@
 ---
 title: Overview
-description: FlareDispatch runs the expensive half of GitHub Actions on a Cloudflare stack you deploy into your own account.
+description: Run CI, tasks and agents anywhere. Securely. v1 runs on Cloudflare in your own account today; this section documents it.
 ---
 
-FlareDispatch is BYOC CI/CD: an organization deploys one Dispatcher Worker and one GitHub App into its own Cloudflare account, and heavy jobs (agentic code review, Playwright e2e, acceptance suites, matrix fan-outs, security scans) run there instead of on GitHub-hosted runners. There is no multi-tenant service.
+FlareDispatch is BYOC CI/CD: an organization deploys one Dispatcher Worker and one GitHub App into its own Cloudflare account, and CI jobs, scheduled tasks and agents run there instead of on GitHub-hosted runners. There is no multi-tenant service.
 
-This section documents v1, the system that deploys today. [v1 and v2](/docs/v2/) states what v2 changes and how much of it exists. The [specifications](/specs/) define v2.
+This section documents v1, the system that deploys today. A local v2 run works in development through `pnpm dogfood`, which lives on the unmerged [#247](https://github.com/fractalboxdev/flare-dispatch/pull/247); its jobs run on the host, so it is not for production. The rest of v2 is specified, not built. [v1 and v2](/docs/v2/) states each part's status, and the [specifications](/specs/) define v2.
 
 ## What runs where
 
 | Concern           | Cloudflare service | What it does                                                 |
 | ----------------- | ------------------ | ------------------------------------------------------------ |
 | Orchestration     | Workflows          | Each run is a durable Workflow instance with a step timeline |
-| Job execution     | Containers         | Jobs run in sandboxed containers under deny-all egress       |
+| Job execution     | Containers         | Each job runs in a container                                 |
 | Browser and e2e   | Browser Rendering  | Playwright e2e and recorded product demos over CDP           |
 | Cache + artifacts | R2                 | Dependency cache, logs and artifacts                         |
+
+## Security
+
+The Dispatcher verifies the HMAC signature of each dispatch and webhook. Log links carry a signed token, and Cloudflare Access gates the dashboard.
+
+By default a run uses the Dispatcher's own containers, which have no egress control. The [substrate](/docs/substrate/) runs containers with no internet access and grants egress through [reviewed profiles](/docs/substrate/grant-profiles/). It ships switched off: a deployment opts in through the [adoption runbook](/docs/design/substrate/adoption-runbook/).
 
 ## Triggers
 
@@ -26,9 +32,17 @@ A run starts from one of three sources:
 
 Every run reports its verdict as a `flare-dispatch/<run>` check-run on the commit. Branch protection gates on that name. The check-run summary links the run's logs; [Finding your logs](/docs/runs/#finding-your-logs) traces the path from the summary to the raw artifacts.
 
-## Runs are programs
+## CI, tasks and agents
 
-A run is a typed Effect-TS program, not YAML, written against three layers. **Capabilities** wrap Cloudflare primitives, **primitives** compose them into build, test and cache steps, and **recipes** are the named runs a Dispatcher registers. Steps are typed, errors are tagged, and matches are exhaustive. The [run catalog](/docs/runs/) lists every recipe with its inputs.
+A run is a typed Effect-TS program, not YAML, written against three layers. **Capabilities** wrap Cloudflare primitives, **primitives** compose them into build, test and cache steps, and **recipes** are the named runs a Dispatcher registers. Steps are typed, errors are tagged, and matches are exhaustive.
+
+The same contract covers three kinds of work:
+
+- **CI.** Gates and suites such as `check`, `oxlint`, `offload-test` and `playwright-e2e`.
+- **Tasks.** Runs that gate nothing, usually on a cron schedule, such as `finops-audit` and `product-demo`. "Task" is this page's plain word for them; the catalog calls every kind a run.
+- **Agents.** Runs that call a model, such as `pr-review`, `self-heal-pr` and `spec-drift-pr`.
+
+The [run catalog](/docs/runs/) lists the recipes with their inputs.
 
 ## Deployment
 
