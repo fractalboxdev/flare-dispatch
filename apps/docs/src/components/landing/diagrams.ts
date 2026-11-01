@@ -4,7 +4,7 @@
 // lifecycle (specs/github-output.md) and the fenced lease (mameko's placement-leases.md).
 
 export const heroShape = `flowchart TB
-  accTitle: Cloudflare schedules; owned hardware runs first; the cloud takes the spill
+  accTitle: Cloudflare schedules; owned hardware runs first; the cloud takes the overflow
   trig["Webhook · Actions · cron · local"]:::accent --> intake
   subgraph cp["Control plane · your Cloudflare account"]
     intake["Intake: verify, dedup, class"] --> admit{"Spend guard: hold fits?"}
