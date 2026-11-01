@@ -125,6 +125,23 @@ export const linkTarget = (url, fromRel, exists) => {
 };
 
 /**
+ * The phase table in `specs/roadmap.md`: each phase with its goal and requirement count, and the
+ * total. Throws when the table is not there, so a changed table fails the build.
+ * @param {string} roadmap The text of `specs/roadmap.md`.
+ */
+export const phaseTable = (roadmap) => {
+  const phases = [...roadmap.matchAll(/^\| (\d+) \| (.+?) \| (\d+) \| (.+?) \| (.+?) \|$/gm)].map((m) => ({
+    phase: Number(m[1]),
+    goal: (m[2] ?? "").replace(/`/g, ""),
+    requirements: Number(m[3]),
+    waitsOn: (m[4] ?? "").replace(/`/g, ""),
+  }));
+  const total = /^\| All \| \| (\d+) \|/m.exec(roadmap)?.[1];
+  if (phases.length === 0 || total === undefined) throw new Error("no phase table in specs/roadmap.md");
+  return { phases, total: Number(total) };
+};
+
+/**
  * The files of the index table in `specs/README.md`, in table order. `roadmap.md` has its own
  * sidebar group.
  * @param {string} readme

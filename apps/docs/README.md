@@ -5,7 +5,7 @@ Source for the FlareDispatch site. One Astro build with Starlight serves three t
 
 | Path | Content | Source |
 | --- | --- | --- |
-| `/`, `/benchmarks/` | Product page and modeled run costs: plain Astro pages with their own layout and stylesheet | [`src/pages/`](src/pages/), [`src/data/benchmarks.ts`](src/data/benchmarks.ts) priced through `packages/core/src/cost.ts` at build time |
+| `/`, `/roadmap/`, `/benchmarks/` | Product page, roadmap and status, and modeled run costs: plain Astro pages with their own layout and stylesheet. `/` carries no status, which `test/specs.test.ts` checks; `/roadmap/` holds all of it | [`src/pages/`](src/pages/), [`src/data/status.ts`](src/data/status.ts), the phase table of `specs/roadmap.md` read at build time, [`src/data/benchmarks.ts`](src/data/benchmarks.ts) priced through `packages/core/src/cost.ts` |
 | `/docs/` | Documentation of what deploys today | [`src/content/docs/docs/`](src/content/docs/docs/), plus the mounted guides, run catalog, action READMEs and reference |
 | `/specs/` | Every file under `specs/` | [`specs/`](../../specs/README.md), read in place |
 

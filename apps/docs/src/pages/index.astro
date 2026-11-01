@@ -1,78 +1,41 @@
 ---
-// The page is three pillars: run anywhere, secure, and CI, tasks and agents. Every claim has one of
-// three states, and each table row or section names its state. "Deploys today" is v1 on main. "In
-// development" is the unmerged v2 path, `pnpm dogfood`. "Specified" is specs/, with a phase from
-// specs/roadmap.md, and uses the spec's `must`; only the first two use the plain present tense.
+// The page is three pillars: run anywhere, secure, and CI, tasks and agents. It carries no status:
+// /roadmap/ reports what exists, and test/specs.test.ts rejects status labels here. So the plain
+// present tense states only what exists, and anything else is phrased as design ("designed so
+// that", "built to"). A claim that needs a status label to stay true does not belong on this page.
 import { Code } from "@astrojs/starlight/components";
 import Landing from "../layouts/Landing.astro";
 import HeroDiagram from "../components/landing/HeroDiagram.astro";
 import Diagram from "../components/landing/Diagram.astro";
 import { fencedLease, lifecycle, placement } from "../components/landing/diagrams";
-import { REPO_URL } from "../lib/llms";
 
 const TITLE = "Run CI, tasks and agents anywhere. Securely. | FlareDispatch";
 const DESCRIPTION =
-  "Run CI, tasks and agents anywhere. Securely. v1 runs on Cloudflare in your own account today; v2 runs locally in development; other executors are specified.";
-
-const DOGFOOD_PR = `${REPO_URL}/pull/247`;
-const IMPL_PR = `${REPO_URL}/pull/246`;
-
-const heroStates = [
-  "Run anywhere: v1 on Cloudflare today, v2 local in development, AWS specified",
-  "Secure: signed device sessions in development, job isolation specified",
-  "CI, tasks and agents: v1 catalog today, v2 runs one check",
-];
+  "Run CI, tasks and agents anywhere. Securely. FlareDispatch is designed to place work on your machines, Cloudflare and other clouds, from your own account.";
 
 const pillars = [
   {
     id: "01.01 / Run anywhere",
     title: "Your machines, Cloudflare, other clouds",
-    body: "v1 runs every job on Cloudflare in your own account. v2 runs FlareDispatch's own CI on one machine in development. Placement across executors, with AWS among them, is specified, not built.",
+    body: "Built to place each job where it fits: machines you own for routine work, Cloudflare Containers and other cloud executors where capacity matters.",
     href: "#run-anywhere",
   },
   {
     id: "01.02 / Secure",
-    title: "Signed, fenced, and honest about isolation",
-    body: "In development, device sessions are connect-signed, devices enroll by key and leases carry epochs. Job isolation is specified, not built: today's v2 run executes on the host, and production refuses it.",
+    title: "Signed requests, fenced results",
+    body: "The Dispatcher verifies every dispatch and webhook signature. The device path is designed so that a machine proves its key and a stale result never counts.",
     href: "#secure",
   },
   {
     id: "01.03 / CI, tasks and agents",
     title: "Three kinds of work, one run contract",
-    body: "v1's catalog holds gates and test suites, scheduled tasks and agents, all defined as typed programs. v2 has one run so far, check.",
+    body: "Gates and test suites, scheduled tasks and model-driven agents are all typed programs, with the same triggers, durable steps and logs.",
     href: "#work",
   },
 ];
 
-type Row = { readonly what: string; readonly state: string; readonly detail: string };
-
-const executors: readonly Row[] = [
-  { what: "Cloudflare Containers, from Actions, webhook or cron", state: "Deploys today", detail: "v1" },
-  { what: "One owned machine, through mameko's Rust device executor", state: "In development", detail: "Control plane under wrangler dev, batch class, job on the host, #247" },
-  { what: "Cloudflare Containers under the v2 control plane", state: "Specified", detail: "Phase 0" },
-  { what: "Owned devices for batch work, then interactive", state: "Specified", detail: "Phases 1 and 2" },
-  { what: "AWS launcher, and owned devices for required checks", state: "Specified", detail: "Phase 3" },
-  { what: "GitHub Actions launcher and device-aware placement", state: "Specified", detail: "Phase 4" },
-];
-
-const secure: readonly Row[] = [
-  { what: "HMAC-verified dispatch and webhook signatures", state: "Deploys today", detail: "v1 Dispatcher" },
-  { what: "Tokened log links and an Access-gated dashboard", state: "Deploys today", detail: "v1 Dispatcher" },
-  { what: "Containers with no internet access and reviewed egress grants", state: "Deploys today, off by default", detail: "v1 substrate. A deployment opts in; by default runs use the Dispatcher's own containers, without this control" },
-  { what: "Connect-signed device sessions", state: "In development", detail: "The upgrade's signature is verified against the enrolled device key, #247" },
-  { what: "Device-key enrollment", state: "In development", detail: "Software key under development only. Production requires an attested Secure Enclave key, and no verifier is wired, so it refuses every key" },
-  { what: "Fenced leases", state: "In development", detail: "Each lease carries an epoch and the record names the accepted epoch. Reclaim is not wired" },
-  { what: "Production refuses host execution and software keys", state: "In development", detail: "The route answers 403 and the runner's catalog is empty outside development" },
-  { what: "Allow-listed job environment", state: "In development", detail: "No credential reaches the job; the command strips them from every child process" },
-  { what: "A job sandbox per job on a device", state: "Specified", detail: "MAMEKO-ISO-001. Phase 1 waits on it" },
-  { what: "Deny-all egress on devices, per-lease credentials", state: "Specified", detail: "Phase 1" },
-  { what: "Egress profiles and staged writeback", state: "Specified", detail: "Phase 2" },
-  { what: "Device attestation and provenance tiers", state: "Specified", detail: "Phase 4" },
-];
-
 const wins = [
   { dim: "Warm state: deps, builds, browsers", owned: "Stays on local disk between runs", cloud: "Starts cold each execution", verdict: "Owned" },
-  { dim: "Apple-platform builds", owned: "Native macOS guests, phase 4", cloud: "Removed from placement", verdict: "Owned" },
   { dim: "Burst fan-out", owned: "Fixed slot count", cloud: "Up to the pool's admission cap", verdict: "Cloud" },
   { dim: "Untrusted code (fork PRs)", owned: "Not eligible", cloud: "Disposable container", verdict: "Cloud only" },
   { dim: "Releases", owned: "Not eligible", cloud: "Cold from the commit", verdict: "Cloud only" },
@@ -80,57 +43,41 @@ const wins = [
 
 const rules = [
   {
-    phase: "Phase 0",
-    title: "Fork PR code must stay off owned hardware.",
-    body: "resolveClass labels a fork PR untrusted-input. Owned devices must run only code from people with write access.",
+    title: "Designed so that fork PR code stays off owned hardware.",
+    body: "Owned devices are meant for code from people with write access.",
   },
   {
-    phase: "Phase 4",
-    title: "Confidential-compute code must stay on owned hardware.",
-    body: "A confidential-compute repository has no cloud path. With no eligible managed device, its execution must wait until its deadline, then conclude failure.",
+    title: "Designed so that releases build in the cloud.",
+    body: "A release starts cold from the commit, on a disposable executor.",
   },
   {
-    phase: "Phase 0",
-    title: "Unclassified data must not reach a hosted model.",
-    body: "A scope's default mode is unclassified, which routes as confidential-model, so classification fails closed.",
-  },
-  {
-    phase: "Phase 0",
-    title: "Releases must build in the cloud.",
-    body: "release is cloud-pinned: it must run on Cloudflare Containers from admission. A release-matrix job that needs macOS must run on GitHub Actions instead.",
-  },
-  {
-    phase: "Phase 2",
-    title: "Owned-first placement must be a delayed cloud claim, not a race.",
-    body: "The placement row must hold a local entry claimable at once and a cloud entry eligible at the claim deadline. The first compare-and-set from queued to leased wins the epoch, so one copy runs.",
+    title: "Designed so that one copy runs.",
+    body: "Owned-first placement is a delayed cloud claim, not a race: the first claim wins the epoch.",
   },
 ];
 
-const classes = [
-  { cls: "P0", name: "release", runs: "Release and deploy runs", deadline: "None: cloud at admission", outcome: "failure, named reason" },
-  { cls: "P1", name: "required", runs: "Runs the target branch's ruleset requires", deadline: "60 s", outcome: "Waits until deadline_at, then failure" },
-  { cls: "P2", name: "interactive", runs: "Gating runs whose check is not required", deadline: "300 s", outcome: "failure at its 1800 s queue age" },
-  { cls: "P3", name: "batch", runs: "Crons, improve-pr, triage", deadline: "Half the run's period", outcome: "Deferred to the next tick" },
+const queue = [
+  { title: "Named reasons.", body: "A red check is designed to say why it is red: budget, capacity, deadline or halt." },
+  { title: "Four classes.", body: "Work is designed to carry a class, from release to batch, that decides how long it waits." },
+  { title: "One verdict.", body: "The check is designed to report the result of the current epoch only." },
 ];
 
-const lines = [
-  { cls: "P3", at: "P3 line", note: "stops first", pct: 38 },
-  { cls: "P2", at: "B − R0 − R1", note: "keeps the required reserve", pct: 68 },
-  { cls: "P1", at: "B − R0", note: "required checks and ops runs", pct: 88 },
-  { cls: "P0", at: "B", note: "releases spend to the budget", pct: 100 },
-];
-
-const failures = [
-  { failure: "Sleep, reboot, OS update", detect: "Heartbeat stops for 90 s", effect: "The lease expires and the execution restarts under a new epoch" },
-  { failure: "Control-plane deploy", detect: "Sockets drop", effect: "The executor reconnects; lease expiry counts from the restart anchor" },
-  { failure: "Job stalled, executor alive", detect: "Progress timeout", effect: "Reclaimed like a dead device" },
-  { failure: "Device returns with stale work", detect: "Epoch mismatch", effect: "Result discarded; stale writes blocked" },
-];
-
-const tiers = [
-  { tier: "device-signed", proves: "This attested device produced it, unaltered since", use: "Test verdicts, logs, internal artifacts" },
-  { tier: "platform", proves: "These inputs and this process; the job could not reach the signer", use: "PR artifacts, preview deploys" },
-  { tier: "reproduced", proves: "The source produces exactly this output: a cold rebuild on a dedicated attested device with digests equal to the cloud build's", use: "Releases, published packages and images" },
+const secure = [
+  {
+    id: "03.01 / Requests",
+    title: "Signed triggers",
+    body: "The Dispatcher verifies the HMAC signature of each dispatch and webhook. Log links carry a signed token, and Cloudflare Access gates the dashboard.",
+  },
+  {
+    id: "03.02 / Machines",
+    title: "Device identity",
+    body: "Designed so that a machine enrolls by key and signs each connection, and the control plane verifies the signature against the enrolled key.",
+  },
+  {
+    id: "03.03 / Credentials",
+    title: "Least privilege",
+    body: "Designed so that a job holds no secret of the executor's. An optional substrate runs containers with no internet access and grants egress through reviewed profiles.",
+  },
 ];
 
 const work = [
@@ -166,36 +113,28 @@ const work = [
   },
 ];
 
-const routing = [
-  { step: "Confidentiality", body: "A scope that is not non-confidential must route no call to a hosted model." },
-  { step: "Task tier", body: "A non-confidential judgment call must use the hosted judgment model." },
-  { step: "Data location", body: "A bulk call on a device with a local route must use the local model (phase 2); on a cloud executor it must use a hosted bulk model and not move its input to a device." },
-  { step: "Budget", body: "A judgment call rejected at its allowance must conclude failure with the reason budget." },
-];
-
 const bets = [
   {
     statement: "Cloudflare <strong>schedules</strong>; machines execute.",
-    body: "Specified. The control plane must own every guarantee, deadline and check. A device's local scheduler must place only unguaranteed work inside a capacity lease, so a device's uptime never becomes the system's.",
+    body: "The control plane is designed to own every guarantee, deadline and check, so a device's uptime never becomes the system's.",
   },
   {
     statement: "<strong>Queue</strong>, then fail.",
-    body: "Specified. A budget, capacity, deadline or halt outcome must never conclude success or neutral, and every red check must carry its reason.",
+    body: "Designed so that a budget, capacity, deadline or halt outcome never concludes success or neutral.",
   },
   {
     statement: "Runs are <strong>typed programs</strong>, not YAML.",
-    body: "Deploys today. v1 runs are Effect 3 programs with tagged errors. The v2 check run in development is an Effect 4 program on mameko's run DSL.",
+    body: "A run is an Effect program with schema-typed inputs, durable steps and tagged errors.",
   },
   {
     statement: "BYOC <strong>by construction</strong>.",
-    body: "Deploys today. Each organization deploys its own Dispatcher into its own Cloudflare account. There is no multi-tenant service to trust.",
+    body: "Each organization deploys its own Dispatcher into its own Cloudflare account. There is no multi-tenant service to trust.",
   },
 ];
 
-const v1Ts = `// runs/check.ts on main, condensed
+const checkTs = `// runs/check.ts, condensed
 export const check = defineRun({
   name: "check",
-  version: "1.4.0",
   inputs: CheckInput,
   outputs: CheckOutput,
   run: (input) =>
@@ -211,60 +150,14 @@ export const check = defineRun({
     }),
 });`;
 
-const v2Ts = `// packages/catalog/src/spec.ts on #247, condensed
-export const checkSpec = {
-  name: "check",
-  version: "2.0.0",
-  input: CheckInput,
-  requires: ["Workspace", "Exec"],
-  limits: { maxDurationSec: CHECK_MAX_DURATION_SEC, qosClass: "batch", qosCeiling: "batch" },
-  retries: 0,
-} as const;
-
-const entries = {
-  // The run executes on the device's host OS, so only the development deployment reaches it.
-  check: { spec: checkSpec, hostExecution: true },
-};`;
-
-const profileTs = `// packages/profile/src/document.ts on #246, condensed
-const classes: Profile["classes"] = [
-  {
-    name: "required",
-    rank: 1,
-    claim_deadline: { seconds: 60 },
-    cloud_kinds: ["cloudflare", "aws", "gha"],
-    line: "next-above-less-reserve",
-    guaranteed: true,
-    firm: true,
-    terminal_outcome: { outcome: "failure", reason: "budget: required reserve exhausted" },
-  },
-  // release, interactive, batch
-];`;
-
 const snippets = [
   {
-    id: "v1",
-    label: "v1 check.ts",
-    code: v1Ts,
-    blurb: "Deploys today. A run is a typed program: durable steps, a container workspace and a log in R2.",
+    id: "check",
+    label: "check.ts",
+    code: checkTs,
+    blurb: "A run is a typed program: durable steps, a container workspace and a log in R2.",
     href: "/docs/runs/",
     link: "Run catalog →",
-  },
-  {
-    id: "v2",
-    label: "v2 spec.ts",
-    code: v2Ts,
-    blurb: "In development. The v2 catalog holds this one run, on mameko's run DSL.",
-    href: DOGFOOD_PR,
-    link: "#247 →",
-  },
-  {
-    id: "profile",
-    label: "v2 profile",
-    code: profileTs,
-    blurb: "Policy as data: the classes the specifications define. The values exist on a draft branch; only batch has run.",
-    href: IMPL_PR,
-    link: "#246 →",
   },
 ];
 ---
@@ -282,22 +175,19 @@ const snippets = [
             Run CI, tasks and agents <em>anywhere</em>. Securely.
           </h1>
           <p class="hero__sub reveal" data-delay="3">
-            From a Dispatcher in your own Cloudflare account, v1 runs CI, scheduled tasks and agents on Cloudflare today,
-            and v2 is extending that to your own machines and other cloud executors with signed device sessions and
-            fenced leases.
+            FlareDispatch is built to run CI, scheduled tasks and agents on your own machines, on Cloudflare and on
+            other cloud executors, from a control plane you deploy into your own account.
           </p>
           <div class="hero__cta reveal" data-delay="4">
             <a class="btn" href="/docs/">Read the docs</a>
             <a class="btn btn--ghost" href="/specs/">Read the specs</a>
-            <a class="btn btn--ghost" href="/docs/v2/">v1 and v2</a>
+            <a class="btn btn--ghost" href="/specs/adr/">Decision records</a>
           </div>
+          <p class="more reveal" data-delay="4"><a href="/roadmap/">Roadmap and status →</a></p>
         </div>
         <div class="reveal" data-delay="3">
           <HeroDiagram />
         </div>
-      </div>
-      <div class="hero__meta" style="margin: 3rem 0 0">
-        {heroStates.map((s) => <span class="section-marker reveal" data-delay="4">{s}</span>)}
       </div>
     </div>
   </section>
@@ -306,13 +196,11 @@ const snippets = [
     <div class="container">
       <div class="tenets__header">
         <span class="section-marker">§01 / Three pillars</span>
-        <h2>Each pillar states what deploys today, what runs in development and what is specified.</h2>
+        <h2>Where work runs, how it stays safe, and what it can be.</h2>
         <p class="section-lede">
-          FlareDispatch is CI/CD you deploy into your own Cloudflare account. v2 is an application on
+          FlareDispatch is CI/CD you deploy into your own Cloudflare account. Its design builds on
           <a href="https://github.com/fractalboxdev/mameko">mameko</a>, the libraries that accept work, select an
-          executor and record results. In development means <code>pnpm dogfood</code>, on unmerged
-          <a href={DOGFOOD_PR}>#247</a>: a local control plane under <code>wrangler dev</code>, the Rust device executor
-          and a real lease, for development only. Phases come from the <a href="/specs/roadmap/">roadmap</a>.
+          executor and record results.
         </p>
       </div>
       <div class="tenets__grid">
@@ -335,44 +223,19 @@ const snippets = [
         <span class="section-marker">§02 / Run anywhere</span>
         <h2>Your own machines, Cloudflare and other cloud executors.</h2>
         <p class="section-lede">
-          v1 runs on Cloudflare. v2's first path runs on one machine you own, and the rest of this table is specified.
-          The design bets that a machine keeping dependencies and build outputs warm beats the best cloud setup on
-          routine jobs. That bet is unmeasured: the phase 0 gate requires a warm run to reach its verdict at least 30%
-          faster, and a kill line narrows the plan if it does not.
+          An ephemeral runner re-downloads dependencies and rebuilds unchanged packages on every job. The design keeps
+          that state warm on machines you own and uses the cloud for what those machines cannot do.
         </p>
       </div>
       <div class="compare__wrap compare__wrap--spaced">
         <table class="compare__table">
-          <caption class="sr-only">Where work runs, and the state of each executor</caption>
-          <thead>
-            <tr>
-              <th>Where work runs</th>
-              <th>State</th>
-              <th>Where</th>
-            </tr>
-          </thead>
-          <tbody>
-            {
-              executors.map((c) => (
-                <tr>
-                  <td>{c.what}</td>
-                  <td class:list={[c.state === "Specified" ? "compare__cloud" : "compare__yes"]}>{c.state}</td>
-                  <td>{c.detail}</td>
-                </tr>
-              ))
-            }
-          </tbody>
-        </table>
-      </div>
-      <div class="compare__wrap compare__wrap--spaced">
-        <table class="compare__table">
-          <caption class="sr-only">Where the design places each kind of work</caption>
+          <caption class="sr-only">How the design divides work between owned hardware and the cloud</caption>
           <thead>
             <tr>
               <th>Dimension</th>
               <th>Owned hardware</th>
               <th>Cloudflare Containers</th>
-              <th>Specified to run on</th>
+              <th>Designed to run on</th>
             </tr>
           </thead>
           <tbody>
@@ -395,27 +258,21 @@ const snippets = [
   <section class="band">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§02.1 / Placement · specified, phases 0 to 4</span>
-        <h2>Placement rules must hold before any deadline does.</h2>
+        <span class="section-marker">§02.1 / Placement</span>
+        <h2>Placement is designed so that rules hold before any deadline does.</h2>
         <p class="section-lede">
-          Each execution must carry a class and a claim deadline from intake. Placement constraints must remove
-          executors from the eligible set first; the deadline then decides between owned hardware and the cloud. None
-          of this runs yet: the development path has one class, one device and no cloud executor.
+          In the design, rules remove executors from the eligible set first; a deadline then decides between owned
+          hardware and the cloud.
         </p>
       </div>
       <div class="split">
-        <Diagram
-          id="placement"
-          source={placement}
-          width={520}
-          caption="Fig. 1 · specified: constraints first, then the claim deadline"
-        />
+        <Diagram id="placement" source={placement} width={520} caption="Fig. 1 · the design: rules first, then the deadline" />
         <div>
           <ol class="rules">
             {
-              rules.map((r) => (
+              rules.map((r, i) => (
                 <li class="rule-item">
-                  <span class="rule-item__num">{r.phase}</span>
+                  <span class="rule-item__num">§02.1.{i + 1}</span>
                   <div>
                     <p class="rule-item__title">{r.title}</p>
                     <p class="rule-item__body">{r.body}</p>
@@ -436,114 +293,30 @@ const snippets = [
   <section class="band">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§02.2 / Queue, then fail · specified, phase 0</span>
-        <h2>No budget or capacity outcome must turn a check green.</h2>
+        <span class="section-marker">§02.2 / Queue, then fail</span>
+        <h2>Designed so that no budget or capacity outcome turns a check green.</h2>
         <p class="section-lede">
-          GitHub counts a <code>neutral</code> conclusion as passing for a required check. So an execution that meets
-          its class line or an empty pool must queue until its deadline, then conclude <code>failure</code> with a named
-          reason: budget, capacity or deadline. The conclusion mapping exists as code on
-          <a href={IMPL_PR}>#246</a>; the path from an execution to GitHub does not.
+          GitHub counts a <code>neutral</code> conclusion as passing for a required check, so the design waits, then
+          fails with a reason, rather than concluding <code>neutral</code>.
         </p>
       </div>
       <div class="split split--reverse">
-        <div class="compare__wrap">
-          <table class="compare__table">
-            <caption class="sr-only">QoS classes, their claim deadlines on owned hardware, and their outcome at the line</caption>
-            <thead>
-              <tr>
-                <th>Class</th>
-                <th>Runs</th>
-                <th>Local claim deadline</th>
-                <th>At its line or deadline</th>
-              </tr>
-            </thead>
-            <tbody>
-              {
-                classes.map((c) => (
-                  <tr>
-                    <td>
-                      <span class="class-tag">{c.cls}</span> <code>{c.name}</code>
-                    </td>
-                    <td>{c.runs}</td>
-                    <td>{c.deadline}</td>
-                    <td>{c.outcome}</td>
-                  </tr>
-                ))
-              }
-            </tbody>
-          </table>
+        <div>
+          <ul class="facts">
+            {
+              queue.map((q) => (
+                <li>
+                  <strong>{q.title}</strong> {q.body}
+                </li>
+              ))
+            }
+          </ul>
           <p class="more">
             <a href="/specs/profile/">Classes and admission →</a>
             <a href="/specs/github-output/">GitHub output →</a>
           </p>
         </div>
-        <Diagram
-          id="lifecycle"
-          source={lifecycle}
-          width={560}
-          caption="Fig. 2 · specified: a guaranteed execution, intake to verdict"
-        />
-      </div>
-    </div>
-  </section>
-
-  <section class="band">
-    <div class="container">
-      <div class="tenets__header">
-        <span class="section-marker">§02.3 / Spend · specified, phase 0</span>
-        <h2>Admission must keep committed cloud spend under the budget.</h2>
-        <p class="section-lede">
-          Cloudflare has no account-level spending cap, so the control plane's admission is the only place a cap holds.
-          The spend meter must admit an execution only when its hold fits under its class line. Nothing meters yet: the
-          development control plane sets every hold term to zero.
-        </p>
-      </div>
-      <div class="split">
-        <figure class="lines" aria-labelledby="lines-caption">
-          <ol class="lines__list">
-            {
-              lines.map((l) => (
-                <li class="lines__row">
-                  <span class="lines__cls">{l.cls}</span>
-                  <span class="lines__track">
-                    <span class="lines__bar" style={`width: ${l.pct}%`}>
-                      <code>{l.at}</code>
-                    </span>
-                  </span>
-                  <span class="lines__note">{l.note}</span>
-                </li>
-              ))
-            }
-          </ol>
-          <figcaption id="lines-caption">
-            Fig. 3 · specified: nested class lines on one meter, P3 ≤ P2 ≤ P1 ≤ P0 = B. Widths are illustrative.
-          </figcaption>
-        </figure>
-        <div>
-          <ul class="facts">
-            <li>
-              <strong>Holds, then settle.</strong> Admission must reserve the worst case; settling must replace the
-              reservation with the metered cost.
-            </li>
-            <li>
-              <strong>Burn lanes.</strong> Nested hourly lanes must cap the summed list rate each class may admit.
-            </li>
-            <li>
-              <strong>Operator halt.</strong> One control must stop admission for a scope.
-            </li>
-          </ul>
-          <aside class="formal">
-            <span class="formal__eyebrow">Formal models · specified</span>
-            <p>
-              ADR-0018 specifies Lean 4 models of the spend, placement, outbox, staged-write and fencing kernels, linked
-              to the TypeScript kernels by differential testing. FlareDispatch holds no model yet.
-            </p>
-            <p class="more">
-              <a href="/specs/spend/">Spend →</a>
-              <a href="/specs/adr/0018-formal-models/">Formal models →</a>
-            </p>
-          </aside>
-        </div>
+        <Diagram id="lifecycle" source={lifecycle} width={560} caption="Fig. 2 · the design: an execution, intake to verdict" />
       </div>
     </div>
   </section>
@@ -552,40 +325,26 @@ const snippets = [
     <div class="container">
       <div class="tenets__header">
         <span class="section-marker">§03 / Secure</span>
-        <h2>Identity and fencing exist. Job isolation on a device does not.</h2>
+        <h2>Dispatches and webhooks prove who sent them.</h2>
         <p class="section-lede">
-          The v2 development run executes on the host under your own user, which MAMEKO-ISO-001 forbids in a conformant
-          deployment: a device must run each job in a sandbox created for that job alone. No job sandbox exists on that
-          path and no conformant macOS runtime exists yet, so the command says so when it starts, and production refuses
-          the run.
+          The Dispatcher runs in your account, and it rejects a dispatch or webhook whose signature does not verify.
+          The design extends the same rule to machines.
         </p>
       </div>
-      <div class="compare__wrap compare__wrap--spaced">
-        <table class="compare__table">
-          <caption class="sr-only">Security controls and the state of each</caption>
-          <thead>
-            <tr>
-              <th>Control</th>
-              <th>State</th>
-              <th>Where</th>
-            </tr>
-          </thead>
-          <tbody>
-            {
-              secure.map((c) => (
-                <tr>
-                  <td>{c.what}</td>
-                  <td class:list={[c.state === "Specified" ? "compare__cloud" : "compare__yes"]}>{c.state}</td>
-                  <td>{c.detail}</td>
-                </tr>
-              ))
-            }
-          </tbody>
-        </table>
+      <div class="tenets__grid">
+        {
+          secure.map((s) => (
+            <article class="tenet">
+              <span class="tenet__id">{s.id}</span>
+              <h3 class="tenet__title">{s.title}</h3>
+              <p class="tenet__rationale">{s.body}</p>
+            </article>
+          ))
+        }
       </div>
       <p class="more">
-        <a href="/specs/isolation-egress/">Isolation and egress →</a>
-        <a href="/docs/substrate/grant-profiles/">v1 grant profiles →</a>
+        <a href="/specs/isolation-egress/">Isolation and egress design →</a>
+        <a href="/docs/substrate/grant-profiles/">Grant profiles →</a>
       </p>
     </div>
   </section>
@@ -593,98 +352,33 @@ const snippets = [
   <section class="band">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§03.1 / Fenced leases · lease in development, reclaim specified</span>
-        <h2>A lost machine must cost time, never a wrong check.</h2>
+        <span class="section-marker">§03.1 / Fenced leases</span>
+        <h2>Designed so that a lost machine costs time, never a wrong check.</h2>
         <p class="section-lede">
-          In development, a device takes a real execution lease and the coordinator records the epoch it accepted.
-          Reclaim is specified, not wired: when the heartbeat stops, the control plane must reclaim the lease, increment
-          the epoch and restart the execution elsewhere. It must accept a result only at the current epoch, so a device
-          that wakes late cannot overwrite newer work.
+          A lease carries an epoch. The design reclaims a lease when its heartbeat stops, restarts the work under the
+          next epoch and accepts a result only at the current one.
         </p>
       </div>
       <div class="split">
-        <Diagram
-          id="fenced-lease"
-          source={fencedLease}
-          width={560}
-          caption="Fig. 4 · specified: reclaim, restart, reject the stale result"
-        />
-        <div class="compare__wrap">
-          <table class="compare__table">
-            <caption class="sr-only">Specified device failures, how the control plane must detect them, and their effect</caption>
-            <thead>
-              <tr>
-                <th>Failure</th>
-                <th>Detected by</th>
-                <th>Specified effect</th>
-              </tr>
-            </thead>
-            <tbody>
-              {
-                failures.map((f) => (
-                  <tr>
-                    <td>{f.failure}</td>
-                    <td>{f.detect}</td>
-                    <td>{f.effect}</td>
-                  </tr>
-                ))
-              }
-            </tbody>
-          </table>
+        <Diagram id="fenced-lease" source={fencedLease} width={560} caption="Fig. 3 · the design: reclaim, restart, reject the stale result" />
+        <div>
           <p class="more">
             <a href="/specs/executor-protocol/">Executor protocol →</a>
+            <a href="/specs/adr/0007-fenced-execution-leases/">Why fenced leases →</a>
           </p>
         </div>
       </div>
     </div>
   </section>
 
-  <section class="band">
-    <div class="container">
-      <div class="tenets__header">
-        <span class="section-marker">§03.2 / Provenance · specified, phases 0 to 4</span>
-        <h2>A build must prove where it ran.</h2>
-        <p class="section-lede">
-          Every executor must emit the same in-toto statement. Its tier says what it proves; the verification policy
-          decides what counts. No statement is produced today.
-        </p>
-      </div>
-      <div class="compare__wrap">
-        <table class="compare__table">
-          <caption class="sr-only">Provenance tiers, what each must prove and where it is used</caption>
-          <thead>
-            <tr>
-              <th>Tier</th>
-              <th>Proves</th>
-              <th>Used for</th>
-            </tr>
-          </thead>
-          <tbody>
-            {
-              tiers.map((t) => (
-                <tr>
-                  <td><code>{t.tier}</code></td>
-                  <td>{t.proves}</td>
-                  <td>{t.use}</td>
-                </tr>
-              ))
-            }
-          </tbody>
-        </table>
-      </div>
-      <p class="more"><a href="/specs/provenance/">Provenance →</a></p>
-    </div>
-  </section>
-
   <section class="tenets" id="work">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§04 / CI, tasks and agents · v1 deploys today</span>
+        <span class="section-marker">§04 / CI, tasks and agents</span>
         <h2>Gates, scheduled tasks and agents share one run contract.</h2>
         <p class="section-lede">
-          The v1 catalog defines all three kinds of work through one <code>defineRun</code> contract, on the same trigger
-          sources and durable steps. v2 has one run in development, <code>check</code>; the eight agentic recipes and the gate recipes under
-          v2 are specified.
+          The catalog defines all three kinds of work through one <code>defineRun</code> contract, on the same trigger
+          sources and durable steps.
         </p>
       </div>
       <div class="tenets__grid">
@@ -698,57 +392,14 @@ const snippets = [
           ))
         }
       </div>
-      <p class="more">
-        <a href="/specs/runs/gate/">v2 gate recipes, specified →</a>
-        <a href="/specs/runs/agentic/">v2 agentic recipes, specified →</a>
-      </p>
-    </div>
-  </section>
-
-  <section class="band">
-    <div class="container">
-      <div class="tenets__header">
-        <span class="section-marker">§04.1 / Agent controls · specified, phases 0 to 2</span>
-        <h2>Model output must stay data.</h2>
-      </div>
-      <div class="split split--even">
-        <div>
-          <h3 class="sub-head">Model routing</h3>
-          <p class="sub-lede">
-            The v2 model gateway must decide each call's route from four inputs, in this order:
-          </p>
-          <ol class="steps">
-            {
-              routing.map((r) => (
-                <li>
-                  <span>
-                    <strong>{r.step}.</strong> {r.body}
-                  </span>
-                </li>
-              ))
-            }
-          </ol>
-          <p class="more"><a href="/specs/model-gateway/">Model gateway →</a></p>
-        </div>
-        <div>
-          <h3 class="sub-head">Staged writes</h3>
-          <p class="sub-lede">
-            A v2 agentic recipe must never write to GitHub itself. It must return intents, and file changes must reach a
-            repository only as a staged write that the <code>pr.propose</code> applier checks against a path allowlist
-            and a deny list. No agentic recipe must hold private data, untrusted content and outbound communication at
-            once.
-          </p>
-          <p class="more"><a href="/specs/runs/agentic/">Agentic recipes →</a></p>
-        </div>
-      </div>
     </div>
   </section>
 
   <section class="snippets">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§04.2 / The code · each tab names its state</span>
-        <h2>One program per run. One document for policy.</h2>
+        <span class="section-marker">§04.1 / The code</span>
+        <h2>One program per run.</h2>
       </div>
       <div class="snippets__widget">
         <div class="snippets__tabs" role="tablist" aria-label="Code samples">

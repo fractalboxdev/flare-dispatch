@@ -85,6 +85,8 @@ export const siteCheck = ({ pages, specsDir }) => ({
       }
 
       const routes = new Set([...html.keys()].map((p) => routeOf(outDir, p)));
+      for (const route of ["/", "/benchmarks/", "/roadmap/"])
+        if (!routes.has(route)) problems.push(`no page at ${route}`);
       for (const [file, id] of pages)
         if (!routes.has(pagePath(id))) problems.push(`${relative(specsDir, file)} has no page at ${pagePath(id)}`);
 

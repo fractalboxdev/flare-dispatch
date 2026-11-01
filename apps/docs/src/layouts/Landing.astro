@@ -1,5 +1,5 @@
 ---
-// The shell for the pages outside Starlight: the landing page (/) and /benchmarks/. The
+// The shell for the pages outside Starlight: /, /roadmap/ and /benchmarks/. The
 // pages under /docs/ and /specs/ are Starlight. The theme shares Starlight's `starlight-theme`
 // storage key, so a choice made here holds on those pages and back.
 import "../styles/landing.css";
@@ -39,6 +39,7 @@ const nav = [
   { href: "/specs/", label: "Specs", current: path.startsWith("/specs") },
   { href: "/specs/runs/gate/", label: "Recipes", current: false, secondary: true },
   { href: "/specs/adr/", label: "ADRs", current: false, secondary: true },
+  { href: "/roadmap/", label: "Roadmap", current: path.startsWith("/roadmap") },
   { href: "/benchmarks/", label: "Benchmarks", current: path.startsWith("/benchmarks") },
 ];
 
@@ -47,10 +48,9 @@ const footer = [
     heading: "Get started",
     links: [
       { href: "/docs/", label: "Documentation" },
-      { href: "/docs/v2/", label: "v1 and v2" },
       { href: "/specs/", label: "Specifications" },
       { href: "/specs/architecture/", label: "Architecture" },
-      { href: "/specs/roadmap/", label: "Roadmap" },
+      { href: "/roadmap/", label: "Roadmap and status" },
     ],
   },
   {

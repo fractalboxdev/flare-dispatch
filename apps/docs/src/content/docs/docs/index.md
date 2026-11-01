@@ -1,11 +1,11 @@
 ---
 title: Overview
-description: Run CI, tasks and agents anywhere. Securely. v1 runs on Cloudflare in your own account today; this section documents it.
+description: Run CI, tasks and agents anywhere. Securely. This section documents the FlareDispatch that deploys into your own Cloudflare account today.
 ---
 
 FlareDispatch is BYOC CI/CD: an organization deploys one Dispatcher Worker and one GitHub App into its own Cloudflare account, and CI jobs, scheduled tasks and agents run there instead of on GitHub-hosted runners. There is no multi-tenant service.
 
-This section documents v1, the system that deploys today. A local v2 run works in development through `pnpm dogfood`, which lives on the unmerged [#247](https://github.com/fractalboxdev/flare-dispatch/pull/247); its jobs run on the host, so it is not for production. The rest of v2 is specified, not built. [v1 and v2](/docs/v2/) states each part's status, and the [specifications](/specs/) define v2.
+This section documents v1, the system that deploys today. [Roadmap and status](/roadmap/) states what exists of v2.
 
 ## What runs where
 

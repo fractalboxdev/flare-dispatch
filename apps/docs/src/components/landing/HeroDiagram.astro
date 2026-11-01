@@ -1,6 +1,5 @@
 ---
-// The landing hero's diagram. Solid lines run in development under `pnpm dogfood`; dashed lines
-// are specified: triggers, the cloud executors and GitHub output.
+// The landing hero's diagram: the system's design, one control plane and many executors.
 import Diagram from "./Diagram.astro";
 import { heroShape } from "./diagrams";
 ---
@@ -10,5 +9,5 @@ import { heroShape } from "./diagrams";
   source={heroShape}
   width={640}
   class="hero__diagram"
-  caption="Fig. 0 · solid lines run in development, dashed lines are specified"
+  caption="Fig. 0 · the design: one control plane, many executors"
 />

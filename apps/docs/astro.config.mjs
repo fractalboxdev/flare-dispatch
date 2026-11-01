@@ -28,13 +28,14 @@ export default defineConfig({
       social: [{ icon: "github", label: "GitHub", href: "https://github.com/fractalboxdev/flare-dispatch" }],
       lastUpdated: false,
       customCss: ["./src/styles/brand.css"],
+      components: { SocialIcons: "./src/components/SocialIcons.astro" },
       head: [{ tag: "link", attrs: { rel: "alternate", type: "text/plain", href: "/llms.txt", title: "llms.txt" } }],
       markdown: { processedDirs: MOUNTS.map(({ dir }) => join(REPO, dir)) },
       plugins: [
         starlightLinksValidator({
           errorOnLocalLinks: true,
           // Pages outside the docs collection.
-          exclude: ["/", "/benchmarks/", "/llms.txt", "/llms-full.txt"],
+          exclude: ["/", "/benchmarks/", "/roadmap/", "/llms.txt", "/llms-full.txt"],
         }),
       ],
       sidebar: siteSidebar(),

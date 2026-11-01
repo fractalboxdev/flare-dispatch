@@ -80,7 +80,7 @@ const clip = (/** @type {string} */ s) => (s.length <= 160 ? s : `${s.slice(0, 1
 /** The banner on every specification page. */
 const SPEC_BANNER = {
   content:
-    'This page specifies FlareDispatch v2, which is partly built. <a href="/docs/v2/">v1 and v2</a> states what deploys today.',
+    'This page specifies FlareDispatch v2, which is partly built. <a href="/roadmap/">Roadmap and status</a> states what deploys today.',
 };
 
 /**

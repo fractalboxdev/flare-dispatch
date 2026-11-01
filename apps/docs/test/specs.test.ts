@@ -1,9 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { states } from "../src/data/status.ts";
 import { sections } from "../src/lib/nav.mjs";
 import { PAGES, SPECS_DIR, pageFrontmatter, pageHref, REPO, REPO_URL, siteSidebar } from "../src/lib/pages.mjs";
-import { areaFiles, linkTarget, pageId, sidebarLabelOf, specId, titleOf } from "../src/lib/specs.mjs";
+import { areaFiles, linkTarget, pageId, phaseTable, sidebarLabelOf, specId, titleOf } from "../src/lib/specs.mjs";
 
 const files = new Set(["spend.md", "README.md", "roadmap.md", "runs/gate.md", "adr/README.md", "adr/0001-a.md"]);
 const exists = (rel: string): boolean => files.has(rel);
@@ -39,7 +40,7 @@ describe("pageFrontmatter", () => {
     const data = pageFrontmatter({}, join(SPECS_DIR, "roadmap.md"), "specs/roadmap");
     expect(data.title).toBe("Roadmap");
     expect(data.description).toMatch(/^FlareDispatch ships in five phases/);
-    expect(data.banner?.content).toContain("/docs/v2/");
+    expect(data.banner?.content).toContain("/roadmap/");
   });
   it("gives a page under /docs/ no banner", () => {
     const data = pageFrontmatter({}, join(REPO, "runs/README.md"), "docs/runs");
@@ -164,6 +165,62 @@ describe("siteSidebar", () => {
       "specs/adr",
       "specs/adr/0001-local-first-control-plane",
     ]);
+  });
+});
+
+describe("phaseTable", () => {
+  const { phases, total } = phaseTable(readFileSync(join(SPECS_DIR, "roadmap.md"), "utf8"));
+  it("reads each phase with its goal and count from specs/roadmap.md", () => {
+    expect(phases.map((p) => p.phase)).toEqual([0, 1, 2, 3, 4]);
+    expect(phases[0]?.goal).toMatch(/^Measure the bet/);
+    expect(phases[0]?.waitsOn).toBe("mameko phase 0");
+  });
+  it("reads a total equal to the sum of the phases", () => {
+    expect(phases.reduce((n, p) => n + p.requirements, 0)).toBe(total);
+  });
+  it("throws without a phase table", () => {
+    expect(() => phaseTable("# Roadmap")).toThrow("no phase table");
+  });
+});
+
+describe("/roadmap/", () => {
+  const source = (path: string): string => readFileSync(join(REPO, "apps/docs", path), "utf8");
+  it("is a page, and a tab on the landing layout and in the Starlight header", () => {
+    expect(source("src/pages/roadmap.astro")).toContain("phaseTable");
+    expect(source("src/layouts/Landing.astro")).toContain('href: "/roadmap/", label: "Roadmap"');
+    expect(source("src/components/SocialIcons.astro")).toContain('href="/roadmap/"');
+  });
+  it("is listed in /llms.txt", () => {
+    expect(source("src/pages/llms.txt.ts")).toContain('new URL("/roadmap/", base)');
+  });
+  it("sorts each capability into one state", () => {
+    expect(states.map((s) => s.id)).toEqual(["deploys-today", "in-development", "specified"]);
+    const all = states.flatMap((s) => s.capabilities.map((c) => c.what));
+    expect(new Set(all).size).toBe(all.length);
+  });
+});
+
+describe("the landing page", () => {
+  const STATUS = [
+    /\bspecified\b/i,
+    /\bunbuilt\b/i,
+    /in development/i,
+    /deploys? today/i,
+    /\bphases?\s+\d/i,
+    /(?<!stateDiagram-)\bv[12]\b/i,
+    /dogfood/i,
+    /#24[67]/,
+    /\bdraft\b(?! PR)/i,
+    /not for production/i,
+    /\bisolated\b/i,
+  ];
+  const pages = ["src/pages/index.astro", "src/components/landing/diagrams.ts", "src/components/landing/HeroDiagram.astro"];
+  const text = pages.map((p) => readFileSync(join(REPO, "apps/docs", p), "utf8")).join("\n");
+  it("carries no status label", () => {
+    for (const label of STATUS) expect(text).not.toMatch(label);
+  });
+  it("links to /roadmap/ once", () => {
+    expect(text.match(/href="\/roadmap\/"/g)).toHaveLength(1);
   });
 });
 

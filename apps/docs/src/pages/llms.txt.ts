@@ -8,11 +8,15 @@ export const GET: APIRoute = async ({ site }) => {
   const lines = [
     "# FlareDispatch",
     "",
-    "> Run CI, tasks and agents anywhere. Securely. Three states apply: v1 deploys today into your own Cloudflare account and runs CI, scheduled tasks and agents on Cloudflare Workflows and Containers; a local v2 run works in development only, through `pnpm dogfood` on an unmerged pull request, with its jobs on the host; v2 placement across owned machines, Cloudflare and AWS, and job isolation on a device, are specified and not built.",
+    "> Run CI, tasks and agents anywhere. Securely. FlareDispatch is CI/CD you deploy into your own Cloudflare account.",
     "",
-    "The Documentation sections describe what deploys today. The Specifications sections state the requirements and decisions of v2, and describe its target behaviour, not shipped behaviour.",
+    "The Documentation sections describe what deploys today. The Specifications sections state the requirements and decisions of v2, and describe its target behaviour, not shipped behaviour. The Roadmap section states how much of v2 exists.",
     "",
     `The full text of every page is at ${new URL("/llms-full.txt", base).href}.`,
+    "",
+    "## Roadmap",
+    "",
+    `- [Roadmap and status](${new URL("/roadmap/", base).href}): what deploys today, what runs in development and what is specified, with the phases and their goals.`,
     "",
   ];
   for (const section of await sectionEntries()) {

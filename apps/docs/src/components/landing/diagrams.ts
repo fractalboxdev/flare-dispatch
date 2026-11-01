@@ -1,44 +1,35 @@
-// Mermaid sources for the landing page's diagrams, rendered by Diagram.astro. The hero separates
-// what runs in development (solid lines, `packages/dogfood`) from what is specified (dashed lines,
-// specs/architecture.md). The other three summarize specified mechanisms, and their captions say
-// so: placement constraints (specs/profile.md), the execution lifecycle (specs/github-output.md)
-// and the fenced lease (mameko's placement-leases.md).
+// Mermaid sources for the landing page's diagrams, rendered by Diagram.astro. Each one shows how the
+// system is designed, and its caption says so: the system shape (specs/architecture.md), placement
+// (specs/profile.md), the execution lifecycle (specs/github-output.md) and the fenced lease
+// (mameko's placement-leases.md). /roadmap/ reports how much of each exists.
 
 export const heroShape = `flowchart TB
-  accTitle: A control plane leases work to a machine you own; the cloud executors and GitHub output are specified
-  sub["pnpm dogfood"]:::accent --> ctl["Control plane: mameko coordinator"]
-  trig["Webhook · Actions · cron"] -.-> ctl
-  ctl -->|lease| dev["Owned machine: device executor"]
-  ctl -.->|claim deadline| pool["Cloudflare Containers"]
-  ctl -.->|required check| ec2["AWS launcher"]
-  dev --> rec["Verdict in the coordinator's record"]:::ok
-  pool -.-> rec
-  ec2 -.-> rec
-  rec -.-> gh["GitHub check run"]
+  accTitle: The design: one control plane in your account places work on your machines, Cloudflare or other cloud executors
+  trig["Webhook · Actions · cron · local"]:::accent --> ctl["Control plane in your Cloudflare account"]
+  ctl -->|lease| dev["Your machines"]
+  ctl -->|lease| pool["Cloudflare Containers"]
+  ctl -->|lease| other["Other cloud executors"]
+  dev --> rec["Verdict at the current epoch"]:::ok
+  pool --> rec
+  other --> rec
+  rec --> gh["GitHub check run"]
 `;
 
 export const placement = `flowchart TB
-  accTitle: Specified placement, where constraints narrow the eligible executors before the deadline picks one
-  ex["Admitted execution"]:::accent --> cc{"confidential-compute repo?"}
-  cc -->|yes| pin{"Fork PR, tag or release?"}
-  pin -->|yes| refuse["failure: placement: no eligible executor"]:::danger
-  pin -->|no| owned["Owned devices only"]
-  owned -->|no device by deadline_at| fail["failure: capacity"]:::danger
-  owned -->|claimed| odev["Owned device"]:::ok
-  cc -->|no| pin2{"Fork PR, tag or release?"}
-  pin2 -->|yes| cfc["Cloudflare Containers"]:::ok
-  pin2 -->|no| lf["Owned hardware first"]
+  accTitle: The design: placement rules narrow the eligible executors before the deadline picks one
+  ex["Admitted execution"]:::accent --> pin{"Fork PR, tag or release?"}
+  pin -->|yes| cfc["Cloudflare Containers"]:::ok
+  pin -->|no| lf["Owned hardware first"]
   lf -->|claimed before deadline| dev["Owned device"]:::ok
   lf -->|deadline passes| cfc
 `;
 
 export const lifecycle = `stateDiagram-v2
-  accTitle: As specified, a guaranteed execution queues, then fails; no capacity, budget, deadline or halt outcome concludes neutral
+  accTitle: The design: a guaranteed execution queues, then fails; no capacity, budget, deadline or halt outcome concludes neutral
   [*] --> Queued: intake assigns a class
-  Queued --> Held: hold fits under the class line
-  Queued --> Failure: deadline_at passes, named reason
+  Queued --> Leased: an executor claims
+  Queued --> Failure: deadline passes, named reason
   Queued --> Cancelled: superseded
-  Held --> Leased: an executor claims
   Leased --> Leased: reclaim, next epoch
   Leased --> Success: current-epoch verdict
   Leased --> Failure: current-epoch verdict
@@ -51,17 +42,17 @@ export const lifecycle = `stateDiagram-v2
 `;
 
 export const fencedLease = `sequenceDiagram
-  accTitle: As specified, a stale executor's result is never accepted
+  accTitle: The design: a stale executor's result is never accepted
   participant CP as Control plane
   participant D as Owned device
-  participant C as Cloudflare Container
+  participant C as Cloud executor
   CP->>D: lease, epoch n
-  D-->>CP: heartbeat every 15 s
+  D-->>CP: heartbeat
   Note over D: device sleeps
-  Note over CP: no heartbeat for 90 s: reclaim
+  Note over CP: heartbeats stop: reclaim
   CP->>C: lease, epoch n+1
   C->>CP: result, epoch n+1
-  CP->>CP: accept, post the check
+  CP->>CP: accept
   Note over D: device wakes
   D->>CP: result, epoch n
   CP-->>D: rejected: stale epoch
