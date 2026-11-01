@@ -1,7 +1,7 @@
 ---
 // The shell for the pages outside Starlight: the landing page (/) and /benchmarks/. The
-// docs under /docs/ are Starlight pages rendered from specs/. The theme shares Starlight's
-// `starlight-theme` storage key, so a choice made here holds on /docs/ and back.
+// pages under /docs/ and /specs/ are Starlight. The theme shares Starlight's `starlight-theme`
+// storage key, so a choice made here holds on those pages and back.
 import "../styles/landing.css";
 import { REPO_URL } from "../lib/llms";
 
@@ -36,8 +36,9 @@ const jsonLd = {
 
 const nav = [
   { href: "/docs/", label: "Docs", current: path.startsWith("/docs") },
-  { href: "/docs/runs/gate/", label: "Recipes", current: false, secondary: true },
-  { href: "/docs/adr/", label: "ADRs", current: false, secondary: true },
+  { href: "/specs/", label: "Specs", current: path.startsWith("/specs") },
+  { href: "/specs/runs/gate/", label: "Recipes", current: false, secondary: true },
+  { href: "/specs/adr/", label: "ADRs", current: false, secondary: true },
   { href: "/benchmarks/", label: "Benchmarks", current: path.startsWith("/benchmarks") },
 ];
 
@@ -45,19 +46,21 @@ const footer = [
   {
     heading: "Get started",
     links: [
-      { href: "/docs/", label: "Overview" },
-      { href: "/docs/architecture/", label: "Architecture" },
-      { href: "/docs/run-model/", label: "Run model" },
-      { href: "/docs/roadmap/", label: "Roadmap" },
+      { href: "/docs/", label: "Documentation" },
+      { href: "/docs/v2/", label: "v1 and v2" },
+      { href: "/specs/", label: "Specifications" },
+      { href: "/specs/architecture/", label: "Architecture" },
+      { href: "/specs/roadmap/", label: "Roadmap" },
     ],
   },
   {
     heading: "Reference",
     links: [
-      { href: "/docs/spend/", label: "Spend guard" },
-      { href: "/docs/profile/", label: "Profile" },
-      { href: "/docs/adr/", label: "Decision records" },
-      { href: "/benchmarks/", label: "Cloud spill prices" },
+      { href: "/specs/run-model/", label: "Run model" },
+      { href: "/specs/spend/", label: "Spend guard" },
+      { href: "/specs/profile/", label: "Profile" },
+      { href: "/specs/adr/", label: "Decision records" },
+      { href: "/benchmarks/", label: "Cloud overflow prices" },
       { href: "/llms.txt", label: "llms.txt" },
     ],
   },

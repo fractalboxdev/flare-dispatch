@@ -1,14 +1,15 @@
 // @ts-check
+import { join } from "node:path";
 import { defineConfig } from "astro/config";
 import { satteri } from "@astrojs/markdown-satteri";
 import starlight from "@astrojs/starlight";
 import merlion from "@fractalbox/merlion-astro";
 import starlightLinksValidator from "starlight-links-validator";
-import { sidebar } from "./src/lib/nav.mjs";
-import { README_PAGES, repoLinks } from "./src/lib/pages.mjs";
+import { MOUNTS, PAGES, REPO, SPECS_DIR, repoLinks, siteSidebar } from "./src/lib/pages.mjs";
+import { siteCheck } from "./src/lib/site-check.mjs";
 
 const DESCRIPTION =
-  "Local-first CI/CD in your own Cloudflare account: runs execute on hardware you own first and spill to Cloudflare Containers and AWS, under a spend guard and a fenced lease.";
+  "BYOC CI/CD in your own Cloudflare account: documentation for what deploys today, and the specifications of v2, a local-first control plane.";
 
 export default defineConfig({
   site: "https://flare-dispatch.fractalbox.dev",
@@ -19,6 +20,8 @@ export default defineConfig({
     processor: satteri({ hastPlugins: [repoLinks] }),
   },
   integrations: [
+    // First, so its report names a broken link in specs/ before the links validator stops the build.
+    siteCheck({ pages: PAGES, specsDir: SPECS_DIR }),
     starlight({
       title: "FlareDispatch",
       description: DESCRIPTION,
@@ -26,22 +29,21 @@ export default defineConfig({
       lastUpdated: false,
       customCss: ["./src/styles/brand.css"],
       head: [{ tag: "link", attrs: { rel: "alternate", type: "text/plain", href: "/llms.txt", title: "llms.txt" } }],
+      markdown: { processedDirs: MOUNTS.map(({ dir }) => join(REPO, dir)) },
       plugins: [
         starlightLinksValidator({
           errorOnLocalLinks: true,
-          exclude: ({ link }) =>
-            // Pages outside the docs collection.
-            ["/", "/benchmarks/", "/llms.txt", "/llms-full.txt"].includes(link) ||
-            // README.md pages served at their directory (src/lib/pages.mjs).
-            README_PAGES.has(link.replace(/#.*$/, "")),
+          // Pages outside the docs collection.
+          exclude: ["/", "/benchmarks/", "/llms.txt", "/llms-full.txt"],
         }),
       ],
-      sidebar: sidebar(),
+      sidebar: siteSidebar(),
     }),
     // Every ```mermaid block renders to inline, themeable SVG at build time.
     merlion({ stylesheet: "src/styles/diagrams.css", width: 720 }),
   ],
   vite: {
     server: { allowedHosts: [".ts.net"] },
+    preview: { allowedHosts: [".ts.net"] },
   },
 });

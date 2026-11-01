@@ -100,37 +100,37 @@ const recipes = [
     id: "08.01 / Gate",
     title: "check and oxlint",
     body: "One command per check run in a fresh VM or container. The exit code maps to the conclusion, and the log links from the check.",
-    href: "/docs/runs/gate/",
+    href: "/specs/runs/gate/",
   },
   {
     id: "08.02 / Gate",
     title: "Test shards and job matrices",
     body: "offload-test and the job-matrix primitive fan a suite out as child executions whose class never ranks above the parent's.",
-    href: "/docs/runs/gate/",
+    href: "/specs/runs/gate/",
   },
   {
     id: "08.03 / Agentic",
     title: "pr-review",
     body: "Local embeddings retrieve context and a local pre-pass drops style nits; a hosted judgment model writes the one review the author reads.",
-    href: "/docs/runs/agentic/",
+    href: "/specs/runs/agentic/",
   },
   {
     id: "08.04 / Agentic",
     title: "self-heal-pr, improve-pr, spec-drift-pr",
     body: "The agent edits in a job VM that holds no GitHub token. The control plane applies the staged write after a path allowlist and a secret scan.",
-    href: "/docs/runs/agentic/",
+    href: "/specs/runs/agentic/",
   },
   {
     id: "08.05 / Agentic",
     title: "ci-triage-pr",
     body: "A bulk model classifies the failed job from its logs; a judgment model writes the fix proposal.",
-    href: "/docs/runs/agentic/",
+    href: "/specs/runs/agentic/",
   },
   {
     id: "08.06 / Rule",
     title: "The trifecta rule",
     body: "No agentic run holds private data, untrusted content and outbound communication at once. Every agentic recipe is reviewed against it.",
-    href: "/docs/runs/agentic/",
+    href: "/specs/runs/agentic/",
   },
 ];
 
@@ -191,7 +191,7 @@ const snippets = [
     lang: "ts" as const,
     code: runTs,
     blurb: "A run is a program: a typed contract, journaled steps, a tagged failure that maps to the check's conclusion. The same program runs on every executor.",
-    href: "/docs/run-model/",
+    href: "/specs/run-model/",
   },
   {
     id: "policy",
@@ -199,7 +199,7 @@ const snippets = [
     lang: "json" as const,
     code: policyJson,
     blurb: "Placement is configuration: the first matching rule picks the mode and which result is authoritative. Moving a run between modes changes no code.",
-    href: "/docs/profile/",
+    href: "/specs/profile/",
   },
 ];
 ---
@@ -224,9 +224,9 @@ const snippets = [
             capacity cannot meet the deadline.
           </p>
           <div class="hero__cta reveal" data-delay="4">
-            <a class="btn" href="/docs/">Read the specs</a>
-            <a class="btn btn--ghost" href="/docs/architecture/">Architecture</a>
-            <a class="btn btn--ghost" href="/docs/adr/">Decision records</a>
+            <a class="btn" href="/docs/">Read the docs</a>
+            <a class="btn btn--ghost" href="/specs/">Read the specs</a>
+            <a class="btn btn--ghost" href="/specs/adr/">Decision records</a>
           </div>
         </div>
         <div class="reveal" data-delay="3">
@@ -319,8 +319,8 @@ const snippets = [
             }
           </ol>
           <p class="more">
-            <a href="/docs/profile/">Profile and placement →</a>
-            <a href="/docs/isolation-egress/">Isolation and egress →</a>
+            <a href="/specs/profile/">Profile and placement →</a>
+            <a href="/specs/isolation-egress/">Isolation and egress →</a>
           </p>
         </div>
       </div>
@@ -367,8 +367,8 @@ const snippets = [
             </tbody>
           </table>
           <p class="more">
-            <a href="/docs/profile/">Classes and admission →</a>
-            <a href="/docs/github-output/">GitHub output →</a>
+            <a href="/specs/profile/">Classes and admission →</a>
+            <a href="/specs/github-output/">GitHub output →</a>
           </p>
         </div>
         <Diagram
@@ -438,8 +438,8 @@ const snippets = [
               admits executions answer the same way.
             </p>
             <p class="more">
-              <a href="/docs/spend/">Spend →</a>
-              <a href="/docs/adr/0018-formal-models/">Formal models →</a>
+              <a href="/specs/spend/">Spend →</a>
+              <a href="/specs/adr/0018-formal-models/">Formal models →</a>
             </p>
           </aside>
         </div>
@@ -489,8 +489,8 @@ const snippets = [
             </tbody>
           </table>
           <p class="more">
-            <a href="/docs/executors/">Executors →</a>
-            <a href="/docs/executor-protocol/">Executor protocol →</a>
+            <a href="/specs/executors/">Executors →</a>
+            <a href="/specs/executor-protocol/">Executor protocol →</a>
           </p>
         </div>
       </div>
@@ -521,7 +521,7 @@ const snippets = [
               ))
             }
           </ol>
-          <p class="more"><a href="/docs/model-gateway/">Model gateway →</a></p>
+          <p class="more"><a href="/specs/model-gateway/">Model gateway →</a></p>
         </div>
         <div>
           <h3 class="sub-head">Provenance tiers</h3>
@@ -552,7 +552,7 @@ const snippets = [
               </tbody>
             </table>
           </div>
-          <p class="more"><a href="/docs/provenance/">Provenance →</a></p>
+          <p class="more"><a href="/specs/provenance/">Provenance →</a></p>
         </div>
       </div>
     </div>
@@ -654,8 +654,8 @@ const snippets = [
         <h2>One control plane per organization, in your own Cloudflare account.</h2>
       </div>
       <div class="cta-band__actions">
-        <a class="btn" href="/docs/">Read the specs</a>
-        <a class="btn btn--ghost" href="/docs/adr/">Decision records</a>
+        <a class="btn" href="/docs/">Read the docs</a>
+        <a class="btn btn--ghost" href="/specs/">Read the specs</a>
         <a class="btn btn--ghost" href="/benchmarks/">Cloud overflow prices</a>
       </div>
     </div>
