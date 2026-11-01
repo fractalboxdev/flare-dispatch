@@ -9,7 +9,7 @@ import { MOUNTS, PAGES, REPO, SPECS_DIR, repoLinks, siteSidebar } from "./src/li
 import { siteCheck } from "./src/lib/site-check.mjs";
 
 const DESCRIPTION =
-  "BYOC CI/CD in your own Cloudflare account: documentation for what deploys today, and the specifications of v2, a local-first control plane.";
+  "Run CI, tasks and agents anywhere. Securely. Documentation for what deploys today, and the specifications of FlareDispatch v2.";
 
 export default defineConfig({
   site: "https://flare-dispatch.fractalbox.dev",

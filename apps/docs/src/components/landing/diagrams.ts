@@ -1,52 +1,45 @@
-// Mermaid sources for the landing page's diagrams, rendered by Diagram.astro. Each one
-// summarizes, at landing-page size, a mechanism a specification defines: the system shape
-// (specs/architecture.md), placement constraints (specs/profile.md), the execution
-// lifecycle (specs/github-output.md) and the fenced lease (mameko's placement-leases.md).
+// Mermaid sources for the landing page's diagrams, rendered by Diagram.astro. The hero separates
+// what runs in development (solid lines, `packages/dogfood`) from what is specified (dashed lines,
+// specs/architecture.md). The other three summarize specified mechanisms, and their captions say
+// so: placement constraints (specs/profile.md), the execution lifecycle (specs/github-output.md)
+// and the fenced lease (mameko's placement-leases.md).
 
 export const heroShape = `flowchart TB
-  accTitle: Cloudflare schedules; owned hardware runs first; the cloud takes the overflow
-  trig["Webhook · Actions · cron · local"]:::accent --> intake
-  subgraph cp["Control plane · your Cloudflare account"]
-    intake["Intake: verify, dedup, class"] --> admit{"Spend guard: hold fits?"}
-    admit -->|yes| place["Placement: fenced lease"]
-  end
-  subgraph ex["Executors, in placement order"]
-    dev["1 · Owned hardware: VM per job"]
-    pool["2 · Cloudflare Containers"]
-    ec2["3 · AWS launcher"]
-  end
-  place -->|claim| dev
-  place -->|deadline| pool
-  place -->|P1, breaker open| ec2
-  dev --> gh["Check run: current epoch only"]:::ok
-  pool --> gh
-  ec2 --> gh
+  accTitle: A control plane leases work to a machine you own; the cloud executors and GitHub output are specified
+  sub["pnpm dogfood"]:::accent --> ctl["Control plane: mameko coordinator"]
+  trig["Webhook · Actions · cron"] -.-> ctl
+  ctl -->|lease| dev["Owned machine: device executor"]
+  ctl -.->|claim deadline| pool["Cloudflare Containers"]
+  ctl -.->|required check| ec2["AWS launcher"]
+  dev --> rec["Verdict in the coordinator's record"]:::ok
+  pool -.-> rec
+  ec2 -.-> rec
+  rec -.-> gh["GitHub check run"]
 `;
 
 export const placement = `flowchart TB
-  accTitle: Placement constraints narrow the eligible executors before the deadline picks one
+  accTitle: Specified placement, where constraints narrow the eligible executors before the deadline picks one
   ex["Admitted execution"]:::accent --> cc{"confidential-compute repo?"}
-  cc -->|yes| pin{"Fork PR, tag or P0?"}
+  cc -->|yes| pin{"Fork PR, tag or release?"}
   pin -->|yes| refuse["failure: placement: no eligible executor"]:::danger
   pin -->|no| owned["Owned devices only"]
   owned -->|no device by deadline_at| fail["failure: capacity"]:::danger
   owned -->|claimed| odev["Owned device"]:::ok
-  cc -->|no| pin2{"Fork PR, tag or P0?"}
+  cc -->|no| pin2{"Fork PR, tag or release?"}
   pin2 -->|yes| cfc["Cloudflare Containers"]:::ok
-  pin2 -->|no| lf["Local-first"]
+  pin2 -->|no| lf["Owned hardware first"]
   lf -->|claimed before deadline| dev["Owned device"]:::ok
   lf -->|deadline passes| cfc
-  cfc -->|P1 only, breaker open| aws["AWS"]:::ok
 `;
 
 export const lifecycle = `stateDiagram-v2
-  accTitle: A guaranteed execution queues, then fails; no capacity, budget, deadline or halt outcome concludes neutral
+  accTitle: As specified, a guaranteed execution queues, then fails; no capacity, budget, deadline or halt outcome concludes neutral
   [*] --> Queued: intake assigns a class
   Queued --> Held: hold fits under the class line
   Queued --> Failure: deadline_at passes, named reason
   Queued --> Cancelled: superseded
-  Held --> Leased: an executor claims, epoch n
-  Leased --> Leased: reclaim, epoch n+1
+  Held --> Leased: an executor claims
+  Leased --> Leased: reclaim, next epoch
   Leased --> Success: current-epoch verdict
   Leased --> Failure: current-epoch verdict
   Leased --> Cancelled: superseded
@@ -58,18 +51,18 @@ export const lifecycle = `stateDiagram-v2
 `;
 
 export const fencedLease = `sequenceDiagram
-  accTitle: A stale executor's result is never accepted
+  accTitle: As specified, a stale executor's result is never accepted
   participant CP as Control plane
   participant D as Owned device
   participant C as Cloudflare Container
-  CP->>D: lease, epoch 1
+  CP->>D: lease, epoch n
   D-->>CP: heartbeat every 15 s
   Note over D: device sleeps
   Note over CP: no heartbeat for 90 s: reclaim
-  CP->>C: lease, epoch 2, hold re-admitted
-  C->>CP: result, epoch 2
+  CP->>C: lease, epoch n+1
+  C->>CP: result, epoch n+1
   CP->>CP: accept, post the check
   Note over D: device wakes
-  D->>CP: result, epoch 1
-  CP-->>D: rejected: stale epoch, token revoked
+  D->>CP: result, epoch n
+  CP-->>D: rejected: stale epoch
 `;
