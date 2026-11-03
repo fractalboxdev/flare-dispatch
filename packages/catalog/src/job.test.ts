@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCheck } from "./check.ts";
 import { CommandExit } from "./command.ts";
@@ -6,9 +6,57 @@ import { ctx, fakeArtifacts, fakeExec, SHA } from "./gate.test-support.ts";
 import type { GateJobInput } from "./inputs.ts";
 import { runGateJob, writebackBranch } from "./job.ts";
 import { runOxlint, OXLINT_PINNED_VERSION } from "./oxlint.ts";
-import { GateCache, type CacheEntry } from "./ports.ts";
+import {
+  GateCache,
+  localContentArtifacts,
+  LOCAL_CONTENT_MAX_BYTES,
+  UPLOAD_TIMEOUT_MS,
+  type CacheEntry,
+} from "./ports.ts";
+import { LocalContent } from "@fractalboxdev/mameko-run";
+import * as TestClock from "effect/testing/TestClock";
 
 const run = <A>(effect: Effect.Effect<A, never, never>): Promise<A> => Effect.runPromise(effect);
+
+describe("artifacts on the device's local content store", () => {
+  const stored: Uint8Array[] = [];
+  const store = (answer: "store" | "never") =>
+    Layer.succeed(LocalContent, {
+      put: (bytes) =>
+        answer === "never"
+          ? Effect.never
+          : Effect.sync(() => (stored.push(bytes), `sha256:${"0".repeat(64)}`)),
+      get: () => Effect.never,
+    });
+
+  it("FD-GATE-012 returns the verdict when the content socket cannot take the log", async () => {
+    const big = "x".repeat(LOCAL_CONTENT_MAX_BYTES + 1);
+    const exec = fakeExec([{ match: "pnpm test", output: big }]);
+    const layer = Layer.mergeAll(
+      exec.layer,
+      localContentArtifacts.pipe(Layer.provide(store("store"))),
+    );
+    expect(await run(runGateJob(job()).pipe(Effect.provide(layer)))).toEqual({ _tag: "success" });
+    expect(stored).toEqual([]);
+  });
+
+  it("FD-GATE-012 returns the verdict when the store never answers a put", async () => {
+    const exec = fakeExec([{ match: "pnpm test", exit: CommandExit.Exited({ code: 3 }) }]);
+    const layer = Layer.mergeAll(
+      exec.layer,
+      localContentArtifacts.pipe(Layer.provide(store("never"))),
+      TestClock.layer(),
+    );
+    const outcome = await run(
+      Effect.gen(function* () {
+        const fiber = yield* runGateJob(job()).pipe(Effect.forkChild);
+        yield* TestClock.adjust(UPLOAD_TIMEOUT_MS);
+        return yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(outcome).toEqual({ _tag: "failure", reason: "exit: 3" });
+  });
+});
 
 const job = (over: Partial<GateJobInput> = {}): GateJobInput => ({
   ...ctx,

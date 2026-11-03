@@ -19,8 +19,19 @@ export class GateArtifacts extends Context.Service<
 >()("@fractalboxdev/flare-dispatch-catalog/GateArtifacts") {}
 
 /**
+ * The largest artifact the device's content socket takes. The device executor reads each request line under a 20 ms
+ * read timeout and drops a line that arrives in more than one read, so a larger `content.put` is never answered.
+ */
+export const LOCAL_CONTENT_MAX_BYTES = 16 * 1024;
+
+/** How long one upload may wait for the store's answer. */
+export const UPLOAD_TIMEOUT_MS = 30_000;
+
+/**
  * Artifacts on the device's local content store for the execution's tenant scope. The store keys bytes by digest only,
- * so the job's log records each artifact's name beside its digest.
+ * so the job's log records each artifact's name beside its digest. An artifact over `LOCAL_CONTENT_MAX_BYTES`, or a
+ * put the store does not answer within `UPLOAD_TIMEOUT_MS`, fails the upload, which leaves the verdict unchanged
+ * (FD-GATE-012).
  */
 export const localContentArtifacts: Layer.Layer<GateArtifacts, never, LocalContent> = Layer.effect(
   GateArtifacts,
@@ -28,13 +39,27 @@ export const localContentArtifacts: Layer.Layer<GateArtifacts, never, LocalConte
     const content = yield* LocalContent;
     return {
       upload: (name, bytes) =>
-        content.put(bytes).pipe(
-          Effect.tap((digest) =>
-            Effect.sync(() => process.stderr.write(`[artifact] ${name} ${digest}\n`)),
-          ),
-          Effect.asVoid,
-          Effect.mapError((e) => new ArtifactUploadFailed({ name, detail: e.reason })),
-        ),
+        bytes.length > LOCAL_CONTENT_MAX_BYTES
+          ? Effect.fail(
+              new ArtifactUploadFailed({
+                name,
+                detail: `${bytes.length} bytes exceeds the content socket's ${LOCAL_CONTENT_MAX_BYTES}`,
+              }),
+            )
+          : content.put(bytes).pipe(
+              Effect.mapError((e) => new ArtifactUploadFailed({ name, detail: e.reason })),
+              Effect.timeoutOrElse({
+                duration: UPLOAD_TIMEOUT_MS,
+                orElse: () =>
+                  Effect.fail(
+                    new ArtifactUploadFailed({ name, detail: "the store did not answer" }),
+                  ),
+              }),
+              Effect.tap((digest) =>
+                Effect.sync(() => process.stderr.write(`[artifact] ${name} ${digest}\n`)),
+              ),
+              Effect.asVoid,
+            ),
     };
   }),
 );
