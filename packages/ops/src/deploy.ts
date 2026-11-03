@@ -1,0 +1,338 @@
+// `fd deploy` and `fd doctor`: overlay decode, render, drift check, D1 migrations, Worker deploys in service-binding
+// order, post-deploy probes and the floor canary, then the record of the deploy (specs/operability.md § Deploy
+// pipeline). The stages run in that order and stop at the first that fails (FD-OPS-009); the Cloudflare and GitHub
+// reads and writes go through the `DeployTarget` port, so `fd doctor` runs the same checks with no write (FD-OPS-024).
+import { Context, Effect, Schema } from "effect";
+import {
+  appRegistrationCheck,
+  failed,
+  rulesetCheck,
+  settingsDrift,
+  templateInvariants,
+  unrenderedCheck,
+  type AppPermissions,
+  type DeployedSettings,
+  type Finding,
+} from "./drift.ts";
+import { decodeOverlay, type OverlayRejected, type OverlayValues } from "./overlay.ts";
+import { parseJsonc, renderTemplate, type RenderFailed, type WorkerConfig } from "./render.ts";
+
+/** One Worker the deploy carries: its name, committed template and the overlay hostname key it serves on. */
+export interface WorkerTemplate {
+  readonly worker: string;
+  readonly template: string;
+  /** The `hostnames.<key>` of the overlay the post-deploy probe reads; none for a Worker with no hostname. */
+  readonly hostKey?: string;
+  /** The template's path relative to the repository root, beside which wrangler resolves the Worker's files. */
+  readonly templatePath?: string;
+  /** The path the post-deploy probe requests; `/health` by default. */
+  readonly probePath?: string;
+}
+
+/** One rendered Worker configuration. */
+export interface RenderedWorker {
+  readonly worker: string;
+  readonly text: string;
+  readonly config: WorkerConfig;
+  readonly hostKey?: string;
+  readonly templatePath?: string;
+  readonly probePath?: string;
+}
+
+/** The stages of FD-OPS-009, in order. */
+export const STAGES = [
+  "decode",
+  "render",
+  "drift",
+  "migrations",
+  "deploy",
+  "probes",
+  "record",
+] as const;
+export type Stage = (typeof STAGES)[number];
+
+/** What a Worker deploy reports: the new version, the previous one and the migrations it carried. */
+export interface Deployed {
+  readonly worker: string;
+  readonly version: string;
+  readonly previousVersion: string | null;
+  /** Durable Object migration tags this deploy applied. */
+  readonly durableObjectMigrations: readonly string[];
+}
+
+/** A Cloudflare or GitHub call the pipeline made failed; the stage that made it stops the pipeline. */
+export class TargetFailed extends Schema.TaggedError<TargetFailed>()("TargetFailed", {
+  operation: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** The result of the floor canary: passed, failed with the stage it reached, or not applicable to this deploy. */
+export type CanaryResult =
+  | { readonly status: "passed"; readonly digest: string }
+  | { readonly status: "failed"; readonly detail: string }
+  | { readonly status: "not-applicable"; readonly detail: string };
+
+/** The Cloudflare and GitHub operations the pipeline uses; `fd doctor` calls only the reads. */
+export class DeployTarget extends Context.Service<
+  DeployTarget,
+  {
+    readonly deployedSettings: (
+      worker: RenderedWorker,
+    ) => Effect.Effect<DeployedSettings | null, TargetFailed>;
+    /** The record of the last deploy, from the artifacts bucket (FD-OPS-015). */
+    readonly lastRecord: (
+      worker: RenderedWorker,
+    ) => Effect.Effect<DeployedSettings | null, TargetFailed>;
+    readonly appRegistration: Effect.Effect<AppPermissions, TargetFailed>;
+    /** The status checks the default branch's ruleset requires (FD-VER-023, FD-OPS-028). */
+    readonly requiredChecks: Effect.Effect<readonly string[], TargetFailed>;
+    /** Applies each Worker's pending D1 migrations, in order; answers the migrations applied. */
+    readonly applyD1Migrations: (
+      rendered: readonly RenderedWorker[],
+    ) => Effect.Effect<readonly string[], TargetFailed>;
+    readonly deployWorker: (worker: RenderedWorker) => Effect.Effect<Deployed, TargetFailed>;
+    /** `GET /health` on the deployed Worker. */
+    readonly probe: (worker: RenderedWorker) => Effect.Effect<boolean, TargetFailed>;
+    /** The container floor canary, once, on the deployed image digest (FD-OPS-050). */
+    readonly floorCanary: (
+      rendered: readonly RenderedWorker[],
+    ) => Effect.Effect<CanaryResult, TargetFailed>;
+    readonly writeRecord: (worker: RenderedWorker) => Effect.Effect<void, TargetFailed>;
+    readonly raiseAlarm: (name: string, detail: string) => Effect.Effect<void>;
+  }
+>()("@fractalboxdev/flare-dispatch-ops/DeployTarget") {}
+
+/** The pipeline stopped at a stage; `findings` and `rollback` say why and what the operator runs next. */
+export class DeployFailed extends Schema.TaggedError<DeployFailed>()("DeployFailed", {
+  stage: Schema.Literals(STAGES),
+  findings: Schema.Array(Schema.Struct({ path: Schema.String, detail: Schema.String })),
+  /** One line per Worker: its `wrangler rollback` command, or why none applies (FD-OPS-013). */
+  rollback: Schema.Array(Schema.String),
+}) {}
+
+const serviceTargets = (c: WorkerConfig): readonly string[] =>
+  (Array.isArray(c["services"]) ? (c["services"] as { service?: unknown }[]) : [])
+    .map((s) => s.service)
+    .filter((s): s is string => typeof s === "string");
+
+/**
+ * The Workers in deploy order: each after every Worker it binds as a service (FD-OPS-010). A service outside the set
+ * is already deployed; a cycle keeps the remaining Workers in their given order.
+ */
+export const deployOrder = (
+  configs: readonly { worker: string; config: WorkerConfig }[],
+): readonly string[] => {
+  const names = new Set(configs.map((c) => c.worker));
+  const order: string[] = [];
+  const visiting = new Set<string>();
+  const visit = (w: string) => {
+    if (order.includes(w) || visiting.has(w)) return;
+    visiting.add(w);
+    const c = configs.find((x) => x.worker === w);
+    for (const dep of c === undefined ? [] : serviceTargets(c.config))
+      if (names.has(dep)) visit(dep);
+    visiting.delete(w);
+    order.push(w);
+  };
+  for (const c of configs) visit(c.worker);
+  return order;
+};
+
+/** The line `fd deploy` prints per Worker after a failed probe (FD-OPS-013); it never runs the rollback (FD-OPS-014). */
+export const rollbackLine = (d: Deployed, d1Migrations: readonly string[]): string => {
+  const blocking = [...d.durableObjectMigrations, ...d1Migrations];
+  if (blocking.length > 0)
+    return `${d.worker}: fix forward: rollback blocked by migration ${blocking[0]}`;
+  return d.previousVersion === null
+    ? `${d.worker}: fix forward: no previous version`
+    : `wrangler rollback ${d.previousVersion} --name ${d.worker}`;
+};
+
+const findingsOf = (fs: readonly Finding[]) =>
+  fs.filter((f) => f.severity === "failure").map((f) => ({ path: f.path, detail: f.detail }));
+
+const stageFailed = (stage: Stage) => (e: TargetFailed) =>
+  new DeployFailed({ stage, findings: [{ path: e.operation, detail: e.message }], rollback: [] });
+
+/** Render and the static checks over the rendered configuration; shared by `fd deploy`, `fd doctor` and CI. */
+export const renderAll = (overlayText: string, workers: readonly WorkerTemplate[]) =>
+  Effect.gen(function* () {
+    const overlay: OverlayValues = yield* decodeOverlay(overlayText).pipe(
+      Effect.mapError(
+        (e: OverlayRejected) =>
+          new DeployFailed({
+            stage: "decode",
+            findings: e.issues.map((i) => ({ path: i.path, detail: i.message })),
+            rollback: [],
+          }),
+      ),
+    );
+    const rendered: RenderedWorker[] = [];
+    for (const w of workers) {
+      const text = yield* renderTemplate(w.worker, w.template, overlay).pipe(
+        Effect.mapError(
+          (e: RenderFailed) =>
+            new DeployFailed({
+              stage: "render",
+              findings: e.paths.map((p) => ({
+                path: `${e.worker}.${p}`,
+                detail: "the overlay holds no value",
+              })),
+              rollback: [],
+            }),
+        ),
+      );
+      rendered.push({
+        worker: w.worker,
+        text,
+        config: parseJsonc(text),
+        ...(w.hostKey === undefined ? {} : { hostKey: w.hostKey }),
+        ...(w.templatePath === undefined ? {} : { templatePath: w.templatePath }),
+        ...(w.probePath === undefined ? {} : { probePath: w.probePath }),
+      });
+    }
+    return { overlay, rendered };
+  });
+
+/**
+ * Every drift finding: the templates' invariants, the rendered configuration, the deployed Workers against the record
+ * of the last deploy, the GitHub App's registration and the default branch's ruleset.
+ */
+export const driftFindings = (
+  workers: readonly WorkerTemplate[],
+  rendered: readonly RenderedWorker[],
+  manifest: AppPermissions,
+  extra: (worker: string, config: WorkerConfig) => readonly Finding[] = () => [],
+  more: Effect.Effect<readonly Finding[]> = Effect.succeed([]),
+) =>
+  Effect.gen(function* () {
+    const target = yield* DeployTarget;
+    const findings: Finding[] = [...(yield* more)];
+    for (const w of workers) findings.push(...templateInvariants(w.worker, parseJsonc(w.template)));
+    for (const r of rendered) {
+      findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config));
+      const deployed = yield* target.deployedSettings(r);
+      const record = yield* target.lastRecord(r);
+      if (deployed !== null && record !== null)
+        findings.push(...settingsDrift(r.worker, record, deployed));
+    }
+    findings.push(...appRegistrationCheck(manifest, yield* target.appRegistration));
+    findings.push(...rulesetCheck(yield* target.requiredChecks));
+    return findings;
+  }).pipe(Effect.mapError(stageFailed("drift")));
+
+/** `fd doctor`: every drift check, no Cloudflare or GitHub write (FD-OPS-024). */
+export const fdDoctor = (
+  overlayText: string,
+  workers: readonly WorkerTemplate[],
+  manifest: AppPermissions,
+  extra?: (worker: string, config: WorkerConfig) => readonly Finding[],
+  more?: Effect.Effect<readonly Finding[]>,
+) =>
+  Effect.gen(function* () {
+    const { rendered } = yield* renderAll(overlayText, workers);
+    return yield* driftFindings(workers, rendered, manifest, extra, more);
+  });
+
+/**
+ * `fd deploy`: the stages of FD-OPS-009 in order, stopping at the first that fails. A failed probe or floor canary
+ * exits non-zero, raises `deploy-probe-failed` and prints each Worker's rollback line; nothing rolls back by itself.
+ */
+export const fdDeploy = (
+  overlayText: string,
+  workers: readonly WorkerTemplate[],
+  manifest: AppPermissions,
+  extra?: (worker: string, config: WorkerConfig) => readonly Finding[],
+  more?: Effect.Effect<readonly Finding[]>,
+) =>
+  Effect.gen(function* () {
+    const target = yield* DeployTarget;
+    const { rendered } = yield* renderAll(overlayText, workers);
+    const drift = yield* driftFindings(workers, rendered, manifest, extra, more);
+    if (failed(drift))
+      return yield* new DeployFailed({ stage: "drift", findings: findingsOf(drift), rollback: [] });
+    const d1 = yield* target
+      .applyD1Migrations(rendered)
+      .pipe(Effect.mapError(stageFailed("migrations")));
+    const deployed: Deployed[] = [];
+    for (const worker of deployOrder(rendered)) {
+      const r = rendered.find((x) => x.worker === worker)!;
+      deployed.push(
+        yield* target.deployWorker(r).pipe(
+          Effect.mapError(
+            (e) =>
+              new DeployFailed({
+                stage: "deploy",
+                findings: [{ path: e.operation, detail: e.message }],
+                rollback: deployed.map((d) => rollbackLine(d, d1)),
+              }),
+          ),
+        ),
+      );
+    }
+    const probes: { path: string; detail: string }[] = [];
+    for (const d of deployed) {
+      const r = rendered.find((x) => x.worker === d.worker)!;
+      const ok = yield* target.probe(r).pipe(Effect.orElseSucceed(() => false));
+      if (!ok) probes.push({ path: r.worker, detail: "GET /health failed" });
+    }
+    let canary: CanaryResult | null = null;
+    if (probes.length === 0) {
+      canary = yield* target
+        .floorCanary(rendered)
+        .pipe(
+          Effect.catchTag("TargetFailed", (e) =>
+            Effect.succeed<CanaryResult>({ status: "failed", detail: e.message }),
+          ),
+        );
+      if (canary.status === "failed") probes.push({ path: "floor-canary", detail: canary.detail });
+    }
+    if (probes.length > 0) {
+      yield* target.raiseAlarm(
+        "deploy-probe-failed",
+        probes.map((p) => `${p.path}: ${p.detail}`).join("; "),
+      );
+      return yield* new DeployFailed({
+        stage: "probes",
+        findings: probes,
+        rollback: deployed.map((d) => rollbackLine(d, d1)),
+      });
+    }
+    for (const r of rendered)
+      yield* target.writeRecord(r).pipe(Effect.mapError(stageFailed("record")));
+    return {
+      deployed,
+      migrations: d1,
+      canary,
+      warnings: drift.filter((f) => f.severity === "warning"),
+    };
+  });
+
+/** One stage of a deploy or a drift check, in the order it ran: the shape `fd` prints. */
+export interface StageReport {
+  readonly stage: string;
+  readonly ok: boolean;
+  readonly detail: string;
+}
+
+/** The stages that ran, from a deploy's result or the stage it failed at. */
+export const stageReport = (
+  outcome:
+    | { readonly ok: true; readonly last: Stage; readonly details?: Partial<Record<Stage, string>> }
+    | { readonly ok: false; readonly failed: DeployFailed },
+): readonly StageReport[] => {
+  const last = outcome.ok ? outcome.last : outcome.failed.stage;
+  const ran = STAGES.slice(0, STAGES.indexOf(last) + 1);
+  return ran.map((stage) => {
+    if (!outcome.ok) {
+      if (stage !== last) return { stage, ok: true, detail: "" };
+      const f = outcome.failed;
+      return {
+        stage,
+        ok: false,
+        detail: [...f.findings.map((x) => `${x.path}: ${x.detail}`), ...f.rollback].join("\n"),
+      };
+    }
+    return { stage, ok: true, detail: outcome.details?.[stage] ?? "" };
+  });
+};

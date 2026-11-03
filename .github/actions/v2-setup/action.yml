@@ -1,0 +1,27 @@
+name: v2 setup
+description: Fetches vendor/mameko at its pinned commit and installs the workspace.
+inputs:
+  mameko-deploy-key:
+    description: The read-only deploy key of the private mameko repository.
+    required: true
+runs:
+  using: composite
+  steps:
+    # vendor/mameko is a private submodule: a read-only deploy key on that repository fetches the pinned commit, so a
+    # fork's pull request, which receives no secrets, cannot install the workspace.
+    - name: Fetch vendor/mameko
+      shell: bash
+      env:
+        MAMEKO_DEPLOY_KEY: ${{ inputs.mameko-deploy-key }}
+      run: |
+        install -m 700 -d ~/.ssh
+        printf '%s\n' "$MAMEKO_DEPLOY_KEY" > ~/.ssh/mameko
+        chmod 600 ~/.ssh/mameko
+        GIT_SSH_COMMAND="ssh -i ~/.ssh/mameko -o IdentitiesOnly=yes" git submodule update --init vendor/mameko
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+    - shell: bash
+      run: pnpm install --frozen-lockfile

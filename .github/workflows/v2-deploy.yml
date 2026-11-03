@@ -1,0 +1,76 @@
+name: v2-deploy
+
+# The v2 deploy (specs/operability.md § Deploy pipeline): a push to the default branch runs the CI commands of
+# FD-OPS-026 and starts no deploy step until they pass (FD-OPS-030); the deploy reads the operator overlay from one
+# repository secret and fails before its first deploy step without it (FD-OPS-008); `fd deploy` renders through the one
+# renderer and runs the drift check before any change (FD-OPS-007, FD-OPS-009). Every 24 h `fd doctor` runs the drift
+# check and raises the notify alarm `drift` when it fails (FD-OPS-025).
+#
+# CREDENTIALS. `FD_OPERATOR_OVERLAY`: the operator overlay's JSON. `CLOUDFLARE_API_TOKEN`: account-scoped, Workers
+# Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit, Account Settings:Read. `GITHUB_APP_PRIVATE_KEY`: the
+# App's key, for the App registration and the ruleset reads of the drift check.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+# One deploy per account at a time; a started deploy is never cancelled (FD-OPS-011).
+concurrency:
+  group: flare-dispatch-v2-deploy
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    if: github.event_name != 'schedule'
+    uses: ./.github/workflows/v2-ci.yml
+    secrets: inherit
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the operator overlay
+        env:
+          FD_OPERATOR_OVERLAY: ${{ secrets.FD_OPERATOR_OVERLAY }}
+        run: |
+          if [ -z "$FD_OPERATOR_OVERLAY" ]; then
+            echo "::error::the FD_OPERATOR_OVERLAY secret is not set; no deploy step runs"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/fd"
+          printf '%s' "$FD_OPERATOR_OVERLAY" > "$RUNNER_TEMP/fd/overlay.json"
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - name: fd deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+        run: node --experimental-strip-types --no-warnings packages/ops/scripts/fd-operability.ts deploy --overlay "@$RUNNER_TEMP/fd/overlay.json"
+
+  doctor:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the operator overlay
+        env:
+          FD_OPERATOR_OVERLAY: ${{ secrets.FD_OPERATOR_OVERLAY }}
+        run: |
+          if [ -z "$FD_OPERATOR_OVERLAY" ]; then
+            echo "::error::the FD_OPERATOR_OVERLAY secret is not set"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/fd"
+          printf '%s' "$FD_OPERATOR_OVERLAY" > "$RUNNER_TEMP/fd/overlay.json"
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - name: fd doctor
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+        run: node --experimental-strip-types --no-warnings packages/ops/scripts/fd-operability.ts doctor --overlay "@$RUNNER_TEMP/fd/overlay.json" --alarm-on-drift
