@@ -26,7 +26,7 @@ The decisions behind the mechanisms are mameko's [ADR-0007](https://github.com/f
 | `policy_version` | `flare-dispatch.v2.0`; `flare-dispatch.v2.0-dev` for `development`, because mameko's loader rejects one version carrying two contents |
 | Tenant scope | A GitHub repository, `<owner>/<repo>`; an `exec.lease` names it as the scope id and carries the commit SHA in its inputs, with the lease fields of FD-PROF-063 |
 | `host` | `adapter: host-cloudflare`, `features: [cloudflare-containers, durable-object-alarms]` |
-| `registration` | `key_stores: [secure-enclave]`, `attestation: verifier`; `key_stores: [software]`, `attestation: none` for `development` |
+| `registration` | `key_stores: [secure-enclave]`, with `attestation: none` in phase 0, when no device registers, and `attestation: verifier` from phase 1 (FD-PROF-052); `key_stores: [software]`, `attestation: none` for `development` |
 | `cache_namespaces` | Binding `cacheNamespaces` ([cache-artifacts.md](cache-artifacts.md)) |
 | `capacity` | `grant: capacityGrant`; `isolation` absent, so `vm` |
 | `member_partition` | `true` |
@@ -34,14 +34,14 @@ The decisions behind the mechanisms are mameko's [ADR-0007](https://github.com/f
 
 ### Class catalogue
 
-Four classes, all guaranteed. `required` is the one firm class. Every class lists `gha` last in `cloud_kinds`; the declared constraints of § Placement remove `gha` from every run except an `apple-build` run of class `required` and a release-matrix job.
+Four classes, all guaranteed. `required` is the one firm class. In phase 0 every class lists `cloudflare` alone in `cloud_kinds`. `required` adds `aws` from phase 3, when the AWS launcher exists, and every class adds `gha` last from phase 4, when the `gha` launcher exists; the declared constraints of § Placement then remove `gha` from every run except an `apple-build` run of class `required` and a release-matrix job. A kind enters a class's `cloud_kinds` only in the phase whose launcher Layer the dispatcher supplies, because mameko rejects a control plane that uses a port with no Layer ([MAMEKO-HOST-043](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/hosts.md)).
 
 | Class | Rank | Claim deadline | Cloud kinds, in preference order | Line | Reserve |
 | --- | --- | --- | --- | --- | --- |
-| `release` (P0) | 0 | `none`: cloud at admission | `cloudflare`, `gha` | `budget` | `release-reserve` |
-| `required` (P1) | 1 | 60 s; 0 s on a predicted miss | `cloudflare`, `aws`, `gha` | `next-above-less-reserve` | `measured` |
-| `interactive` (P2) | 2 | 300 s; 0 s on a predicted miss | `cloudflare`, `gha` | `next-above-less-reserve` | absent: 0 |
-| `batch` (P3) | 3 | `staleness`: `stale_after` fraction 0.5, 43200 s (12 h) without a schedule | `cloudflare`, `gha` | `general_band_ratio` 0.45, `floor_ratio` 0.1 | absent: 0 |
+| `release` (P0) | 0 | `none`: cloud at admission | `cloudflare`; `gha` from phase 4 | `budget` | `release-reserve` |
+| `required` (P1) | 1 | 60 s; 0 s on a predicted miss | `cloudflare`; `aws` from phase 3; `gha` from phase 4 | `next-above-less-reserve` | `measured` |
+| `interactive` (P2) | 2 | 300 s; 0 s on a predicted miss | `cloudflare`; `gha` from phase 4 | `next-above-less-reserve` | absent: 0 |
+| `batch` (P3) | 3 | `staleness`: `stale_after` fraction 0.5, 43200 s (12 h) without a schedule | `cloudflare`; `gha` from phase 4 | `general_band_ratio` 0.45, `floor_ratio` 0.1 | absent: 0 |
 
 | Class | Queue age | Bounds (global, per scope) | Sheddable | Retries | Terminal outcome | Queue-full alarm |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -147,9 +147,9 @@ The generic constraints of [admission-qos.md](https://github.com/fractalboxdev/m
 | `cloud_pinned_kinds` | `cloudflare` |
 | `cloud_only` | Trigger `tag-push` |
 | `local_only` | A run that declares no class |
-| `launcher_kinds` | `gha`, the GitHub Actions launcher |
+| `launcher_kinds` | None before phase 4; `gha`, the GitHub Actions launcher, from phase 4 |
 
-The profile declares five constraints:
+From phase 4 the profile declares five constraints; before phase 4 it declares none, and `placement.required` and `placement.unreachable` are empty:
 
 | Constraint | Holds for | Removes | Posture |
 | --- | --- | --- | --- |
@@ -282,6 +282,8 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/8530203ba76b
 - **FD-PROF-002** · phase 0 · `V-UNIT` — FlareDispatch's CI must compare the `production` profile of `document.ts` with mameko's § The reference CI profile at the pinned mameko commit, and must fail on any difference that § Differences from the reference CI profile does not list.
 - **FD-PROF-063** · phase 0 · `V-UNIT` — When the control plane grants an execution lease, it must supply in the application's lease fields the execution's repository as `<owner>/<repo>` for the scope id, the commit SHA the execution verifies among the inputs, the run registry's run version and workflow version, and the request context admission recorded ([MAMEKO-PROTO-032](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/executor-protocol.md), [MAMEKO-PROTO-083](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/executor-protocol.md)).
 
+- **FD-PROF-064** · phase 0 · `V-UNIT` `V-DEPLOY` — The profile must list `aws` in no class's `cloud_kinds` before phase 3, and must list `gha` in no class's `cloud_kinds`, register no launcher kind and declare none of the constraints of § Placement before phase 4, and must set `registration.attestation` to `none` before phase 1, so that every port the profile uses has a Layer in that phase ([MAMEKO-HOST-043](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/hosts.md), [architecture.md](architecture.md) FD-ARCH-039).
+
 ### Class catalogue
 
 - **FD-PROF-003** · phase 0 · `V-UNIT` — The profile must declare exactly the classes `release` (P0, rank 0), `required` (P1, rank 1), `interactive` (P2, rank 2) and `batch` (P3, rank 3), each guaranteed, with `required` the one firm class, and with the cloud kinds, lines and reserves of § Class catalogue, which admission assigns once per execution ([MAMEKO-ADM-004](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/admission-qos.md)).
@@ -377,4 +379,5 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/8530203ba76b
 - TODO(maintainer): `required` keeps `min: 2` in the `agent` and `browser` pools alone; a minimum kept for `release` and `required` together waits on mameko's decision on group minimums ([profiles.md](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/profiles.md) § Open items).
 - TODO(maintainer): the signing purpose `statement` signs a DSSE envelope; it declares `format: dsse` once mameko's signing purposes carry a format ([profiles.md](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/profiles.md) § Open items), before phase 4.
 - TODO(maintainer): FD-PROF-002 compares against the prose of mameko's reference CI profile; it compares against a committed fixture document once mameko ships one ([profiles.md](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/profiles.md) § Open items).
+- TODO(maintainer): FD-PROF-002 compares against mameko's reference CI profile, which declares the `gha` launcher, `aws` in `required`'s cloud kinds and `attestation: verifier` itself; until phase 4, list the phase 0 omissions of FD-PROF-064 in § Differences from the reference CI profile, or compare against the phase 4 document.
 - TODO(operator): confirm the `interactive` claim deadline of 300 s and queue age of 1800 s against measured time to verdict before phase 2 starts.

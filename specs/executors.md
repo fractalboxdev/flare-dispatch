@@ -28,7 +28,7 @@ The decisions behind the executors are mameko's [ADR-0005](https://github.com/fr
 | `aws` | mameko | One Fargate task in the deploying organization's AWS account | 3 |
 | `gha` | FlareDispatch, as a launcher kind | One GitHub Actions job, started by `workflow_dispatch`, that runs the runner for one lease | 4 |
 
-Each class tries the cloud kinds in the order the profile gives it. Every class lists `gha` last, and the profile's placement constraints remove `gha` from every run except a release-matrix job and an `apple-build` run of class `required` ([profile.md](profile.md) § Placement).
+Each class tries the cloud kinds in the order the profile gives it ([profile.md](profile.md) FD-PROF-064 names the phase each kind enters). From phase 4 every class lists `gha` last, and the profile's placement constraints remove `gha` from every run except a release-matrix job and an `apple-build` run of class `required` ([profile.md](profile.md) § Placement).
 
 ### Devices
 

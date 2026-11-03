@@ -1,6 +1,6 @@
 # Model gateway
 
-FlareDispatch routes every model call through mameko's model gateway. This file specifies the two route kinds FlareDispatch registers in the gateway's provider registry, `workers-ai` and `bedrock`, how a `workers-ai` model entry is priced, and the configuration check that reports a provider's own spend limit.
+FlareDispatch routes every model call through mameko's model gateway. This file specifies the two route kinds FlareDispatch registers in the gateway's provider registry, `workers-ai` and `bedrock`, and how a `workers-ai` model entry is priced. A provider's own spend limit is mameko's configuration check ([MAMEKO-MDL-075](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/model-gateway.md)); the gateway's allowance enforcement does not depend on it.
 
 ## Scope
 
@@ -35,10 +35,6 @@ FlareDispatch composes only `host-cloudflare`, so the `workers-ai` route always 
 - **FD-MDL-021** · phase 0 · `V-UNIT` — The model gateway must not price a `workers-ai` model entry at the fallback rate of [MAMEKO-MDL-022](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/model-gateway.md).
 - **FD-MDL-022** · phase 0 · `V-DEPLOY` — If a `workers-ai` model entry states no per-token rate derived from its Neurons price, then the deploy check must fail.
 - **FD-MDL-024** · phase 0 · `V-UNIT` — The `bedrock` route must sign its requests in the control plane, and the control plane must be the only component that reaches `bedrock`.
-
-### Configuration check
-
-- **FD-MDL-067** · phase 0 · `V-DEPLOY` — Where a hosted provider offers an account spend limit, `fd doctor` may report whether it is set, as the application's configuration check of [MAMEKO-MDL-075](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/model-gateway.md); the gateway's allowance enforcement does not depend on it.
 
 ## Open items
 

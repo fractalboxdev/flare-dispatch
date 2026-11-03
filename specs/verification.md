@@ -71,7 +71,7 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-LIVE`
 
-- **Runs:** the synthetic webhook canary every 15 min (FD-OPS-038, FD-OPS-040), the installation probe every 15 min (FD-OPS-041), the webhook delivery scan (FD-OPS-044), the post-deploy probe (FD-OPS-013), `pr-review` on this repository's pull requests, and mameko's floor canaries on the deployed control plane.
+- **Runs:** the synthetic webhook canary every 15 min (FD-OPS-038, FD-OPS-040), the installation probe every 15 min (FD-OPS-041), the webhook delivery scan (FD-OPS-044), the post-deploy probe (FD-OPS-013), `check` on this repository's pull requests (FD-OPS-028), `pr-review` on them from phase 2, and mameko's floor canaries on the deployed control plane.
 - **Lives:** the control plane's cron and ops intents; results reach the alert sink and the dashboard.
 - **Runs when:** live, on every deploying organization's control plane.
 - **Failure blocks:** no merge. It raises the page alarm the requirement names, and the phase gate reads the alarm record of its window.
@@ -292,35 +292,35 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 
 | Phase | Requirements | `V-UNIT` | `V-CONF` | `V-SIM` | `V-REPLAY` | `V-E2E-LOCAL` | `V-DEPLOY` | `V-LIVE` | `V-MEASURE` | `V-PROOF` | `V-DIFF` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 520 | 474 | 23 | 31 | 14 | 29 | 47 | 22 | 4 | 14 | 11 |
-| 1 | 56 | 48 | 10 | 3 | 1 | 8 | 2 | 0 | 2 | 3 | 0 |
+| 0 | 520 | 474 | 24 | 31 | 14 | 29 | 47 | 22 | 4 | 14 | 11 |
+| 1 | 54 | 47 | 8 | 3 | 1 | 8 | 2 | 0 | 2 | 3 | 0 |
 | 2 | 56 | 56 | 0 | 4 | 1 | 4 | 0 | 0 | 0 | 1 | 1 |
-| 3 | 26 | 24 | 0 | 1 | 0 | 2 | 1 | 0 | 0 | 0 | 0 |
-| 4 | 97 | 60 | 30 | 8 | 2 | 6 | 6 | 1 | 0 | 22 | 0 |
-| All | 755 | 662 | 63 | 47 | 18 | 49 | 56 | 23 | 6 | 40 | 12 |
+| 3 | 25 | 24 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | 0 | 0 |
+| 4 | 100 | 62 | 31 | 8 | 2 | 7 | 6 | 1 | 0 | 22 | 0 |
+| All | 755 | 663 | 63 | 47 | 18 | 49 | 56 | 23 | 6 | 40 | 12 |
 
 **By area**
 
 | Area | Total | By phase 0 · 1 · 2 · 3 · 4 | `V-UNIT` | `V-CONF` | `V-SIM` | `V-REPLAY` | `V-E2E-LOCAL` | `V-DEPLOY` | `V-LIVE` | `V-MEASURE` | `V-PROOF` | `V-DIFF` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ARCH` | 11 | 9 · 1 · 0 · 1 · 0 | 7 | 2 | 0 | 0 | 6 | 2 | 0 | 0 | 0 | 0 |
+| `ARCH` | 11 | 9 · 1 · 0 · 0 · 1 | 7 | 2 | 0 | 0 | 6 | 2 | 0 | 0 | 0 | 0 |
 | `CACHE` | 90 | 71 · 18 · 1 · 0 · 0 | 83 | 11 | 7 | 1 | 4 | 3 | 0 | 1 | 9 | 0 |
 | `PROTO` | 1 | 0 · 0 · 0 · 0 · 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `EXEC` | 11 | 0 · 2 · 0 · 1 · 8 | 5 | 2 | 2 | 0 | 1 | 2 | 0 | 0 | 0 | 0 |
-| `GH` | 65 | 63 · 1 · 1 · 0 · 0 | 64 | 4 | 6 | 6 | 2 | 0 | 2 | 0 | 0 | 0 |
+| `GH` | 65 | 63 · 0 · 1 · 0 · 1 | 64 | 4 | 6 | 6 | 2 | 0 | 2 | 0 | 0 | 0 |
 | `INT` | 50 | 46 · 1 · 2 · 1 · 0 | 49 | 2 | 7 | 0 | 5 | 3 | 1 | 0 | 2 | 0 |
-| `IFC` | 85 | 67 · 12 · 3 · 0 · 3 | 83 | 3 | 0 | 0 | 8 | 5 | 2 | 0 | 0 | 0 |
+| `IFC` | 85 | 66 · 12 · 3 · 0 · 4 | 83 | 3 | 0 | 0 | 8 | 5 | 2 | 0 | 0 | 0 |
 | `ISO` | 2 | 0 · 0 · 0 · 0 · 2 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `LOCAL` | 23 | 0 · 9 · 14 · 0 · 0 | 22 | 0 | 3 | 1 | 1 | 0 | 0 | 0 | 1 | 1 |
-| `MDL` | 5 | 5 · 0 · 0 · 0 · 0 | 2 | 0 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 0 |
+| `MDL` | 4 | 4 · 0 · 0 · 0 · 0 | 2 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 |
 | `OPS` | 60 | 59 · 1 · 0 · 0 · 0 | 33 | 0 | 0 | 0 | 2 | 28 | 13 | 1 | 1 | 1 |
-| `PROF` | 63 | 46 · 7 · 1 · 1 · 8 | 62 | 5 | 2 | 0 | 2 | 3 | 3 | 0 | 0 | 0 |
+| `PROF` | 64 | 47 · 7 · 1 · 1 · 8 | 63 | 5 | 2 | 0 | 2 | 4 | 3 | 0 | 0 | 0 |
 | `PROV` | 77 | 2 · 2 · 0 · 0 · 73 | 46 | 26 | 6 | 2 | 6 | 3 | 1 | 2 | 21 | 0 |
 | `RUN` | 7 | 6 · 1 · 0 · 0 · 0 | 7 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `AGT` | 85 | 28 · 0 · 33 · 22 · 2 | 83 | 4 | 4 | 2 | 2 | 2 | 0 | 0 | 4 | 8 |
 | `GATE` | 80 | 79 · 0 · 1 · 0 · 0 | 79 | 0 | 10 | 6 | 8 | 0 | 0 | 0 | 2 | 2 |
 | `SPD` | 4 | 4 · 0 · 0 · 0 · 0 | 4 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `VER` | 36 | 35 · 1 · 0 · 0 · 0 | 32 | 1 | 0 | 0 | 0 | 2 | 1 | 2 | 0 | 0 |
+| `VER` | 36 | 36 · 0 · 0 · 0 · 0 | 32 | 1 | 0 | 0 | 0 | 2 | 1 | 2 | 0 | 0 |
 
 ## Requirements
 
@@ -349,7 +349,7 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 
 ### mameko conformance and the reference profile
 
-- **FD-VER-032** · phase 1 · `V-CONF` — On every pull request, the `conf` job must run mameko's coordinator conformance suite, at the pinned release, against FlareDispatch's composed control plane: `host-cloudflare` under workerd with FlareDispatch's profile, its appliers on the fake GitHub, its application ports and the fake executor, and must fail on any scenario that fails ([MAMEKO-VER-022](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/verification.md), [MAMEKO-VER-024](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/verification.md)).
+- **FD-VER-032** · phase 0 · `V-CONF` — On every pull request, the `conf` job must run mameko's coordinator conformance suite, at the pinned release, against FlareDispatch's composed control plane: `host-cloudflare` under workerd with FlareDispatch's profile, its appliers on the fake GitHub, its application ports and the fake executor, and must fail on any scenario that fails ([MAMEKO-VER-022](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/verification.md), [MAMEKO-VER-024](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/verification.md)).
 - **FD-VER-033** · phase 0 · `V-DEPLOY` — On every pull request, the `profile-reference` job must run the reference-profile comparison of [profile.md](profile.md) FD-PROF-002 at the pinned mameko commit, which fails only on a difference that profile.md § Differences from the reference CI profile does not list, and the job must fail when that comparison fails.
 
 ### Formal gate
