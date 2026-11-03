@@ -24,6 +24,8 @@ build/
 wrangler.*.local.jsonc
 # The drift check's rendered control-plane configuration, written beside its template.
 apps/control-plane/control-plane.jsonc
+# The configuration `pnpm dogfood` renders for one run, beside its template.
+apps/control-plane/.dogfood-*.wrangler.jsonc
 
 # Logs
 *.log

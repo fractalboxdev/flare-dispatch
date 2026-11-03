@@ -10,6 +10,8 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import type { CheckInput } from "@fractalboxdev/flare-dispatch-catalog";
 import { Console, Effect, Runtime, Schedule, Schema } from "effect";
 import { Argument, Command } from "effect/cli";
+import { placeholderOverlay } from "@fractalboxdev/flare-dispatch-ops/overlay";
+import { renderTemplate } from "@fractalboxdev/flare-dispatch-ops/render";
 import { DOGFOOD_IDENTITY, startAccessTeam, type LocalAccessTeam } from "./access.ts";
 import { DeviceIdentity, health, makeClient, type ControlPlaneClient } from "./client.ts";
 import { capture, CommandFailed, startService, type RunOptions } from "./processes.ts";
@@ -147,6 +149,31 @@ const devRepository = (sha: string) =>
 /** A dotenv value wrangler reads literally: single-quoted, so JSON keeps its double quotes. */
 const literal = (value: unknown) => `'${JSON.stringify(value)}'`;
 
+/**
+ * The control plane's template rendered with the placeholder overlay, beside the template so the paths inside it
+ * resolve, and removed when the command ends. `wrangler dev` refuses the template's unrendered placeholders; the
+ * local values that matter (the deployment, the Access team, the repository) come from the vars file.
+ */
+const renderedConfig = (appDir: string) =>
+  Effect.acquireRelease(
+    Effect.gen(function* () {
+      const template = readFileSync(join(appDir, "wrangler.jsonc"), "utf8");
+      const rendered = yield* renderTemplate("control-plane", template, placeholderOverlay).pipe(
+        Effect.mapError(
+          (e) =>
+            new CommandFailed({
+              command: "render wrangler.jsonc",
+              detail: `no overlay value for ${e.paths.join(", ")}`,
+            }),
+        ),
+      );
+      const path = join(appDir, `.dogfood-${process.pid}.wrangler.jsonc`);
+      writeFileSync(path, rendered);
+      return path;
+    }),
+    (path) => Effect.sync(() => rmSync(path, { force: true })),
+  );
+
 const startControlPlane = (runtimeDir: string, team: LocalAccessTeam, sha: string) =>
   Effect.gen(function* () {
     const port = yield* freePort;
@@ -171,10 +198,13 @@ const startControlPlane = (runtimeDir: string, team: LocalAccessTeam, sha: strin
     );
     chmodSync(varsPath, 0o600);
     const appDir = join(repoRoot, "apps/control-plane");
+    const config = yield* renderedConfig(appDir);
     yield* startService(
       join(appDir, "node_modules/.bin/wrangler"),
       [
         "dev",
+        "--config",
+        config,
         "--local",
         "--ip",
         "127.0.0.1",

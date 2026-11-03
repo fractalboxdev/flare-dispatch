@@ -493,6 +493,9 @@ importers:
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../catalog
+      '@fractalboxdev/flare-dispatch-ops':
+        specifier: workspace:*
+        version: link:../ops
       effect:
         specifier: 4.0.6
         version: 4.0.6

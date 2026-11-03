@@ -8,7 +8,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./worker": "./src/worker.ts",
-    "./cli": "./src/cli/index.ts"
+    "./cli": "./src/cli/index.ts",
+    "./render": "./src/render.ts",
+    "./overlay": "./src/overlay.ts"
   },
   "scripts": {
     "test": "vitest run"
