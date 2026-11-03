@@ -80,3 +80,4 @@ export {
   validateProfile,
   type ValidationContext,
 } from "./validate.ts";
+export { bindings, validationContext } from "./registry.ts";

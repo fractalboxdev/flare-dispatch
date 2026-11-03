@@ -7,7 +7,7 @@ import {
 } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { bindings, validationContext } from "./context.test-support.ts";
+import { bindings, validationContext } from "./registry.ts";
 import {
   buildProfile,
   classNamed,

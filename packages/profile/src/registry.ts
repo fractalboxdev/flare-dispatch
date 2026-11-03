@@ -1,7 +1,6 @@
-// The validation context of a control plane that serves every kind the profile
-// declares. `packages/github` registers `checkRun`; the other names are the
-// registry the profile commits to, listed here so the tests exercise mameko's
-// binding and applier checks.
+// The bindings and appliers the profile names, as the registry the composed control plane commits to, and the
+// validation context of a production control plane that serves every declared kind. `packages/github` registers
+// `checkRun`; the drift check validates the deployed document against this context (FD-OPS-021).
 import { poolAdmissionCaps, profile, spendDefaults } from "./document.ts";
 import type { ValidationContext } from "./validate.ts";
 

@@ -1,7 +1,7 @@
 import { decodeProfile } from "@fractalboxdev/mameko-ports";
 import { Effect, Match } from "effect";
 import { describe, expect, it } from "vitest";
-import { validationContext } from "./context.test-support.ts";
+import { validationContext } from "./registry.ts";
 import {
   buildProfile,
   configurationSourceLayer,
