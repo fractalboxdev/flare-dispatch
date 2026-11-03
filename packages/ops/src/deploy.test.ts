@@ -8,6 +8,8 @@ import {
   fdDoctor,
   placeholderOverlay,
   rollbackLine,
+  MERGE_GATE_CHECKS,
+  type CanaryResult,
   type Deployed,
   type DeployedSettings,
 } from "./index.ts";
@@ -42,15 +44,18 @@ const target = (
 ) => {
   const calls: string[] = [];
   const layer = Layer.succeed(DeployTarget, {
-    deployedSettings: (w) =>
+    deployedSettings: ({ worker: w }) =>
       Effect.sync(() => {
         calls.push(`read:${w}`);
         return opts.drifted === true ? { ...settings, vars: { X: "1" } } : settings;
       }),
-    lastRecord: (w) => Effect.sync(() => (calls.push(`record?:${w}`), settings)),
+    lastRecord: ({ worker: w }) => Effect.sync(() => (calls.push(`record?:${w}`), settings)),
     appRegistration: Effect.sync(() => (calls.push("app"), APP_PERMISSIONS)),
-    applyD1Migrations: Effect.sync(() => (calls.push("migrate"), ["0007_alarms"])),
-    deployWorker: (w) =>
+    requiredChecks: Effect.sync(
+      () => (calls.push("ruleset"), [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
+    ),
+    applyD1Migrations: () => Effect.sync(() => (calls.push("migrate"), ["0007_alarms"])),
+    deployWorker: ({ worker: w }) =>
       Effect.sync((): Deployed => {
         calls.push(`deploy:${w}`);
         return {
@@ -60,9 +65,15 @@ const target = (
           durableObjectMigrations: opts.doMigrations ?? [],
         };
       }),
-    probe: (w) => Effect.sync(() => (calls.push(`probe:${w}`), opts.probe ?? true)),
-    floorCanary: Effect.sync(() => (calls.push("canary"), opts.canary ?? true)),
-    writeRecord: (w) => Effect.sync(() => void calls.push(`write:${w}`)),
+    probe: ({ worker: w }) => Effect.sync(() => (calls.push(`probe:${w}`), opts.probe ?? true)),
+    floorCanary: () =>
+      Effect.sync((): CanaryResult => {
+        calls.push("canary");
+        return opts.canary === false
+          ? { status: "failed", detail: "the container floor canary failed on the deployed digest" }
+          : { status: "passed", digest: "sha256:abc" };
+      }),
+    writeRecord: ({ worker: w }) => Effect.sync(() => void calls.push(`write:${w}`)),
     raiseAlarm: (name) => Effect.sync(() => void calls.push(`alarm:${name}`)),
   });
   return { calls, layer };
@@ -77,7 +88,9 @@ describe("fd deploy", () => {
     const t = target();
     Effect.runSync(fdDeploy(overlay, WORKERS, APP_PERMISSIONS).pipe(Effect.provide(t.layer)));
     const firstWrite = t.calls.indexOf("migrate");
-    expect(t.calls.slice(0, firstWrite).every((c) => /^(read|record\?|app)/.test(c))).toBe(true);
+    expect(t.calls.slice(0, firstWrite).every((c) => /^(read|record\?|app|ruleset)/.test(c))).toBe(
+      true,
+    );
     expect(t.calls.slice(firstWrite)).toEqual([
       "migrate",
       "deploy:substrate",

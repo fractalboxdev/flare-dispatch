@@ -7,7 +7,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./worker": "./src/worker.ts"
+    "./worker": "./src/worker.ts",
+    "./cli": "./src/cli/index.ts"
   },
   "scripts": {
     "test": "vitest run"
@@ -24,7 +25,9 @@
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261012.1",
     "@types/node": "^22.19.0",
+    "fast-check": "3.23.2",
     "miniflare": "4.20260515.0",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "yaml": "2.9.0"
   }
 }

@@ -23,3 +23,5 @@ export * from "./verification/formal.ts";
 export * from "./verification/phase-gate.ts";
 export * from "./verification/spec-tags.ts";
 export * from "./mount.ts";
+export * from "./settings.ts";
+export * from "./access-application.ts";

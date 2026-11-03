@@ -1,0 +1,26 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-conformance",
+  "version": "0.0.1",
+  "private": true,
+  "description": "mameko's coordinator conformance suite on FlareDispatch's composed control plane: host-cloudflare under workerd with FlareDispatch's profile and application ports.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalboxdev/flare-dispatch-ops": "workspace:*",
+    "@fractalboxdev/flare-dispatch-profile": "workspace:*",
+    "@fractalboxdev/mameko-conformance": "workspace:*",
+    "@fractalboxdev/mameko-coordinator": "workspace:*",
+    "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
+    "@fractalboxdev/mameko-ports": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261012.1",
+    "@types/node": "^22.19.0",
+    "miniflare": "4.20260515.0",
+    "vitest": "^3.2.0"
+  }
+}

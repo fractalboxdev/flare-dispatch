@@ -2,15 +2,16 @@ name: v2-ci
 
 # The merge gate of specs/verification.md § Merge gate, one job per required check whose harness exists, and
 # `fallback-ci`, the not-required check that runbook R13 accepts while the control plane is down (FD-OPS-027). The
-# documentation site build runs in docs.yml. A push to the default branch runs the same jobs (FD-OPS-030).
+# diagram check and the documentation site build run in the docs job. A push to the default branch runs the same jobs (FD-OPS-030).
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 concurrency:
-  group: v2-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: v2-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   STRIP_TYPES: node --experimental-strip-types --no-warnings
@@ -119,8 +120,66 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: $STRIP_TYPES packages/ops/scripts/phase-gate.ts --base "$BASE" --records .tmp/phase-gate-records.json
 
+  # FD-VER-032: mameko's coordinator suites on host-cloudflare under workerd, with FlareDispatch's application ports.
+  conf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-conformance test
+
+  # FD-VER-024: 100 seeds per V-SIM scenario plus every kept seed.
+  sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - run: $STRIP_TYPES packages/ops/scripts/harness.ts sim
+
+  # FD-VER-025: every V-REPLAY workflow twice over its cached journal.
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - run: $STRIP_TYPES packages/ops/scripts/harness.ts replay
+
+  # FD-VER-019, FD-VER-022: every kept regression, then 10,000 traces of stagedWriteGate against the oracle built from
+  # the same commit.
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - name: Install elan with the pinned toolchain
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain "$(cat formal/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - run: (cd formal && lake build)
+      - run: $STRIP_TYPES packages/ops/scripts/harness.ts diff --traces 10000
+
+  # FD-OPS-031: every spec diagram renders, and the site build fails on a broken local link.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - run: shopt -s globstar && node apps/docs/scripts/check-diagrams.mjs specs/**/*.md
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run build
+
   fallback-ci:
-    needs: [lint, typecheck, unit, spec-tags, deploy-dry-run, profile-reference, formal]
+    needs: [lint, typecheck, unit, spec-tags, deploy-dry-run, profile-reference, formal, conf, sim, replay, diff, docs]
     runs-on: ubuntu-latest
     steps:
       - run: echo "every CI command of FD-OPS-026 passed"
