@@ -78,6 +78,7 @@ if (job === "diff") {
     console.log(
       `diff: ${s.kernel} agreed on ${regressions.length} kept and ${outcome.traces} generated traces, seed ${seed}`,
     );
+    s.close?.();
   }
 } else if (job === "sim") {
   const scenarios = await discover<SimScenario>(".sim.ts", "sim", "scenarios");

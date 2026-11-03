@@ -13,20 +13,38 @@ export const pipeOracle = <I, O>(
   args: readonly string[] = [],
 ): PipeOracle<I, O> => {
   const child = spawn(command, [...args], { stdio: ["pipe", "pipe", "inherit"] });
-  const waiting: ((line: string) => void)[] = [];
-  createInterface({ input: child.stdout }).on("line", (line) => waiting.shift()?.(line));
+  const waiting: { readonly answer: (line: string) => void; readonly fail: (e: Error) => void }[] =
+    [];
+  let ended: Error | null = null;
+  // An oracle that exits or cannot start fails every question still waiting, so a run never hangs on it.
+  const end = (e: Error) => {
+    ended ??= e;
+    for (const w of waiting.splice(0)) w.fail(ended);
+  };
+  child.on("error", end);
+  child.on("exit", (code, signal) =>
+    end(new Error(`oracle ${command} exited (${signal ?? `code ${String(code)}`})`)),
+  );
+  createInterface({ input: child.stdout }).on("line", (line) => waiting.shift()?.answer(line));
   return {
     ask: (input) =>
       new Promise((resolve, reject) => {
-        waiting.push((line) => {
-          try {
-            resolve(JSON.parse(line) as O);
-          } catch (e) {
-            reject(e instanceof Error ? e : new Error(String(e)));
-          }
+        if (ended !== null) return reject(ended);
+        waiting.push({
+          fail: reject,
+          answer: (line) => {
+            try {
+              resolve(JSON.parse(line) as O);
+            } catch (e) {
+              reject(e instanceof Error ? e : new Error(String(e)));
+            }
+          },
         });
         child.stdin.write(`${JSON.stringify(input)}\n`);
       }),
-    close: () => child.stdin.end(),
+    close: () => {
+      child.removeAllListeners("exit");
+      child.stdin.end();
+    },
   };
 };

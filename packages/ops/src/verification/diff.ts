@@ -11,6 +11,8 @@ export interface DiffSubject<I, O> {
   /** The oracle's answer for one input; a compiled oracle answers over a pipe. */
   readonly oracle: (input: I) => Promise<O>;
   readonly arbitrary: fc.Arbitrary<I>;
+  /** Ends the oracle process once the run is over. */
+  readonly close?: () => void;
 }
 
 /** One `formal/regressions.jsonl` line: the kernel, the seed, the shrunk trace and both outputs (FD-VER-021). */
