@@ -8,7 +8,7 @@ const view: ExecutionView = {
   class: "batch",
   status: "done",
   verdict: "failure",
-  reason: "finding: test: exit 1",
+  reason: "exit: 1",
   epoch: 2,
   accepted_epoch: 2,
   executor_id: "device",
@@ -26,8 +26,8 @@ describe("the command's verdict", () => {
     expect(exitCodeOf(null)).toBe(5);
   });
 
-  it("names the failing step from the record's reason", () => {
-    expect(verdictLines(view)[0]).toBe("verdict: failure (finding: test: exit 1)");
+  it("prints the record's failure reason, exit: <code> (FD-GATE-003)", () => {
+    expect(verdictLines(view)[0]).toBe("verdict: failure (exit: 1)");
   });
 
   it("prints a skipped verdict with its detail and a cancelled one with its cause", () => {

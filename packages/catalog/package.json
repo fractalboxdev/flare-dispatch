@@ -10,7 +10,8 @@
     "./runs": "./src/runs.ts"
   },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:schemas": "node --experimental-strip-types --no-warnings src/generate-schemas.ts"
   },
   "dependencies": {
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
