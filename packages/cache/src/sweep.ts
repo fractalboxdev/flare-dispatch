@@ -1,5 +1,5 @@
 // The cache sweep (specs/cache-artifacts.md § Retention and sweeps). One tick lists at most 500 pages of 1000 objects
-// across `cache/` and then `compile-cache/`, and resumes from the cursor it stores in R2 (FD-CACHE-067). Listing is
+// across `cache/` and then `compile-cache/`, and resumes from the key it stores in R2 (FD-CACHE-067). Listing is
 // sorted by key, so the objects of one entry (`cache/<namespace>/<key>/`) are contiguous and one entry is held at a
 // time. A tick that lists both prefixes whole from the start has seen every repository, so only such a tick evicts
 // over-bound repositories and measures the `CacheLedger`; a partial tick releases what it deleted instead.
@@ -80,8 +80,10 @@ export const sweepCache = async (
 
   const state = await bucket.head(SWEEP_STATE_KEY);
   let phase = Number(state?.customMetadata?.phase ?? 0);
-  let cursor = state?.customMetadata?.cursor;
-  const fromStart = phase === 0 && cursor === undefined;
+  // The tick resumes after the last key of the last unit it finished, so an entry cut by the page bound is listed
+  // whole by the next tick.
+  let startAfter = state?.customMetadata?.start_after;
+  const fromStart = phase === 0 && startAfter === undefined;
 
   const closed = new Map<string, number | null>();
   const prClosed = async (namespace: string) => {
@@ -113,21 +115,21 @@ export const sweepCache = async (
     kept.push(unit);
   };
 
-  // The first entry of a tick that resumed inside `cache/` may have started in the previous tick, so the sweep does
-  // not judge its unlisted objects orphans.
-  let resumedInside = phase === 0 && cursor !== undefined;
-  let group:
-    | { prefix: string; namespace: string; objects: Listed[]; partial: boolean }
-    | undefined;
+  let group: { prefix: string; namespace: string; objects: Listed[] } | undefined;
+  let lastDone: string | undefined;
   const finishGroup = async () => {
     if (group === undefined) return;
-    const { namespace, objects, prefix, partial } = group;
+    const { namespace, objects, prefix } = group;
     group = undefined;
+    lastDone = objects.at(-1)?.key ?? lastDone;
     const repo = repoOfNamespace(namespace);
     const manifestObject = objects.find((o) => o.key === `${prefix}manifest.json`);
     const created = Math.min(...objects.map((o) => o.uploaded));
-    let listed = new Set<string>();
-    if (manifestObject !== undefined) {
+    // The manifest body is read only when an object is old enough to be an orphan; otherwise every object counts as
+    // listed, which errs high on the repository's bytes until the next sweep.
+    const mayOrphan = objects.some((o) => o !== manifestObject && nowMs - o.uploaded > orphanAge);
+    let listed = new Set(mayOrphan ? [] : objects.map((o) => o.key));
+    if (manifestObject !== undefined && mayOrphan) {
       const body = await bucket.get(manifestObject.key);
       const manifest = body === null ? null : (JSON.parse(await body.text()) as Manifest);
       listed = new Set(manifest?.objects.map((o) => o.path) ?? []);
@@ -136,7 +138,7 @@ export const sweepCache = async (
     const orphans = objects.filter(
       (o) => o !== manifestObject && !listed.has(o.key) && nowMs - o.uploaded > orphanAge,
     );
-    if (orphans.length > 0 && !partial)
+    if (orphans.length > 0)
       drop(
         { repo, keys: orphans.map((o) => o.key), bytes: 0, lastReadAt: 0, committed: false },
         "orphaned",
@@ -157,6 +159,7 @@ export const sweepCache = async (
 
   let pages = 0;
   let finished = false;
+  let cursor: string | undefined;
   while (pages < maxPages) {
     const prefix = PHASES[phase];
     if (prefix === undefined) {
@@ -167,7 +170,7 @@ export const sweepCache = async (
       prefix,
       limit: 1000,
       include: ["customMetadata"],
-      ...(cursor === undefined ? {} : { cursor }),
+      ...(cursor !== undefined ? { cursor } : startAfter !== undefined ? { startAfter } : {}),
     });
     pages++;
     for (const o of page.objects) {
@@ -186,8 +189,7 @@ export const sweepCache = async (
         const entry = `${prefix}${parts.slice(0, width + 1).join("/")}/`;
         if (group?.prefix !== entry) {
           await finishGroup();
-          group = { prefix: entry, namespace, objects: [], partial: resumedInside };
-          resumedInside = false;
+          group = { prefix: entry, namespace, objects: [] };
         }
         group.objects.push(item);
       } else {
@@ -203,6 +205,7 @@ export const sweepCache = async (
           },
           item.uploaded,
         );
+        lastDone = o.key;
       }
     }
     if (page.truncated) {
@@ -212,9 +215,11 @@ export const sweepCache = async (
     await finishGroup();
     phase++;
     cursor = undefined;
+    startAfter = undefined;
+    lastDone = undefined;
   }
   if (!finished && PHASES[phase] === undefined) finished = true;
-  // A group cut by the page bound resumes in the next tick, which lists the rest of it.
+  // An entry cut by the page bound is dropped here and listed whole by the next tick.
   if (!finished) group = undefined;
 
   const measured: Record<string, number> = {};
@@ -250,7 +255,10 @@ export const sweepCache = async (
     if (state !== null) await bucket.delete(SWEEP_STATE_KEY);
   } else
     await bucket.put(SWEEP_STATE_KEY, "", {
-      customMetadata: { phase: String(phase), ...(cursor === undefined ? {} : { cursor }) },
+      customMetadata: {
+        phase: String(phase),
+        ...((lastDone ?? startAfter) === undefined ? {} : { start_after: (lastDone ?? startAfter)! }),
+      },
     });
   return {
     deletedObjects: doomed.length,
