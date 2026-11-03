@@ -342,7 +342,7 @@ flowchart LR
 - **FD-IFC-042** · phase 0 · `V-UNIT` — The dispatcher must bound a failure summary to the `incident/v1` caps (log tail 4000, text fields 2000 and paths 400 characters) and to 16 KiB serialized.
 - **FD-IFC-043** · phase 0 · `V-UNIT` — If a failure summary is requested for an execution whose verdict is not `failure`, then the dispatcher must answer 409 `not_failed`.
 - **FD-IFC-044** · phase 0 · `V-UNIT` — If a failure summary is requested for an execution that is not `done`, then the dispatcher must answer 409 `not_finished`.
-- **FD-IFC-045** · phase 0 · `V-UNIT` — Where a repository's confidentiality mode is `confidential-compute`, the dispatcher must return in its failure summaries only the reason and the failing step names, with no log tail, path or file content.
+- **FD-IFC-045** · phase 4 · `V-UNIT` — Where a repository's confidentiality mode is `confidential-compute` ([profile.md](profile.md) FD-PROF-025), the dispatcher must return in its failure summaries only the reason and the failing step names, with no log tail, path or file content.
 - **FD-IFC-046** · phase 0 · `V-UNIT` — If a cancel request comes from an identity that neither dispatched the execution nor is in the operator overlay's `operators`, then the dispatcher must answer 403 `forbidden`.
 
 ### Operator API

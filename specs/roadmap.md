@@ -17,10 +17,10 @@ Requirement counts and ID ranges come from the requirement lines under `specs/`;
 | Phase | Goal | Requirements | Waits on | Gate to the next phase |
 | --- | --- | --- | --- | --- |
 | 0 | Measure the bet: the cloud path on `host-cloudflare` with the profile, the GitHub appliers and the installation rate limit, so no capacity path concludes `neutral`, and warm runs on an owned device measured against the best cloud setup | 520 | mameko phase 0 | A warm run reaches its verdict at least 30% faster than the best cloud setup |
-| 1 | Batch on owned devices: mameko's device bundle and FlareDispatch's device extension, capacity leases and the local scheduler; only `batch` runs locally | 56 | mameko phase 1 | Owned devices take most eligible `batch` executions for 14 days with no verdict audit disagreement |
+| 1 | Batch on owned devices: mameko's device bundle and FlareDispatch's device extension, capacity leases and the local scheduler; only `batch` runs locally | 54 | mameko phase 1 | Owned devices take most eligible `batch` executions for 14 days with no verdict audit disagreement |
 | 2 | Interactive with cloud placement: `interactive` runs local first with a 300 s claim deadline, egress profiles, staged writeback and rehearsal reuse | 56 | mameko phase 2 | `interactive` p95 time to verdict is no worse than cloud-only |
-| 3 | Required checks: `required` runs local first with a 60 s claim deadline, firm cloud holds, preemption at step boundaries and the AWS launcher as a floor | 26 | mameko phase 3; the firm-hold rate | `required` p95 time to verdict is within 60 s of cloud-only |
-| 4 | Harden and generalise: provenance tiers, confidential mode with local models, macOS VM jobs, the `gha` launcher and device-aware placement | 97 | mameko phase 4; the DSSE signing purpose | — |
+| 3 | Required checks: `required` runs local first with a 60 s claim deadline, firm cloud holds, preemption at step boundaries and the AWS launcher as a floor | 25 | mameko phase 3; the firm-hold rate | `required` p95 time to verdict is within 60 s of cloud-only |
+| 4 | Harden and generalise: provenance tiers, confidential mode with local models, macOS VM jobs, the `gha` launcher and device-aware placement | 100 | mameko phase 4; the DSSE signing purpose | — |
 | All | | 755 | | |
 
 ```mermaid
@@ -142,21 +142,21 @@ flowchart LR
 | `CACHE` | 71 | 001–003, 011–012, 015–017, 019–020, 022–024, 026, 028–029, 031–035, 037–042, 044–059, 061–064, 066–079, 081–087, 089–091 |
 | `GH` | 63 | 001–018, 020–029, 031, 045–048, 052, 056–063, 065–068, 075–076, 078–092 |
 | `INT` | 46 | 001, 003–004, 009–011, 015–036, 039–043, 049–058, 064–065, 067 |
-| `IFC` | 67 | 001–030, 032–033, 035–047, 049–052, 055–062, 064–068, 070, 076, 082–084 |
-| `MDL` | 5 | 020–022, 024, 067 |
+| `IFC` | 66 | 001–030, 032–033, 035–044, 046–047, 049–052, 055–062, 064–068, 070, 076, 082–084 |
+| `MDL` | 4 | 020–022, 024 |
 | `OPS` | 59 | 001–017, 019–031, 036, 038–046, 050, 053, 056–057, 064, 067–070, 072–078, 083, 088–089 |
-| `PROF` | 46 | 001–024, 026–030, 032–034, 037, 044–048, 054–058, 060, 062–063 |
+| `PROF` | 47 | 001–024, 026–030, 032–034, 037, 044–048, 054–058, 060, 062–064 |
 | `PROV` | 2 | 049–050 |
 | `RUN` | 6 | 008, 017, 054, 057, 061–062 |
 | `AGT` | 28 | 002–003, 008–009, 011–014, 016–028, 034–035, 037–039, 041–042 |
 | `GATE` | 79 | 001–008, 010–015, 017–080, 082 |
 | `SPD` | 4 | 032, 057–058, 060 |
-| `VER` | 35 | 001–016, 018–031, 033–037 |
+| `VER` | 36 | 001–016, 018–037 |
 
 **Gate 0.**
 
 - `V-MEASURE`: the median time to verdict of each required suite run warm on an owned device is at least 30% below the best cloud setup over 14 days ([MAMEKO-LEASE-081](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/placement-leases.md)); the cache hit rate per tier and executor kind is reported (FD-CACHE-090); no `estimate-drift` notification is unresolved.
-- Must pass: every phase 0 harness entry for `V-UNIT`, `V-CONF`, `V-SIM`, `V-REPLAY`, `V-E2E-LOCAL` (cloud path), `V-DEPLOY` and `V-DIFF`, the `profile-reference` diff (FD-VER-033) included; the formal gate with S3 · profile, S6 and S8 for their phase 0 requirements and their assumption tests passing; the `V-LIVE` canary and installation probe with no page unresolved for more than 24 h.
+- Must pass: every phase 0 harness entry for `V-UNIT`, `V-CONF`, `V-SIM`, `V-REPLAY`, `V-E2E-LOCAL` (cloud path), `V-DEPLOY` and `V-DIFF`, the `profile-reference` diff (FD-VER-033) and mameko's conformance suite on the composed control plane (FD-VER-032) included; the formal gate with S3 · profile, S6 and S8 for their phase 0 requirements and their assumption tests passing; the `V-LIVE` canary and installation probe with no page unresolved for more than 24 h.
 
 **Kill line.** If a warm run is less than 30% faster than the best cloud setup, owned devices run `batch` and Apple builds only, phase 1 proceeds for that scope, and phases 2 to 4 do not start.
 
@@ -166,14 +166,13 @@ flowchart LR
 
 **Waits on.** mameko phase 1: the key helper, sandbox isolation with its probe, deny-all egress, per-lease credentials, capacity leases and the local scheduler on `host-cloudflare`.
 
-**Closes** 56 requirements:
+**Closes** 54 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
 | `ARCH` | 1 | 018 |
 | `CACHE` | 18 | 004, 006–010, 013, 018, 021, 025, 027, 030, 036, 043, 060, 065, 080, 088 |
 | `EXEC` | 2 | 007, 059 |
-| `GH` | 1 | 019 |
 | `INT` | 1 | 061 |
 | `IFC` | 12 | 063, 069, 075, 077–081, 085–088 |
 | `LOCAL` | 9 | 018–020, 038, 055, 067, 071–072, 075 |
@@ -181,12 +180,11 @@ flowchart LR
 | `PROF` | 7 | 035–036, 043, 049–052 |
 | `PROV` | 2 | 069–070 |
 | `RUN` | 1 | 063 |
-| `VER` | 1 | 032 |
 
 **Gate 1.**
 
 - `V-MEASURE`: owned devices take more than 50% of eligible `batch` executions over 14 days ([MAMEKO-LEASE-081](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/placement-leases.md)) with zero verdict audit disagreements (FD-PROV-069, FD-PROV-070); executor channel duration in GB-s per connected executor per day is recorded for every day of the window; each preemption is reported.
-- Must pass: every phase 1 harness entry, with `V-CONF` and `V-E2E-LOCAL` on the device path and mameko's conformance suite on the composed control plane (FD-VER-032); S3 · profile and S6 for their phase 1 requirements, each with its assumption tests passing.
+- Must pass: every phase 1 harness entry, with `V-CONF` and `V-E2E-LOCAL` on the device path; S3 · profile and S6 for their phase 1 requirements, each with its assumption tests passing.
 
 **Kill lines.** Devices taking under 50% of eligible control-plane executions over 30 days keep owned devices on `batch`. More than one manual intervention on a device in a week freezes features until the device heals itself. More than one audit disagreement in a week adds a nightly clean-room cloud build of the default branch.
 
@@ -222,11 +220,10 @@ flowchart LR
 
 **Waits on.** mameko phase 3: the highest-rank device class local-first, firm cloud holds, preemption at step boundaries and the `aws` launcher as a floor. Before this phase opens, mameko's open item on the firm-hold rate (how a firm hold is covered in claim order by the burn lane's headroom or the look-ahead) is resolved, so FlareDispatch's look-ahead of 5 has one meaning.
 
-**Closes** 26 requirements:
+**Closes** 25 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
-| `ARCH` | 1 | 015 |
 | `EXEC` | 1 | 083 |
 | `INT` | 1 | 066 |
 | `PROF` | 1 | 059 |
@@ -245,13 +242,15 @@ flowchart LR
 
 **Waits on.** mameko phase 4: confidential mode with local models, macOS VM jobs, device-aware placement by owner, the statement builder and the result-acceptance check. Before this phase opens, mameko's open item on the signing purpose of the DSSE statement envelope is resolved, so the `statement` purpose FlareDispatch's profile lists signs the envelope FD-PROV-004 specifies.
 
-**Closes** 97 requirements:
+**Closes** 100 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
+| `ARCH` | 1 | 015 |
+| `GH` | 1 | 019 |
 | `PROTO` | 1 | 014 |
 | `EXEC` | 8 | 085–092 |
-| `IFC` | 3 | 053–054, 071 |
+| `IFC` | 4 | 045, 053–054, 071 |
 | `ISO` | 2 | 021–022 |
 | `PROF` | 8 | 025, 038–042, 053, 061 |
 | `PROV` | 73 | 001–048, 051–068, 071–077 |

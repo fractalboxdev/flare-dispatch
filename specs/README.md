@@ -120,7 +120,7 @@ Every `must` and `must not` carries at least one tag. [verification.md](verifica
 | `V-REPLAY` | Every workflow runs twice over a cached journal; extra GitHub calls, D1 writes or intents fail it |
 | `V-E2E-LOCAL` | The full stack on one machine: workerd, a device executor from mameko's device bundle, a recorded GitHub fixture server, a local job sandbox |
 | `V-DEPLOY` | `wrangler deploy --dry-run`, mameko's profile validator, the reference-profile diff and the overlay drift check in CI |
-| `V-LIVE` | A synthetic webhook canary, an installation probe and `pr-review` on this repository's pull requests |
+| `V-LIVE` | A synthetic webhook canary, an installation probe and `check` on this repository's pull requests, with `pr-review` from phase 2 |
 | `V-MEASURE` | A metric from the executions table with a threshold that a phase gate reads |
 | `V-PROOF` | A Lean 4 theorem in `formal/`, or a Tamarin lemma for provenance, named by requirement ID |
 | `V-DIFF` | Differential random testing of `stagedWriteGate` against the compiled Lean oracle |
