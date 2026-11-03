@@ -1,0 +1,40 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-fd",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FlareDispatch's `fd-<subcommand>` executables, which mameko's `<cli>` built as `fd` runs for every command it does not define, and the GitHub Actions dispatch action.",
+  "license": "MIT",
+  "bin": {
+    "fd-cancel": "bin/fd-cancel.mjs",
+    "fd-deploy": "bin/fd-deploy.mjs",
+    "fd-dispatch": "bin/fd-dispatch.mjs",
+    "fd-doctor": "bin/fd-doctor.mjs",
+    "fd-failure": "bin/fd-failure.mjs",
+    "fd-lease": "bin/fd-lease.mjs",
+    "fd-login": "bin/fd-login.mjs",
+    "fd-logs": "bin/fd-logs.mjs",
+    "fd-ls": "bin/fd-ls.mjs",
+    "fd-mcp": "bin/fd-mcp.mjs",
+    "fd-ops": "bin/fd-ops.mjs",
+    "fd-queue": "bin/fd-queue.mjs",
+    "fd-rehearse": "bin/fd-rehearse.mjs",
+    "fd-status": "bin/fd-status.mjs",
+    "fd-verdict": "bin/fd-verdict.mjs"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.6",
+    "@fractalboxdev/flare-dispatch-api": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "vitest": "^3.2.0"
+  }
+}
