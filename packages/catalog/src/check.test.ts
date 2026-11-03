@@ -116,14 +116,14 @@ describe("check through the runner entry", () => {
     ).resolves.toEqual({ _tag: "success" });
   });
 
-  it("FD-GATE-003 names the failing step and runs no step after it", async () => {
+  it("FD-GATE-003 records exit: <code> for the failing step and runs no step after it", async () => {
     const after = join(root, "ran-after");
     await expect(
       check([
         { label: "lint", command: "exit 3" },
         { label: "test", command: `touch ${after}` },
       ]),
-    ).resolves.toEqual({ _tag: "failure", reason: "finding: lint: exit 3" });
+    ).resolves.toEqual({ _tag: "failure", reason: "exit: 3" });
     expect(existsSync(after)).toBe(false);
   });
 
@@ -131,7 +131,7 @@ describe("check through the runner entry", () => {
     const survivor = join(root, "survivor");
     await expect(
       check([{ label: "slow", command: `(sleep 2; touch ${survivor}) & sleep 30`, timeoutSec: 1 }]),
-    ).resolves.toEqual({ _tag: "failure", reason: "finding: slow: timeout" });
+    ).resolves.toEqual({ _tag: "failure", reason: "timeout: job" });
     await new Promise((r) => setTimeout(r, 2_200));
     expect(existsSync(survivor)).toBe(false);
   });
@@ -154,10 +154,10 @@ describe("check through the runner entry", () => {
     expect(JSON.parse(lines[0]!)).toMatchObject({ result: { _tag: "success" } });
   });
 
-  it("reports a commit the repository lacks as an infrastructure failure, not a finding", async () => {
+  it("FD-GATE-010 reports a commit the repository lacks as infra: <error tag>, not a finding", async () => {
     await expect(
       check([{ label: "never", command: "true" }], "0".repeat(40)),
-    ).resolves.toMatchObject({ _tag: "failure", reason: "infra: checkout: exit 128" });
+    ).resolves.toMatchObject({ _tag: "failure", reason: "infra: CheckoutFailed" });
   });
 
   it("removes every clean directory it made", () => {
@@ -181,7 +181,7 @@ describe("check through the runner entry", () => {
 
 describe("runCommand", () => {
   it("FD-GATE-008 stops a command past its output limit", async () => {
-    const exit = await Effect.runPromise(
+    const { exit } = await Effect.runPromise(
       runCommand({
         command: "yes",
         cwd: tmpdir(),
@@ -193,15 +193,15 @@ describe("runCommand", () => {
     expect(exit).toEqual(CommandExit.OverLimit());
   });
 
-  it("answers a command killed by a signal", async () => {
-    const exit = await Effect.runPromise(
+  it("FD-GATE-005 answers a command killed by a signal", async () => {
+    const { exit } = await Effect.runPromise(
       runCommand({ command: "kill -KILL $$", cwd: tmpdir(), env: {}, timeoutMs: 10_000 }),
     );
     expect(exit).toEqual(CommandExit.Signalled({ signal: "SIGKILL" }));
   });
 
   it("answers a directory that does not exist as not started", async () => {
-    const exit = await Effect.runPromise(
+    const { exit } = await Effect.runPromise(
       runCommand({ command: "true", cwd: "/nonexistent/dir", env: {}, timeoutMs: 10_000 }),
     );
     expect(CommandExit.$is("NotStarted")(exit)).toBe(true);
@@ -212,6 +212,7 @@ describe("lookupRun", () => {
   it("offers a host execution only under development", () => {
     expect(lookupRun("development", "check")._tag).toBe("Available");
     expect(lookupRun("production", "check")._tag).toBe("HostExecutionRefused");
+    expect(lookupRun("production", "worker-deploy")._tag).toBe("Available");
     expect(lookupRun("development", "constructor")._tag).toBe("NotInCatalogue");
   });
 

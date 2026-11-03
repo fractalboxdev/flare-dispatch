@@ -1,0 +1,9 @@
+#!/bin/sh
+# The gate image's entry: the run catalogue's runner entry (FD-RUN-063) under Node's type stripping. Arguments pass
+# through to `runnerMain` (`--journal <path>`, `--content-socket <path>`); `--version` prints the Node version the
+# image's smoke command checks.
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  exec node --version
+fi
+exec node --experimental-strip-types --no-warnings /opt/flare-dispatch/packages/catalog/src/runner-entry.ts "$@"

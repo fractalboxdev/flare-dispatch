@@ -1,0 +1,37 @@
+# FlareDispatch v2 gate image: the runner child of a cloud lease and the toolchain its gate jobs run.
+#
+# The cloud executor starts `fd-runner` once per lease with the run payload on stdin; the runner answers one result
+# line on stdout (MAMEKO-EXEC-122). A lease names this image by digest (MAMEKO-EXEC-031), so every input below is
+# pinned and `sandbox-image` refuses an unpinned one (FD-GATE-078).
+#
+# Build context: the repository root, including the `vendor/mameko` submodule. `.dockerignore` keeps node_modules
+# and build output out of the context.
+FROM docker.io/library/node:22.21.1-bookworm-slim@sha256:25b3eb23a00590b7499f2a2ce939322727fcce1b15fdd69754fcd09536a3ae2c
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CI=true \
+    FD_WORKSPACE_ROOT=/workspaces
+
+# git fetches the execution's commit; ca-certificates lets it and the jobs trust the egress proxy's upstreams.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    git --version
+
+# Corepack resolves the `packageManager` pin of the repository under test.
+RUN npm install -g corepack@0.35.0 && corepack enable && corepack prepare pnpm@11.1.3 --activate && pnpm --version
+
+WORKDIR /opt/flare-dispatch
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/catalog packages/catalog
+COPY packages/profile packages/profile
+COPY vendor/mameko/packages vendor/mameko/packages
+COPY vendor/mameko/package.json vendor/mameko/tsconfig.base.json vendor/mameko/
+RUN pnpm install --frozen-lockfile --prod --filter "@fractalboxdev/flare-dispatch-catalog..." && \
+    mkdir -p /workspaces && chown node:node /workspaces
+
+COPY infra/v2/fd-runner /usr/local/bin/fd-runner
+RUN chmod 0755 /usr/local/bin/fd-runner && fd-runner --version
+
+USER node
+ENTRYPOINT ["/usr/local/bin/fd-runner"]
