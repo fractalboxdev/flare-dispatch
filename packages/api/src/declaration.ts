@@ -325,10 +325,36 @@ export class WellKnownGroup extends HttpApiGroup.make("wellKnown")
   )
   .middleware(ErrorModel) {}
 
+/** A log as the route serves it: NDJSON, or plain text with `?format=text` (FD-CACHE-083). */
+const LogText = Schema.String.pipe(HttpApiSchema.asText({ contentType: "application/x-ndjson" }));
+const LogQuery = { format: Schema.optionalKey(Schema.Literal("text")) };
+
+/**
+ * The redacted step logs. The cache-artifacts area implements these handlers; the declaration holds their schemas so
+ * `fd logs` derives its client from it (FD-IFC-002).
+ */
+export class LogsGroup extends HttpApiGroup.make("logs")
+  .add(
+    HttpApiEndpoint.get("aggregate", "/v1/executions/:id/logs", {
+      ...IdParam,
+      query: LogQuery,
+      success: LogText,
+      ...errors,
+    }),
+    HttpApiEndpoint.get("file", "/v1/executions/:id/logs/:file", {
+      params: { id: Schema.String, file: Schema.String },
+      query: LogQuery,
+      success: LogText,
+      ...errors,
+    }),
+  )
+  .middleware(ErrorModel) {}
+
 /** The declaration. Every route the dispatcher serves through the router is an endpoint of one of these groups. */
 export class FlareDispatchApi extends HttpApi.make("flare-dispatch")
   .add(DispatchGroup)
   .add(ExecutionsGroup)
   .add(OpsGroup)
   .add(ExecutorsGroup)
-  .add(WellKnownGroup) {}
+  .add(WellKnownGroup)
+  .add(LogsGroup) {}

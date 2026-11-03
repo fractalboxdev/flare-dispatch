@@ -3,9 +3,12 @@ import {
   DispatchGroup,
   ExecutionsGroup,
   ExecutorsGroup,
+  LogsGroup,
   OpsGroup,
   WellKnownGroup,
 } from "./declaration.ts";
+import type { Layer } from "effect";
+import type { HttpApiGroup } from "effect/http-api";
 import { apiGroup, type Surface } from "./router.ts";
 import { DispatchHandlers } from "./routes/dispatch.ts";
 import { ExecutionsHandlers } from "./routes/executions.ts";
@@ -25,7 +28,12 @@ export const dispatchGroup = apiGroup({
 
 export const executionsGroup = apiGroup({
   group: ExecutionsGroup,
-  surfaces: { list: member, get: member, failureSummary: member, cancel: member },
+  surfaces: {
+    list: member,
+    get: { _tag: "AccessOrActions" },
+    failureSummary: member,
+    cancel: member,
+  },
   handlers: ExecutionsHandlers,
 });
 
@@ -58,7 +66,22 @@ export const wellKnownGroup = apiGroup({
   handlers: WellKnownHandlers,
 });
 
-/** Every group of the declaration, in the order the Worker mounts them. */
+const logLink: Surface = { _tag: "Link", purpose: "logs", param: "id" };
+
+/**
+ * The logs group, mounted with the cache-artifacts area's handlers. Its routes serve an Access identity or a link token
+ * for that execution (FD-IFC-017).
+ */
+export const logsGroup = <R>(
+  handlers: Layer.Layer<HttpApiGroup.Service<"flare-dispatch", "logs">, never, R>,
+) =>
+  apiGroup({
+    group: LogsGroup,
+    surfaces: { aggregate: logLink, file: logLink },
+    handlers,
+  });
+
+/** Every group of the declaration this package implements, in the order the Worker mounts them. */
 export const declaredGroups = [
   wellKnownGroup,
   dispatchGroup,

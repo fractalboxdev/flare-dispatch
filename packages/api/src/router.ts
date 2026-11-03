@@ -25,10 +25,12 @@ import { ApiConfig } from "./config.ts";
 import { apiError, errorBody, isApiError, statusOfError, type ApiError } from "./errors.ts";
 import {
   authenticateAccess,
+  authenticateActions,
   authenticateDispatch,
   authenticateLink,
   CurrentIdentity,
   inGroup,
+  readBearer,
   type AccessGroup,
   type Identity,
   type LoginRedirect,
@@ -53,6 +55,11 @@ export type Surface =
     }
   /** An Actions OIDC token, or the Access JWT of a dispatcher (FD-IFC-027). */
   | { readonly _tag: "Dispatch" }
+  /**
+   * An Access JWT, or an Actions OIDC token as the bearer: the execution a dispatch action waits on (FD-IFC-059). The
+   * route answers an Actions identity only for its own repository.
+   */
+  | { readonly _tag: "AccessOrActions" }
   /** An Access JWT, or a link token for the object the path parameter `param` names (FD-IFC-017). */
   | { readonly _tag: "Link"; readonly purpose: LinkPurpose; readonly param: string }
   /** The route verifies its own credential: a webhook HMAC, a connect signature, a cache or per-lease token. */
@@ -234,6 +241,12 @@ const surfaceCheck = (
     Match.tagsExhaustive({
       Access: (s) => accessCheck(request, s),
       Dispatch: () => authenticateDispatch(request),
+      AccessOrActions: () => {
+        const bearer = readBearer(request);
+        return bearer === undefined
+          ? accessCheck(request, { _tag: "Access", group: "any" })
+          : authenticateActions(bearer);
+      },
       Link: (s) => authenticateLink(request, s.purpose, params[s.param] ?? ""),
       OwnCredential: () => Effect.succeed<Identity>({ _tag: "Unidentified" }),
       Public: () => Effect.succeed<Identity>({ _tag: "Unidentified" }),

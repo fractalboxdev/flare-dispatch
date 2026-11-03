@@ -1,5 +1,6 @@
 // Test doubles for the router: real RS256 tokens from throwaway key pairs, a JWKS source that serves them, and
 // in-memory ports. The router runs through `toFetchHandler`, the way the Worker calls it.
+import type { webcrypto } from "node:crypto";
 import { Context, Effect, Layer } from "effect";
 import { ApiConfig, type ApiConfigShape } from "./config.ts";
 import { base64urlEncode, utf8 } from "./crypto.ts";
@@ -20,7 +21,7 @@ import {
   type OperatorCall,
   type OperatorOperation,
 } from "./ports.ts";
-import { mount, toFetchHandler } from "./router.ts";
+import { mount, toFetchHandler, type RouteGroup } from "./router.ts";
 
 export const TEAM = "team.example.com";
 export const AUD = "aud-tag";
@@ -49,8 +50,11 @@ export const makeSigner = async (kid: string): Promise<Signer> => {
     },
     true,
     ["sign", "verify"],
-  )) as CryptoKeyPair;
-  const exported = (await crypto.subtle.exportKey("jwk", keys.publicKey)) as JsonWebKey;
+  )) as { readonly publicKey: webcrypto.CryptoKey; readonly privateKey: webcrypto.CryptoKey };
+  const exported = (await crypto.subtle.exportKey("jwk", keys.publicKey)) as {
+    readonly n?: string;
+    readonly e?: string;
+  };
   const segment = (value: unknown) => base64urlEncode(utf8(JSON.stringify(value)));
   return {
     kid,
@@ -251,13 +255,15 @@ export interface Harness {
     init?: RequestInit & { readonly config?: ApiConfigShape },
   ) => Promise<Response>;
   readonly asAccess: (email: string, init?: RequestInit) => Promise<RequestInit>;
+  /** A `fetch` over the router in process, for a client that sends whole requests. */
+  readonly asFetch: (config?: ApiConfigShape) => typeof globalThis.fetch;
 }
 
-export const makeHarness = async (): Promise<Harness> => {
+export const makeHarness = async (extra: readonly RouteGroup<any>[] = []): Promise<Harness> => {
   const access = await makeSigner("access-kid");
   const actions = await makeSigner("actions-kid");
   const doubles = makeDoubles();
-  const router = mount(...declaredGroups);
+  const router = mount(...declaredGroups, ...extra);
   const handler = toFetchHandler(router, {
     shared: jwksLayer({
       [`${accessIssuer(TEAM)}/cdn-cgi/access/certs`]: [access.jwk],
@@ -273,6 +279,11 @@ export const makeHarness = async (): Promise<Harness> => {
       const services = portsContext(doubles).pipe(Context.add(ApiConfig, config ?? baseConfig()));
       return handler.fetch(new Request(`${ORIGIN}${path}`, rest), services as never);
     },
+    asFetch: (config) =>
+      ((input: Request | string | URL, init?: RequestInit) => {
+        const services = portsContext(doubles).pipe(Context.add(ApiConfig, config ?? baseConfig()));
+        return handler.fetch(new Request(input, init), services as never);
+      }) as typeof globalThis.fetch,
     asAccess: async (email, init = {}) => ({
       ...init,
       headers: {

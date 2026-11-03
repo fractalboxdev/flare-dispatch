@@ -7,7 +7,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./declaration": "./src/declaration.ts"
+    "./declaration": "./src/declaration.ts",
+    "./errors": "./src/errors.ts",
+    "./incident": "./src/incident.ts",
+    "./mcp-tools": "./src/mcp/tools.ts",
+    "./test-support": "./src/api.test-support.ts"
   },
   "scripts": {
     "test": "vitest run"

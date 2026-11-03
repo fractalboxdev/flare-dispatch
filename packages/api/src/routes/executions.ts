@@ -32,6 +32,24 @@ const found = (id: string) =>
     return record;
   });
 
+/**
+ * An Actions identity reads only its own repository's executions; any other answers `execution_not_found`, so an id
+ * reveals nothing outside the token's repository.
+ */
+export const ownedByCaller = (id: string) =>
+  Effect.gen(function* () {
+    const identity = yield* CurrentIdentity;
+    const record = yield* found(id);
+    const foreign = Match.value(identity).pipe(
+      Match.tag(
+        "Actions",
+        ({ repository }) => repository.toLowerCase() !== record.repository.toLowerCase(),
+      ),
+      Match.orElse(() => false),
+    );
+    if (foreign) return yield* apiError("execution_not_found", `no execution ${id}`);
+  });
+
 /** Holds the answer until the execution is `done` or the wait ends (FD-IFC-040). */
 export const awaitExecution = (id: string, waitSeconds: number) =>
   Effect.gen(function* () {
@@ -104,6 +122,7 @@ export const ExecutionsHandlers = HttpApiBuilder.group(FlareDispatchApi, "execut
     .handle("get", ({ params, query }) =>
       Effect.gen(function* () {
         const wait = yield* parseWait(query.wait);
+        yield* ownedByCaller(params.id);
         return viewOf(yield* awaitExecution(params.id, wait));
       }),
     )

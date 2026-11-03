@@ -1,4 +1,4 @@
-import { HttpApi } from "effect/http-api";
+import { HttpApi, HttpApiBuilder } from "effect/http-api";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   accessClaims,
@@ -9,9 +9,9 @@ import {
   type Harness,
 } from "./api.test-support.ts";
 import { FlareDispatchApi } from "./declaration.ts";
-import { declaredGroups } from "./groups.ts";
+import { declaredGroups, logsGroup } from "./groups.ts";
 import { DuplicateRoute, matchPath, mount, routerGroup } from "./router.ts";
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
 
 let h: Harness;
 beforeAll(async () => {
@@ -27,7 +27,14 @@ describe("declaration and router", () => {
       onGroup: () => {},
       onEndpoint: ({ endpoint }) => declared.push(`${endpoint.method} ${endpoint.path}`),
     });
-    const mounted = mount(...declaredGroups).routes.map((r) => `${r.method} ${r.path}`);
+    const logs = logsGroup(
+      HttpApiBuilder.group(FlareDispatchApi, "logs", (handlers) =>
+        handlers
+          .handle("aggregate", () => Effect.succeed(""))
+          .handle("file", () => Effect.succeed("")),
+      ),
+    );
+    const mounted = mount(...declaredGroups, logs).routes.map((r) => `${r.method} ${r.path}`);
     expect(mounted.sort()).toEqual(declared.sort());
   });
 

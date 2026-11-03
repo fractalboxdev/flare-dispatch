@@ -23,3 +23,5 @@ export {
 export { oidcKeyFromSecret, parseSigningJwk } from "./live/oidc-key.ts";
 export { d1DeviceRegistry } from "./live/registry.ts";
 export * from "./live/tables.ts";
+export * from "./mcp/tools.ts";
+export { DispatcherToolsLive, MCP_PATH, MCP_SURFACE, mcpGroup } from "./mcp/server.ts";

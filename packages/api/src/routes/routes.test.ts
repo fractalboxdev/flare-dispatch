@@ -262,6 +262,24 @@ describe("executions", () => {
     expect(h.doubles.calls.cancels.map((c) => c.identity)).toEqual([DISPATCHER, OPERATOR]);
   });
 
+  it("FD-IFC-059: an Actions token reads its own repository's execution, and no other route or repository", async () => {
+    h.doubles.executions.set(
+      "01JOTHER",
+      record({ execution_id: "01JOTHER", repository: "acme/other" }),
+    );
+    const bearer = {
+      authorization: `Bearer ${await h.actions.sign(actionsClaims("acme/widgets"))}`,
+    };
+    expect((await h.fetch("/v1/executions/01JEXEC0", { headers: bearer })).status).toBe(200);
+    const foreign = await h.fetch("/v1/executions/01JOTHER", { headers: bearer });
+    expect(foreign.status).toBe(404);
+    expect((await json(foreign))["error"]).toBe("execution_not_found");
+    expect((await h.fetch("/v1/executions", { headers: bearer })).status).toBe(401);
+    expect(
+      (await h.fetch("/v1/executions/01JEXEC0/failure-summary", { headers: bearer })).status,
+    ).toBe(401);
+  });
+
   it("FD-IFC-003: an unauthenticated request looks up no execution", async () => {
     const before = h.doubles.calls.lookups.length;
     expect((await h.fetch("/v1/executions/01JEXEC0")).status).toBe(401);
