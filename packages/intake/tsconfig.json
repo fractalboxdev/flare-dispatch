@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // mameko exports its TypeScript sources with `.ts` import specifiers and
+    // reaches for Node globals, so its ports typecheck here under these two.
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}
