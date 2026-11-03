@@ -145,9 +145,7 @@ export interface Doubles {
   readonly executions: Map<string, ExecutionRecord>;
   readonly calls: Calls;
   /** The answer intake gives the next submission. */
-  intake: (
-    s: DispatchSubmission,
-  ) => Effect.Effect<
+  intake: (s: DispatchSubmission) => Effect.Effect<
     {
       readonly _tag: "Admitted" | "Duplicate";
       readonly executionId: string;
