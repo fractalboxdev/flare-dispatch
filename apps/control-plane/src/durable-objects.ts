@@ -13,7 +13,7 @@ import {
   profileOf,
   type ControlPlaneEnv,
 } from "./config.ts";
-import { getExecutionInputs } from "./inputs.ts";
+import { getExecutionInputs } from "@fractalboxdev/flare-dispatch-api";
 
 type ChannelEnv = ControlPlaneEnv & {
   readonly MAMEKO_CHANNEL_CONFIG: ReturnType<typeof channelConfig>;

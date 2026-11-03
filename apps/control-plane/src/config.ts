@@ -29,8 +29,8 @@ export interface ControlPlaneEnv {
   readonly ALERT_SINK?: string;
   readonly DEPLOYMENT?: string;
   readonly PLANE_ID: string;
-  /** The bearer token of the operator routes. With none set, those routes answer `not_configured`. */
-  readonly OPERATOR_TOKEN?: string;
+  /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */
+  readonly FD_DEV_REPOSITORY?: string;
 }
 
 export const deployment = (env: ControlPlaneEnv): Deployment => deploymentOf(env.DEPLOYMENT);

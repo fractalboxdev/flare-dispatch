@@ -1,0 +1,35 @@
+// The repository a `development` deployment with no GitHub App reads: one commit of one repository, as the local
+// command that starts the deployment captured it (`pnpm dogfood` writes it from the checkout). Only the facts it holds
+// answer; every other read fails, so no caller decides on a read that never happened.
+import { Schema } from "effect";
+import { deployment, type ControlPlaneEnv } from "./config.ts";
+
+export const DevRepository = Schema.Struct({
+  /** `<owner>/<name>`. */
+  repository: Schema.NonEmptyString,
+  installation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+  default_branch: Schema.NonEmptyString,
+  /** The default branch's head: the commit the files were read at. */
+  head: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
+  /** Each captured path's UTF-8 text at `head`, base64-encoded, or null where the path does not exist there. */
+  files: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+});
+export type DevRepository = typeof DevRepository.Type;
+
+const decode = Schema.decodeUnknownSync(Schema.fromJsonString(DevRepository));
+
+/** The captured repository, read only by a `development` deployment; a value that does not decode throws. */
+export const devRepositoryOf = (env: ControlPlaneEnv): DevRepository | undefined => {
+  const raw = env.FD_DEV_REPOSITORY;
+  if (deployment(env) !== "development" || raw === undefined || raw === "") return undefined;
+  return decode(raw);
+};
+
+/** A captured file's text: a string, null where the path is absent, undefined where it was not captured. */
+export const devFile = (dev: DevRepository, path: string): string | null | undefined => {
+  if (!Object.hasOwn(dev.files, path)) return undefined;
+  const encoded = dev.files[path]!;
+  if (encoded === null) return null;
+  const binary = atob(encoded);
+  return new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)));
+};

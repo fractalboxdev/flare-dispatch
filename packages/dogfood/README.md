@@ -30,7 +30,7 @@ The first run builds the device programs into `.tmp/target`. Each run keeps its 
 ```text
 verdict: failure (finding: lint: exit 1)
 record: execution 01K..., run check, class batch, executor dogfood-mac, epoch 2, accepted epoch 2
-github: output skipped, the control plane has no credentials; 1 outcome intent stays in the outbox
+github: output skipped, the control plane has no GitHub App; the failure conclusion stays in the outbox
 ```
 
 | Exit code | Meaning                                                                                                                      |

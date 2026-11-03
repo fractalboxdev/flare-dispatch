@@ -45,6 +45,9 @@ importers:
 
   apps/control-plane:
     dependencies:
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../../packages/api
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../../packages/catalog

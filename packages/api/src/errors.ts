@@ -136,7 +136,25 @@ const CLASSES = {
   507: StorageBound,
 } as const;
 
-const API_ERROR_TAGS: ReadonlySet<string> = new Set(Object.values(CLASSES).map((c) => c.name));
+/**
+ * Each class's `_tag`, written out: a bundler renames a class whose name another module also declares, so the class
+ * name is not the tag in a Worker bundle.
+ */
+const API_ERROR_TAGS: ReadonlySet<string> = new Set([
+  "InvalidRequest",
+  "Unauthenticated",
+  "AllowanceExhausted",
+  "Forbidden",
+  "NotFound",
+  "MethodNotAllowed",
+  "Conflict",
+  "PayloadTooLarge",
+  "InstallationNotFound",
+  "RateLimited",
+  "Internal",
+  "Unavailable",
+  "StorageBound",
+] satisfies readonly ApiError["_tag"][]);
 
 export const isApiError = (u: unknown): u is ApiError =>
   typeof u === "object" && u !== null && API_ERROR_TAGS.has((u as { _tag?: string })._tag ?? "");

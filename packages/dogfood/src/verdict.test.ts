@@ -12,7 +12,7 @@ const view: ExecutionView = {
   epoch: 2,
   accepted_epoch: 2,
   executor_id: "device",
-  outcome_intents: 1,
+  conclusion: "failure",
 };
 
 describe("the command's verdict", () => {

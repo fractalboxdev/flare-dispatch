@@ -21,5 +21,5 @@ export const exitCodeOf = (verdict: string | null): number =>
 export const verdictLines = (view: ExecutionView): readonly string[] => [
   `verdict: ${view.verdict ?? "none"}${view.reason === null ? "" : ` (${view.reason})`}`,
   `record: execution ${view.execution_id}, run ${view.run}, class ${view.class}, executor ${view.executor_id ?? "none"}, epoch ${view.epoch ?? "none"}, accepted epoch ${view.accepted_epoch ?? "none"}`,
-  `github: output skipped, the control plane has no credentials; ${view.outcome_intents} outcome intent stays in the outbox`,
+  `github: output skipped, the control plane has no GitHub App; the ${view.conclusion ?? "pending"} conclusion stays in the outbox`,
 ];

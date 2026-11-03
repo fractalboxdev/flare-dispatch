@@ -1,7 +1,6 @@
 // `pnpm dogfood [<git ref>]`: runs FlareDispatch's CI on this machine through a real execution. A control plane under
 // `wrangler dev`, the key helper and the device executor start here; the device takes the lease, its runner child runs
 // the `check` run, and the verdict printed is the control plane's execution record.
-import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync, mkdtempSync } from "node:fs";
 import { createServer } from "node:net";
 import { hostname, tmpdir } from "node:os";
@@ -11,6 +10,7 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import type { CheckInput } from "@fractalboxdev/flare-dispatch-catalog";
 import { Console, Effect, Runtime, Schedule, Schema } from "effect";
 import { Argument, Command } from "effect/cli";
+import { DOGFOOD_IDENTITY, startAccessTeam, type LocalAccessTeam } from "./access.ts";
 import { DeviceIdentity, health, makeClient, type ControlPlaneClient } from "./client.ts";
 import { capture, CommandFailed, startService, type RunOptions } from "./processes.ts";
 import { EXIT_NO_VERDICT, exitCodeOf, verdictLines } from "./verdict.ts";
@@ -33,7 +33,8 @@ const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 /** How long the device has to take a lease before the command stops waiting. */
 const LEASE_WAIT_MS = 120_000;
 const START_WAIT_MS = 60_000;
-const WAIT_SEC = 5;
+/** How often the command reads the execution record. */
+const POLL_MS = 2_000;
 const LOG_TAIL_LINES = 40;
 
 /** The command's failure: a process exit code and no second report, since the program printed its own. */
@@ -123,11 +124,47 @@ const resolveCommit = (ref: string) =>
     env: process.env,
   }).pipe(Effect.map((sha) => sha.trim()));
 
-const startControlPlane = (runtimeDir: string, operatorToken: string) =>
+/** The repository manifest's path (specs/intake.md § Repo manifest). */
+const MANIFEST_PATH = ".github/flare-dispatch.json";
+
+/**
+ * The repository the development deployment reads in place of GitHub: this checkout, with the commit under test as
+ * its default branch's head, and the manifest's text at that commit, or null where the commit has none.
+ */
+const devRepository = (sha: string) =>
+  capture("git", ["show", `${sha}:${MANIFEST_PATH}`], { cwd: repoRoot, env: process.env }).pipe(
+    Effect.map((text): string | null => Buffer.from(text).toString("base64")),
+    Effect.catchTag("CommandFailed", () => Effect.succeed(null)),
+    Effect.map((manifest) => ({
+      repository: REPOSITORY,
+      installation: 1,
+      default_branch: "main",
+      head: sha,
+      files: { [MANIFEST_PATH]: manifest },
+    })),
+  );
+
+/** A dotenv value wrangler reads literally: single-quoted, so JSON keeps its double quotes. */
+const literal = (value: unknown) => `'${JSON.stringify(value)}'`;
+
+const startControlPlane = (runtimeDir: string, team: LocalAccessTeam, sha: string) =>
   Effect.gen(function* () {
     const port = yield* freePort;
     const varsPath = join(runtimeDir, "dev.vars");
-    writeFileSync(varsPath, `DEPLOYMENT=development\nOPERATOR_TOKEN=${operatorToken}\n`);
+    const vars = {
+      DEPLOYMENT: "development",
+      ACCESS_TEAM_DOMAIN: team.teamDomain,
+      ACCESS_AUD: team.aud,
+      OPERATORS: literal([DOGFOOD_IDENTITY]),
+      DISPATCHERS: literal([DOGFOOD_IDENTITY]),
+      FD_DEV_REPOSITORY: literal(yield* devRepository(sha)),
+    };
+    writeFileSync(
+      varsPath,
+      Object.entries(vars)
+        .map(([name, value]) => `${name}=${value}\n`)
+        .join(""),
+    );
     chmodSync(varsPath, 0o600);
     const appDir = join(repoRoot, "apps/control-plane");
     yield* startService(
@@ -244,7 +281,7 @@ const awaitVerdict = (client: ControlPlaneClient, executionId: string) =>
     const started = Date.now();
     let last = "";
     while (true) {
-      const view = yield* client.execution(executionId, WAIT_SEC);
+      const view = yield* client.execution(executionId);
       if (view.status !== last) {
         last = view.status;
         yield* Console.log(`execution ${executionId}: ${view.status}`);
@@ -254,6 +291,7 @@ const awaitVerdict = (client: ControlPlaneClient, executionId: string) =>
         yield* Console.error(`no device took the lease within ${LEASE_WAIT_MS / 1000} s`);
         return yield* new DogfoodExit({ code: EXIT_NO_VERDICT });
       }
+      yield* Effect.sleep(POLL_MS);
     }
   });
 
@@ -272,10 +310,10 @@ const dogfood = (ref: string) =>
       Effect.sync(() => mkdtempSync(join(tmpdir(), "fd-dogfood-"))),
       (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
     );
-    const operatorToken = randomBytes(32).toString("hex");
-    const { origin, planeId } = yield* startControlPlane(runtimeDir, operatorToken);
+    const team = yield* startAccessTeam;
+    const { origin, planeId } = yield* startControlPlane(runtimeDir, team, sha);
     yield* Console.log(`control plane: ${origin}, plane ${planeId}, deployment development`);
-    const client = makeClient(origin, operatorToken);
+    const client = makeClient(origin, team.jwt);
     yield* startDevice({ binaries, client, origin, planeId, runtimeDir, workspaceRoot });
     const { execution_id: executionId, class: className } = yield* client.dispatchCheck({
       repository: REPOSITORY,

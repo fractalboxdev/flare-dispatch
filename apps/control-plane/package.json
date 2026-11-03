@@ -10,6 +10,7 @@
     "dev": "wrangler dev"
   },
   "dependencies": {
+    "@fractalboxdev/flare-dispatch-api": "workspace:*",
     "@fractalboxdev/flare-dispatch-catalog": "workspace:*",
     "@fractalboxdev/flare-dispatch-ops": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
