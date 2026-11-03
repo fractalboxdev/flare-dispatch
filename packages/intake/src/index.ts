@@ -39,6 +39,7 @@ export {
 } from "./event.ts";
 export { errorResponse, json } from "./http.ts";
 export { intakeLayer, runDefaultClassResolver, type IntakeLayerOptions } from "./layer.ts";
+export { followOnSubmitterLayer } from "./follow-on.ts";
 export { LOCAL_CLASS, LOCAL_ONLY, LocalRegistrationBody, localRegistrationLayer } from "./local.ts";
 export {
   MANIFEST_CACHE_MS,

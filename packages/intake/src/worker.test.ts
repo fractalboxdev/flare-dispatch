@@ -1,7 +1,7 @@
 // The route group as the Worker mounts it: `intakeLayer` over `githubLiveLayer`, a GitHub reached through `fetch`,
 // and mameko's admission on a SQLite D1.
 import { generateKeyPairSync } from "node:crypto";
-import { githubLiveLayer } from "@fractalboxdev/flare-dispatch-github";
+import { githubLiveLayer, SideOutputConfig } from "@fractalboxdev/flare-dispatch-github";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, ManagedRuntime } from "effect";
@@ -72,7 +72,16 @@ const worker = async (manifestText = DEFAULT_MANIFEST) => {
   const calls: string[] = [];
   const fetch = github(manifestText, calls);
   const githubLayer = githubLiveLayer({ appId: String(APP_ID), privateKeyPem: PEM, fetch }).pipe(
-    Layer.provide(Layer.succeed(AlarmPort, { deliver: () => Effect.void })),
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+        Layer.succeed(SideOutputConfig, {
+          appBot: { login: "app[bot]", name: "app[bot]", email: "app@example.com" },
+          slack: undefined,
+          fetch,
+        }),
+      ),
+    ),
   );
   const intake = intakeLayer({
     db,
