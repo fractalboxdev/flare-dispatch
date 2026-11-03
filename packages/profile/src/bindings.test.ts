@@ -85,6 +85,20 @@ describe("resolveClass", () => {
     ).toBe("release");
   });
 
+  it("[FD-GATE-080] a sandbox-image publish on a push to the protected deploy branch resolves to release", () => {
+    const publish: ClassRequest = {
+      ...pr,
+      run: "sandbox-image",
+      qosClass: "required",
+      deployBranch: "main",
+      trigger: { kind: "push", branch: "main", protectedBranch: true, defaultBranch: true },
+    };
+    expect(resolveClass(publish, {}).class).toBe("release");
+    expect(resolveClass({ ...publish, trigger: { kind: "pull_request" } }, {}).class).not.toBe(
+      "release",
+    );
+  });
+
   it("[FD-PROF-013] a gating run is required when the target branch requires its check, interactive when not", () => {
     expect(resolveClass(pr, required).class).toBe("required");
     expect(resolveClass(pr, notRequired).class).toBe("interactive");

@@ -26,6 +26,11 @@ export interface PlacementRequest {
   readonly class: string;
   /** Placement labels from class resolution and capability labels the run declares, e.g. `expose-port`. */
   readonly labels: readonly string[];
+  /**
+   * The placement constraints the run definition declares, e.g. `cloud-pinned` for `worker-deploy` (FD-GATE-061) and
+   * a publishing `sandbox-image` (FD-GATE-080). A declared `cloud-pinned` holds at every class.
+   */
+  readonly constraints?: readonly string[];
   readonly trigger?: string;
   /** False for a run whose definition declares no class. */
   readonly declaresClass?: boolean;
@@ -79,7 +84,9 @@ export const eligibleKinds = (profile: Profile, request: PlacementRequest): Elig
       labels: request.labels,
       runLabels: request.labels,
       confidentiality: request.confidentiality ?? "unclassified",
-      cloudPinned: holds(placement.cloud_pinned, request),
+      cloudPinned:
+        (request.constraints ?? []).includes("cloud-pinned") ||
+        holds(placement.cloud_pinned, request),
       cloudOnly: has("cloud-only") || holds(placement.cloud_only, request),
       localOnly: has("local-only") || holds(placement.local_only, request),
       deviceLocalInput: request.deviceLocalInput === true,

@@ -21,8 +21,13 @@ export const GATING_RUNS: readonly string[] = ["check", "oxlint", "offload-test"
 /** The recipes that declare `supersede` (FD-PROF-028). */
 export const SUPERSEDING_RUNS: readonly string[] = ["check", "oxlint", "offload-test", "pr-review"];
 
-/** The in-code `release` allowlist of step 1. */
-export const RELEASE_ALLOWLIST: readonly string[] = ["release", "worker-deploy", "publish"];
+/** The in-code `release` allowlist of step 1; `sandbox-image` publishes on its release trigger (FD-GATE-080). */
+export const RELEASE_ALLOWLIST: readonly string[] = [
+  "release",
+  "worker-deploy",
+  "publish",
+  "sandbox-image",
+];
 
 /** How a request reached the control plane. */
 export type Trigger =

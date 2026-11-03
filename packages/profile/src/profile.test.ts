@@ -495,6 +495,14 @@ describe("delayed cloud claim", () => {
 });
 
 describe("placement", () => {
+  it("[FD-GATE-061] [FD-GATE-080] a run that declares cloud-pinned keeps only cloudflare at every class", () => {
+    for (const c of CLASSES) {
+      const r = eligibleKinds(profile, { class: c, labels: [], constraints: ["cloud-pinned"] });
+      expect(r.kinds.every((k) => k === "cloudflare")).toBe(true);
+      expect(r.constraints).toContain("cloud-pinned");
+    }
+  });
+
   it("[FD-PROF-018] a run that declares no class is local-only", () => {
     const r = eligibleKinds(profile, { class: "batch", labels: [], declaresClass: false });
     expect(r.kinds).toEqual(["device"]);

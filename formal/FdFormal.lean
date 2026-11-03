@@ -6,3 +6,4 @@ import FdFormal.StagedWrite
 import FdFormal.Cache
 import FdFormal.Intake
 import FdFormal.Drift
+import FdFormal.Placement
