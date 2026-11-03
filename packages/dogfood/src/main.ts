@@ -317,6 +317,7 @@ const dogfood = (ref: string) =>
     yield* startDevice({ binaries, client, origin, planeId, runtimeDir, workspaceRoot });
     const { execution_id: executionId, class: className } = yield* client.dispatchCheck({
       repository: REPOSITORY,
+      sha,
       inputs: {
         repo: `file://${repoRoot.replace(/\/$/, "")}`,
         sha,

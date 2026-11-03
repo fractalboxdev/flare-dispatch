@@ -1,41 +1,95 @@
-// The HTTP API: `packages/api`'s router of mountable groups, and the services each request reads, built from the
-// Worker's bindings. A port this deploy cannot back answers `unavailable` naming what it lacks.
+// The HTTP API: `packages/api`'s router of mountable groups with intake's routes mounted under `/v1/`, and the services
+// each request reads, built from the Worker's bindings. A port this deploy cannot back answers `unavailable` naming
+// what it lacks.
 import {
+  ApiConfig,
   apiConfigFromEnv,
   apiError,
+  authenticateAccess,
   Cancellation,
   ConfigInvalid,
   d1DeviceRegistry,
   d1Executions,
-  d1Intake,
   errorBody,
   executionsGroup,
   executorsGroup,
-  dispatchGroup,
   FailureSummaries,
+  JwksSource,
   JwksSourceLive,
   mount,
   oidcKeyFromSecret,
   Operations,
   opsGroup,
+  routerGroup,
   toFetchHandler,
   wellKnownGroup,
   type ApiEnv,
-  ApiConfig,
 } from "@fractalboxdev/flare-dispatch-api";
+import {
+  AccessIdentity,
+  DISPATCH_MAX_BYTES,
+  handleIntake,
+  WEBHOOK_MAX_BYTES,
+} from "@fractalboxdev/flare-dispatch-intake";
 import { livenessReport, runOpsMigrations } from "@fractalboxdev/flare-dispatch-ops";
 import { Context, Effect, Layer } from "effect";
-import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
-import { devRepositoryOf } from "./dev-repository.ts";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { isolateServices } from "./composition.ts";
+import { profileOf, type ControlPlaneEnv } from "./config.ts";
+
+/** The Access identity the API's gate verified, as intake's dispatch route asks for it. */
+const accessIdentity = Effect.gen(function* () {
+  const context = yield* Effect.context<ApiConfig | JwksSource>();
+  return AccessIdentity.of({
+    identity: (request) =>
+      authenticateAccess(request, { redirectBrowser: false }).pipe(
+        Effect.map((outcome) => (outcome._tag === "Access" ? outcome.id : null)),
+        Effect.orElseSucceed(() => null),
+        Effect.provide(context),
+      ),
+  });
+});
+
+/** Intake's routes, below the `/v1/` mount: the request and the path below it, as `handleIntake` takes them. */
+const intakeRoute = Effect.gen(function* () {
+  const request = (yield* HttpServerRequest.HttpServerRequest).source as Request;
+  const path = new URL(request.url).pathname.replace(/^\/v1\//, "");
+  const response = yield* handleIntake(request, path).pipe(
+    Effect.provideService(AccessIdentity, yield* accessIdentity),
+  );
+  return HttpServerResponse.fromWeb(
+    response ?? Response.json({ error: "not_found", message: "no such route" }, { status: 404 }),
+  );
+});
+
+/**
+ * `POST /v1/webhooks/github` checks its own HMAC (FD-INT-022); `POST /v1/dispatch/:run` passes the gate's dispatch
+ * identity check before intake looks up the run (FD-IFC-027).
+ */
+export const intakeGroup = routerGroup(
+  "intake",
+  [
+    {
+      method: "POST",
+      path: "/v1/webhooks/github",
+      surface: { _tag: "OwnCredential" },
+      maxBodyBytes: WEBHOOK_MAX_BYTES,
+    },
+    {
+      method: "POST",
+      path: "/v1/dispatch/:run",
+      surface: { _tag: "Dispatch" },
+      maxBodyBytes: DISPATCH_MAX_BYTES,
+    },
+  ],
+  Layer.mergeAll(
+    HttpRouter.add("POST", "/v1/webhooks/github", intakeRoute),
+    HttpRouter.add("POST", "/v1/dispatch/:run", intakeRoute),
+  ) as never,
+);
 
 /** The groups the Worker mounts; `/v1/executors/connect` is answered before the router, since it upgrades. */
-export const router = mount(
-  wellKnownGroup,
-  dispatchGroup,
-  executionsGroup,
-  opsGroup,
-  executorsGroup,
-);
+export const router = mount(wellKnownGroup, intakeGroup, executionsGroup, opsGroup, executorsGroup);
 
 const handler = toFetchHandler(router, { shared: JwksSourceLive });
 
@@ -84,26 +138,13 @@ export const apiEnvOf = (env: ControlPlaneEnv): ApiEnv => {
   } as ApiEnv;
 };
 
-const servicesOf = (env: ControlPlaneEnv) => {
-  const profile = profileOf(env);
-  const dev = devRepositoryOf(env);
-  return Layer.mergeAll(
+const requestServices = (env: ControlPlaneEnv) =>
+  Layer.mergeAll(
     d1Executions(env.DB),
-    d1Intake({
-      db: env.DB,
-      channels: env.CHANNEL,
-      deployment: deployment(env),
-      profile,
-      installations: (repository) =>
-        Effect.succeed(
-          dev !== undefined && dev.repository === repository ? String(dev.installation) : undefined,
-        ),
-      resolveClass: ({ run, requested }) => Effect.succeed(requested ?? run.spec.limits.qosClass),
-    }),
     d1DeviceRegistry({
       db: env.DB,
       anchor: env.EPOCH_ANCHOR.get(env.EPOCH_ANCHOR.idFromName("control-plane")),
-      profile,
+      profile: profileOf(env),
       posture: () => Effect.succeed(POSTURE_TIER),
       verify: undefined,
     }),
@@ -112,18 +153,19 @@ const servicesOf = (env: ControlPlaneEnv) => {
     failureSummariesDeferred,
     operations(env),
   );
-};
 
-/** One request through the router, with the services its routes read. */
+/** One request through the router, with the isolate's services and the ones its routes read. */
 export const apiFetch = async (request: Request, env: ControlPlaneEnv): Promise<Response> => {
   const config = apiConfigFromEnv(apiEnvOf(env), new URL(request.url).origin);
   if (config instanceof ConfigInvalid)
     return Response.json(
       errorBody(apiError("misconfigured", config.message), crypto.randomUUID()),
-      {
-        status: 503,
-      },
+      { status: 503 },
     );
-  const services = await Effect.runPromise(Layer.build(servicesOf(env)).pipe(Effect.scoped));
-  return handler.fetch(request, Context.add(services, ApiConfig, config) as never);
+  const isolate = await isolateServices(env);
+  const services = await Effect.runPromise(Layer.build(requestServices(env)).pipe(Effect.scoped));
+  return handler.fetch(
+    request,
+    Context.merge(isolate, services).pipe(Context.add(ApiConfig, config)) as never,
+  );
 };

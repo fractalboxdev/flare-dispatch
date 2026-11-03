@@ -1,6 +1,7 @@
 // The control plane Worker on workerd through Miniflare: the bindings of `wrangler.jsonc`, the router, admission, the
 // lease path and the record. The executor here is the test's own signed WebSocket; `pnpm dogfood` proves the real
 // device executor.
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
@@ -26,7 +27,11 @@ const DEV_REPOSITORY = {
   installation: 1,
   default_branch: "main",
   head: "f".repeat(40),
-  files: {},
+  files: {
+    ".github/flare-dispatch.json": readFileSync(
+      join(import.meta.dirname, "../../../.github/flare-dispatch.json"),
+    ).toString("base64"),
+  },
 };
 
 let team: AccessTeam;
@@ -113,6 +118,7 @@ const execution = async (mf: Miniflare, id: string) => {
 
 const dispatchBody = (sha: string) => ({
   repository: "fractalboxdev/flare-dispatch",
+  sha: /^[0-9a-f]{40}$/.test(sha) ? sha : SHA,
   inputs: {
     repo: "https://github.com/fractalboxdev/flare-dispatch",
     sha,
@@ -173,10 +179,10 @@ describe("the minute tick", () => {
 });
 
 describe("a production deployment", () => {
-  it("MAMEKO-ISO-001 refuses a host execution", async () => {
+  it("MAMEKO-ISO-001 leaves a host execution out of the catalogue", async () => {
     const r = await post(production, "/v1/dispatch/check", dispatchBody(SHA));
-    expect(r.status).toBe(403);
-    expect(await r.json()).toMatchObject({ error: "forbidden" });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toMatchObject({ error: "run_not_found" });
   });
 
   it("FD-IFC-087 refuses a software key and writes no executor row", async () => {
@@ -196,6 +202,25 @@ describe("a development deployment", () => {
     const r = await post(development, "/v1/dispatch/nothing", dispatchBody(SHA));
     expect(r.status).toBe(404);
     expect(await r.json()).toMatchObject({ error: "run_not_found" });
+  });
+
+  it("FD-IFC-028 answers run_not_found for a run and label the repository's manifest does not list", async () => {
+    const r = await post(development, "/v1/dispatch/check", {
+      ...dispatchBody(SHA),
+      label: "nightly",
+    });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toMatchObject({ error: "run_not_found" });
+  });
+
+  it("FD-INT-022 refuses a webhook on a deployment that holds no webhook secret", async () => {
+    const r = await development.dispatchFetch("http://x/v1/webhooks/github", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "ping" },
+      body: "{}",
+    });
+    expect(r.status).toBe(503);
+    expect(await r.json()).toMatchObject({ error: "webhook_unconfigured" });
   });
 
   it("FD-IFC-029 answers invalid_inputs for a body that fails the run's schema", async () => {

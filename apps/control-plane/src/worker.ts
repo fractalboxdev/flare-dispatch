@@ -1,11 +1,15 @@
 // The v2 control plane Worker: mameko's coordinator on host-cloudflare, FlareDispatch's profile, the operability
 // routes and `packages/api`'s router. It shares no code with the v1 dispatcher.
 import { runApiMigrations } from "@fractalboxdev/flare-dispatch-api";
-import { opsFetch, scheduledHandler, tickDepsFromEnv } from "@fractalboxdev/flare-dispatch-ops";
+import { migrateIntake } from "@fractalboxdev/flare-dispatch-intake";
+import { opsFetch, scheduledHandler } from "@fractalboxdev/flare-dispatch-ops";
 import { CLASS_ORDER } from "@fractalboxdev/flare-dispatch-profile";
 import { routeExecutorUpgrade, runD1Migrations } from "@fractalboxdev/mameko-host-cloudflare";
-import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { Effect } from "effect";
+import { deployment, type ControlPlaneEnv } from "./config.ts";
+import { boundFetch } from "./github.ts";
 import { apiFetch } from "./http.ts";
+import { tickDeps } from "./tick.ts";
 
 export {
   EpochAnchor,
@@ -20,13 +24,11 @@ const migrate = (env: ControlPlaneEnv) =>
   (migrated ??= (async () => {
     await runD1Migrations(env.DB);
     await runApiMigrations(env.DB);
+    await Effect.runPromise(migrateIntake(env.DB));
   })().catch((e: unknown) => {
     migrated = undefined;
     throw e;
   }));
-
-/** `fetch` as a plain function: workerd refuses it called as a method of another object, as the JWKS cache does. */
-const boundFetch: typeof fetch = (input, init) => fetch(input, init);
 
 /** The paths `packages/api` declares that the operability routes also match; the API's routes serve them. */
 const API_OWNED = /^\/v1\/executions(\/[^/]+\/cancel)?$/;
@@ -55,10 +57,9 @@ export default {
     }
     return apiFetch(request, env);
   },
-  /** The minute tick (FD-INT-050): outbox drain, liveness record and the `cron-silent` alarm. */
-  scheduled: scheduledHandler((env: ControlPlaneEnv) =>
-    tickDepsFromEnv(env as unknown as Parameters<typeof tickDepsFromEnv>[0], {
-      profile: profileOf(env),
-    }),
-  ),
+  /**
+   * The minute tick (FD-INT-050): liveness record, `cron-silent`, the outbox drain through the GitHub applier and
+   * intake's sweep and schedule units.
+   */
+  scheduled: scheduledHandler((env: ControlPlaneEnv) => tickDeps(env)),
 };

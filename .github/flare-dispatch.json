@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "runs": [
+    {
+      "recipe": "check",
+      "triggers": ["dispatch"],
+      "params": {
+        "steps": [
+          { "label": "install", "command": "pnpm install --frozen-lockfile", "timeoutSec": 900 },
+          { "label": "lint", "command": "pnpm lint", "timeoutSec": 600 },
+          { "label": "typecheck", "command": "pnpm typecheck", "timeoutSec": 900 },
+          { "label": "test", "command": "pnpm test", "timeoutSec": 1800 }
+        ]
+      }
+    }
+  ]
+}

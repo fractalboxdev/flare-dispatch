@@ -114,6 +114,23 @@ const outbox = async () =>
   }[];
 
 describe("minute tick", () => {
+  it("[FD-INT-067] runs each composed unit as its own step; a failing unit leaves the others running", async () => {
+    const ran: string[] = [];
+    const m = monitor();
+    const { deps: d } = deps({
+      units: (now) => [
+        { step: "sweep", effect: Effect.sync(() => ran.push(`sweep@${now}`)) },
+        { step: "broken", effect: Effect.fail("no bucket") },
+        { step: "logs", effect: Effect.sync(() => ran.push("logs")) },
+      ],
+    });
+    const report = await tick({ DB: t.db, MONITOR: m.ns }, d, T0 + 120_000);
+    expect(ran).toEqual([`sweep@${T0 + 120_000}`, "logs"]);
+    expect(
+      report.steps.filter((s) => ["sweep", "broken", "logs"].includes(s.step)).map((s) => s.status),
+    ).toEqual(["ran", "failed", "ran"]);
+  });
+
   it("[FD-ARCH-002] the Worker's scheduled export accepts the cron tick: records it and starts the liveness monitor", async () => {
     const m = monitor();
     const { deps: d } = deps();

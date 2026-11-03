@@ -46,6 +46,8 @@ export interface ControlPlaneClient {
   }) => Effect.Effect<void, ControlPlaneError>;
   readonly dispatchCheck: (input: {
     readonly repository: string;
+    /** The commit, which the commit-scoped dedup key and the manifest read take (FD-INT-009). */
+    readonly sha: string;
     readonly inputs: CheckInput;
   }) => Effect.Effect<typeof Dispatched.Type, ControlPlaneError>;
   readonly execution: (id: string) => Effect.Effect<ExecutionView, ControlPlaneError>;

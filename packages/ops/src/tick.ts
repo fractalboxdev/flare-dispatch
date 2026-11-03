@@ -45,6 +45,17 @@ export interface TickDeps {
   /** The limit key the App-JWT `delivery.redeliver` intents take. */
   readonly appLimitKey?: string;
   readonly webhookSilentHours: number;
+  /**
+   * The units another area runs on the tick, each its own step: intake's sweep and schedule units, the cache, artifact
+   * and log retention sweeps.
+   */
+  readonly units?: (now: number) => readonly TickStep[];
+}
+
+/** One unit of work the tick runs as its own step. */
+export interface TickStep {
+  readonly step: string;
+  readonly effect: Effect.Effect<unknown, unknown>;
 }
 
 /** The name the one `LivenessMonitor` object is addressed by. */
@@ -133,6 +144,8 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
             ),
           ),
     );
+
+    for (const unit of deps.units?.(now) ?? []) steps.push(yield* run(unit.step, unit.effect));
 
     if (isProbeMinute(now)) {
       steps.push(

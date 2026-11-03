@@ -1,5 +1,7 @@
 // FlareDispatch's Durable Object classes: mameko's, with the configuration each reads derived from the profile.
+import { ExecutionInputsMissing } from "@fractalboxdev/flare-dispatch-api";
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
+import { IntakeStore, d1IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
 import {
   ExecutionEngine as MamekoExecutionEngine,
   ExecutorChannel as MamekoExecutorChannel,
@@ -13,7 +15,6 @@ import {
   profileOf,
   type ControlPlaneEnv,
 } from "./config.ts";
-import { getExecutionInputs } from "@fractalboxdev/flare-dispatch-api";
 
 type ChannelEnv = ControlPlaneEnv & {
   readonly MAMEKO_CHANNEL_CONFIG: ReturnType<typeof channelConfig>;
@@ -39,12 +40,14 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
     super(ctx, { ...env, MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)) });
   }
 
-  /** The stored inputs and deadline of a won claim. */
+  /** The inputs and deadline intake recorded for a won claim. */
   protected override leaseFields(executionId: string): Promise<ClaimedLease> {
     const env = this.env;
     return Effect.runPromise(
       Effect.gen(function* () {
-        const { inputs, deadlineAtMs } = yield* getExecutionInputs(env.DB, executionId);
+        const record = yield* (yield* IntakeStore).get(executionId);
+        if (record === null) return yield* new ExecutionInputsMissing({ executionId });
+        const { inputs, deadlineAtMs } = record;
         const { results } = yield* Effect.promise(() =>
           env.DB.prepare("select run, scope_id from executions where id = ?")
             .bind(executionId)
@@ -72,7 +75,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           upload_grant: {},
           nonce: crypto.randomUUID(),
         } satisfies ClaimedLease;
-      }),
+      }).pipe(Effect.provide(d1IntakeStore(env.DB))),
     );
   }
 }

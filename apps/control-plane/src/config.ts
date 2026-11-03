@@ -29,6 +29,18 @@ export interface ControlPlaneEnv {
   readonly ALERT_SINK?: string;
   readonly DEPLOYMENT?: string;
   readonly PLANE_ID: string;
+  /** The GitHub App's id and private key (a Worker secret); without both, nothing is applied to GitHub. */
+  readonly GITHUB_APP_ID?: string;
+  readonly GITHUB_APP_PRIVATE_KEY?: string;
+  /** The App's slug, whose bot the App commits as. */
+  readonly GITHUB_APP_SLUG?: string;
+  /** The webhook secret (a Worker secret); unset refuses every webhook (FD-INT-022). */
+  readonly WEBHOOK_SECRET?: string;
+  /** `dispatch.oidcAudience`; unset refuses every Actions token. */
+  readonly DISPATCH_OIDC_AUDIENCE?: string;
+  /** The Slack verdict endpoint and its signing secret. */
+  readonly SLACK_URL?: string;
+  readonly SLACK_SECRET?: string;
   /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */
   readonly FD_DEV_REPOSITORY?: string;
 }
