@@ -133,7 +133,8 @@ export const fakeWritesLayer = (s: FakeSide) => {
         },
         true,
       ),
-    recentIssues: () => call("recentIssues", () => [...s.issues].reverse()),
+    issuesPage: ({ page }) =>
+      call("issuesPage", () => [...s.issues].reverse().slice((page - 1) * 100, page * 100)),
     createIssue: ({ title, body, labels }) =>
       call(
         "createIssue",

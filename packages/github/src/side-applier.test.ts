@@ -17,7 +17,7 @@ import {
   type FakeSide,
 } from "./fake-writes.test-support.ts";
 import { GithubApplierLive } from "./github-applier.ts";
-import { intentMarker } from "./side-applier.ts";
+import { intentMarker, ISSUE_PAGES } from "./side-applier.ts";
 import {
   BlobStore,
   EmailSender,
@@ -203,6 +203,46 @@ describe("comment, review and issue", () => {
     await apply(w, issue);
     expect(w.side.issues).toHaveLength(1);
     expect(await lookup(w, issue)).toMatchObject({ _tag: "found" });
+  });
+
+  it("FD-GH-092 an issue older than the first page is found, and a search that cannot finish is undetermined", async () => {
+    const w = world();
+    const r = row("issue", { title: "flake", body: "seen" }, { intentKey: "run:triage:2" });
+    w.side.issues.push({
+      id: 1,
+      number: 1,
+      title: "flake",
+      body: `seen\n\n${intentMarker(r)}`,
+      labels: [],
+    });
+    for (let n = 2; n <= 150; n++)
+      w.side.issues.push({ id: n, number: n, title: "other", body: "other", labels: [] });
+    expect(await lookup(w, r)).toEqual({ _tag: "found", externalRef: "1" });
+    expect(await apply(w, r)).toEqual({ _tag: "applied", externalRef: "1" });
+    expect(w.side.issues).toHaveLength(150);
+
+    // The second page fails: neither lookup nor apply decides on the first page alone.
+    w.side.failures.push(
+      null,
+      new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false }),
+    );
+    expect(await lookup(w, r)).toMatchObject({ _tag: "undetermined" });
+    w.side.failures.push(
+      null,
+      new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false }),
+    );
+    expect(await apply(w, r)).toMatchObject({ _tag: "retryable" });
+    expect(w.side.issues).toHaveLength(150);
+  });
+
+  it("FD-GH-092 an issue list longer than the search bound is undetermined, never absent", async () => {
+    const w = world();
+    for (let n = 1; n <= ISSUE_PAGES * 100; n++)
+      w.side.issues.push({ id: n, number: n, title: "other", body: "other", labels: [] });
+    const r = row("issue", { title: "flake", body: "seen" });
+    expect(await lookup(w, r)).toMatchObject({ _tag: "undetermined" });
+    expect(await apply(w, r)).toMatchObject({ _tag: "retryable" });
+    expect(w.side.calls.filter((c) => c === "createIssue")).toEqual([]);
   });
 
   it("FD-GH-046 a lost answer after GitHub made the comment is adopted on the next attempt", async () => {

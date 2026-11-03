@@ -78,8 +78,10 @@ export class GithubWrites extends Context.Service<
     readonly createReview: (
       c: Repo & { readonly pull: number; readonly body: string; readonly commitId?: string },
     ) => Effect.Effect<Commented, GithubError>;
-    /** The repository's most recently created issues and pull requests, at most 100. */
-    readonly recentIssues: (c: Repo) => Effect.Effect<readonly IssueRef[], GithubError>;
+    /** One page of 100 of the repository's issues and pull requests, newest first; page 1 is the first. */
+    readonly issuesPage: (
+      c: Repo & { readonly page: number },
+    ) => Effect.Effect<readonly IssueRef[], GithubError>;
     readonly createIssue: (
       c: Repo & {
         readonly title: string;
@@ -213,11 +215,11 @@ export const githubWritesLayer = (options: WritesOptions) =>
             event: "COMMENT",
             ...(commitId === undefined ? {} : { commit_id: commitId }),
           }),
-        recentIssues: ({ installation, repo }) =>
+        issuesPage: ({ installation, repo, page }) =>
           request(
             installation,
             "GET",
-            `/repos/${repo}/issues?state=all&sort=created&direction=desc&per_page=100`,
+            `/repos/${repo}/issues?state=all&sort=created&direction=desc&per_page=100&page=${page}`,
           ),
         createIssue: ({ installation, repo, title, body, labels }) =>
           request(installation, "POST", `/repos/${repo}/issues`, { title, body, labels }),

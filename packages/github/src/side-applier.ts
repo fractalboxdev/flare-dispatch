@@ -21,7 +21,7 @@ import {
   StagedWriteGate,
   type DeliveryAnswer,
 } from "./side-ports.ts";
-import { GithubWrites, type CommitAuthor } from "./writes.ts";
+import { GithubWrites, type CommitAuthor, type IssueRef } from "./writes.ts";
 
 /** Every write branch lives under this prefix (FD-GH-082, FD-AGT-028). */
 export const WRITE_BRANCH_PREFIX = "flare-dispatch/";
@@ -212,6 +212,27 @@ const releaseFor = (ctx: Ctx, tag: string) =>
     return (yield* w.releases(ctx)).find((r) => r.tag_name === tag) ?? null;
   });
 
+/** Issue list pages the marker search reads before it stops without an answer. */
+export const ISSUE_PAGES = 50;
+
+/**
+ * Every issue whose body carries the marker, read page by page until GitHub's list ends. A search that cannot reach
+ * the end, a failed page included, fails rather than answering empty: an empty answer creates the issue again.
+ */
+const issuesWithMarker = (ctx: Ctx, marker: string) =>
+  Effect.gen(function* () {
+    const w = yield* writes;
+    const found: IssueRef[] = [];
+    for (let page = 1; page <= ISSUE_PAGES; page++) {
+      const batch = yield* w.issuesPage({ ...ctx, page });
+      found.push(...batch.filter((i) => i.pull_request === undefined && i.body?.includes(marker)));
+      if (batch.length < 100) return found;
+    }
+    return yield* new Retry({
+      reason: `issue: the marker search read ${ISSUE_PAGES} pages without reaching the end`,
+    });
+  });
+
 const owner = (repo: string) => repo.slice(0, repo.indexOf("/"));
 
 const handlers: { readonly [K in SideKind]: Handler<K> } = {
@@ -288,28 +309,14 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
           return applied(
             (yield* w.updateIssue({ ...ctx, issue: p.number, title: p.title, body })).id,
           );
-        const existing = yield* single(
-          (yield* w.recentIssues(ctx)).filter(
-            (i) => i.pull_request === undefined && i.body?.includes(marker),
-          ),
-          (i) => i.id,
-        );
+        const existing = yield* single(yield* issuesWithMarker(ctx, marker), (i) => i.id);
         if (Option.isSome(existing)) return applied(existing.value);
         return applied(
           (yield* w.createIssue({ ...ctx, title: p.title, body, labels: p.labels ?? [] })).id,
         );
       }),
     lookup: (ctx) =>
-      Effect.flatMap(writes, (w) =>
-        Effect.flatMap(w.recentIssues(ctx), (is) =>
-          single(
-            is.filter(
-              (i) => i.pull_request === undefined && i.body?.includes(intentMarker(ctx.row)),
-            ),
-            (i) => i.id,
-          ),
-        ),
-      ),
+      Effect.flatMap(issuesWithMarker(ctx, intentMarker(ctx.row)), (is) => single(is, (i) => i.id)),
   },
   label: {
     github: true,
