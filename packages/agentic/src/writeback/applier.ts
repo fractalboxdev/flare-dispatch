@@ -125,41 +125,41 @@ const humanCommits = (repo: Repo, base: string, head: string, appLogin: string) 
     return commits.some((c) => c.authorLogin !== appLogin);
   });
 
-/**
- * `apply` on a `pr.propose` row: decode, gate, then blobs, tree and commit on the base commit, the branch ref, and the
- * pull request reused or opened (FD-AGT-016, FD-AGT-018, FD-AGT-035, FD-GH-082 to FD-GH-084).
- */
-export const applyPrPropose = (config: ApplierConfig) => (row: IntentRow) =>
+/** A write is model-authored when the recipe declares a model call site or the records hold a model call. */
+const modelAuthorship = (declaration: WritebackDeclaration, executionId: string) =>
   Effect.gen(function* () {
-    const decoded = decodePayload(row.payload);
-    if (Exit.isFailure(decoded))
-      return { _tag: "refused", reason: "writeback: payload-invalid" } satisfies ApplyAnswer;
-    const payload = decoded.value;
-    const { manifest } = payload;
-    const declaration = config.writebackFor(payload.run);
-    if (declaration === undefined)
-      return { _tag: "refused", reason: "writeback: no-writeback-block" } satisfies ApplyAnswer;
+    if (declaration.declaresModel) return true;
+    const records = yield* WritebackRecords;
+    return yield* records.modelCalls(executionId);
+  });
 
+/**
+ * Runs `stagedWriteGate` on a manifest with the blobs read back from the artifact store. The first verdict treats
+ * every blob line as added, so no GitHub call precedes it; only a reason on a blob line can change once the base
+ * commit's text is known, so for those files the base is read and the gate runs again, before any write.
+ */
+export const gateStagedWrite = (input: {
+  readonly executionId: string;
+  readonly repo: Repo;
+  readonly manifest: Manifest;
+  readonly writeback: WritebackSpec;
+  readonly modelAuthored: boolean;
+  readonly githubHost: string;
+}) =>
+  Effect.gen(function* () {
     const records = yield* WritebackRecords;
     const git = yield* GitData;
-    const repo = repoOf(row, payload);
-
-    const blobs = yield* records.blobs(payload.executionId, manifest.entries);
-    const modelAuthored =
-      declaration.declaresModel || (yield* records.modelCalls(payload.executionId));
-    const issued = yield* records.issuedCredentials(payload.executionId);
+    const { manifest } = input;
+    const blobs = yield* records.blobs(input.executionId, manifest.entries);
+    const issued = yield* records.issuedCredentials(input.executionId);
     const runGate = (baseText: (path: string) => string | null) =>
-      stagedWriteGate(manifest, declaration.writeback, modelAuthored, {
+      stagedWriteGate(manifest, input.writeback, input.modelAuthored, {
         blobs,
         baseText,
         issuedCredentials: issued,
-        githubHost: config.githubHost ?? "github.com",
+        githubHost: input.githubHost,
       });
-
-    // The first verdict treats every blob line as added. Only a reason on a blob line can change once the base
-    // commit's text is known, so the applier reads those files, and runs the gate again, before any write.
-    const first = runGate(() => null);
-    const verdict = yield* Match.value(first).pipe(
+    const verdict = yield* Match.value(runGate(() => null)).pipe(
       Match.tag("accept", (v) => Effect.succeed<GateVerdict>(v)),
       Match.tag("reject", (v) =>
         Effect.gen(function* () {
@@ -175,7 +175,7 @@ export const applyPrPropose = (config: ApplierConfig) => (row: IntentRow) =>
           if (lineScoped.length === 0) return v as GateVerdict;
           const baseTexts = new Map<string, string | null>();
           for (const path of lineScoped) {
-            const bytes = yield* git.fileAt(repo, manifest.baseCommit, path);
+            const bytes = yield* git.fileAt(input.repo, manifest.baseCommit, path);
             baseTexts.set(path, bytes === null ? null : textOf(bytes));
           }
           return runGate((path) => baseTexts.get(path) ?? null);
@@ -183,6 +183,35 @@ export const applyPrPropose = (config: ApplierConfig) => (row: IntentRow) =>
       ),
       Match.exhaustive,
     );
+    return { verdict, blobs };
+  });
+
+/**
+ * `apply` on a `pr.propose` row: decode, gate, then blobs, tree and commit on the base commit, the branch ref, and the
+ * pull request reused or opened (FD-AGT-016, FD-AGT-018, FD-AGT-035, FD-GH-082 to FD-GH-084).
+ */
+export const applyPrPropose = (config: ApplierConfig) => (row: IntentRow) =>
+  Effect.gen(function* () {
+    const decoded = decodePayload(row.payload);
+    if (Exit.isFailure(decoded))
+      return { _tag: "refused", reason: "writeback: payload-invalid" } satisfies ApplyAnswer;
+    const payload = decoded.value;
+    const { manifest } = payload;
+    const declaration = config.writebackFor(payload.run);
+    if (declaration === undefined)
+      return { _tag: "refused", reason: "writeback: no-writeback-block" } satisfies ApplyAnswer;
+
+    const git = yield* GitData;
+    const repo = repoOf(row, payload);
+    const modelAuthored = yield* modelAuthorship(declaration, payload.executionId);
+    const { verdict, blobs } = yield* gateStagedWrite({
+      executionId: payload.executionId,
+      repo,
+      manifest,
+      writeback: declaration.writeback,
+      modelAuthored,
+      githubHost: config.githubHost ?? "github.com",
+    });
     if (verdict._tag === "reject")
       return { _tag: "refused", reason: refusalReason(verdict.reasons) } satisfies ApplyAnswer;
 

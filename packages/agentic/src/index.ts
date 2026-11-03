@@ -7,3 +7,8 @@ export * from "./writeback/git-data.ts";
 export * from "./writeback/applier.ts";
 export * from "./model/routes.ts";
 export * from "./model/sigv4.ts";
+export * from "./local/store.ts";
+export * from "./local/registration.ts";
+export * from "./local/run-context.ts";
+export * from "./local/reuse.ts";
+export * from "./local/writeback-gate.ts";
