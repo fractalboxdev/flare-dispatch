@@ -1,4 +1,21 @@
 export {
+  AppKeyInvalid,
+  GithubApp,
+  githubAppLayer,
+  InstallationDirectoryFromApp,
+  JWT_BACKDATE_SEC,
+  JWT_LIFETIME_SEC,
+  LEASE_READ_PERMISSIONS,
+  pkcs1ToPkcs8,
+  privateKeyDer,
+  signAppJwt,
+  TOKEN_MARGIN_MS,
+  tokenFromApp,
+  type AppOptions,
+  type InstallationToken,
+  type TokenScope,
+} from "./app.ts";
+export {
   ANNOTATION_BATCH,
   CheckRunApplierLive,
   classify,
@@ -11,6 +28,7 @@ export {
   GithubHttpError,
   GithubNetworkError,
   observeHeaders,
+  restRequest,
   type Annotation,
   type CheckRun,
   type CheckRunBody,
@@ -27,7 +45,8 @@ export {
   verdictOf,
   type Conclusion,
 } from "./conclusion.ts";
-export { githubApplicationLayer } from "./layer.ts";
+export { drainOutbox, githubApplicationLayer, githubLiveLayer } from "./layer.ts";
+export { leaseReadToken, type LeaseCredential } from "./lease-token.ts";
 export {
   ApplierRateLimitLive,
   decidePermit,
@@ -37,3 +56,13 @@ export {
   type QuotaObservation,
   type QuotaOptions,
 } from "./rate-limit.ts";
+export {
+  CheckRunSummary,
+  GithubRead,
+  githubReadLayer,
+  GithubUncredentialed,
+  GithubUnexpected,
+  PullSummary,
+  RepoFile,
+  type GithubReadError,
+} from "./read.ts";
