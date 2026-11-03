@@ -1,0 +1,32 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-api",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FlareDispatch's HTTP API: the one effect/http-api declaration, the identity gates, link tokens and the dispatcher router the control plane Worker mounts.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./declaration": "./src/declaration.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalboxdev/flare-dispatch-catalog": "workspace:*",
+    "@fractalboxdev/flare-dispatch-github": "workspace:*",
+    "@fractalboxdev/flare-dispatch-profile": "workspace:*",
+    "@fractalboxdev/mameko-coordinator": "workspace:*",
+    "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
+    "@fractalboxdev/mameko-kernel": "workspace:*",
+    "@fractalboxdev/mameko-ports": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261012.1",
+    "@types/node": "^22.19.0",
+    "esbuild": "0.28.2",
+    "miniflare": "4.20260515.0",
+    "vitest": "^3.2.0"
+  }
+}
