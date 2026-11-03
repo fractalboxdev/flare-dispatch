@@ -2,6 +2,7 @@ export {
   acceptanceReasonKinds,
   buildProfile,
   configurationSourceLayer,
+  CURRENT_PHASE,
   ConfigurationSourceLive,
   deviceSlotDefaults,
   GateDecisionSourceLive,
@@ -11,6 +12,7 @@ export {
   profileDocumentFor,
   spendDefaults,
   type Deployment,
+  type Phase,
   type SpendConfig,
 } from "./document.ts";
 export {
@@ -36,6 +38,8 @@ export {
 export {
   linesOf,
   loadProfile,
+  missingPorts,
+  portUses,
   profileLoader,
   validateProfile,
   type ValidationContext,

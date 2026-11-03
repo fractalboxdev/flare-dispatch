@@ -14,9 +14,19 @@ import {
   type ProfileContext,
 } from "@fractalboxdev/mameko-coordinator";
 import { classLines, type ConfidentialityMode } from "@fractalboxdev/mameko-kernel";
-import { decodeProfile, type ProfileDocument } from "@fractalboxdev/mameko-ports";
+import {
+  decodeProfile,
+  missingApplicationPorts,
+  type PortUses,
+  type ProfileDocument,
+} from "@fractalboxdev/mameko-ports";
 import { Effect, Match, Schema } from "effect";
-import { acceptanceReasonKinds, type Deployment, type SpendConfig } from "./document.ts";
+import {
+  acceptanceReasonKinds,
+  type Deployment,
+  type Phase,
+  type SpendConfig,
+} from "./document.ts";
 import { eligibleKinds } from "./placement.ts";
 import { ProfileRejected, type PlacementShape, type Profile, type Rejection } from "./schema.ts";
 
@@ -33,6 +43,8 @@ const PPM = 1_000_000;
 export interface ValidationContext {
   /** Which registration values the deployment accepts. */
   readonly deployment: Deployment;
+  /** The roadmap phase the control plane serves. */
+  readonly phase: Phase;
   /** The bindings and appliers registered in code. */
   readonly bindings: Bindings;
   /** The kinds a registered run may emit or the control plane generates. */
@@ -182,10 +194,14 @@ const placement = (p: Profile): Rejection[] => {
   return out;
 };
 
-/** A production deployment keeps FD-PROF-052: a key from the enclave, accepted by the attestation verifier. */
-const registration = (p: Profile, deployment: Deployment): Rejection[] => {
+/**
+ * A production deployment admits only secure-enclave keys, with the attestation verifier from phase 1 and without it
+ * before (FD-PROF-052, FD-PROF-064).
+ */
+const registration = (p: Profile, deployment: Deployment, phase: Phase): Rejection[] => {
   if (deployment === "development") return [];
   const stores = p.registration.key_stores;
+  const attestation = phase >= 1 ? "verifier" : "none";
   return [
     ...(stores.length === 1 && stores[0] === "secure-enclave"
       ? []
@@ -196,17 +212,59 @@ const registration = (p: Profile, deployment: Deployment): Rejection[] => {
             reason: "a production deployment admits only secure-enclave keys",
           },
         ]),
-    ...(p.registration.attestation === "verifier"
+    ...(p.registration.attestation === attestation
       ? []
       : [
           {
             item: "registration",
             path: "registration.attestation",
-            reason: "a production deployment requires the attestation verifier",
+            reason: `a production deployment at phase ${phase} sets attestation ${attestation}`,
           },
         ]),
   ];
 };
+
+/** No kind, launcher or constraint before the phase whose Layer serves it (FD-PROF-064). */
+const phased = (p: Profile, phase: Phase): Rejection[] => {
+  const out: Rejection[] = [];
+  for (const c of p.classes)
+    for (const [kind, from] of [
+      ["aws", 3],
+      ["gha", 4],
+    ] as const)
+      if (phase < from && c.cloud_kinds.includes(kind))
+        out.push({
+          item: "classes",
+          path: `classes[${c.name}].cloud_kinds`,
+          reason: `${kind} enters at phase ${from}`,
+        });
+  if (phase < 4 && p.placement.launcher_kinds.length > 0)
+    out.push({
+      item: "placement",
+      path: "placement.launcher_kinds",
+      reason: "a launcher kind enters at phase 4",
+    });
+  if (phase < 4 && p.placement.constraints.length > 0)
+    out.push({
+      item: "placement",
+      path: "placement.constraints",
+      reason: "the declared constraints enter at phase 4",
+    });
+  return out;
+};
+
+/**
+ * What the profile uses of mameko's application ports: each launcher kind and the attestation verifier. Whether
+ * device executors register is the composition's to state.
+ */
+export const portUses = (p: Profile): PortUses => ({
+  launcherKinds: p.placement.launcher_kinds,
+  attestationVerifier: p.registration.attestation === "verifier",
+});
+
+/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-043 rejects. */
+export const missingPorts = (p: Profile, supplied: readonly string[]): readonly string[] =>
+  missingApplicationPorts(portUses(p), supplied);
 
 const context = (p: Profile, c: ValidationContext): Rejection[] =>
   validateProfileContext({
@@ -251,7 +309,8 @@ export const validateProfile = (p: Profile, c: ValidationContext): readonly Reje
   ...intentKinds(p),
   ...placement(p),
   ...reasonKinds(p),
-  ...registration(p, c.deployment),
+  ...registration(p, c.deployment, c.phase),
+  ...phased(p, c.phase),
 ];
 
 /**

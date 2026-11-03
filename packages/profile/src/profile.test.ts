@@ -1,5 +1,10 @@
 import { reclaimPolicyFor } from "@fractalboxdev/mameko-kernel";
-import { ConfigurationSource, GateDecisionSource } from "@fractalboxdev/mameko-ports";
+import {
+  APPLICATION_PORTS,
+  ConfigurationSource,
+  GateDecisionSource,
+  requiredApplicationPorts,
+} from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { bindings, validationContext } from "./context.test-support.ts";
@@ -17,6 +22,8 @@ import {
   lifecycleKey,
   linesOf,
   loadProfile,
+  missingPorts,
+  portUses,
   poolAdmissionCaps,
   profile as committed,
   profileDocument,
@@ -39,6 +46,12 @@ const cls = (name: string) => {
   return c;
 };
 const kinds = (r: PlacementRequest) => eligibleKinds(profile, r).kinds;
+/** The production document of phase 4, which registers `gha` and declares the constraints of § Placement. */
+const phase4Context: ValidationContext = { ...validationContext, phase: 4 };
+const phase4 = Effect.runSync(
+  loadProfile(loader(phase4Context), profileDocumentFor("production", 4)),
+);
+const kinds4 = (r: PlacementRequest) => eligibleKinds(phase4, r).kinds;
 const CLASSES = ["release", "required", "interactive", "batch"] as const;
 const rejections = (
   document: unknown,
@@ -299,10 +312,18 @@ describe("class catalogue", () => {
     expect(profile.classes.filter((c) => c.firm === true).map((c) => c.name)).toEqual(["required"]);
   });
 
-  it("lists gha last in every class's cloud kinds", () => {
-    for (const c of profile.classes) expect(c.cloud_kinds.at(-1)).toBe("gha");
-    expect(cls("required").cloud_kinds).toEqual(["cloudflare", "aws", "gha"]);
-    expect(cls("interactive").cloud_kinds).toEqual(["cloudflare", "gha"]);
+  it("FD-PROF-064 every class lists cloudflare alone in phase 0; required adds aws from phase 3", () => {
+    for (const c of profile.classes) expect(c.cloud_kinds).toEqual(["cloudflare"]);
+    const required = (phase: 1 | 2 | 3) =>
+      buildProfile("production", phase).classes.find((c) => c.name === "required")?.cloud_kinds;
+    expect(required(2)).toEqual(["cloudflare"]);
+    expect(required(3)).toEqual(["cloudflare", "aws"]);
+  });
+
+  it("FD-PROF-064 from phase 4 every class lists gha last", () => {
+    for (const c of phase4.classes) expect(c.cloud_kinds.at(-1)).toBe("gha");
+    expect(classNamed(phase4, "required")?.cloud_kinds).toEqual(["cloudflare", "aws", "gha"]);
+    expect(classNamed(phase4, "interactive")?.cloud_kinds).toEqual(["cloudflare", "gha"]);
   });
 
   it("FD-PROF-006 queue bounds per class", () => {
@@ -497,7 +518,7 @@ describe("placement", () => {
 
   it("FD-PROF-037 release runs only on cloudflare, a macOS release-matrix job only on gha", () => {
     expect(kinds({ class: "release", labels: [] })).toEqual(["cloudflare"]);
-    expect(kinds({ class: "release", labels: ["release-matrix"] })).toEqual(["gha"]);
+    expect(kinds4({ class: "release", labels: ["release-matrix"] })).toEqual(["gha"]);
   });
 
   it("MAMEKO-ADM-012 expose-port leaves at most cloudflare", () => {
@@ -506,10 +527,10 @@ describe("placement", () => {
   });
 
   it("FD-PROF-040 apple-build runs on a device, or on gha for required and a release-matrix job", () => {
-    expect(kinds({ class: "required", labels: ["apple-build"] })).toEqual(["gha", "device"]);
-    expect(kinds({ class: "interactive", labels: ["apple-build"] })).toEqual(["device"]);
-    expect(kinds({ class: "batch", labels: ["apple-build"] })).toEqual(["device"]);
-    expect(kinds({ class: "interactive", labels: ["apple-build", "release-matrix"] })).toEqual([
+    expect(kinds4({ class: "required", labels: ["apple-build"] })).toEqual(["gha", "device"]);
+    expect(kinds4({ class: "interactive", labels: ["apple-build"] })).toEqual(["device"]);
+    expect(kinds4({ class: "batch", labels: ["apple-build"] })).toEqual(["device"]);
+    expect(kinds4({ class: "interactive", labels: ["apple-build", "release-matrix"] })).toEqual([
       "gha",
     ]);
   });
@@ -524,20 +545,21 @@ describe("placement", () => {
 
   it("FD-PROF-039 a macOS release-matrix job keeps exactly gha at every class", () => {
     for (const c of CLASSES)
-      expect(kinds({ class: c, labels: ["release-matrix"] })).toEqual(["gha"]);
-    expect(kinds({ class: "release", labels: ["release-matrix"], trigger: "tag-push" })).toEqual([
+      expect(kinds4({ class: c, labels: ["release-matrix"] })).toEqual(["gha"]);
+    expect(kinds4({ class: "release", labels: ["release-matrix"], trigger: "tag-push" })).toEqual([
       "gha",
     ]);
   });
 
   it("FD-PROF-039 the validator rejects a release matrix whose macOS jobs have no eligible kind", () => {
-    const doc = mutate((d) => ({
-      ...d,
-      classes: d.classes.map((c) =>
+    const four = buildProfile("production", 4);
+    const doc = {
+      ...four,
+      classes: four.classes.map((c) =>
         c.name === "interactive" ? { ...c, cloud_kinds: ["cloudflare"] } : c,
       ),
-    }));
-    expect(rejections(doc)).toEqual([
+    };
+    expect(rejections(doc, four.policy_version, phase4Context)).toEqual([
       {
         item: "placement",
         path: "placement.required[0]",
@@ -551,15 +573,25 @@ describe("placement", () => {
   });
 
   it("FD-PROF-041 reproduction runs only on an attested-dedicated device", () => {
-    const r = eligibleKinds(profile, { class: "required", labels: ["reproduction"] });
+    const r = eligibleKinds(phase4, { class: "required", labels: ["reproduction"] });
     expect(r.kinds).toEqual(["device"]);
     expect(r.requiresPosture).toBe("attested-dedicated");
   });
 
-  it("registers gha as the one launcher kind and pins cloud-pinned to cloudflare", () => {
-    expect(profile.placement.launcher_kinds).toEqual(["gha"]);
-    expect(profile.placement.cloud_pinned_kinds).toEqual(["cloudflare"]);
-    expect(profile.placement.unreachable.map((s) => s.labels)).toEqual([
+  it("FD-PROF-064 phase 0 registers no launcher and declares no constraint", () => {
+    expect(profile.placement).toMatchObject({
+      launcher_kinds: [],
+      constraints: [],
+      required: [],
+      unreachable: [],
+      cloud_pinned_kinds: ["cloudflare"],
+    });
+  });
+
+  it("FD-PROF-038 FD-PROF-042 phase 4 registers gha as the one launcher kind", () => {
+    expect(phase4.placement.launcher_kinds).toEqual(["gha"]);
+    expect(phase4.placement.cloud_pinned_kinds).toEqual(["cloudflare"]);
+    expect(phase4.placement.unreachable.map((s) => s.labels)).toEqual([
       ["reproduction", "untrusted-input"],
       ["reproduction", "cloud-only"],
       ["reproduction", "expose-port"],
@@ -686,8 +718,9 @@ describe("deployments", () => {
   const development = profileDocumentFor("development");
   const developmentContext: ValidationContext = { ...validationContext, deployment: "development" };
 
-  it("FD-PROF-052 production admits only attested secure-enclave keys", () => {
-    expect(profile.registration).toEqual({
+  it("FD-PROF-052 FD-PROF-064 production admits secure-enclave keys, attested from phase 1", () => {
+    expect(profile.registration).toEqual({ key_stores: ["secure-enclave"], attestation: "none" });
+    expect(buildProfile("production", 1).registration).toEqual({
       key_stores: ["secure-enclave"],
       attestation: "verifier",
     });
@@ -712,10 +745,17 @@ describe("deployments", () => {
         path: "registration.key_stores",
         reason: "a production deployment admits only secure-enclave keys",
       },
+    ]);
+  });
+
+  it("FD-PROF-064 a production deployment at phase 1 requires the attestation verifier", () => {
+    expect(
+      rejections(committed, committed.policy_version, { ...validationContext, phase: 1 }),
+    ).toEqual([
       {
         item: "registration",
         path: "registration.attestation",
-        reason: "a production deployment requires the attestation verifier",
+        reason: "a production deployment at phase 1 sets attestation verifier",
       },
     ]);
   });
@@ -731,5 +771,50 @@ describe("deployments", () => {
       ),
     );
     expect(delivered).toEqual(development);
+  });
+});
+
+describe("phases", () => {
+  /** The application ports whose Layers exist: `checkRun` serves the effect applier. */
+  const supplied = [
+    "effect-applier",
+    "gate-decision-source",
+    "configuration-source",
+    "applier-rate-limit",
+  ];
+  const always = APPLICATION_PORTS.filter((p) => p.required === "always").map((p) => p.id);
+
+  it("FD-PROF-064 MAMEKO-HOST-043 the phase 0 document needs no port beyond the always-ports", () => {
+    expect(requiredApplicationPorts(portUses(profile))).toEqual(always);
+    // The alarm port's Layer is the dispatcher's (FD-OPS-053), outside the profile.
+    expect(missingPorts(profile, supplied)).toEqual(["alarm-port"]);
+    expect(missingPorts(buildProfile("development"), supplied)).toEqual(["alarm-port"]);
+  });
+
+  it("FD-PROF-064 MAMEKO-HOST-043 phase 4 needs the gha launcher and the attestation verifier", () => {
+    expect(missingPorts(phase4, [...supplied, "alarm-port"])).toEqual([
+      "launcher:gha",
+      "attestation-verifier",
+    ]);
+  });
+
+  it("FD-PROF-064 the validator rejects a phase 4 document at phase 0", () => {
+    const four = buildProfile("production", 4);
+    expect(rejections(four, four.policy_version).map((r) => [r.path, r.reason])).toEqual([
+      ["registration.attestation", "a production deployment at phase 0 sets attestation none"],
+      ["classes[release].cloud_kinds", "gha enters at phase 4"],
+      ["classes[required].cloud_kinds", "aws enters at phase 3"],
+      ["classes[required].cloud_kinds", "gha enters at phase 4"],
+      ["classes[interactive].cloud_kinds", "gha enters at phase 4"],
+      ["classes[batch].cloud_kinds", "gha enters at phase 4"],
+      ["placement.launcher_kinds", "a launcher kind enters at phase 4"],
+      ["placement.constraints", "the declared constraints enter at phase 4"],
+    ]);
+  });
+
+  it("each phase has its own policy version", () => {
+    expect(profile.policy_version).toBe("flare-dispatch.v2.0");
+    expect(buildProfile("development").policy_version).toBe("flare-dispatch.v2.0-dev");
+    expect(phase4.policy_version).toBe("flare-dispatch.v2.0-phase4");
   });
 });

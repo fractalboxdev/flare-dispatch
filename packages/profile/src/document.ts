@@ -21,24 +21,42 @@ import type { Predicate, Profile } from "./schema.ts";
  */
 export type Deployment = "production" | "development";
 
-const registrations: { readonly [D in Deployment]: Profile["registration"] } = {
-  production: { key_stores: ["secure-enclave"], attestation: "verifier" },
-  development: { key_stores: ["software"], attestation: "none" },
-};
+/**
+ * The roadmap phase the document serves. A kind, launcher or verifier enters the profile only in the phase whose
+ * Layer the dispatcher supplies, because mameko rejects a control plane that uses a port with no Layer
+ * (FD-PROF-064, MAMEKO-HOST-043).
+ */
+export type Phase = 0 | 1 | 2 | 3 | 4;
 
-/** Each deployment has its own version: mameko's loader rejects one version carrying two contents. */
-const policyVersions: { readonly [D in Deployment]: string } = {
-  production: "flare-dispatch.v2.0",
-  development: "flare-dispatch.v2.0-dev",
-};
+/** The phase the committed documents serve. */
+export const CURRENT_PHASE: Phase = 0;
+
+const registrationFor = (deployment: Deployment, phase: Phase): Profile["registration"] =>
+  deployment === "development"
+    ? { key_stores: ["software"], attestation: "none" }
+    : { key_stores: ["secure-enclave"], attestation: phase >= 1 ? "verifier" : "none" };
+
+/**
+ * Each deployment has its own version, and a phase after 0 adds its own suffix: mameko's loader rejects one version
+ * carrying two contents.
+ */
+const policyVersionFor = (deployment: Deployment, phase: Phase): string =>
+  `flare-dispatch.v2.0${deployment === "development" ? "-dev" : ""}${phase === 0 ? "" : `-phase${phase}`}`;
+
+/** `cloudflare` in every phase; `aws` for `required` from phase 3; `gha` last from phase 4. */
+const cloudKindsFor = (cls: string, phase: Phase): string[] => [
+  "cloudflare",
+  ...(cls === "required" && phase >= 3 ? ["aws"] : []),
+  ...(phase >= 4 ? ["gha"] : []),
+];
 
 /** P0 to P3. `cloud-pinned` keeps `release` off devices; `required` is the one firm class. */
-const classes: Profile["classes"] = [
+const classesFor = (phase: Phase): Profile["classes"] => [
   {
     name: "release",
     rank: 0,
     claim_deadline: "none",
-    cloud_kinds: ["cloudflare", "gha"],
+    cloud_kinds: cloudKindsFor("release", phase),
     line: "budget",
     guaranteed: true,
     terminal_outcome: { outcome: "failure", reason: "budget: release reserve exhausted" },
@@ -53,7 +71,7 @@ const classes: Profile["classes"] = [
     name: "required",
     rank: 1,
     claim_deadline: { seconds: 60 },
-    cloud_kinds: ["cloudflare", "aws", "gha"],
+    cloud_kinds: cloudKindsFor("required", phase),
     line: "next-above-less-reserve",
     guaranteed: true,
     firm: true,
@@ -68,7 +86,7 @@ const classes: Profile["classes"] = [
     name: "interactive",
     rank: 2,
     claim_deadline: { seconds: 300 },
-    cloud_kinds: ["cloudflare", "gha"],
+    cloud_kinds: cloudKindsFor("interactive", phase),
     line: "next-above-less-reserve",
     guaranteed: true,
     terminal_outcome: { outcome: "failure", reason: "budget" },
@@ -81,7 +99,7 @@ const classes: Profile["classes"] = [
     name: "batch",
     rank: 3,
     claim_deadline: "staleness",
-    cloud_kinds: ["cloudflare", "gha"],
+    cloud_kinds: cloudKindsFor("batch", phase),
     line: { general_band_ratio: 0.45, floor_ratio: 0.1 },
     guaranteed: true,
     terminal_outcome: "deferred",
@@ -310,14 +328,10 @@ const anyShape = {
 const withLabels = (...labels: string[]) => ({ ...anyShape, labels });
 
 /**
- * The generic constraints' parameters, the `gha` launcher and five declared constraints. Every class lists `gha`
- * last, so a macOS release-matrix job of any class keeps `gha`; the constraints remove `gha` from every other run.
+ * From phase 4: the `gha` launcher and five declared constraints. Every class lists `gha` last, so a macOS
+ * release-matrix job of any class keeps `gha`; the constraints remove `gha` from every other run.
  */
-const placement: Profile["placement"] = {
-  cloud_pinned: all(isClass("release"), not(label("release-matrix"))),
-  cloud_only: { trigger: "tag-push" },
-  local_only: { undeclared_class: true },
-  cloud_pinned_kinds: ["cloudflare"],
+const ghaPlacement = {
   launcher_kinds: ["gha"],
   constraints: [
     {
@@ -350,7 +364,18 @@ const placement: Profile["placement"] = {
     withLabels("reproduction", "expose-port"),
     withLabels("apple-build", "expose-port"),
   ],
-};
+} satisfies Partial<Profile["placement"]>;
+
+/** The generic constraints' parameters in every phase; before phase 4 no launcher and no declared constraint. */
+const placementFor = (phase: Phase): Profile["placement"] => ({
+  cloud_pinned: all(isClass("release"), not(label("release-matrix"))),
+  cloud_only: { trigger: "tag-push" },
+  local_only: { undeclared_class: true },
+  cloud_pinned_kinds: ["cloudflare"],
+  ...(phase >= 4
+    ? ghaPlacement
+    : { launcher_kinds: [], constraints: [], required: [], unreachable: [] }),
+});
 
 const cap = (cls: string, max: number, min = 0) => ({ class: cls, max, min });
 
@@ -371,10 +396,13 @@ export const poolAdmissionCaps: Readonly<Record<string, { readonly admission_cap
   control: { admission_cap: 16 },
 };
 
-/** The profile for a deployment; only the policy version and `registration` differ between deployments. */
-export const buildProfile = (deployment: Deployment): Profile => ({
-  policy_version: policyVersions[deployment],
-  classes,
+/**
+ * The profile for a deployment at a phase. Deployments differ only in the policy version and `registration`; phases
+ * differ in the cloud kinds, the placement launcher and constraints, and the attestation of `registration`.
+ */
+export const buildProfile = (deployment: Deployment, phase: Phase = CURRENT_PHASE): Profile => ({
+  policy_version: policyVersionFor(deployment, phase),
+  classes: classesFor(phase),
   /** Per-class caps inside each Container pool's admission cap (FD-PROF-032). */
   // TODO(maintainer): FD-PROF-032 keeps 2 slots for P0 and P1 together; a floor over a group of classes waits on
   // mameko specs/profiles.md § Open items, so `min: 2` sits on `required` alone.
@@ -466,10 +494,10 @@ export const buildProfile = (deployment: Deployment): Profile => ({
     agent: { grants: ["model-gateway", "git-remote"], other_hosts: "read-only" },
   },
   signing_purposes: ["statement", "cache-entry"],
-  placement,
+  placement: placementFor(phase),
   cache_namespaces: "cacheNamespaces",
   capacity: { grant: "capacityGrant" },
-  registration: registrations[deployment],
+  registration: registrationFor(deployment, phase),
   host: {
     adapter: "host-cloudflare",
     features: ["cloudflare-containers", "durable-object-alarms"],
@@ -481,15 +509,18 @@ export const buildProfile = (deployment: Deployment): Profile => ({
   reason_kinds: { provenance: "policy" },
 });
 
-/** The committed production profile. */
+/** The committed production profile at the current phase. */
 export const profile: Profile = buildProfile("production");
 
 /** The result-acceptance check's reason kinds, which MAMEKO-PROF-032 requires the profile to declare. */
 export const acceptanceReasonKinds: readonly string[] = ["provenance"];
 
 /** The profile as the configuration source delivers it: the document and its policy version. */
-export const profileDocumentFor = (deployment: Deployment): ProfileDocument => {
-  const document = buildProfile(deployment);
+export const profileDocumentFor = (
+  deployment: Deployment,
+  phase: Phase = CURRENT_PHASE,
+): ProfileDocument => {
+  const document = buildProfile(deployment, phase);
   return { document, policyVersion: document.policy_version };
 };
 
