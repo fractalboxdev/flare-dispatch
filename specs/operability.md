@@ -323,7 +323,7 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 
 ### Alerts
 
-- **FD-OPS-053** · phase 0 · `V-UNIT` — FlareDispatch's alarm port must show every alarm the coordinator raises on the dashboard and send it to the alert sink the operator overlay names.
+- **FD-OPS-053** · phase 0 · `V-UNIT` `V-DEPLOY` — FlareDispatch's alarm port, a Layer the dispatcher supplies in phase 0 because mameko requires the port on every control plane ([MAMEKO-HOST-043](https://github.com/fractalboxdev/mameko/blob/8530203ba76ba00961e236b1fcea4f34b401bba1/specs/hosts.md)), must show every alarm the coordinator raises on the dashboard and send it to the alert sink the operator overlay names, so that no phase 0 deploy passes configuration validation without it.
 - **FD-OPS-056** · phase 0 · `V-DEPLOY` — If the operator overlay names no alert sink, then `fd deploy` must reject the overlay.
 - **FD-OPS-057** · phase 0 · `V-UNIT` — Every page-severity alarm message the alarm port sends must name the runbook entry that handles it.
 
