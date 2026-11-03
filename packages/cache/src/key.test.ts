@@ -1,7 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "./crypto.ts";
@@ -108,19 +105,24 @@ describe("cache keys", () => {
   });
 });
 
-/** Runs the wrapper with a `PATH` of fake `rustc` (and optionally `sccache`) scripts. */
+/**
+ * Runs the wrapper with fake `rustc` (and optionally `sccache`) as shell functions, which `command -v` finds as it
+ * finds an executable on `PATH`. No executable file is written, so no first-run executable check delays the spawn.
+ */
 const wrap = (opts: { sccache: "ok" | "refuses" | "absent"; env?: Record<string, string> }) => {
-  const dir = mkdtempSync(join(tmpdir(), "fd-cc-"));
-  const script = (name: string, body: string) => {
-    writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`);
-    chmodSync(join(dir, name), 0o755);
-  };
-  script("rustc", "printf 'rustc 1.90.0\\nrelease: 1.90.0\\nhost: x86_64-unknown-linux-gnu\\n'");
-  if (opts.sccache !== "absent")
-    script("sccache", opts.sccache === "ok" ? "exit 0" : '[ "$1" = "--start-server" ] && exit 1; exit 0');
+  const fakes = [
+    "rustc() { printf 'rustc 1.90.0\\nrelease: 1.90.0\\nhost: x86_64-unknown-linux-gnu\\n'; }",
+    ...(opts.sccache === "absent"
+      ? []
+      : [
+          opts.sccache === "ok"
+            ? "sccache() { return 0; }"
+            : 'sccache() { [ "$1" = "--start-server" ] && return 1; return 0; }',
+        ]),
+  ];
   const command = 'echo "W=${RUSTC_WRAPPER:-none} I=${CARGO_INCREMENTAL:-unset} P=${SCCACHE_WEBDAV_KEY_PREFIX:-none}"';
-  const out = spawnSync("/bin/sh", ["-c", compileCacheCommand(command, "Acme/widgets")!], {
-    env: { PATH: `${dir}:/usr/bin:/bin`, SCCACHE_WEBDAV_ENDPOINT: "https://ci.example.com/v1/compile-cache", SCCACHE_WEBDAV_TOKEN: "t", ...opts.env },
+  const out = spawnSync("/bin/sh", ["-c", [...fakes, compileCacheCommand(command, "Acme/widgets")!].join("\n")], {
+    env: { PATH: "/usr/bin:/bin", SCCACHE_WEBDAV_ENDPOINT: "https://ci.example.com/v1/compile-cache", SCCACHE_WEBDAV_TOKEN: "t", ...opts.env },
     encoding: "utf8",
   });
   return { status: out.status, stdout: out.stdout };

@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { freshDb, recordingAlarms, type TestDb } from "./d1.test-support.ts";
+import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
 import {
   classFigures,
   DASHBOARD_LINK_TTL_S,
@@ -20,7 +20,7 @@ import {
 
 let t: TestDb;
 beforeEach(async () => {
-  t = await freshDb();
+  t = await sqliteDb();
 });
 afterEach(() => t.dispose());
 
@@ -115,8 +115,15 @@ describe("executions view", () => {
   });
 
   it("[FD-OPS-068] pages with a keyset cursor at 50 by default and at most 200 rows", async () => {
-    for (let i = 0; i < 205; i++)
-      await execution(`e${String(i).padStart(3, "0")}`, { enqueued_at: NOW - i });
+    await t.db.batch(
+      Array.from({ length: 205 }, (_, i) =>
+        t.db
+          .prepare(
+            "insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'check', 'required', 'pending', ?)",
+          )
+          .bind(`e${String(i).padStart(3, "0")}`, NOW - i),
+      ),
+    );
     const q = (search: string) => parseExecutionQuery(new URL(`https://x/${search}`));
     expect(q("").limit).toBe(50);
     expect(q("?limit=500").limit).toBe(200);
