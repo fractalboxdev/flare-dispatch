@@ -1,7 +1,8 @@
 import { it } from "@effect/vitest";
-import { Cause, Effect, Exit, Fiber, Option, TestClock } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import { describe, expect } from "vitest";
 import { Sandbox, type CheckCommandService } from "../services/sandbox";
+import { StepRunner } from "../services/step-runner";
 import { makeCFRuntimeTest } from "../testing";
 import { durableExec, pollDelayMs } from "./durable-exec";
 
@@ -32,19 +33,25 @@ describe("durableExec", () => {
   it.effect("a four-hour command spends a few hundred steps, well inside the instance step cap", () => {
     const { layer, handles } = makeCFRuntimeTest();
     const calls: string[] = [];
+    let sleptMs = 0;
     return Effect.gen(function* () {
       const original = yield* Sandbox;
-      const running = yield* Effect.fork(
-        durableExec({ name: "build", workspace: ws, ensure: Effect.succeed, exec: exec(14_400) }).pipe(
-          Effect.provideService(Sandbox, { ...original, checkCommand: neverExits(calls) }),
-        ),
+      const runner = yield* StepRunner;
+      // A Workflows step runner sleeps through `step.sleep`; this one records
+      // each sleep and returns at once, so the poll loop's hundreds of sleeps
+      // cost no test-clock adjustment.
+      yield* durableExec({ name: "build", workspace: ws, ensure: Effect.succeed, exec: exec(14_400) }).pipe(
+        Effect.provideService(Sandbox, { ...original, checkCommand: neverExits(calls) }),
+        Effect.provideService(StepRunner, {
+          ...runner,
+          sleep: (_name, ms) => Effect.sync(() => void (sleptMs += ms)),
+        }),
       );
-      yield* TestClock.adjust("5 hours");
-      yield* Fiber.join(running);
       expect(calls.length).toBeGreaterThan(200);
       expect(calls.length).toBeLessThan(320);
+      expect(sleptMs).toBeGreaterThan(14_400_000);
       // Sleeps hibernate the instance and do not count toward the step cap.
-      expect(handles.executions.steps.filter((s) => !s.name.includes("-sleep-")).length).toBeLessThan(330);
+      expect(handles.executions.steps.length).toBeLessThan(330);
     }).pipe(Effect.provide(layer));
   });
 
