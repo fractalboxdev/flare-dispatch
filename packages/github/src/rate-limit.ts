@@ -74,6 +74,8 @@ export class InstallationQuota extends Context.Service<
     readonly observe: (limitKey: string, observation: QuotaObservation) => Effect.Effect<void>;
     readonly acquire: (request: PermitRequest) => Effect.Effect<PermitAnswer>;
     readonly release: (permitId: string) => Effect.Effect<void>;
+    /** The installation's remaining budget as a share of its limit; 1 before any response reports one. */
+    readonly remainingShare: (limitKey: string) => Effect.Effect<number>;
   }
 >()("@fractalboxdev/flare-dispatch-github/InstallationQuota") {}
 
@@ -200,6 +202,14 @@ export const installationQuotaLayer = (options: QuotaOptions = quotaOptionsDefau
                 },
               ] as const;
             });
+          }),
+        remainingShare: (limitKey) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            const s = (yield* Ref.get(states)).installations.get(limitKey);
+            if (s === undefined || s.limit <= 0) return 1;
+            if (s.resetAt > 0 && now >= s.resetAt) return 1;
+            return s.remaining / s.limit;
           }),
         // An unknown or already released permit changes nothing, so a repeated release is harmless.
         release: (permitId) =>
