@@ -416,19 +416,17 @@ describe("improve-pr", () => {
   it("FD-AGT-067 an edit loop that cannot start concludes infra: edit loop unavailable", async () => {
     const rec = recorder();
     const result = await Effect.runPromise(
-      improvePrRun.workflow
-        .execute(payload("improve-pr", { baseBranch: "main", dimension }))
-        .pipe(
-          Effect.provide(
-            Layer.provideMerge(
-              improvePrRun.layer,
-              fakeServices(rec, {
-                shell: () => ({ exitCode: 0, stdout: "1", stderr: "" }),
-                editLoop: () => 127,
-              }),
-            ),
+      improvePrRun.workflow.execute(payload("improve-pr", { baseBranch: "main", dimension })).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            improvePrRun.layer,
+            fakeServices(rec, {
+              shell: () => ({ exitCode: 0, stdout: "1", stderr: "" }),
+              editLoop: () => 127,
+            }),
           ),
         ),
+      ),
     );
     expect(result).toEqual({ _tag: "failure", reason: "infra: edit loop unavailable" });
   });

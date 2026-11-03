@@ -40,7 +40,7 @@ describe("declaration", () => {
     ).toEqual([{ run: "x", reason: "policy: trifecta" }]);
   });
 
-  it("FD-AGT-009 FD-AGT-039 offers exactly the eight write kinds and no merge kind", () => {
+  it("FD-AGT-009 FD-AGT-039 offers exactly the eight write kinds and no merge kind (S8 assumption)", () => {
     expect(WRITE_KINDS).toEqual([
       "comment",
       "review",
