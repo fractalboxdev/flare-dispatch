@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // mameko exports its TypeScript sources with `.ts` import specifiers; the R2, D1 and Durable Object types come
+    // from the Workers types, and the Miniflare suite reaches for Node.
+    "allowImportingTsExtensions": true,
+    "types": ["@cloudflare/workers-types", "node"]
+  },
+  "include": ["src/**/*.ts"]
+}
