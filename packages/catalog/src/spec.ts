@@ -42,6 +42,8 @@ export interface RunSpecFields {
     readonly maxDurationSec: number;
     readonly qosClass: string;
     readonly qosCeiling: string;
+    /** The model allowance of a run that calls the gateway (specs/runs/agentic.md § Model). */
+    readonly modelAllowanceUsd?: number;
   };
   readonly retries: number;
   readonly constraints: readonly string[];
@@ -50,6 +52,25 @@ export interface RunSpecFields {
   readonly outputPaths: readonly string[];
   readonly needsModel: boolean;
   readonly intentKinds: readonly string[];
+  /** A run's own schedules, beside any a manifest entry names. */
+  readonly schedules?: readonly { readonly cron: string }[];
+}
+
+/** An agentic recipe's declaration as the catalogue carries it (specs/runs/agentic.md § Declaration and catalog). */
+export interface AgenticEntryFields {
+  readonly declaration: {
+    readonly callSites: readonly { readonly name: string; readonly tier: string }[];
+    readonly needsModel: boolean;
+    readonly dataClasses: {
+      readonly privateData: boolean;
+      readonly untrustedInput: boolean;
+      readonly outbound: boolean;
+    };
+    readonly intentKinds: readonly string[];
+    readonly writeback?: unknown;
+  };
+  /** The trigger kinds that start the recipe. */
+  readonly triggers: readonly string[];
 }
 
 const gate = (
@@ -89,6 +110,8 @@ export interface CatalogEntry {
   readonly containerRateUsdPerHour: number | null;
   /** The application capabilities the run reads beside mameko's, which stay out of `requires`. */
   readonly appCapabilities: readonly "GithubRead"[];
+  /** An agentic recipe's declaration and triggers; absent for a gate run. */
+  readonly agentic?: AgenticEntryFields;
   /**
    * The run executes on the device's host OS, outside any job sandbox. MAMEKO-ISO-001 forbids that, and no conformant
    * macOS runtime exists, so such a run stays reachable only under the `development` deployment.

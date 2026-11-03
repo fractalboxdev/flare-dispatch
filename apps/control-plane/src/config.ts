@@ -42,6 +42,8 @@ export interface ControlPlaneEnv extends CacheEnv {
   /** The Slack verdict endpoint and its signing secret. */
   readonly SLACK_URL?: string;
   readonly SLACK_SECRET?: string;
+  /** The gate image's digest, `sha256:<hex>`, which every lease outside a device host execution names. */
+  readonly GATE_IMAGE_DIGEST?: string;
   /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */
   readonly FD_DEV_REPOSITORY?: string;
 }

@@ -9,6 +9,7 @@ import {
 } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect, Match } from "effect";
 import { leaseCache } from "./cache.ts";
+import { imageDigestOf } from "./lease.ts";
 import {
   channelConfig,
   deployment,
@@ -30,9 +31,6 @@ const hex = (bytes: ArrayBuffer) =>
 const sha256 = async (text: string) =>
   hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
 
-/** The image a host execution names: it runs in no image, and a lease must carry the field. */
-const NO_IMAGE = "none: host execution";
-
 /** A lease's progress timeout, from `defineRun`'s default. */
 const PROGRESS_TIMEOUT_MS = 300_000;
 
@@ -50,22 +48,27 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
         if (record === null) return yield* new ExecutionInputsMissing({ executionId });
         const { inputs, deadlineAtMs } = record;
         const { results } = yield* Effect.promise(() =>
-          env.DB.prepare("select run, scope_id from executions where id = ?")
+          env.DB.prepare(
+            `select e.run, e.scope_id, x.kind from executions e
+             left join placements p on p.execution_id = e.id
+             left join executors x on x.executor_id = p.executor_id where e.id = ?`,
+          )
             .bind(executionId)
             .all(),
         );
-        const row = results[0] as { run: string; scope_id: string };
-        const run = Match.value(lookupRun(deployment(env), row.run)).pipe(
-          Match.tag("Available", ({ entry }) => entry.spec),
+        const row = results[0] as { run: string; scope_id: string; kind: string | null };
+        const entry = Match.value(lookupRun(deployment(env), row.run)).pipe(
+          Match.tag("Available", ({ entry }) => entry),
           Match.orElse(() => null),
         );
+        const run = entry?.spec ?? null;
         return {
           run: row.run,
           run_digest: yield* Effect.promise(() => sha256(`${row.run}@${run?.version ?? ""}`)),
           run_version: run?.version ?? "",
           workflow_version: 1,
           request_context: null,
-          image_digest: NO_IMAGE,
+          image_digest: yield* imageDigestOf(entry, row.kind ?? "device", env.GATE_IMAGE_DIGEST),
           scope_id: row.scope_id,
           inputs,
           deadline_at: deadlineAtMs,

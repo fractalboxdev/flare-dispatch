@@ -21,6 +21,7 @@ export {
   type ExecutorKind,
   type RunLookup,
   type RunSpecFields,
+  type AgenticEntryFields,
 } from "./spec.ts";
 export * from "./inputs.ts";
 export * from "./manifest.ts";
