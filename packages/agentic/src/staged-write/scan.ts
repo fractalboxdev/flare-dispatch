@@ -38,13 +38,12 @@ export const urlHostsIn = (text: string): readonly string[] =>
     }
   });
 
-/** A host is allowed when it equals an allowlisted host or is a subdomain of one. */
+/**
+ * A host is allowed when it is in the link allowlist, compared lower-cased (FD-AGT-031, FD-AGT-032); a subdomain of an
+ * allowlisted host is not, and an empty entry admits no host.
+ */
 export const hostAllowed = (host: string, allowlist: readonly string[]): boolean =>
-  host !== "" &&
-  allowlist.some((entry) => {
-    const allowed = entry.toLowerCase();
-    return host === allowed || host.endsWith(`.${allowed}`);
-  });
+  host !== "" && allowlist.some((entry) => entry.toLowerCase() === host);
 
 /** A run of at least 64 base64 or hexadecimal characters (FD-AGT-033). */
 const ENCODED_RUN = /[A-Za-z0-9+/_-]{64,}/;

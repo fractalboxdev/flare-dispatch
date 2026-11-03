@@ -179,7 +179,7 @@ def manifestReasons (m : Manifest) (spec : Spec) (ev : Evidence) : List Reason :
   let maxFiles := spec.maxFiles.getD defaultMaxFiles
   let maxBytes := spec.maxBytes.getD defaultMaxBytes
   let total := (m.entries.map fun e => ((blobFor ev e.path).map (·.size)).getD 0).sum
-  (if !branchPrefix.toList.isPrefixOf m.branch.toList || m.branch == branchPrefix then [{ kind := "branch-invalid" }]
+  (if !branchPrefix.toList.isPrefixOf m.branch.toList then [{ kind := "branch-invalid" }]
   else []) ++
   (if m.entries.length > maxFiles then
     [{ kind := "too-many-files", detail := some (toString m.entries.length ++ " > " ++ toString maxFiles) }]

@@ -219,11 +219,12 @@ describe("stagedWriteGate", () => {
     expect(verdict).toEqual({ _tag: "reject", reasons: [{ kind: "mode-invalid", path: "link" }] });
   });
 
-  it("FD-AGT-028 rejects a branch outside flare-dispatch/", () => {
+  it("FD-AGT-028 rejects a branch that does not start with flare-dispatch/", () => {
     expect(kinds(gate({ a: "x" }, { over: { branch: "feature/x" } }))).toEqual(["branch-invalid"]);
-    expect(kinds(gate({ a: "x" }, { over: { branch: "flare-dispatch/" } }))).toEqual([
+    expect(kinds(gate({ a: "x" }, { over: { branch: "flare-dispatch" } }))).toEqual([
       "branch-invalid",
     ]);
+    expect(kinds(gate({ a: "x" }, { over: { branch: "flare-dispatch/" } }))).toEqual([]);
   });
 
   it("FD-AGT-029 rejects credential patterns in added lines and text fields, and issued credentials", () => {
@@ -285,12 +286,22 @@ describe("stagedWriteGate", () => {
           { a: "x" },
           {
             model: true,
-            over: body("see https://docs.example.org/p"),
+            over: body("see https://Example.ORG/p"),
             spec: { linkAllowlist: ["example.org"] },
           },
         ),
       ),
     ).toEqual([]);
+    // A subdomain of an allowlisted host is not in the allowlist, and an empty entry admits no host.
+    for (const [text, allow] of [
+      ["see https://docs.example.org/p", ["example.org"]],
+      ["see http://evil.com./x", [""]],
+    ] as const)
+      expect(
+        kinds(
+          gate({ a: "x" }, { model: true, over: body(text), spec: { linkAllowlist: [...allow] } }),
+        ),
+      ).toEqual(["url-not-allowed"]);
     expect(kinds(gate({ a: "x" }, { model: true, over: { message: "http://x.test/" } }))).toEqual([
       "url-not-allowed",
     ]);

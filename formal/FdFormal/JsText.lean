@@ -283,12 +283,10 @@ def hostOf (scheme : Nat) (m : List Char) : List Char :=
 def urlHostsIn (s : List Char) : List (List Char) :=
   (urlMatches (s.length + 1) none s).map fun (k, m) => hostOf k m
 
-/-- `hostAllowed(host, allowlist)`: a non-empty host equal to an allowlisted host or a subdomain of one. -/
+/-- `hostAllowed(host, allowlist)`: a non-empty host that is in the allowlist, compared lower-cased (FD-AGT-031,
+FD-AGT-032). An empty entry admits no host. -/
 def hostAllowed (host : List Char) (allowlist : List String) : Bool :=
-  !host.isEmpty &&
-    allowlist.any fun e =>
-      let a := lower e.toList
-      host == a || ('.' :: a).isSuffixOf host
+  !host.isEmpty && allowlist.any fun e => host == lower e.toList
 
 /-! ### Path globs -/
 

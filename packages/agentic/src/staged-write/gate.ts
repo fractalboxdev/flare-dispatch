@@ -161,8 +161,7 @@ export const stagedWriteGate = (
   const links = [evidence.githubHost, ...(spec.linkAllowlist ?? [])];
   const blobs = new Map(evidence.blobs.map((b) => [b.path, b]));
 
-  if (!manifest.branch.startsWith(BRANCH_PREFIX) || manifest.branch.length === BRANCH_PREFIX.length)
-    reasons.push({ kind: "branch-invalid" });
+  if (!manifest.branch.startsWith(BRANCH_PREFIX)) reasons.push({ kind: "branch-invalid" });
   if (manifest.entries.length > maxFiles)
     reasons.push({ kind: "too-many-files", detail: `${manifest.entries.length} > ${maxFiles}` });
   const total = manifest.entries.reduce((n, e) => n + (blobs.get(e.path)?.size ?? 0), 0);
