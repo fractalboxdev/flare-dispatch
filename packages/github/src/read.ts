@@ -78,6 +78,10 @@ export class GithubRead extends Context.Service<
       repo: string,
       branch: string,
     ) => Effect.Effect<readonly string[], GithubReadError>;
+    /** The `<owner>/<repo>` names an installation covers, at most 100. */
+    readonly repositories: (
+      installation: number,
+    ) => Effect.Effect<readonly string[], GithubReadError>;
   }
 >()("@fractalboxdev/flare-dispatch-github/GithubRead") {}
 
@@ -185,6 +189,18 @@ export const githubReadLayer = (options: GithubClientOptions) =>
               decode(Schema.Struct({ check_runs: Schema.Array(CheckRunSummary) })),
             ),
             (r) => r.check_runs,
+          ),
+        repositories: (id) =>
+          Effect.map(
+            Effect.flatMap(
+              request<unknown>(id, "GET", "/installation/repositories?per_page=100"),
+              decode(
+                Schema.Struct({
+                  repositories: Schema.Array(Schema.Struct({ full_name: Schema.String })),
+                }),
+              ),
+            ),
+            (r) => r.repositories.map((x) => x.full_name),
           ),
         requiredChecks: (repo, branch) =>
           Effect.gen(function* () {

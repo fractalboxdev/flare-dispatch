@@ -160,6 +160,8 @@ export class GithubApp extends Context.Service<
     readonly evictInstallation: (installation: number) => Effect.Effect<void>;
     /** Drops the repository mappings of removed repositories (FD-GH-066). */
     readonly evictRepositories: (repos: readonly string[]) => Effect.Effect<void>;
+    /** The App's installation ids, at most 100. */
+    readonly installations: Effect.Effect<readonly number[], GithubError | AppKeyInvalid>;
   }
 >()("@fractalboxdev/flare-dispatch-github/GithubApp") {}
 
@@ -307,6 +309,22 @@ export const githubAppLayer = (options: AppOptions) =>
               repos: new Map([...s.repos].filter(([, id]) => id !== installation)),
             };
           }),
+        installations: Effect.gen(function* () {
+          const { status, json } = yield* appCall(
+            options,
+            `Bearer ${yield* jwt}`,
+            "GET",
+            "/app/installations?per_page=100",
+          );
+          if (status < 200 || status >= 300) return yield* httpError(status, json);
+          const list = yield* Schema.decodeUnknownEffect(Schema.Array(RepoInstallation))(json).pipe(
+            Effect.mapError(
+              (e) =>
+                new GithubNetworkError({ sent: false, message: `installations: ${e.message}` }),
+            ),
+          );
+          return list.map((i) => i.id);
+        }),
         evictRepositories: (repos) =>
           Ref.update(state, (s) => {
             const gone = new Set(repos.map(repoKey));

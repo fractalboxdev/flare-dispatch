@@ -183,6 +183,13 @@ export const fakeReadLayer = (state: FakeReads) => {
     openPulls: (repo) => read("openPulls", repo, (r) => r.pulls),
     checkRuns: (repo, sha) => read("checkRuns", repo, (r) => r.checkRuns[sha] ?? []),
     requiredChecks: (repo, branch) => read("requiredChecks", repo, (r) => r.required[branch] ?? []),
+    repositories: (installation) =>
+      Effect.sync(() => {
+        state.calls.push(`repositories ${installation}`);
+        return Object.keys(state.installations).filter(
+          (r) => state.installations[r] === installation,
+        );
+      }),
   });
 };
 

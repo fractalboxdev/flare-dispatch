@@ -32,7 +32,7 @@ export const githubApplicationLayer = (
   ).pipe(Layer.provide(installationQuotaLayer(quota)));
 
 /**
- * Every GitHub service of one isolate under the App's own authority: `GithubApp`, `InstallationDirectory`,
+ * Every GitHub service of one isolate under the App's own authority: `GithubApp`, `InstallationDirectory`, `GithubClient`,
  * `GithubRead`, `InstallationQuota`, the applier and the applier rate limit. The application supplies `AlarmPort`.
  * Build it once per isolate, so the token cache, the repository mapping and the quota outlive one request.
  */
@@ -45,7 +45,7 @@ export const githubLiveLayer = (app: AppOptions, quota: QuotaOptions = quotaOpti
         ...(app.baseUrl === undefined ? {} : { baseUrl: app.baseUrl }),
       };
       return Layer.mergeAll(
-        CheckRunApplierLive.pipe(Layer.provide(githubClientLayer(options))),
+        CheckRunApplierLive.pipe(Layer.provideMerge(githubClientLayer(options))),
         githubReadLayer(options),
         ApplierRateLimitLive,
       );
