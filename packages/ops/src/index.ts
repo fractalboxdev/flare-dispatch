@@ -19,3 +19,6 @@ export * from "./routes.ts";
 export * from "./spend.ts";
 export * from "./tick.ts";
 export * from "./architecture.ts";
+export * from "./verification/formal.ts";
+export * from "./verification/phase-gate.ts";
+export * from "./verification/spec-tags.ts";

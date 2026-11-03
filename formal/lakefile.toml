@@ -1,0 +1,5 @@
+name = "FdFormal"
+defaultTargets = ["FdFormal"]
+
+[[lean_lib]]
+name = "FdFormal"
