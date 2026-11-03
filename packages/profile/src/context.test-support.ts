@@ -26,6 +26,7 @@ export const bindings: ValidationContext["bindings"] = {
   functions: [
     "resolveClass",
     "idempotencyKeyRecipe",
+    "dispatchBodyDigest",
     "followOnRecipe",
     "commitRecipe",
     "checkOpenPayload",
