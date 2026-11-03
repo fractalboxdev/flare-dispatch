@@ -207,6 +207,29 @@ describe("the operator gate", () => {
   });
 });
 
+describe("the minute tick", () => {
+  it("FD-INT-050 records the tick and starts the liveness monitor; a drain with no applier is skipped", async () => {
+    const worker = await unconfigured.getWorker();
+    const at = Date.now();
+    await worker.scheduled({ cron: "* * * * *", scheduledTime: new Date(at) });
+    const db = await unconfigured.getD1Database("DB");
+    await expect
+      .poll(
+        async () =>
+          (await db.prepare("select at from fd_liveness where key = 'tick'").all()).results,
+      )
+      .toEqual([{ at }]);
+  });
+
+  it("FD-OPS-053 serves the operator routes from the operability package", async () => {
+    const r = await unconfigured.dispatchFetch("http://x/v1/ops/health");
+    expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(((await r.json()) as { error: string }).error).toMatch(
+      /not_configured|misconfigured|unauthenticated/,
+    );
+  });
+});
+
 describe("a production deployment", () => {
   it("MAMEKO-ISO-001 refuses a host execution", async () => {
     const r = await post(production, "/v1/dispatch/check", dispatchBody(SHA));

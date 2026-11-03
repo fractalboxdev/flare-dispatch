@@ -4,12 +4,13 @@
 import { NodeServices } from "@effect/platform-node";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { Command } from "effect/cli";
+import { makeOperability } from "@fractalboxdev/flare-dispatch-ops/cli";
 import { COMMANDS, type Subcommand } from "./commands.ts";
 import { FdConfigLive } from "./config.ts";
 import { CredentialStoreLive } from "./credentials.ts";
 import { LocalSchedulerSocket } from "./local-scheduler.ts";
 import { CloudflaredLogin } from "./login.ts";
-import { OperabilityNotInstalled } from "./operability.ts";
+import { Operability, OperabilityFailed } from "./operability.ts";
 import { EXIT, OutputLive } from "./outcome.ts";
 
 export const VERSION = "0.0.1";
@@ -18,7 +19,9 @@ export const VERSION = "0.0.1";
 export const FdLive = Layer.mergeAll(
   CredentialStoreLive,
   CloudflaredLogin,
-  OperabilityNotInstalled,
+  Layer.succeed(Operability)(
+    makeOperability({ fail: (message) => new OperabilityFailed({ message }) }),
+  ),
   OutputLive,
   LocalSchedulerSocket,
 ).pipe(Layer.provideMerge(FdConfigLive));

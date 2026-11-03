@@ -1,9 +1,11 @@
 // The v2 control plane Worker: mameko's coordinator on host-cloudflare, FlareDispatch's profile and the routes
 // `pnpm dogfood` drives. It shares no code with the v1 dispatcher.
+import { opsFetch, scheduledHandler, tickDepsFromEnv } from "@fractalboxdev/flare-dispatch-ops";
+import { CLASS_ORDER } from "@fractalboxdev/flare-dispatch-profile";
 import { routeExecutorUpgrade, runD1Migrations } from "@fractalboxdev/mameko-host-cloudflare";
 import { Cause, Effect } from "effect";
 import { ApiError, dispatch, getExecution, register, requireOperator } from "./api.ts";
-import { deployment, type ControlPlaneEnv } from "./config.ts";
+import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { EXECUTION_INPUTS_MIGRATION } from "./inputs.ts";
 
 export {
@@ -33,6 +35,13 @@ const route = (request: Request, env: ControlPlaneEnv, url: URL) =>
       return yield* Effect.promise(() =>
         routeExecutorUpgrade(request, { db: env.DB, channel: env.CHANNEL, planeId: env.PLANE_ID }),
       );
+    // The dashboard, `/v1/ops/*`, the install routes and `/v1/spend`, each behind its own gate.
+    const ops = yield* Effect.promise(() =>
+      opsFetch(request, env as unknown as Parameters<typeof opsFetch>[1], {
+        classes: CLASS_ORDER,
+      }),
+    );
+    if (ops !== null) return ops;
     yield* requireOperator(request, env);
     if (pathname === "/v1/executors/register" && method === "POST")
       return yield* register(request, env);
@@ -69,4 +78,10 @@ export default {
       ),
     );
   },
+  /** The minute tick (FD-INT-050): outbox drain, liveness record and the `cron-silent` alarm. */
+  scheduled: scheduledHandler((env: ControlPlaneEnv) =>
+    tickDepsFromEnv(env as unknown as Parameters<typeof tickDepsFromEnv>[0], {
+      profile: profileOf(env),
+    }),
+  ),
 };

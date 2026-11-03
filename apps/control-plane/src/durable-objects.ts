@@ -83,4 +83,6 @@ export class ExecutionEngine extends MamekoExecutionEngine<EngineEnv> {
   }
 }
 
-export { EpochAnchor, LivenessMonitor } from "@fractalboxdev/mameko-host-cloudflare";
+export { EpochAnchor } from "@fractalboxdev/mameko-host-cloudflare";
+/** mameko's monitor whose timed wake also raises `cron-silent` (MAMEKO-OPS-010). */
+export { FlareDispatchLivenessMonitor as LivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/worker";

@@ -1,6 +1,7 @@
 // The Worker's bindings, and the two `json` configurations host-cloudflare reads, derived from the profile so one
 // document decides both.
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
+import type { MonitorNamespace } from "@fractalboxdev/flare-dispatch-ops";
 import {
   buildProfile,
   deviceSlotDefaults,
@@ -22,6 +23,10 @@ export interface ControlPlaneEnv {
   };
   readonly EXECUTION: ExecutorChannelEnv["EXECUTION"];
   readonly EPOCH_ANCHOR: ExecutorChannelEnv["EPOCH_ANCHOR"];
+  /** The one `LivenessMonitor` object the minute tick starts. */
+  readonly MONITOR: MonitorNamespace;
+  /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
+  readonly ALERT_SINK?: string;
   readonly DEPLOYMENT?: string;
   readonly PLANE_ID: string;
   /** The bearer token of the operator routes. With none set, those routes answer `not_configured`. */

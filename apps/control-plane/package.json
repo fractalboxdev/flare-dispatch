@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@fractalboxdev/flare-dispatch-catalog": "workspace:*",
+    "@fractalboxdev/flare-dispatch-ops": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
     "@fractalboxdev/mameko-coordinator": "workspace:*",
     "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
