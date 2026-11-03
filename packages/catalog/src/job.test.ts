@@ -1,4 +1,4 @@
-import { Effect, Fiber, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCheck } from "./check.ts";
 import { CommandExit } from "./command.ts";
@@ -6,55 +6,44 @@ import { ctx, fakeArtifacts, fakeExec, SHA } from "./gate.test-support.ts";
 import type { GateJobInput } from "./inputs.ts";
 import { runGateJob, writebackBranch } from "./job.ts";
 import { runOxlint, OXLINT_PINNED_VERSION } from "./oxlint.ts";
-import {
-  GateCache,
-  localContentArtifacts,
-  LOCAL_CONTENT_MAX_BYTES,
-  UPLOAD_TIMEOUT_MS,
-  type CacheEntry,
-} from "./ports.ts";
-import { LocalContent } from "@fractalboxdev/mameko-run";
-import * as TestClock from "effect/testing/TestClock";
+import { GateCache, localContentArtifacts, type CacheEntry } from "./ports.ts";
+import { LocalContent, StoreUnavailable } from "@fractalboxdev/mameko-run";
 
 const run = <A>(effect: Effect.Effect<A, never, never>): Promise<A> => Effect.runPromise(effect);
 
 describe("artifacts on the device's local content store", () => {
   const stored: Uint8Array[] = [];
-  const store = (answer: "store" | "never") =>
+  const store = (answer: "store" | "refuse") =>
     Layer.succeed(LocalContent, {
       put: (bytes) =>
-        answer === "never"
-          ? Effect.never
+        answer === "refuse"
+          ? Effect.fail(new StoreUnavailable({ reason: "content socket closed" }))
           : Effect.sync(() => (stored.push(bytes), `sha256:${"0".repeat(64)}`)),
       get: () => Effect.never,
     });
 
-  it("FD-GATE-012 returns the verdict when the content socket cannot take the log", async () => {
-    const big = "x".repeat(LOCAL_CONTENT_MAX_BYTES + 1);
+  it("FD-GATE-012 uploads a step log of any size through the content store", async () => {
+    stored.length = 0;
+    const big = "x".repeat(110 * 1024);
     const exec = fakeExec([{ match: "pnpm test", output: big }]);
     const layer = Layer.mergeAll(
       exec.layer,
       localContentArtifacts.pipe(Layer.provide(store("store"))),
     );
     expect(await run(runGateJob(job()).pipe(Effect.provide(layer)))).toEqual({ _tag: "success" });
-    expect(stored).toEqual([]);
+    expect(stored.some((bytes) => bytes.length >= big.length)).toBe(true);
   });
 
-  it("FD-GATE-012 returns the verdict when the store never answers a put", async () => {
+  it("FD-GATE-012 returns the verdict when the store refuses a put", async () => {
     const exec = fakeExec([{ match: "pnpm test", exit: CommandExit.Exited({ code: 3 }) }]);
     const layer = Layer.mergeAll(
       exec.layer,
-      localContentArtifacts.pipe(Layer.provide(store("never"))),
-      TestClock.layer(),
+      localContentArtifacts.pipe(Layer.provide(store("refuse"))),
     );
-    const outcome = await run(
-      Effect.gen(function* () {
-        const fiber = yield* runGateJob(job()).pipe(Effect.forkChild);
-        yield* TestClock.adjust(UPLOAD_TIMEOUT_MS);
-        return yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(layer)),
-    );
-    expect(outcome).toEqual({ _tag: "failure", reason: "exit: 3" });
+    expect(await run(runGateJob(job()).pipe(Effect.provide(layer)))).toEqual({
+      _tag: "failure",
+      reason: "exit: 3",
+    });
   });
 });
 

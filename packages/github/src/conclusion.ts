@@ -12,7 +12,7 @@ import { Match, Schema } from "effect";
 
 /**
  * mameko's closed failure categories. An acceptance-check rejection carries the reason kind the check returns,
- * `provenance: <check>`, in category `policy` (MAMEKO-LEASE-090).
+ * `provenance: <check>`, in category `policy` (MAMEKO-LEASE-091).
  */
 export const FailureCategory = Schema.Literals(CATEGORIES);
 

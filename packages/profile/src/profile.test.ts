@@ -146,12 +146,12 @@ describe("load", () => {
     ]);
   });
 
-  it("MAMEKO-LEASE-090 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
+  it("MAMEKO-LEASE-091 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
     expect(profile.reason_kinds).toEqual({ provenance: "policy" });
     expect(acceptanceReasonKinds).toEqual(["provenance"]);
   });
 
-  it("MAMEKO-PROF-032 every terminal reason and acceptance-check reason kind is built in or declared", () => {
+  it("MAMEKO-PROF-033 every terminal reason and acceptance-check reason kind is built in or declared", () => {
     expect(
       validateProfile(profile, validationContext).filter((r) => r.item === "reason_kinds"),
     ).toEqual([]);
@@ -214,7 +214,7 @@ describe("load", () => {
     expect(paths).toContain("delivery.limit_key");
   });
 
-  it("MAMEKO-PROF-030 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
+  it("MAMEKO-PROF-031 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
     const { lean: _, ...withoutLean } = poolAdmissionCaps;
     const undeclared = { ...validationContext, declaredPools: withoutLean };
     expect(rejections(committed, committed.policy_version, undeclared)).toEqual([

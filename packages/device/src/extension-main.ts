@@ -1,5 +1,5 @@
 // The device extension process: `fd-device-extension <plane id> <L1 directory>`, started by mameko's device executor
-// with its end of a socketpair as file descriptor 3 (MAMEKO-EXEC-130).
+// with its end of a socketpair as file descriptor 3 (MAMEKO-EXEC-132).
 import { mkdirSync } from "node:fs";
 import net from "node:net";
 import { EXTENSION_FD } from "@fractalboxdev/mameko-protocol";

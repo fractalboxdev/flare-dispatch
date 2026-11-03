@@ -4,7 +4,7 @@
 //
 // `processGateExec` runs a command as a supervised child process. The child leads its own process group, so a timeout
 // or a stopped runner kills everything the command started. Its output reaches the runner's stderr: the runner's
-// stdout carries only the result line, and any other line there loses the result (MAMEKO-EXEC-122).
+// stdout carries only the result line, and any other line there loses the result (MAMEKO-EXEC-124).
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

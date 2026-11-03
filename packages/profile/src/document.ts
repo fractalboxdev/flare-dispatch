@@ -509,7 +509,7 @@ const baseProfile = (deployment: Deployment, phase: Phase): Profile => ({
   },
   /**
    * The result-acceptance check rejects a result with `provenance: <check>`, and the execution concludes `failure`
-   * with that reason (MAMEKO-LEASE-090).
+   * with that reason (MAMEKO-LEASE-091).
    */
   reason_kinds: { provenance: "policy" },
 });
@@ -520,7 +520,7 @@ export const DEVICE_CLASSES = ["required", "interactive", "batch"] as const;
 /**
  * The fields FD-PROF-065 adds for `development`: `development_runtime: true` and `isolation: none` on each device
  * class, so one operator's own runs execute under mameko's `host-process` development runtime with no sandbox
- * (MAMEKO-PROF-026, MAMEKO-LEASE-082). `production` adds none.
+ * (MAMEKO-PROF-027, MAMEKO-LEASE-082). `production` adds none.
  */
 export const developmentRuntimeFields = (
   deployment: Deployment,
@@ -587,7 +587,7 @@ export const buildProfile = (
 /** The committed production profile at the current phase. */
 export const profile: Profile = buildProfile("production");
 
-/** The result-acceptance check's reason kinds, which MAMEKO-PROF-032 requires the profile to declare. */
+/** The result-acceptance check's reason kinds, which MAMEKO-PROF-033 requires the profile to declare. */
 export const acceptanceReasonKinds: readonly string[] = ["provenance"];
 
 /** The profile as the configuration source delivers it: the document and its policy version. */

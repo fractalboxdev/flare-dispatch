@@ -286,7 +286,7 @@ const context = (p: Profile, c: ValidationContext): Rejection[] =>
     runs: c.runs,
   }).map(({ path, reason }) => ({ item: path.split(".")[0] ?? path, path, reason }));
 
-/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-032). */
+/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-033). */
 const reasonKinds = (p: Profile): Rejection[] =>
   validateReasonKinds({
     declared: p.reason_kinds ?? {},
