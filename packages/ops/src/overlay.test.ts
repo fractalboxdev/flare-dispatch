@@ -96,9 +96,9 @@ describe("renderer", () => {
 
   it("[FD-OPS-004] a placeholder whose value the overlay lacks fails the render, naming it", () => {
     const err = Effect.runSync(
-      Effect.flip(renderTemplate("cp", `{"x": "{{kv.CONFIG}}"}`, placeholderOverlay)),
+      Effect.flip(renderTemplate("cp", `{"x": "{{kv.SESSIONS}}"}`, placeholderOverlay)),
     );
-    expect(err.paths).toEqual(["kv.CONFIG"]);
+    expect(err.paths).toEqual(["kv.SESSIONS"]);
   });
 });
 

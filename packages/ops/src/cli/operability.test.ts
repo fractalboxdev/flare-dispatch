@@ -133,8 +133,9 @@ describe("Operability service", () => {
     });
     const report = await Effect.runPromise(live.doctor(overlay));
     const drift = report.stages.find((s) => s.stage === "drift")!;
+    // The control-plane template passes every check; the documentation Worker's template still fails its own.
     expect(drift.ok).toBe(false);
-    expect(drift.detail).toContain("control-plane.keep_vars");
-    expect(drift.detail).toContain("Durable Object class InstallationQuota is not bound");
+    expect(drift.detail).not.toContain("control-plane.");
+    expect(drift.detail).toContain("docs.keep_vars");
   });
 });

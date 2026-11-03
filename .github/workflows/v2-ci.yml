@@ -69,8 +69,9 @@ jobs:
       - uses: ./.github/actions/v2-setup
         with:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
-      - run: $STRIP_TYPES packages/ops/scripts/drift-check.ts --out .tmp/rendered
-      - run: pnpm exec wrangler deploy --dry-run -c .tmp/rendered/control-plane.jsonc
+      # The rendered file sits beside its template, so the paths inside it (`main`, each container image) resolve.
+      - run: $STRIP_TYPES packages/ops/scripts/drift-check.ts --out apps/control-plane
+      - run: pnpm exec wrangler deploy --dry-run -c apps/control-plane/control-plane.jsonc
 
   # FD-VER-033, FD-PROF-002.
   profile-reference:

@@ -46,15 +46,11 @@ describe("components", () => {
     expect(missing).toContain("cp.kv_namespaces");
   });
 
-  it("[FD-ARCH-001] reports what the committed control-plane template lacks", () => {
+  it("[FD-ARCH-001] finds every component in the committed control-plane template", () => {
     const template = parseJsonc(
       readFileSync(join(import.meta.dirname, "../../../apps/control-plane/wrangler.jsonc"), "utf8"),
     );
-    const paths = architectureFindings("control-plane", template, 0).map((f) => f.path);
-    // The control plane's own DO classes are bound; the application's classes and storage are not yet.
-    for (const c of ["ExecutionEngine", "ExecutorChannel", "EpochAnchor", "LivenessMonitor"])
-      expect(paths).not.toContain(`control-plane.durable_objects.${c}`);
-    expect(paths).toContain("control-plane.durable_objects.InstallationQuota");
+    expect(architectureFindings("control-plane", template, 0)).toEqual([]);
   });
 });
 

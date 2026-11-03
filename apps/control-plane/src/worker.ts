@@ -20,6 +20,15 @@ export {
   ExecutorChannel,
   LivenessMonitor,
 } from "./durable-objects.ts";
+export {
+  AgentPool,
+  BrowserPool,
+  ControlPool,
+  InstallationQuota,
+  LeanPool,
+  PoolController,
+  ReleasePool,
+} from "./deferred-objects.ts";
 
 let migrated: Promise<unknown> | undefined;
 

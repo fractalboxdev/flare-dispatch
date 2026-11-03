@@ -125,6 +125,7 @@ export const spendConfigOf = (overlay: OverlayValues): SpendConfig => {
 export const placeholderOverlay: OverlayValues = {
   accountId: "00000000000000000000000000000000",
   d1: { DB: "00000000-0000-0000-0000-000000000000" },
+  kv: { CONFIG: "00000000000000000000000000000000" },
   r2: { CACHE: "flare-dispatch-cache", ARTIFACTS: "flare-dispatch-artifacts" },
   hostnames: { dispatcher: "dispatch.example.com", docs: "docs.example.com" },
   access: { teamDomain: "example.cloudflareaccess.com", aud: "placeholder-aud" },

@@ -158,6 +158,10 @@ const startControlPlane = (runtimeDir: string, team: LocalAccessTeam, sha: strin
       OPERATORS: literal([DOGFOOD_IDENTITY]),
       DISPATCHERS: literal([DOGFOOD_IDENTITY]),
       FD_DEV_REPOSITORY: literal(yield* devRepository(sha)),
+      // The template's overlay placeholders that a local run has no value for: no alert sink and no GitHub App.
+      ALERT_SINK: "",
+      GITHUB_APP_ID: "",
+      GITHUB_FIXTURE_REPO: "",
     };
     writeFileSync(
       varsPath,
