@@ -6,7 +6,7 @@ This file specifies how FlareDispatch proves that each of its requirements holds
 
 This file covers the ten verification tags of [README.md](README.md), the CI jobs that run them, the merge gate, the phase gates, the `spec-tags` check, FlareDispatch's formal gate (Lean 4 for the staged-write gate and the cache namespaces, Tamarin for provenance, differential testing of `stagedWriteGate`) and the coverage counts. Tags are inline on each requirement, so this file holds no row per requirement: a requirement's tags name its harnesses, and its phase names the gate that requires those harnesses to pass.
 
-mameko's [verification.md](https://github.com/fractalboxdev/mameko/blob/aade0a5bf87e4c975b859b9d627a38e11951525b/specs/verification.md) specifies the harnesses for mameko's own requirements: the coordinator conformance suite, the kernels' Lean models and differential testing, the fleet simulation and the replay check. FlareDispatch runs mameko's conformance suite against its own composed control plane (FD-VER-032) and cites mameko's theorems for the properties of the mechanism it inherits; it does not re-prove them.
+mameko's [verification.md](https://github.com/fractalboxdev/mameko/blob/aade0a5bf87e4c975b859b9d627a38e11951525b/specs/verification.md) specifies the harnesses for mameko's own requirements: the coordinator conformance suite, the verified kernels written once in Rust and proved through their Lean translation with differential testing against its oracle ([mameko ADR-0016](https://github.com/fractalboxdev/mameko/blob/aade0a5bf87e4c975b859b9d627a38e11951525b/specs/adr/0016-formal-models.md)), the fleet simulation and the replay check. FlareDispatch runs mameko's conformance suite against its own composed control plane (FD-VER-032) and cites mameko's theorems for the properties of the mechanism it inherits; it does not re-prove them.
 
 It depends on [README.md](README.md) for the requirement format, the area table, the tag table and the moved-ID table; on [roadmap.md](roadmap.md) for the phases, the `V-MEASURE` thresholds and the kill lines; on [operability.md](operability.md) for the deploy workflow, the drift check, the canary and the alarms; on [profile.md](profile.md) for the profile the reference diff reads; on [provenance.md](provenance.md) for the Tamarin gate (FD-PROV-072, FD-PROV-073); and on [adr/0018-formal-models.md](adr/0018-formal-models.md) for the Tamarin model.
 
@@ -86,7 +86,7 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 #### `V-PROOF`
 
 - **Runs:** `lake build` over FlareDispatch's Lean 4 project, the forbidden-term scan, `#print axioms` for every theorem, and `tamarin-prover --prove` over the provenance model.
-- **Lives:** `formal/` at the repository root: `formal/FdFormal/*.lean` for the staged-write gate and the cache namespaces, `formal/provenance.spthy` for provenance, `formal/lean-toolchain` and a pinned prover version for the tools. A theorem about mameko's mechanism lives in mameko's `formal/` and is cited by name.
+- **Lives:** `formal/` at the repository root: `formal/FdFormal/*.lean` for the staged-write gate and the cache namespaces, `formal/provenance.spthy` for provenance, `formal/lean-toolchain` and a pinned prover version for the tools. A theorem about mameko's mechanism lives in mameko's `formal/`, over the Lean translation of its Rust kernels, and is cited by name.
 - **Runs when:** every pull request and every push to the default branch, in the `formal` job.
 - **Failure blocks:** the merge. A proof counts toward a phase gate only while every assumption test of its row in the formal property table passes on the same commit.
 
@@ -292,12 +292,12 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 
 | Phase | Requirements | `V-UNIT` | `V-CONF` | `V-SIM` | `V-REPLAY` | `V-E2E-LOCAL` | `V-DEPLOY` | `V-LIVE` | `V-MEASURE` | `V-PROOF` | `V-DIFF` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 520 | 474 | 24 | 31 | 14 | 29 | 48 | 22 | 4 | 14 | 11 |
+| 0 | 521 | 475 | 24 | 31 | 14 | 29 | 48 | 22 | 4 | 14 | 11 |
 | 1 | 54 | 47 | 8 | 3 | 1 | 8 | 2 | 0 | 2 | 3 | 0 |
 | 2 | 56 | 56 | 0 | 4 | 1 | 4 | 0 | 0 | 0 | 1 | 1 |
 | 3 | 25 | 24 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 4 | 100 | 62 | 31 | 8 | 2 | 7 | 6 | 1 | 0 | 22 | 0 |
-| All | 755 | 663 | 63 | 47 | 18 | 49 | 57 | 23 | 6 | 40 | 12 |
+| All | 756 | 664 | 63 | 47 | 18 | 49 | 57 | 23 | 6 | 40 | 12 |
 
 **By area**
 
@@ -314,7 +314,7 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 | `LOCAL` | 23 | 0 · 9 · 14 · 0 · 0 | 22 | 0 | 3 | 1 | 1 | 0 | 0 | 0 | 1 | 1 |
 | `MDL` | 4 | 4 · 0 · 0 · 0 · 0 | 2 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 |
 | `OPS` | 60 | 59 · 1 · 0 · 0 · 0 | 33 | 0 | 0 | 0 | 2 | 29 | 13 | 1 | 1 | 1 |
-| `PROF` | 64 | 47 · 7 · 1 · 1 · 8 | 63 | 5 | 2 | 0 | 2 | 4 | 3 | 0 | 0 | 0 |
+| `PROF` | 65 | 48 · 7 · 1 · 1 · 8 | 64 | 5 | 2 | 0 | 2 | 4 | 3 | 0 | 0 | 0 |
 | `PROV` | 77 | 2 · 2 · 0 · 0 · 73 | 46 | 26 | 6 | 2 | 6 | 3 | 1 | 2 | 21 | 0 |
 | `RUN` | 7 | 6 · 1 · 0 · 0 · 0 | 7 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `AGT` | 85 | 28 · 0 · 33 · 22 · 2 | 83 | 4 | 4 | 2 | 2 | 2 | 0 | 0 | 4 | 8 |

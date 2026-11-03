@@ -16,12 +16,12 @@ Requirement counts and ID ranges come from the requirement lines under `specs/`;
 
 | Phase | Goal | Requirements | Waits on | Gate to the next phase |
 | --- | --- | --- | --- | --- |
-| 0 | Measure the bet: the cloud path on `host-cloudflare` with the profile, the GitHub appliers and the installation rate limit, so no capacity path concludes `neutral`, and warm runs on an owned device measured against the best cloud setup | 520 | mameko phase 0 | A warm run reaches its verdict at least 30% faster than the best cloud setup |
+| 0 | Measure the bet: the cloud path on `host-cloudflare` with the profile, the GitHub appliers and the installation rate limit, so no capacity path concludes `neutral`, and warm runs on an owned device measured against the best cloud setup | 521 | mameko phase 0 | A warm run reaches its verdict at least 30% faster than the best cloud setup |
 | 1 | Batch on owned devices: mameko's device bundle and FlareDispatch's device extension, capacity leases and the local scheduler; only `batch` runs locally | 54 | mameko phase 1 | Owned devices take most eligible `batch` executions for 14 days with no verdict audit disagreement |
 | 2 | Interactive with cloud placement: `interactive` runs local first with a 300 s claim deadline, egress profiles, staged writeback and rehearsal reuse | 56 | mameko phase 2 | `interactive` p95 time to verdict is no worse than cloud-only |
 | 3 | Required checks: `required` runs local first with a 60 s claim deadline, firm cloud holds, preemption at step boundaries and the AWS launcher as a floor | 25 | mameko phase 3; the firm-hold rate | `required` p95 time to verdict is within 60 s of cloud-only |
 | 4 | Harden and generalise: provenance tiers, confidential mode with local models, macOS VM jobs, the `gha` launcher and device-aware placement | 100 | mameko phase 4; the DSSE signing purpose | — |
-| All | | 755 | | |
+| All | | 756 | | |
 
 ```mermaid
 stateDiagram-v2
@@ -134,7 +134,7 @@ flowchart LR
 
 **Waits on.** mameko phase 0: the kernels, the DO-SQLite engine backend, the `host-cloudflare` stores, admission, the outbox and the spend holds.
 
-**Closes** 520 requirements:
+**Closes** 521 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
@@ -145,7 +145,7 @@ flowchart LR
 | `IFC` | 66 | 001–030, 032–033, 035–044, 046–047, 049–052, 055–062, 064–068, 070, 076, 082–084 |
 | `MDL` | 4 | 020–022, 024 |
 | `OPS` | 59 | 001–017, 019–031, 036, 038–046, 050, 053, 056–057, 064, 067–070, 072–078, 083, 088–089 |
-| `PROF` | 47 | 001–024, 026–030, 032–034, 037, 044–048, 054–058, 060, 062–064 |
+| `PROF` | 48 | 001–024, 026–030, 032–034, 037, 044–048, 054–058, 060, 062–065 |
 | `PROV` | 2 | 049–050 |
 | `RUN` | 6 | 008, 017, 054, 057, 061–062 |
 | `AGT` | 28 | 002–003, 008–009, 011–014, 016–028, 034–035, 037–039, 041–042 |
