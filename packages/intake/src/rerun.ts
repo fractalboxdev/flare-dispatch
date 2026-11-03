@@ -73,6 +73,7 @@ const nextAttempt = (family: readonly RecordWithStatus[]) =>
         familyRoot: latest.familyRoot,
         forcedClass: latest.className,
         spendLine,
+        cacheTrigger: latest.cacheTrigger,
         applyCooldown: false,
       }),
     );

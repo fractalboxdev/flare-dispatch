@@ -152,5 +152,36 @@ export const isForkPr = (f: WebhookFields): boolean => {
   return head === null || base === null || head !== base;
 };
 
+/**
+ * What started an execution as its cache namespaces read it (specs/cache-artifacts.md § Cache namespaces and cache
+ * tiers): the pull request's number, a push's ref and whether it is a protected trigger, a merge group, or `Other`.
+ */
+export const CacheTriggerRecord = Schema.Union([
+  Schema.TaggedStruct("PullRequest", { number: Schema.Number }),
+  Schema.TaggedStruct("Push", { ref: Schema.String, protected: Schema.Boolean }),
+  Schema.TaggedStruct("MergeGroup", {}),
+  Schema.TaggedStruct("Other", {}),
+]);
+export type CacheTriggerRecord = typeof CacheTriggerRecord.Type;
+
+export const OTHER_CACHE_TRIGGER: CacheTriggerRecord = { _tag: "Other" };
+
+/**
+ * The cache trigger of a webhook. A push to the default branch is a protected trigger; intake reads no ruleset, so a
+ * push to another branch or a tag records `protected: false`, which reads protected tiers and writes none.
+ */
+export const cacheTriggerOf = (
+  event: string,
+  f: WebhookFields,
+  defaultBranch: string,
+): CacheTriggerRecord => {
+  if (event === "pull_request" && f.pull_request !== undefined)
+    return { _tag: "PullRequest", number: f.pull_request.number };
+  if (event === "merge_group") return { _tag: "MergeGroup" };
+  if (event === "push" && f.ref !== undefined)
+    return { _tag: "Push", ref: f.ref, protected: f.ref === `refs/heads/${defaultBranch}` };
+  return OTHER_CACHE_TRIGGER;
+};
+
 /** The trigger a request records: `fork-pr` for a fork pull request, else the trigger kind. */
 export type RecordedTrigger = TriggerKind | "fork-pr";

@@ -28,6 +28,8 @@ export {
   SIGNAL_CAPS,
 } from "./dispatch.ts";
 export {
+  CacheTriggerRecord,
+  cacheTriggerOf,
   Caller,
   commitOf,
   DispatchEvent,

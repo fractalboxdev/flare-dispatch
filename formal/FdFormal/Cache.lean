@@ -12,6 +12,7 @@ inductive Trigger where
   | pullRequest (number : Nat)
   | push (ref : String) (isProtected : Bool)
   | mergeGroup
+  | rehearsal
   | other
   deriving DecidableEq, Repr
 
@@ -21,8 +22,10 @@ structure Execution where
   cls : String
   constraints : List String
   trigger : Trigger
-  rehearsal : Bool
   deriving Repr
+
+/-- A rehearsal is a trigger of its own, so a rehearsal is never a protected push or a pull request. -/
+def Execution.rehearsal (e : Execution) : Bool := e.trigger == .rehearsal
 
 /-- A cache namespace. -/
 inductive Ns where
@@ -81,8 +84,9 @@ def restoresNothing (e : Execution) : Bool := e.cls == "release" || e.constraint
 
 /-- `writable`. -/
 def writable (e : Execution) (repo : String) (kind : String) : Option Ns :=
-  if e.rehearsal || kind == "gha" then some (.exec repo e.executionId)
+  if kind == "gha" then some (.exec repo e.executionId)
   else match e.trigger with
+    | .rehearsal => some (.exec repo e.executionId)
     | .pullRequest n => some (.pr repo n)
     | .push ref p =>
       if !isProtectedTrigger (.push ref p) then none
@@ -123,25 +127,25 @@ def capacityNamespaces (slug : Option String) (leaseId : String) : Lease :=
 
 /-- Every writable namespace the binding assigns, by the reason it assigns it. -/
 theorem writable_cases (e : Execution) (r kind : String) (ns : Ns) (h : writable e r kind = some ns) :
-    ((e.rehearsal = true ∨ kind = "gha") ∧ ns = .exec r e.executionId) ∨
-    (e.rehearsal = false ∧ kind ≠ "gha" ∧
+    ((e.trigger = .rehearsal ∨ kind = "gha") ∧ ns = .exec r e.executionId) ∨
+    (kind ≠ "gha" ∧
       ((∃ n, e.trigger = .pullRequest n ∧ ns = .pr r n) ∨
        (isProtectedTrigger e.trigger = true ∧ (kind = "cloudflare" ∨ kind = "aws") ∧ ns = .protectedCloud r) ∨
        (isProtectedTrigger e.trigger = true ∧ kind = "device" ∧ ns = .protectedDevice r))) := by
   unfold writable at h
-  by_cases h1 : (e.rehearsal || kind == "gha") = true
-  · simp only [h1, ite_true, Option.some.injEq] at h
-    left; exact ⟨by simpa using h1, h.symm⟩
-  · simp only [h1, Bool.false_eq_true, ite_false] at h
-    have hreh : e.rehearsal = false := by simp_all
-    have hk : kind ≠ "gha" := by intro hk; simp_all
-    right; refine ⟨hreh, hk, ?_⟩
+  by_cases hk : kind = "gha"
+  · simp only [hk, beq_self_eq_true, ite_true, Option.some.injEq] at h
+    exact Or.inl ⟨Or.inr hk, h.symm⟩
+  · have hk' : (kind == "gha") = false := by simpa using hk
+    simp only [hk', Bool.false_eq_true, ite_false] at h
     cases htr : e.trigger with
-    | pullRequest n => simp only [htr, Option.some.injEq] at h; exact Or.inl ⟨n, rfl, h.symm⟩
+    | rehearsal => simp only [htr, Option.some.injEq] at h; exact Or.inl ⟨Or.inl rfl, h.symm⟩
+    | pullRequest n => simp only [htr, Option.some.injEq] at h; exact Or.inr ⟨hk, Or.inl ⟨n, rfl, h.symm⟩⟩
     | mergeGroup => simp [htr] at h
     | other => simp [htr] at h
     | push ref p =>
       simp only [htr] at h
+      refine Or.inr ⟨hk, ?_⟩
       by_cases hp : isProtectedTrigger (.push ref p) = true
       · simp only [hp, Bool.not_true, Bool.false_eq_true, ite_false] at h
         by_cases hc : isCloudKind kind = true
@@ -166,24 +170,24 @@ theorem protected_cloud_writer (slug : Option String) (e : Execution) (kind : St
   cases slug with
   | none => simp [cacheNamespaces] at h
   | some r =>
-    rcases writable_cases e r kind ns h with ⟨_, rfl⟩ | ⟨_, _, ⟨_, _, rfl⟩ | ⟨hp, hc, rfl⟩ | ⟨_, _, rfl⟩⟩ <;>
+    rcases writable_cases e r kind ns h with ⟨_, rfl⟩ | ⟨_, ⟨_, _, rfl⟩ | ⟨hp, hc, rfl⟩ | ⟨_, _, rfl⟩⟩ <;>
       first | exact ⟨hp, hc⟩ | simp [Ns.tier] at ht
 
 /--
 When a pull request triggers an execution of a repository, the control plane assigns it the writable namespace
-`pr/<repo>/<number>` of that pull request, except that a rehearsal or an execution on executor kind `gha` takes its own
+`pr/<repo>/<number>` of that pull request, except that an execution on executor kind `gha` takes its own
 `exec/<repo>/<execution_id>` namespace under FD-CACHE-021 (FD-CACHE-019).
 -/
 theorem pull_request_writer (r : String) (e : Execution) (kind : String) (n : Nat)
     (ht : e.trigger = .pullRequest n) :
     (cacheNamespaces (some r) e kind).write =
-      if e.rehearsal || kind == "gha" then some (.exec r e.executionId) else some (.pr r n) := by
+      if kind == "gha" then some (.exec r e.executionId) else some (.pr r n) := by
   simp only [cacheNamespaces, writable, ht]
 
-/-- Every namespace an execution reads, other than a rehearsal's own execution namespace, is of tier
-`protected-cloud`, `protected-device`, `content` or the execution's own pull request. -/
+/-- Every namespace an execution reads: a rehearsal's own execution namespace, a protected tier, `content` or the
+execution's own pull request. -/
 theorem readable_tiers (r : String) (e : Execution) (kind : String) (ns : Ns) (h : ns ∈ readable e r kind) :
-    ns = .exec r e.executionId ∧ e.rehearsal = true ∨ ns = .protectedCloud r ∨ ns = .protectedDevice r ∨
+    ns = .exec r e.executionId ∧ e.trigger = .rehearsal ∨ ns = .protectedCloud r ∨ ns = .protectedDevice r ∨
       ns = .content ∨ ∃ n, e.trigger = .pullRequest n ∧ ns = .pr r n := by
   unfold readable at h
   split at h
@@ -191,7 +195,10 @@ theorem readable_tiers (r : String) (e : Execution) (kind : String) (ns : Ns) (h
   · simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at h
     rcases h with ((hx | ho) | hp) | hc
     · split at hx
-      · simp at hx; left; exact ⟨hx, by assumption⟩
+      · rename_i hreh
+        simp at hx
+        left
+        exact ⟨hx, by simpa [Execution.rehearsal] using hreh⟩
       · simp at hx
     · split at ho
       · rename_i n hn; simp at ho; right; right; right; right; exact ⟨n, hn, ho⟩
@@ -201,18 +208,16 @@ theorem readable_tiers (r : String) (e : Execution) (kind : String) (ns : Ns) (h
 
 /--
 The control plane gives an execution of a protected trigger only readable namespaces of cache tiers
-`protected-cloud`, `protected-device` and `content`. A rehearsal is a local run and never an execution of a protected
-trigger (README.md § Glossary), so the statement covers the executions with `rehearsal` false (FD-CACHE-022).
+`protected-cloud`, `protected-device` and `content` (FD-CACHE-022).
 -/
 theorem protected_trigger_reads (slug : Option String) (e : Execution) (kind : String) (ns : Ns)
-    (hp : isProtectedTrigger e.trigger = true) (hr : e.rehearsal = false)
-    (h : ns ∈ (cacheNamespaces slug e kind).read) :
+    (hp : isProtectedTrigger e.trigger = true) (h : ns ∈ (cacheNamespaces slug e kind).read) :
     ns.tier = .protectedCloud ∨ ns.tier = .protectedDevice ∨ ns.tier = .content := by
   cases slug with
   | none => simp [cacheNamespaces] at h
   | some r =>
     rcases readable_tiers r e kind ns h with ⟨_, h'⟩ | rfl | rfl | rfl | ⟨n, hn, _⟩
-    · simp [hr] at h'
+    · simp [h', isProtectedTrigger] at hp
     · simp [Ns.tier]
     · simp [Ns.tier]
     · simp [Ns.tier]
@@ -220,28 +225,17 @@ theorem protected_trigger_reads (slug : Option String) (e : Execution) (kind : S
 
 /--
 The control plane gives a pull-request execution only its own `pr/<repo>/<number>` namespace, the protected tiers of
-the same repository and `content` as readable namespaces. A rehearsal is a local run and never a pull-request
-execution (README.md § Glossary), so the statement covers the executions with `rehearsal` false (FD-CACHE-023).
+the same repository and `content` as readable namespaces (FD-CACHE-023).
 -/
 theorem pull_request_reads (r : String) (e : Execution) (kind : String) (n : Nat) (ns : Ns)
-    (ht : e.trigger = .pullRequest n) (hr : e.rehearsal = false)
-    (h : ns ∈ (cacheNamespaces (some r) e kind).read) :
+    (ht : e.trigger = .pullRequest n) (h : ns ∈ (cacheNamespaces (some r) e kind).read) :
     ns = .pr r n ∨ ns = .protectedCloud r ∨ ns = .protectedDevice r ∨ ns = .content := by
   rcases readable_tiers r e kind ns h with ⟨_, h'⟩ | h' | h' | h' | ⟨m, hm, h'⟩
-  · simp [hr] at h'
+  · rw [ht] at h'; cases h'
   · exact Or.inr (Or.inl h')
   · exact Or.inr (Or.inr (Or.inl h'))
   · exact Or.inr (Or.inr (Or.inr h'))
   · rw [ht] at hm; cases hm; exact Or.inl h'
-
--- FD-CACHE-022 and FD-CACHE-023 as written fail for a row the type admits: `rehearsal` true on a protected push or a
--- pull request reads its own `exec/` namespace first. No current caller builds such a row.
-theorem rehearsal_on_protected_push_reads_exec :
-    Ns.exec "o/r" "e1" ∈
-      (cacheNamespaces (some "o/r")
-        { executionId := "e1", cls := "required", constraints := [], trigger := .push "refs/heads/main" true,
-          rehearsal := true } "cloudflare").read := by
-  decide
 
 /-! ### FD-CACHE-029: the commit's namespace check -/
 
@@ -299,7 +293,7 @@ execution namespace. -/
 theorem unprotected_writer (r : String) (e : Execution) (kind : String) (hp : isProtectedTrigger e.trigger = false)
     (ns : Ns) (h : writable e r kind = some ns) :
     ns = .exec r e.executionId ∨ ∃ n, ns = .pr r n := by
-  rcases writable_cases e r kind ns h with ⟨_, rfl⟩ | ⟨_, _, ⟨n, _, rfl⟩ | ⟨hp', _, _⟩ | ⟨hp', _, _⟩⟩
+  rcases writable_cases e r kind ns h with ⟨_, rfl⟩ | ⟨_, ⟨n, _, rfl⟩ | ⟨hp', _, _⟩ | ⟨hp', _, _⟩⟩
   · exact Or.inl rfl
   · exact Or.inr ⟨n, rfl⟩
   · simp [hp] at hp'
@@ -329,17 +323,10 @@ theorem restore_commit_disjoint {α : Type} (reader writer : Lease) (s : Store �
     exact findSome_congr _ _ _ fun ns hns => by simp [h ns hns hw]
   · rfl
 
-/--
-A pull-request-namespace writer cannot change what a protected-trigger reader restores: a commit by an execution whose
-trigger is a pull request, on any executor kind, leaves every lookup of an execution of a protected trigger unchanged.
-The writer reaches only its own pull request's namespace (FD-CACHE-019), or its own execution namespace on `gha`
-(FD-CACHE-021), the commit check refuses every other namespace (FD-CACHE-029), and the reader reads only protected
-tiers and `content` (FD-CACHE-022). The lease is the only source of namespaces (FD-CACHE-015, FD-CACHE-058). A
-protected-trigger reader that is a rehearsal reads its own execution namespace, which another execution never writes.
--/
-theorem pr_writer_noninterference {α : Type} (slugW slugR : Option String) (w rd : Execution) (kindW kindR : String)
-    (n : Nat) (hw : w.trigger = .pullRequest n) (hr : isProtectedTrigger rd.trigger = true)
-    (hids : rd.rehearsal = false ∨ (slugW = slugR ∧ w.executionId ≠ rd.executionId))
+/-- A commit by any execution whose trigger is not protected, on any executor kind, leaves every lookup of an
+execution of a protected trigger unchanged. -/
+theorem unprotected_writer_noninterference {α : Type} (slugW slugR : Option String) (w rd : Execution)
+    (kindW kindR : String) (hw : isProtectedTrigger w.trigger = false) (hr : isProtectedTrigger rd.trigger = true)
     (s : Store α) (nsId key k : String) (v : α) :
     restore (cacheNamespaces slugR rd kindR) (commit (cacheNamespaces slugW w kindW) s nsId key v) k =
       restore (cacheNamespaces slugR rd kindR) s k := by
@@ -353,22 +340,92 @@ theorem pr_writer_noninterference {α : Type} (slugW slugR : Option String) (w r
     | some rr =>
       simp only [cacheNamespaces, Option.map_eq_some_iff] at hwr hns
       obtain ⟨wns, hwns, rfl⟩ := hwr
-      have hwp : isProtectedTrigger w.trigger = false := by simp [hw, isProtectedTrigger]
-      rcases unprotected_writer rw w kindW hwp wns hwns with rfl | ⟨m, rfl⟩
-      · rcases readable_tiers rr rd kindR ns hns with ⟨rfl, hreh⟩ | rfl | rfl | rfl | ⟨m, hm, _⟩
-        · rcases hids with h0 | ⟨hs, hne⟩
-          · simp [h0] at hreh
-          · cases hs; exact (render_exec_ne_exec rw _ _ hne).symm
+      have hread := readable_tiers rr rd kindR ns hns
+      rcases hread with ⟨_, hreh⟩ | rfl | rfl | rfl | ⟨m, hm, _⟩
+      · simp [hreh, isProtectedTrigger] at hr
+      · rcases unprotected_writer rw w kindW hw wns hwns with rfl | ⟨m, rfl⟩
         · exact fun h => (render_exec_ne_protected rw rr _).1 h.symm
-        · exact fun h => (render_exec_ne_protected rw rr _).2.1 h.symm
-        · exact fun h => (render_exec_ne_protected rw rr _).2.2 h.symm
-        · simp [hm, isProtectedTrigger] at hr
-      · rcases readable_tiers rr rd kindR ns hns with ⟨rfl, _⟩ | rfl | rfl | rfl | ⟨m', hm, _⟩
-        · intro h; have := congrArg String.toList h; simp [Ns.render] at this
         · exact fun h => (render_pr_ne_protected rw rr m).1 h.symm
+      · rcases unprotected_writer rw w kindW hw wns hwns with rfl | ⟨m, rfl⟩
+        · exact fun h => (render_exec_ne_protected rw rr _).2.1 h.symm
         · exact fun h => (render_pr_ne_protected rw rr m).2.1 h.symm
+      · rcases unprotected_writer rw w kindW hw wns hwns with rfl | ⟨m, rfl⟩
+        · exact fun h => (render_exec_ne_protected rw rr _).2.2 h.symm
         · exact fun h => (render_pr_ne_protected rw rr m).2.2 h.symm
-        · simp [hm, isProtectedTrigger] at hr
+      · simp [hm, isProtectedTrigger] at hr
+
+/--
+A pull-request-namespace writer cannot change what a protected-trigger reader restores: a commit by an execution whose
+trigger is a pull request, on any executor kind, leaves every lookup of an execution of a protected trigger unchanged.
+The writer reaches only its own pull request's namespace (FD-CACHE-019), or its own execution namespace on `gha`
+(FD-CACHE-021), the commit check refuses every other namespace (FD-CACHE-029), and the reader reads only protected
+tiers and `content` (FD-CACHE-022). The lease is the only source of namespaces (FD-CACHE-015, FD-CACHE-058).
+-/
+theorem pr_writer_noninterference {α : Type} (slugW slugR : Option String) (w rd : Execution) (kindW kindR : String)
+    (n : Nat) (hw : w.trigger = .pullRequest n) (hr : isProtectedTrigger rd.trigger = true)
+    (s : Store α) (nsId key k : String) (v : α) :
+    restore (cacheNamespaces slugR rd kindR) (commit (cacheNamespaces slugW w kindW) s nsId key v) k =
+      restore (cacheNamespaces slugR rd kindR) s k :=
+  unprotected_writer_noninterference slugW slugR w rd kindW kindR (by simp [hw, isProtectedTrigger]) hr s nsId key k v
+
+/-! ### The control plane's mapping from intake's record -/
+
+/-- The fields of a webhook intake reads for the cache trigger: the event name, the pull request's number and the
+pushed ref. -/
+structure WebhookFacts where
+  event : String
+  prNumber : Option Nat
+  ref : Option String
+  deriving Repr
+
+/-- intake's `cacheTriggerOf` (packages/intake/src/event.ts): a push to the default branch is a protected trigger,
+and a push to any other ref records `protected` false. -/
+def cacheTriggerOf (f : WebhookFacts) (defaultBranch : String) : Trigger :=
+  if f.event = "pull_request" then
+    match f.prNumber with
+    | some n => .pullRequest n
+    | none => .other
+  else if f.event = "merge_group" then .mergeGroup
+  else if f.event = "push" then
+    match f.ref with
+    | some ref => .push ref (ref == "refs/heads/" ++ defaultBranch)
+    | none => .other
+  else .other
+
+/-- The control plane's `cacheExecutionOf` (apps/control-plane/src/cache-execution.ts) over intake's record: the recorded
+trigger, the class and the placement constraint. -/
+def cacheExecutionOf (executionId cls : String) (placementConstraint : Option String) (recorded : Trigger) :
+    Execution :=
+  { executionId, cls, constraints := placementConstraint.toList, trigger := recorded }
+
+/--
+A pull-request webhook that intake records reaches the cache binding as that pull request, so the control plane
+assigns the execution the writable namespace `pr/<repo>/<number>` on every executor kind but `gha`, which takes its own
+execution namespace under FD-CACHE-021 (FD-CACHE-019).
+-/
+theorem webhook_pull_request_writer (r executionId cls defaultBranch kind : String) (pc : Option String) (n : Nat)
+    (ref : Option String) (hk : kind ≠ "gha") :
+    (cacheNamespaces (some r)
+      (cacheExecutionOf executionId cls pc
+        (cacheTriggerOf { event := "pull_request", prNumber := some n, ref } defaultBranch)) kind).write =
+      some (.pr r n) := by
+  have : (kind == "gha") = false := by simpa using hk
+  simp [cacheExecutionOf, cacheTriggerOf, cacheNamespaces, writable, this]
+
+/--
+Through intake's record, a pull-request webhook's execution cannot change what a protected-trigger reader restores,
+whatever trigger intake recorded for the reader (FD-CACHE-019, FD-CACHE-022, FD-CACHE-029).
+-/
+theorem webhook_pr_writer_noninterference {α : Type} (slugW slugR : Option String) (idW clsW defaultBranch kindW : String)
+    (pc : Option String) (n : Nat) (ref : Option String) (rd : Execution) (kindR : String)
+    (hr : isProtectedTrigger rd.trigger = true) (s : Store α) (nsId key k : String) (v : α) :
+    let w := cacheExecutionOf idW clsW pc
+      (cacheTriggerOf { event := "pull_request", prNumber := some n, ref } defaultBranch)
+    restore (cacheNamespaces slugR rd kindR) (commit (cacheNamespaces slugW w kindW) s nsId key v) k =
+      restore (cacheNamespaces slugR rd kindR) s k := by
+  intro w
+  exact pr_writer_noninterference slugW slugR w rd kindW kindR n (by simp [w, cacheExecutionOf, cacheTriggerOf]) hr
+    s nsId key k v
 
 /-! ### FD-CACHE-015: the binding against FD-CACHE-017 to FD-CACHE-028 -/
 
@@ -388,15 +445,13 @@ theorem cacheNamespaces_conforms (slug : Option String) (e : Execution) (kind : 
     (∀ ns, l.write = some ns → ns.tier = .protectedCloud →
       isProtectedTrigger e.trigger = true ∧ (kind = "cloudflare" ∨ kind = "aws")) ∧
     (∀ ns, l.write = some ns → ns.tier = .protectedDevice → isProtectedTrigger e.trigger = true ∧ kind = "device") ∧
-    (∀ r n, slug = some r → e.trigger = .pullRequest n → e.rehearsal = false → kind ≠ "gha" →
-      l.write = some (.pr r n)) ∧
+    (∀ r n, slug = some r → e.trigger = .pullRequest n → kind ≠ "gha" → l.write = some (.pr r n)) ∧
     ((e.trigger = .mergeGroup ∨ ∃ ref p, e.trigger = .push ref p ∧ isMergeQueueRef ref = true) →
-      e.rehearsal = false → kind ≠ "gha" → l.write = none) ∧
-    (∀ r, slug = some r → (e.rehearsal = true ∨ kind = "gha") → l.write = some (.exec r e.executionId)) ∧
-    (isProtectedTrigger e.trigger = true → e.rehearsal = false →
+      kind ≠ "gha" → l.write = none) ∧
+    (∀ r, slug = some r → (e.trigger = .rehearsal ∨ kind = "gha") → l.write = some (.exec r e.executionId)) ∧
+    (isProtectedTrigger e.trigger = true →
       ∀ ns ∈ l.read, ns.tier = .protectedCloud ∨ ns.tier = .protectedDevice ∨ ns.tier = .content) ∧
-    (∀ r n, slug = some r → e.trigger = .pullRequest n → e.rehearsal = false →
-      l.read.head? = some (.pr r n) ∨ l.read = []) ∧
+    (∀ r n, slug = some r → e.trigger = .pullRequest n → l.read.head? = some (.pr r n) ∨ l.read = []) ∧
     (kind ≠ "device" → ∀ ns ∈ l.read, ns.tier ≠ .protectedDevice) ∧
     (∀ ns, (ns ∈ l.read ∨ l.write = some ns) → ns.repo = slug ∨ ns = .content) ∧
     (restoresNothing e = true → l.read = []) ∧
@@ -408,30 +463,34 @@ theorem cacheNamespaces_conforms (slug : Option String) (e : Execution) (kind : 
     cases slug with
     | none => simp [l, cacheNamespaces] at h
     | some r =>
-      rcases writable_cases e r kind ns h with ⟨_, rfl⟩ | ⟨_, _, ⟨_, _, rfl⟩ | ⟨_, _, rfl⟩ | ⟨hp, hd, rfl⟩⟩ <;>
+      rcases writable_cases e r kind ns h with ⟨_, rfl⟩ | ⟨_, ⟨_, _, rfl⟩ | ⟨_, _, rfl⟩ | ⟨hp, hd, rfl⟩⟩ <;>
         first | exact ⟨hp, hd⟩ | simp [Ns.tier] at ht
-  · intro r n hs ht hreh hk
+  · intro r n hs ht hk
     subst hs
-    simp [l, cacheNamespaces, writable, ht, hreh, hk]
-  · intro hm hreh hk
+    have : (kind == "gha") = false := by simpa using hk
+    simp [l, cacheNamespaces, writable, ht, this]
+  · intro hm hk
     cases slug with
     | none => rfl
     | some r =>
-      simp only [l, cacheNamespaces, writable, hreh, Bool.false_or]
       have : (kind == "gha") = false := by simpa using hk
-      simp only [this, Bool.false_eq_true, ite_false]
+      simp only [l, cacheNamespaces, writable, this, Bool.false_eq_true, ite_false]
       rcases hm with hm | ⟨ref, p, hm, hq⟩
       · simp [hm]
       · simp [hm, isProtectedTrigger, hq]
   · intro r hs h
     subst hs
-    have : (e.rehearsal || kind == "gha") = true := by rcases h with h | h <;> simp [h]
-    simp [l, cacheNamespaces, writable, this]
-  · intro hp hreh ns h
-    exact protected_trigger_reads slug e kind ns hp hreh h
-  · intro r n hs ht hreh
+    rcases h with h | h
+    · by_cases hk : kind = "gha"
+      · simp [l, cacheNamespaces, writable, hk]
+      · have : (kind == "gha") = false := by simpa using hk
+        simp [l, cacheNamespaces, writable, this, h]
+    · simp [l, cacheNamespaces, writable, h]
+  · intro hp ns h
+    exact protected_trigger_reads slug e kind ns hp h
+  · intro r n hs ht
     subst hs
-    simp only [l, cacheNamespaces, readable, ht, hreh, Bool.false_eq_true, ite_false, List.nil_append]
+    simp only [l, cacheNamespaces, readable, Execution.rehearsal, ht]
     split <;> simp
   · intro hk ns h
     cases slug with
@@ -454,7 +513,7 @@ theorem cacheNamespaces_conforms (slug : Option String) (e : Execution) (kind : 
     | some r =>
       rcases h with h | h
       · rcases readable_tiers r e kind ns h with ⟨rfl, _⟩ | rfl | rfl | rfl | ⟨_, _, rfl⟩ <;> simp [Ns.repo]
-      · rcases writable_cases e r kind ns h with ⟨_, rfl⟩ | ⟨_, _, ⟨_, _, rfl⟩ | ⟨_, _, rfl⟩ | ⟨_, _, rfl⟩⟩ <;>
+      · rcases writable_cases e r kind ns h with ⟨_, rfl⟩ | ⟨_, ⟨_, _, rfl⟩ | ⟨_, _, rfl⟩ | ⟨_, _, rfl⟩⟩ <;>
           simp [Ns.repo]
   · intro h
     cases slug with

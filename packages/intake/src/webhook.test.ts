@@ -19,6 +19,7 @@ import {
   signedWebhook,
   type Harness,
 } from "./harness.test-support.ts";
+import { cacheTriggerOf } from "./event.ts";
 import { handleIntake } from "./routes.ts";
 
 const post = (h: Harness, request: Request) => h.run(handleIntake(request, "webhooks/github"));
@@ -248,6 +249,32 @@ describe("webhook to admission", () => {
       ["fork-pr", '["untrusted-input"]'],
       ["fork-pr", '["untrusted-input"]'],
     ]);
+  });
+
+  it("[FD-CACHE-019] [FD-CACHE-017] each record carries the trigger the cache namespaces read: a pull request's number, a push and whether it is to the default branch", async () => {
+    const h = await harness();
+    await deliver(h, "pull_request", pullRequestPayload({ number: 41 }));
+    // One commit deduplicates across triggers, so the push goes to its own deployment.
+    const push = await harness();
+    await deliver(push, "push", pushPayload("refs/heads/feature"));
+    expect(new Set(h.records().map((r) => r.cache_trigger_json))).toEqual(
+      new Set([JSON.stringify({ _tag: "PullRequest", number: 41 })]),
+    );
+    expect(new Set(push.records().map((r) => r.cache_trigger_json))).toEqual(
+      new Set([JSON.stringify({ _tag: "Push", ref: "refs/heads/feature", protected: false })]),
+    );
+    expect(cacheTriggerOf("push", { ref: "refs/heads/main" }, "main")).toEqual({
+      _tag: "Push",
+      ref: "refs/heads/main",
+      protected: true,
+    });
+    expect(cacheTriggerOf("push", { ref: "refs/heads/feature" }, "main")).toEqual({
+      _tag: "Push",
+      ref: "refs/heads/feature",
+      protected: false,
+    });
+    expect(cacheTriggerOf("merge_group", {}, "main")).toEqual({ _tag: "MergeGroup" });
+    expect(cacheTriggerOf("check_suite", {}, "main")).toEqual({ _tag: "Other" });
   });
 
   it("FD-INT-004 when admission fails the webhook answers 503 intake_unavailable and keeps no record", async () => {

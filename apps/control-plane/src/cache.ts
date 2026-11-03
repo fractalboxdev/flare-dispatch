@@ -18,7 +18,6 @@ import {
   sweepArtifacts,
   sweepCache,
   sweepLogs,
-  type CacheExecution,
 } from "@fractalboxdev/flare-dispatch-cache";
 import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
 import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
@@ -26,6 +25,7 @@ import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
 import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
 import { Effect } from "effect";
 import type { ControlPlaneEnv } from "./config.ts";
+import { cacheExecutionOf } from "./cache-execution.ts";
 import { apiEnvOf } from "./http.ts";
 
 /** The bindings this area reads beside the control plane's. */
@@ -51,18 +51,6 @@ const first = async <T>(db: D1Like, sql: string, ...binds: unknown[]): Promise<T
       .bind(...binds)
       .all()
   ).results[0] as T | undefined;
-
-/**
- * The execution as the cache namespaces read it. Intake's record holds the trigger kind and no pull-request number or
- * branch protection, so every trigger reads as `Other`: it restores protected namespaces and writes none.
- */
-export const cacheExecutionOf = (record: IntakeRecord): CacheExecution => ({
-  repo: record.repo,
-  executionId: record.executionId,
-  class: record.className,
-  constraints: record.placementConstraint === null ? [] : [record.placementConstraint],
-  trigger: { _tag: "Other" },
-});
 
 /** A lease's `cache_namespaces` and `upload_grant`, from the won placement's epoch and executor kind. */
 export const leaseCache = async (env: ControlPlaneEnv & CacheEnv, record: IntakeRecord) => {

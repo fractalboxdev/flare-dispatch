@@ -102,10 +102,8 @@ describe("cache namespaces and tiers", () => {
   });
 
   it("FD-CACHE-021 a rehearsal or a gha execution writes at most exec/<repo>/<execution_id>", () => {
-    for (const t of TRIGGERS) {
-      expect(cacheNamespaces(t, "gha").write).toBe(executionNamespace(REPO, "e-1"));
-      expect(cacheNamespaces({ ...t, rehearsal: true }, "device").write).toBe(executionNamespace(REPO, "e-1"));
-    }
+    for (const t of TRIGGERS) expect(cacheNamespaces(t, "gha").write).toBe(executionNamespace(REPO, "e-1"));
+    expect(cacheNamespaces({ ...base, trigger: { _tag: "Rehearsal" } }, "device").write).toBe(executionNamespace(REPO, "e-1"));
   });
 
   it("FD-CACHE-022 a protected trigger reads only protected-cloud, protected-device and content", () => {
@@ -136,7 +134,7 @@ describe("cache namespaces and tiers", () => {
   it("FD-CACHE-026 every namespace of an execution belongs to its own repository", () => {
     for (const t of TRIGGERS)
       for (const kind of KINDS) {
-        const n = cacheNamespaces({ ...t, rehearsal: kind === "device" }, kind);
+        const n = cacheNamespaces(kind === "device" ? { ...t, trigger: { _tag: "Rehearsal" } } : t, kind);
         for (const ns of [...n.read, ...(n.write === null ? [] : [n.write])])
           if (ns !== CONTENT_NAMESPACE) expect(repoOfNamespace(ns)).toBe(REPO);
       }

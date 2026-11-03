@@ -12,7 +12,12 @@ import {
   type IntakeError,
 } from "./config.ts";
 import { requestKey, type KeyedRequest } from "./dedup.ts";
-import type { Caller, RecordedTrigger } from "./event.ts";
+import {
+  OTHER_CACHE_TRIGGER,
+  type CacheTriggerRecord,
+  type Caller,
+  type RecordedTrigger,
+} from "./event.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
 import { IntakeStore, ShedRecorder, type StoreUnavailable } from "./store.ts";
 
@@ -42,6 +47,8 @@ export interface Submission extends Omit<KeyedRequest, "run"> {
   readonly applyCooldown: boolean;
   readonly placementConstraint: string | null;
   readonly extraLabels: readonly string[];
+  /** What the cache namespaces read of the trigger (FD-CACHE-019); `Other` unless a webhook says more. */
+  readonly cacheTrigger: CacheTriggerRecord;
 }
 
 export const submission = (
@@ -64,6 +71,7 @@ export const submission = (
   applyCooldown: true,
   placementConstraint: null,
   extraLabels: [],
+  cacheTrigger: OTHER_CACHE_TRIGGER,
   ...fields,
 });
 
@@ -158,6 +166,7 @@ export const submit = (
       notBefore: cooldown?.notBefore ?? null,
       spendLine: s.spendLine,
       placementConstraint: s.placementConstraint,
+      cacheTrigger: s.cacheTrigger,
       createdAt: now,
     });
     const admitted = yield* admission

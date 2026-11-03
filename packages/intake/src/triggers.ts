@@ -4,7 +4,12 @@
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { Effect, Match, Option, Result } from "effect";
 import { IntakeConfig, type IntakeError } from "./config.ts";
-import type { DispatchEvent, RecordedTrigger, WebhookFields } from "./event.ts";
+import {
+  cacheTriggerOf,
+  type DispatchEvent,
+  type RecordedTrigger,
+  type WebhookFields,
+} from "./event.ts";
 import { ManifestSource, type ManifestEntry, type RepoManifest } from "./manifest.ts";
 import { ManifestReporter } from "./ports.ts";
 import type { IntakeRun } from "./runs.ts";
@@ -159,6 +164,7 @@ export const triggerWebhook = (e: RepositoryEvent) =>
             ref,
             inputs,
             installation: e.fields.installation?.id ?? null,
+            cacheTrigger: cacheTriggerOf(e.event.event, e.fields, defaultBranch),
           }),
         ],
       });

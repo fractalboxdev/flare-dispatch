@@ -4,8 +4,8 @@
 // per execution beside mameko's. Shed rows, cooldown windows and webhook delivery
 // times live here too.
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { Clock, Context, Effect, Layer, Schema } from "effect";
-import type { RecordedTrigger } from "./event.ts";
+import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import { CacheTriggerRecord, OTHER_CACHE_TRIGGER, type RecordedTrigger } from "./event.ts";
 
 export const INTAKE_MIGRATIONS: readonly string[] = [
   `create table if not exists intake_records (
@@ -27,6 +27,7 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     not_before integer,
     spend_line text,
     placement_constraint text,
+    cache_trigger_json text,
     created_at integer not null)`,
   `create index if not exists intake_records_family on intake_records (family_root)`,
   `create index if not exists intake_records_commit on intake_records (repo, sha)`,
@@ -72,6 +73,8 @@ export interface IntakeRecord {
   readonly spendLine: string | null;
   /** `local-only` for a local submit (FD-INT-061). */
   readonly placementConstraint: string | null;
+  /** The trigger as the cache namespaces read it (FD-CACHE-019). */
+  readonly cacheTrigger: CacheTriggerRecord;
   readonly createdAt: number;
 }
 
@@ -172,9 +175,22 @@ interface Row {
   readonly not_before: number | null;
   readonly spend_line: string | null;
   readonly placement_constraint: string | null;
+  readonly cache_trigger_json: string | null;
   readonly created_at: number;
   readonly status: string | null;
 }
+
+const decodeCacheTrigger = Schema.decodeUnknownOption(CacheTriggerRecord);
+
+/** A row's cache trigger; a missing or unreadable one reads as `Other`, which restores protected tiers and writes none. */
+const cacheTriggerOfRow = (json: string | null): CacheTriggerRecord => {
+  if (json === null) return OTHER_CACHE_TRIGGER;
+  try {
+    return Option.getOrElse(decodeCacheTrigger(JSON.parse(json)), () => OTHER_CACHE_TRIGGER);
+  } catch {
+    return OTHER_CACHE_TRIGGER;
+  }
+};
 
 const fromRow = (r: Row): RecordWithStatus => ({
   executionId: r.execution_id,
@@ -195,6 +211,7 @@ const fromRow = (r: Row): RecordWithStatus => ({
   notBefore: r.not_before,
   spendLine: r.spend_line,
   placementConstraint: r.placement_constraint,
+  cacheTrigger: cacheTriggerOfRow(r.cache_trigger_json),
   createdAt: r.created_at,
   status: r.status,
 });
@@ -209,7 +226,8 @@ export const d1IntakeStore = (db: D1Like) =>
           .prepare(
             `insert into intake_records (execution_id, trigger, run, label, repo, sha, ref, inputs_json, deadline_at,
               class, labels_json, attempt, family_root, installation, caller, not_before, spend_line,
-              placement_constraint, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              placement_constraint, cache_trigger_json, created_at)
+              values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             r.executionId,
@@ -230,6 +248,7 @@ export const d1IntakeStore = (db: D1Like) =>
             r.notBefore,
             r.spendLine,
             r.placementConstraint,
+            JSON.stringify(r.cacheTrigger),
             r.createdAt,
           )
           .run(),

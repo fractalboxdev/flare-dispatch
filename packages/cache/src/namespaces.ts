@@ -16,6 +16,11 @@ export type CacheTrigger =
   /** A push; `protected` is true for the default branch or a branch or tag its ruleset or branch protection guards. */
   | { readonly _tag: "Push"; readonly ref: string; readonly protected: boolean }
   | { readonly _tag: "MergeGroup" }
+  /**
+   * A rehearsal registered from a capacity lease: a local run, never a protected trigger or a pull request (README
+   * § Glossary), so it reads and writes its own execution namespace without widening what either of those reads.
+   */
+  | { readonly _tag: "Rehearsal" }
   /** A schedule, a manual dispatch or any other trigger: it reads like a protected-branch reader and writes nothing. */
   | { readonly _tag: "Other" };
 
@@ -28,8 +33,6 @@ export interface CacheExecution {
   /** The placement constraints that held, as the execution row records them (e.g. `cloud-only`). */
   readonly constraints: readonly string[];
   readonly trigger: CacheTrigger;
-  /** A rehearsal registered from a capacity lease. */
-  readonly rehearsal?: boolean;
 }
 
 /** The lease's `cache_namespaces` field: readable namespaces in lookup order and at most one writable namespace. */
@@ -75,9 +78,9 @@ export const restoresNothing = (execution: Pick<CacheExecution, "class" | "const
 
 const writable = (execution: CacheExecution, repo: string, kind: ExecutorKind): string | null => {
   // FD-CACHE-021: a rehearsal or a `gha` execution writes at most its own execution namespace.
-  if (execution.rehearsal === true || kind === "gha")
-    return executionNamespace(repo, execution.executionId);
+  if (kind === "gha") return executionNamespace(repo, execution.executionId);
   return Match.value(execution.trigger).pipe(
+    Match.tag("Rehearsal", () => executionNamespace(repo, execution.executionId)),
     Match.tag("PullRequest", ({ number }) => pullRequestNamespace(repo, number)),
     Match.tag("Push", (push) => {
       if (!isProtectedTrigger(push)) return null;
@@ -101,7 +104,8 @@ const readable = (execution: CacheExecution, repo: string, kind: ExecutorKind): 
   );
   // A rehearsal reads its own execution namespace; a `gha` execution writes its own but reads only what its trigger
   // may, so FD-CACHE-022 and FD-CACHE-023 hold for it too.
-  const exec = execution.rehearsal === true ? [executionNamespace(repo, execution.executionId)] : [];
+  const exec =
+    execution.trigger._tag === "Rehearsal" ? [executionNamespace(repo, execution.executionId)] : [];
   // FD-CACHE-024: the execution's own namespace comes before any protected tier.
   return [...exec, ...own, ...protectedTiers, CONTENT_NAMESPACE];
 };
@@ -111,10 +115,7 @@ const readable = (execution: CacheExecution, repo: string, kind: ExecutorKind): 
  * one it writes, from the execution row and the claiming executor's kind. An execution whose repository is not a
  * slug gets no namespace, so a malformed row reads and writes no cache.
  */
-export const cacheNamespaces = (
-  execution: CacheExecution,
-  kind: ExecutorKind,
-): CacheNamespaces => {
+export const cacheNamespaces = (execution: CacheExecution, kind: ExecutorKind): CacheNamespaces => {
   const repo = repoSlug(execution.repo);
   if (repo === undefined) return { read: [], write: null };
   return { read: readable(execution, repo, kind), write: writable(execution, repo, kind) };
