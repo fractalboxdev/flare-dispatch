@@ -11,3 +11,4 @@ export * from "./sweep.ts";
 export * from "./artifacts.ts";
 export * from "./logs.ts";
 export * from "./oidc.ts";
+export * from "./audit.ts";

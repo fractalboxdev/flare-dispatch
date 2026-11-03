@@ -7,7 +7,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./ledger-object": "./src/ledger-object.ts"
+    "./ledger-object": "./src/ledger-object.ts",
+    "./device": "./src/device/l1.ts"
   },
   "scripts": {
     "test": "vitest run"
