@@ -327,6 +327,12 @@ importers:
       '@fractalboxdev/mameko-coordinator':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
       '@fractalboxdev/mameko-ports':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/ports
@@ -334,9 +340,6 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
-      '@fractalboxdev/mameko-kernel':
-        specifier: workspace:*
-        version: link:../../vendor/mameko/packages/kernel
       '@fractalboxdev/mameko-testkit':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/testkit

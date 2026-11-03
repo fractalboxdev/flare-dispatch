@@ -15,6 +15,7 @@ import {
 import { githubLiveLayer } from "./layer.ts";
 import { leaseReadToken } from "./lease-token.ts";
 import { GithubRead } from "./read.ts";
+import { SideOutputConfig } from "./side-ports.ts";
 
 const NOW = 1_800_000_000_000;
 const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -193,7 +194,14 @@ describe("installation tokens", () => {
   });
 });
 
-const alarms = Layer.succeed(AlarmPort, { deliver: () => Effect.void });
+const alarms = Layer.mergeAll(
+  Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+  Layer.succeed(SideOutputConfig, {
+    appBot: { login: "flare-dispatch[bot]", name: "flare-dispatch[bot]", email: "bot@example.com" },
+    slack: undefined,
+    fetch: globalThis.fetch,
+  }),
+);
 
 const live = <A, E>(
   effect: Effect.Effect<A, E, GithubApp | GithubRead>,

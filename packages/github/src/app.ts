@@ -160,6 +160,15 @@ export class GithubApp extends Context.Service<
     readonly evictInstallation: (installation: number) => Effect.Effect<void>;
     /** Drops the repository mappings of removed repositories (FD-GH-066). */
     readonly evictRepositories: (repos: readonly string[]) => Effect.Effect<void>;
+    /** One call under the App JWT, for `/app/*` endpoints such as webhook deliveries (FD-GH-089). */
+    readonly rest: (
+      method: string,
+      path: string,
+      body?: unknown,
+    ) => Effect.Effect<
+      { readonly status: number; readonly json: unknown },
+      GithubError | AppKeyInvalid
+    >;
     /** The App's installation ids, at most 100. */
     readonly installations: Effect.Effect<readonly number[], GithubError | AppKeyInvalid>;
   }
@@ -196,8 +205,12 @@ const appCall = (
         }),
       catch: (e) => new GithubNetworkError({ sent: method !== "GET", message: String(e) }),
     });
+    // A `202` or `204` may carry no body.
     const json: unknown = yield* Effect.tryPromise({
-      try: () => response.json(),
+      try: async () => {
+        const text = await response.text();
+        return text === "" ? null : (JSON.parse(text) as unknown);
+      },
       catch: (e) => new GithubNetworkError({ sent: true, message: String(e) }),
     });
     return { status: response.status, json };
@@ -309,6 +322,8 @@ export const githubAppLayer = (options: AppOptions) =>
               repos: new Map([...s.repos].filter(([, id]) => id !== installation)),
             };
           }),
+        rest: (method, path, body) =>
+          Effect.flatMap(jwt, (token) => appCall(options, `Bearer ${token}`, method, path, body)),
         installations: Effect.gen(function* () {
           const { status, json } = yield* appCall(
             options,

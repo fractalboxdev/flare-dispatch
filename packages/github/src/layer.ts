@@ -20,6 +20,8 @@ import {
   type QuotaOptions,
 } from "./rate-limit.ts";
 import { githubReadLayer } from "./read.ts";
+import { GithubApplierLive } from "./github-applier.ts";
+import { githubWritesLayer } from "./writes.ts";
 
 /** `EffectApplier` and `ApplierRateLimit`; the application supplies `InstallationDirectory` and `AlarmPort`. */
 export const githubApplicationLayer = (
@@ -33,7 +35,9 @@ export const githubApplicationLayer = (
 
 /**
  * Every GitHub service of one isolate under the App's own authority: `GithubApp`, `InstallationDirectory`, `GithubClient`,
- * `GithubRead`, `InstallationQuota`, the applier and the applier rate limit. The application supplies `AlarmPort`.
+ * `GithubWrites`, `GithubRead`, `InstallationQuota`, the applier of every GitHub kind and the applier rate limit. The
+ * application supplies `AlarmPort` and `SideOutputConfig`, and, for the kinds it serves, `StagedWriteGate`,
+ * `BlobStore`, `FollowOnSubmitter`, `EmailSender` and `NoticeChannel`; a kind whose port is absent is refused.
  * Build it once per isolate, so the token cache, the repository mapping and the quota outlive one request.
  */
 export const githubLiveLayer = (app: AppOptions, quota: QuotaOptions = quotaOptionsDefault) => {
@@ -45,7 +49,11 @@ export const githubLiveLayer = (app: AppOptions, quota: QuotaOptions = quotaOpti
         ...(app.baseUrl === undefined ? {} : { baseUrl: app.baseUrl }),
       };
       return Layer.mergeAll(
-        CheckRunApplierLive.pipe(Layer.provideMerge(githubClientLayer(options))),
+        GithubApplierLive.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(githubClientLayer(options), githubWritesLayer(options)),
+          ),
+        ),
         githubReadLayer(options),
         ApplierRateLimitLive,
       );

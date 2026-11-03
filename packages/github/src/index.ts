@@ -20,6 +20,7 @@ export {
   CheckRunApplierLive,
   classify,
   InstallationDirectory,
+  makeCheckRunApplier,
   Payloads,
 } from "./applier.ts";
 export {
@@ -66,3 +67,40 @@ export {
   RepoFile,
   type GithubReadError,
 } from "./read.ts";
+export {
+  checkNeutralInvariant,
+  childConclusions,
+  insertOpsIntent,
+  installationOf,
+  InvalidCheckLabel,
+  neutralHolds,
+  NoInstallation,
+  PARENT_CLOSED,
+  validateCheckLabel,
+  type ChildCheck,
+  type OpsIntent,
+} from "./bindings.ts";
+export { QuarantinedFailure, quarantineAnnotations } from "./conclusion.ts";
+export { GithubApplierLive } from "./github-applier.ts";
+export {
+  intentMarker,
+  isSideKind,
+  makeSideOutputApplier,
+  SidePayloads,
+  slackSignature,
+  WRITE_BRANCH_PREFIX,
+  type SideKind,
+} from "./side-applier.ts";
+export {
+  BlobStore,
+  EmailSender,
+  FollowOnSubmitter,
+  GateReason,
+  NoticeChannel,
+  SideOutputConfig,
+  StagedWriteGate,
+  type DeliveryAnswer,
+  type GateResult,
+  type SideOutputSettings,
+} from "./side-ports.ts";
+export { GithubWrites, githubWritesLayer, type WritesOptions } from "./writes.ts";

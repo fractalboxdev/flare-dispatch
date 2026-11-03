@@ -208,3 +208,5 @@ export const row = (
   attempts: 0,
   ...overrides,
 });
+
+export * from "./fake-writes.test-support.ts";
