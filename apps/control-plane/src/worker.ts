@@ -7,6 +7,7 @@ import { CLASS_ORDER } from "@fractalboxdev/flare-dispatch-profile";
 import { routeExecutorUpgrade, runD1Migrations } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect } from "effect";
 import { deployment, type ControlPlaneEnv } from "./config.ts";
+import { migrateLocalStore } from "./agentic.ts";
 import { cacheFetch, cacheSweeps } from "./cache.ts";
 import { boundFetch } from "./github.ts";
 import { apiFetch } from "./http.ts";
@@ -27,6 +28,7 @@ const migrate = (env: ControlPlaneEnv) =>
     await runD1Migrations(env.DB);
     await runApiMigrations(env.DB);
     await Effect.runPromise(migrateIntake(env.DB));
+    await migrateLocalStore(env.DB);
   })().catch((e: unknown) => {
     migrated = undefined;
     throw e;

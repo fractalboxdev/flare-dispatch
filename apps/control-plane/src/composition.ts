@@ -23,7 +23,14 @@ import {
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { Context, Effect, Layer, Scope } from "effect";
 import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
-import { appOptionsOf, appServices, boundFetch, readsWithoutApp } from "./github.ts";
+import {
+  gitData,
+  gitDataWithoutApp,
+  localPorts,
+  writebackApplier,
+  writebackRecordsDeferred,
+} from "./agentic.ts";
+import { appLoginOf, appOptionsOf, appServices, boundFetch, readsWithoutApp } from "./github.ts";
 
 const listOf = (value: unknown): readonly string[] => {
   if (Array.isArray(value)) return value.map(String);
@@ -98,13 +105,19 @@ const isolateLayer = (env: ControlPlaneEnv) => {
   );
   if (app !== undefined) {
     const github = appServices(env, app, alarms);
-    return runDefaultClassResolver.pipe(
-      Layer.provideMerge(
-        intakeLayer({ db: env.DB, settings, fetch: boundFetch, queued: wake(env) }),
-      ),
+    // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.
+    const support = Layer.mergeAll(gitData, writebackRecordsDeferred).pipe(
       Layer.provideMerge(github),
-      Layer.provideMerge(common),
     );
+    const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
+    return Layer.mergeAll(
+      runDefaultClassResolver.pipe(
+        Layer.provideMerge(
+          intakeLayer({ db: env.DB, settings, fetch: boundFetch, queued: wake(env) }),
+        ),
+      ),
+      localPorts(env),
+    ).pipe(Layer.provideMerge(applier), Layer.provideMerge(common));
   }
   return Layer.mergeAll(
     Layer.succeed(IntakeConfig, settings),
@@ -116,7 +129,11 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     evictionWithoutApp,
     oidcVerifierLayer(boundFetch),
     runDefaultClassResolver.pipe(Layer.provide(Layer.succeed(IntakeConfig, settings))),
-  ).pipe(Layer.provideMerge(readsWithoutApp(env)), Layer.provideMerge(common));
+    localPorts(env),
+  ).pipe(
+    Layer.provideMerge(Layer.merge(readsWithoutApp(env), gitDataWithoutApp)),
+    Layer.provideMerge(common),
+  );
 };
 
 export type IsolateServices = Layer.Success<ReturnType<typeof isolateLayer>>;

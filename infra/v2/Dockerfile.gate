@@ -25,6 +25,7 @@ WORKDIR /opt/flare-dispatch
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/catalog packages/catalog
 COPY packages/profile packages/profile
+COPY packages/agentic packages/agentic
 COPY vendor/mameko/packages vendor/mameko/packages
 COPY vendor/mameko/package.json vendor/mameko/tsconfig.base.json vendor/mameko/
 RUN pnpm install --frozen-lockfile --prod --filter "@fractalboxdev/flare-dispatch-catalog..." && \

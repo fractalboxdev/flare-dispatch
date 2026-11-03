@@ -100,7 +100,7 @@ const decodePayload = Schema.decodeUnknownExit(PrProposePayload);
 
 const textOf = (bytes: Uint8Array): string | null => {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
   } catch {
     return null;
   }

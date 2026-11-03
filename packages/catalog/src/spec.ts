@@ -1,5 +1,12 @@
 // The run catalogue's declarations. This module imports no process or file API, so the control plane's Worker reads
 // the same declarations the runner child executes.
+import {
+  AGENTIC_CATALOG,
+  CiTriageInput,
+  ImprovePrInput,
+  PrReviewInput,
+  SpecDriftInput,
+} from "@fractalboxdev/flare-dispatch-agentic";
 import { buildProfile, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import type { Capability } from "@fractalboxdev/mameko-run";
 import { Match, type Schema } from "effect";
@@ -176,7 +183,7 @@ export const sandboxImageSpec = gate("sandbox-image", {
   },
 });
 
-const entries: Readonly<Record<string, CatalogEntry>> = {
+const gateEntries: Readonly<Record<string, CatalogEntry>> = {
   check: {
     spec: checkSpec,
     input: CheckInput,
@@ -248,6 +255,44 @@ const entries: Readonly<Record<string, CatalogEntry>> = {
     hostExecution: false,
   },
 };
+
+/** The input schema of each agentic recipe whose body ships at this phase (specs/runs/agentic.md § Recipes). */
+const AGENTIC_INPUTS: Readonly<Record<string, Schema.Decoder<unknown>>> = {
+  "pr-review": PrReviewInput,
+  "improve-pr": ImprovePrInput,
+  "spec-drift-pr": SpecDriftInput,
+  "ci-triage-pr": CiTriageInput,
+};
+
+/**
+ * The agentic recipes with a body, each served by a cloud executor through the model gateway. A recipe whose body is
+ * a later phase's has no run in the registry, so it has no catalogue entry either (FD-RUN-063).
+ */
+const agenticEntries: Readonly<Record<string, CatalogEntry>> = Object.fromEntries(
+  Object.entries(AGENTIC_CATALOG).flatMap(([name, entry]) => {
+    const input = AGENTIC_INPUTS[name];
+    return input === undefined
+      ? []
+      : [
+          [
+            name,
+            {
+              spec: entry.spec,
+              input,
+              manifestKey: name,
+              defaultClass: entry.spec.limits.qosClass,
+              executors: ["cloud"],
+              containerRateUsdPerHour: null,
+              appCapabilities: [],
+              hostExecution: false,
+              agentic: { declaration: entry.declaration, triggers: entry.triggers },
+            } satisfies CatalogEntry,
+          ],
+        ];
+  }),
+);
+
+const entries: Readonly<Record<string, CatalogEntry>> = { ...gateEntries, ...agenticEntries };
 
 /** The placement of a `sandbox-image` execution (FD-GATE-080): a publish runs `release`, cloud-pinned, on an executor
  * labelled `container-artifact`; a pull request runs `required` anywhere eligible. */

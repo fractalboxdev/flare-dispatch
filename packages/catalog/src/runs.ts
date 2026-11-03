@@ -1,6 +1,7 @@
 // The run registry, the only list of runs (FD-RUN-063, MAMEKO-RUN-008). It holds Node process code, so only the
 // runner entry and its tests import it. Each executor kind supplies the Layers of the services its runs require.
 import type { Deployment } from "@fractalboxdev/flare-dispatch-profile";
+import { agenticRuns } from "@fractalboxdev/flare-dispatch-agentic/executor";
 import { defineRun, type LocalContent } from "@fractalboxdev/mameko-run";
 import { Effect, Layer } from "effect";
 import { runCheck } from "./check.ts";
@@ -74,6 +75,7 @@ export const registry = [
   workerDeployRun,
   deploySmokeRun,
   sandboxImageRun,
+  ...agenticRuns,
 ] as const;
 
 /** Which executor kinds serve a run, from its catalogue entry. */

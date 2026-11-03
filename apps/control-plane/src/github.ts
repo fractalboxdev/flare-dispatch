@@ -26,6 +26,10 @@ export const appOptionsOf = (env: ControlPlaneEnv): AppOptions | undefined =>
     ? undefined
     : { appId: env.GITHUB_APP_ID, privateKeyPem: env.GITHUB_APP_PRIVATE_KEY, fetch: boundFetch };
 
+/** The App's bot login, `<app slug>[bot]`: the author of every commit the App writes. */
+export const appLoginOf = (env: ControlPlaneEnv) =>
+  `${env.GITHUB_APP_SLUG ?? "flare-dispatch"}[bot]`;
+
 /** The identity the App commits as, and the Slack endpoint when the deploy names one. */
 export const sideOutputLayer = (env: ControlPlaneEnv, app: AppOptions) => {
   const slug = env.GITHUB_APP_SLUG ?? "flare-dispatch";

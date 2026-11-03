@@ -45,6 +45,9 @@ importers:
 
   apps/control-plane:
     dependencies:
+      '@fractalboxdev/flare-dispatch-agentic':
+        specifier: workspace:*
+        version: link:../../packages/agentic
       '@fractalboxdev/flare-dispatch-api':
         specifier: workspace:*
         version: link:../../packages/api
@@ -339,6 +342,9 @@ importers:
 
   packages/catalog:
     dependencies:
+      '@fractalboxdev/flare-dispatch-agentic':
+        specifier: workspace:*
+        version: link:../agentic
       '@fractalboxdev/flare-dispatch-profile':
         specifier: workspace:*
         version: link:../profile
