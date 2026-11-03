@@ -12,3 +12,5 @@ export * from "./artifacts.ts";
 export * from "./logs.ts";
 export * from "./oidc.ts";
 export * from "./audit.ts";
+export * from "./metrics.ts";
+export * from "./workspace.ts";

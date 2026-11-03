@@ -71,7 +71,20 @@ export interface CompileCacheDeps {
   readonly maxObjectBytes?: number;
   readonly bounds?: LedgerBounds;
   readonly ttlMs?: number;
+  /** Each GET's hit or miss, for the per-execution cache columns and the hit rate (FD-CACHE-090). */
+  readonly onLookup?: (lookup: CompileCacheLookup) => void;
 }
+
+export interface CompileCacheLookup {
+  readonly executionId: string;
+  /** The namespace that answered, or `null` on a miss. */
+  readonly namespace: string | null;
+  readonly hit: boolean;
+  readonly bytes: number;
+}
+
+/** The response header naming the namespace that answered a GET or HEAD. */
+export const CACHE_NAMESPACE_HEADER = "x-cache-namespace";
 
 const text = (status: number, body: string, headers: Record<string, string> = {}) =>
   new Response(body, {
@@ -130,16 +143,20 @@ export const handleCompileCache = async (
     for (const namespace of reads) {
       const key = compileObjectKey(namespace, path.key);
       const object = await read(key);
-      if (object !== null) return { key, object };
+      if (object !== null) return { key, object, namespace };
     }
     return null;
   };
-  const headersOf = (o: R2Object) => ({
+  // The namespace that answered, so the device's proxy files an L1 copy under it and no other (FD-CACHE-060).
+  const headersOf = (o: R2Object, namespace: string) => ({
     "content-type": "application/octet-stream",
     "content-length": String(o.size),
     etag: o.httpEtag,
     "last-modified": o.uploaded.toUTCString(),
+    [CACHE_NAMESPACE_HEADER]: namespace,
   });
+  const observe = (namespace: string | null, bytes: number) =>
+    deps.onLookup?.({ executionId: scope.executionId, namespace, hit: namespace !== null, bytes });
   switch (request.method) {
     case "OPTIONS":
       return new Response(null, { status: 200, headers: { allow: ALLOW, dav: "1" } });
@@ -148,11 +165,12 @@ export const handleCompileCache = async (
       const found = await find((k) => deps.bucket.head(k));
       return found === null
         ? text(404, "not found")
-        : new Response(null, { status: 200, headers: headersOf(found.object) });
+        : new Response(null, { status: 200, headers: headersOf(found.object, found.namespace) });
     }
     case "GET": {
       if (path.collection) return text(404, "not found");
       const found = await find((k) => deps.bucket.get(k));
+      observe(found?.namespace ?? null, found?.object.size ?? 0);
       if (found === null) return text(404, "not found");
       const object = found.object;
       const ttl = deps.ttlMs ?? DEFAULT_COMPILE_TTL_MS;
@@ -166,9 +184,9 @@ export const handleCompileCache = async (
               .put(found.key, sized, { httpMetadata: { contentType: "application/octet-stream" } })
               .catch(() => undefined),
           );
-        return new Response(served, { status: 200, headers: headersOf(object) });
+        return new Response(served, { status: 200, headers: headersOf(object, found.namespace) });
       }
-      return new Response(object.body, { status: 200, headers: headersOf(object) });
+      return new Response(object.body, { status: 200, headers: headersOf(object, found.namespace) });
     }
     case "PUT": {
       if (path.collection) return text(405, "a collection takes no body", { allow: ALLOW });

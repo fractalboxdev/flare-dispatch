@@ -64,6 +64,10 @@ export interface L1Cache {
   readonly evict: (targetBytes: number) => Effect.Effect<number>;
   /** Places an entry fetched from somewhere other than L2 after verifying it (FD-CACHE-014). */
   readonly place: (entry: L2Entry) => Effect.Effect<boolean>;
+  /** An L1 read that never reads through to L2. */
+  readonly peek: (namespace: string, key: string) => Effect.Effect<Uint8Array | null>;
+  /** An L1 write that uploads nothing: for bytes the control plane already holds. */
+  readonly keep: (namespace: string, key: string, bytes: Uint8Array) => Effect.Effect<boolean>;
   readonly usage: () => { readonly bytes: number; readonly cap: number; readonly entries: number };
 }
 
@@ -158,6 +162,18 @@ export const openL1 = async (options: L1Options): Promise<L1Cache> => {
         const bytes = await verified(entry, options.keys);
         return bytes === null ? false : store(namespace, key, bytes);
       }).pipe(Effect.orElseSucceed(() => false)),
+    peek: (namespace, key) =>
+      Effect.tryPromise(async () => {
+        if (!safe(namespace, key) || !index.has(pathOf(namespace, key))) return null;
+        const bytes = await options.disk.read(pathOf(namespace, key));
+        if (bytes === null) index.delete(pathOf(namespace, key));
+        else index.get(pathOf(namespace, key))!.lastReadAt = now();
+        return bytes;
+      }).pipe(Effect.orElseSucceed(() => null)),
+    keep: (namespace, key, bytes) =>
+      Effect.tryPromise(async () => safe(namespace, key) && store(namespace, key, bytes)).pipe(
+        Effect.orElseSucceed(() => false),
+      ),
     usage: () => ({ bytes: total(), cap, entries: index.size }),
   };
 };
