@@ -63,7 +63,7 @@ export const dispatchRecipes: readonly DedupRecipe<KeyedRequest>[] = [
 ];
 
 const decodeInputs = (entry: CatalogEntry, inputs: unknown) =>
-  Schema.decodeUnknownEffect(entry.spec.input as Schema.Decoder<unknown>)(inputs).pipe(
+  Schema.decodeUnknownEffect(entry.input)(inputs).pipe(
     Effect.mapError((e) => apiError("invalid_inputs", e.message)),
   );
 

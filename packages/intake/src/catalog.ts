@@ -1,7 +1,7 @@
 // The run catalogue as intake reads it, built from FlareDispatch's catalogue
 // package. `check` answers `pull_request`, `push` and `merge_group` webhooks with
 // the steps its manifest entry names, and dispatches with their own inputs.
-import { CheckInput, CheckStep, lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
+import { CheckStep, lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
 import type { Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import { Match, Option, Schema } from "effect";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
@@ -52,7 +52,7 @@ export const catalogRuns =
       Match.tag("Available", ({ entry }): IntakeRun | undefined => ({
         name: entry.spec.name,
         params: CheckParams,
-        input: CheckInput,
+        input: entry.input,
         trigger: checkTrigger,
         defaultClass: entry.spec.limits.qosClass,
         maxDurationSec: entry.spec.limits.maxDurationSec,

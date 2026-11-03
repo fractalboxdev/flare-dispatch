@@ -2,9 +2,16 @@
 // the same declarations the runner child executes.
 import { buildProfile, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import type { Capability } from "@fractalboxdev/mameko-run";
-import { Match } from "effect";
+import { Match, type Schema } from "effect";
 import {
   CHECK_MAX_DURATION_SEC,
+  CheckInput,
+  DeploySmokeInput,
+  GateJobInput,
+  OffloadTestInput,
+  OxlintInput,
+  SandboxImageInput,
+  WorkerDeployInput,
   DEPLOY_SMOKE_MAX_DURATION_SEC,
   GATE_JOB_MAX_DURATION_SEC,
   OFFLOAD_TEST_MAX_DURATION_SEC,
@@ -67,6 +74,8 @@ export type ExecutorKind = "device" | "cloud" | "control";
 /** What the control plane reads of a run: `defineRun`'s fields and the declarations beside them (FD-RUN-062). */
 export interface CatalogEntry {
   readonly spec: RunSpecFields;
+  /** The run's input schema, which a dispatch's inputs and a request decoder's answer must pass (FD-IFC-029). */
+  readonly input: Schema.Decoder<unknown>;
   /** The repo-manifest key the run reads (specs/runs/gate.md § Recipes). */
   readonly manifestKey: string | null;
   /**
@@ -147,6 +156,7 @@ export const sandboxImageSpec = gate("sandbox-image", {
 const entries: Readonly<Record<string, CatalogEntry>> = {
   check: {
     spec: checkSpec,
+    input: CheckInput,
     defaultClass: "required",
     manifestKey: "check",
     executors: ["device", "cloud"],
@@ -156,6 +166,7 @@ const entries: Readonly<Record<string, CatalogEntry>> = {
   },
   oxlint: {
     spec: oxlintSpec,
+    input: OxlintInput,
     defaultClass: "required",
     manifestKey: "oxlint",
     executors: ["device", "cloud"],
@@ -165,6 +176,7 @@ const entries: Readonly<Record<string, CatalogEntry>> = {
   },
   "gate-job": {
     spec: gateJobSpec,
+    input: GateJobInput,
     defaultClass: "required",
     manifestKey: null,
     executors: ["device", "cloud"],
@@ -174,6 +186,7 @@ const entries: Readonly<Record<string, CatalogEntry>> = {
   },
   "offload-test": {
     spec: offloadTestSpec,
+    input: OffloadTestInput,
     defaultClass: "required",
     manifestKey: "offloadTest",
     executors: ["control"],
@@ -183,6 +196,7 @@ const entries: Readonly<Record<string, CatalogEntry>> = {
   },
   "worker-deploy": {
     spec: workerDeploySpec,
+    input: WorkerDeployInput,
     defaultClass: "release",
     manifestKey: "workerDeploy",
     executors: ["cloud"],
@@ -192,6 +206,7 @@ const entries: Readonly<Record<string, CatalogEntry>> = {
   },
   "deploy-smoke": {
     spec: deploySmokeSpec,
+    input: DeploySmokeInput,
     defaultClass: "release",
     manifestKey: "deploySmoke",
     executors: ["control"],
@@ -201,6 +216,7 @@ const entries: Readonly<Record<string, CatalogEntry>> = {
   },
   "sandbox-image": {
     spec: sandboxImageSpec,
+    input: SandboxImageInput,
     defaultClass: "required",
     manifestKey: "sandboxImage",
     executors: ["cloud"],
