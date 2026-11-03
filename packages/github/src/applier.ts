@@ -23,6 +23,7 @@ import {
   checkConclusion,
   ConcludeDetails,
   concludeSummary,
+  quarantineAnnotations,
   truncate,
   Verdict,
 } from "./conclusion.ts";
@@ -147,17 +148,36 @@ const progressOutput = (p: PayloadOf<"check.progress">) => ({
   summary: `Class \`${p.class}\`; queue position ${p.bucket}; deadline ${new Date(p.deadline_at).toISOString()}.`,
 });
 
+const concludeOutput = (p: PayloadOf<"check.conclude">) => ({
+  title: withAttempt(checkConclusion(p.verdict).title, p.attempt),
+  summary: truncate(concludeSummary(p.verdict, p.details), p.details_url),
+});
+
+/** The conclusion with the first batch of quarantined-failure annotations (FD-GH-077). */
 const concludeBody = (p: PayloadOf<"check.conclude">) => {
-  const { conclusion, title } = checkConclusion(p.verdict);
+  const first = quarantineAnnotations(p.details).slice(0, ANNOTATION_BATCH);
   return {
     status: "completed" as const,
-    conclusion,
-    output: {
-      title: withAttempt(title, p.attempt),
-      summary: truncate(concludeSummary(p.verdict, p.details), p.details_url),
-    },
+    conclusion: checkConclusion(p.verdict).conclusion,
+    output: { ...concludeOutput(p), ...(first.length === 0 ? {} : { annotations: first }) },
   };
 };
+
+/** The quarantined-failure annotations beyond the first batch, 50 per request, keeping the conclusion's output. */
+const restOfQuarantine = (ctx: Ctx, p: PayloadOf<"check.conclude">, run: CheckRun) =>
+  Effect.gen(function* () {
+    const github = yield* GithubClient;
+    for (const batch of chunks(
+      quarantineAnnotations(p.details).slice(ANNOTATION_BATCH),
+      ANNOTATION_BATCH,
+    ))
+      yield* github.updateCheckRun({
+        ...ctx,
+        checkRunId: run.id,
+        body: { output: { ...concludeOutput(p), annotations: batch } },
+      });
+    return applied(run);
+  });
 
 const missingAnnotations = (ctx: Ctx, p: PayloadOf<"check.annotations">, run: CheckRun) =>
   Effect.gen(function* () {
@@ -208,22 +228,23 @@ const handlers: { readonly [K in CheckKind]: Handler<K> } = {
   "check.conclude": {
     // Without an applied `check.open`, the conclusion creates the check run completed (FD-GH-052).
     apply: (ctx, p, run) =>
-      run !== null
-        ? update(ctx, run, concludeBody(p))
-        : Effect.gen(function* () {
-            const github = yield* GithubClient;
-            const created = yield* github.createCheckRun({
-              ...ctx,
-              body: {
-                name: p.name,
-                head_sha: p.head_sha,
-                external_id: ctx.executionId,
-                ...(p.details_url === undefined ? {} : { details_url: p.details_url }),
-                ...concludeBody(p),
-              },
-            });
-            return applied(created);
-          }),
+      Effect.gen(function* () {
+        const github = yield* GithubClient;
+        const concluded =
+          run !== null
+            ? yield* github.updateCheckRun({ ...ctx, checkRunId: run.id, body: concludeBody(p) })
+            : yield* github.createCheckRun({
+                ...ctx,
+                body: {
+                  name: p.name,
+                  head_sha: p.head_sha,
+                  external_id: ctx.executionId,
+                  ...(p.details_url === undefined ? {} : { details_url: p.details_url }),
+                  ...concludeBody(p),
+                },
+              });
+        return yield* restOfQuarantine(ctx, p, concluded);
+      }),
     adopted: (_, p, run) =>
       Effect.succeed(run.status === "completed" && run.conclusion === concludeBody(p).conclusion),
   },
@@ -303,129 +324,128 @@ type ReadFailure = GithubError | AmbiguousCheckRun | Unservable;
 const found = (run: CheckRun | null): LookupAnswer =>
   run === null ? { _tag: "absent" } : { _tag: "found", externalRef: String(run.id) };
 
-export const CheckRunApplierLive = Layer.effect(
-  EffectApplier,
-  Effect.gen(function* () {
-    const github = yield* GithubClient;
-    const directory = yield* InstallationDirectory;
-    const alarms = yield* AlarmPort;
+/** The check-run applier's service, for `CheckRunApplierLive` and the applier that routes every GitHub kind. */
+export const makeCheckRunApplier = Effect.gen(function* () {
+  const github = yield* GithubClient;
+  const directory = yield* InstallationDirectory;
+  const alarms = yield* AlarmPort;
 
-    const raiseInstallationLost = (row: IntentRow, reason: string) =>
-      alarms
-        .deliver({
-          name: "installation-lost",
-          severity: "page",
-          dedupeKey: `installation-lost:${row.scopeId}`,
-          state: "raised",
-          detail: { scopeId: row.scopeId, kind: row.kind, reason },
-        })
-        // A failed alarm delivery is logged; it never changes the row's answer.
-        .pipe(
-          Effect.catchTag("AlarmDeliveryFailed", (e) =>
-            Effect.logWarning("alarm not delivered", e.reason),
-          ),
-        );
+  const raiseInstallationLost = (row: IntentRow, reason: string) =>
+    alarms
+      .deliver({
+        name: "installation-lost",
+        severity: "page",
+        dedupeKey: `installation-lost:${row.scopeId}`,
+        state: "raised",
+        detail: { scopeId: row.scopeId, kind: row.kind, reason },
+      })
+      // A failed alarm delivery is logged; it never changes the row's answer.
+      .pipe(
+        Effect.catchTag("AlarmDeliveryFailed", (e) =>
+          Effect.logWarning("alarm not delivered", e.reason),
+        ),
+      );
 
-    /** One `401` mints a new token and retries once (FD-GH-047). */
-    const call = <A>(installation: number, effect: Effect.Effect<A, GithubError, GithubClient>) =>
-      effect.pipe(
-        Effect.catchTag("GithubHttpError", (e) =>
+  /** One `401` mints a new token and retries once (FD-GH-047). */
+  const call = <A>(installation: number, effect: Effect.Effect<A, GithubError, GithubClient>) =>
+    effect.pipe(
+      Effect.catchTag("GithubHttpError", (e) =>
+        e.status === 401
+          ? Effect.andThen(github.refreshToken(installation), effect)
+          : Effect.fail(e),
+      ),
+      Effect.provideService(GithubClient, github),
+    );
+
+  const resolve = (row: IntentRow) =>
+    Effect.gen(function* () {
+      const executionId = row.executionId;
+      if (executionId === null)
+        return yield* unservable("a check-run kind belongs to an execution");
+      const kind = row.kind;
+      if (!isCheckKind(kind)) return yield* unservable(`applier: ${kind} is not a check-run kind`);
+      const payload = yield* Schema.decodeUnknownEffect(Payloads[kind])(row.payload).pipe(
+        Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
+      );
+      const installation = yield* directory.installationFor(row.scopeId);
+      if (installation === null) {
+        yield* raiseInstallationLost(row, "installation: not found");
+        return yield* unservable("installation: not found");
+      }
+      const ctx: Ctx = { installation, repo: row.scopeId, executionId, row };
+      // The handler table is keyed by kind, and the payload decoded under that kind's schema.
+      const handler = handlers[kind] as unknown as Handler<CheckKind>;
+      // Every check run of the execution, oldest first; more than one means an earlier create was doubled.
+      const matching = call(
+        installation,
+        Effect.map(
+          github.listCheckRuns({ ...ctx, ref: payload.head_sha, name: payload.name }),
+          (runs) => runs.filter((r) => r.external_id === executionId).sort((a, b) => a.id - b.id),
+        ),
+      );
+      return { ctx, matching, payload: payload as never, handler };
+    });
+
+  const apply = (row: IntentRow): Effect.Effect<ApplyAnswer> =>
+    Effect.gen(function* () {
+      const { ctx, matching, payload, handler } = yield* resolve(row);
+      // Every attempt searches by `external_id` before it writes and works on the oldest check run it finds
+      // (FD-GH-010). `row.attempts` holds the value from insertion, so it does not mark a repeat.
+      const run = (yield* matching)[0] ?? null;
+      return yield* call(ctx.installation, handler.apply(ctx, payload, run));
+    }).pipe(
+      Effect.catchTags({
+        Unservable: ({ reason }) => Effect.succeed<ApplyAnswer>({ _tag: "refused", reason }),
+        GithubHttpError: (e) =>
           e.status === 401
-            ? Effect.andThen(github.refreshToken(installation), effect)
-            : Effect.fail(e),
-        ),
-        Effect.provideService(GithubClient, github),
-      );
+            ? Effect.as(raiseInstallationLost(row, "installation: unauthorized"), classify(e))
+            : Effect.succeed(classify(e)),
+        GithubNetworkError: (e) => Effect.succeed(classify(e)),
+      }),
+    );
 
-    const resolve = (row: IntentRow) =>
-      Effect.gen(function* () {
-        const executionId = row.executionId;
-        if (executionId === null)
-          return yield* unservable("a check-run kind belongs to an execution");
-        const kind = row.kind;
-        if (!isCheckKind(kind))
-          return yield* unservable(`applier: ${kind} is not a check-run kind`);
-        const payload = yield* Schema.decodeUnknownEffect(Payloads[kind])(row.payload).pipe(
-          Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
-        );
-        const installation = yield* directory.installationFor(row.scopeId);
-        if (installation === null) {
-          yield* raiseInstallationLost(row, "installation: not found");
-          return yield* unservable("installation: not found");
-        }
-        const ctx: Ctx = { installation, repo: row.scopeId, executionId, row };
-        // The handler table is keyed by kind, and the payload decoded under that kind's schema.
-        const handler = handlers[kind] as unknown as Handler<CheckKind>;
-        // Every check run of the execution, oldest first; more than one means an earlier create was doubled.
-        const matching = call(
-          installation,
-          Effect.map(
-            github.listCheckRuns({ ...ctx, ref: payload.head_sha, name: payload.name }),
-            (runs) => runs.filter((r) => r.external_id === executionId).sort((a, b) => a.id - b.id),
-          ),
-        );
-        return { ctx, matching, payload: payload as never, handler };
-      });
+  /**
+   * The check run carrying the row's effect, or null when the effect is not on GitHub. A read that fails, cannot
+   * reach GitHub, or finds the execution's check run more than once, proves neither.
+   */
+  const adoptedRun = (row: IntentRow): Effect.Effect<CheckRun | null, ReadFailure> =>
+    Effect.gen(function* () {
+      const { ctx, matching, payload, handler } = yield* resolve(row);
+      const runs = yield* matching;
+      if (runs.length > 1) return yield* Effect.fail(new AmbiguousCheckRun({ count: runs.length }));
+      const run = runs[0];
+      if (run === undefined) return null;
+      return (yield* call(ctx.installation, handler.adopted(ctx, payload, run))) ? run : null;
+    });
 
-    const apply = (row: IntentRow): Effect.Effect<ApplyAnswer> =>
-      Effect.gen(function* () {
-        const { ctx, matching, payload, handler } = yield* resolve(row);
-        // Every attempt searches by `external_id` before it writes and works on the oldest check run it finds
-        // (FD-GH-010). `row.attempts` holds the value from insertion, so it does not mark a repeat.
-        const run = (yield* matching)[0] ?? null;
-        return yield* call(ctx.installation, handler.apply(ctx, payload, run));
-      }).pipe(
-        Effect.catchTags({
-          Unservable: ({ reason }) => Effect.succeed<ApplyAnswer>({ _tag: "refused", reason }),
-          GithubHttpError: (e) =>
-            e.status === 401
-              ? Effect.as(raiseInstallationLost(row, "installation: unauthorized"), classify(e))
-              : Effect.succeed(classify(e)),
-          GithubNetworkError: (e) => Effect.succeed(classify(e)),
+  // Neither read guesses: `absent` sends an adoptable row again and voids a reconcile-only one, so a read without
+  // an answer is `undetermined`, the row stays ambiguous and the drainer asks again after back-off
+  // (MAMEKO-OUT-025, MAMEKO-OUT-064).
+  const undetermined = (e: ReadFailure) =>
+    Match.value(e).pipe(
+      Match.tag("AmbiguousCheckRun", ({ count }) => `check run: ${count} carry the execution id`),
+      Match.tag("Unservable", ({ reason }) => reason),
+      Match.orElse(reasonOf),
+    );
+
+  const service: EffectApplier["Service"] = {
+    apply,
+    lookup: (row) =>
+      adoptedRun(row).pipe(
+        Effect.match({
+          onFailure: (e): LookupAnswer => ({ _tag: "undetermined", reason: undetermined(e) }),
+          onSuccess: found,
         }),
-      );
+      ),
+    reconcile: (row) =>
+      adoptedRun(row).pipe(
+        Effect.match({
+          onFailure: (e): ReconcileAnswer => ({ _tag: "undetermined", reason: undetermined(e) }),
+          onSuccess: found,
+        }),
+      ),
+  };
+  return service;
+});
 
-    /**
-     * The check run carrying the row's effect, or null when the effect is not on GitHub. A read that fails, cannot
-     * reach GitHub, or finds the execution's check run more than once, proves neither.
-     */
-    const adoptedRun = (row: IntentRow): Effect.Effect<CheckRun | null, ReadFailure> =>
-      Effect.gen(function* () {
-        const { ctx, matching, payload, handler } = yield* resolve(row);
-        const runs = yield* matching;
-        if (runs.length > 1)
-          return yield* Effect.fail(new AmbiguousCheckRun({ count: runs.length }));
-        const run = runs[0];
-        if (run === undefined) return null;
-        return (yield* call(ctx.installation, handler.adopted(ctx, payload, run))) ? run : null;
-      });
-
-    // Neither read guesses: `absent` sends an adoptable row again and voids a reconcile-only one, so a read without
-    // an answer is `undetermined`, the row stays ambiguous and the drainer asks again after back-off
-    // (MAMEKO-OUT-025, MAMEKO-OUT-064).
-    const undetermined = (e: ReadFailure) =>
-      Match.value(e).pipe(
-        Match.tag("AmbiguousCheckRun", ({ count }) => `check run: ${count} carry the execution id`),
-        Match.tag("Unservable", ({ reason }) => reason),
-        Match.orElse(reasonOf),
-      );
-
-    return {
-      apply,
-      lookup: (row) =>
-        adoptedRun(row).pipe(
-          Effect.match({
-            onFailure: (e): LookupAnswer => ({ _tag: "undetermined", reason: undetermined(e) }),
-            onSuccess: found,
-          }),
-        ),
-      reconcile: (row) =>
-        adoptedRun(row).pipe(
-          Effect.match({
-            onFailure: (e): ReconcileAnswer => ({ _tag: "undetermined", reason: undetermined(e) }),
-            onSuccess: found,
-          }),
-        ),
-    };
-  }),
-);
+export const CheckRunApplierLive = Layer.effect(EffectApplier, makeCheckRunApplier);
