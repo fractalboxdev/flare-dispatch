@@ -1,0 +1,75 @@
+# FlareDispatch's dispatch action: dispatches a run to the control plane with the job's Actions OIDC token and, with
+# `wait`, holds the step until the verdict. The job needs `permissions: id-token: write`; the action takes no secret.
+name: FlareDispatch dispatch
+description: Dispatch a run to a FlareDispatch control plane, authenticated by the job's Actions OIDC token.
+inputs:
+  url:
+    description: The control plane's origin.
+    required: true
+  audience:
+    description: The control plane's Actions OIDC audience, the overlay's dispatch.oidcAudience.
+    required: true
+  run:
+    description: The run to dispatch.
+    required: true
+  repository:
+    description: "<owner>/<repo>; defaults to the workflow's repository."
+    required: false
+  sha:
+    description: The commit; defaults to the workflow's commit.
+    required: false
+  inputs:
+    description: The run's inputs, as JSON.
+    required: false
+    default: "{}"
+  class:
+    description: The class to request; resolveClass decides.
+    required: false
+  signals:
+    description: A signals/v1 array, as JSON.
+    required: false
+  wait:
+    description: Hold the step until the verdict, and fail it unless the verdict is success.
+    required: false
+    default: "false"
+  wait-timeout:
+    description: The longest wait, in seconds.
+    required: false
+    default: "3600"
+outputs:
+  execution-id:
+    description: The execution's id.
+    value: ${{ steps.dispatch.outputs.execution-id }}
+  details-url:
+    description: The execution's details link.
+    value: ${{ steps.dispatch.outputs.details-url }}
+  logs-url:
+    description: The execution's logs link.
+    value: ${{ steps.dispatch.outputs.logs-url }}
+  verdict:
+    description: The verdict, when the action waits.
+    value: ${{ steps.dispatch.outputs.verdict }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      run: corepack enable && pnpm install --frozen-lockfile --filter @fractalboxdev/flare-dispatch-fd...
+    - id: dispatch
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        INPUT_URL: ${{ inputs.url }}
+        INPUT_AUDIENCE: ${{ inputs.audience }}
+        INPUT_RUN: ${{ inputs.run }}
+        INPUT_REPOSITORY: ${{ inputs.repository }}
+        INPUT_SHA: ${{ inputs.sha }}
+        INPUT_INPUTS: ${{ inputs.inputs }}
+        INPUT_CLASS: ${{ inputs.class }}
+        INPUT_SIGNALS: ${{ inputs.signals }}
+        INPUT_WAIT: ${{ inputs.wait }}
+        INPUT_WAIT-TIMEOUT: ${{ inputs.wait-timeout }}
+      run: node --experimental-strip-types --no-warnings packages/fd/src/action/main.ts
