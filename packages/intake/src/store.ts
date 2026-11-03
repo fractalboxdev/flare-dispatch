@@ -28,9 +28,20 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     spend_line text,
     placement_constraint text,
     cache_trigger_json text,
+    eligible_kinds text,
     created_at integer not null)`,
   `create index if not exists intake_records_family on intake_records (family_root)`,
   `create index if not exists intake_records_commit on intake_records (repo, sha)`,
+  // mameko's admission batch inserts the placement row and takes no eligible kinds, so this trigger copies the kinds
+  // the profile's placement gave the request into that row inside the same batch, before any executor can claim it
+  // (FD-GATE-061, FD-GATE-080). intake writes its record before admission, so the record is there to read.
+  `create trigger if not exists intake_placement_kinds after insert on placements
+    when exists (select 1 from intake_records where execution_id = new.execution_id and eligible_kinds is not null)
+    begin
+      update placements set eligible_kinds =
+        (select eligible_kinds from intake_records where execution_id = new.execution_id)
+      where execution_id = new.execution_id;
+    end`,
   `create table if not exists intake_shed (
     id integer primary key autoincrement,
     scope_id text not null,
@@ -75,6 +86,8 @@ export interface IntakeRecord {
   readonly placementConstraint: string | null;
   /** The trigger as the cache namespaces read it (FD-CACHE-019). */
   readonly cacheTrigger: CacheTriggerRecord;
+  /** The executor kinds the profile's placement allows; admission copies them into the placement row. */
+  readonly eligibleKinds: readonly string[] | null;
   readonly createdAt: number;
 }
 
@@ -176,6 +189,7 @@ interface Row {
   readonly spend_line: string | null;
   readonly placement_constraint: string | null;
   readonly cache_trigger_json: string | null;
+  readonly eligible_kinds: string | null;
   readonly created_at: number;
   readonly status: string | null;
 }
@@ -212,6 +226,7 @@ const fromRow = (r: Row): RecordWithStatus => ({
   spendLine: r.spend_line,
   placementConstraint: r.placement_constraint,
   cacheTrigger: cacheTriggerOfRow(r.cache_trigger_json),
+  eligibleKinds: r.eligible_kinds === null ? null : (JSON.parse(r.eligible_kinds) as string[]),
   createdAt: r.created_at,
   status: r.status,
 });
@@ -226,8 +241,8 @@ export const d1IntakeStore = (db: D1Like) =>
           .prepare(
             `insert into intake_records (execution_id, trigger, run, label, repo, sha, ref, inputs_json, deadline_at,
               class, labels_json, attempt, family_root, installation, caller, not_before, spend_line,
-              placement_constraint, cache_trigger_json, created_at)
-              values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              placement_constraint, cache_trigger_json, eligible_kinds, created_at)
+              values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             r.executionId,
@@ -249,6 +264,7 @@ export const d1IntakeStore = (db: D1Like) =>
             r.spendLine,
             r.placementConstraint,
             JSON.stringify(r.cacheTrigger),
+            r.eligibleKinds === null ? null : JSON.stringify(r.eligibleKinds),
             r.createdAt,
           )
           .run(),

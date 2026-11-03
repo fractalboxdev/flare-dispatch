@@ -34,6 +34,14 @@ export interface IntakeRun {
   readonly gating: boolean;
   readonly retries: number;
   readonly cooldown?: Cooldown;
+  /**
+   * The placement constraints and capability labels a request with these inputs declares, e.g. `cloud-pinned` for
+   * `worker-deploy` and a publishing `sandbox-image` (FD-GATE-061, FD-GATE-080); none when absent.
+   */
+  readonly placement?: (inputs: unknown) => {
+    readonly constraints: readonly string[];
+    readonly labels: readonly string[];
+  };
 }
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */

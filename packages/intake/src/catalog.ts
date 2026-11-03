@@ -1,7 +1,7 @@
 // The run catalogue as intake reads it, built from FlareDispatch's catalogue
 // package. `check` answers `pull_request`, `push` and `merge_group` webhooks with
 // the steps its manifest entry names, and dispatches with their own inputs.
-import { CheckStep, lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
+import { CheckStep, lookupRun, requestPlacement } from "@fractalboxdev/flare-dispatch-catalog";
 import type { Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import { Match, Option, Schema } from "effect";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
@@ -59,6 +59,7 @@ export const catalogRuns =
         ownsCheck: true,
         gating: true,
         retries: entry.spec.retries,
+        placement: (inputs) => requestPlacement(entry.spec, inputs),
       })),
       Match.orElse(() => undefined),
     );

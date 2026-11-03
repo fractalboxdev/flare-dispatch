@@ -40,7 +40,12 @@ let development: Miniflare;
 let production: Miniflare;
 let unconfigured: Miniflare;
 
-const miniflare = (deployment: string, access: boolean) =>
+const miniflare = (
+  deployment: string,
+  access: boolean,
+  repository: object = DEV_REPOSITORY,
+  extra: Record<string, string> = {},
+) =>
   new Miniflare({
     modules: [{ type: "ESModule", path: "worker.js", contents: script }],
     compatibilityDate: "2026-05-01",
@@ -57,13 +62,14 @@ const miniflare = (deployment: string, access: boolean) =>
       DEPLOYMENT: deployment,
       CACHE_TOKEN_SECRET: "cache-token-secret-for-tests",
       PLANE_ID: PLANE,
+      ...extra,
       ...(access
         ? {
             ACCESS_TEAM_DOMAIN: team.teamDomain,
             ACCESS_AUD: AUD,
             OPERATORS: JSON.stringify([OPERATOR]),
             DISPATCHERS: JSON.stringify([OPERATOR]),
-            FD_DEV_REPOSITORY: JSON.stringify(DEV_REPOSITORY),
+            FD_DEV_REPOSITORY: JSON.stringify(repository),
           }
         : {}),
     },
@@ -377,6 +383,108 @@ describe("a development deployment", () => {
         .poll(() => execution(development, id), { timeout: 20_000 })
         .toMatchObject({ status: "done", verdict, reason });
       await endStandingClaim(socket);
+    },
+  );
+});
+
+/** A manifest that lists `worker-deploy` and `sandbox-image` for dispatch, beside the repository's own. */
+const PLACEMENT_REPOSITORY = {
+  ...DEV_REPOSITORY,
+  files: {
+    ".github/flare-dispatch.json": Buffer.from(
+      JSON.stringify({
+        version: 1,
+        runs: ["worker-deploy", "sandbox-image"].map((recipe) => ({
+          recipe,
+          triggers: ["dispatch"],
+          params: { steps: [{ label: "run", command: "true" }] },
+        })),
+      }),
+    ).toString("base64"),
+  },
+};
+
+describe("placement of cloud-pinned runs through admission and the lease path", () => {
+  let placement: Miniflare;
+  beforeAll(async () => {
+    placement = miniflare("development", true, PLACEMENT_REPOSITORY, {
+      GATE_IMAGE_DIGEST: `sha256:${"a".repeat(64)}`,
+    });
+    await placement.ready;
+  });
+  afterAll(async () => {
+    await placement?.dispose();
+  });
+
+  const context = (sha: string) => ({
+    repo: "https://github.com/fractalboxdev/flare-dispatch",
+    sha,
+    ref: "refs/heads/main",
+  });
+  const requests = [
+    {
+      run: "worker-deploy",
+      inputs: {
+        ...context("d".repeat(40)),
+        scope: "fractalboxdev/flare-dispatch",
+        branch: "main",
+        entry: { command: "pnpm deploy" },
+      },
+    },
+    {
+      run: "sandbox-image",
+      inputs: {
+        ...context("e".repeat(40)),
+        entry: {
+          images: [{ name: "sandbox", dockerfile: "infra/Dockerfile.sandbox", smoke: ["true"] }],
+        },
+        publish: true,
+        executorLabels: [],
+      },
+    },
+  ];
+
+  it.each(requests)(
+    "[FD-GATE-061] [FD-GATE-080] a $run request is admitted eligible for cloudflare alone, and a device never takes its lease",
+    async ({ run, inputs }) => {
+      const device = await newDevice();
+      const executorId = `mac-${run}`;
+      await post(placement, "/v1/executors/register", registration(executorId, device.identity));
+      const admitted = await post(placement, `/v1/dispatch/${run}`, {
+        repository: "fractalboxdev/flare-dispatch",
+        sha: inputs.sha,
+        inputs,
+      });
+      expect(admitted.status).toBe(202);
+      const { execution_id: id, class: className } = (await admitted.json()) as {
+        execution_id: string;
+        class: string;
+      };
+      const db = await placement.getD1Database("DB");
+      const row = async () =>
+        (
+          await db
+            .prepare("select state, eligible_kinds from placements where execution_id = ?")
+            .bind(id)
+            .all()
+        ).results;
+      expect(await row()).toEqual([{ state: "queued", eligible_kinds: '["cloudflare"]' }]);
+
+      const socket = await connect(placement, executorId, device.keys);
+      socket.send(hello(executorId));
+      await socket.next("session.welcome");
+      socket.send({ type: "exec.claim", id: "c1", free: { [className]: 1 } });
+      await socket.next("exec.idle");
+      expect(await row()).toEqual([{ state: "queued", eligible_kinds: '["cloudflare"]' }]);
+      await endStandingClaim(socket);
+
+      // The eligible kinds alone keep the device out: with them cleared, the same claim takes the lease.
+      await db
+        .prepare("update placements set eligible_kinds = null where execution_id = ?")
+        .bind(id)
+        .run();
+      socket.send({ type: "exec.claim", id: "c2", free: { [className]: 1 } });
+      expect(await socket.next("exec.lease")).toMatchObject({ execution_id: id, run });
     },
   );
 });

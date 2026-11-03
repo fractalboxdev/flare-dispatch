@@ -28,6 +28,7 @@ const record = (cacheTrigger: IntakeRecord["cacheTrigger"]): IntakeRecord => ({
   spendLine: null,
   placementConstraint: null,
   cacheTrigger,
+  eligibleKinds: null,
   createdAt: 0,
 });
 

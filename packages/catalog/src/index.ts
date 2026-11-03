@@ -14,6 +14,7 @@ export {
   offloadTestSpec,
   oxlintSpec,
   RUN_NAMES,
+  requestPlacement,
   sandboxImagePlacement,
   sandboxImageSpec,
   workerDeploySpec,

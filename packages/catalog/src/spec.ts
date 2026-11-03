@@ -301,6 +301,26 @@ export const sandboxImagePlacement = (publish: boolean) =>
     ? { className: "release", constraints: ["cloud-pinned"], labels: ["container-artifact"] }
     : { className: "required", constraints: [], labels: [] };
 
+/**
+ * The placement constraints and capability labels one request of a run declares: the run's own, and for a
+ * `sandbox-image` request whose input publishes, those of `sandboxImagePlacement(true)` (FD-GATE-061, FD-GATE-080).
+ */
+export const requestPlacement = (
+  spec: Pick<RunSpecFields, "name" | "constraints" | "labels">,
+  inputs: unknown,
+): { readonly constraints: readonly string[]; readonly labels: readonly string[] } => {
+  const publishes =
+    spec.name === "sandbox-image" &&
+    typeof inputs === "object" &&
+    inputs !== null &&
+    (inputs as { readonly publish?: unknown }).publish === true;
+  const extra = publishes ? sandboxImagePlacement(true) : { constraints: [], labels: [] };
+  return {
+    constraints: [...new Set([...spec.constraints, ...extra.constraints])],
+    labels: [...new Set([...spec.labels, ...extra.labels])],
+  };
+};
+
 /** Every run's name, in catalogue order. */
 export const RUN_NAMES: readonly string[] = Object.keys(entries);
 

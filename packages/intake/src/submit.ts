@@ -1,6 +1,7 @@
 // One request to mameko's admission function (FD-INT-001). Intake writes its own
 // record and, for a refusal before admission, a shed row; every `executions`,
 // dedup-key and `placements` row is admission's.
+import { eligibleKinds, type Profile } from "@fractalboxdev/flare-dispatch-profile";
 import { executionId as newExecutionId } from "@fractalboxdev/mameko-coordinator";
 import { Clock, Effect, Match } from "effect";
 import {
@@ -103,6 +104,33 @@ const cooldownWait = (s: Submission, now: number) =>
     return { bucket, notBefore: notBefore !== null && notBefore > now ? notBefore : null };
   });
 
+/**
+ * The executor kinds the profile's placement allows a request: its class, the labels class resolution returned with
+ * the run's capability labels and any recorded placement constraint, and the constraints the run declares for these
+ * inputs, so a `cloud-pinned` run never reaches a device (FD-GATE-061, FD-GATE-080).
+ */
+export const placementKinds = (
+  profile: Profile,
+  s: Submission,
+  className: string,
+  labels: readonly string[],
+): readonly string[] => {
+  const declared = s.run.placement?.(s.inputs) ?? { constraints: [], labels: [] };
+  const tagPush = s.cacheTrigger._tag === "Push" && s.cacheTrigger.ref.startsWith("refs/tags/");
+  return eligibleKinds(profile, {
+    class: className,
+    labels: [
+      ...new Set([
+        ...labels,
+        ...declared.labels,
+        ...(s.placementConstraint === null ? [] : [s.placementConstraint]),
+      ]),
+    ],
+    constraints: declared.constraints,
+    ...(tagPush ? { trigger: "tag-push" } : {}),
+  }).kinds;
+};
+
 export const submit = (
   s: Submission,
 ): Effect.Effect<
@@ -146,7 +174,9 @@ export const submit = (
     const cooldown = yield* cooldownWait(s, now);
     const id = newExecutionId(now, Math.random);
 
-    // The record goes in first, so a device that claims the moment admission commits finds the inputs.
+    const labels = [...new Set([...resolved.labels, ...s.extraLabels])];
+    // The record goes in first, so a device that claims the moment admission commits finds the inputs, and the
+    // placement row admission inserts takes the record's eligible kinds.
     yield* store.put({
       executionId: id,
       trigger: s.trigger,
@@ -158,7 +188,7 @@ export const submit = (
       inputs: s.inputs,
       deadlineAtMs: now + s.run.maxDurationSec * 1000,
       className,
-      labels: [...new Set([...resolved.labels, ...s.extraLabels])],
+      labels,
       attempt: s.attempt,
       familyRoot: s.familyRoot ?? id,
       installation: s.installation,
@@ -167,6 +197,7 @@ export const submit = (
       spendLine: s.spendLine,
       placementConstraint: s.placementConstraint,
       cacheTrigger: s.cacheTrigger,
+      eligibleKinds: placementKinds(config.profile, s, className, labels),
       createdAt: now,
     });
     const admitted = yield* admission
