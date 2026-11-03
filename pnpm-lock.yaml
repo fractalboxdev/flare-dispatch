@@ -48,6 +48,9 @@ importers:
       '@fractalboxdev/flare-dispatch-api':
         specifier: workspace:*
         version: link:../../packages/api
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../../packages/cache
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../../packages/catalog

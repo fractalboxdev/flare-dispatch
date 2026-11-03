@@ -50,9 +50,12 @@ const miniflare = (deployment: string, access: boolean) =>
       EXECUTION: { className: "ExecutionEngine", useSQLite: true },
       EPOCH_ANCHOR: { className: "EpochAnchor", useSQLite: true },
       MONITOR: { className: "LivenessMonitor", useSQLite: true },
+      CACHE_LEDGER: { className: "CacheLedger", useSQLite: true },
     },
+    r2Buckets: ["CACHE"],
     bindings: {
       DEPLOYMENT: deployment,
+      CACHE_TOKEN_SECRET: "cache-token-secret-for-tests",
       PLANE_ID: PLANE,
       ...(access
         ? {
@@ -178,6 +181,21 @@ describe("the minute tick", () => {
   });
 });
 
+describe("the cache, artifact and log routes", () => {
+  it("FD-CACHE-083 serves an execution's logs to a member and nothing without a token or identity", async () => {
+    expect((await development.dispatchFetch("http://x/v1/executions/01ABC/logs")).status).toBe(404);
+    const r = await development.dispatchFetch("http://x/v1/executions/01ABC/logs", {
+      headers: await headersFor(OPERATOR),
+    });
+    expect(r.status).toBe(404);
+  });
+
+  it("FD-CACHE-051 refuses a compile-cache request without a signing secret", async () => {
+    const r = await development.dispatchFetch("http://x/v1/compile-cache/acme/widgets/ns/key");
+    expect(r.status).toBe(503);
+  });
+});
+
 describe("a production deployment", () => {
   it("MAMEKO-ISO-001 leaves a host execution out of the catalogue", async () => {
     const r = await post(production, "/v1/dispatch/check", dispatchBody(SHA));
@@ -268,6 +286,14 @@ describe("a development deployment", () => {
       credentials: {},
     });
     const epoch = lease["epoch"];
+    // A device restores the device and content tiers and writes none for a dispatch (FD-CACHE-016).
+    expect(lease["upload_grant"]).toMatchObject({
+      cache_prefix: null,
+      artifact_prefix: `artifacts/${id}/${String(epoch)}/`,
+      log_prefix: `logs/${id}/${String(epoch)}/`,
+      compile_cache: null,
+    });
+    expect((lease["cache_namespaces"] as { write: unknown }).write).toBeNull();
     await expect.poll(() => execution(development, id)).toMatchObject({ status: "running" });
     socket.send({
       type: "exec.result",

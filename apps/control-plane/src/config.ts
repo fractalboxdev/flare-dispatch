@@ -2,6 +2,7 @@
 // document decides both.
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
 import type { MonitorNamespace } from "@fractalboxdev/flare-dispatch-ops";
+import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
   deviceSlotDefaults,
@@ -15,7 +16,7 @@ import type {
 } from "@fractalboxdev/mameko-host-cloudflare";
 
 /** The bindings of `wrangler.jsonc`, plus the channel and engine namespaces the mameko classes read. */
-export interface ControlPlaneEnv {
+export interface ControlPlaneEnv extends CacheEnv {
   readonly DB: D1Like;
   readonly CHANNEL: {
     idFromName(name: string): unknown;

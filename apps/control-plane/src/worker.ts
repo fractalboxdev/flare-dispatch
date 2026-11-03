@@ -7,11 +7,13 @@ import { CLASS_ORDER } from "@fractalboxdev/flare-dispatch-profile";
 import { routeExecutorUpgrade, runD1Migrations } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect } from "effect";
 import { deployment, type ControlPlaneEnv } from "./config.ts";
+import { cacheFetch, cacheSweeps } from "./cache.ts";
 import { boundFetch } from "./github.ts";
 import { apiFetch } from "./http.ts";
 import { tickDeps } from "./tick.ts";
 
 export {
+  CacheLedger,
   EpochAnchor,
   ExecutionEngine,
   ExecutorChannel,
@@ -34,7 +36,11 @@ const migrate = (env: ControlPlaneEnv) =>
 const API_OWNED = /^\/v1\/executions(\/[^/]+\/cancel)?$/;
 
 export default {
-  async fetch(request: Request, env: ControlPlaneEnv): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: ControlPlaneEnv,
+    ctx: { waitUntil(p: Promise<unknown>): void },
+  ): Promise<Response> {
     const { pathname } = new URL(request.url);
     // The deployment and plane id, which `pnpm dogfood` checks before it enrolls a device.
     if (pathname === "/health")
@@ -47,6 +53,9 @@ export default {
         channel: env.CHANNEL,
         planeId: env.PLANE_ID,
       });
+    // The compile-cache, artifact and log routes, each checking its own token (FD-CACHE-051, FD-CACHE-076).
+    const cached = await cacheFetch(request, env, (p) => ctx.waitUntil(p));
+    if (cached !== null) return cached;
     // The dashboard, `/v1/ops/health`, `/v1/ops/fleet`, the install routes and `/v1/spend`, each behind its own gate.
     if (!API_OWNED.test(pathname)) {
       const ops = await opsFetch(request, env as unknown as Parameters<typeof opsFetch>[1], {
@@ -59,7 +68,7 @@ export default {
   },
   /**
    * The minute tick (FD-INT-050): liveness record, `cron-silent`, the outbox drain through the GitHub applier and
-   * intake's sweep and schedule units.
+   * intake's sweep and schedule units, and the cache, artifact and log retention sweeps.
    */
-  scheduled: scheduledHandler((env: ControlPlaneEnv) => tickDeps(env)),
+  scheduled: scheduledHandler((env: ControlPlaneEnv) => tickDeps(env, cacheSweeps(env))),
 };

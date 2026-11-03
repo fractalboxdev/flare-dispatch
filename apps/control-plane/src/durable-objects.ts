@@ -8,6 +8,7 @@ import {
   type ClaimedLease,
 } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect, Match } from "effect";
+import { leaseCache } from "./cache.ts";
 import {
   channelConfig,
   deployment,
@@ -71,8 +72,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           server_now: Date.now(),
           progress_timeout_ms: PROGRESS_TIMEOUT_MS,
           credentials: {},
-          cache_namespaces: [],
-          upload_grant: {},
+          ...(yield* Effect.promise(() => leaseCache(env, record))),
           nonce: crypto.randomUUID(),
         } satisfies ClaimedLease;
       }).pipe(Effect.provide(d1IntakeStore(env.DB))),
@@ -87,5 +87,7 @@ export class ExecutionEngine extends MamekoExecutionEngine<EngineEnv> {
 }
 
 export { EpochAnchor } from "@fractalboxdev/mameko-host-cloudflare";
+/** One per repository: the cache's byte ledger (FD-CACHE-061). */
+export { CacheLedger } from "@fractalboxdev/flare-dispatch-cache/ledger-object";
 /** mameko's monitor whose timed wake also raises `cron-silent` (MAMEKO-OPS-010). */
 export { FlareDispatchLivenessMonitor as LivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/worker";
