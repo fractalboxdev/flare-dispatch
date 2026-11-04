@@ -179,8 +179,14 @@ export const triggerWebhook = (e: RepositoryEvent) =>
     const pushed = protectableRefOf(e.event.event, e.fields);
     const read =
       pushed === null ? null : yield* (yield* ProtectionSnapshots).refProtected(e.repo, pushed);
+    // Protection decides cache writes only, and an unprotected trigger writes no protected tier, so a push whose
+    // protection does not read runs as unprotected rather than not at all.
     if (isUnavailable(read) && pushed !== `refs/heads/${defaultBranch}`)
-      return yield* Effect.as(shed(e.repo, null, "protection: unreadable"), nothing);
+      yield* Effect.logWarning("push protection unreadable; running as an unprotected trigger", {
+        repo: e.repo,
+        ref: pushed,
+        reason: read.reason,
+      });
     const refProtection = isUnavailable(read) ? null : read;
     const cacheTrigger = cacheTriggerOf(
       e.event.event,

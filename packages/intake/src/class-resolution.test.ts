@@ -275,18 +275,21 @@ describe("protected triggers", () => {
     expect(h.reads.calls).not.toContain(`refProtected ${REPO}`);
   });
 
-  it("FD-CACHE-017 a push whose protection cannot be read submits nothing and records protection: unreadable, except on the default branch", async () => {
+  it("FD-CACHE-017 a push whose protection cannot be read runs as an unprotected trigger and writes no protected tier, except on the default branch", async () => {
     const h = await harness();
     h.reads.failures.set(
       `refProtected ${REPO}`,
       new GithubHttpError({ status: 503, message: "unavailable", rateLimited: false }),
     );
     await deliver(h, "push", pushPayload("refs/heads/release/2"));
-    expect(h.executions()).toEqual([]);
-    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "protection: unreadable" }]);
+    expect(h.sheds()).toEqual([]);
+    expect(triggers(h)).toEqual([
+      JSON.stringify({ _tag: "Push", ref: "refs/heads/release/2", protected: false }),
+    ]);
 
     await deliver(h, "push", pushPayload("refs/heads/main", BASE), "d-2");
     expect(triggers(h)).toEqual([
+      JSON.stringify({ _tag: "Push", ref: "refs/heads/release/2", protected: false }),
       JSON.stringify({ _tag: "Push", ref: "refs/heads/main", protected: true }),
     ]);
   });
