@@ -8,6 +8,7 @@ import { IntakeConfig, intakeError } from "./config.ts";
 import { commitOf, isForkPr, WebhookFields, type WebhookEvent } from "./event.ts";
 import { json, parseJson, readBody } from "./http.ts";
 import { ExecutionCanceller, InstallationEviction } from "./ports.ts";
+import { PROTECTION_EVENTS, ProtectionSnapshots } from "./protection.ts";
 import { rerunCheckRun, rerunCheckSuite } from "./rerun.ts";
 import { checkName } from "./runs.ts";
 import { verifySignature } from "./signature.ts";
@@ -88,9 +89,15 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
       if (removed.length > 0) yield* (yield* InstallationEviction).repositories(removed);
       return json({ executions: [] }, 202);
     }
-    // The required-set refresh of class resolution consumes these (FD-PROF-014).
-    if (event.event === "repository_ruleset" || event.event === "branch_protection_rule")
+    // A ruleset or branch-protection change drops the repository's cached protection; an organization ruleset names
+    // no repository and drops every one (FD-PROF-014).
+    if (PROTECTION_EVENTS.has(event.event)) {
+      yield* (yield* ProtectionSnapshots).refresh(
+        event.event,
+        fields.repository?.full_name ?? null,
+      );
       return json({ executions: [] }, 202);
+    }
 
     const repo = fields.repository?.full_name;
     if (repo === undefined) return ignored("no_repository");

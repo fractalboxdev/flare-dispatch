@@ -6,12 +6,14 @@ import { Effect, Match, Option, Result } from "effect";
 import { IntakeConfig, type IntakeError } from "./config.ts";
 import {
   cacheTriggerOf,
+  protectableRefOf,
   type DispatchEvent,
   type RecordedTrigger,
   type WebhookFields,
 } from "./event.ts";
 import { ManifestSource, type ManifestEntry, type RepoManifest } from "./manifest.ts";
 import { ManifestReporter } from "./ports.ts";
+import { isUnavailable, ProtectionSnapshots } from "./protection.ts";
 import type { IntakeRun } from "./runs.ts";
 import { shed, submission, submit, type Admitted, type Submission } from "./submit.ts";
 
@@ -44,6 +46,20 @@ export const refOf = (event: string, f: WebhookFields, defaultBranch: string) =>
     return f.merge_group.base_ref;
   if (f.ref !== undefined) return f.ref;
   return `refs/heads/${defaultBranch}`;
+};
+
+const READONLY_QUEUE = /^refs\/heads\/gh-readonly-queue\/(.+)\/pr-\d+-[0-9a-f]+$/;
+
+/**
+ * The branch whose required set decides a gating run: a pull request's base, a merge group's base, or the base a
+ * `gh-readonly-queue/<base>/pr-<number>-<sha>` push names; null for every other event.
+ */
+export const targetBranchOf = (event: string, f: WebhookFields): string | null => {
+  if (event === "pull_request" && f.pull_request !== undefined) return f.pull_request.base.ref;
+  if (event === "merge_group" && f.merge_group?.base_ref !== undefined)
+    return branchOf(f.merge_group.base_ref);
+  if (event === "push" && f.ref !== undefined) return READONLY_QUEUE.exec(f.ref)?.[1] ?? null;
+  return null;
 };
 
 /** What one trigger did: the executions it reached, and whether every one already existed. */
@@ -149,26 +165,47 @@ export const triggerWebhook = (e: RepositoryEvent) =>
     if (Option.isNone(manifest)) return nothing;
     const entries = yield* entriesFor(manifest.value, e.event.event, e.repo);
     const ref = refOf(e.event.event, e.fields, defaultBranch);
-    const subs = entries.flatMap(({ entry, run }) => {
+    const answering = entries.flatMap(({ entry, run }) => {
       if (e.keep !== undefined && !e.keep(run, entry)) return [];
       return Option.match(run.trigger(e.event, viewOf(entry)), {
         onNone: () => [],
-        onSome: (inputs) => [
-          submission({
-            run,
-            trigger: e.trigger,
-            event: e.event.event,
-            label: entry.label ?? null,
-            repo: e.repo,
-            sha: e.sha,
-            ref,
-            inputs,
-            installation: e.fields.installation?.id ?? null,
-            cacheTrigger: cacheTriggerOf(e.event.event, e.fields, defaultBranch),
-          }),
-        ],
+        onSome: (inputs) => [{ entry, run, inputs }],
       });
     });
+    if (answering.length === 0) return nothing;
+    // A push's protection decides whether it is a protected trigger and a release trigger. Off the default branch an
+    // unreadable answer submits nothing rather than record the push as unprotected; on the default branch, which is a
+    // protected trigger regardless, it leaves the protection unknown.
+    const pushed = protectableRefOf(e.event.event, e.fields);
+    const read =
+      pushed === null ? null : yield* (yield* ProtectionSnapshots).refProtected(e.repo, pushed);
+    if (isUnavailable(read) && pushed !== `refs/heads/${defaultBranch}`)
+      return yield* Effect.as(shed(e.repo, null, "protection: unreadable"), nothing);
+    const refProtection = isUnavailable(read) ? null : read;
+    const cacheTrigger = cacheTriggerOf(
+      e.event.event,
+      e.fields,
+      defaultBranch,
+      refProtection === true,
+    );
+    const targetBranch = targetBranchOf(e.event.event, e.fields);
+    const subs = answering.map(({ entry, run, inputs }) =>
+      submission({
+        run,
+        trigger: e.trigger,
+        event: e.event.event,
+        label: entry.label ?? null,
+        repo: e.repo,
+        sha: e.sha,
+        ref,
+        inputs,
+        installation: e.fields.installation?.id ?? null,
+        cacheTrigger,
+        defaultBranch,
+        targetBranch,
+        refProtection,
+      }),
+    );
     return yield* submitEach(subs);
   }).pipe(
     // A repository read that fails before the manifest is read is the same refusal as an unreadable manifest.

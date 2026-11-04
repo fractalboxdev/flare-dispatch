@@ -12,6 +12,8 @@ export const Caller = Schema.Struct({
   id: Schema.String,
   /** The token's `workflow_ref` for an Actions caller. */
   workflowRef: Schema.optionalKey(Schema.String),
+  /** The token's `ref` for an Actions caller, `refs/heads/<branch>`. */
+  ref: Schema.optionalKey(Schema.String),
 });
 export type Caller = typeof Caller.Type;
 
@@ -166,20 +168,33 @@ export type CacheTriggerRecord = typeof CacheTriggerRecord.Type;
 
 export const OTHER_CACHE_TRIGGER: CacheTriggerRecord = { _tag: "Other" };
 
+/** A `gh-readonly-queue/*` push carries several pull requests' code and is never a protected trigger. */
+export const isReadonlyQueueRef = (ref: string) => ref.startsWith("refs/heads/gh-readonly-queue/");
+
+/** The pushed ref whose ruleset and branch protection intake reads; none for a `gh-readonly-queue/*` push. */
+export const protectableRefOf = (event: string, f: WebhookFields): string | null =>
+  event === "push" && f.ref !== undefined && !isReadonlyQueueRef(f.ref) ? f.ref : null;
+
 /**
- * The cache trigger of a webhook. A push to the default branch is a protected trigger; intake reads no ruleset, so a
- * push to another branch or a tag records `protected: false`, which reads protected tiers and writes none.
+ * The cache trigger of a webhook. A push is a protected trigger when it is to the default branch, or to a branch or
+ * tag that `refProtected` says a ruleset or branch protection protects; a `gh-readonly-queue/*` push never is.
  */
 export const cacheTriggerOf = (
   event: string,
   f: WebhookFields,
   defaultBranch: string,
+  refProtected: boolean,
 ): CacheTriggerRecord => {
   if (event === "pull_request" && f.pull_request !== undefined)
     return { _tag: "PullRequest", number: f.pull_request.number };
   if (event === "merge_group") return { _tag: "MergeGroup" };
   if (event === "push" && f.ref !== undefined)
-    return { _tag: "Push", ref: f.ref, protected: f.ref === `refs/heads/${defaultBranch}` };
+    return {
+      _tag: "Push",
+      ref: f.ref,
+      protected:
+        !isReadonlyQueueRef(f.ref) && (f.ref === `refs/heads/${defaultBranch}` || refProtected),
+    };
   return OTHER_CACHE_TRIGGER;
 };
 

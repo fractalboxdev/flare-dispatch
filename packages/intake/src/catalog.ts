@@ -55,6 +55,8 @@ export const catalogRuns =
         input: entry.input,
         trigger: checkTrigger,
         defaultClass: entry.spec.limits.qosClass,
+        qosCeiling: entry.spec.limits.qosCeiling,
+        hostedModelCalls: entry.spec.needsModel,
         maxDurationSec: entry.spec.limits.maxDurationSec,
         ownsCheck: true,
         gating: true,

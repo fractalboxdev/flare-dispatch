@@ -12,7 +12,8 @@ import {
   ManifestReporter,
   manifestSourceLayer,
   oidcVerifierLayer,
-  runDefaultClassResolver,
+  profileClassResolver,
+  protectionSnapshotsLayer,
   type IntakeSettings,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
@@ -111,7 +112,7 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     );
     const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
     return Layer.mergeAll(
-      runDefaultClassResolver.pipe(
+      profileClassResolver.pipe(
         Layer.provideMerge(
           intakeLayer({ db: env.DB, settings, fetch: boundFetch, queued: wake(env) }),
         ),
@@ -128,7 +129,10 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     manifestReporterWithoutApp,
     evictionWithoutApp,
     oidcVerifierLayer(boundFetch),
-    runDefaultClassResolver.pipe(Layer.provide(Layer.succeed(IntakeConfig, settings))),
+    profileClassResolver.pipe(
+      Layer.provideMerge(protectionSnapshotsLayer),
+      Layer.provide(Layer.succeed(IntakeConfig, settings)),
+    ),
     localPorts(env),
   ).pipe(
     Layer.provideMerge(Layer.merge(readsWithoutApp(env), gitDataWithoutApp)),

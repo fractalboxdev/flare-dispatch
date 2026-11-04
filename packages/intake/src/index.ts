@@ -34,13 +34,21 @@ export {
   commitOf,
   DispatchEvent,
   isForkPr,
+  isReadonlyQueueRef,
+  protectableRefOf,
   TriggerKind,
   WebhookFields,
   type RecordedTrigger,
   type WebhookEvent,
 } from "./event.ts";
 export { errorResponse, json } from "./http.ts";
-export { intakeLayer, runDefaultClassResolver, type IntakeLayerOptions } from "./layer.ts";
+export {
+  intakeLayer,
+  profileClassResolver,
+  profileRequestOf,
+  triggerOf,
+  type IntakeLayerOptions,
+} from "./layer.ts";
 export { followOnSubmitterLayer } from "./follow-on.ts";
 export { LOCAL_CLASS, LOCAL_ONLY, LocalRegistrationBody, localRegistrationLayer } from "./local.ts";
 export {
@@ -72,6 +80,14 @@ export {
   manifestReporterLayer,
   manifestSummary,
 } from "./ports.ts";
+export {
+  isUnavailable,
+  PROTECTION_EVENTS,
+  PROTECTION_READ_TIMEOUT,
+  ProtectionSnapshots,
+  protectionSnapshotsLayer,
+  unavailableOf,
+} from "./protection.ts";
 export {
   familyAllowance,
   MAX_ATTEMPTS,
@@ -117,5 +133,11 @@ export {
   type Submission,
 } from "./submit.ts";
 export { planTick, runTickUnit, sweepEvent, TickUnit, type UnitResult } from "./tick.ts";
-export { manifestAt, readManifest, triggerWebhook, type TriggerOutcome } from "./triggers.ts";
+export {
+  manifestAt,
+  readManifest,
+  targetBranchOf,
+  triggerWebhook,
+  type TriggerOutcome,
+} from "./triggers.ts";
 export { handleWebhook, SUPPORTED_EVENTS, WEBHOOK_MAX_BYTES } from "./webhook.ts";

@@ -121,6 +121,8 @@ export interface FakeRepo {
   checkRuns: Record<string, CheckRunSummary[]>;
   /** Branch name to its required check names. */
   required: Record<string, string[]>;
+  /** The refs, `refs/heads/<branch>` or `refs/tags/<tag>`, a ruleset or branch protection protects. */
+  protectedRefs: string[];
 }
 
 export const fakeRepo = (overrides: Partial<FakeRepo> = {}): FakeRepo => ({
@@ -130,6 +132,7 @@ export const fakeRepo = (overrides: Partial<FakeRepo> = {}): FakeRepo => ({
   pulls: [],
   checkRuns: {},
   required: {},
+  protectedRefs: [],
   ...overrides,
 });
 
@@ -183,6 +186,7 @@ export const fakeReadLayer = (state: FakeReads) => {
     openPulls: (repo) => read("openPulls", repo, (r) => r.pulls),
     checkRuns: (repo, sha) => read("checkRuns", repo, (r) => r.checkRuns[sha] ?? []),
     requiredChecks: (repo, branch) => read("requiredChecks", repo, (r) => r.required[branch] ?? []),
+    refProtected: (repo, ref) => read("refProtected", repo, (r) => r.protectedRefs.includes(ref)),
     repositories: (installation) =>
       Effect.sync(() => {
         state.calls.push(`repositories ${installation}`);

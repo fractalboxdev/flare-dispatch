@@ -12,6 +12,7 @@ import { errorResponse, json } from "./http.ts";
 import type { ManifestSource } from "./manifest.ts";
 import type { OidcVerifier } from "./oidc.ts";
 import type { ExecutionCanceller, InstallationEviction, ManifestReporter } from "./ports.ts";
+import type { ProtectionSnapshots } from "./protection.ts";
 import type { IntakeStore, ShedRecorder, StoreUnavailable } from "./store.ts";
 import { handleWebhook } from "./webhook.ts";
 
@@ -28,7 +29,8 @@ export type IntakeEnv =
   | OidcVerifier
   | AccessIdentity
   | InstallationEviction
-  | ExecutionCanceller;
+  | ExecutionCanceller
+  | ProtectionSnapshots;
 
 /** The paths this group serves, below the `/v1/` mount, and the one method each takes. */
 export const INTAKE_PATHS = [

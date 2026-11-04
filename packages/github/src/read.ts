@@ -78,6 +78,11 @@ export class GithubRead extends Context.Service<
       repo: string,
       branch: string,
     ) => Effect.Effect<readonly string[], GithubReadError>;
+    /**
+     * Whether an active ruleset with at least one rule targets `ref` (`refs/heads/<branch>` or `refs/tags/<tag>`), or
+     * branch protection guards the branch; false for any other ref.
+     */
+    readonly refProtected: (repo: string, ref: string) => Effect.Effect<boolean, GithubReadError>;
     /** The `<owner>/<repo>` names an installation covers, at most 100. */
     readonly repositories: (
       installation: number,
@@ -116,6 +121,54 @@ const ProtectionChecks = Schema.Struct({
   contexts: Schema.optionalKey(Schema.Array(Schema.String)),
   checks: Schema.optionalKey(Schema.Array(Schema.Struct({ context: Schema.String }))),
 });
+
+const Rules = Schema.Array(Schema.Struct({ type: Schema.String }));
+const BranchProtected = Schema.Struct({ protected: Schema.Boolean });
+const RulesetSummaries = Schema.Array(
+  Schema.Struct({
+    id: Schema.Number,
+    target: Schema.optionalKey(Schema.String),
+    enforcement: Schema.String,
+  }),
+);
+const RulesetDetail = Schema.Struct({
+  enforcement: Schema.String,
+  conditions: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        ref_name: Schema.optionalKey(
+          Schema.Struct({
+            include: Schema.optionalKey(Schema.Array(Schema.String)),
+            exclude: Schema.optionalKey(Schema.Array(Schema.String)),
+          }),
+        ),
+      }),
+    ),
+  ),
+  rules: Schema.optionalKey(Rules),
+});
+
+const globSource = (pattern: string) =>
+  pattern
+    .split("**")
+    .map((part) =>
+      part
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replaceAll("*", "[^/]*")
+        .replaceAll("?", "[^/]"),
+    )
+    .join(".*");
+
+/**
+ * Whether a ruleset `ref_name` pattern names `ref`: `~ALL` names every ref; otherwise `**` spans `/`, `*` and `?` do
+ * not, and a pattern without the `refs/` prefix matches the ref's short name.
+ */
+export const refPatternMatches = (pattern: string, ref: string): boolean => {
+  if (pattern === "~ALL") return true;
+  if (pattern.startsWith("~")) return false;
+  const short = ref.replace(/^refs\/(heads|tags)\//, "");
+  return new RegExp(`^${globSource(pattern)}$`).test(pattern.startsWith("refs/") ? ref : short);
+};
 
 const utf8FromBase64 = (b64: string) => {
   const binary = atob(b64.replace(/\s+/g, ""));
@@ -222,6 +275,44 @@ export const githubReadLayer = (options: GithubClientOptions) =>
               ...(protection?.checks ?? []).map((c) => c.context),
             ]);
             return [...names].sort();
+          }),
+        refProtected: (repo, ref) =>
+          Effect.gen(function* () {
+            if (ref.startsWith("refs/heads/")) {
+              const branch = enc(ref.slice("refs/heads/".length));
+              const rules = yield* Effect.flatMap(
+                get(repo, `/repos/${repo}/rules/branches/${branch}`),
+                decode(Rules),
+              );
+              if (rules.length > 0) return true;
+              const raw = yield* notFound(get(repo, `/repos/${repo}/branches/${branch}`));
+              return raw === null ? false : (yield* decode(BranchProtected)(raw)).protected;
+            }
+            if (!ref.startsWith("refs/tags/")) return false;
+            // GitHub answers the rules of a branch but not of a tag, so each active tag ruleset's conditions decide.
+            const summaries = yield* Effect.flatMap(
+              get(repo, `/repos/${repo}/rulesets?targets=tag&includes_parents=true&per_page=100`),
+              decode(RulesetSummaries),
+            );
+            for (const s of summaries) {
+              if (s.enforcement !== "active" || (s.target !== undefined && s.target !== "tag"))
+                continue;
+              const detail = yield* Effect.flatMap(
+                get(repo, `/repos/${repo}/rulesets/${s.id}?includes_parents=true`),
+                decode(RulesetDetail),
+              );
+              const names = detail.conditions?.ref_name;
+              const included = (names?.include ?? []).some((p) => refPatternMatches(p, ref));
+              const excluded = (names?.exclude ?? []).some((p) => refPatternMatches(p, ref));
+              if (
+                detail.enforcement === "active" &&
+                included &&
+                !excluded &&
+                (detail.rules ?? []).length > 0
+              )
+                return true;
+            }
+            return false;
           }),
       };
     }),

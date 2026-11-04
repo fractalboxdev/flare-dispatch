@@ -265,18 +265,18 @@ describe("webhook to admission", () => {
     expect(new Set(push.records().map((r) => r.cache_trigger_json))).toEqual(
       new Set([JSON.stringify({ _tag: "Push", ref: "refs/heads/feature", protected: false })]),
     );
-    expect(cacheTriggerOf("push", { ref: "refs/heads/main" }, "main")).toEqual({
+    expect(cacheTriggerOf("push", { ref: "refs/heads/main" }, "main", false)).toEqual({
       _tag: "Push",
       ref: "refs/heads/main",
       protected: true,
     });
-    expect(cacheTriggerOf("push", { ref: "refs/heads/feature" }, "main")).toEqual({
+    expect(cacheTriggerOf("push", { ref: "refs/heads/feature" }, "main", false)).toEqual({
       _tag: "Push",
       ref: "refs/heads/feature",
       protected: false,
     });
-    expect(cacheTriggerOf("merge_group", {}, "main")).toEqual({ _tag: "MergeGroup" });
-    expect(cacheTriggerOf("check_suite", {}, "main")).toEqual({ _tag: "Other" });
+    expect(cacheTriggerOf("merge_group", {}, "main", false)).toEqual({ _tag: "MergeGroup" });
+    expect(cacheTriggerOf("check_suite", {}, "main", false)).toEqual({ _tag: "Other" });
   });
 
   it("FD-INT-004 when admission fails the webhook answers 503 intake_unavailable and keeps no record", async () => {

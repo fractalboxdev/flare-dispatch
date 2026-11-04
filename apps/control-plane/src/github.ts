@@ -87,6 +87,7 @@ export const devGithubRead = (dev: DevRepository) => {
     openPulls: (repo) => (ours(repo) ? unknown("pull requests") : uncredentialed(repo)),
     checkRuns: (repo) => (ours(repo) ? unknown("check runs") : uncredentialed(repo)),
     requiredChecks: (repo) => (ours(repo) ? unknown("branch rules") : uncredentialed(repo)),
+    refProtected: (repo) => (ours(repo) ? unknown("rulesets") : uncredentialed(repo)),
     repositories: () => unknown("an installation's repositories"),
   });
 };
@@ -100,6 +101,7 @@ export const noGithubRead = Layer.succeed(GithubRead, {
   openPulls: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   checkRuns: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   requiredChecks: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
+  refProtected: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   repositories: (installation) =>
     Effect.fail(new GithubUncredentialed({ repo: `installation ${installation}` })),
 });

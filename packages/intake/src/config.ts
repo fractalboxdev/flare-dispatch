@@ -75,6 +75,16 @@ export interface ClassRequest {
   readonly event: string | null;
   readonly repo: string;
   readonly ref: string;
+  readonly sha: string;
+  /** The repository's default branch, when the trigger read it. */
+  readonly defaultBranch: string | null;
+  /**
+   * The branch whose required set decides a gating run: a pull request's or a merge group's base, or the base of a
+   * `gh-readonly-queue/*` push; null for every other trigger.
+   */
+  readonly targetBranch: string | null;
+  /** Whether a ruleset or branch protection protects a push's ref; null when intake did not read it. */
+  readonly refProtection: boolean | null;
   readonly checkName: string;
   /** A dispatch's or an MCP call's `class` input (FD-IFC-033). */
   readonly classInput: string | null;

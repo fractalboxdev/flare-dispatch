@@ -21,12 +21,7 @@ import {
   type RecordedTrigger,
 } from "./event.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
-import {
-  IntakeStore,
-  ShedRecorder,
-  type IntakeRecord,
-  type StoreUnavailable,
-} from "./store.ts";
+import { IntakeStore, ShedRecorder, type IntakeRecord, type StoreUnavailable } from "./store.ts";
 
 export const COOLDOWN_MIN_SEC = 60;
 export const COOLDOWN_MAX_SEC = 86_400;
@@ -56,6 +51,12 @@ export interface Submission extends Omit<KeyedRequest, "run"> {
   readonly extraLabels: readonly string[];
   /** What the cache namespaces read of the trigger (FD-CACHE-019); `Other` unless a webhook says more. */
   readonly cacheTrigger: CacheTriggerRecord;
+  /** The repository's default branch, when the trigger read it. */
+  readonly defaultBranch: string | null;
+  /** The branch whose required set decides a gating run (specs/profile.md § Class resolution, step 2). */
+  readonly targetBranch: string | null;
+  /** Whether a ruleset or branch protection protects a push's ref; null when intake did not read it. */
+  readonly refProtection: boolean | null;
 }
 
 export const submission = (
@@ -79,6 +80,9 @@ export const submission = (
   placementConstraint: null,
   extraLabels: [],
   cacheTrigger: OTHER_CACHE_TRIGGER,
+  defaultBranch: null,
+  targetBranch: null,
+  refProtection: null,
   ...fields,
 });
 
@@ -159,6 +163,10 @@ export const submit = (
             event: s.event,
             repo: s.repo,
             ref: s.ref,
+            sha: s.sha,
+            defaultBranch: s.defaultBranch,
+            targetBranch: s.targetBranch,
+            refProtection: s.refProtection,
             checkName: name,
             classInput: s.classInput,
             caller: s.caller,
@@ -355,7 +363,10 @@ export const releaseHeld = (
           }),
         ),
         Match.tag("Concluded", () =>
-          Effect.andThen(store.release(id), Effect.sync(() => void concluded++)),
+          Effect.andThen(
+            store.release(id),
+            Effect.sync(() => void concluded++),
+          ),
         ),
         Match.tag("Duplicate", "Conflict", () =>
           Effect.gen(function* () {

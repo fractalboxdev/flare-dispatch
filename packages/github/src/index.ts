@@ -64,6 +64,7 @@ export {
   GithubUncredentialed,
   GithubUnexpected,
   PullSummary,
+  refPatternMatches,
   RepoFile,
   type GithubReadError,
 } from "./read.ts";

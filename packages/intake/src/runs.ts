@@ -27,6 +27,10 @@ export interface IntakeRun {
   readonly trigger: (event: DispatchEvent, entry: EntryView) => Option.Option<unknown>;
   /** `limits.qosClass`, the class `resolveClass` starts from. */
   readonly defaultClass: string;
+  /** `limits.qosCeiling`, the highest class `resolveClass` gives the run; absent caps at `required`. */
+  readonly qosCeiling?: string;
+  /** The run makes hosted model calls (FD-PROF-023). */
+  readonly hostedModelCalls?: boolean;
   readonly maxDurationSec: number;
   /** Whether an execution of the run owns a check run. */
   readonly ownsCheck: boolean;

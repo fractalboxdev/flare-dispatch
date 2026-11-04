@@ -107,8 +107,9 @@ export interface CatalogEntry {
   /** The repo-manifest key the run reads (specs/runs/gate.md § Recipes). */
   readonly manifestKey: string | null;
   /**
-   * The recipe's default class, which `resolveClass` starts from (specs/runs/gate.md § Recipes). `spec.limits.qosClass`
-   * stays the class the control plane admits a device run at until intake resolves classes.
+   * The recipe's default class (specs/runs/gate.md § Recipes). Intake's `resolveClass` starts from `spec.limits.qosClass`
+   * instead, which keeps `check` and `oxlint` at `batch` outside a pull request; `spec.limits.qosCeiling` is `required`
+   * for both, so a pull request whose base branch requires the check still resolves to `required` (FD-PROF-013).
    */
   readonly defaultClass: string;
   /** The executor kinds that can serve the run's capabilities. */
@@ -130,11 +131,11 @@ const JOB: readonly Capability[] = ["Workspace", "Exec", "Artifact"];
 
 export const checkSpec = gate("check", {
   requires: JOB,
-  limits: { maxDurationSec: CHECK_MAX_DURATION_SEC, qosClass: "batch", qosCeiling: "batch" },
+  limits: { maxDurationSec: CHECK_MAX_DURATION_SEC, qosClass: "batch", qosCeiling: "required" },
 });
 export const oxlintSpec = gate("oxlint", {
   requires: JOB,
-  limits: { maxDurationSec: OXLINT_MAX_DURATION_SEC, qosClass: "batch", qosCeiling: "batch" },
+  limits: { maxDurationSec: OXLINT_MAX_DURATION_SEC, qosClass: "batch", qosCeiling: "required" },
 });
 export const gateJobSpec = gate("gate-job", {
   requires: [...JOB, "Cache"],

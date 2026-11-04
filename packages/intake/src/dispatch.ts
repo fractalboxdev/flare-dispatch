@@ -120,6 +120,7 @@ const identify = (
           kind: "actions-oidc",
           id: claims.sub,
           ...(claims.workflow_ref === undefined ? {} : { workflowRef: claims.workflow_ref }),
+          ...(claims.ref === undefined ? {} : { ref: claims.ref }),
         },
         claims,
       } satisfies Identified;

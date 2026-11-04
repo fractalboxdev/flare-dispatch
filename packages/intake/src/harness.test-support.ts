@@ -12,6 +12,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-github/testing";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import type { Resolution } from "@fractalboxdev/mameko-coordinator";
+import { AlarmPort, type Alarm } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { d1Admission, IntakeConfig, type ClassRequest, type IntakeSettings } from "./config.ts";
@@ -19,7 +20,9 @@ import { AccessIdentity } from "./dispatch.ts";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
 import { manifestSourceLayer } from "./manifest.ts";
 import { ACTIONS_ISSUER, JWKS_URL, oidcVerifierLayer } from "./oidc.ts";
+import { profileClassResolver } from "./layer.ts";
 import { ExecutionCanceller, InstallationEviction, ManifestReporter } from "./ports.ts";
+import { protectionSnapshotsLayer } from "./protection.ts";
 import type { IntakeRun } from "./runs.ts";
 import { signBody } from "./signature.ts";
 import { d1IntakeStore, d1ShedRecorder } from "./store.ts";
@@ -122,6 +125,7 @@ export interface Recorded {
   readonly reported: { repo: string; sha: string; errors: readonly string[] }[];
   readonly cancelled: { executionId: string; cause: string }[];
   readonly evicted: string[];
+  readonly alarms: Alarm[];
   jwksFetches: number;
 }
 
@@ -130,6 +134,8 @@ export interface HarnessOptions {
   readonly installations?: Record<string, number>;
   readonly settings?: Partial<IntakeSettings>;
   readonly resolve?: (r: ClassRequest) => Resolution;
+  /** Resolve classes through the profile's `resolveClass` binding instead of the recording resolver. */
+  readonly profileResolver?: boolean;
 }
 
 /** A default repository: `main` at `BASE` carrying the default manifest. */
@@ -151,6 +157,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     reported: [],
     cancelled: [],
     evicted: [],
+    alarms: [],
     jwksFetches: 0,
   };
   const settings: IntakeSettings = {
@@ -170,15 +177,26 @@ export const harness = async (options: HarnessOptions = {}) => {
     return Response.json({ keys: [{ ...jwk, kty: "RSA", kid: "k1", alg: "RS256", use: "sig" }] });
   }) as typeof globalThis.fetch;
   const readLayer = fakeReadLayer(reads);
+  const config = Layer.succeed(IntakeConfig, settings);
+  const protection = protectionSnapshotsLayer.pipe(Layer.provide(readLayer));
+  const alarms = Layer.succeed(AlarmPort, {
+    deliver: (alarm) => Effect.sync(() => void recorded.alarms.push(alarm)),
+  });
+  const resolver =
+    options.profileResolver === true
+      ? profileClassResolver.pipe(Layer.provide(Layer.mergeAll(config, protection, alarms)))
+      : recordingResolver(recorded.resolved, options.resolve);
   const layer = Layer.mergeAll(
-    Layer.succeed(IntakeConfig, settings),
+    config,
     d1Admission(db),
     d1IntakeStore(db),
     d1ShedRecorder(db),
     manifestSourceLayer,
     readLayer,
     oidcVerifierLayer(fetch),
-    recordingResolver(recorded.resolved, options.resolve),
+    resolver,
+    protection,
+    alarms,
     installationQuotaLayer(),
     Layer.succeed(ManifestReporter, {
       invalid: (repo, sha, errors) =>

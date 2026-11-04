@@ -14,7 +14,7 @@ import {
 } from "./app.ts";
 import { githubLiveLayer } from "./layer.ts";
 import { leaseReadToken } from "./lease-token.ts";
-import { GithubRead } from "./read.ts";
+import { GithubRead, refPatternMatches } from "./read.ts";
 import { SideOutputConfig } from "./side-ports.ts";
 
 const NOW = 1_800_000_000_000;
@@ -307,5 +307,102 @@ describe("GithubRead", () => {
       },
     );
     expect(checks).toEqual(["flare-dispatch/check:ci", "lint"]);
+  });
+
+  it("FD-CACHE-017 a branch is protected by any rule that targets it or by branch protection", async () => {
+    const protectedRef = (routes: Parameters<typeof fakeApi>[0], ref: string) =>
+      live(
+        GithubRead.use((r) => r.refProtected("acme/app", ref)),
+        { ...covered, ...routes },
+      );
+    const ruled = await protectedRef(
+      {
+        "GET /repos/acme/app/rules/branches/release/2": () => ({
+          status: 200,
+          body: [{ type: "non_fast_forward" }],
+        }),
+      },
+      "refs/heads/release/2",
+    );
+    const classic = await protectedRef(
+      {
+        "GET /repos/acme/app/rules/branches/main": () => ({ status: 200, body: [] }),
+        "GET /repos/acme/app/branches/main": () => ({
+          status: 200,
+          body: { protected: true, commit: { sha: "a".repeat(40) } },
+        }),
+      },
+      "refs/heads/main",
+    );
+    const open = await protectedRef(
+      {
+        "GET /repos/acme/app/rules/branches/feature": () => ({ status: 200, body: [] }),
+        "GET /repos/acme/app/branches/feature": () => ({
+          status: 200,
+          body: { protected: false, commit: { sha: "a".repeat(40) } },
+        }),
+      },
+      "refs/heads/feature",
+    );
+    const deleted = await protectedRef(
+      { "GET /repos/acme/app/rules/branches/gone": () => ({ status: 200, body: [] }) },
+      "refs/heads/gone",
+    );
+    expect([ruled, classic, open, deleted]).toEqual([true, true, false, false]);
+  });
+
+  it("FD-PROF-012 a tag is protected only by an active tag ruleset with a rule whose conditions name it", async () => {
+    const rulesets = {
+      "GET /repos/acme/app/rulesets": () => ({
+        status: 200,
+        body: [
+          { id: 1, target: "tag", enforcement: "active" },
+          { id: 2, target: "tag", enforcement: "evaluate" },
+        ],
+      }),
+      "GET /repos/acme/app/rulesets/1": () => ({
+        status: 200,
+        body: {
+          enforcement: "active",
+          conditions: { ref_name: { include: ["refs/tags/v*"], exclude: ["refs/tags/v0*"] } },
+          rules: [{ type: "deletion" }, { type: "update" }],
+        },
+      }),
+      "GET /repos/acme/app/rulesets/2": () => ({
+        status: 200,
+        body: {
+          enforcement: "evaluate",
+          conditions: { ref_name: { include: ["~ALL"], exclude: [] } },
+          rules: [{ type: "deletion" }],
+        },
+      }),
+    };
+    const calls: Call[] = [];
+    const answers = await Promise.all(
+      ["refs/tags/v1.2.0", "refs/tags/v0.9.0", "refs/tags/nightly"].map((ref) =>
+        live(
+          GithubRead.use((r) => r.refProtected("acme/app", ref)),
+          { ...covered, ...rulesets },
+          calls,
+        ),
+      ),
+    );
+    expect(answers).toEqual([true, false, false]);
+    expect(calls.some((c) => c.path.includes("/rulesets/2"))).toBe(false);
+    expect(
+      calls.some(
+        (c) => c.path === "/repos/acme/app/rulesets?targets=tag&includes_parents=true&per_page=100",
+      ),
+    ).toBe(true);
+  });
+
+  it("FD-PROF-012 a ruleset ref pattern spans / only with **, and ~ALL names every ref", () => {
+    expect(refPatternMatches("refs/tags/v*", "refs/tags/v1.2.0")).toBe(true);
+    expect(refPatternMatches("refs/tags/v*", "refs/tags/v1/rc")).toBe(false);
+    expect(refPatternMatches("refs/tags/**", "refs/tags/v1/rc")).toBe(true);
+    expect(refPatternMatches("v?", "refs/tags/v1")).toBe(true);
+    expect(refPatternMatches("~ALL", "refs/tags/anything")).toBe(true);
+    expect(refPatternMatches("~DEFAULT_BRANCH", "refs/tags/main")).toBe(false);
+    expect(refPatternMatches("refs/tags/v1.0", "refs/tags/v1x0")).toBe(false);
   });
 });

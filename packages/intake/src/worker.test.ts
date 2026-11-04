@@ -19,7 +19,7 @@ import {
   SECRET,
   signedWebhook,
 } from "./harness.test-support.ts";
-import { intakeLayer, runDefaultClassResolver } from "./layer.ts";
+import { intakeLayer, profileClassResolver } from "./layer.ts";
 import { ExecutionCanceller } from "./ports.ts";
 import { handleIntake } from "./routes.ts";
 import { migratedD1 } from "./testing.ts";
@@ -28,7 +28,7 @@ const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 })
   .privateKey.export({ type: "pkcs1", format: "pem" })
   .toString();
 
-const github = (manifestText: string, calls: string[]) =>
+const github = (manifestText: string, calls: string[], required: readonly string[] = []) =>
   (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     const route = `${init?.method ?? "GET"} ${url.pathname}`;
@@ -43,6 +43,17 @@ const github = (manifestText: string, calls: string[]) =>
         return ok({ default_branch: "main" });
       case `GET /repos/${REPO}/branches/main`:
         return ok({ commit: { sha: BASE } });
+      case `GET /repos/${REPO}/rules/branches/main`:
+        return ok(
+          required.length === 0
+            ? []
+            : [
+                {
+                  type: "required_status_checks",
+                  parameters: { required_status_checks: required.map((context) => ({ context })) },
+                },
+              ],
+        );
       case `GET /repos/${REPO}/contents/.github/flare-dispatch.json`:
         return ok({
           type: "file",
@@ -67,14 +78,15 @@ const github = (manifestText: string, calls: string[]) =>
     }
   }) as typeof globalThis.fetch;
 
-const worker = async (manifestText = DEFAULT_MANIFEST) => {
+const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string[] = []) => {
   const db = await migratedD1();
   const calls: string[] = [];
-  const fetch = github(manifestText, calls);
+  const fetch = github(manifestText, calls, required);
+  const alarms = Layer.succeed(AlarmPort, { deliver: () => Effect.void });
   const githubLayer = githubLiveLayer({ appId: String(APP_ID), privateKeyPem: PEM, fetch }).pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+        alarms,
         Layer.succeed(SideOutputConfig, {
           appBot: { login: "app[bot]", name: "app[bot]", email: "app@example.com" },
           slack: undefined,
@@ -102,7 +114,7 @@ const worker = async (manifestText = DEFAULT_MANIFEST) => {
     Layer.succeed(AccessIdentity, { identity: () => Effect.succeed(null) }),
     Layer.succeed(ExecutionCanceller, { cancel: () => Effect.void }),
   ).pipe(
-    Layer.provideMerge(runDefaultClassResolver),
+    Layer.provideMerge(profileClassResolver.pipe(Layer.provide(alarms))),
     Layer.provideMerge(intake),
     Layer.provideMerge(githubLayer),
   );
@@ -133,6 +145,16 @@ describe("the intake routes on the live Layers", () => {
       { sha: HEAD },
       { sha: HEAD },
     ]);
+  });
+
+  it("FD-PROF-013 FD-PROF-014 a gating run whose check the base branch's ruleset requires resolves to required", async () => {
+    const w = await worker(DEFAULT_MANIFEST, ["flare-dispatch/check:ci"]);
+    await w.handle(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github");
+    expect(w.db.sqlite.prepare("select run, class from executions order by run").all()).toEqual([
+      { run: "check", class: "required" },
+      { run: "lint", class: "batch" },
+    ]);
+    expect(w.calls).toContain(`GET /repos/${REPO}/rules/branches/main`);
   });
 
   it("FD-INT-018 an invalid manifest posts the failing flare-dispatch/manifest check run through the App", async () => {
