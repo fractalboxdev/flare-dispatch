@@ -42,8 +42,16 @@ describe("dispatch.followOn", () => {
       .records()
       .find((r) => r.execution_id === (first as { executionId: string }).executionId)!;
     expect(child).toMatchObject({ run: "lint", repo: REPO, sha: HEAD });
+    // `lint` ran on the parent's commit moments ago, so the follow-on is held for its cooldown window (FD-INT-057)
+    // and its key waits with the held request until admission.
     expect(
-      h.rows("select canonical from dedup_keys where canonical like ?", `${parent}/%`),
+      h.rows(
+        `select canonical from dedup_keys where canonical like ?1
+         union all
+         select json_extract(admit_json, '$.dedup.canonical') from intake_held
+         where json_extract(admit_json, '$.dedup.canonical') like ?1`,
+        `${parent}/%`,
+      ),
     ).toEqual([{ canonical: `${parent}/run:review:0` }]);
   });
 

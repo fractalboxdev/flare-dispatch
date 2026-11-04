@@ -1,7 +1,7 @@
-// The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, and
-// intake's sweep and schedule units for every installation of the App.
+// The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, the
+// admission of held requests, and intake's sweep and schedule units for every installation of the App.
 import { GithubApp } from "@fractalboxdev/flare-dispatch-github";
-import { planTick, runTickUnit } from "@fractalboxdev/flare-dispatch-intake";
+import { planTick, releaseHeld, runTickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import { tickDepsFromEnv, type TickDeps, type TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { ApplierRateLimit, EffectApplier } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
@@ -42,6 +42,14 @@ export const tickDeps = (
       ? { appliers: services as unknown as Layer.Layer<EffectApplier | ApplierRateLimit> }
       : {}),
     units: (now) => [
+      // Held requests whose cooldown window ended are admitted on every tick, whatever triggered them (FD-INT-057).
+      {
+        step: "intake-release",
+        effect: releaseHeld().pipe(Effect.provide(services as never)) as Effect.Effect<
+          unknown,
+          unknown
+        >,
+      },
       ...(withApp
         ? [
             {

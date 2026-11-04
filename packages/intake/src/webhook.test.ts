@@ -21,6 +21,8 @@ import {
 } from "./harness.test-support.ts";
 import { cacheTriggerOf } from "./event.ts";
 import { handleIntake } from "./routes.ts";
+import { HELD_STATUS, IntakeStore } from "./store.ts";
+import { releaseHeld } from "./submit.ts";
 
 const post = (h: Harness, request: Request) => h.run(handleIntake(request, "webhooks/github"));
 const deliver = async (h: Harness, event: string, payload: unknown, delivery = "d-1") =>
@@ -472,6 +474,72 @@ describe("cooldown", () => {
         .filter((r) => r.run === "check")
         .every((r) => r.not_before === null),
     ).toBe(true);
+  });
+
+  it("FD-INT-057 a request inside its window is held from admission until the window ends; the tick then admits it and arms the next window", async () => {
+    const h = await harness();
+    const windowEnd = Date.UTC(2026, 10, 4, 12, 1, 0);
+    await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await h.adjust(10_000);
+    await deliver(h, "pull_request", pullRequestPayload({ head: "2".repeat(40) }), "d-2");
+    const [first, held] = h.records().filter((r) => r.run === "lint");
+    const id = held!.execution_id as string;
+    expect(h.executions().map((e) => e.id)).not.toContain(id);
+    expect((await h.run(IntakeStore.use((s) => s.get(id))))?.status).toBe(HELD_STATUS);
+    // The held execution's duration counts from the end of its window.
+    expect((held!.deadline_at as number) - windowEnd).toBe(
+      (first!.deadline_at as number) - (first!.created_at as number),
+    );
+
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0 });
+    await h.adjust(50_000);
+    // The first `lint` has finished, so the class's per-repository queue bound has room.
+    h.db.sqlite
+      .prepare("update executions set status = 'success' where id = ?")
+      .run(first!.execution_id as string);
+    expect(await h.run(releaseHeld())).toEqual({
+      admitted: 1,
+      concluded: 0,
+      duplicate: 0,
+      unavailable: 0,
+      more: false,
+    });
+    expect(h.executions().find((e) => e.id === id)?.status).toBe("pending");
+    expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
+    expect(
+      h.rows("select armed_at from intake_cooldowns where execution_id = ?", id)[0]!.armed_at,
+    ).toBe(windowEnd);
+    // The placement row admission inserted at release takes the record's eligible kinds.
+    expect(
+      h.rows("select eligible_kinds from placements where execution_id = ?", id)[0]!.eligible_kinds,
+    ).toBe(held!.eligible_kinds);
+  });
+
+  it("FD-INT-057 MAMEKO-ADM-041 a held request released into a full queue concludes capacity: queue full and leaves the hold", async () => {
+    const h = await harness();
+    await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await h.adjust(10_000);
+    await deliver(h, "pull_request", pullRequestPayload({ head: "2".repeat(40) }), "d-2");
+    const id = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
+    await h.adjust(50_000);
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0, concluded: 1 });
+    expect(h.executions().find((e) => e.id === id)?.status).toBe("failure");
+    expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
+  });
+
+  it("FD-INT-057 a redelivered request whose execution is held answers the held execution and writes nothing", async () => {
+    const h = await harness();
+    await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await h.adjust(10_000);
+    const payload = pullRequestPayload({ head: "2".repeat(40) });
+    const heldBody = await bodyOf(await deliver(h, "pull_request", payload, "d-2"));
+    const again = await bodyOf(await deliver(h, "pull_request", payload, "d-3"));
+    expect(again.executions).toEqual(heldBody.executions);
+    expect(again.duplicate).toBe(true);
+    expect(h.records().filter((r) => r.run === "lint")).toHaveLength(2);
+    expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(
+      h.records().filter((r) => r.not_before !== null).length,
+    );
   });
 
   it("FD-INT-058 a check re-run takes no cooldown", async () => {

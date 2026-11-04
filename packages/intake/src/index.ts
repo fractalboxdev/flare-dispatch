@@ -98,16 +98,22 @@ export {
   migrateIntake,
   ShedRecorder,
   StoreUnavailable,
+  HELD_STATUS,
+  type HeldRequest,
+  type HoldResult,
   type IntakeRecord,
   type RecordWithStatus,
   type ShedRow,
 } from "./store.ts";
 export {
   clampCooldown,
+  RELEASE_PER_PASS,
+  releaseHeld,
   shed,
   submission,
   submit,
   type Admitted,
+  type ReleaseReport,
   type Submission,
 } from "./submit.ts";
 export { planTick, runTickUnit, sweepEvent, TickUnit, type UnitResult } from "./tick.ts";

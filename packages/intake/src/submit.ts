@@ -3,6 +3,7 @@
 // dedup-key and `placements` row is admission's.
 import { eligibleKinds, type Profile } from "@fractalboxdev/flare-dispatch-profile";
 import { executionId as newExecutionId } from "@fractalboxdev/mameko-coordinator";
+import type { D1AdmitInput } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Clock, Effect, Match } from "effect";
 import {
   Admission,
@@ -20,7 +21,12 @@ import {
   type RecordedTrigger,
 } from "./event.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
-import { IntakeStore, ShedRecorder, type StoreUnavailable } from "./store.ts";
+import {
+  IntakeStore,
+  ShedRecorder,
+  type IntakeRecord,
+  type StoreUnavailable,
+} from "./store.ts";
 
 export const COOLDOWN_MIN_SEC = 60;
 export const COOLDOWN_MAX_SEC = 86_400;
@@ -175,9 +181,8 @@ export const submit = (
     const id = newExecutionId(now, Math.random);
 
     const labels = [...new Set([...resolved.labels, ...s.extraLabels])];
-    // The record goes in first, so a device that claims the moment admission commits finds the inputs, and the
-    // placement row admission inserts takes the record's eligible kinds.
-    yield* store.put({
+    const notBefore = cooldown?.notBefore ?? null;
+    const record: IntakeRecord = {
       executionId: id,
       trigger: s.trigger,
       run: s.run.name,
@@ -186,35 +191,69 @@ export const submit = (
       sha: s.sha,
       ref: s.ref,
       inputs: s.inputs,
-      deadlineAtMs: now + s.run.maxDurationSec * 1000,
+      // A held request's duration counts from the end of its window.
+      deadlineAtMs: (notBefore ?? now) + s.run.maxDurationSec * 1000,
       className,
       labels,
       attempt: s.attempt,
       familyRoot: s.familyRoot ?? id,
       installation: s.installation,
       caller: s.caller?.id ?? null,
-      notBefore: cooldown?.notBefore ?? null,
+      notBefore,
       spendLine: s.spendLine,
       placementConstraint: s.placementConstraint,
       cacheTrigger: s.cacheTrigger,
       eligibleKinds: placementKinds(config.profile, s, className, labels),
       createdAt: now,
-    });
-    const admitted = yield* admission
-      .admit({
-        executionId: id,
-        scopeId: s.repo,
-        run: s.run.name,
+    };
+    const admitInput: D1AdmitInput = {
+      executionId: id,
+      scopeId: s.repo,
+      run: s.run.name,
+      className,
+      enqueuedAtMs: now,
+      dedup: {
+        sha256: key.sha256,
+        canonical: key.canonical,
+        requestDigest: key.requestDigest,
+        onMismatch: key.onMismatch,
+      },
+      bounds,
+    };
+
+    // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the
+    // window ends (FD-INT-057). A request whose dedup key already names an execution, held or admitted, answers it.
+    if (cooldown !== null && notBefore !== null) {
+      const held = yield* store.hold(record, {
+        admit: admitInput,
+        cooldownBucket: cooldown.bucket,
+        notBefore,
+      });
+      if (held._tag === "Held")
+        return { executionId: id, className, duplicate: false, concluded: null, notBefore };
+      if (key.onMismatch === "conflict" && held.requestDigest !== key.requestDigest)
+        return yield* Effect.fail(
+          intakeError(
+            409,
+            "conflict",
+            "the Idempotency-Key names a request with another body",
+            held.executionId,
+          ),
+        );
+      return {
+        executionId: held.executionId,
         className,
-        enqueuedAtMs: now,
-        dedup: {
-          sha256: key.sha256,
-          canonical: key.canonical,
-          requestDigest: key.requestDigest,
-          onMismatch: key.onMismatch,
-        },
-        bounds,
-      })
+        duplicate: true,
+        concluded: null,
+        notBefore: null,
+      };
+    }
+
+    // The record goes in first, so a device that claims the moment admission commits finds the inputs, and the
+    // placement row admission inserts takes the record's eligible kinds.
+    yield* store.put(record);
+    const admitted = yield* admission
+      .admit(admitInput)
       .pipe(
         Effect.catchTag("IntakeUnavailable", () =>
           Effect.andThen(
@@ -228,16 +267,9 @@ export const submit = (
     return yield* Match.value(admitted).pipe(
       Match.tag("Queued", ({ executionId }) =>
         Effect.gen(function* () {
-          if (cooldown !== null && cooldown.notBefore === null)
-            yield* store.armCooldown(cooldown.bucket, executionId, now);
+          if (cooldown !== null) yield* store.armCooldown(cooldown.bucket, executionId, now);
           yield* admission.queued(className);
-          return {
-            executionId,
-            className,
-            duplicate: false,
-            concluded: null,
-            notBefore: cooldown?.notBefore ?? null,
-          };
+          return { executionId, className, duplicate: false, concluded: null, notBefore: null };
         }),
       ),
       Match.tag("Concluded", ({ executionId, reason }) =>
@@ -273,4 +305,67 @@ export const submit = (
       ),
       Match.exhaustive,
     );
+  });
+
+/** Held requests one pass admits; the rest wait for the next minute's pass. */
+export const RELEASE_PER_PASS = 100;
+
+export interface ReleaseReport {
+  readonly admitted: number;
+  readonly concluded: number;
+  readonly duplicate: number;
+  /** Requests admission could not answer; they stay held for the next pass. */
+  readonly unavailable: number;
+  /** True when the pass stopped at its limit with more requests due. */
+  readonly more: boolean;
+}
+
+/**
+ * Admits every held request whose cooldown window has ended (FD-INT-057). An admitted request arms its bucket's window
+ * from now; a request admission answers as a duplicate or a conflict loses its record, as at submit.
+ */
+export const releaseHeld = (
+  limit: number = RELEASE_PER_PASS,
+): Effect.Effect<ReleaseReport, StoreUnavailable, Admission | IntakeStore> =>
+  Effect.gen(function* () {
+    const store = yield* IntakeStore;
+    const admission = yield* Admission;
+    const now = yield* Clock.currentTimeMillis;
+    const due = yield* store.due(now, limit);
+    let admitted = 0;
+    let concluded = 0;
+    let duplicate = 0;
+    let unavailable = 0;
+    for (const held of due) {
+      const id = held.admit.executionId;
+      const result = yield* admission
+        .admit({ ...held.admit, enqueuedAtMs: now })
+        .pipe(Effect.catchTag("IntakeUnavailable", () => Effect.succeed(null)));
+      if (result === null) {
+        unavailable++;
+        continue;
+      }
+      yield* Match.value(result).pipe(
+        Match.tag("Queued", () =>
+          Effect.gen(function* () {
+            yield* store.release(id);
+            yield* store.armCooldown(held.cooldownBucket, id, now);
+            yield* admission.queued(held.admit.className);
+            admitted++;
+          }),
+        ),
+        Match.tag("Concluded", () =>
+          Effect.andThen(store.release(id), Effect.sync(() => void concluded++)),
+        ),
+        Match.tag("Duplicate", "Conflict", () =>
+          Effect.gen(function* () {
+            yield* store.release(id);
+            yield* store.drop(id);
+            duplicate++;
+          }),
+        ),
+        Match.exhaustive,
+      );
+    }
+    return { admitted, concluded, duplicate, unavailable, more: due.length === limit };
   });

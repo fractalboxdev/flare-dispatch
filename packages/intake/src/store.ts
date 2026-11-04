@@ -3,7 +3,7 @@
 // a lease, a check re-run and a cancel all need them, so intake keeps one row
 // per execution beside mameko's. Shed rows, cooldown windows and webhook delivery
 // times live here too.
-import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import type { D1AdmitInput, D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { CacheTriggerRecord, OTHER_CACHE_TRIGGER, type RecordedTrigger } from "./event.ts";
 
@@ -56,6 +56,16 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
   `create table if not exists intake_deliveries (
     installation integer primary key,
     verified_at integer not null)`,
+  // A request inside its run's cooldown window, held before admission until `not_before` (FD-INT-057). The admission
+  // input waits here and the minute tick admits it; one held request per dedup key.
+  `create table if not exists intake_held (
+    execution_id text primary key,
+    sha256 text not null unique,
+    request_digest text,
+    admit_json text not null,
+    cooldown_bucket text not null,
+    not_before integer not null)`,
+  `create index if not exists intake_held_due on intake_held (not_before)`,
 ];
 
 export const migrateIntake = (db: D1Like): Effect.Effect<void> =>
@@ -91,10 +101,27 @@ export interface IntakeRecord {
   readonly createdAt: number;
 }
 
-/** A record with mameko's status of its execution; null when admission kept no execution for it. */
+/**
+ * A record with mameko's status of its execution: `held` while it waits for its cooldown window before admission, null
+ * when admission kept no execution for it.
+ */
 export interface RecordWithStatus extends IntakeRecord {
   readonly status: string | null;
 }
+
+export const HELD_STATUS = "held";
+
+/** A held request: its admission input and the cooldown bucket it arms once admitted. */
+export interface HeldRequest {
+  readonly admit: D1AdmitInput;
+  readonly cooldownBucket: string;
+  readonly notBefore: number;
+}
+
+/** What holding a request found: it was held, or its dedup key already names an execution, held or admitted. */
+export type HoldResult =
+  | { readonly _tag: "Held" }
+  | { readonly _tag: "Known"; readonly executionId: string; readonly requestDigest: string | null };
 
 export const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   "success",
@@ -128,6 +155,21 @@ export class IntakeStore extends Context.Service<
   IntakeStore,
   {
     readonly put: (record: IntakeRecord) => Effect.Effect<void, StoreUnavailable>;
+    /**
+     * Writes the record and holds its admission input until `notBefore`, unless the dedup key already names an
+     * admitted or held execution; then it writes nothing and answers that execution (FD-INT-057).
+     */
+    readonly hold: (
+      record: IntakeRecord,
+      held: HeldRequest,
+    ) => Effect.Effect<HoldResult, StoreUnavailable>;
+    /** Held requests whose window ended at or before `now`, earliest first. */
+    readonly due: (
+      now: number,
+      limit: number,
+    ) => Effect.Effect<readonly HeldRequest[], StoreUnavailable>;
+    /** Ends the hold of a request admission answered. */
+    readonly release: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
     /** Removes the row of an id admission did not keep. */
     readonly drop: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
     readonly get: (executionId: string) => Effect.Effect<RecordWithStatus | null, StoreUnavailable>;
@@ -231,42 +273,123 @@ const fromRow = (r: Row): RecordWithStatus => ({
   status: r.status,
 });
 
-const SELECT = `select r.*, e.status as status from intake_records r left join executions e on e.id = r.execution_id`;
+const SELECT = `select r.*,
+    coalesce(e.status, case when h.execution_id is not null then '${HELD_STATUS}' end) as status
+  from intake_records r
+  left join executions e on e.id = r.execution_id
+  left join intake_held h on h.execution_id = r.execution_id`;
+
+const RECORD_COLUMNS = `execution_id, trigger, run, label, repo, sha, ref, inputs_json, deadline_at,
+  class, labels_json, attempt, family_root, installation, caller, not_before, spend_line,
+  placement_constraint, cache_trigger_json, eligible_kinds, created_at`;
+
+const recordValues = (r: IntakeRecord) =>
+  [
+    r.executionId,
+    r.trigger,
+    r.run,
+    r.label,
+    r.repo,
+    r.sha,
+    r.ref,
+    JSON.stringify(r.inputs ?? null),
+    r.deadlineAtMs,
+    r.className,
+    JSON.stringify(r.labels),
+    r.attempt,
+    r.familyRoot,
+    r.installation,
+    r.caller,
+    r.notBefore,
+    r.spendLine,
+    r.placementConstraint,
+    JSON.stringify(r.cacheTrigger),
+    r.eligibleKinds === null ? null : JSON.stringify(r.eligibleKinds),
+    r.createdAt,
+  ] as const;
+
+const RECORD_PLACEHOLDERS = RECORD_COLUMNS.split(",")
+  .map(() => "?")
+  .join(", ");
 
 export const d1IntakeStore = (db: D1Like) =>
   Layer.succeed(IntakeStore, {
-    put: (r) =>
+    hold: (r, held) =>
+      query(async () => {
+        const { sha256, requestDigest } = held.admit.dedup;
+        const known = `exists (select 1 from dedup_keys where sha256 = ?)`;
+        // One batch, which D1 runs atomically: the held row goes in only while no admitted or held execution has the
+        // key, and the record only when its held row did.
+        const results = await db.batch([
+          db
+            .prepare(
+              `insert or ignore into intake_held
+                 (execution_id, sha256, request_digest, admit_json, cooldown_bucket, not_before)
+               select ?, ?, ?, ?, ?, ? where not ${known}`,
+            )
+            .bind(
+              r.executionId,
+              sha256,
+              requestDigest,
+              JSON.stringify(held.admit),
+              held.cooldownBucket,
+              held.notBefore,
+              sha256,
+            ),
+          db
+            .prepare(
+              `insert into intake_records (${RECORD_COLUMNS})
+               select ${RECORD_PLACEHOLDERS} where exists (select 1 from intake_held where execution_id = ?)`,
+            )
+            .bind(...recordValues(r), r.executionId),
+          db
+            .prepare(
+              `select execution_id, request_digest from dedup_keys where sha256 = ?
+               union all
+               select execution_id, request_digest from intake_held where sha256 = ?`,
+            )
+            .bind(sha256, sha256),
+        ]);
+        const key = results[2]?.results?.[0] as
+          | { execution_id: string; request_digest: string | null }
+          | undefined;
+        return key === undefined || key.execution_id === r.executionId
+          ? ({ _tag: "Held" } as const)
+          : ({
+              _tag: "Known",
+              executionId: key.execution_id,
+              requestDigest: key.request_digest,
+            } as const);
+      }),
+    due: (now, limit) =>
       query(() =>
         db
           .prepare(
-            `insert into intake_records (execution_id, trigger, run, label, repo, sha, ref, inputs_json, deadline_at,
-              class, labels_json, attempt, family_root, installation, caller, not_before, spend_line,
-              placement_constraint, cache_trigger_json, eligible_kinds, created_at)
-              values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `select admit_json, cooldown_bucket, not_before from intake_held
+             where not_before <= ? order by not_before, execution_id limit ?`,
           )
-          .bind(
-            r.executionId,
-            r.trigger,
-            r.run,
-            r.label,
-            r.repo,
-            r.sha,
-            r.ref,
-            JSON.stringify(r.inputs ?? null),
-            r.deadlineAtMs,
-            r.className,
-            JSON.stringify(r.labels),
-            r.attempt,
-            r.familyRoot,
-            r.installation,
-            r.caller,
-            r.notBefore,
-            r.spendLine,
-            r.placementConstraint,
-            JSON.stringify(r.cacheTrigger),
-            r.eligibleKinds === null ? null : JSON.stringify(r.eligibleKinds),
-            r.createdAt,
-          )
+          .bind(now, limit)
+          .all(),
+      ).pipe(
+        Effect.map(({ results }) =>
+          (results as { admit_json: string; cooldown_bucket: string; not_before: number }[]).map(
+            (row) => ({
+              admit: JSON.parse(row.admit_json) as D1AdmitInput,
+              cooldownBucket: row.cooldown_bucket,
+              notBefore: row.not_before,
+            }),
+          ),
+        ),
+      ),
+    release: (id) =>
+      query(() =>
+        db.prepare("delete from intake_held where execution_id = ?").bind(id).run(),
+      ).pipe(Effect.asVoid),
+    put: (r) =>
+      query(() =>
+        db
+          .prepare(`insert into intake_records (${RECORD_COLUMNS}) values (${RECORD_PLACEHOLDERS})`)
+          .bind(...recordValues(r))
           .run(),
       ).pipe(Effect.asVoid),
     drop: (id) =>
