@@ -1,9 +1,13 @@
 // FlareDispatch's own intake tables on D1. mameko's admission stores no inputs,
 // trigger, attempt or check label (host-cloudflare d1.ts `admitExecution`), and
 // a lease, a check re-run and a cancel all need them, so intake keeps one row
-// per execution beside mameko's. Shed rows, cooldown windows and webhook delivery
-// times live here too.
-import type { D1AdmitInput, D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+// per execution beside mameko's. Cooldown windows, held requests and webhook
+// delivery times live here too; shed rows are mameko's `shed` table.
+import {
+  recordShed,
+  type D1AdmitInput,
+  type D1Like,
+} from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { CacheTriggerRecord, OTHER_CACHE_TRIGGER, type RecordedTrigger } from "./event.ts";
 
@@ -32,23 +36,9 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     created_at integer not null)`,
   `create index if not exists intake_records_family on intake_records (family_root)`,
   `create index if not exists intake_records_commit on intake_records (repo, sha)`,
-  // mameko's admission batch inserts the placement row and takes no eligible kinds, so this trigger copies the kinds
-  // the profile's placement gave the request into that row inside the same batch, before any executor can claim it
-  // (FD-GATE-061, FD-GATE-080). intake writes its record before admission, so the record is there to read.
-  `create trigger if not exists intake_placement_kinds after insert on placements
-    when exists (select 1 from intake_records where execution_id = new.execution_id and eligible_kinds is not null)
-    begin
-      update placements set eligible_kinds =
-        (select eligible_kinds from intake_records where execution_id = new.execution_id)
-      where execution_id = new.execution_id;
-    end`,
-  `create table if not exists intake_shed (
-    id integer primary key autoincrement,
-    scope_id text not null,
-    run text,
-    reason text not null,
-    estimated_cost integer,
-    at integer not null)`,
+  // Admission writes the placement row's eligible kinds itself (MAMEKO-LEASE-014); the trigger that copied them from the
+  // record goes, on a database that still has it.
+  `drop trigger if exists intake_placement_kinds`,
   `create table if not exists intake_cooldowns (
     bucket text primary key,
     execution_id text not null,
@@ -96,7 +86,7 @@ export interface IntakeRecord {
   readonly placementConstraint: string | null;
   /** The trigger as the cache namespaces read it (FD-CACHE-019). */
   readonly cacheTrigger: CacheTriggerRecord;
-  /** The executor kinds the profile's placement allows; admission copies them into the placement row. */
+  /** The executor kinds the profile's placement allows, as admission wrote them on the placement row. */
   readonly eligibleKinds: readonly string[] | null;
   readonly createdAt: number;
 }
@@ -200,8 +190,8 @@ export class IntakeStore extends Context.Service<
 >()("@fractalboxdev/flare-dispatch-intake/IntakeStore") {}
 
 /**
- * `recordShed(scope_id, run, reason, estimated cost)` (MAMEKO-ADM-086): a request rejected before admission. mameko's
- * host adapter exposes no such function, so FlareDispatch's table holds the rows.
+ * `recordShed(scope_id, run, reason, estimated cost)` (MAMEKO-ADM-086): a request rejected before admission, written to
+ * mameko's `shed` table with a null class.
  */
 export class ShedRecorder extends Context.Service<
   ShedRecorder,
@@ -480,17 +470,20 @@ export const d1IntakeStore = (db: D1Like) =>
       ),
   });
 
+/**
+ * A refusal that ends intake for a whole trigger, before any run is known, records the run as the empty string, since
+ * the `shed` row's run is required; an unestimated request records a cost of 0.
+ */
 export const d1ShedRecorder = (db: D1Like) =>
   Layer.succeed(ShedRecorder, {
     record: (row) =>
       Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        query(() =>
-          db
-            .prepare(
-              "insert into intake_shed (scope_id, run, reason, estimated_cost, at) values (?, ?, ?, ?, ?)",
-            )
-            .bind(row.scopeId, row.run, row.reason, row.estimatedCost, now)
-            .run(),
-        ),
-      ).pipe(Effect.asVoid),
+        recordShed(db, {
+          scopeId: row.scopeId,
+          run: row.run ?? "",
+          reason: row.reason,
+          estimatedCostMicroUsd: row.estimatedCost ?? 0,
+          recordedAt: now,
+        }),
+      ).pipe(Effect.mapError((e) => new StoreUnavailable({ message: String(e.cause) }))),
   });

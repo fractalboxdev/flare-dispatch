@@ -175,7 +175,7 @@ describe("webhook to admission", () => {
     const r = await deliver(h, "pull_request", pullRequestPayload());
     expect(r!.status).toBe(202);
     expect(h.executions()).toEqual([]);
-    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: invalid" }]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: "", reason: "manifest: invalid" }]);
     expect(h.recorded.reported).toEqual([
       { repo: REPO, sha: BASE, errors: [expect.stringContaining("51 runs")] },
     ]);
@@ -203,7 +203,7 @@ describe("webhook to admission", () => {
     );
     await deliver(h, "pull_request", pullRequestPayload());
     expect(h.executions()).toEqual([]);
-    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: unreadable" }]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: "", reason: "manifest: unreadable" }]);
   });
 
   it("FD-INT-020 a repository with no manifest submits nothing and sheds nothing", async () => {
@@ -240,7 +240,7 @@ describe("webhook to admission", () => {
       repository: { full_name: REPO },
     });
     expect(await bodyOf(r)).toEqual({ ignored: true, reason: "no_commit" });
-    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "intake: no commit" }]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: "", reason: "intake: no commit" }]);
   });
 
   it("FD-INT-030 a pull request from a fork is recorded as fork-pr and class resolution returns untrusted-input", async () => {
@@ -509,10 +509,15 @@ describe("cooldown", () => {
     expect(
       h.rows("select armed_at from intake_cooldowns where execution_id = ?", id)[0]!.armed_at,
     ).toBe(windowEnd);
-    // The placement row admission inserted at release takes the record's eligible kinds.
-    expect(
-      h.rows("select eligible_kinds from placements where execution_id = ?", id)[0]!.eligible_kinds,
-    ).toBe(held!.eligible_kinds);
+    // Admission at release writes the record's eligible kinds on the placement row, and the record's deadline, counted
+    // from the end of the window, on the execution and placement rows.
+    const placed = h.rows(
+      "select p.eligible_kinds, p.deadline_at as p_deadline, e.deadline_at as e_deadline from placements p join executions e on e.id = p.execution_id where p.execution_id = ?",
+      id,
+    )[0]!;
+    expect(placed.eligible_kinds).toBe(held!.eligible_kinds);
+    expect(placed.p_deadline).toBe(held!.deadline_at);
+    expect(placed.e_deadline).toBe(held!.deadline_at);
   });
 
   it("FD-INT-057 MAMEKO-ADM-041 a held request released into a full queue concludes capacity: queue full and leaves the hold", async () => {

@@ -161,7 +161,7 @@ describe("the intake routes on the live Layers", () => {
     const w = await worker('{"version": 2}');
     await w.handle(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github");
     expect(w.calls).toContain(`POST /repos/${REPO}/check-runs`);
-    expect(w.db.sqlite.prepare("select reason from intake_shed").all()).toEqual([
+    expect(w.db.sqlite.prepare("select reason from shed order by id").all()).toEqual([
       { reason: "manifest: invalid" },
     ]);
   });

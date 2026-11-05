@@ -1,9 +1,13 @@
 // One request to mameko's admission function (FD-INT-001). Intake writes its own
 // record and, for a refusal before admission, a shed row; every `executions`,
 // dedup-key and `placements` row is admission's.
-import { eligibleKinds, type Profile } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  eligibleKinds,
+  type EligibleSet,
+  type Profile,
+} from "@fractalboxdev/flare-dispatch-profile";
 import { executionId as newExecutionId } from "@fractalboxdev/mameko-coordinator";
-import type { D1AdmitInput } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import type { D1AdmitInput, D1AdmitResult } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Clock, Effect, Match } from "effect";
 import {
   Admission,
@@ -90,10 +94,22 @@ export interface Admitted {
   readonly executionId: string;
   readonly className: string;
   readonly duplicate: boolean;
-  /** Admission concluded the execution at once, with this reason (MAMEKO-ADM-041). */
+  /**
+   * Admission concluded the execution at once: its reason, or `expired` for a class whose terminal outcome is `expired`,
+   * which concludes with no reason (MAMEKO-ADM-041). Null when admission did not conclude it.
+   */
   readonly concluded: string | null;
   readonly notBefore: number | null;
 }
+
+type Concluded = Extract<D1AdmitResult, { readonly _tag: "Concluded" }>;
+
+const concludedReason = (c: Concluded): string =>
+  Match.value(c.outcome).pipe(
+    Match.when("failure", () => c.reason ?? "failure"),
+    Match.when("expired", () => "expired"),
+    Match.exhaustive,
+  );
 
 /** Records a request rejected before admission (MAMEKO-ADM-086). */
 export const shed = (repo: string, run: string | null, reason: string) =>
@@ -115,16 +131,17 @@ const cooldownWait = (s: Submission, now: number) =>
   });
 
 /**
- * The executor kinds the profile's placement allows a request: its class, the labels class resolution returned with
- * the run's capability labels and any recorded placement constraint, and the constraints the run declares for these
- * inputs, so a `cloud-pinned` run never reaches a device (FD-GATE-061, FD-GATE-080).
+ * The executor kinds the profile's placement allows a request, with the constraints that held: its class, the labels
+ * class resolution returned with the run's capability labels and any recorded placement constraint, and the
+ * constraints the run declares for these inputs, so a `cloud-pinned` run never reaches a device (FD-GATE-061,
+ * FD-GATE-080).
  */
-export const placementKinds = (
+export const placementOf = (
   profile: Profile,
   s: Submission,
   className: string,
   labels: readonly string[],
-): readonly string[] => {
+): EligibleSet => {
   const declared = s.run.placement?.(s.inputs) ?? { constraints: [], labels: [] };
   const tagPush = s.cacheTrigger._tag === "Push" && s.cacheTrigger.ref.startsWith("refs/tags/");
   return eligibleKinds(profile, {
@@ -138,7 +155,7 @@ export const placementKinds = (
     ],
     constraints: declared.constraints,
     ...(tagPush ? { trigger: "tag-push" } : {}),
-  }).kinds;
+  });
 };
 
 export const submit = (
@@ -190,6 +207,7 @@ export const submit = (
 
     const labels = [...new Set([...resolved.labels, ...s.extraLabels])];
     const notBefore = cooldown?.notBefore ?? null;
+    const placement = placementOf(config.profile, s, className, labels);
     const record: IntakeRecord = {
       executionId: id,
       trigger: s.trigger,
@@ -211,9 +229,11 @@ export const submit = (
       spendLine: s.spendLine,
       placementConstraint: s.placementConstraint,
       cacheTrigger: s.cacheTrigger,
-      eligibleKinds: placementKinds(config.profile, s, className, labels),
+      eligibleKinds: placement.kinds,
       createdAt: now,
     };
+    // Admission writes the eligible kinds, the constraints that held and the deadline on the execution and placement
+    // rows in its own transaction, before any executor can claim the placement (MAMEKO-LEASE-014, MAMEKO-ADM-082).
     const admitInput: D1AdmitInput = {
       executionId: id,
       scopeId: s.repo,
@@ -227,6 +247,9 @@ export const submit = (
         onMismatch: key.onMismatch,
       },
       bounds,
+      eligibleKinds: placement.kinds,
+      constraints: placement.constraints,
+      deadlineAt: record.deadlineAtMs,
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the
@@ -257,8 +280,7 @@ export const submit = (
       };
     }
 
-    // The record goes in first, so a device that claims the moment admission commits finds the inputs, and the
-    // placement row admission inserts takes the record's eligible kinds.
+    // The record goes in first, so a device that claims the moment admission commits finds the inputs.
     yield* store.put(record);
     const admitted = yield* admission
       .admit(admitInput)
@@ -280,12 +302,12 @@ export const submit = (
           return { executionId, className, duplicate: false, concluded: null, notBefore: null };
         }),
       ),
-      Match.tag("Concluded", ({ executionId, reason }) =>
+      Match.tag("Concluded", (c) =>
         Effect.succeed<Admitted>({
-          executionId,
+          executionId: c.executionId,
           className,
           duplicate: false,
-          concluded: reason,
+          concluded: concludedReason(c),
           notBefore: null,
         }),
       ),

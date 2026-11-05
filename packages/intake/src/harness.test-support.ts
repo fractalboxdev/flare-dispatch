@@ -228,7 +228,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     settings,
     run,
     rows,
-    sheds: () => rows("select scope_id, run, reason from intake_shed order by id"),
+    sheds: () => rows("select scope_id, run, reason from shed order by id"),
     executions: () =>
       rows("select id, scope_id, run, class, status from executions order by enqueued_at, run, id"),
     records: () => rows("select * from intake_records order by created_at, attempt, run"),
