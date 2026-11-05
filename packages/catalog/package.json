@@ -1,0 +1,25 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-catalog",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FlareDispatch's v2 run catalogue: the run declarations the control plane reads, the run bodies the runner child executes, and the device extension.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./runs": "./src/runs.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalboxdev/flare-dispatch-profile": "workspace:*",
+    "@fractalboxdev/mameko-run": "workspace:*",
+    "@fractalboxdev/mameko-runner": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "vitest": "^3.2.0"
+  }
+}

@@ -43,6 +43,52 @@ importers:
         specifier: ^4.140.0
         version: 4.140.0(@cloudflare/workers-types@4.20260702.1)(@types/node@22.20.1)
 
+  apps/control-plane:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../../packages/profile
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 5.20261012.1
+        version: 5.20261012.1
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      miniflare:
+        specifier: 4.20260515.0
+        version: 4.20260515.0
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.140.0
+        version: 4.140.0(@cloudflare/workers-types@5.20261012.1)(@types/node@22.20.1)
+
   apps/dispatcher:
     dependencies:
       '@cloudflare/sandbox':
@@ -171,6 +217,28 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
 
+  packages/catalog:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
+      '@fractalboxdev/mameko-run':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/run
+      '@fractalboxdev/mameko-runner':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/runner
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
   packages/core:
     devDependencies:
       '@effect/vitest':
@@ -231,6 +299,25 @@ importers:
       unrun:
         specifier: ^0.3.1
         version: 0.3.1
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
+  packages/dogfood:
+    dependencies:
+      '@effect/platform-node':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)(redis@6.3.1)
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
@@ -1250,9 +1337,6 @@ packages:
 
   '@emnapi/runtime@1.11.1':
     resolution: {integrity: sha512-vgj7R3y3Wgx24IQaGPA/R6YFXLHVMOZ0uVEyIQPaWs+rd1AzfEMXlAC22FYwO1XkKR6NPsq7mUandH8oIRdZFw==}
-
-  '@emnapi/runtime@1.11.2':
-    resolution: {integrity: sha512-kyOl3X0DuTiT1h2ft8r2fYO8JYtU9a9Xis/zBSiGArNaagCOWx90N1k2wxp18czFDH+OgcWGb5ZP/XMt3dcyPA==}
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -4983,10 +5067,6 @@ packages:
     resolution: {integrity: sha512-RYONW2MeafgYlkVOKYKkA/Ag7BmXqgIWCa8t1m0JcxrQg9pI9lEqRhAOruOBCbAohOa/gkCF+iPi9hrgvTzu6Q==}
     engines: {node: '>=20.18.1'}
 
-  undici@8.10.2:
-    resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
-    engines: {node: '>=22.19.0'}
-
   undici@8.12.3:
     resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
     engines: {node: '>=22.19.0'}
@@ -5938,7 +6018,7 @@ snapshots:
       '@parcel/watcher': 2.6.0
       effect: 3.21.2
       multipasta: 0.2.8
-      ws: 8.21.0
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -6068,11 +6148,6 @@ snapshots:
       tslib: 2.8.1
 
   '@emnapi/runtime@1.11.1':
-    dependencies:
-      tslib: 2.8.1
-    optional: true
-
-  '@emnapi/runtime@1.11.2':
     dependencies:
       tslib: 2.8.1
     optional: true
@@ -6629,7 +6704,7 @@ snapshots:
 
   '@img/sharp-wasm32@0.34.5':
     dependencies:
-      '@emnapi/runtime': 1.11.2
+      '@emnapi/runtime': 1.11.3
     optional: true
 
   '@img/sharp-wasm32@0.35.4':
@@ -7559,7 +7634,7 @@ snapshots:
       diff: 9.0.0
       dset: 3.1.4
       es-module-lexer: 2.3.2
-      esbuild: 0.28.1
+      esbuild: 0.28.2
       find-proc: 0.2.0
       flattie: 1.1.1
       fontace: 0.4.1
@@ -7589,8 +7664,8 @@ snapshots:
       unifont: 0.7.5
       unstorage: 1.17.5(aws4fetch@1.0.20)
       verkit: 0.4.1
-      vite: 8.3.0(@types/node@24.13.6)(esbuild@0.28.1)(tsx@4.23.11)(yaml@2.9.0)
-      vitefu: 1.1.3(vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.1)(tsx@4.23.11)(yaml@2.9.0))
+      vite: 8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.11)(yaml@2.9.0)
+      vitefu: 1.1.3(vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.11)(yaml@2.9.0))
       xxhash-wasm: 1.1.0
       yargs-parser: 22.0.0
       zod: 4.6.5
@@ -9598,7 +9673,7 @@ snapshots:
 
   tsx@4.23.11:
     dependencies:
-      esbuild: 0.28.1
+      esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
 
@@ -9656,8 +9731,6 @@ snapshots:
 
   undici@7.29.1: {}
 
-  undici@8.10.2: {}
-
   undici@8.12.3: {}
 
   unenv@2.0.0-rc.24:
@@ -9678,7 +9751,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
       ohash: 2.0.12
-      undici: 8.10.2
+      undici: 8.12.3
 
   unist-util-find-after@5.0.0:
     dependencies:
@@ -9822,7 +9895,7 @@ snapshots:
       tsx: 4.23.11
       yaml: 2.9.0
 
-  vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.1)(tsx@4.23.11)(yaml@2.9.0):
+  vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.11)(yaml@2.9.0):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -9831,14 +9904,14 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 24.13.6
-      esbuild: 0.28.1
+      esbuild: 0.28.2
       fsevents: 2.3.3
       tsx: 4.23.11
       yaml: 2.9.0
 
-  vitefu@1.1.3(vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.1)(tsx@4.23.11)(yaml@2.9.0)):
+  vitefu@1.1.3(vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.11)(yaml@2.9.0)):
     optionalDependencies:
-      vite: 8.3.0(@types/node@24.13.6)(esbuild@0.28.1)(tsx@4.23.11)(yaml@2.9.0)
+      vite: 8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.11)(yaml@2.9.0)
 
   vitest@3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0):
     dependencies:
@@ -10101,6 +10174,24 @@ snapshots:
       workerd: 1.20260923.1
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260702.1
+      fsevents: 2.3.3
+    transitivePeerDependencies:
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
+
+  wrangler@4.140.0(@cloudflare/workers-types@5.20261012.1)(@types/node@22.20.1):
+    dependencies:
+      '@cloudflare/kv-asset-handler': 0.5.0
+      '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20260923.1)
+      blake3-wasm: 2.1.5
+      esbuild: 0.28.1
+      miniflare: 5.20260923.0-alpha(@types/node@22.20.1)
+      path-to-regexp: 6.3.0
+      unenv: 2.0.0-rc.24
+      workerd: 1.20260923.1
+    optionalDependencies:
+      '@cloudflare/workers-types': 5.20261012.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - '@types/node'

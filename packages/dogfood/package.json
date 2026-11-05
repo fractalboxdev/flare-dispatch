@@ -1,0 +1,20 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-dogfood",
+  "version": "0.0.1",
+  "private": true,
+  "description": "`pnpm dogfood`: runs FlareDispatch's own CI through a local control plane and the real device executor.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.6",
+    "@fractalboxdev/flare-dispatch-catalog": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "vitest": "^3.2.0"
+  }
+}

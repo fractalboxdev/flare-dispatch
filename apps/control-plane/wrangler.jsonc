@@ -1,0 +1,40 @@
+{
+  // The v2 control plane. `DEPLOYMENT` is `production` here, and only the local dogfood command overrides it, so a
+  // deploy of this file refuses host execution and the software key. The D1 id is a placeholder; a real deploy
+  // writes its own in an operator overlay.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "flare-dispatch-control-plane",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-05-01",
+  "workers_dev": false,
+  "vars": {
+    "DEPLOYMENT": "production",
+    "PLANE_ID": "flare-dispatch",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "flare-dispatch-control-plane",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "CHANNEL", "class_name": "ExecutorChannel" },
+      { "name": "EXECUTION", "class_name": "ExecutionEngine" },
+      { "name": "EPOCH_ANCHOR", "class_name": "EpochAnchor" },
+      { "name": "MONITOR", "class_name": "LivenessMonitor" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ExecutorChannel",
+        "ExecutionEngine",
+        "EpochAnchor",
+        "LivenessMonitor",
+      ],
+    },
+  ],
+}
