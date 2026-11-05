@@ -4,10 +4,11 @@ import { satteri } from "@astrojs/markdown-satteri";
 import starlight from "@astrojs/starlight";
 import merlion from "@fractalbox/merlion-astro";
 import starlightLinksValidator from "starlight-links-validator";
+import { sidebar } from "./src/lib/nav.mjs";
 import { README_PAGES, repoLinks } from "./src/lib/pages.mjs";
 
 const DESCRIPTION =
-  "FlareDispatch offloads the expensive half of GitHub Actions — agentic review, Playwright e2e, acceptance suites, matrix fan-outs — onto a Cloudflare stack you own.";
+  "Local-first CI/CD in your own Cloudflare account: runs execute on hardware you own first and spill to Cloudflare Containers and AWS, under a spend guard and a fenced lease.";
 
 export default defineConfig({
   site: "https://flare-dispatch.fractalbox.dev",
@@ -35,34 +36,7 @@ export default defineConfig({
             README_PAGES.has(link.replace(/#.*$/, "")),
         }),
       ],
-      sidebar: [
-        { label: "Overview", link: "/docs/" },
-        {
-          label: "GitHub Actions",
-          items: ["docs/actions", "docs/actions/flare-dispatch-action", "docs/actions/deploy-dispatcher-action"],
-        },
-        { label: "Run catalog", slug: "docs/runs" },
-        {
-          label: "Substrate",
-          items: [
-            "docs/substrate",
-            "docs/substrate/facade",
-            "docs/substrate/grant-profiles",
-            "docs/substrate/byoc-upgrade",
-            "docs/substrate/contract-versioning",
-          ],
-        },
-        { label: "API reference", items: [{ label: "Substrate facade", slug: "docs/reference/substrate-contract" }] },
-        {
-          label: "Design records",
-          collapsed: true,
-          items: [
-            { label: "Dispatcher ADRs", collapsed: true, items: [{ autogenerate: { directory: "docs/design/adr" } }] },
-            { label: "Dispatcher specs", collapsed: true, items: [{ autogenerate: { directory: "docs/design/dispatcher" } }] },
-            { label: "Substrate specs", collapsed: true, items: [{ autogenerate: { directory: "docs/design/substrate" } }] },
-          ],
-        },
-      ],
+      sidebar: sidebar(),
     }),
     // Every ```mermaid block renders to inline, themeable SVG at build time.
     merlion({ stylesheet: "src/styles/diagrams.css", width: 720 }),
