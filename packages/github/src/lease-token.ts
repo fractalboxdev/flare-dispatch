@@ -1,6 +1,6 @@
 // The per-lease GitHub token: an installation token scoped to the one
 // repository the execution targets and to read permissions only (FD-GH-002,
-// MAMEKO-HOST-045). It expires no later than the lease's `deadline_at`.
+// MAMEKO-HOST-047). It expires no later than the lease's `deadline_at`.
 import type { LeaseRef } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { GithubApp, LEASE_READ_PERMISSIONS, type AppKeyInvalid } from "./app.ts";

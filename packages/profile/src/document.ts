@@ -25,7 +25,7 @@ export type Deployment = "production" | "development";
 /**
  * The roadmap phase the document serves. A kind, launcher or verifier enters the profile only in the phase whose
  * Layer the dispatcher supplies, because mameko rejects a control plane that uses a port with no Layer
- * (FD-PROF-064, MAMEKO-HOST-043).
+ * (FD-PROF-064, MAMEKO-HOST-045).
  */
 export type Phase = 0 | 1 | 2 | 3 | 4;
 

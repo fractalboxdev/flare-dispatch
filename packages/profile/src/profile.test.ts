@@ -792,14 +792,14 @@ describe("phases", () => {
   ];
   const always = APPLICATION_PORTS.filter((p) => p.required === "always").map((p) => p.id);
 
-  it("[FD-PROF-064] MAMEKO-HOST-043 the phase 0 document needs no port beyond the always-ports", () => {
+  it("[FD-PROF-064] MAMEKO-HOST-045 the phase 0 document needs no port beyond the always-ports", () => {
     expect(requiredApplicationPorts(portUses(profile))).toEqual(always);
     // The alarm port's Layer is the dispatcher's (FD-OPS-053), outside the profile.
     expect(missingPorts(profile, supplied)).toEqual(["alarm-port"]);
     expect(missingPorts(buildProfile("development"), supplied)).toEqual(["alarm-port"]);
   });
 
-  it("[FD-PROF-064] MAMEKO-HOST-043 phase 4 needs the gha launcher and the attestation verifier", () => {
+  it("[FD-PROF-064] MAMEKO-HOST-045 phase 4 needs the gha launcher and the attestation verifier", () => {
     expect(missingPorts(phase4, [...supplied, "alarm-port"])).toEqual([
       "launcher:gha",
       "attestation-verifier",

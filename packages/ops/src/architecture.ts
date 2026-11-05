@@ -1,5 +1,5 @@
 // The composition checks of specs/architecture.md: the components a control plane's configuration declares
-// (FD-ARCH-001), the application ports each phase requires a Layer for (FD-ARCH-039, MAMEKO-HOST-043), the credentials
+// (FD-ARCH-001), the application ports each phase requires a Layer for (FD-ARCH-039, MAMEKO-HOST-045), the credentials
 // no executor holds or receives (FD-ARCH-004, FD-ARCH-005) and when each class's workflow starts (FD-ARCH-019).
 import {
   poolAdmissionCaps,
@@ -109,7 +109,7 @@ export const requiredPorts = (
   ...(phase >= 4 ? ["launcher:gha", "result-acceptance-check"] : []),
 ];
 
-/** Each port the phase requires that the composition supplies no Layer for (FD-ARCH-039, MAMEKO-HOST-043). */
+/** Each port the phase requires that the composition supplies no Layer for (FD-ARCH-039, MAMEKO-HOST-045). */
 export const compositionFindings = (
   phase: Phase,
   supplied: readonly string[],

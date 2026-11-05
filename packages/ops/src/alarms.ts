@@ -125,7 +125,7 @@ export const deliverAlarm = (config: AlarmPortConfig, alarm: Alarm) =>
       return yield* new AlarmDeliveryFailed({ reason: `webhook answered ${response.status}` });
   });
 
-/** The alarm port Layer the composed control plane supplies (MAMEKO-HOST-043 requires it in every phase). */
+/** The alarm port Layer the composed control plane supplies (MAMEKO-HOST-045 requires it in every phase). */
 export const alarmPortLayer = (config: AlarmPortConfig) =>
   Layer.succeed(AlarmPort, { deliver: (alarm) => deliverAlarm(config, alarm) });
 

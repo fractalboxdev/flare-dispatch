@@ -79,7 +79,7 @@ export const R2PresignerLive = (config: R2PresignerConfig) =>
     }),
   );
 
-/** mameko's object-store presigner port (MAMEKO-HOST-048), answered by FlareDispatch's signer. */
+/** mameko's object-store presigner port (MAMEKO-HOST-050), answered by FlareDispatch's signer. */
 export const ObjectStorePresignerLive = Layer.effect(
   ObjectStorePresigner,
   Effect.gen(function* () {
