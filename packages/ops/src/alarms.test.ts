@@ -1,7 +1,7 @@
 import { AlarmPort, type Alarm } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { freshDb, recordingAlarms, type TestDb } from "./d1.test-support.ts";
+import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
 import {
   activeAlarms,
   alarmMessage,
@@ -14,7 +14,7 @@ import {
 
 let t: TestDb;
 beforeEach(async () => {
-  t = await freshDb();
+  t = await sqliteDb();
 });
 afterEach(() => t.dispose());
 

@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { accessTeam, AUD, requestWith, TEAM } from "./access.test-support.ts";
-import { freshDb, type TestDb } from "./d1.test-support.ts";
+import { sqliteDb, type TestDb } from "./d1.test-support.ts";
 import {
   APP_PERMISSIONS,
   appManifest,
@@ -23,7 +23,7 @@ import {
 
 let t: TestDb;
 beforeEach(async () => {
-  t = await freshDb();
+  t = await sqliteDb();
 });
 afterEach(() => t.dispose());
 

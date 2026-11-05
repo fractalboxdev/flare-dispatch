@@ -2,12 +2,12 @@ import { profile } from "@fractalboxdev/flare-dispatch-profile";
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { freshDb, type TestDb } from "./d1.test-support.ts";
+import { sqliteDb, type TestDb } from "./d1.test-support.ts";
 import { activeAlarms, alarmPortFromEnv, tickDepsFromEnv } from "./index.ts";
 
 let t: TestDb;
 beforeEach(async () => {
-  t = await freshDb();
+  t = await sqliteDb();
 });
 afterEach(() => t.dispose());
 
