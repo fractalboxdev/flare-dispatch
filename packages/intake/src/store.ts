@@ -471,8 +471,8 @@ export const d1IntakeStore = (db: D1Like) =>
   });
 
 /**
- * A refusal that ends intake for a whole trigger, before any run is known, records the run as the empty string, since
- * the `shed` row's run is required; an unestimated request records a cost of 0.
+ * A refusal that ends intake for a whole trigger, before any run is known, records a null run (MAMEKO-ADM-044); an
+ * unestimated request records a cost of 0.
  */
 export const d1ShedRecorder = (db: D1Like) =>
   Layer.succeed(ShedRecorder, {
@@ -480,7 +480,7 @@ export const d1ShedRecorder = (db: D1Like) =>
       Effect.flatMap(Clock.currentTimeMillis, (now) =>
         recordShed(db, {
           scopeId: row.scopeId,
-          run: row.run ?? "",
+          run: row.run ?? null,
           reason: row.reason,
           estimatedCostMicroUsd: row.estimatedCost ?? 0,
           recordedAt: now,

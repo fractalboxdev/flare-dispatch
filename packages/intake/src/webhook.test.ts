@@ -175,7 +175,7 @@ describe("webhook to admission", () => {
     const r = await deliver(h, "pull_request", pullRequestPayload());
     expect(r!.status).toBe(202);
     expect(h.executions()).toEqual([]);
-    expect(h.sheds()).toEqual([{ scope_id: REPO, run: "", reason: "manifest: invalid" }]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: invalid" }]);
     expect(h.recorded.reported).toEqual([
       { repo: REPO, sha: BASE, errors: [expect.stringContaining("51 runs")] },
     ]);
@@ -203,7 +203,7 @@ describe("webhook to admission", () => {
     );
     await deliver(h, "pull_request", pullRequestPayload());
     expect(h.executions()).toEqual([]);
-    expect(h.sheds()).toEqual([{ scope_id: REPO, run: "", reason: "manifest: unreadable" }]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: unreadable" }]);
   });
 
   it("FD-INT-020 a repository with no manifest submits nothing and sheds nothing", async () => {
@@ -240,7 +240,7 @@ describe("webhook to admission", () => {
       repository: { full_name: REPO },
     });
     expect(await bodyOf(r)).toEqual({ ignored: true, reason: "no_commit" });
-    expect(h.sheds()).toEqual([{ scope_id: REPO, run: "", reason: "intake: no commit" }]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "intake: no commit" }]);
   });
 
   it("FD-INT-030 a pull request from a fork is recorded as fork-pr and class resolution returns untrusted-input", async () => {
