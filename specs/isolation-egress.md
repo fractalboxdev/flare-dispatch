@@ -4,7 +4,7 @@ FlareDispatch uses mameko's isolation and egress mechanism on every executor kin
 
 ## Scope
 
-mameko's [isolation-egress.md](https://github.com/fractalboxdev/mameko/blob/c6f5d06419689a7307af3622edc8b8d9aced945c/specs/isolation-egress.md) specifies the job sandbox per job on a device, the executor user, network isolation on a device, egress on the `cloudflare`, `device` and `aws` kinds, egress profiles, grants and the egress decision, the approval floor and per-lease credentials. Two of its rules carry what FlareDispatch requires of every kind: each outbound HTTPS request outside the current egress profile is denied ([MAMEKO-ISO-015](https://github.com/fractalboxdev/mameko/blob/c6f5d06419689a7307af3622edc8b8d9aced945c/specs/isolation-egress.md)), and each outbound connection that is not an HTTPS request through the egress proxy is dropped ([MAMEKO-ISO-016](https://github.com/fractalboxdev/mameko/blob/c6f5d06419689a7307af3622edc8b8d9aced945c/specs/isolation-egress.md)). A device starts run programs only from the run-catalogue bundle its device configuration pins ([MAMEKO-EXEC-123](https://github.com/fractalboxdev/mameko/blob/c6f5d06419689a7307af3622edc8b8d9aced945c/specs/executors.md)) and refuses a lease whose run definition is not in it with `RunNotInCatalog` ([MAMEKO-EXEC-124](https://github.com/fractalboxdev/mameko/blob/c6f5d06419689a7307af3622edc8b8d9aced945c/specs/executors.md)).
+mameko's [isolation-egress.md](https://github.com/fractalboxdev/mameko/blob/b0c7b3e5f5ff596fb58fb999c1d5e96dcaba8014/specs/isolation-egress.md) specifies the job sandbox per job on a device, the executor user, network isolation on a device, egress on the `cloudflare`, `device` and `aws` kinds, egress profiles, grants and the egress decision, the approval floor and per-lease credentials. Two of its rules carry what FlareDispatch requires of every kind: each outbound HTTPS request outside the current egress profile is denied ([MAMEKO-ISO-015](https://github.com/fractalboxdev/mameko/blob/b0c7b3e5f5ff596fb58fb999c1d5e96dcaba8014/specs/isolation-egress.md)), and each outbound connection that is not an HTTPS request through the egress proxy is dropped ([MAMEKO-ISO-016](https://github.com/fractalboxdev/mameko/blob/b0c7b3e5f5ff596fb58fb999c1d5e96dcaba8014/specs/isolation-egress.md)). A device starts run programs only from the run-catalogue bundle its device configuration pins ([MAMEKO-EXEC-123](https://github.com/fractalboxdev/mameko/blob/b0c7b3e5f5ff596fb58fb999c1d5e96dcaba8014/specs/executors.md)) and refuses a lease whose run definition is not in it with `RunNotInCatalog` ([MAMEKO-EXEC-124](https://github.com/fractalboxdev/mameko/blob/b0c7b3e5f5ff596fb58fb999c1d5e96dcaba8014/specs/executors.md)).
 
 FlareDispatch's approval floor, base egress profiles and signing purposes are profile values ([profile.md](profile.md) § Approval floor, egress profiles and signing purposes).
 
@@ -13,7 +13,7 @@ This file depends on:
 - [executors.md](executors.md) § GitHub Actions launcher for the runner job and its launch;
 - [profile.md](profile.md) for the egress profiles and the launcher kind `gha`.
 
-The decision behind the mechanism is mameko's [ADR-0011](https://github.com/fractalboxdev/mameko/blob/c6f5d06419689a7307af3622edc8b8d9aced945c/specs/adr/0011-device-isolation.md).
+The decision behind the mechanism is mameko's [ADR-0011](https://github.com/fractalboxdev/mameko/blob/b0c7b3e5f5ff596fb58fb999c1d5e96dcaba8014/specs/adr/0011-device-isolation.md).
 
 ## Model
 
