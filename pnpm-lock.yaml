@@ -205,6 +205,49 @@ importers:
         specifier: ^4.140.0
         version: 4.140.0(@cloudflare/workers-types@4.20260702.1)(@types/node@22.20.1)
 
+  packages/api:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@fractalboxdev/flare-dispatch-github':
+        specifier: workspace:*
+        version: link:../github
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 5.20261012.1
+        version: 5.20261012.1
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      miniflare:
+        specifier: 4.20260515.0
+        version: 4.20260515.0
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
   packages/bedrock-sigv4:
     devDependencies:
       '@types/node':
@@ -311,6 +354,25 @@ importers:
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../catalog
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
+  packages/fd:
+    dependencies:
+      '@effect/platform-node':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)(redis@6.3.1)
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../api
       effect:
         specifier: 4.0.6
         version: 4.0.6
