@@ -10,11 +10,47 @@ export {
   profile,
   profileDocument,
   profileDocumentFor,
+  spendConfigWith,
   spendDefaults,
+  spendSettings,
+  DEVICE_CLASSES,
+  developmentRuntimeFields,
+  MAMEKO_DECLARES_DEVELOPMENT_RUNTIME,
+  type BuildOptions,
   type Deployment,
   type Phase,
   type SpendConfig,
 } from "./document.ts";
+export {
+  CLASS_ORDER,
+  commitRecipe,
+  dedupRecipes,
+  followOnRecipe,
+  GATING_RUNS,
+  idempotencyKeyRecipe,
+  PolicyRule,
+  PROTECTION_TTL_MS,
+  ProtectionSnapshot,
+  ProtectionSnapshotCache,
+  RELEASE_ALLOWLIST,
+  resolveClass,
+  resolveClassDetailed,
+  SUPERSEDING_RUNS,
+  supersessionKey,
+  type Caller,
+  type ClassName,
+  type ClassRequest,
+  type Resolved,
+  type Trigger,
+} from "./bindings.ts";
+export {
+  diffJson,
+  listedDifferences,
+  projectForReference,
+  referenceProfile,
+  unlistedDifferences,
+  type Difference,
+} from "./reference.ts";
 export {
   classNamed,
   classPlacement,
@@ -44,3 +80,4 @@ export {
   validateProfile,
   type ValidationContext,
 } from "./validate.ts";
+export { bindings, validationContext } from "./registry.ts";

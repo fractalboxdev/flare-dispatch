@@ -1,0 +1,26 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-device",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FlareDispatch's device side: the device extension that holds L1 beside mameko's device executor, each class's job-sandbox CPU priority, and the MCP server that reaches the local scheduler over its Unix socket.",
+  "license": "MIT",
+  "bin": {
+    "fd-device-extension": "./src/extension-main.ts"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalboxdev/flare-dispatch-profile": "workspace:*",
+    "@fractalboxdev/mameko-protocol": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "vitest": "^3.2.0"
+  }
+}

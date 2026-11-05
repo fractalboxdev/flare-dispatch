@@ -262,7 +262,7 @@ export const portUses = (p: Profile): PortUses => ({
   attestationVerifier: p.registration.attestation === "verifier",
 });
 
-/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-043 rejects. */
+/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-045 rejects. */
 export const missingPorts = (p: Profile, supplied: readonly string[]): readonly string[] =>
   missingApplicationPorts(portUses(p), supplied);
 
@@ -286,7 +286,7 @@ const context = (p: Profile, c: ValidationContext): Rejection[] =>
     runs: c.runs,
   }).map(({ path, reason }) => ({ item: path.split(".")[0] ?? path, path, reason }));
 
-/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-032). */
+/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-033). */
 const reasonKinds = (p: Profile): Rejection[] =>
   validateReasonKinds({
     declared: p.reason_kinds ?? {},

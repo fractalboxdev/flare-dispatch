@@ -1,0 +1,276 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  accessClaims,
+  actionsClaims,
+  baseConfig,
+  DISPATCHER,
+  makeHarness,
+  makeSigner,
+  MEMBER,
+  now,
+  OPERATOR,
+  type Harness,
+} from "./api.test-support.ts";
+import { apiConfigFromEnv, ConfigInvalid, distinctLinkKey } from "./config.ts";
+import { constantTimeEqual } from "./crypto.ts";
+import { signBody, verifyBody } from "./hmac.ts";
+import { checkLinkToken, LINK_LABELS, mintLinkToken } from "./link-token.ts";
+
+let h: Harness;
+beforeAll(async () => {
+  h = await makeHarness();
+});
+
+const withJwt = (jwt: string, init: RequestInit = {}): RequestInit => ({
+  ...init,
+  headers: { ...(init.headers as Record<string, string>), "cf-access-jwt-assertion": jwt },
+});
+const body = async (response: Response) => (await response.json()) as Record<string, unknown>;
+
+describe("Access gate", () => {
+  it("FD-IFC-010, FD-IFC-013: a gated route with no Access JWT answers 401 unauthenticated", async () => {
+    const response = await h.fetch("/v1/executions");
+    expect(response.status).toBe(401);
+    expect((await body(response))["error"]).toBe("unauthenticated");
+  });
+
+  it("FD-IFC-013: a browser with no identity on a link route is redirected to the Access login", async () => {
+    // The router redirects only on surfaces that ask for it; executions are API routes, so they answer 401.
+    const response = await h.fetch("/v1/executions", { headers: { accept: "text/html" } });
+    expect(response.status).toBe(401);
+  });
+
+  it("FD-IFC-011: a valid RS256 token of the team and audience passes, from the header or the cookie", async () => {
+    expect((await h.fetch("/v1/executions", await h.asAccess(MEMBER))).status).toBe(200);
+    const jwt = await h.access.sign(accessClaims(MEMBER));
+    const cookie = await h.fetch("/v1/executions", {
+      headers: { cookie: `a=b; CF_Authorization=${jwt}` },
+    });
+    expect(cookie.status).toBe(200);
+  });
+
+  it("FD-IFC-011, FD-IFC-012: a wrong issuer, audience, algorithm, kid or an expiry past the skew answers 403", async () => {
+    const cases = [
+      await h.access.sign(accessClaims(MEMBER, { iss: "https://other.example.com" })),
+      await h.access.sign(accessClaims(MEMBER, { aud: ["other"] })),
+      await h.access.sign(accessClaims(MEMBER), { alg: "HS256" }),
+      await h.access.sign(accessClaims(MEMBER), { kid: "unknown" }),
+      await h.access.sign(accessClaims(MEMBER, { exp: now() - 61 })),
+      await h.access.sign(accessClaims(MEMBER, { nbf: now() + 120 })),
+    ];
+    for (const jwt of cases) {
+      const response = await h.fetch("/v1/executions", withJwt(jwt));
+      expect(response.status).toBe(403);
+      expect((await body(response))["error"]).toBe("forbidden");
+    }
+  });
+
+  it("FD-IFC-011: an expiry within the 60 s skew still passes", async () => {
+    const jwt = await h.access.sign(accessClaims(MEMBER, { exp: now() - 30 }));
+    expect((await h.fetch("/v1/executions", withJwt(jwt))).status).toBe(200);
+  });
+
+  it("FD-IFC-012: a malformed token or a forged signature answers 403, never 500", async () => {
+    const other = await makeSigner("access-kid");
+    const forged = await other.sign(accessClaims(MEMBER));
+    for (const jwt of ["not-a-jwt", "a.b.c", "x.y.%%%", forged, "eyJhbGciOiJSUzI1NiJ9.e30.@@@"]) {
+      const response = await h.fetch("/v1/executions", withJwt(jwt));
+      expect(response.status).toBe(403);
+    }
+  });
+
+  it("FD-IFC-014, FD-IFC-015: with no Access team domain or audience every gated route answers 503 not_configured", async () => {
+    const config = baseConfig({ access: undefined });
+    for (const path of ["/v1/executions", "/v1/ops/health", "/v1/anything"]) {
+      const response = await h.fetch(path, { ...(await h.asAccess(OPERATOR)), config });
+      expect(response.status).toBe(503);
+      expect((await body(response))["error"]).toBe("not_configured");
+    }
+  });
+
+  it("FD-IFC-014: the overlay values come from the Worker's bindings, and an absent value disables Access", () => {
+    const config = apiConfigFromEnv(
+      { ACCESS_TEAM_DOMAIN: "t.example.com", OPERATORS: '["Ops@Example.com"]' },
+      "https://x",
+    );
+    expect(config).not.toBeInstanceOf(ConfigInvalid);
+    expect((config as { access: unknown }).access).toBeUndefined();
+    expect((config as unknown as { operators: string[] }).operators).toEqual(["ops@example.com"]);
+    expect(apiConfigFromEnv({ OPERATORS: "ops@example.com" }, "https://x")).toBeInstanceOf(
+      ConfigInvalid,
+    );
+  });
+
+  it("FD-IFC-016: an identity outside operators answers 403 on /v1/ops/*", async () => {
+    const response = await h.fetch("/v1/ops/health", await h.asAccess(MEMBER));
+    expect(response.status).toBe(403);
+    expect((await body(response))["error"]).toBe("forbidden");
+    expect((await h.fetch("/v1/ops/health", await h.asAccess(OPERATOR))).status).toBe(200);
+  });
+
+  it("FD-IFC-088: an identity outside operators answers 403 on executor registration", async () => {
+    const init = {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        executor_id: "dev-1",
+        labels: [],
+        protocol_version: "1",
+        code_hash: null,
+        identity: { public_key: "k", key_store: "software", certificate_chain: [], evidence: null },
+      }),
+    };
+    expect((await h.fetch("/v1/executors/register", await h.asAccess(MEMBER, init))).status).toBe(
+      403,
+    );
+    const ok = await h.fetch("/v1/executors/register", await h.asAccess(OPERATOR, init));
+    expect(ok.status).toBe(201);
+    expect(await body(ok)).toEqual({ executor_id: "dev-1", posture_tier: "unmanaged" });
+  });
+});
+
+describe("dispatch identity", () => {
+  const dispatchInit = (
+    headers: Record<string, string>,
+    repository = "acme/widgets",
+  ): RequestInit => ({
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ repository, inputs: {} }),
+  });
+
+  it("FD-IFC-027: no token, or an Access identity outside dispatchers, answers 401 before the run is looked up", async () => {
+    const before = h.doubles.calls.submissions.length;
+    expect((await h.fetch("/v1/dispatch/no-such-run", dispatchInit({}))).status).toBe(401);
+    const member = await h.fetch("/v1/dispatch/check", await h.asAccess(MEMBER, dispatchInit({})));
+    expect(member.status).toBe(401);
+    expect(h.doubles.calls.submissions.length).toBe(before);
+  });
+
+  it("FD-IFC-027: an Access identity in dispatchers may dispatch", async () => {
+    const response = await h.fetch(
+      "/v1/dispatch/check",
+      await h.asAccess(DISPATCHER, dispatchInit({})),
+    );
+    expect(response.status).toBe(202);
+  });
+
+  it("FD-IFC-024: an Actions token needs GitHub's issuer, the overlay audience and a key from GitHub's JWKS", async () => {
+    const good = await h.actions.sign(actionsClaims("acme/widgets"));
+    expect(
+      (await h.fetch("/v1/dispatch/check", dispatchInit({ authorization: `Bearer ${good}` })))
+        .status,
+    ).toBe(202);
+    for (const jwt of [
+      await h.actions.sign(actionsClaims("acme/widgets", { aud: "other" })),
+      await h.actions.sign(actionsClaims("acme/widgets", { iss: "https://example.com" })),
+      await h.access.sign(actionsClaims("acme/widgets")),
+    ]) {
+      const response = await h.fetch(
+        "/v1/dispatch/check",
+        dispatchInit({ authorization: `Bearer ${jwt}` }),
+      );
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it("FD-IFC-025: an Actions dispatch takes its repository, ref and workflow ref from the token", async () => {
+    const jwt = await h.actions.sign(actionsClaims("Acme/Widgets", { ref: "refs/heads/feature" }));
+    await h.fetch(
+      "/v1/dispatch/check",
+      dispatchInit({ authorization: `Bearer ${jwt}` }, "acme/widgets"),
+    );
+    const last = h.doubles.calls.submissions.at(-1)!;
+    expect(last.repository).toBe("Acme/Widgets");
+    expect(last.ref).toBe("refs/heads/feature");
+    expect(last.workflowRef).toBe("Acme/Widgets/.github/workflows/ci.yml@refs/heads/main");
+    expect(last.caller).toBe(
+      "actions:Acme/Widgets:Acme/Widgets/.github/workflows/ci.yml@refs/heads/main",
+    );
+  });
+
+  it("FD-IFC-026: a body naming another repository than the token answers 403 repository_mismatch", async () => {
+    const jwt = await h.actions.sign(actionsClaims("acme/widgets"));
+    const response = await h.fetch(
+      "/v1/dispatch/check",
+      dispatchInit({ authorization: `Bearer ${jwt}` }, "acme/other"),
+    );
+    expect(response.status).toBe(403);
+    expect((await body(response))["error"]).toBe("repository_mismatch");
+  });
+
+  it("FD-IFC-024: with no OIDC audience configured an Actions dispatch answers 503 not_configured", async () => {
+    const jwt = await h.actions.sign(actionsClaims("acme/widgets"));
+    const response = await h.fetch("/v1/dispatch/check", {
+      ...dispatchInit({ authorization: `Bearer ${jwt}` }),
+      config: baseConfig({ oidcAudience: undefined }),
+    });
+    expect(response.status).toBe(503);
+  });
+});
+
+describe("link tokens", () => {
+  const key = "link-key-for-tests";
+  const grant = { purpose: "logs" as const, objectId: "exec-1", expiresAtS: now() + 600, epoch: 3 };
+  const check = (token: string, overrides: Partial<Parameters<typeof checkLinkToken>[2]> = {}) =>
+    checkLinkToken(key, token, {
+      purpose: "logs",
+      objectId: "exec-1",
+      nowS: now(),
+      currentEpoch: 3,
+      ...overrides,
+    });
+
+  it("FD-IFC-018: a token binds the purpose, the object, the expiry and the epoch, with at least 128 bits of MAC", async () => {
+    const token = await mintLinkToken(key, grant);
+    const mac = token.split(".")[2]!;
+    expect(mac.length).toBeGreaterThanOrEqual(22);
+    expect((await check(token))._tag).toBe("Granted");
+    expect((await check(token, { objectId: "exec-2" }))._tag).toBe("Invalid");
+    expect((await check(token, { purpose: "artifact" }))._tag).toBe("Invalid");
+    const edited = token.replace(/^\d+/, String(grant.expiresAtS + 999));
+    expect((await check(edited))._tag).toBe("Invalid");
+    expect(new Set(Object.values(LINK_LABELS)).size).toBe(Object.keys(LINK_LABELS).length);
+  });
+
+  it("FD-IFC-020: a token past its expiry is expired", async () => {
+    const token = await mintLinkToken(key, { ...grant, expiresAtS: now() - 1 });
+    expect((await check(token))._tag).toBe("Expired");
+  });
+
+  it("FD-IFC-021: a token below the current link epoch is revoked", async () => {
+    const token = await mintLinkToken(key, { ...grant, epoch: 2 });
+    expect((await check(token))._tag).toBe("Revoked");
+  });
+
+  it("FD-IFC-019: a details link lasts the configured lifetime, 24 h by default and at most 7 days", () => {
+    expect((apiConfigFromEnv({}, "https://x") as { linkLifetimeS: number }).linkLifetimeS).toBe(
+      86_400,
+    );
+    expect(apiConfigFromEnv({ LINK_LIFETIME_S: "604801" }, "https://x")).toBeInstanceOf(
+      ConfigInvalid,
+    );
+    expect(
+      (apiConfigFromEnv({ LINK_LIFETIME_S: "604800" }, "https://x") as { linkLifetimeS: number })
+        .linkLifetimeS,
+    ).toBe(604_800);
+  });
+
+  it("FD-IFC-022: token and MAC comparisons run through the constant-time compare", async () => {
+    expect(await constantTimeEqual("abc", "abc")).toBe(true);
+    expect(await constantTimeEqual("abc", "abd")).toBe(false);
+    expect(await constantTimeEqual("abc", "abcd")).toBe(false);
+    expect(await constantTimeEqual("", "")).toBe(false);
+    const signature = await signBody("secret", new TextEncoder().encode("{}"));
+    expect(await verifyBody("secret", signature, new TextEncoder().encode("{}"))).toBe(true);
+    expect(await verifyBody("secret", signature, new TextEncoder().encode("{ }"))).toBe(false);
+    expect(await verifyBody("secret", "sha256=00", new TextEncoder().encode("{}"))).toBe(false);
+  });
+
+  it("FD-IFC-023: a link key equal to the webhook secret, the OIDC key or the provenance key is refused", () => {
+    expect(distinctLinkKey({ LINK_KEY: "k", WEBHOOK_SECRET: "k" })).toBeInstanceOf(ConfigInvalid);
+    expect(distinctLinkKey({ LINK_KEY: "k", OIDC_SIGNING_JWK: "k" })).toBeInstanceOf(ConfigInvalid);
+    expect(distinctLinkKey({ LINK_KEY: "k", PROVENANCE_KEY: "k" })).toBeInstanceOf(ConfigInvalid);
+    expect(distinctLinkKey({ LINK_KEY: "k", WEBHOOK_SECRET: "w" })).toBeUndefined();
+  });
+});

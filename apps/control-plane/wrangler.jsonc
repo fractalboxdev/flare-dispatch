@@ -1,22 +1,42 @@
 {
   // The v2 control plane. `DEPLOYMENT` is `production` here, and only the local dogfood command overrides it, so a
-  // deploy of this file refuses host execution and the software key. The D1 id is a placeholder; a real deploy
-  // writes its own in an operator overlay.
+  // deploy of this file refuses host execution and the software key. Every account-specific value is a `{{path}}`
+  // placeholder the renderer fills from the operator overlay; secrets (the App key, webhook secret, link key, cache
+  // token secrets) are Worker secrets.
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "flare-dispatch-control-plane",
   "main": "src/worker.ts",
   "compatibility_date": "2026-05-01",
   "workers_dev": false,
+  "keep_vars": false,
+  // No container runs locally: the cloud pools need host-cloudflare's launcher, so `wrangler dev` builds no image.
+  "dev": { "enable_containers": false },
+  "routes": [{ "pattern": "{{hostnames.dispatcher}}", "custom_domain": true }],
   "vars": {
     "DEPLOYMENT": "production",
     "PLANE_ID": "flare-dispatch",
+    "ALERT_SINK": "{{alerts.sink}}",
+    "ACCESS_TEAM_DOMAIN": "{{access.teamDomain}}",
+    "ACCESS_AUD": "{{access.aud}}",
+    "OPERATORS": "{{operators}}",
+    "GITHUB_APP_ID": "{{github.appId}}",
+    "GITHUB_FIXTURE_REPO": "{{github.fixtureRepo}}",
   },
+  // The minute tick (FD-INT-050): outbox drain, liveness, intake's units and the retention sweeps.
+  "triggers": { "crons": ["* * * * *"] },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "flare-dispatch-control-plane",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "{{d1.DB}}",
     },
+  ],
+  // The profile document and the runtime configuration.
+  "kv_namespaces": [{ "binding": "CONFIG", "id": "{{kv.CONFIG}}" }],
+  // `CACHE` holds the cache, compile cache, artifacts and logs under their prefixes (FD-CACHE-091).
+  "r2_buckets": [
+    { "binding": "CACHE", "bucket_name": "{{r2.CACHE}}" },
+    { "binding": "ARTIFACTS", "bucket_name": "{{r2.ARTIFACTS}}" },
   ],
   "durable_objects": {
     "bindings": [
@@ -24,8 +44,50 @@
       { "name": "EXECUTION", "class_name": "ExecutionEngine" },
       { "name": "EPOCH_ANCHOR", "class_name": "EpochAnchor" },
       { "name": "MONITOR", "class_name": "LivenessMonitor" },
+      { "name": "CACHE_LEDGER", "class_name": "CacheLedger" },
+      { "name": "POOL_CONTROLLER", "class_name": "PoolController" },
+      { "name": "INSTALLATION_QUOTA", "class_name": "InstallationQuota" },
+      { "name": "LEAN_POOL", "class_name": "LeanPool" },
+      { "name": "AGENT_POOL", "class_name": "AgentPool" },
+      { "name": "BROWSER_POOL", "class_name": "BrowserPool" },
+      { "name": "RELEASE_POOL", "class_name": "ReleasePool" },
+      { "name": "CONTROL_POOL", "class_name": "ControlPool" },
     ],
   },
+  // One Container class per cloud pool, each running the gate image; `max_instances` sits above the pool's admission
+  // cap in the profile (FD-ARCH-001).
+  "containers": [
+    {
+      "class_name": "LeanPool",
+      "image": "../../infra/v2/Dockerfile.gate",
+      "image_build_context": "../..",
+      "max_instances": 64,
+    },
+    {
+      "class_name": "AgentPool",
+      "image": "../../infra/v2/Dockerfile.gate",
+      "image_build_context": "../..",
+      "max_instances": 16,
+    },
+    {
+      "class_name": "BrowserPool",
+      "image": "../../infra/v2/Dockerfile.gate",
+      "image_build_context": "../..",
+      "max_instances": 32,
+    },
+    {
+      "class_name": "ReleasePool",
+      "image": "../../infra/v2/Dockerfile.gate",
+      "image_build_context": "../..",
+      "max_instances": 16,
+    },
+    {
+      "class_name": "ControlPool",
+      "image": "../../infra/v2/Dockerfile.gate",
+      "image_build_context": "../..",
+      "max_instances": 32,
+    },
+  ],
   "migrations": [
     {
       "tag": "v1",
@@ -34,6 +96,19 @@
         "ExecutionEngine",
         "EpochAnchor",
         "LivenessMonitor",
+      ],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "CacheLedger",
+        "PoolController",
+        "InstallationQuota",
+        "LeanPool",
+        "AgentPool",
+        "BrowserPool",
+        "ReleasePool",
+        "ControlPool",
       ],
     },
   ],

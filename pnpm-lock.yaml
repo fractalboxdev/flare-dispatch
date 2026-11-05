@@ -45,9 +45,27 @@ importers:
 
   apps/control-plane:
     dependencies:
+      '@fractalboxdev/flare-dispatch-agentic':
+        specifier: workspace:*
+        version: link:../../packages/agentic
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../../packages/api
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../../packages/cache
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../../packages/catalog
+      '@fractalboxdev/flare-dispatch-github':
+        specifier: workspace:*
+        version: link:../../packages/github
+      '@fractalboxdev/flare-dispatch-intake':
+        specifier: workspace:*
+        version: link:../../packages/intake
+      '@fractalboxdev/flare-dispatch-ops':
+        specifier: workspace:*
+        version: link:../../packages/ops
       '@fractalboxdev/flare-dispatch-profile':
         specifier: workspace:*
         version: link:../../packages/profile
@@ -175,7 +193,7 @@ importers:
         version: 5.9.3
       wrangler:
         specifier: ^4.140.0
-        version: 4.140.0(@cloudflare/workers-types@5.20261012.1)(@types/node@24.13.6)
+        version: 4.140.0(@cloudflare/workers-types@5.20261104.1)(@types/node@24.13.6)
 
   apps/substrate:
     dependencies:
@@ -205,6 +223,83 @@ importers:
         specifier: ^4.140.0
         version: 4.140.0(@cloudflare/workers-types@4.20260702.1)(@types/node@22.20.1)
 
+  packages/agentic:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
+      '@fractalboxdev/mameko-gateway':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/gateway
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
+      '@fractalboxdev/mameko-protocol':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/protocol
+      '@fractalboxdev/mameko-run':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/run
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      fast-check:
+        specifier: ^3.23.2
+        version: 3.23.2
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
+  packages/api:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@fractalboxdev/flare-dispatch-github':
+        specifier: workspace:*
+        version: link:../github
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 5.20261012.1
+        version: 5.20261012.1
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      miniflare:
+        specifier: 4.20260515.0
+        version: 4.20260515.0
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
   packages/bedrock-sigv4:
     devDependencies:
       '@types/node':
@@ -217,8 +312,39 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
 
+  packages/cache:
+    dependencies:
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 5.20261012.1
+        version: 5.20261012.1
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      miniflare:
+        specifier: 4.20260515.0
+        version: 4.20260515.0
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
   packages/catalog:
     dependencies:
+      '@fractalboxdev/flare-dispatch-agentic':
+        specifier: workspace:*
+        version: link:../agentic
       '@fractalboxdev/flare-dispatch-profile':
         specifier: workspace:*
         version: link:../profile
@@ -235,6 +361,43 @@ importers:
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
+  packages/conformance:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-ops':
+        specifier: workspace:*
+        version: link:../ops
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
+      '@fractalboxdev/mameko-conformance':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/conformance
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 5.20261012.1
+        version: 5.20261012.1
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      miniflare:
+        specifier: 4.20260515.0
+        version: 4.20260515.0
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
@@ -303,6 +466,25 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
 
+  packages/device:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
+      '@fractalboxdev/mameko-protocol':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/protocol
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
   packages/dogfood:
     dependencies:
       '@effect/platform-node':
@@ -311,6 +493,31 @@ importers:
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../catalog
+      '@fractalboxdev/flare-dispatch-ops':
+        specifier: workspace:*
+        version: link:../ops
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
+  packages/fd:
+    dependencies:
+      '@effect/platform-node':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)(redis@6.3.1)
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../api
+      '@fractalboxdev/flare-dispatch-ops':
+        specifier: workspace:*
+        version: link:../ops
       effect:
         specifier: 4.0.6
         version: 4.0.6
@@ -327,6 +534,12 @@ importers:
       '@fractalboxdev/mameko-coordinator':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
       '@fractalboxdev/mameko-ports':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/ports
@@ -334,9 +547,6 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
-      '@fractalboxdev/mameko-kernel':
-        specifier: workspace:*
-        version: link:../../vendor/mameko/packages/kernel
       '@fractalboxdev/mameko-testkit':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/testkit
@@ -361,6 +571,80 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
+  packages/intake:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@fractalboxdev/flare-dispatch-github':
+        specifier: workspace:*
+        version: link:../github
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
+  packages/ops:
+    dependencies:
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
+      '@fractalboxdev/mameko-protocol':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/protocol
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 5.20261012.1
+        version: 5.20261012.1
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      fast-check:
+        specifier: 3.23.2
+        version: 3.23.2
+      miniflare:
+        specifier: 4.20260515.0
+        version: 4.20260515.0
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
 
   packages/profile:
     dependencies:
@@ -485,9 +769,6 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.6
         version: 4.0.6(effect@4.0.6)(redis@6.3.1)
-      '@effect/sql-pg':
-        specifier: 4.0.6
-        version: 4.0.6(effect@4.0.6)
       '@fractalboxdev/mameko-coordinator':
         specifier: workspace:*
         version: link:../coordinator
@@ -500,6 +781,9 @@ importers:
       '@fractalboxdev/mameko-ports':
         specifier: workspace:*
         version: link:../ports
+      '@fractalboxdev/mameko-store-sqlite':
+        specifier: workspace:*
+        version: link:../store-sqlite
       '@fractalboxdev/mameko-testkit':
         specifier: workspace:*
         version: link:../testkit
@@ -544,18 +828,6 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
 
-  vendor/mameko/packages/engine-postgres:
-    dependencies:
-      '@effect/sql-pg':
-        specifier: 4.0.6
-        version: 4.0.6(effect@4.0.6)
-      '@fractalboxdev/mameko-engine':
-        specifier: workspace:*
-        version: link:../engine
-      effect:
-        specifier: 4.0.6
-        version: 4.0.6
-
   vendor/mameko/packages/engine-sqlite:
     dependencies:
       '@fractalboxdev/mameko-engine':
@@ -591,15 +863,15 @@ importers:
 
   vendor/mameko/packages/host-cloudflare:
     dependencies:
+      '@effect/sql-d1':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)
       '@fractalboxdev/mameko-coordinator':
         specifier: workspace:*
         version: link:../coordinator
       '@fractalboxdev/mameko-engine':
         specifier: workspace:*
         version: link:../engine
-      '@fractalboxdev/mameko-engine-postgres':
-        specifier: workspace:*
-        version: link:../engine-postgres
       '@fractalboxdev/mameko-engine-sqlite':
         specifier: workspace:*
         version: link:../engine-sqlite
@@ -621,6 +893,9 @@ importers:
       '@fractalboxdev/mameko-run':
         specifier: workspace:*
         version: link:../run
+      '@fractalboxdev/mameko-store-sqlite':
+        specifier: workspace:*
+        version: link:../store-sqlite
       effect:
         specifier: 4.0.6
         version: 4.0.6
@@ -640,7 +915,7 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.6
         version: 4.0.6(effect@4.0.6)(redis@6.3.1)
-      '@effect/sql-pg':
+      '@effect/sql-sqlite-node':
         specifier: 4.0.6
         version: 4.0.6(effect@4.0.6)
       '@fractalboxdev/mameko-coordinator':
@@ -649,9 +924,6 @@ importers:
       '@fractalboxdev/mameko-engine':
         specifier: workspace:*
         version: link:../engine
-      '@fractalboxdev/mameko-engine-postgres':
-        specifier: workspace:*
-        version: link:../engine-postgres
       '@fractalboxdev/mameko-engine-sqlite':
         specifier: workspace:*
         version: link:../engine-sqlite
@@ -673,6 +945,9 @@ importers:
       '@fractalboxdev/mameko-run':
         specifier: workspace:*
         version: link:../run
+      '@fractalboxdev/mameko-store-sqlite':
+        specifier: workspace:*
+        version: link:../store-sqlite
       effect:
         specifier: 4.0.6
         version: 4.0.6
@@ -736,6 +1011,25 @@ importers:
       effect:
         specifier: 4.0.6
         version: 4.0.6
+
+  vendor/mameko/packages/store-sqlite:
+    dependencies:
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../ports
+      '@fractalboxdev/mameko-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@effect/sql-sqlite-node':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)
 
   vendor/mameko/packages/testkit:
     dependencies:
@@ -1177,6 +1471,9 @@ packages:
   '@cloudflare/workers-types@5.20261012.1':
     resolution: {integrity: sha512-5Y0NrKXG9CZaNUZ6Dt3TLRE4UQe2/DGuxIhTEVYHUl0jAlv1TpQtI59YBAszRpSaZAMzbM8nqGc1n9Z2q4TVyA==}
 
+  '@cloudflare/workers-types@5.20261104.1':
+    resolution: {integrity: sha512-XSPcK88JXnW/oC82wuXvaP7vgyk2myydugbgOd/RcLKwqkwW0cP09Ozp9ItACa4IAZ7uKtMIfxZpUTXajYVd1Q==}
+
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
@@ -1277,8 +1574,13 @@ packages:
       '@effect/platform': ^0.96.1
       effect: 3.21.2
 
-  '@effect/sql-pg@4.0.6':
-    resolution: {integrity: sha512-mh2Z+Hi1/AWtkoGuzub2PPCHN7ZsMAbY8dlv/YbdJ6PoXVdrVAGsr+FeeoeD6f0rdnln4DQm7PvFjv1htAjY9w==}
+  '@effect/sql-d1@4.0.6':
+    resolution: {integrity: sha512-W149Svo5pR+7eoKtTmMX3aFCJKQmvMdypKhMlFekKvy2UjY6h5Af8d+9YeBeOXkYtDQjxNs4l6iv7EqbF6XBbg==}
+    peerDependencies:
+      effect: ^4.0.6
+
+  '@effect/sql-sqlite-node@4.0.6':
+    resolution: {integrity: sha512-mYWr1Ppoz3/XrY+ZBnYfdvZvdcAYJTO6VcWoNetBX5n2c0VKHqg9S8WO6EpgtV5WiR8/yHHmu3qkfAGHJmalcA==}
     peerDependencies:
       effect: ^4.0.6
 
@@ -5970,6 +6272,8 @@ snapshots:
 
   '@cloudflare/workers-types@5.20261012.1': {}
 
+  '@cloudflare/workers-types@5.20261104.1': {}
+
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
@@ -6081,7 +6385,12 @@ snapshots:
       effect: 3.21.2
       msgpackr: 1.12.1
 
-  '@effect/sql-pg@4.0.6(effect@4.0.6)':
+  '@effect/sql-d1@4.0.6(effect@4.0.6)':
+    dependencies:
+      '@cloudflare/workers-types': 5.20261104.1
+      effect: 4.0.6
+
+  '@effect/sql-sqlite-node@4.0.6(effect@4.0.6)':
     dependencies:
       effect: 4.0.6
 
@@ -10198,7 +10507,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  wrangler@4.140.0(@cloudflare/workers-types@5.20261012.1)(@types/node@24.13.6):
+  wrangler@4.140.0(@cloudflare/workers-types@5.20261104.1)(@types/node@24.13.6):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20260923.1)
@@ -10209,7 +10518,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20260923.1
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20261012.1
+      '@cloudflare/workers-types': 5.20261104.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - '@types/node'

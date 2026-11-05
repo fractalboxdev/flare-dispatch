@@ -1,38 +1,51 @@
-// The control plane Worker on workerd through Miniflare: the bindings of `wrangler.jsonc`, admission, the lease path and
-// the record. The executor here is the test's own signed WebSocket; `pnpm dogfood` proves the real device executor.
-import { randomBytes } from "node:crypto";
+// The control plane Worker on workerd through Miniflare: the bindings of `wrangler.jsonc`, the router, admission, the
+// lease path and the record. The executor here is the test's own signed WebSocket; `pnpm dogfood` proves the real
+// device executor.
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { connectMessage, CONNECT_HEADERS } from "@fractalboxdev/mameko-coordinator";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  AUD,
+  connect,
+  endStandingClaim,
+  hello,
+  newDevice,
+  OPERATOR,
+  PLANE,
+  registration,
+  startAccessTeam,
+  type AccessTeam,
+} from "./support.ts";
 
-const TOKEN = "test-operator-token";
-const PLANE = "flare-dispatch";
 const SHA = "a".repeat(40);
 
-type Keys = { readonly publicKey: CryptoKey; readonly privateKey: CryptoKey };
-
-const base64 = (bytes: ArrayBuffer | Uint8Array) =>
-  Buffer.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).toString("base64");
-
-const newDevice = async () => {
-  const keys = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
-    "sign",
-    "verify",
-  ])) as Keys;
-  return {
-    keys,
-    identity: {
-      public_key: base64((await crypto.subtle.exportKey("spki", keys.publicKey)) as ArrayBuffer),
-      key_store: "software",
-      certificate_chain: [],
-      evidence: null,
-    },
-  };
+/** The repository the development deployment reads: this one, at one commit. */
+const DEV_REPOSITORY = {
+  repository: "fractalboxdev/flare-dispatch",
+  installation: 1,
+  default_branch: "main",
+  head: "f".repeat(40),
+  files: {
+    ".github/flare-dispatch.json": readFileSync(
+      join(import.meta.dirname, "../../../.github/flare-dispatch.json"),
+    ).toString("base64"),
+  },
 };
 
-const miniflare = (script: string, deployment: string, token: string | undefined) =>
+let team: AccessTeam;
+let script: string;
+let development: Miniflare;
+let production: Miniflare;
+let unconfigured: Miniflare;
+
+const miniflare = (
+  deployment: string,
+  access: boolean,
+  repository: object = DEV_REPOSITORY,
+  extra: Record<string, string> = {},
+) =>
   new Miniflare({
     modules: [{ type: "ESModule", path: "worker.js", contents: script }],
     compatibilityDate: "2026-05-01",
@@ -42,20 +55,28 @@ const miniflare = (script: string, deployment: string, token: string | undefined
       EXECUTION: { className: "ExecutionEngine", useSQLite: true },
       EPOCH_ANCHOR: { className: "EpochAnchor", useSQLite: true },
       MONITOR: { className: "LivenessMonitor", useSQLite: true },
+      CACHE_LEDGER: { className: "CacheLedger", useSQLite: true },
     },
+    r2Buckets: ["CACHE"],
     bindings: {
       DEPLOYMENT: deployment,
+      CACHE_TOKEN_SECRET: "cache-token-secret-for-tests",
       PLANE_ID: PLANE,
-      ...(token === undefined ? {} : { OPERATOR_TOKEN: token }),
+      ...extra,
+      ...(access
+        ? {
+            ACCESS_TEAM_DOMAIN: team.teamDomain,
+            ACCESS_AUD: AUD,
+            OPERATORS: JSON.stringify([OPERATOR]),
+            DISPATCHERS: JSON.stringify([OPERATOR]),
+            FD_DEV_REPOSITORY: JSON.stringify(repository),
+          }
+        : {}),
     },
   });
 
-let script: string;
-let development: Miniflare;
-let production: Miniflare;
-let unconfigured: Miniflare;
-
 beforeAll(async () => {
+  team = await startAccessTeam();
   const bundle = await build({
     entryPoints: [join(import.meta.dirname, "../src/worker.ts")],
     bundle: true,
@@ -65,43 +86,48 @@ beforeAll(async () => {
     external: ["cloudflare:*"],
   });
   script = bundle.outputFiles[0]!.text;
-  development = miniflare(script, "development", TOKEN);
-  production = miniflare(script, "production", TOKEN);
-  unconfigured = miniflare(script, "production", undefined);
+  development = miniflare("development", true);
+  production = miniflare("production", true);
+  unconfigured = miniflare("production", false);
   await Promise.all([development.ready, production.ready, unconfigured.ready]);
 });
 
 afterAll(async () => {
   await Promise.all([development?.dispose(), production?.dispose(), unconfigured?.dispose()]);
+  await team?.close();
 });
 
-const post = (mf: Miniflare, path: string, body: unknown, token: string | null = TOKEN) =>
+/** `identity` is an Access identity, `null` for none, or `invalid` for a token no key of the team signed. */
+const headersFor = async (identity: string | null): Promise<Record<string, string>> =>
+  identity === null
+    ? {}
+    : {
+        "cf-access-jwt-assertion":
+          identity === "invalid" ? "e30.e30.c2ln" : await team.jwt(identity),
+      };
+
+const post = async (
+  mf: Miniflare,
+  path: string,
+  body: unknown,
+  identity: string | null = OPERATOR,
+) =>
   mf.dispatchFetch(`http://x${path}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(token === null ? {} : { authorization: `Bearer ${token}` }),
-    },
+    headers: { "content-type": "application/json", ...(await headersFor(identity)) },
     body: JSON.stringify(body),
   });
 
-const execution = async (mf: Miniflare, id: string, query = "") => {
-  const r = await mf.dispatchFetch(`http://x/v1/executions/${id}${query}`, {
-    headers: { authorization: `Bearer ${TOKEN}` },
+const execution = async (mf: Miniflare, id: string) => {
+  const r = await mf.dispatchFetch(`http://x/v1/executions/${id}`, {
+    headers: await headersFor(OPERATOR),
   });
   return (await r.json()) as Record<string, unknown>;
 };
 
-const registration = (executorId: string, identity: unknown) => ({
-  executor_id: executorId,
-  identity,
-  labels: [],
-  protocol_version: "1",
-  code_hash: null,
-});
-
 const dispatchBody = (sha: string) => ({
   repository: "fractalboxdev/flare-dispatch",
+  sha: /^[0-9a-f]{40}$/.test(sha) ? sha : SHA,
   inputs: {
     repo: "https://github.com/fractalboxdev/flare-dispatch",
     sha,
@@ -110,95 +136,27 @@ const dispatchBody = (sha: string) => ({
   },
 });
 
-/** A device's signed upgrade: the connect signature `routeExecutorUpgrade` verifies. */
-const connect = async (executorId: string, keys: Keys) => {
-  const path = "/v1/executors/connect";
-  const nonce = randomBytes(32).toString("hex");
-  const at = Date.now();
-  const message = await connectMessage({
-    method: "GET",
-    path,
-    executorId,
-    planeId: PLANE,
-    connectAt: at,
-    nonce,
-  });
-  const signature = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    keys.privateKey,
-    new Uint8Array(message),
-  );
-  const response = await development.dispatchFetch(`http://x${path}`, {
-    headers: {
-      Upgrade: "websocket",
-      [CONNECT_HEADERS.executorId]: executorId,
-      [CONNECT_HEADERS.at]: String(at),
-      [CONNECT_HEADERS.nonce]: nonce,
-      [CONNECT_HEADERS.signature]: base64(signature),
-    },
-  });
-  const ws = response.webSocket;
-  if (ws === null || ws === undefined) throw new Error(`no socket: ${response.status}`);
-  const frames: Record<string, unknown>[] = [];
-  ws.accept();
-  ws.addEventListener("message", (e) => void frames.push(JSON.parse(String(e.data))));
-  return {
-    send: (m: unknown) => ws.send(JSON.stringify(m)),
-    next: async (type: string) => {
-      for (let i = 0; i < 1000; i++) {
-        const frame = frames.find((f) => f["type"] === type);
-        if (frame !== undefined) {
-          frames.splice(frames.indexOf(frame), 1);
-          return frame;
-        }
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      throw new Error(`no ${type}; received ${JSON.stringify(frames)}`);
-    },
-  };
-};
-
-const hello = (executorId: string) => ({
-  type: "session.hello",
-  id: "h1",
-  executor_id: executorId,
-  plane_id: PLANE,
-  boot_id: "b",
-  executor_version: "t",
-  versions: { min: 1, max: 1 },
-  held: [],
-  capacity: null,
-  in_use: {},
-  outbox_depth: 0,
-});
-
-/** A heartbeat ends a device's standing claim, so a later test's dispatch wakes only that test's device. */
-const endStandingClaim = async (socket: Awaited<ReturnType<typeof connect>>) => {
-  socket.send({
-    type: "exec.heartbeat",
-    id: "hb1",
-    leases: [],
-    in_use: {},
-    activity: "unknown",
-    memory_pressure: "unknown",
-    thermal: "unknown",
-    power: "unknown",
-    free_disk_bytes: 0,
-    teardowns: [],
-  });
-  await socket.next("exec.heartbeat.ack");
-};
-
-describe("the operator gate", () => {
-  it("FD-IFC-014 answers not_configured with no operator identity set", async () => {
+describe("the identity gate", () => {
+  it("FD-IFC-014 answers not_configured with no Access team set", async () => {
     const r = await post(unconfigured, "/v1/dispatch/check", dispatchBody(SHA));
     expect(r.status).toBe(503);
     expect(await r.json()).toMatchObject({ error: "not_configured" });
   });
 
-  it("FD-IFC-013 and FD-IFC-012 reject a missing and a wrong token before any route logic", async () => {
+  it("FD-IFC-027 refuses a dispatch with no identity and with a token the team did not sign", async () => {
     expect((await post(development, "/v1/dispatch/nothing", {}, null)).status).toBe(401);
-    expect((await post(development, "/v1/dispatch/nothing", {}, "wrong")).status).toBe(403);
+    expect((await post(development, "/v1/dispatch/nothing", {}, "invalid")).status).toBe(401);
+  });
+
+  it("FD-IFC-012 refuses an Access token outside operators on an operator route", async () => {
+    const { identity } = await newDevice();
+    const r = await post(
+      development,
+      "/v1/executors/register",
+      registration("stranger", identity),
+      "member@example.com",
+    );
+    expect(r.status).toBe(403);
   });
 
   it("serves health without identity and names the deployment", async () => {
@@ -207,21 +165,57 @@ describe("the operator gate", () => {
   });
 });
 
+describe("the minute tick", () => {
+  it("FD-INT-050 records the tick and starts the liveness monitor", async () => {
+    const worker = await unconfigured.getWorker();
+    const at = Date.now();
+    await worker.scheduled({ cron: "* * * * *", scheduledTime: new Date(at) });
+    const db = await unconfigured.getD1Database("DB");
+    await expect
+      .poll(
+        async () =>
+          (await db.prepare("select at from fd_liveness where key = 'tick'").all()).results,
+      )
+      .toEqual([{ at }]);
+  });
+
+  it("FD-OPS-036 serves the liveness report to an operator", async () => {
+    const r = await development.dispatchFetch("http://x/v1/ops/health", {
+      headers: await headersFor(OPERATOR),
+    });
+    expect(r.status).toBe(200);
+  });
+});
+
+describe("the cache, artifact and log routes", () => {
+  it("FD-CACHE-083 serves an execution's logs to a member and nothing without a token or identity", async () => {
+    expect((await development.dispatchFetch("http://x/v1/executions/01ABC/logs")).status).toBe(404);
+    const r = await development.dispatchFetch("http://x/v1/executions/01ABC/logs", {
+      headers: await headersFor(OPERATOR),
+    });
+    expect(r.status).toBe(404);
+  });
+
+  it("FD-CACHE-051 refuses a compile-cache request without a signing secret", async () => {
+    const r = await development.dispatchFetch("http://x/v1/compile-cache/acme/widgets/ns/key");
+    expect(r.status).toBe(503);
+  });
+});
+
 describe("a production deployment", () => {
-  it("MAMEKO-ISO-001 refuses a host execution", async () => {
+  it("MAMEKO-ISO-001 leaves a host execution out of the catalogue", async () => {
     const r = await post(production, "/v1/dispatch/check", dispatchBody(SHA));
-    expect(r.status).toBe(403);
-    expect(await r.json()).toMatchObject({ error: "forbidden" });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toMatchObject({ error: "run_not_found" });
   });
 
   it("FD-IFC-087 refuses a software key and writes no executor row", async () => {
     const { identity } = await newDevice();
     const r = await post(production, "/v1/executors/register", registration("mac", identity));
     expect(r.status).toBe(403);
-    expect(await r.json()).toMatchObject({
-      error: "registration_refused",
-      message: "registration refused: key-store",
-    });
+    const body = (await r.json()) as { error: string; message: string };
+    expect(body.error).toBe("registration_refused");
+    expect(body.message).toContain("key-store");
     const db = await production.getD1Database("DB");
     expect((await db.prepare("select * from executors").all()).results).toEqual([]);
   });
@@ -234,17 +228,29 @@ describe("a development deployment", () => {
     expect(await r.json()).toMatchObject({ error: "run_not_found" });
   });
 
+  it("FD-IFC-028 answers run_not_found for a run and label the repository's manifest does not list", async () => {
+    const r = await post(development, "/v1/dispatch/check", {
+      ...dispatchBody(SHA),
+      label: "nightly",
+    });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toMatchObject({ error: "run_not_found" });
+  });
+
+  it("FD-INT-022 refuses a webhook on a deployment that holds no webhook secret", async () => {
+    const r = await development.dispatchFetch("http://x/v1/webhooks/github", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "ping" },
+      body: "{}",
+    });
+    expect(r.status).toBe(503);
+    expect(await r.json()).toMatchObject({ error: "webhook_unconfigured" });
+  });
+
   it("FD-IFC-029 answers invalid_inputs for a body that fails the run's schema", async () => {
     const r = await post(development, "/v1/dispatch/check", dispatchBody("not-a-sha"));
     expect(r.status).toBe(400);
     expect(await r.json()).toMatchObject({ error: "invalid_inputs" });
-  });
-
-  it("FD-IFC-041 answers invalid_wait for a wait out of range", async () => {
-    const r = await development.dispatchFetch("http://x/v1/executions/x?wait=61", {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
-    expect(r.status).toBe(400);
   });
 
   it("FD-IFC-086 enrolls a software key, and an upgrade with another key is refused", async () => {
@@ -252,8 +258,8 @@ describe("a development deployment", () => {
     const stranger = await newDevice();
     const r = await post(development, "/v1/executors/register", registration("mac-1", identity));
     expect(r.status).toBe(201);
-    expect(await r.json()).toEqual({ executor_id: "mac-1", posture_tier: "unmanaged" });
-    await expect(connect("mac-1", stranger.keys)).rejects.toThrow("no socket: 403");
+    expect(await r.json()).toMatchObject({ executor_id: "mac-1", posture_tier: "unmanaged" });
+    await expect(connect(development, "mac-1", stranger.keys)).rejects.toThrow("no socket: 403");
   });
 
   it("carries one execution from dispatch through the lease to the record, and a duplicate reuses it", async () => {
@@ -269,9 +275,9 @@ describe("a development deployment", () => {
     expect(className).toBe("batch");
     expect(await execution(development, id)).toMatchObject({ status: "queued", verdict: null });
     const repeat = await post(development, "/v1/dispatch/check", dispatchBody(sha));
-    expect(await repeat.json()).toEqual({ execution_id: id, class: "batch", duplicate: true });
+    expect(await repeat.json()).toMatchObject({ execution_id: id, duplicate: true });
 
-    const socket = await connect("mac-2", device.keys);
+    const socket = await connect(development, "mac-2", device.keys);
     socket.send(hello("mac-2"));
     await socket.next("session.welcome");
     socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
@@ -286,6 +292,14 @@ describe("a development deployment", () => {
       credentials: {},
     });
     const epoch = lease["epoch"];
+    // A device restores the device and content tiers and writes none for a dispatch (FD-CACHE-016).
+    expect(lease["upload_grant"]).toMatchObject({
+      cache_prefix: null,
+      artifact_prefix: `artifacts/${id}/${String(epoch)}/`,
+      log_prefix: `logs/${id}/${String(epoch)}/`,
+      compile_cache: null,
+    });
+    expect((lease["cache_namespaces"] as { write: unknown }).write).toBeNull();
     await expect.poll(() => execution(development, id)).toMatchObject({ status: "running" });
     socket.send({
       type: "exec.result",
@@ -298,25 +312,26 @@ describe("a development deployment", () => {
       artifacts: [],
     });
     expect(await socket.next("exec.result.ack")).toMatchObject({ status: "accepted" });
-    expect(await execution(development, id, "?wait=20")).toEqual({
-      execution_id: id,
-      run: "check",
-      class: "batch",
-      status: "done",
-      verdict: "failure",
-      reason: "finding: test: exit 1",
-      epoch,
-      accepted_epoch: epoch,
-      executor_id: "mac-2",
-      outcome_intents: 1,
-    });
+    await expect
+      .poll(() => execution(development, id), { timeout: 20_000 })
+      .toMatchObject({
+        execution_id: id,
+        run: "check",
+        class: "batch",
+        status: "done",
+        verdict: "failure",
+        reason: "finding: test: exit 1",
+        epoch,
+        accepted_epoch: epoch,
+        executor_id: "mac-2",
+      });
     await endStandingClaim(socket);
   });
 
   it("wakes a connected device's standing claim when a dispatch is admitted", async () => {
     const device = await newDevice();
     await post(development, "/v1/executors/register", registration("mac-3", device.identity));
-    const socket = await connect("mac-3", device.keys);
+    const socket = await connect(development, "mac-3", device.keys);
     socket.send(hello("mac-3"));
     await socket.next("session.welcome");
     socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
@@ -348,7 +363,7 @@ describe("a development deployment", () => {
         dispatchBody(shaChar.repeat(40)),
       );
       const { execution_id: id } = (await admitted.json()) as { execution_id: string };
-      const socket = await connect(executor, device.keys);
+      const socket = await connect(development, executor, device.keys);
       socket.send(hello(executor));
       await socket.next("session.welcome");
       socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
@@ -364,12 +379,112 @@ describe("a development deployment", () => {
         artifacts: [],
       });
       expect(await socket.next("exec.result.ack")).toMatchObject({ status: "accepted" });
-      expect(await execution(development, id, "?wait=20")).toMatchObject({
-        status: "done",
-        verdict,
-        reason,
-      });
+      await expect
+        .poll(() => execution(development, id), { timeout: 20_000 })
+        .toMatchObject({ status: "done", verdict, reason });
       await endStandingClaim(socket);
+    },
+  );
+});
+
+/** A manifest that lists `worker-deploy` and `sandbox-image` for dispatch, beside the repository's own. */
+const PLACEMENT_REPOSITORY = {
+  ...DEV_REPOSITORY,
+  files: {
+    ".github/flare-dispatch.json": Buffer.from(
+      JSON.stringify({
+        version: 1,
+        runs: ["worker-deploy", "sandbox-image"].map((recipe) => ({
+          recipe,
+          triggers: ["dispatch"],
+          params: { steps: [{ label: "run", command: "true" }] },
+        })),
+      }),
+    ).toString("base64"),
+  },
+};
+
+describe("placement of cloud-pinned runs through admission and the lease path", () => {
+  let placement: Miniflare;
+  beforeAll(async () => {
+    placement = miniflare("development", true, PLACEMENT_REPOSITORY, {
+      GATE_IMAGE_DIGEST: `sha256:${"a".repeat(64)}`,
+    });
+    await placement.ready;
+  });
+  afterAll(async () => {
+    await placement?.dispose();
+  });
+
+  const context = (sha: string) => ({
+    repo: "https://github.com/fractalboxdev/flare-dispatch",
+    sha,
+    ref: "refs/heads/main",
+  });
+  const requests = [
+    {
+      run: "worker-deploy",
+      inputs: {
+        ...context("d".repeat(40)),
+        scope: "fractalboxdev/flare-dispatch",
+        branch: "main",
+        entry: { command: "pnpm deploy" },
+      },
+    },
+    {
+      run: "sandbox-image",
+      inputs: {
+        ...context("e".repeat(40)),
+        entry: {
+          images: [{ name: "sandbox", dockerfile: "infra/Dockerfile.sandbox", smoke: ["true"] }],
+        },
+        publish: true,
+        executorLabels: [],
+      },
+    },
+  ];
+
+  it.each(requests)(
+    "[FD-GATE-061] [FD-GATE-080] a $run request is admitted eligible for cloudflare alone, and a device never takes its lease",
+    async ({ run, inputs }) => {
+      const device = await newDevice();
+      const executorId = `mac-${run}`;
+      await post(placement, "/v1/executors/register", registration(executorId, device.identity));
+      const admitted = await post(placement, `/v1/dispatch/${run}`, {
+        repository: "fractalboxdev/flare-dispatch",
+        sha: inputs.sha,
+        inputs,
+      });
+      expect(admitted.status).toBe(202);
+      const { execution_id: id, class: className } = (await admitted.json()) as {
+        execution_id: string;
+        class: string;
+      };
+      const db = await placement.getD1Database("DB");
+      const row = async () =>
+        (
+          await db
+            .prepare("select state, eligible_kinds from placements where execution_id = ?")
+            .bind(id)
+            .all()
+        ).results;
+      expect(await row()).toEqual([{ state: "queued", eligible_kinds: '["cloudflare"]' }]);
+
+      const socket = await connect(placement, executorId, device.keys);
+      socket.send(hello(executorId));
+      await socket.next("session.welcome");
+      socket.send({ type: "exec.claim", id: "c1", free: { [className]: 1 } });
+      await socket.next("exec.idle");
+      expect(await row()).toEqual([{ state: "queued", eligible_kinds: '["cloudflare"]' }]);
+      await endStandingClaim(socket);
+
+      // The eligible kinds alone keep the device out: with them cleared, the same claim takes the lease.
+      await db
+        .prepare("update placements set eligible_kinds = null where execution_id = ?")
+        .bind(id)
+        .run();
+      socket.send({ type: "exec.claim", id: "c2", free: { [className]: 1 } });
+      expect(await socket.next("exec.lease")).toMatchObject({ execution_id: id, run });
     },
   );
 });

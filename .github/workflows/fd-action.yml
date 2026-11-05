@@ -1,0 +1,27 @@
+# The dispatch action's test suite on every pull request that changes the action, the `fd` package it runs from or the
+# HTTP API declaration its client derives from (FD-IFC-062).
+name: fd-action
+on:
+  pull_request:
+    paths:
+      - "packages/fd/**"
+      - "packages/api/src/declaration.ts"
+      - "packages/api/src/errors.ts"
+      - "packages/api/src/request-id.ts"
+      - "packages/api/src/mcp/**"
+      - ".github/workflows/fd-action.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-fd exec tsc --noEmit
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-fd test

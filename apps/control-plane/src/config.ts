@@ -1,6 +1,8 @@
 // The Worker's bindings, and the two `json` configurations host-cloudflare reads, derived from the profile so one
 // document decides both.
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
+import type { MonitorNamespace } from "@fractalboxdev/flare-dispatch-ops";
+import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
   deviceSlotDefaults,
@@ -14,7 +16,7 @@ import type {
 } from "@fractalboxdev/mameko-host-cloudflare";
 
 /** The bindings of `wrangler.jsonc`, plus the channel and engine namespaces the mameko classes read. */
-export interface ControlPlaneEnv {
+export interface ControlPlaneEnv extends CacheEnv {
   readonly DB: D1Like;
   readonly CHANNEL: {
     idFromName(name: string): unknown;
@@ -22,10 +24,28 @@ export interface ControlPlaneEnv {
   };
   readonly EXECUTION: ExecutorChannelEnv["EXECUTION"];
   readonly EPOCH_ANCHOR: ExecutorChannelEnv["EPOCH_ANCHOR"];
+  /** The one `LivenessMonitor` object the minute tick starts. */
+  readonly MONITOR: MonitorNamespace;
+  /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
+  readonly ALERT_SINK?: string;
   readonly DEPLOYMENT?: string;
   readonly PLANE_ID: string;
-  /** The bearer token of the operator routes. With none set, those routes answer `not_configured`. */
-  readonly OPERATOR_TOKEN?: string;
+  /** The GitHub App's id and private key (a Worker secret); without both, nothing is applied to GitHub. */
+  readonly GITHUB_APP_ID?: string;
+  readonly GITHUB_APP_PRIVATE_KEY?: string;
+  /** The App's slug, whose bot the App commits as. */
+  readonly GITHUB_APP_SLUG?: string;
+  /** The webhook secret (a Worker secret); unset refuses every webhook (FD-INT-022). */
+  readonly WEBHOOK_SECRET?: string;
+  /** `dispatch.oidcAudience`; unset refuses every Actions token. */
+  readonly DISPATCH_OIDC_AUDIENCE?: string;
+  /** The Slack verdict endpoint and its signing secret. */
+  readonly SLACK_URL?: string;
+  readonly SLACK_SECRET?: string;
+  /** The gate image's digest, `sha256:<hex>`, which every lease outside a device host execution names. */
+  readonly GATE_IMAGE_DIGEST?: string;
+  /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */
+  readonly FD_DEV_REPOSITORY?: string;
 }
 
 export const deployment = (env: ControlPlaneEnv): Deployment => deploymentOf(env.DEPLOYMENT);

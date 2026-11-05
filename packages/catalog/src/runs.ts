@@ -1,16 +1,111 @@
-// The run registry, the only list of runs (FD-RUN-063). It holds Node process code, so only the runner entry and its
-// tests import it.
+// The run registry, the only list of runs (FD-RUN-063, MAMEKO-RUN-008). It holds Node process code, so only the
+// runner entry and its tests import it. Each executor kind supplies the Layers of the services its runs require.
 import type { Deployment } from "@fractalboxdev/flare-dispatch-profile";
-import { defineRun } from "@fractalboxdev/mameko-run";
+import { agenticRuns } from "@fractalboxdev/flare-dispatch-agentic/executor";
+import { defineRun, type LocalContent } from "@fractalboxdev/mameko-run";
+import { Effect, Layer } from "effect";
 import { runCheck } from "./check.ts";
-import { checkSpec, classRanks, lookupRun } from "./spec.ts";
-
-export const checkRun = defineRun({ ...checkSpec, requires: [...checkSpec.requires] }, runCheck, {
+import { processGateExec, type GateExec } from "./command.ts";
+import { runDeploySmoke } from "./deploy-smoke.ts";
+import { githubReadLayer, type GithubRead } from "./github-read.ts";
+import {
+  CheckInput,
+  DeploySmokeInput,
+  GateJobInput,
+  OffloadTestInput,
+  OxlintInput,
+  SandboxImageInput,
+  WorkerDeployInput,
+} from "./inputs.ts";
+import { runGateJob } from "./job.ts";
+import { runOffloadTest } from "./offload-test.ts";
+import { runOxlint } from "./oxlint.ts";
+import { localContentArtifacts, type GateArtifacts } from "./ports.ts";
+import { toRunResult } from "./reasons.ts";
+import { runSandboxImage } from "./sandbox-image.ts";
+import {
+  checkSpec,
   classRanks,
-});
+  deploySmokeSpec,
+  gateJobSpec,
+  lookupRun,
+  offloadTestSpec,
+  oxlintSpec,
+  sandboxImageSpec,
+  workerDeploySpec,
+  type ExecutorKind,
+  type RunSpecFields,
+} from "./spec.ts";
+import { runWorkerDeploy } from "./worker-deploy.ts";
 
-const registry = [checkRun];
+const define = <I extends Parameters<typeof defineRun>[0]["input"], R>(
+  spec: RunSpecFields,
+  input: I,
+  body: (input: I["Type"]) => Effect.Effect<Parameters<typeof toRunResult>[0], never, R>,
+) =>
+  defineRun(
+    {
+      ...spec,
+      input,
+      requires: [...spec.requires],
+      labels: [...spec.labels],
+      constraints: [...spec.constraints],
+      grants: { setup: [...spec.grants.setup], agent: [...spec.grants.agent] },
+      outputPaths: [...spec.outputPaths],
+      intentKinds: [...spec.intentKinds],
+    },
+    (i) => body(i).pipe(Effect.map(toRunResult)),
+    { classRanks },
+  );
 
-/** The runs a deployment may execute; a run `lookupRun` refuses is absent, so its lease answers `RunNotInCatalog`. */
+export const checkRun = define(checkSpec, CheckInput, runCheck);
+export const oxlintRun = define(oxlintSpec, OxlintInput, runOxlint);
+export const gateJobRun = define(gateJobSpec, GateJobInput, runGateJob);
+export const offloadTestRun = define(offloadTestSpec, OffloadTestInput, (i) => runOffloadTest(i));
+export const workerDeployRun = define(workerDeploySpec, WorkerDeployInput, runWorkerDeploy);
+export const deploySmokeRun = define(deploySmokeSpec, DeploySmokeInput, (i) => runDeploySmoke(i));
+export const sandboxImageRun = define(sandboxImageSpec, SandboxImageInput, runSandboxImage);
+
+/** Every run, in catalogue order. */
+export const registry = [
+  checkRun,
+  oxlintRun,
+  gateJobRun,
+  offloadTestRun,
+  workerDeployRun,
+  deploySmokeRun,
+  sandboxImageRun,
+  ...agenticRuns,
+] as const;
+
+/** Which executor kinds serve a run, from its catalogue entry. */
+const servedBy = (name: string, kind: ExecutorKind): boolean => {
+  const found = lookupRun("development", name);
+  return found._tag === "Available" && found.entry.executors.includes(kind);
+};
+
+/**
+ * The device executor's Layers: processes on the host, artifacts on the execution's local content store, and GitHub
+ * reads that leave through `fetch` for the egress proxy to credential.
+ */
+export const deviceLayers: Layer.Layer<GateExec | GateArtifacts | GithubRead, never, LocalContent> =
+  Layer.mergeAll(
+    processGateExec,
+    localContentArtifacts,
+    githubReadLayer({ apiBase: "https://api.github.com", fetch: globalThis.fetch }),
+  );
+
+/**
+ * The runs a device may execute under a deployment, each with the device's Layers provided. A run `lookupRun` refuses
+ * or that needs a service the device lacks is absent, so its lease answers `RunNotInCatalog`.
+ */
 export const runsFor = (deployment: Deployment) =>
-  registry.filter((run) => lookupRun(deployment, run.spec.name)._tag === "Available");
+  registry
+    .filter((run) => lookupRun(deployment, run.spec.name)._tag === "Available")
+    .filter((run) => servedBy(run.spec.name, "device"))
+    .map((run) => ({
+      ...run,
+      layer: (run.layer as Layer.Layer<never, never, GateExec | GateArtifacts | GithubRead>).pipe(
+        Layer.provide(deviceLayers),
+      ),
+    }));
