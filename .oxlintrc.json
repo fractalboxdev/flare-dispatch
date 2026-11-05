@@ -9,7 +9,8 @@
     "**/*.tsbuildinfo",
     "actions/flare-dispatch-action/dist/**",
     "apps/docs/**",
-    "apps/dashboard/**"
+    "apps/dashboard/**",
+    "vendor/**"
   ],
   "categories": {
     "correctness": "error"
