@@ -38,6 +38,8 @@ export interface IntakeRun {
   readonly gating: boolean;
   readonly retries: number;
   readonly cooldown?: Cooldown;
+  /** The run declares a grant in its `setup` or `agent` egress phase, which keeps it off a host-process device. */
+  readonly declaresGrant?: boolean;
   /**
    * The placement constraints and capability labels a request with these inputs declares, e.g. `cloud-pinned` for
    * `worker-deploy` and a publishing `sandbox-image` (FD-GATE-061, FD-GATE-080); none when absent.

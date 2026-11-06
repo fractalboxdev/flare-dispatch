@@ -15,8 +15,6 @@ export {
   spendSettings,
   DEVICE_CLASSES,
   developmentRuntimeFields,
-  MAMEKO_DECLARES_DEVELOPMENT_RUNTIME,
-  type BuildOptions,
   type Deployment,
   type Phase,
   type SpendConfig,
@@ -51,6 +49,7 @@ export {
   unlistedDifferences,
   type Difference,
 } from "./reference.ts";
+export type { ConfidentialityMode } from "@fractalboxdev/mameko-kernel";
 export {
   classNamed,
   classPlacement,
@@ -58,9 +57,11 @@ export {
   deliveryOrder,
   drawsReserve,
   eligibleKinds,
+  isolationOf,
   lifecycleKey,
   staleAt,
   type EligibleSet,
+  type IsolationRequest,
   type PlacementRequest,
 } from "./placement.ts";
 export {

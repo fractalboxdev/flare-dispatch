@@ -1,6 +1,10 @@
 // What intake is configured with and the ports it calls: mameko's admission
 // function, class resolution and the error every refusal becomes.
-import { classNamed, type Profile } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  classNamed,
+  type ConfidentialityMode,
+  type Profile,
+} from "@fractalboxdev/flare-dispatch-profile";
 import type { Resolution } from "@fractalboxdev/mameko-coordinator";
 import type {
   D1AdmitInput,
@@ -45,6 +49,12 @@ export interface IntakeSettings {
   readonly dispatchers: readonly string[];
   /** The operator policy: whether a repository may run a run at all (FD-INT-015). */
   readonly allows: (repo: string, run: string) => boolean;
+  /**
+   * A repository's confidentiality mode, which the placement's isolation reads (MAMEKO-LEASE-083). No policy rule sets
+   * one yet, so a deployment answers `unclassified`, mameko's fail-closed default, for every repository it does not
+   * know to be `non-confidential`.
+   */
+  readonly confidentiality: (repo: string) => ConfidentialityMode;
 }
 
 export class IntakeConfig extends Context.Service<IntakeConfig, IntakeSettings>()(

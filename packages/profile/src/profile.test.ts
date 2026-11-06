@@ -739,10 +739,18 @@ describe("deployments", () => {
     expect(accepted.registration).toEqual({ key_stores: ["software"], attestation: "none" });
   });
 
-  it("the development build differs from production only in version and registration", () => {
+  it("[FD-PROF-065] the development build differs from production only in version, registration and the development runtime", () => {
     const { policy_version: _pv, registration: _pr, ...prod } = buildProfile("production");
-    const { policy_version: _dv, registration: _dr, ...dev } = buildProfile("development");
-    expect(dev).toEqual(prod);
+    const {
+      policy_version: _dv,
+      registration: _dr,
+      development_runtime: _drt,
+      ...dev
+    } = buildProfile("development");
+    expect({
+      ...dev,
+      classes: dev.classes.map(({ isolation: _i, ...c }) => c),
+    }).toEqual(prod);
     expect(development.policyVersion).not.toBe(profileDocument.policyVersion);
   });
 

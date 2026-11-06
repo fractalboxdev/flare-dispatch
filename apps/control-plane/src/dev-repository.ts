@@ -13,6 +13,10 @@ export const DevRepository = Schema.Struct({
   head: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
   /** Each captured path's UTF-8 text at `head`, base64-encoded, or null where the path does not exist there. */
   files: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+  /** The repository's confidentiality mode; absent is `unclassified`, mameko's fail-closed default. */
+  confidentiality: Schema.optionalKey(
+    Schema.Literals(["non-confidential", "unclassified", "confidential-model", "confidential-compute"]),
+  ),
 });
 export type DevRepository = typeof DevRepository.Type;
 

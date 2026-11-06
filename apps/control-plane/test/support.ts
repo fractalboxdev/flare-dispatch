@@ -61,10 +61,15 @@ export const newDevice = async () => {
   };
 };
 
-export const registration = (executorId: string, identity: unknown) => ({
+/** A device's registration; a host-process device advertises `isolation:none` (MAMEKO-LEASE-084). */
+export const registration = (
+  executorId: string,
+  identity: unknown,
+  labels: readonly string[] = ["isolation:none"],
+) => ({
   executor_id: executorId,
   identity,
-  labels: [],
+  labels,
   protocol_version: "1",
   code_hash: null,
 });

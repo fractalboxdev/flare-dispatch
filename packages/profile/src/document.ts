@@ -9,11 +9,10 @@
 import { CATEGORIES } from "@fractalboxdev/mameko-coordinator";
 import {
   ConfigurationSource,
-  decodeProfile,
   GateDecisionSource,
   type ProfileDocument,
 } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer, Match } from "effect";
+import { Effect, Layer } from "effect";
 import type { Predicate, Profile } from "./schema.ts";
 
 /**
@@ -539,8 +538,6 @@ export const developmentRuntimeFields = (
 const withDevelopmentRuntime = (base: Profile, deployment: Deployment): Profile => {
   const fields = developmentRuntimeFields(deployment);
   if (fields.development_runtime === undefined) return base;
-  // The two fields are outside the `Profile` type of the vendored mameko; the document carries them only where that
-  // mameko's schema decodes them (`MAMEKO_DECLARES_DEVELOPMENT_RUNTIME`).
   return {
     ...base,
     development_runtime: true,
@@ -549,40 +546,16 @@ const withDevelopmentRuntime = (base: Profile, deployment: Deployment): Profile 
         ? c
         : { ...c, isolation: fields.classIsolation[c.name] },
     ),
-  } as unknown as Profile;
+  };
 };
-
-/**
- * Whether the vendored mameko's `Profile` schema declares `development_runtime` and the class isolation `none`. The
- * schema decodes with excess properties rejected, so a document carrying either field under a mameko that does not
- * declare it fails its decode; the development document carries them only where this holds.
- */
-export const MAMEKO_DECLARES_DEVELOPMENT_RUNTIME: boolean = Match.value(
-  decodeProfile(withDevelopmentRuntime(baseProfile("development", CURRENT_PHASE), "development")),
-).pipe(
-  Match.tag("Accepted", () => true),
-  Match.tag("Rejected", () => false),
-  Match.exhaustive,
-);
-
-/** How `buildProfile` treats the development runtime fields; tests override the probe of the vendored schema. */
-export interface BuildOptions {
-  readonly developmentRuntime?: boolean;
-}
 
 /**
  * The profile for a deployment at a phase. Deployments differ only in the policy version, `registration`,
  * `development_runtime` and each device class's `isolation` (FD-PROF-065); phases differ in the cloud kinds, the
  * placement launcher and constraints, and the attestation of `registration`.
  */
-export const buildProfile = (
-  deployment: Deployment,
-  phase: Phase = CURRENT_PHASE,
-  options: BuildOptions = {},
-): Profile =>
-  (options.developmentRuntime ?? MAMEKO_DECLARES_DEVELOPMENT_RUNTIME)
-    ? withDevelopmentRuntime(baseProfile(deployment, phase), deployment)
-    : baseProfile(deployment, phase);
+export const buildProfile = (deployment: Deployment, phase: Phase = CURRENT_PHASE): Profile =>
+  withDevelopmentRuntime(baseProfile(deployment, phase), deployment);
 
 /** The committed production profile at the current phase. */
 export const profile: Profile = buildProfile("production");

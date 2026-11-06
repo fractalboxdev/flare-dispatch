@@ -27,6 +27,7 @@ const DEV_REPOSITORY = {
   installation: 1,
   default_branch: "main",
   head: "f".repeat(40),
+  confidentiality: "non-confidential",
   files: {
     ".github/flare-dispatch.json": readFileSync(
       join(import.meta.dirname, "../../../.github/flare-dispatch.json"),
@@ -449,7 +450,12 @@ describe("placement of cloud-pinned runs through admission and the lease path", 
     async ({ run, inputs }) => {
       const device = await newDevice();
       const executorId = `mac-${run}`;
-      await post(placement, "/v1/executors/register", registration(executorId, device.identity));
+      // A device whose sandbox meets any isolation, so the eligible kinds alone keep it out.
+      await post(
+        placement,
+        "/v1/executors/register",
+        registration(executorId, device.identity, ["isolation:vm"]),
+      );
       const admitted = await post(placement, `/v1/dispatch/${run}`, {
         repository: "fractalboxdev/flare-dispatch",
         sha: inputs.sha,

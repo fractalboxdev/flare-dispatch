@@ -3,6 +3,7 @@
 // dedup-key and `placements` row is admission's.
 import {
   eligibleKinds,
+  isolationOf,
   type EligibleSet,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
@@ -250,6 +251,14 @@ export const submit = (
       eligibleKinds: placement.kinds,
       constraints: placement.constraints,
       deadlineAt: record.deadlineAtMs,
+      // A class with isolation none reaches a host-process device only for trusted input from a non-confidential
+      // repository and a run with no grant (MAMEKO-LEASE-083, FD-PROF-065).
+      isolation: isolationOf(config.profile, {
+        class: className,
+        untrustedInput: s.trigger === "fork-pr" || labels.includes("untrusted-input"),
+        confidentiality: config.confidentiality(s.repo),
+        declaresGrant: s.run.declaresGrant === true,
+      }),
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the

@@ -1,5 +1,4 @@
-import { decodeProfile } from "@fractalboxdev/mameko-ports";
-import { Effect, Match } from "effect";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { validationContext } from "./registry.ts";
 import {
@@ -8,8 +7,8 @@ import {
   CURRENT_PHASE,
   developmentRuntimeFields,
   DEVICE_CLASSES,
+  isolationOf,
   loadProfile,
-  MAMEKO_DECLARES_DEVELOPMENT_RUNTIME,
   profile,
   profileDocumentFor,
   profileLoader,
@@ -184,10 +183,7 @@ describe("intent kinds, delivery and gate policy", () => {
 describe("development runtime", () => {
   it("[FD-PROF-065] production omits development_runtime and every class's isolation", () => {
     for (const phase of PHASES) {
-      const p = buildProfile("production", phase, {
-        developmentRuntime: true,
-      }) as unknown as Record<string, unknown>;
-      expect(p["development_runtime"]).toBeUndefined();
+      expect(buildProfile("production", phase).development_runtime).toBeUndefined();
       expect(
         buildProfile("production", phase).classes.every((c) => c.isolation === undefined),
       ).toBe(true);
@@ -200,10 +196,7 @@ describe("development runtime", () => {
       development_runtime: true,
       classIsolation: { required: "none", interactive: "none", batch: "none" },
     });
-    const dev = buildProfile("development", 0, { developmentRuntime: true }) as unknown as {
-      development_runtime?: boolean;
-      classes: { name: string; isolation?: string }[];
-    };
+    const dev = buildProfile("development", 0);
     expect(dev.development_runtime).toBe(true);
     expect(dev.classes.filter((c) => c.isolation === "none").map((c) => c.name)).toEqual([
       ...DEVICE_CLASSES,
@@ -211,22 +204,37 @@ describe("development runtime", () => {
     expect(dev.classes.find((c) => c.name === "release")?.isolation).toBeUndefined();
   });
 
-  it("[FD-PROF-065] the fields enter the document only where the vendored mameko schema decodes them", () => {
-    const withFields = buildProfile("development", 0, { developmentRuntime: true });
-    const declared = Match.value(decodeProfile(withFields)).pipe(
-      Match.tag("Accepted", () => true),
-      Match.tag("Rejected", () => false),
-      Match.exhaustive,
-    );
-    expect(MAMEKO_DECLARES_DEVELOPMENT_RUNTIME).toBe(declared);
-    // The committed development document validates under the vendored mameko whichever way the probe answers.
+  it("[FD-PROF-065] the development document validates under the vendored mameko", () => {
     const devContext = { ...validationContext, deployment: "development" as const };
     const loaded = Effect.runSync(
       loadProfile(profileLoader(devContext), profileDocumentFor("development")),
     );
     expect(loaded.policy_version).toBe("flare-dispatch.v2.0-dev");
-    // mameko 8530203's schema declares neither field; a pin that declares them fails this line, and the gate goes.
-    expect(MAMEKO_DECLARES_DEVELOPMENT_RUNTIME).toBe(false);
+    expect(loaded.development_runtime).toBe(true);
+  });
+});
+
+describe("placement isolation", () => {
+  const trusted = {
+    untrustedInput: false,
+    confidentiality: "non-confidential",
+    declaresGrant: false,
+  } as const;
+
+  it("[FD-PROF-065] a development device class admits isolation none only for trusted, non-confidential, grant-free work", () => {
+    const dev = buildProfile("development");
+    expect(isolationOf(dev, { class: "batch", ...trusted })).toBe("none");
+    expect(isolationOf(dev, { class: "batch", ...trusted, untrustedInput: true })).toBe("container");
+    expect(isolationOf(dev, { class: "batch", ...trusted, confidentiality: "unclassified" })).toBe(
+      "container",
+    );
+    expect(isolationOf(dev, { class: "batch", ...trusted, declaresGrant: true })).toBe("container");
+    expect(isolationOf(dev, { class: "release", ...trusted })).toBe("vm");
+  });
+
+  it("[FD-PROF-065] production places every class at vm", () => {
+    for (const c of profile.classes)
+      expect(isolationOf(profile, { class: c.name, ...trusted })).toBe("vm");
   });
 });
 

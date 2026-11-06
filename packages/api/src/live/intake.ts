@@ -2,7 +2,13 @@
 // resolution and mameko's `admitExecution`, which writes the `executions`, dedup-key and `placements` rows (FD-INT-001).
 // FlareDispatch writes only its own `execution_inputs` and `execution_origins` rows.
 import { lookupRun, type CatalogEntry } from "@fractalboxdev/flare-dispatch-catalog";
-import { classNamed, type Deployment, type Profile } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  classNamed,
+  isolationOf,
+  type ConfidentialityMode,
+  type Deployment,
+  type Profile,
+} from "@fractalboxdev/flare-dispatch-profile";
 import { dedupKey, executionId, type DedupRecipe } from "@fractalboxdev/mameko-coordinator";
 import {
   admitExecution,
@@ -40,6 +46,8 @@ export interface D1IntakeOptions {
   readonly profile: Profile;
   readonly installations: InstallationLookup;
   readonly resolveClass: ClassResolver;
+  /** A repository's confidentiality mode; `unclassified`, mameko's fail-closed default, where nothing classifies it. */
+  readonly confidentiality: (repository: string) => ConfidentialityMode;
 }
 
 interface KeyedRequest {
@@ -155,6 +163,14 @@ export const d1Intake = (options: D1IntakeOptions): Layer.Layer<Intake> =>
             onMismatch: idempotent ? "conflict" : "duplicate",
           },
           bounds,
+          // A dispatch carries no fork input; the class, the repository's mode and the run's grants decide whether a
+          // host-process device may take it (MAMEKO-LEASE-083).
+          isolation: isolationOf(profile, {
+            class: className,
+            untrustedInput: false,
+            confidentiality: options.confidentiality(submission.repository),
+            declaresGrant: entry.spec.grants.setup.length + entry.spec.grants.agent.length > 0,
+          }),
         }).pipe(
           Effect.catchTag("IntakeUnavailable", () =>
             dropExecutionRows(db, id).pipe(
