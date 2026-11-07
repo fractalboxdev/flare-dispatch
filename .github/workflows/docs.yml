@@ -12,11 +12,12 @@ name: docs
 # main, so a PR-time signal needs its own workflow. It is cheap: no Docker, no
 # Cloudflare credentials — typedoc over one entry point.
 #
-# `site` builds the documentation site (apps/docs) on every run — the build fails
-# on a broken internal link — and on main deploys it to its Worker, which serves
-# the custom domain apps/docs/wrangler.jsonc routes. Its pages are symbolic links to Markdown across
-# the repo (guides, run catalog, action READMEs, specs), so any path can change
-# the site and the workflow carries no path filter.
+# `site` tests and builds the documentation site (apps/docs) on every run — the
+# build fails on a broken internal link or a page outside the sidebar — and on main
+# deploys it to its Worker, which serves the custom domain apps/docs/wrangler.jsonc
+# routes. Its pages are Markdown across the repo read in place (guides, run catalog,
+# action READMEs, specs), so any path can change the site and the workflow carries
+# no path filter.
 on:
   pull_request:
   push:
@@ -61,6 +62,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run test
       - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run build
       # Static assets only, so the deploy token needs Workers Scripts:Edit and no
       # zone grant: the custom domain is already attached, and wrangler only

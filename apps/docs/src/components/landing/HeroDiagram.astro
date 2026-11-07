@@ -1,8 +1,5 @@
 ---
-// The landing hero's diagram: triggers reach the control plane in the deploying
-// organization's Cloudflare account, which admits each execution under the spend guard and
-// leases it to owned hardware first, then Cloudflare Containers, then AWS. Only a result
-// at the current epoch becomes the check run.
+// The landing hero's diagram: the system's design, one control plane and many executors.
 import Diagram from "./Diagram.astro";
 import { heroShape } from "./diagrams";
 ---
@@ -12,5 +9,5 @@ import { heroShape } from "./diagrams";
   source={heroShape}
   width={640}
   class="hero__diagram"
-  caption="Fig. 0 · control plane on Cloudflare, owned hardware first, cloud spill"
+  caption="Fig. 0 · the design: one control plane, many executors"
 />
