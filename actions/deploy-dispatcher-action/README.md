@@ -103,7 +103,7 @@ jobs:
           wrangler-config: infra/flare-dispatch/wrangler.jsonc
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          health-check-url: https://flare-dispatch-acme.<your>.workers.dev/health
+          health-check-url: https://dispatcher.example.com/health
 ```
 
 Pin the action itself by SHA (not `@main`) — same reason as the upstream pin.

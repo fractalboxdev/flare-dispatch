@@ -12,11 +12,12 @@ name: docs
 # main, so a PR-time signal needs its own workflow. It is cheap: no Docker, no
 # Cloudflare credentials — typedoc over one entry point.
 #
-# `site` builds the documentation site (apps/docs) on every run — the build fails
-# on a broken internal link — and on main deploys it to its Worker, which serves
-# the custom domain apps/docs/wrangler.jsonc routes. Its pages are symbolic links to Markdown across
-# the repo (guides, run catalog, action READMEs, specs), so any path can change
-# the site and the workflow carries no path filter.
+# `site` tests and builds the documentation site (apps/docs) on every run — the
+# build fails on a broken internal link or a page outside the sidebar — and on main
+# deploys it to its Worker, which serves the custom domain apps/docs/wrangler.jsonc
+# routes. Its pages are Markdown across the repo read in place (guides, run catalog,
+# action READMEs, specs), so any path can change the site and the workflow carries
+# no path filter.
 on:
   pull_request:
   push:
@@ -31,6 +32,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # vendor/mameko is a private submodule: a read-only deploy key on that
+      # repository fetches the pinned commit, so a fork's pull request, which
+      # receives no secrets, cannot install the workspace.
+      - name: Fetch vendor/mameko
+        env:
+          MAMEKO_DEPLOY_KEY: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$MAMEKO_DEPLOY_KEY" > ~/.ssh/mameko
+          chmod 600 ~/.ssh/mameko
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/mameko -o IdentitiesOnly=yes" git submodule update --init vendor/mameko
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -55,12 +67,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # vendor/mameko is a private submodule: a read-only deploy key on that
+      # repository fetches the pinned commit, so a fork's pull request, which
+      # receives no secrets, cannot install the workspace.
+      - name: Fetch vendor/mameko
+        env:
+          MAMEKO_DEPLOY_KEY: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$MAMEKO_DEPLOY_KEY" > ~/.ssh/mameko
+          chmod 600 ~/.ssh/mameko
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/mameko -o IdentitiesOnly=yes" git submodule update --init vendor/mameko
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run test
       - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run build
       # Static assets only, so the deploy token needs Workers Scripts:Edit and no
       # zone grant: the custom domain is already attached, and wrangler only

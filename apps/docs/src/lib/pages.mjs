@@ -1,173 +1,183 @@
 // @ts-check
-// Repository Markdown on the site. Every page under src/content/docs/ except the docs
-// overview (docs/index.mdx) is a relative symbolic link into the repository (a guide, a
-// README, a spec), so each file has one copy and reads the same on GitHub and here. This
-// module supplies what Starlight needs and GitHub does not: ids, titles, descriptions,
-// and site URLs for the relative links those files contain.
+// Repository Markdown on the site. Each mount names a repository directory and the route its files
+// serve at; the content loader (src/content.config.ts) reads them in place, so each file has one
+// copy and reads the same on GitHub and here. This module supplies what Starlight needs and GitHub
+// does not: ids, titles, descriptions, and site URLs for the relative links those files contain.
+//
+// It reads the file system at import, relative to its own URL, so a prerendered page cannot import
+// it; src/lib/specs.mjs and src/lib/nav.mjs hold what those pages need.
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildReport } from "./build-report.mjs";
+import { sections, sidebar } from "./nav.mjs";
+import { headingAndLead, linkTarget, pageId, pagePath, titleOf } from "./specs.mjs";
 
-/** Repository root and the docs content root, both real paths. */
+/** The repository root, as a real path. */
 export const REPO = realpathSync(fileURLToPath(new URL("../../../../", import.meta.url)));
-const CONTENT = realpathSync(fileURLToPath(new URL("../content/docs/", import.meta.url)));
 /** Where links to repository files that are not pages point. */
 export const REPO_URL = "https://github.com/fractalboxdev/flare-dispatch";
-
-const slugify = (/** @type {string} */ segment) =>
-  segment
-    .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9_-]/g, "");
+/** The repository's `specs/` directory, with a trailing separator. */
+export const SPECS_DIR = join(REPO, "specs") + sep;
 
 /**
- * Collection id of a docs entry: the path without extension, slugified per segment;
- * `README` and `index` name their directory.
- * @param {{ entry: string, data: Record<string, unknown> }} options
+ * @typedef {object} Mount
+ * @property {string} dir Repository-relative directory.
+ * @property {string} route Route prefix of its pages.
+ * @property {ReadonlyArray<string>} [files] Files to publish; every Markdown file when absent.
  */
-export const pageId = ({ entry, data }) => {
-  if (typeof data.slug === "string") return data.slug;
-  const parts = entry.replace(/\.(md|mdx)$/i, "").split("/");
-  if (/^(readme|index)$/i.test(parts[parts.length - 1] ?? "")) parts.pop();
-  return parts.map(slugify).join("/") || "index";
-};
 
-/** Site path of a collection id. */
-export const pagePath = (/** @type {string} */ id) => (id === "index" ? "/" : `/${id}/`);
+/** @type {ReadonlyArray<Mount>} */
+export const MOUNTS = [
+  { dir: "specs", route: "specs" },
+  { dir: "apps/docs/src/content/docs/docs", route: "docs" },
+  { dir: "apps/docs/substrate", route: "docs/substrate" },
+  { dir: "apps/docs/reference", route: "docs/reference" },
+  { dir: "apps/substrate/specs", route: "docs/design/substrate" },
+  { dir: "runs", route: "docs/runs", files: ["README.md"] },
+  {
+    dir: "actions",
+    route: "docs/actions",
+    files: ["README.md", "flare-dispatch-action/README.md", "deploy-dispatcher-action/README.md"],
+  },
+];
 
 /**
- * Real path of every page → its site path, walked through the symbolic links the
- * content root holds.
- * @type {Map<string, string>}
+ * Every published file of a mount, relative to the mount's directory.
+ * @param {Mount} mount
+ * @returns {ReadonlyArray<string>}
  */
-export const PAGES = (() => {
-  /** @type {Map<string, string>} */
-  const pages = new Map();
-  const walk = (/** @type {string} */ dir) => {
-    for (const name of readdirSync(dir)) {
-      const p = join(dir, name);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (/\.mdx?$/i.test(name)) {
-        const entry = relative(CONTENT, p).split(sep).join("/");
-        pages.set(realpathSync(p), pagePath(pageId({ entry, data: {} })));
-      }
-    }
-  };
-  walk(CONTENT);
-  return pages;
-})();
+const mountFiles = (mount) =>
+  mount.files ??
+  readdirSync(join(REPO, mount.dir), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => f.split(sep).join("/"));
 
 /**
- * Site paths of pages whose source is a README.md. starlight-links-validator keys pages by
- * file name, so it reports links to these directory indexes as invalid.
+ * Real path of every page → its content id.
+ * @type {ReadonlyMap<string, string>}
  */
-export const README_PAGES = new Set([...PAGES].filter(([real]) => /\/README\.md$/i.test(real)).map(([, path]) => path));
+export const PAGES = new Map(
+  MOUNTS.flatMap((mount) =>
+    mountFiles(mount).map((entry) => {
+      /** @type {[string, string]} */
+      const page = [join(REPO, mount.dir, entry), pageId(mount.route, entry)];
+      return page;
+    }),
+  ),
+);
 
-/** Markdown inline syntax to plain text, for titles and descriptions. */
-const plain = (/** @type {string} */ s) =>
-  s
-    .replace(/<[^>]+>/g, "")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[`*_]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-/**
- * The first `# heading` and the first paragraph of a Markdown file.
- * @param {string} text
- */
-export const headingAndLead = (text) => {
-  const lines = text.replace(/^---\n[\s\S]*?\n---\n/, "").split("\n");
-  const h = lines.findIndex((l) => /^# /.test(l));
-  const title = h >= 0 ? plain(lines[h].slice(2)) : undefined;
-  let lead;
-  for (let i = h + 1, para = []; i <= lines.length; i++) {
-    const l = lines[i] ?? "";
-    if (l.trim() === "" || /^(#|```|\||- |\d+\. |>|<)/.test(l)) {
-      if (para.length) {
-        lead = plain(para.join(" "));
-        break;
-      }
-      continue;
-    }
-    para.push(l);
-  }
-  return { title, lead };
+/** The Starlight sidebar. Throws when a page belongs to no section. */
+export const siteSidebar = () => {
+  const readme = readFileSync(join(SPECS_DIR, "README.md"), "utf8");
+  const titles = new Map([...PAGES].map(([file, id]) => [id, titleOf(readFileSync(file, "utf8"))]));
+  return sidebar(sections(readme, [...titles.keys()]), titles);
 };
 
 /** Cuts a description to at most 160 characters at a word boundary. */
 const clip = (/** @type {string} */ s) => (s.length <= 160 ? s : `${s.slice(0, 157).replace(/\s+\S*$/, "")}…`);
 
+/** The banner on every specification page. */
+const SPEC_BANNER = {
+  content:
+    'This page specifies FlareDispatch v2, which is partly built. <a href="/roadmap/">Roadmap and status</a> states what deploys today.',
+};
+
 /**
- * Front matter for an entry: a missing `title` comes from the first `# heading`, a
- * missing `description` from the first paragraph. Entries with their own front matter
- * pass through unchanged.
+ * Front matter for an entry: a missing `title` comes from the first `# heading`, a missing
+ * `description` from the first paragraph, and a specification page carries the v2 banner. A
+ * Markdown file with neither a title nor a heading throws.
  * @template {Record<string, unknown>} T
  * @param {T} data
  * @param {string | undefined} filePath
- * @returns {T}
+ * @param {string} id
  */
-export const pageFrontmatter = (data, filePath) => {
-  if ((data.title && data.description) || !filePath) return data;
-  const { title, lead } = headingAndLead(readFileSync(filePath, "utf8"));
+export const pageFrontmatter = (data, filePath, id) => {
+  const { title, lead } = headingAndLead(filePath ? readFileSync(filePath, "utf8") : "");
+  if (!data.title && !title) throw new Error(`${id}: no first-level heading to take a title from`);
   return {
     ...data,
-    ...(data.title ? {} : { title: title ?? filePath.split("/").pop() }),
+    ...(data.title ? {} : { title }),
     ...(data.description || !lead ? {} : { description: clip(lead) }),
+    ...(id === "specs" || id.startsWith("specs/") ? { banner: SPEC_BANNER } : {}),
   };
 };
 
 const inside = (/** @type {string} */ base, /** @type {string} */ p) => p === base || p.startsWith(base + sep);
 
 /**
- * Site URL of a relative link written in the repository file `realFile`: a page → its
- * site path; a directory whose README is a page → that page; anything else in the
- * repository → GitHub. Returns null for links left alone (absolute, external, anchors).
+ * Site URL of a relative link written in the repository file `realFile`: a page → its site path; a
+ * directory whose README is a page → that page; any other repository file → GitHub. Absolute,
+ * external and same-page links return unchanged, and a relative link that leaves the repository or
+ * names a missing file returns an error.
  * @param {string} href
  * @param {string} realFile
+ * @returns {import("./specs.mjs").LinkTarget}
  */
 export const pageHref = (href, realFile) => {
-  if (!href || /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(href)) return null;
+  if (!href || /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(href)) return { href };
   const [path = "", hash = ""] = href.split(/(?=#)/);
   const target = resolve(dirname(realFile), decodeURI(path));
-  if (!inside(REPO, target)) return null;
-  const isDir = existsSync(target) && statSync(target).isDirectory();
+  if (!inside(REPO, target)) return { error: `${href} leaves the repository` };
+  if (!existsSync(target)) return { error: `${href} names a missing file` };
+  const isDir = statSync(target).isDirectory();
   const page = PAGES.get(isDir ? resolve(target, "README.md") : target);
-  if (page) return `${page}${hash}`;
+  if (page) return { href: `${pagePath(page)}${hash}` };
   const repoRel = relative(REPO, target).split(sep).join("/");
-  return `${REPO_URL}/${isDir ? "tree" : "blob"}/main/${repoRel}${hash}`;
+  return { href: `${REPO_URL}/${isDir ? "tree" : "blob"}/main/${repoRel}${hash}` };
 };
 
-/** Real path of a repository page, or null for the docs overview and non-files. */
-const repoFile = (/** @type {URL | undefined} */ fileURL) => {
-  if (!fileURL) return null;
+/**
+ * The target of a link in the page at `realFile`. Links in `specs/` stay in `specs/`, under
+ * `linkTarget`; links in every other page follow `pageHref`.
+ * @param {string} href
+ * @param {string} realFile
+ * @returns {import("./specs.mjs").LinkTarget}
+ */
+const resolveLink = (href, realFile) =>
+  realFile.startsWith(SPECS_DIR)
+    ? linkTarget(href, realFile.slice(SPECS_DIR.length), (rel) => existsSync(join(SPECS_DIR, rel)))
+    : pageHref(href, realFile);
+
+/** Real path of the file behind a Markdown render, or undefined for a render with no file. */
+const realFile = (/** @type {URL | undefined} */ fileURL) => {
+  if (!fileURL) return undefined;
   try {
-    const real = realpathSync(fileURLToPath(fileURL));
-    return inside(REPO, real) && !inside(CONTENT, real) ? real : null;
+    return realpathSync(fileURLToPath(fileURL));
   } catch {
-    return null;
+    return undefined;
   }
 };
 
 /**
- * Sätteri hast plugin factory: in repository files, rewrites relative links to site URLs
- * so links written for GitHub work on the site, and drops the first `# heading`, because
- * Starlight renders the title from front matter. The docs overview is left alone.
+ * Sätteri hast plugin factory for pages: rewrites relative links to site URLs so links written for
+ * GitHub work on the site, records a broken link in the build report, and drops the first
+ * `# heading`, because Starlight renders the title from front matter.
  * @param {{ fileURL?: URL }} ctx
  */
 export const repoLinks = ({ fileURL } = {}) => {
-  const real = repoFile(fileURL);
-  if (!real) return null;
+  const file = realFile(fileURL);
+  const id = file === undefined ? undefined : PAGES.get(file);
+  if (file === undefined || id === undefined) return null;
   let droppedTitle = false;
   return {
     name: "flare-dispatch-docs-repo-links",
+    /** @param {unknown} _root @param {any} ctx */
+    before(_root, ctx) {
+      // starlight-links-validator keys a page by its path under src/content/docs unless its front
+      // matter names a slug. A mounted file sits outside that directory.
+      const frontmatter = ctx.data.astro?.frontmatter;
+      if (frontmatter) frontmatter.slug = id;
+    },
     element: [
       {
         filter: ["a"],
         /** @param {any} node @param {any} ctx */
         visit(node, ctx) {
-          const href = pageHref(String(node.properties?.href ?? ""), real);
-          if (href) ctx.setProperty(node, "href", href);
+          const href = String(node.properties?.href ?? "");
+          const target = resolveLink(href, file);
+          if ("error" in target) buildReport().problems.push(`${relative(REPO, file)}: broken link: ${target.error}`);
+          else if (target.href !== href) ctx.setProperty(node, "href", target.href);
         },
       },
       {

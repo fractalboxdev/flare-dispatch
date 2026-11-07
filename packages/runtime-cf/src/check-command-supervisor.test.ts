@@ -56,18 +56,27 @@ describe("native check command supervisor", () => {
     const command = `node -e 'process.on("SIGTERM",()=>{});require("node:fs").writeFileSync("${dir}/ready","ready");setInterval(()=>{},1000)' >/dev/null 2>&1 & echo $!; while [ ! -f '${dir}/ready' ]; do sleep 0.01; done; exit 0`;
     const delayed = `const realKill=process.kill.bind(process);process.kill=(pid,signal)=>{if(signal==='SIGKILL'){setTimeout(()=>{try{realKill(pid,signal)}catch{}},200);return true;}return realKill(pid,signal);};`;
     const child = spawn(process.execPath, ["-e", delayed + commandSupervisor(handle, command)]);
+    let exited = false;
     const closed = new Promise<void>((resolve, reject) => {
       child.on("error", reject);
-      child.on("close", () => resolve());
+      child.on("close", () => {
+        exited = true;
+        resolve();
+      });
     });
     let descendant = 0;
     try {
+      // Read the receipt as soon as it appears, so the descendant check runs
+      // while a delayed KILL could still be pending. The supervisor publishes
+      // before it exits, so a read that starts after its exit is final.
       let terminal;
-      for (let attempt = 0; attempt < 500 && terminal === undefined; attempt++) {
+      while (terminal === undefined) {
+        const final = exited;
         try {
           terminal = JSON.parse(await readFile(`${dir}/terminal.json`, "utf8"));
         } catch (error) {
           if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+          if (final) break;
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
       }
@@ -151,6 +160,25 @@ describe("native check command supervisor", () => {
       }
     },
   );
+  it("a Darwin probe that reads an exiting process as ?E waits for it and publishes", async () => {
+    const handle = { id: `native-${crypto.randomUUID()}`, container: { id: "explicit" }, fingerprint: "native",
+      startedAt: Date.now(), deadline: Date.now() + 5000 };
+    // `ps` answers `?E` for every process while the group exists and nothing once it is gone.
+    const override = `Object.defineProperty(process,'platform',{value:'darwin'});const cp=require('node:child_process'),realSpawn=cp.spawn;let ownedPid;cp.spawn=(...args)=>{const child=realSpawn(...args);ownedPid=child.pid;return child};cp.spawnSync=()=>{try{process.kill(-ownedPid,0)}catch{return {status:1,stdout:''}}return {status:0,stdout:ownedPid+' ?E'}};`;
+    const child = spawn(process.execPath, ["-e", override + commandSupervisor(handle, "sleep 30 >/dev/null 2>&1 & echo $!; sleep 0.05; exit 0")]);
+    let descendant = 0;
+    try {
+      const actual = await new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
+      descendant = Number((await readFile(`${commandSpool(handle)}/stdout`, "utf8")).trim());
+      expect(actual).toBe(0);
+      expect(JSON.parse(await readFile(`${commandSpool(handle)}/terminal.json`, "utf8"))).toMatchObject({ exitCode: 0, timedOut: false });
+      expect(descendant).toBeGreaterThan(0);
+      expect(await stopped(descendant)).toBe(true);
+    } finally {
+      if (descendant > 0) { try { process.kill(descendant, "SIGKILL"); } catch {} }
+      await rm(commandSpool(handle), { recursive: true, force: true });
+    }
+  });
   it("a successful parent exit cleans redirected descendants before publishing its receipt", async () => {
     const handle = {
       id: `native-${crypto.randomUUID()}`,

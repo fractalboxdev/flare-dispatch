@@ -6,6 +6,8 @@ BYOC CI/CD that offloads the expensive half of GitHub Actions onto a Cloudflare 
 
 Working monorepo: Effect-TS DSL (`packages/core`), capability layers (`packages/runtime-cf`), run definitions (`runs/`), the dispatcher Worker (`apps/dispatcher`), the substrate (`apps/substrate`), and the bundled CLIs (`packages/demo-agent`, `packages/review-agent`). Deployed via `wrangler deploy` with container images built in-repo (`infra/Dockerfile.sandbox*`); CI runs `pnpm lint && pnpm typecheck`, then `wrangler deploy --dry-run` for both workers — so a Worker config that names missing code fails before anything deploys — then `pnpm test` (`deploy.yml`).
 
+v2 lives beside v1 on Effect 4: the control plane Worker (`apps/control-plane`), the run catalogue (`packages/catalog`) and `pnpm dogfood` (`packages/dogfood`), which runs this repository's CI on your own machine through mameko's control plane and device executor. That run executes on the host, so only the `development` deployment reaches it ([README](packages/dogfood/README.md)).
+
 ## Architecture
 
 Runs are **typed Effect-TS programs**, not YAML — composable steps, tagged errors, exhaustive matching — written against a layered DSL:

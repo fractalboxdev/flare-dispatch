@@ -23,4 +23,6 @@ export default [
   "runs",
   "apps/dispatcher",
   "apps/substrate",
+  "apps/control-plane",
+  "apps/docs",
 ];

@@ -1,7 +1,7 @@
 ---
-// The shell for the pages outside Starlight: the landing page (/) and /benchmarks/. The
-// theme shares Starlight's `starlight-theme` storage key, so a choice made here holds on
-// /docs/ and back.
+// The shell for the pages outside Starlight: /, /roadmap/ and /benchmarks/. The
+// pages under /docs/ and /specs/ are Starlight. The theme shares Starlight's `starlight-theme`
+// storage key, so a choice made here holds on those pages and back.
 import "../styles/landing.css";
 import { REPO_URL } from "../lib/llms";
 
@@ -36,7 +36,10 @@ const jsonLd = {
 
 const nav = [
   { href: "/docs/", label: "Docs", current: path.startsWith("/docs") },
-  { href: "/docs/runs/", label: "Runs", current: false, secondary: true },
+  { href: "/specs/", label: "Specs", current: path.startsWith("/specs") },
+  { href: "/specs/runs/gate/", label: "Recipes", current: false, secondary: true },
+  { href: "/specs/adr/", label: "ADRs", current: false, secondary: true },
+  { href: "/roadmap/", label: "Roadmap", current: path.startsWith("/roadmap") },
   { href: "/benchmarks/", label: "Benchmarks", current: path.startsWith("/benchmarks") },
 ];
 
@@ -44,18 +47,20 @@ const footer = [
   {
     heading: "Get started",
     links: [
-      { href: "/docs/", label: "Overview" },
-      { href: "/docs/actions/flare-dispatch-action/", label: "Offload a job" },
-      { href: "/docs/actions/deploy-dispatcher-action/", label: "Deploy a Dispatcher" },
-      { href: "/docs/runs/", label: "Run catalog" },
+      { href: "/docs/", label: "Documentation" },
+      { href: "/specs/", label: "Specifications" },
+      { href: "/specs/architecture/", label: "Architecture" },
+      { href: "/roadmap/", label: "Roadmap and status" },
     ],
   },
   {
     heading: "Reference",
     links: [
-      { href: "/docs/substrate/", label: "Substrate" },
-      { href: "/docs/reference/substrate-contract/", label: "API reference" },
-      { href: "/benchmarks/", label: "Benchmarks" },
+      { href: "/specs/run-model/", label: "Run model" },
+      { href: "/specs/spend/", label: "Spend guard" },
+      { href: "/specs/profile/", label: "Profile" },
+      { href: "/specs/adr/", label: "Decision records" },
+      { href: "/benchmarks/", label: "Modeled run costs" },
       { href: "/llms.txt", label: "llms.txt" },
     ],
   },
@@ -156,7 +161,7 @@ const footer = [
           }
         </div>
         <div class="site-footer__stamp">
-          <span>BYOC CI/CD on Cloudflare</span>
+          <span>Run CI, tasks and agents anywhere. Securely.</span>
           <span>repo / <a href={REPO_URL} target="_blank" rel="noreferrer noopener">{REPO_URL.replace("https://", "")}</a></span>
         </div>
       </div>

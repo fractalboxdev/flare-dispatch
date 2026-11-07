@@ -1,272 +1,396 @@
 ---
+// The page is three pillars: run anywhere, secure, and CI, tasks and agents. It carries no status:
+// /roadmap/ reports what exists, and test/specs.test.ts rejects status labels here. So the plain
+// present tense states only what exists, and anything else is phrased as design ("designed so
+// that", "built to"). A claim that needs a status label to stay true does not belong on this page.
 import { Code } from "@astrojs/starlight/components";
 import Landing from "../layouts/Landing.astro";
 import HeroDiagram from "../components/landing/HeroDiagram.astro";
-import BillingTimeline from "../components/landing/BillingTimeline.astro";
-import { INSTANCE_SPECS, containerMicroUsdPerSec } from "../data/benchmarks";
-import { REPO_URL } from "../lib/llms";
+import Diagram from "../components/landing/Diagram.astro";
+import { fencedLease, lifecycle, placement } from "../components/landing/diagrams";
 
+const TITLE = "Run CI, tasks and agents anywhere. Securely. | FlareDispatch";
 const DESCRIPTION =
-  "BYOC CI/CD that runs agentic code review, Playwright e2e, acceptance suites, sharded matrices and security scans on Cloudflare — billed per vCPU-second in your own account. Runs are typed Effect-TS programs, not YAML.";
+  "Run CI, tasks and agents anywhere. Securely. FlareDispatch is designed to place work on your machines, Cloudflare and other clouds, from your own account.";
 
-// §02 cost card. GitHub-hosted Linux x64 per-minute rates
-// (docs.github.com/en/billing/reference/actions-runner-pricing); the FlareDispatch figure
-// prices the vCPU-active minutes on a standard-2 container through the cost engine that
-// meters real executions (src/data/benchmarks.ts).
-const RUN_MINUTES = 10;
-const ACTIVE_SECONDS = 120;
-const instance = INSTANCE_SPECS["standard-2"];
-const fdUsd = (ACTIVE_SECONDS * containerMicroUsdPerSec("standard-2")) / 1_000_000;
-const runners = [
-  { label: "ubuntu-latest", sub: "2-core · GHA", perMin: 0.006 },
-  { label: "4-core larger runner", sub: "4-core · GHA", perMin: 0.012 },
-  { label: "8-core larger runner", sub: "8-core · GHA", perMin: 0.022 },
-];
-const minRatio = Math.floor((runners[0].perMin * RUN_MINUTES) / fdUsd);
-const maxRatio = Math.floor((runners[runners.length - 1].perMin * RUN_MINUTES) / fdUsd);
-
-const value = [
+const pillars = [
   {
-    id: "01 / Cost",
-    title: "Pay per vCPU-second",
-    body: "Heavy compute bills at Cloudflare Container rates — per vCPU-second, scaled to zero between runs — instead of per GitHub Actions minute. The jobs that dominate a CI bill move to the cheapest place to run them.",
+    id: "01.01 / Run anywhere",
+    title: "Your machines, Cloudflare, other clouds",
+    body: "Built to place each job where it fits: machines you own for routine work, Cloudflare Containers and other cloud executors where capacity matters.",
+    href: "#run-anywhere",
   },
   {
-    id: "02 / Headroom",
-    title: "No platform ceilings",
-    body: "No 6-hour job limit: each run declares its own wall-time ceiling. No 10 GB cache cap: the dependency cache lives in your R2 bucket. Artifact retention is yours to set.",
+    id: "01.02 / Secure",
+    title: "Signed requests, fenced results",
+    body: "The Dispatcher verifies every dispatch and webhook signature. The device path is designed so that a machine proves its key and a stale result never counts.",
+    href: "#secure",
   },
   {
-    id: "03 / Fit",
-    title: "Install the App, or keep Actions",
-    body: "In webhook mode the GitHub App fires runs on every PR with no workflow file and zero Actions minutes. In Action mode a workflow step dispatches the run, for jobs that interleave with the rest of a pipeline. Either way the verdict lands as a check-run.",
+    id: "01.03 / CI, tasks and agents",
+    title: "Three kinds of work, one run contract",
+    body: "Gates and test suites, scheduled tasks and model-driven agents are all typed programs, with the same triggers, durable steps and logs.",
+    href: "#work",
   },
 ];
 
-const capabilities = [
+const wins = [
+  { dim: "Warm state: deps, builds, browsers", owned: "Stays on local disk between runs", cloud: "Starts cold each execution", verdict: "Owned" },
+  { dim: "Burst fan-out", owned: "Fixed slot count", cloud: "Up to the pool's admission cap", verdict: "Cloud" },
+  { dim: "Untrusted code (fork PRs)", owned: "Not eligible", cloud: "Disposable container", verdict: "Cloud only" },
+  { dim: "Releases", owned: "Not eligible", cloud: "Cold from the commit", verdict: "Cloud only" },
+];
+
+const rules = [
   {
-    id: "05.01 / Agentic review",
-    title: "Review runs that read the whole diff",
-    body: "pr-review fans a diff out to per-domain reviewers, or one generalist, and posts a single verdict with a severity table and per-finding blob links.",
+    title: "Designed so that fork PR code stays off owned hardware.",
+    body: "Owned devices are meant for code from people with write access.",
   },
   {
-    id: "05.02 / Writeback",
-    title: "Propose the fix back as a PR",
-    body: "self-heal-pr runs a coding agent in a credential-free sandbox and opens a draft PR only when the repro goes green; spec-drift-pr and improve-pr file their proposals the same way. The Worker holds the App key, never the agent.",
+    title: "Designed so that releases build in the cloud.",
+    body: "A release starts cold from the commit, on a disposable executor.",
   },
   {
-    id: "05.03 / Model routing",
-    title: "Provider-agnostic model gateway",
-    body: "Model calls route to Workers AI, Anthropic or Bedrock, chosen per run from KV config with no redeploy. Bedrock signs with SigV4, with no long-lived AWS keys in the Worker.",
+    title: "Designed so that one copy runs.",
+    body: "Owned-first placement is a delayed cloud claim, not a race: the first claim wins the epoch.",
+  },
+];
+
+const queue = [
+  { title: "Named reasons.", body: "A red check is designed to say why it is red: budget, capacity, deadline or halt." },
+  { title: "Four classes.", body: "Work is designed to carry a class, from release to batch, that decides how long it waits." },
+  { title: "One verdict.", body: "The check is designed to report the result of the current epoch only." },
+];
+
+const secure = [
+  {
+    id: "03.01 / Requests",
+    title: "Signed triggers",
+    body: "The Dispatcher verifies the HMAC signature of each dispatch and webhook. Log links carry a signed token, and Cloudflare Access gates the dashboard.",
   },
   {
-    id: "05.04 / Admission control",
-    title: "Bursts queue instead of failing",
-    body: "A FIFO admission gate caps in-flight runs at the pool size, and the check-run shows the queue position while a run waits. Runs that must not overlap declare a serial group.",
+    id: "03.02 / Machines",
+    title: "Device identity",
+    body: "Designed so that a machine enrolls by key and signs each connection, and the control plane verifies the signature against the enrolled key.",
   },
   {
-    id: "05.05 / Session replay",
-    title: "Scrub the walkthrough inline",
-    body: "product-demo drives a deployed app over CDP with session recording; reviewers replay it in an rrweb player linked from the check-run and the result email.",
+    id: "03.03 / Credentials",
+    title: "Least privilege",
+    body: "Designed so that a job holds no secret of the executor's. An optional substrate runs containers with no internet access and grants egress through reviewed profiles.",
+  },
+];
+
+const work = [
+  {
+    id: "04.01 / CI",
+    title: "check, oxlint, offload-test",
+    body: "check runs one repository-chosen command in a container and reports a check run. oxlint is the install-free Oxc gate. offload-test runs a suite and uploads its log to R2.",
   },
   {
-    id: "05.06 / Observability signals",
-    title: "Bring your own APM",
-    body: "ci-triage-pr reads the vendor-neutral signals/v1 shape from a small adapter on your side — Datadog, SigNoz, HyperDX or your own — so no observability key sits in the Dispatcher.",
+    id: "04.02 / CI",
+    title: "playwright-e2e, matrix-fanout",
+    body: "playwright-e2e runs one container per shard against Cloudflare Browser Rendering. matrix-fanout and vitest-shard split a suite across containers.",
+  },
+  {
+    id: "04.03 / Tasks",
+    title: "finops-audit, product-demo",
+    body: "A task here is a run that gates nothing. finops-audit runs weekly on a cron schedule and proposes a draft PR; product-demo records a demo daily.",
+  },
+  {
+    id: "04.04 / Tasks",
+    title: "refresh-fixtures",
+    body: "refresh-fixtures regenerates files in a credential-free container, then the Worker proposes the diff as a PR.",
+  },
+  {
+    id: "04.05 / Agents",
+    title: "pr-review",
+    body: "A Worker-side review engine calls a model through the model gateway capability and reviews a pull request.",
+  },
+  {
+    id: "04.06 / Agents",
+    title: "self-heal-pr, ci-triage-pr, spec-drift-pr",
+    body: "self-heal-pr runs a coding agent in a credential-free sandbox, re-runs the repro and opens a draft PR only when the repro goes green.",
   },
 ];
 
 const bets = [
   {
-    statement: "<strong>Progressive</strong> offloading.",
-    body: "Move CI one job at a time, heaviest first. GitHub Actions keeps the cheap jobs and the PR gate; nothing is all-or-nothing.",
+    statement: "Cloudflare <strong>schedules</strong>; machines execute.",
+    body: "The control plane is designed to own every guarantee, deadline and check, so a device's uptime never becomes the system's.",
+  },
+  {
+    statement: "<strong>Queue</strong>, then fail.",
+    body: "Designed so that a budget, capacity, deadline or halt outcome never concludes success or neutral.",
   },
   {
     statement: "Runs are <strong>typed programs</strong>, not YAML.",
-    body: "A run is an Effect-TS program: Schema-typed inputs and outputs, durable steps, tagged errors, exhaustive matching. Fork it, edit it, unit-test it without booting a container.",
+    body: "A run is an Effect program with schema-typed inputs, durable steps and tagged errors.",
   },
   {
     statement: "BYOC <strong>by construction</strong>.",
-    body: "Each organization deploys its own Dispatcher and GitHub App into its own Cloudflare account. There is no multi-tenant operator and no hosted service to trust.",
+    body: "Each organization deploys its own Dispatcher into its own Cloudflare account. There is no multi-tenant service to trust.",
   },
 ];
 
-const workflowYaml = `# .github/workflows/ci.yml — Action mode
-- uses: fractalboxdev/flare-dispatch/actions/flare-dispatch-action@<sha>
-  with:
-    run: offload-test
-    endpoint: \${{ vars.FLAREDISPATCH_ENDPOINT }}
-    hmac-secret: \${{ secrets.FLAREDISPATCH_HMAC }}
-    inputs: |
-      { "repo": "\${{ github.repository }}", "sha": "\${{ github.sha }}", "command": "pnpm test" }`;
-
-const runTs = `// runs/oxlint.ts, condensed — webhook mode, no workflow file
-export const oxlint = defineRun({
-  name: "oxlint",
-  triggers: [{ event: "pull_request", actions: ["opened", "synchronize"], inputs }],
-  inputs: OxlintInput,   // Schema.Struct({ repo, sha, args, version, … })
-  outputs: OxlintOutput, // Schema.Struct({ exitCode, durationMs, logUri, skipped })
-  limits: { maxDurationSec: 600 },
-
+const checkTs = `// runs/check.ts, condensed
+export const check = defineRun({
+  name: "check",
+  inputs: CheckInput,
+  outputs: CheckOutput,
   run: (input) =>
     Effect.gen(function* () {
       const { container, dir } = yield* step("checkout", () =>
-        workspace({ repo: input.repo, sha: input.sha, install: false }),
+        workspace({ repo: input.repo, sha: input.sha, image: input.image, install: input.install }),
       );
-      const result = yield* step("exec", () =>
-        sandbox.exec({ container, cwd: dir, command: "npx --yes oxlint@1.79.0" }),
-      );
+      const { result } = yield* durableExec({ name: "exec", workspace: { container, dir }, exec });
       const logUri = yield* step("upload-log", () =>
-        artifact.upload({ name: "oxlint.log", path: result.logPath, signedUrlTTL: "30 days" }),
+        artifact.upload({ name: "check.log", path: result.logPath, signedUrlTTL: "30 days" }),
       );
-      if (result.exitCode !== 0) {
-        return yield* Effect.fail(new AcceptanceFailed({ exitCode: result.exitCode, summaryMd: logUri }));
-      }
-      return { exitCode: 0, durationMs: result.durationMs, logUri, skipped: false };
+      return { exitCode: result.exitCode, durationMs: result.durationMs, logUri };
     }),
 });`;
 
 const snippets = [
-  { id: "workflow", label: "ci.yml", lang: "yaml" as const, code: workflowYaml, blurb: "Dispatch a registered run from a workflow step; the verdict arrives as the flare-dispatch/offload-test check-run.", href: "/docs/actions/flare-dispatch-action/" },
-  { id: "run", label: "oxlint.ts", lang: "ts" as const, code: runTs, blurb: "A run is a program: typed contract, durable steps, a tagged failure that turns the check red.", href: "/docs/runs/" },
+  {
+    id: "check",
+    label: "check.ts",
+    code: checkTs,
+    blurb: "A run is a typed program: durable steps, a container workspace and a log in R2.",
+    href: "/docs/runs/",
+    link: "Run catalog →",
+  },
 ];
 ---
 
-<Landing title="FlareDispatch — offload the expensive half of GitHub Actions onto Cloudflare" description={DESCRIPTION}>
+<Landing title={TITLE} description={DESCRIPTION}>
   <section class="hero">
     <div class="container">
       <div class="hero__meta">
         <span class="section-marker reveal" data-delay="1">§00 / Manifest</span>
         <span class="section-marker reveal" data-delay="1">BYOC · open source</span>
       </div>
-      <h1 class="hero__title reveal" data-delay="2">
-        Offload the <em>expensive&#160;half</em> of GitHub&#160;Actions onto Cloudflare.
-      </h1>
-      <p class="hero__sub reveal" data-delay="3">
-        FlareDispatch moves agentic code review, Playwright e2e, acceptance suites, sharded matrices and
-        security scans off GitHub-hosted runners and onto Cloudflare — billed per vCPU-second in your own
-        account. Trigger a run from a workflow step or a cron schedule, or install the GitHub App and let
-        runs fire on every PR with zero Actions minutes.
-      </p>
-      <div class="hero__cta reveal" data-delay="4">
-        <a class="btn" href="/docs/actions/flare-dispatch-action/">Offload a job</a>
-        <a class="btn btn--ghost" href="/docs/">Read the docs</a>
-        <a class="btn btn--ghost" href="/docs/runs/">Run catalog</a>
+      <div class="hero__grid">
+        <div>
+          <h1 class="hero__title reveal" data-delay="2">
+            Run CI, tasks and agents <em>anywhere</em>. Securely.
+          </h1>
+          <p class="hero__sub reveal" data-delay="3">
+            FlareDispatch is built to run CI, scheduled tasks and agents on your own machines, on Cloudflare and on
+            other cloud executors, from a control plane you deploy into your own account.
+          </p>
+          <div class="hero__cta reveal" data-delay="4">
+            <a class="btn" href="/docs/">Read the docs</a>
+            <a class="btn btn--ghost" href="/specs/">Read the specs</a>
+            <a class="btn btn--ghost" href="/specs/adr/">Decision records</a>
+          </div>
+          <p class="more reveal" data-delay="4"><a href="/roadmap/">Roadmap and status →</a></p>
+        </div>
+        <div class="reveal" data-delay="3">
+          <HeroDiagram />
+        </div>
       </div>
     </div>
-    <HeroDiagram />
   </section>
 
   <section class="tenets">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§01 / Why it pays off</span>
-        <h2>Heavy CI at the price of raw serverless compute.</h2>
+        <span class="section-marker">§01 / Three pillars</span>
+        <h2>Where work runs, how it stays safe, and what it can be.</h2>
+        <p class="section-lede">
+          FlareDispatch is CI/CD you deploy into your own Cloudflare account. Its design builds on
+          <a href="https://github.com/fractalboxdev/mameko">mameko</a>, the libraries that accept work, select an
+          executor and record results.
+        </p>
       </div>
       <div class="tenets__grid">
         {
-          value.map((v) => (
-            <article class="tenet">
-              <span class="tenet__id">{v.id}</span>
-              <h3 class="tenet__title">{v.title}</h3>
-              <p class="tenet__rationale">{v.body}</p>
-            </article>
+          pillars.map((p) => (
+            <a class="tenet tenet--link" href={p.href}>
+              <span class="tenet__id">{p.id}</span>
+              <h3 class="tenet__title">{p.title}</h3>
+              <p class="tenet__rationale">{p.body}</p>
+            </a>
           ))
         }
       </div>
     </div>
   </section>
 
-  <section class="bottleneck">
+  <section class="tenets" id="run-anywhere">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§02 / The bottleneck</span>
-        <h2>Most of a code-review run is the model thinking, not your CPU working.</h2>
-        <p class="bottleneck__lede">
-          An agentic review is mostly LLM I/O: the run waits on the model while the vCPU idles. GitHub
-          Actions bills that wait by the wall-clock minute. FlareDispatch bills container vCPU-seconds, and
-          the model wait runs in a Workflow step that accrues no container time — so a run pays for its <em>active</em>
-          slivers, here about a fifth of it.
+        <span class="section-marker">§02 / Run anywhere</span>
+        <h2>Your own machines, Cloudflare and other cloud executors.</h2>
+        <p class="section-lede">
+          An ephemeral runner re-downloads dependencies and rebuilds unchanged packages on every job. The design keeps
+          that state warm on machines you own and uses the cloud for what those machines cannot do.
         </p>
       </div>
-      <div class="bottleneck__split">
-        <BillingTimeline />
-        <aside class="cost-card" aria-label={`Sample cost for one ${RUN_MINUTES}-minute code-review run`}>
-          <span class="cost-card__eyebrow">Sample cost · one {RUN_MINUTES}-min review</span>
-          <table class="cost-card__table">
-            <thead>
-              <tr>
-                <th>Runner</th>
-                <th>$&#8239;/&#8239;min</th>
-                <th>/ run</th>
-              </tr>
-            </thead>
-            <tbody>
-              {
-                runners.map((r) => (
-                  <tr>
-                    <th scope="row">
-                      <code>{r.label}</code>
-                      <span class="cost-card__sub">{r.sub}</span>
-                    </th>
-                    <td>{r.perMin.toFixed(3)}</td>
-                    <td>${(r.perMin * RUN_MINUTES).toFixed(3)}</td>
-                  </tr>
-                ))
-              }
-              <tr class="cost-card__total">
-                <th scope="row">
-                  <code>flare-dispatch</code>
-                  <span class="cost-card__sub">~{ACTIVE_SECONDS / 60}&#8239;min active · standard-2</span>
-                </th>
-                <td>vCPU-s</td>
-                <td class="cost-card__win">~${fdUsd.toFixed(3)}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p class="cost-card__verdict">{minRatio}–{maxRatio}× cheaper per run</p>
-          <p class="cost-card__note">
-            Review is I/O-bound and never needs the cores, yet GitHub bills all {RUN_MINUTES}&#8239;minutes at
-            the runner's rate, so a bigger runner only widens the gap. The FlareDispatch figure prices {ACTIVE_SECONDS / 60}&#8239;minutes
-            on a {instance.vcpu}-vCPU, {instance.gib}&#8239;GiB container. CI compute only — model
-            tokens cost the same either way. GitHub rates are Linux x64 list prices; container rates come from
-            the <a href={`${REPO_URL}/blob/main/packages/core/src/cost.ts`}>rate card</a>.
-          </p>
-        </aside>
+      <div class="compare__wrap compare__wrap--spaced">
+        <table class="compare__table">
+          <caption class="sr-only">How the design divides work between owned hardware and the cloud</caption>
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>Owned hardware</th>
+              <th>Cloudflare Containers</th>
+              <th>Designed to run on</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              wins.map((w) => (
+                <tr>
+                  <td>{w.dim}</td>
+                  <td>{w.owned}</td>
+                  <td>{w.cloud}</td>
+                  <td class:list={[w.verdict === "Owned" ? "compare__yes" : "compare__cloud"]}>{w.verdict}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
       </div>
     </div>
   </section>
 
-  <section class="compare">
+  <section class="band">
     <div class="container">
-      <div class="compare__intro">
-        <div>
-          <span class="section-marker">§03 / Positioning</span>
-          <h2>Every other option gives up one of three things.</h2>
-        </div>
-        <p>
-          Hosted runners are easy but bill per minute under hard ceilings. Self-hosted and hybrid runners lift
-          the ceilings and hand you a fleet to operate. FlareDispatch runs on serverless Cloudflare primitives
-          in an account you already own.
+      <div class="tenets__header">
+        <span class="section-marker">§02.1 / Placement</span>
+        <h2>Placement is designed so that rules hold before any deadline does.</h2>
+        <p class="section-lede">
+          In the design, rules remove executors from the eligible set first; a deadline then decides between owned
+          hardware and the cloud.
         </p>
       </div>
-      <div class="compare__wrap">
-        <table class="compare__table">
-          <thead>
-            <tr>
-              <th>Heavy-CI option</th>
-              <th>Serverless, scale-to-zero compute</th>
-              <th>No 6&#8239;h / 10&#8239;GB ceilings</th>
-              <th>No runner fleet to operate</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td>GHA hosted runners</td><td class="compare__no">—</td><td class="compare__no">—</td><td class="compare__yes">✓</td></tr>
-            <tr><td>Self-hosted runners</td><td class="compare__no">—</td><td class="compare__yes">✓</td><td class="compare__no">—</td></tr>
-            <tr><td>Buildkite Agent (hybrid)</td><td class="compare__no">—</td><td class="compare__yes">✓</td><td class="compare__no">—</td></tr>
-            <tr class="is-flare-dispatch"><td>FlareDispatch</td><td class="compare__yes">✓</td><td class="compare__yes">✓</td><td class="compare__yes">✓</td></tr>
-          </tbody>
-        </table>
+      <div class="split">
+        <Diagram id="placement" source={placement} width={520} caption="Fig. 1 · the design: rules first, then the deadline" />
+        <div>
+          <ol class="rules">
+            {
+              rules.map((r, i) => (
+                <li class="rule-item">
+                  <span class="rule-item__num">§02.1.{i + 1}</span>
+                  <div>
+                    <p class="rule-item__title">{r.title}</p>
+                    <p class="rule-item__body">{r.body}</p>
+                  </div>
+                </li>
+              ))
+            }
+          </ol>
+          <p class="more">
+            <a href="/specs/profile/">Profile and placement →</a>
+            <a href="/specs/executors/">Executors →</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§02.2 / Queue, then fail</span>
+        <h2>Designed so that no budget or capacity outcome turns a check green.</h2>
+        <p class="section-lede">
+          GitHub counts a <code>neutral</code> conclusion as passing for a required check, so the design waits, then
+          fails with a reason, rather than concluding <code>neutral</code>.
+        </p>
+      </div>
+      <div class="split split--reverse">
+        <div>
+          <ul class="facts">
+            {
+              queue.map((q) => (
+                <li>
+                  <strong>{q.title}</strong> {q.body}
+                </li>
+              ))
+            }
+          </ul>
+          <p class="more">
+            <a href="/specs/profile/">Classes and admission →</a>
+            <a href="/specs/github-output/">GitHub output →</a>
+          </p>
+        </div>
+        <Diagram id="lifecycle" source={lifecycle} width={560} caption="Fig. 2 · the design: an execution, intake to verdict" />
+      </div>
+    </div>
+  </section>
+
+  <section class="tenets" id="secure">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§03 / Secure</span>
+        <h2>Dispatches and webhooks prove who sent them.</h2>
+        <p class="section-lede">
+          The Dispatcher runs in your account, and it rejects a dispatch or webhook whose signature does not verify.
+          The design extends the same rule to machines.
+        </p>
+      </div>
+      <div class="tenets__grid">
+        {
+          secure.map((s) => (
+            <article class="tenet">
+              <span class="tenet__id">{s.id}</span>
+              <h3 class="tenet__title">{s.title}</h3>
+              <p class="tenet__rationale">{s.body}</p>
+            </article>
+          ))
+        }
+      </div>
+      <p class="more">
+        <a href="/specs/isolation-egress/">Isolation and egress design →</a>
+        <a href="/docs/substrate/grant-profiles/">Grant profiles →</a>
+      </p>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§03.1 / Fenced leases</span>
+        <h2>Designed so that a lost machine costs time, never a wrong check.</h2>
+        <p class="section-lede">
+          A lease carries an epoch. The design reclaims a lease when its heartbeat stops, restarts the work under the
+          next epoch and accepts a result only at the current one.
+        </p>
+      </div>
+      <div class="split">
+        <Diagram id="fenced-lease" source={fencedLease} width={560} caption="Fig. 3 · the design: reclaim, restart, reject the stale result" />
+        <div>
+          <p class="more">
+            <a href="/specs/executor-protocol/">Executor protocol →</a>
+            <a href="/specs/adr/0007-fenced-execution-leases/">Why fenced leases →</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tenets" id="work">
+    <div class="container">
+      <div class="tenets__header">
+        <span class="section-marker">§04 / CI, tasks and agents</span>
+        <h2>Gates, scheduled tasks and agents share one run contract.</h2>
+        <p class="section-lede">
+          The catalog defines all three kinds of work through one <code>defineRun</code> contract, on the same trigger
+          sources and durable steps.
+        </p>
+      </div>
+      <div class="tenets__grid">
+        {
+          work.map((r) => (
+            <a class="tenet tenet--link" href="/docs/runs/">
+              <span class="tenet__id">{r.id}</span>
+              <h3 class="tenet__title">{r.title}</h3>
+              <p class="tenet__rationale">{r.body}</p>
+            </a>
+          ))
+        }
       </div>
     </div>
   </section>
@@ -274,8 +398,8 @@ const snippets = [
   <section class="snippets">
     <div class="container">
       <div class="tenets__header">
-        <span class="section-marker">§04 / The code</span>
-        <h2>One step to dispatch. One program to run.</h2>
+        <span class="section-marker">§04.1 / The code</span>
+        <h2>One program per run.</h2>
       </div>
       <div class="snippets__widget">
         <div class="snippets__tabs" role="tablist" aria-label="Code samples">
@@ -308,30 +432,10 @@ const snippets = [
             >
               <div class="snippets__blurb">
                 <span>{s.blurb}</span>
-                <a href={s.href}>Docs →</a>
+                <a href={s.href}>{s.link}</a>
               </div>
-              <Code code={s.code} lang={s.lang} wrap />
+              <Code code={s.code} lang="ts" wrap />
             </div>
-          ))
-        }
-      </div>
-    </div>
-  </section>
-
-  <section class="tenets">
-    <div class="container">
-      <div class="tenets__header">
-        <span class="section-marker">§05 / Platform</span>
-        <h2>More than runs: the platform underneath.</h2>
-      </div>
-      <div class="tenets__grid">
-        {
-          capabilities.map((c) => (
-            <article class="tenet">
-              <span class="tenet__id">{c.id}</span>
-              <h3 class="tenet__title">{c.title}</h3>
-              <p class="tenet__rationale">{c.body}</p>
-            </article>
           ))
         }
       </div>
@@ -341,14 +445,14 @@ const snippets = [
   <section class="manifesto">
     <div class="container">
       <div class="manifesto__header">
-        <span class="section-marker">§06 / Design philosophy</span>
-        <h2>Three bets the design rests on.</h2>
+        <span class="section-marker">§05 / Design philosophy</span>
+        <h2>Four bets the design rests on.</h2>
       </div>
       <ol class="manifesto__list">
         {
           bets.map((b, i) => (
             <li class="manifesto__item">
-              <span class="manifesto__num">§06.0{i + 1}</span>
+              <span class="manifesto__num">§05.0{i + 1}</span>
               <div>
                 <p class="manifesto__statement" set:html={b.statement} />
                 <p class="manifesto__body">{b.body}</p>
@@ -363,13 +467,13 @@ const snippets = [
   <section class="container">
     <div class="cta-band">
       <div>
-        <span class="section-marker">§07 / Start</span>
-        <h2>One Dispatcher per org, in your own Cloudflare account.</h2>
+        <span class="section-marker">§06 / Start</span>
+        <h2>One Dispatcher per organization, in your own Cloudflare account.</h2>
       </div>
       <div class="cta-band__actions">
-        <a class="btn" href="/docs/actions/deploy-dispatcher-action/">Deploy a Dispatcher</a>
-        <a class="btn btn--ghost" href="/docs/actions/flare-dispatch-action/">Offload a job</a>
-        <a class="btn btn--ghost" href="/benchmarks/">Benchmarks</a>
+        <a class="btn" href="/docs/">Read the docs</a>
+        <a class="btn btn--ghost" href="/specs/">Read the specs</a>
+        <a class="btn btn--ghost" href="/benchmarks/">Modeled run costs</a>
       </div>
     </div>
   </section>

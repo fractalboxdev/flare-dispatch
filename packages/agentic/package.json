@@ -1,0 +1,29 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-agentic",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FlareDispatch's agentic recipes, the staged write and its gate, the pr.propose applier, the workers-ai and bedrock model routes, and the local registration, reuse policy and writeback gate ports on mameko.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./executor": "./src/executor.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalboxdev/flare-dispatch-profile": "workspace:*",
+    "@fractalboxdev/mameko-gateway": "workspace:*",
+    "@fractalboxdev/mameko-kernel": "workspace:*",
+    "@fractalboxdev/mameko-ports": "workspace:*",
+    "@fractalboxdev/mameko-protocol": "workspace:*",
+    "@fractalboxdev/mameko-run": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "fast-check": "^3.23.2",
+    "vitest": "^3.2.0"
+  }
+}
