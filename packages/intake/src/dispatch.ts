@@ -209,21 +209,29 @@ export const handleDispatch = (runName: string, request: Request) =>
     const inputs = yield* decodeOr(run.input, "invalid_inputs")(body.inputs ?? {});
     yield* checkSignals(body.signals, body.inputs);
 
-    const installation =
-      body.installation_id ??
-      (yield* github
-        .installation(repo)
-        .pipe(
-          Effect.catchTag("GithubUncredentialed", () =>
-            Effect.fail(
-              intakeError(
-                422,
-                "installation_not_found",
-                `no installation of the GitHub App covers ${repo}`,
-              ),
-            ),
-          ),
-        ));
+    // The App's own installation for the repository decides; a body `installation_id` is accepted only when it names
+    // that installation, or when the deployment holds no App credential and so cannot look one up.
+    const looked = yield* github.installation(repo).pipe(
+      Effect.map((id): number | null => id),
+      Effect.catchTag("GithubUncredentialed", () => Effect.succeed(null)),
+    );
+    if (looked !== null && body.installation_id !== undefined && body.installation_id !== looked)
+      return yield* Effect.fail(
+        intakeError(
+          403,
+          "installation_mismatch",
+          `installation ${body.installation_id} does not cover ${repo}`,
+        ),
+      );
+    const installation = looked ?? body.installation_id;
+    if (installation === undefined)
+      return yield* Effect.fail(
+        intakeError(
+          422,
+          "installation_not_found",
+          `no installation of the GitHub App covers ${repo}`,
+        ),
+      );
     const label = body.label ?? null;
     const defaultBranch = yield* github.defaultBranch(repo);
     yield* listedEntry(run, repo, label, defaultBranch);
@@ -233,6 +241,26 @@ export const handleDispatch = (runName: string, request: Request) =>
       body.sha ??
       (body.ref === undefined ? claims?.sha : undefined) ??
       (yield* github.branchHead(repo, branchOf(ref)));
+    // An Actions token vouches for one commit. Any other commit it names must be the head of a branch of this
+    // repository; otherwise a workflow could dispatch a fork's commit as trusted, outside the fork-pr trigger.
+    if (
+      claims !== null &&
+      claims.sha !== undefined &&
+      body.sha !== undefined &&
+      body.sha !== claims.sha
+    ) {
+      const branchSha = ref.startsWith("refs/heads/")
+        ? yield* github.branchHead(repo, branchOf(ref))
+        : undefined;
+      if (branchSha !== body.sha)
+        return yield* Effect.fail(
+          intakeError(
+            403,
+            "sha_mismatch",
+            `the token vouches for ${claims.sha}; ${body.sha} is not the head of a branch ${ref} of ${repo}`,
+          ),
+        );
+    }
     const admitted = yield* submit(
       submission({
         run,

@@ -447,7 +447,7 @@ export const listedDifferences = (phase: Phase): readonly string[] => [
         "placement.required_labels",
       ]
     : []),
-  ...(phase < 1 ? ["registration.attestation"] : []),
+  ...(phase < 1 ? ["registration.key_stores", "registration.attestation"] : []),
 ];
 
 const listed = (path: string, prefixes: readonly string[]): boolean =>

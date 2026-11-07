@@ -195,21 +195,23 @@ const placement = (p: Profile): Rejection[] => {
 };
 
 /**
- * A production deployment admits only secure-enclave keys, with the attestation verifier from phase 1 and without it
- * before (FD-PROF-052, FD-PROF-064).
+ * A production deployment admits only attested secure-enclave keys from phase 1. Before phase 1 no verifier exists,
+ * so it declares the key it can check, `software` without attestation: a hardware key store without a verifier is a
+ * label nothing checks (FD-PROF-052, FD-PROF-064).
  */
 const registration = (p: Profile, deployment: Deployment, phase: Phase): Rejection[] => {
   if (deployment === "development") return [];
   const stores = p.registration.key_stores;
+  const store = phase >= 1 ? "secure-enclave" : "software";
   const attestation = phase >= 1 ? "verifier" : "none";
   return [
-    ...(stores.length === 1 && stores[0] === "secure-enclave"
+    ...(stores.length === 1 && stores[0] === store
       ? []
       : [
           {
             item: "registration",
             path: "registration.key_stores",
-            reason: "a production deployment admits only secure-enclave keys",
+            reason: `a production deployment at phase ${phase} admits only ${store} keys`,
           },
         ]),
     ...(p.registration.attestation === attestation
