@@ -15,13 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
         with:
-          submodules: true
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
       - run: pnpm --filter @fractalboxdev/flare-dispatch-fd exec tsc --noEmit
       - run: pnpm --filter @fractalboxdev/flare-dispatch-fd test
