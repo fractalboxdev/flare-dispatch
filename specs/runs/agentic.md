@@ -144,13 +144,13 @@ flowchart LR
 
 | Recipe | Trigger | Default class | Model calls | Output |
 | --- | --- | --- | --- | --- |
-| `pr-review` | Pull request opened, synchronized or ready for review; Actions dispatch | `interactive` | `bulk` retrieval and pre-pass, `judgment` reviewers | One review comment, check-run annotations |
+| `pr-review` | Pull request opened, synchronized or ready for review; Actions dispatch | `interactive` | `transform` retrieval and pre-pass, `judgment` reviewers | One review comment, check-run annotations |
 | `improve-pr` | Cron or dispatch, per dimension in the repo manifest | `batch` | `judgment` interpretation and edits | Draft pull request |
 | `self-heal-pr` | Dispatch with an `incident/v1` pack | `interactive` | `judgment` edit loop | Draft pull request on a green verify |
 | `spec-drift-pr` | Cron, default `0 5 * * *` | `batch` | `judgment` reconciliation | Rolling draft pull request on `specs/**` |
-| `triage-issues` | Cron or dispatch | `batch` | `bulk` classification | Labels, templated comments, duplicate close |
-| `triage-prs` | Cron or dispatch | `batch` | `bulk` digest lines | One digest staged write |
-| `ci-triage-pr` | Cron, default `0 6 * * *` | `batch` | `bulk` classification, `judgment` write-up | Rolling draft pull request |
+| `triage-issues` | Cron or dispatch | `batch` | `transform` classification | Labels, templated comments, duplicate close |
+| `triage-prs` | Cron or dispatch | `batch` | `transform` digest lines | One digest staged write |
+| `ci-triage-pr` | Cron, default `0 6 * * *` | `batch` | `transform` classification, `judgment` write-up | Rolling draft pull request |
 | `release-notes` | Cron per repo manifest, default `0 9 * * 1`, or dispatch; approval of its release pull request starts the publish execution | `batch` | `judgment` notes | Release pull request; the publish execution returns `release.draft` and `release.publish` intents |
 
 ## Requirements
@@ -260,13 +260,13 @@ flowchart LR
 
 ### `ci-triage-pr`
 
-- **FD-AGT-071** · phase 2 · `V-UNIT` — `ci-triage-pr` must read failed executions from the executions table and their failed job logs over the last 24 h, classify each failure with a `bulk` call and write one triage report with a `judgment` call.
+- **FD-AGT-071** · phase 2 · `V-UNIT` — `ci-triage-pr` must read failed executions from the executions table and their failed job logs over the last 24 h, classify each failure with a `transform` call and write one triage report with a `judgment` call.
 - **FD-AGT-072** · phase 2 · `V-UNIT` — `ci-triage-pr` must stage the report as `.flare-dispatch/ci-triage-<YYYY-MM-DD>.md` on the branch `flare-dispatch/ci-triage` with the path allowlist `.flare-dispatch/**`.
 - **FD-AGT-073** · phase 2 · `V-UNIT` — When the executions read succeeds and returns no failure in the window, `ci-triage-pr` must return a `pr.close` intent for its open pull request, which the drain refuses while that branch carries a commit the GitHub App did not author ([../github-output.md](../github-output.md) FD-GH-087).
 
 ### `triage-issues`
 
-- **FD-AGT-074** · phase 3 · `V-UNIT` — `triage-issues` must classify each open issue with one `bulk` call into exactly one of `duplicate`, `needs-repro`, `feature`, `question`, `bug-with-repro`, `bug-without-repro` and `unclassified`, considering at most 40 duplicate candidates.
+- **FD-AGT-074** · phase 3 · `V-UNIT` — `triage-issues` must classify each open issue with one `transform` call into exactly one of `duplicate`, `needs-repro`, `feature`, `question`, `bug-with-repro`, `bug-without-repro` and `unclassified`, considering at most 40 duplicate candidates.
 - **FD-AGT-075** · phase 3 · `V-UNIT` — `triage-issues` must map verdicts to intents: `duplicate` to a templated comment naming the original and a close as duplicate; `needs-repro` to the label `triage:needs-repro` and a templated request; `feature` and `question` to `triage:not-actionable`; `bug-with-repro` to `triage:fix-pending` with the repro and the reporter's `author_association`; `bug-without-repro` to `triage:needs-human`; `unclassified` to no intent.
 - **FD-AGT-076** · phase 3 · `V-UNIT` — `triage-issues` must build every comment from a template, taking from model output only the verdict and the original issue number.
 - **FD-AGT-077** · phase 3 · `V-UNIT` — `triage-issues` must close an issue only for the verdict `duplicate`.
@@ -274,7 +274,7 @@ flowchart LR
 ### `triage-prs`
 
 - **FD-AGT-078** · phase 3 · `V-UNIT` — `triage-prs` must derive each open pull request's state (check health, review state, days since last update, labels) without a model call, and route it to exactly one of `auto-merge`, `nudge`, `unstick` and `ask`.
-- **FD-AGT-079** · phase 3 · `V-UNIT` — `triage-prs` may write each pull request's digest line with one `bulk` call, and the route must not depend on that call's output.
+- **FD-AGT-079** · phase 3 · `V-UNIT` — `triage-prs` may write each pull request's digest line with one `transform` call, and the route must not depend on that call's output.
 - **FD-AGT-080** · phase 3 · `V-UNIT` — `triage-prs` must report its routes as one staged write to the repository its repo manifest names, with the path allowlist `.flare-dispatch/triage/**`, and must return no merge, assignment or close intent.
 
 ### `release-notes`

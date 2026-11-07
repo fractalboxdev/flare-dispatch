@@ -341,7 +341,7 @@ describe("model client", () => {
             const model = yield* ModelClient;
             return yield* model.complete({
               callSite: "c",
-              tier: "bulk",
+              tier: "transform",
               messages: [{ role: "user", content }],
             });
           }).pipe(Effect.provide(layer)),
@@ -546,7 +546,7 @@ describe("ci-triage-pr", () => {
             ciTriageRun.layer,
             Layer.mergeAll(
               fakeServices(rec, {
-                model: (r) => (r.tier === "bulk" ? "flaky" : "## Patterns\nOne flaky test."),
+                model: (r) => (r.tier === "transform" ? "flaky" : "## Patterns\nOne flaky test."),
               }),
               executions,
             ),
@@ -557,13 +557,13 @@ describe("ci-triage-pr", () => {
     ).then((result) => ({ result, rec, reads }));
   };
 
-  it("FD-AGT-071 reads the last 24 h of failures and their logs, classifies each with bulk and writes up with judgment", async () => {
+  it("FD-AGT-071 reads the last 24 h of failures and their logs, classifies each with transform and writes up with judgment", async () => {
     const { rec, reads } = await run([
       { executionId: "x1", run: "check", reason: "finding: test", finishedAt: NOW - 1000 },
       { executionId: "x2", run: "check", reason: "infra: checkout", finishedAt: NOW - 2000 },
     ]);
     expect(reads).toEqual([NOW - 24 * 3_600_000]);
-    expect(rec.modelCalls.map((c) => c.tier)).toEqual(["bulk", "bulk", "judgment"]);
+    expect(rec.modelCalls.map((c) => c.tier)).toEqual(["transform", "transform", "judgment"]);
     expect(rec.modelCalls[0]?.messages[1]?.content).toContain("log of x1");
   });
 

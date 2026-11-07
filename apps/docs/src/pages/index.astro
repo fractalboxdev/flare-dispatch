@@ -84,9 +84,9 @@ const failures = [
 
 const routing = [
   { step: "Confidentiality", body: "A confidential-model or confidential-compute repository never calls a hosted model, and never falls back to one." },
-  { step: "Task tier", body: "Judgment calls (review, plan, write code) go hosted. Bulk calls (classify, extract, summarize, embed) run locally when their input is on owned hardware." },
-  { step: "Data location", body: "A bulk call inside an overflowed cloud step uses a small hosted model instead of pulling data back to the device." },
-  { step: "Budget", body: "Hosted calls reserve their allowance inside the class line. At the line, bulk calls drop to a local model and judgment calls conclude failure, budget." },
+  { step: "Task tier", body: "Judgment calls (review, plan, write code) go hosted. Transform calls (classify, extract, summarize, embed) run locally when their input is on owned hardware." },
+  { step: "Data location", body: "A transform call inside an overflowed cloud step uses a small hosted model instead of pulling data back to the device." },
+  { step: "Budget", body: "Hosted calls reserve their allowance inside the class line. At the line, transform calls drop to a local model and judgment calls conclude failure, budget." },
 ];
 
 const tiers = [
@@ -123,7 +123,7 @@ const recipes = [
   {
     id: "08.05 / Agentic",
     title: "ci-triage-pr",
-    body: "A bulk model classifies the failed job from its logs; a judgment model writes the fix proposal.",
+    body: "A transform model classifies the failed job from its logs; a judgment model writes the fix proposal.",
     href: "/docs/runs/agentic/",
   },
   {
