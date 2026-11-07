@@ -30,4 +30,4 @@ substrate's source.
 
 Design records live under [`apps/substrate/specs`](../../substrate/specs/README.md): the platform
 spec states *what*, the ADRs carry *why*. These guides state *how*, and cite the ADR wherever a
-decision is load-bearing.
+decision is critical.

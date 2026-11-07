@@ -24,4 +24,5 @@ export default [
   "apps/dispatcher",
   "apps/substrate",
   "apps/control-plane",
+  "apps/docs",
 ];
