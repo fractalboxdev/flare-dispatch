@@ -195,21 +195,23 @@ const placement = (p: Profile): Rejection[] => {
 };
 
 /**
- * A production deployment admits only secure-enclave keys, with the attestation verifier from phase 1 and without it
- * before (FD-PROF-052, FD-PROF-064).
+ * A production deployment admits only attested secure-enclave keys from phase 1. Before phase 1 no verifier exists,
+ * so it declares the key it can check, `software` without attestation: a hardware key store without a verifier is a
+ * label nothing checks (FD-PROF-052, FD-PROF-064).
  */
 const registration = (p: Profile, deployment: Deployment, phase: Phase): Rejection[] => {
   if (deployment === "development") return [];
   const stores = p.registration.key_stores;
+  const store = phase >= 1 ? "secure-enclave" : "software";
   const attestation = phase >= 1 ? "verifier" : "none";
   return [
-    ...(stores.length === 1 && stores[0] === "secure-enclave"
+    ...(stores.length === 1 && stores[0] === store
       ? []
       : [
           {
             item: "registration",
             path: "registration.key_stores",
-            reason: "a production deployment admits only secure-enclave keys",
+            reason: `a production deployment at phase ${phase} admits only ${store} keys`,
           },
         ]),
     ...(p.registration.attestation === attestation
@@ -262,7 +264,7 @@ export const portUses = (p: Profile): PortUses => ({
   attestationVerifier: p.registration.attestation === "verifier",
 });
 
-/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-043 rejects. */
+/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-045 rejects. */
 export const missingPorts = (p: Profile, supplied: readonly string[]): readonly string[] =>
   missingApplicationPorts(portUses(p), supplied);
 
@@ -286,7 +288,7 @@ const context = (p: Profile, c: ValidationContext): Rejection[] =>
     runs: c.runs,
   }).map(({ path, reason }) => ({ item: path.split(".")[0] ?? path, path, reason }));
 
-/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-032). */
+/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-033). */
 const reasonKinds = (p: Profile): Rejection[] =>
   validateReasonKinds({
     declared: p.reason_kinds ?? {},

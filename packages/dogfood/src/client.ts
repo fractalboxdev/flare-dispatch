@@ -25,7 +25,8 @@ export const ExecutionView = Schema.Struct({
   epoch: Schema.NullOr(Schema.Number),
   accepted_epoch: Schema.NullOr(Schema.Number),
   executor_id: Schema.NullOr(Schema.String),
-  outcome_intents: Schema.Number,
+  /** The check-run conclusion the verdict maps to (specs/github-output.md). */
+  conclusion: Schema.NullOr(Schema.String),
 });
 export type ExecutionView = typeof ExecutionView.Type;
 
@@ -45,12 +46,11 @@ export interface ControlPlaneClient {
   }) => Effect.Effect<void, ControlPlaneError>;
   readonly dispatchCheck: (input: {
     readonly repository: string;
+    /** The commit, which the commit-scoped dedup key and the manifest read take (FD-INT-009). */
+    readonly sha: string;
     readonly inputs: CheckInput;
   }) => Effect.Effect<typeof Dispatched.Type, ControlPlaneError>;
-  readonly execution: (
-    id: string,
-    waitSec: number,
-  ) => Effect.Effect<ExecutionView, ControlPlaneError>;
+  readonly execution: (id: string) => Effect.Effect<ExecutionView, ControlPlaneError>;
 }
 
 const call = <S extends Schema.Decoder<unknown>>(
@@ -78,10 +78,12 @@ const call = <S extends Schema.Decoder<unknown>>(
 export const health = (origin: string) =>
   Effect.suspend(() => call(Health, `${origin}/health`, { signal: AbortSignal.timeout(2_000) }));
 
-export const makeClient = (origin: string, operatorToken: string): ControlPlaneClient => {
+/** A client that sends the operator's Access JWT, as the Access edge would. */
+export const makeClient = (origin: string, accessJwt: string): ControlPlaneClient => {
+  const identity = { "cf-access-jwt-assertion": accessJwt };
   const post = (body: unknown): RequestInit => ({
     method: "POST",
-    headers: { authorization: `Bearer ${operatorToken}`, "content-type": "application/json" },
+    headers: { ...identity, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   return {
@@ -98,9 +100,9 @@ export const makeClient = (origin: string, operatorToken: string): ControlPlaneC
         }),
       ).pipe(Effect.asVoid),
     dispatchCheck: (body) => call(Dispatched, `${origin}/v1/dispatch/check`, post(body)),
-    execution: (id, waitSec) =>
-      call(ExecutionView, `${origin}/v1/executions/${id}?wait=${waitSec}`, {
-        headers: { authorization: `Bearer ${operatorToken}` },
+    execution: (id) =>
+      call(ExecutionView, `${origin}/v1/executions/${encodeURIComponent(id)}`, {
+        headers: identity,
       }),
   };
 };

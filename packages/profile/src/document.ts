@@ -9,10 +9,11 @@
 import { CATEGORIES } from "@fractalboxdev/mameko-coordinator";
 import {
   ConfigurationSource,
+  decodeProfile,
   GateDecisionSource,
   type ProfileDocument,
 } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Match } from "effect";
 import type { Predicate, Profile } from "./schema.ts";
 
 /**
@@ -24,7 +25,7 @@ export type Deployment = "production" | "development";
 /**
  * The roadmap phase the document serves. A kind, launcher or verifier enters the profile only in the phase whose
  * Layer the dispatcher supplies, because mameko rejects a control plane that uses a port with no Layer
- * (FD-PROF-064, MAMEKO-HOST-043).
+ * (FD-PROF-064, MAMEKO-HOST-045).
  */
 export type Phase = 0 | 1 | 2 | 3 | 4;
 
@@ -32,9 +33,9 @@ export type Phase = 0 | 1 | 2 | 3 | 4;
 export const CURRENT_PHASE: Phase = 0;
 
 const registrationFor = (deployment: Deployment, phase: Phase): Profile["registration"] =>
-  deployment === "development"
+  deployment === "development" || phase === 0
     ? { key_stores: ["software"], attestation: "none" }
-    : { key_stores: ["secure-enclave"], attestation: phase >= 1 ? "verifier" : "none" };
+    : { key_stores: ["secure-enclave"], attestation: "verifier" };
 
 /**
  * Each deployment has its own version, and a phase after 0 adds its own suffix: mameko's loader rejects one version
@@ -156,6 +157,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     coalesce_key: "executionProgressKey",
     delivery_tier: "progress",
     applied_for: "any",
+    priority: 0,
     void_after_outcome: true,
     in_order: true,
     effect_class: "adoptable",
@@ -164,6 +166,7 @@ const intent_kinds: Profile["intent_kinds"] = {
   },
   "check.conclude": {
     origin: "control-plane",
+    on: "terminal",
     delivery_tier: "outcome",
     applied_for: "any",
     in_order: true,
@@ -396,11 +399,8 @@ export const poolAdmissionCaps: Readonly<Record<string, { readonly admission_cap
   control: { admission_cap: 16 },
 };
 
-/**
- * The profile for a deployment at a phase. Deployments differ only in the policy version and `registration`; phases
- * differ in the cloud kinds, the placement launcher and constraints, and the attestation of `registration`.
- */
-export const buildProfile = (deployment: Deployment, phase: Phase = CURRENT_PHASE): Profile => ({
+/** The profile before the development runtime fields of FD-PROF-065. */
+const baseProfile = (deployment: Deployment, phase: Phase): Profile => ({
   policy_version: policyVersionFor(deployment, phase),
   classes: classesFor(phase),
   /** Per-class caps inside each Container pool's admission cap (FD-PROF-032). */
@@ -426,7 +426,12 @@ export const buildProfile = (deployment: Deployment, phase: Phase = CURRENT_PHAS
   supersession_key: "supersessionKey",
   member_partition: true,
   dedup_recipes: [
-    { name: "idempotency-key", binding: "idempotencyKeyRecipe" },
+    {
+      name: "idempotency-key",
+      binding: "idempotencyKeyRecipe",
+      digest: "dispatchBodyDigest",
+      on_mismatch: "conflict",
+    },
     { name: "follow-on", binding: "followOnRecipe" },
     { name: "commit", binding: "commitRecipe", total: true },
   ],
@@ -504,15 +509,85 @@ export const buildProfile = (deployment: Deployment, phase: Phase = CURRENT_PHAS
   },
   /**
    * The result-acceptance check rejects a result with `provenance: <check>`, and the execution concludes `failure`
-   * with that reason (MAMEKO-LEASE-090).
+   * with that reason (MAMEKO-LEASE-091).
    */
   reason_kinds: { provenance: "policy" },
 });
 
+/** The classes a device runs: every class but `release`, which `cloud-pinned` keeps off devices. */
+export const DEVICE_CLASSES = ["required", "interactive", "batch"] as const;
+
+/**
+ * The fields FD-PROF-065 adds for `development`: `development_runtime: true` and `isolation: none` on each device
+ * class, so one operator's own runs execute under mameko's `host-process` development runtime with no sandbox
+ * (MAMEKO-PROF-027, MAMEKO-LEASE-082). `production` adds none.
+ */
+export const developmentRuntimeFields = (
+  deployment: Deployment,
+): {
+  readonly development_runtime?: true;
+  readonly classIsolation: Readonly<Record<string, "none">>;
+} =>
+  deployment === "development"
+    ? {
+        development_runtime: true,
+        classIsolation: Object.fromEntries(DEVICE_CLASSES.map((c) => [c, "none" as const])),
+      }
+    : { classIsolation: {} };
+
+/** The document with the development runtime fields of `deployment` applied. */
+const withDevelopmentRuntime = (base: Profile, deployment: Deployment): Profile => {
+  const fields = developmentRuntimeFields(deployment);
+  if (fields.development_runtime === undefined) return base;
+  // The two fields are outside the `Profile` type of the vendored mameko; the document carries them only where that
+  // mameko's schema decodes them (`MAMEKO_DECLARES_DEVELOPMENT_RUNTIME`).
+  return {
+    ...base,
+    development_runtime: true,
+    classes: base.classes.map((c) =>
+      fields.classIsolation[c.name] === undefined
+        ? c
+        : { ...c, isolation: fields.classIsolation[c.name] },
+    ),
+  } as unknown as Profile;
+};
+
+/**
+ * Whether the vendored mameko's `Profile` schema declares `development_runtime` and the class isolation `none`. The
+ * schema decodes with excess properties rejected, so a document carrying either field under a mameko that does not
+ * declare it fails its decode; the development document carries them only where this holds.
+ */
+export const MAMEKO_DECLARES_DEVELOPMENT_RUNTIME: boolean = Match.value(
+  decodeProfile(withDevelopmentRuntime(baseProfile("development", CURRENT_PHASE), "development")),
+).pipe(
+  Match.tag("Accepted", () => true),
+  Match.tag("Rejected", () => false),
+  Match.exhaustive,
+);
+
+/** How `buildProfile` treats the development runtime fields; tests override the probe of the vendored schema. */
+export interface BuildOptions {
+  readonly developmentRuntime?: boolean;
+}
+
+/**
+ * The profile for a deployment at a phase. Deployments differ only in the policy version, `registration`,
+ * `development_runtime` and each device class's `isolation` (FD-PROF-065); phases differ in the cloud kinds, the
+ * placement launcher and constraints, and the attestation of `registration`.
+ */
+export const buildProfile = (
+  deployment: Deployment,
+  phase: Phase = CURRENT_PHASE,
+  options: BuildOptions = {},
+): Profile =>
+  (options.developmentRuntime ?? MAMEKO_DECLARES_DEVELOPMENT_RUNTIME)
+    ? withDevelopmentRuntime(baseProfile(deployment, phase), deployment)
+    : baseProfile(deployment, phase);
+
 /** The committed production profile at the current phase. */
 export const profile: Profile = buildProfile("production");
 
-/** The result-acceptance check's reason kinds, which MAMEKO-PROF-032 requires the profile to declare. */
+/** The result-acceptance check's reason kinds, which MAMEKO-PROF-033 requires the profile to declare. */
 export const acceptanceReasonKinds: readonly string[] = ["provenance"];
 
 /** The profile as the configuration source delivers it: the document and its policy version. */
@@ -572,3 +647,32 @@ export const spendDefaults: SpendConfig = {
   measured_reserve_days: 10,
   overhead_factor: 1.1,
 };
+
+/**
+ * The spend configuration the operator overlay delivers: each value it sets replaces its default, and every value it
+ * leaves out keeps the default (FD-PROF-054, FD-PROF-055).
+ */
+export const spendConfigWith = (overlay: Partial<SpendConfig> = {}): SpendConfig => ({
+  ...spendDefaults,
+  ...Object.fromEntries(Object.entries(overlay).filter(([, v]) => v !== undefined)),
+  reserves: { ...spendDefaults.reserves, ...overlay.reserves },
+});
+
+/** The spend settings beside the amounts, in micro-USD (specs/profile.md § Spend configuration). */
+export const spendSettings = {
+  /** Burn lanes, list micro-USD per hour (FD-PROF-058). */
+  burn_lanes_per_hour: {
+    batch: 410_000,
+    interactive: 810_000,
+    required: 2_010_000,
+    release: 2_820_000,
+  },
+  /** Queued entries of `required` a firm hold looks ahead over (FD-PROF-059, phase 3). */
+  firm_hold_look_ahead: 5,
+  /** The share of `B` at which spend warns (FD-PROF-060). */
+  warn_ratio: 0.8,
+  /** Unresolved charges above this raise the unresolved-spend alarm (FD-PROF-057). */
+  unresolved_threshold: 5_000_000,
+  /** The price of a hosted model id with no price entry, per million tokens (FD-PROF-056). */
+  default_model_price_per_mtok: 75_000_000,
+} as const;

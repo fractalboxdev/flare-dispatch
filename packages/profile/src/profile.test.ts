@@ -7,7 +7,7 @@ import {
 } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { bindings, validationContext } from "./context.test-support.ts";
+import { bindings, validationContext } from "./registry.ts";
 import {
   buildProfile,
   classNamed,
@@ -108,7 +108,7 @@ describe("load", () => {
     expect(rejections(badLine).map((r) => r.item)).toEqual(["document"]);
   });
 
-  it("FD-PROF-032 FD-PROF-034 pool and browser-session caps per class", () => {
+  it("[FD-PROF-032] [FD-PROF-034] pool and browser-session caps per class", () => {
     expect(
       profile.pools.map((p) => [p.name, p.classes.map((c) => [c.class, c.max, c.min])]),
     ).toEqual([
@@ -146,12 +146,12 @@ describe("load", () => {
     ]);
   });
 
-  it("MAMEKO-LEASE-090 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
+  it("MAMEKO-LEASE-091 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
     expect(profile.reason_kinds).toEqual({ provenance: "policy" });
     expect(acceptanceReasonKinds).toEqual(["provenance"]);
   });
 
-  it("MAMEKO-PROF-032 every terminal reason and acceptance-check reason kind is built in or declared", () => {
+  it("MAMEKO-PROF-033 every terminal reason and acceptance-check reason kind is built in or declared", () => {
     expect(
       validateProfile(profile, validationContext).filter((r) => r.item === "reason_kinds"),
     ).toEqual([]);
@@ -214,7 +214,7 @@ describe("load", () => {
     expect(paths).toContain("delivery.limit_key");
   });
 
-  it("MAMEKO-PROF-030 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
+  it("MAMEKO-PROF-031 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
     const { lean: _, ...withoutLean } = poolAdmissionCaps;
     const undeclared = { ...validationContext, declaredPools: withoutLean };
     expect(rejections(committed, committed.policy_version, undeclared)).toEqual([
@@ -306,13 +306,13 @@ describe("load", () => {
 });
 
 describe("class catalogue", () => {
-  it("FD-PROF-003 four classes, release P0 to batch P3, in a strict rank order", () => {
+  it("[FD-PROF-003] four classes, release P0 to batch P3, in a strict rank order", () => {
     expect(profile.classes.map((c) => [c.name, c.rank])).toEqual(CLASSES.map((n, i) => [n, i]));
     expect(profile.classes.every((c) => c.guaranteed)).toBe(true);
     expect(profile.classes.filter((c) => c.firm === true).map((c) => c.name)).toEqual(["required"]);
   });
 
-  it("FD-PROF-064 every class lists cloudflare alone in phase 0; required adds aws from phase 3", () => {
+  it("[FD-PROF-064] every class lists cloudflare alone in phase 0; required adds aws from phase 3", () => {
     for (const c of profile.classes) expect(c.cloud_kinds).toEqual(["cloudflare"]);
     const required = (phase: 1 | 2 | 3) =>
       buildProfile("production", phase).classes.find((c) => c.name === "required")?.cloud_kinds;
@@ -320,13 +320,13 @@ describe("class catalogue", () => {
     expect(required(3)).toEqual(["cloudflare", "aws"]);
   });
 
-  it("FD-PROF-064 from phase 4 every class lists gha last", () => {
+  it("[FD-PROF-064] from phase 4 every class lists gha last", () => {
     for (const c of phase4.classes) expect(c.cloud_kinds.at(-1)).toBe("gha");
     expect(classNamed(phase4, "required")?.cloud_kinds).toEqual(["cloudflare", "aws", "gha"]);
     expect(classNamed(phase4, "interactive")?.cloud_kinds).toEqual(["cloudflare", "gha"]);
   });
 
-  it("FD-PROF-006 queue bounds per class", () => {
+  it("[FD-PROF-006] queue bounds per class", () => {
     expect(CLASSES.map((n) => cls(n).bounds)).toEqual([
       { global: 16, per_scope: 8 },
       { global: 150, per_scope: 60 },
@@ -335,7 +335,7 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-PROF-006 bounds decode against mameko's two shapes, each from 1 to 10000", () => {
+  it("[FD-PROF-006] bounds decode against mameko's two shapes, each from 1 to 10000", () => {
     const withBounds = (name: string, bounds: unknown): unknown => ({
       ...committed,
       classes: committed.classes.map((c) => (c.name === name ? { ...c, bounds } : c)),
@@ -349,7 +349,7 @@ describe("class catalogue", () => {
       expect(rejections(withBounds("required", bad)).map((r) => r.item)).toEqual(["document"]);
   });
 
-  it("FD-PROF-006 per_run_scope is refused on a class that does not defer", () => {
+  it("[FD-PROF-006] per_run_scope is refused on a class that does not defer", () => {
     const doc = mutate((d) => ({
       ...d,
       classes: d.classes.map((c) =>
@@ -365,7 +365,7 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-PROF-006 a per_run_scope class passes only while its terminal outcome is deferred", () => {
+  it("[FD-PROF-006] a per_run_scope class passes only while its terminal outcome is deferred", () => {
     expect(cls("batch")).toMatchObject({
       bounds: { global: 30, per_run_scope: 1 },
       terminal_outcome: "deferred",
@@ -387,7 +387,7 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-PROF-007 a full release queue raises p0-breach", () => {
+  it("[FD-PROF-007] a full release queue raises p0-breach", () => {
     expect(
       profile.classes
         .filter((c) => c.queue_full_alarm !== undefined)
@@ -395,7 +395,7 @@ describe("class catalogue", () => {
     ).toEqual([["release", "p0-breach"]]);
   });
 
-  it("FD-PROF-005 queue age: the run's for P0 and P1, 1800 s for P2, the staleness span for P3", () => {
+  it("[FD-PROF-005] queue age: the run's for P0 and P1, 1800 s for P2, the staleness span for P3", () => {
     expect(CLASSES.map((n) => cls(n).queue_age)).toEqual([
       "run",
       "run",
@@ -404,12 +404,12 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-PROF-004 stale_at is half the schedule period, or 12 h without a schedule", () => {
+  it("[FD-PROF-004] stale_at is half the schedule period, or 12 h without a schedule", () => {
     expect(staleAt(cls("batch"), 1_000, 3_600_000)).toBe(1_000 + 1_800_000);
     expect(staleAt(cls("batch"), 1_000, null)).toBe(1_000 + 43_200_000);
   });
 
-  it("FD-PROF-008 release ends failure, budget: release reserve exhausted", () => {
+  it("[FD-PROF-008] release ends failure, budget: release reserve exhausted", () => {
     expect(cls("release").terminal_outcome).toEqual({
       outcome: "failure",
       reason: "budget: release reserve exhausted",
@@ -432,7 +432,7 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-PROF-009 retries: the run's for P0, once for P1 and P2, never in the cloud for P3", () => {
+  it("[FD-PROF-009] retries: the run's for P0, once for P1 and P2, never in the cloud for P3", () => {
     expect(CLASSES.map((n) => cls(n).retries)).toEqual(["run", 1, 1, "local-only"]);
   });
 
@@ -445,7 +445,7 @@ describe("class catalogue", () => {
     ]);
   });
 
-  it("FD-PROF-054 reserves: a configured release reserve and the measured required reserve", () => {
+  it("[FD-PROF-054] reserves: a configured release reserve and the measured required reserve", () => {
     expect(cls("release").reserve).toBe("release-reserve");
     expect(cls("required").reserve).toBe("measured");
     expect(spendDefaults.reserves["release-reserve"]).toBe(10_000_000);
@@ -475,11 +475,11 @@ describe("delayed cloud claim", () => {
     expect(at("batch", {})).toBe(99_000);
   });
 
-  it("FD-PROF-004 interactive waits 300 s for a device claim", () => {
+  it("[FD-PROF-004] interactive waits 300 s for a device claim", () => {
     expect(at("interactive", {})).toBe(301_000);
   });
 
-  it("FD-PROF-004 required waits 60 s for a device claim", () => {
+  it("[FD-PROF-004] required waits 60 s for a device claim", () => {
     expect(at("required", {})).toBe(61_000);
   });
 
@@ -495,13 +495,21 @@ describe("delayed cloud claim", () => {
 });
 
 describe("placement", () => {
-  it("FD-PROF-018 a run that declares no class is local-only", () => {
+  it("[FD-GATE-061] [FD-GATE-080] a run that declares cloud-pinned keeps only cloudflare at every class", () => {
+    for (const c of CLASSES) {
+      const r = eligibleKinds(profile, { class: c, labels: [], constraints: ["cloud-pinned"] });
+      expect(r.kinds.every((k) => k === "cloudflare")).toBe(true);
+      expect(r.constraints).toContain("cloud-pinned");
+    }
+  });
+
+  it("[FD-PROF-018] a run that declares no class is local-only", () => {
     const r = eligibleKinds(profile, { class: "batch", labels: [], declaresClass: false });
     expect(r.kinds).toEqual(["device"]);
     expect(r.constraints).toContain("local-only");
   });
 
-  it("FD-PROF-037 no device for a fork pull request, a release tag push or release", () => {
+  it("[FD-PROF-037] no device for a fork pull request, a release tag push or release", () => {
     for (const c of CLASSES) {
       expect(kinds({ class: c, labels: ["untrusted-input"] })).not.toContain("device");
       expect(kinds({ class: c, labels: [], trigger: "tag-push" })).not.toContain("device");
@@ -516,7 +524,7 @@ describe("placement", () => {
       ]);
   });
 
-  it("FD-PROF-037 release runs only on cloudflare, a macOS release-matrix job only on gha", () => {
+  it("[FD-PROF-037] release runs only on cloudflare, a macOS release-matrix job only on gha", () => {
     expect(kinds({ class: "release", labels: [] })).toEqual(["cloudflare"]);
     expect(kinds4({ class: "release", labels: ["release-matrix"] })).toEqual(["gha"]);
   });
@@ -526,7 +534,7 @@ describe("placement", () => {
       expect(kinds({ class: c, labels: ["expose-port"] })).toEqual(["cloudflare"]);
   });
 
-  it("FD-PROF-040 apple-build runs on a device, or on gha for required and a release-matrix job", () => {
+  it("[FD-PROF-040] apple-build runs on a device, or on gha for required and a release-matrix job", () => {
     expect(kinds4({ class: "required", labels: ["apple-build"] })).toEqual(["gha", "device"]);
     expect(kinds4({ class: "interactive", labels: ["apple-build"] })).toEqual(["device"]);
     expect(kinds4({ class: "batch", labels: ["apple-build"] })).toEqual(["device"]);
@@ -543,7 +551,7 @@ describe("placement", () => {
     expect(kinds({ class: "required", labels: [], ...cc })).not.toEqual([]);
   });
 
-  it("FD-PROF-039 a macOS release-matrix job keeps exactly gha at every class", () => {
+  it("[FD-PROF-039] a macOS release-matrix job keeps exactly gha at every class", () => {
     for (const c of CLASSES)
       expect(kinds4({ class: c, labels: ["release-matrix"] })).toEqual(["gha"]);
     expect(kinds4({ class: "release", labels: ["release-matrix"], trigger: "tag-push" })).toEqual([
@@ -551,7 +559,7 @@ describe("placement", () => {
     ]);
   });
 
-  it("FD-PROF-039 the validator rejects a release matrix whose macOS jobs have no eligible kind", () => {
+  it("[FD-PROF-039] the validator rejects a release matrix whose macOS jobs have no eligible kind", () => {
     const four = buildProfile("production", 4);
     const doc = {
       ...four,
@@ -572,13 +580,13 @@ describe("placement", () => {
     expect(kinds({ class: "required", labels: [], needsLocalModel: true })).toEqual(["device"]);
   });
 
-  it("FD-PROF-041 reproduction runs only on an attested-dedicated device", () => {
+  it("[FD-PROF-041] reproduction runs only on an attested-dedicated device", () => {
     const r = eligibleKinds(phase4, { class: "required", labels: ["reproduction"] });
     expect(r.kinds).toEqual(["device"]);
     expect(r.requiresPosture).toBe("attested-dedicated");
   });
 
-  it("FD-PROF-064 phase 0 registers no launcher and declares no constraint", () => {
+  it("[FD-PROF-064] phase 0 registers no launcher and declares no constraint", () => {
     expect(profile.placement).toMatchObject({
       launcher_kinds: [],
       constraints: [],
@@ -588,7 +596,7 @@ describe("placement", () => {
     });
   });
 
-  it("FD-PROF-038 FD-PROF-042 phase 4 registers gha as the one launcher kind", () => {
+  it("[FD-PROF-038] [FD-PROF-042] phase 4 registers gha as the one launcher kind", () => {
     expect(phase4.placement.launcher_kinds).toEqual(["gha"]);
     expect(phase4.placement.cloud_pinned_kinds).toEqual(["cloudflare"]);
     expect(phase4.placement.unreachable.map((s) => s.labels)).toEqual([
@@ -599,7 +607,7 @@ describe("placement", () => {
     ]);
   });
 
-  it("FD-PROF-035 FD-PROF-036 device slot defaults on an 8-slot share", () => {
+  it("[FD-PROF-035] [FD-PROF-036] device slot defaults on an 8-slot share", () => {
     expect(deviceSlotDefaults).toEqual({
       total: 8,
       headroom: 2,
@@ -615,19 +623,19 @@ describe("check-run lifecycle kinds", () => {
     return entry;
   };
 
-  it("FD-GH-005 check.open is generated at admission under cp:check:open and opens the surface", () => {
+  it("[FD-GH-005] check.open is generated at admission under cp:check:open and opens the surface", () => {
     const open = kind("check.open");
     expect(open.on).toBe("admitted");
     expect(open.opens_surface).toBe(true);
     expect(lifecycleKey("check.open", "admitted", 1)).toBe("cp:check:open");
   });
 
-  it("FD-GH-011 check.start is generated at every lease grant under cp:check:start:<epoch>", () => {
+  it("[FD-GH-011] check.start is generated at every lease grant under cp:check:start:<epoch>", () => {
     expect(kind("check.start").on).toBe("lease-granted");
     expect(lifecycleKey("check.start", "lease-granted", 2)).toBe("cp:check:start:2");
   });
 
-  it("FD-GH-012 check.progress is generated on progress and coalesces per execution", () => {
+  it("[FD-GH-012] check.progress is generated on progress and coalesces per execution", () => {
     expect(kind("check.progress")).toMatchObject({
       on: "progress",
       payload: "checkProgressPayload",
@@ -654,7 +662,7 @@ describe("check-run lifecycle kinds", () => {
     expect(kind("check.annotations").in_order).toBeUndefined();
   });
 
-  it("FD-GH-058 only check.open and check.conclude draw the rate limit's reserve", () => {
+  it("[FD-GH-058] only check.open and check.conclude draw the rate limit's reserve", () => {
     const drawing = Object.entries(profile.intent_kinds)
       .filter(([, e]) => drawsReserve(e))
       .map(([k]) => k);
@@ -686,7 +694,7 @@ describe("check-run lifecycle kinds", () => {
     });
   });
 
-  it("FD-ARCH-040 the gate decision source answers no decision", () => {
+  it("[FD-ARCH-040] the gate decision source answers no decision", () => {
     const decision = Effect.runSync(
       Effect.provide(
         Effect.gen(function* () {
@@ -718,8 +726,8 @@ describe("deployments", () => {
   const development = profileDocumentFor("development");
   const developmentContext: ValidationContext = { ...validationContext, deployment: "development" };
 
-  it("FD-PROF-052 FD-PROF-064 production admits secure-enclave keys, attested from phase 1", () => {
-    expect(profile.registration).toEqual({ key_stores: ["secure-enclave"], attestation: "none" });
+  it("[FD-PROF-052] [FD-PROF-064] production admits software keys before phase 1 and attested secure-enclave keys from it", () => {
+    expect(profile.registration).toEqual({ key_stores: ["software"], attestation: "none" });
     expect(buildProfile("production", 1).registration).toEqual({
       key_stores: ["secure-enclave"],
       attestation: "verifier",
@@ -731,27 +739,36 @@ describe("deployments", () => {
     expect(accepted.registration).toEqual({ key_stores: ["software"], attestation: "none" });
   });
 
-  it("the development build differs from production only in version and registration", () => {
-    const { policy_version: _pv, registration: _pr, ...prod } = buildProfile("production");
-    const { policy_version: _dv, registration: _dr, ...dev } = buildProfile("development");
+  it("at phase 0 the development build differs from production only in version", () => {
+    const { policy_version: _pv, ...prod } = buildProfile("production");
+    const { policy_version: _dv, ...dev } = buildProfile("development");
     expect(dev).toEqual(prod);
     expect(development.policyVersion).not.toBe(profileDocument.policyVersion);
   });
 
-  it("FD-PROF-052 a production deployment rejects the development document", () => {
-    expect(rejections(development.document, development.policyVersion)).toEqual([
+  it("[FD-PROF-052] a production deployment at phase 0 rejects a hardware key store nothing attests", () => {
+    const unattested = {
+      ...committed,
+      registration: { key_stores: ["secure-enclave"], attestation: "none" },
+    } as typeof committed;
+    expect(rejections(unattested, committed.policy_version)).toEqual([
       {
         item: "registration",
         path: "registration.key_stores",
-        reason: "a production deployment admits only secure-enclave keys",
+        reason: "a production deployment at phase 0 admits only software keys",
       },
     ]);
   });
 
-  it("FD-PROF-064 a production deployment at phase 1 requires the attestation verifier", () => {
+  it("[FD-PROF-064] a production deployment at phase 1 requires the attestation verifier", () => {
     expect(
       rejections(committed, committed.policy_version, { ...validationContext, phase: 1 }),
     ).toEqual([
+      {
+        item: "registration",
+        path: "registration.key_stores",
+        reason: "a production deployment at phase 1 admits only secure-enclave keys",
+      },
       {
         item: "registration",
         path: "registration.attestation",
@@ -784,23 +801,24 @@ describe("phases", () => {
   ];
   const always = APPLICATION_PORTS.filter((p) => p.required === "always").map((p) => p.id);
 
-  it("FD-PROF-064 MAMEKO-HOST-043 the phase 0 document needs no port beyond the always-ports", () => {
+  it("[FD-PROF-064] MAMEKO-HOST-045 the phase 0 document needs no port beyond the always-ports", () => {
     expect(requiredApplicationPorts(portUses(profile))).toEqual(always);
     // The alarm port's Layer is the dispatcher's (FD-OPS-053), outside the profile.
     expect(missingPorts(profile, supplied)).toEqual(["alarm-port"]);
     expect(missingPorts(buildProfile("development"), supplied)).toEqual(["alarm-port"]);
   });
 
-  it("FD-PROF-064 MAMEKO-HOST-043 phase 4 needs the gha launcher and the attestation verifier", () => {
+  it("[FD-PROF-064] MAMEKO-HOST-045 phase 4 needs the gha launcher and the attestation verifier", () => {
     expect(missingPorts(phase4, [...supplied, "alarm-port"])).toEqual([
       "launcher:gha",
       "attestation-verifier",
     ]);
   });
 
-  it("FD-PROF-064 the validator rejects a phase 4 document at phase 0", () => {
+  it("[FD-PROF-064] the validator rejects a phase 4 document at phase 0", () => {
     const four = buildProfile("production", 4);
     expect(rejections(four, four.policy_version).map((r) => [r.path, r.reason])).toEqual([
+      ["registration.key_stores", "a production deployment at phase 0 admits only software keys"],
       ["registration.attestation", "a production deployment at phase 0 sets attestation none"],
       ["classes[release].cloud_kinds", "gha enters at phase 4"],
       ["classes[required].cloud_kinds", "aws enters at phase 3"],

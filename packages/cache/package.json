@@ -1,0 +1,28 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-cache",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FlareDispatch's cache, artifact and log stores on R2: cache namespaces and tiers, the cache key, the CacheLedger, fenced manifest commits, the object-store presigner, the compile-cache route, sweeps, artifacts, logs, the OIDC issuer and the verdict audit.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ledger-object": "./src/ledger-object.ts",
+    "./device": "./src/device/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalboxdev/mameko-kernel": "workspace:*",
+    "@fractalboxdev/mameko-ports": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261012.1",
+    "@types/node": "^22.19.0",
+    "esbuild": "0.28.2",
+    "miniflare": "4.20260515.0",
+    "vitest": "^3.2.0"
+  }
+}

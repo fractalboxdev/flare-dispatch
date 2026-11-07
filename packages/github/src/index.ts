@@ -1,8 +1,26 @@
 export {
+  AppKeyInvalid,
+  GithubApp,
+  githubAppLayer,
+  InstallationDirectoryFromApp,
+  JWT_BACKDATE_SEC,
+  JWT_LIFETIME_SEC,
+  LEASE_READ_PERMISSIONS,
+  pkcs1ToPkcs8,
+  privateKeyDer,
+  signAppJwt,
+  TOKEN_MARGIN_MS,
+  tokenFromApp,
+  type AppOptions,
+  type InstallationToken,
+  type TokenScope,
+} from "./app.ts";
+export {
   ANNOTATION_BATCH,
   CheckRunApplierLive,
   classify,
   InstallationDirectory,
+  makeCheckRunApplier,
   Payloads,
 } from "./applier.ts";
 export {
@@ -11,6 +29,7 @@ export {
   GithubHttpError,
   GithubNetworkError,
   observeHeaders,
+  restRequest,
   type Annotation,
   type CheckRun,
   type CheckRunBody,
@@ -27,7 +46,8 @@ export {
   verdictOf,
   type Conclusion,
 } from "./conclusion.ts";
-export { githubApplicationLayer } from "./layer.ts";
+export { drainOutbox, githubApplicationLayer, githubLiveLayer } from "./layer.ts";
+export { leaseReadToken, type LeaseCredential } from "./lease-token.ts";
 export {
   ApplierRateLimitLive,
   decidePermit,
@@ -37,3 +57,51 @@ export {
   type QuotaObservation,
   type QuotaOptions,
 } from "./rate-limit.ts";
+export {
+  CheckRunSummary,
+  GithubRead,
+  githubReadLayer,
+  GithubUncredentialed,
+  GithubUnexpected,
+  PullSummary,
+  refPatternMatches,
+  RepoFile,
+  type GithubReadError,
+} from "./read.ts";
+export {
+  checkNeutralInvariant,
+  childConclusions,
+  insertOpsIntent,
+  installationOf,
+  InvalidCheckLabel,
+  neutralHolds,
+  NoInstallation,
+  PARENT_CLOSED,
+  validateCheckLabel,
+  type ChildCheck,
+  type OpsIntent,
+} from "./bindings.ts";
+export { QuarantinedFailure, quarantineAnnotations } from "./conclusion.ts";
+export { GithubApplierLive } from "./github-applier.ts";
+export {
+  intentMarker,
+  isSideKind,
+  makeSideOutputApplier,
+  SidePayloads,
+  slackSignature,
+  WRITE_BRANCH_PREFIX,
+  type SideKind,
+} from "./side-applier.ts";
+export {
+  BlobStore,
+  EmailSender,
+  FollowOnSubmitter,
+  GateReason,
+  NoticeChannel,
+  SideOutputConfig,
+  StagedWriteGate,
+  type DeliveryAnswer,
+  type GateResult,
+  type SideOutputSettings,
+} from "./side-ports.ts";
+export { GithubWrites, githubWritesLayer, type WritesOptions } from "./writes.ts";

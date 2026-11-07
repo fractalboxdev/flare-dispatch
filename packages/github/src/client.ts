@@ -116,54 +116,64 @@ export const observeHeaders = (headers: Headers, now: number): QuotaObservation 
   };
 };
 
+/**
+ * One REST call under an installation token. Every response's rate-limit headers reach the installation quota
+ * before the status is read, so a refused call still informs the next permit.
+ */
+export const restRequest =
+  (options: GithubClientOptions, quota: InstallationQuota["Service"]) =>
+  <A>(
+    installation: number,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Effect.Effect<A, GithubError> =>
+    Effect.gen(function* () {
+      const base = options.baseUrl ?? "https://api.github.com";
+      const token = yield* options.token(installation, false);
+      const response = yield* Effect.tryPromise({
+        try: (signal) =>
+          options.fetch(`${base}${path}`, {
+            method,
+            signal,
+            headers: {
+              accept: "application/vnd.github+json",
+              authorization: `Bearer ${token}`,
+              "x-github-api-version": "2022-11-28",
+              ...(body === undefined ? {} : { "content-type": "application/json" }),
+            },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          }),
+        // A rejected fetch may have reached GitHub, so a write counts as sent.
+        catch: (e) => new GithubNetworkError({ sent: method !== "GET", message: String(e) }),
+      });
+      const now = yield* Clock.currentTimeMillis;
+      yield* quota.observe(String(installation), observeHeaders(response.headers, now));
+      const json: unknown = yield* Effect.tryPromise({
+        try: () => response.json(),
+        catch: (e) => new GithubNetworkError({ sent: true, message: String(e) }),
+      });
+      if (response.ok) return json as A;
+      const message =
+        typeof json === "object" && json !== null && "message" in json
+          ? String(json.message)
+          : response.statusText;
+      const rateLimited =
+        response.status === 429 ||
+        (response.status === 403 &&
+          (response.headers.get("retry-after") !== null ||
+            response.headers.get("x-ratelimit-remaining") === "0" ||
+            /rate limit/i.test(message)));
+      return yield* Effect.fail(
+        new GithubHttpError({ status: response.status, message, rateLimited }),
+      );
+    });
+
 export const githubClientLayer = (options: GithubClientOptions) =>
   Layer.effect(
     GithubClient,
     Effect.gen(function* () {
-      const quota = yield* InstallationQuota;
-      const base = options.baseUrl ?? "https://api.github.com";
-
-      const request = <A>(installation: number, method: string, path: string, body?: unknown) =>
-        Effect.gen(function* () {
-          const token = yield* options.token(installation, false);
-          const response = yield* Effect.tryPromise({
-            try: (signal) =>
-              options.fetch(`${base}${path}`, {
-                method,
-                signal,
-                headers: {
-                  accept: "application/vnd.github+json",
-                  authorization: `Bearer ${token}`,
-                  "x-github-api-version": "2022-11-28",
-                  ...(body === undefined ? {} : { "content-type": "application/json" }),
-                },
-                ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-              }),
-            // A rejected fetch may have reached GitHub, so a write counts as sent.
-            catch: (e) => new GithubNetworkError({ sent: method !== "GET", message: String(e) }),
-          });
-          const now = yield* Clock.currentTimeMillis;
-          yield* quota.observe(String(installation), observeHeaders(response.headers, now));
-          const json: unknown = yield* Effect.tryPromise({
-            try: () => response.json(),
-            catch: (e) => new GithubNetworkError({ sent: true, message: String(e) }),
-          });
-          if (response.ok) return json as A;
-          const message =
-            typeof json === "object" && json !== null && "message" in json
-              ? String(json.message)
-              : response.statusText;
-          const rateLimited =
-            response.status === 429 ||
-            (response.status === 403 &&
-              (response.headers.get("retry-after") !== null ||
-                response.headers.get("x-ratelimit-remaining") === "0" ||
-                /rate limit/i.test(message)));
-          return yield* Effect.fail(
-            new GithubHttpError({ status: response.status, message, rateLimited }),
-          );
-        });
-
+      const request = restRequest(options, yield* InstallationQuota);
       return {
         createCheckRun: ({ installation, repo, body }) =>
           request<CheckRun>(installation, "POST", `/repos/${repo}/check-runs`, body),

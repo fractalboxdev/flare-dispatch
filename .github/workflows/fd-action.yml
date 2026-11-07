@@ -1,0 +1,22 @@
+# The dispatch action's test suite on every pull request that changes the action, the `fd` package it runs from or the
+# HTTP API declaration its client derives from (FD-IFC-062).
+name: fd-action
+on:
+  pull_request:
+    paths:
+      - "packages/fd/**"
+      - "packages/api/src/declaration.ts"
+      - "packages/api/src/errors.ts"
+      - "packages/api/src/request-id.ts"
+      - "packages/api/src/mcp/**"
+      - ".github/workflows/fd-action.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-fd exec tsc --noEmit
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-fd test

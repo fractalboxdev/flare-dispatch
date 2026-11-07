@@ -1,0 +1,28 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-intake",
+  "version": "0.0.1",
+  "private": true,
+  "description": "FlareDispatch's intake: webhook and Actions dispatch authentication, repo manifests, dedup recipes, shed records, the missed-webhook sweep, check re-runs, cooldowns and the minute tick, in front of mameko's admission function.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fractalboxdev/flare-dispatch-catalog": "workspace:*",
+    "@fractalboxdev/flare-dispatch-github": "workspace:*",
+    "@fractalboxdev/flare-dispatch-profile": "workspace:*",
+    "@fractalboxdev/mameko-coordinator": "workspace:*",
+    "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
+    "@fractalboxdev/mameko-ports": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "vitest": "^3.2.0"
+  }
+}
