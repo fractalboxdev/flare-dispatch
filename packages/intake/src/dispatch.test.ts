@@ -225,6 +225,28 @@ describe("dispatch to admission", () => {
     expect(none.executions()).toEqual([]);
   });
 
+  it("an Actions token naming one commit cannot dispatch another commit that is not a branch head of its repository", async () => {
+    const h = await harness();
+    const token = { authorization: `Bearer ${actionsToken({ sha: BASE })}` };
+    const foreign = "e".repeat(40);
+    const r = await dispatch(h, dispatchRequest("check", { ...ok, sha: foreign }, token));
+    expect(r!.status).toBe(403);
+    expect((await bodyOf(r)).error).toBe("sha_mismatch");
+    expect(h.executions()).toEqual([]);
+    const same = await dispatch(h, dispatchRequest("check", { ...ok, sha: BASE }, token));
+    expect(same!.status).toBe(202);
+  });
+
+  it("a body installation_id other than the App's installation for the repository answers 403", async () => {
+    const h = await harness();
+    const r = await dispatch(h, dispatchRequest("check", { ...ok, installation_id: 99 }));
+    expect(r!.status).toBe(403);
+    expect((await bodyOf(r)).error).toBe("installation_mismatch");
+    expect(h.executions()).toEqual([]);
+    const matching = await dispatch(h, dispatchRequest("check", { ...ok, installation_id: 7 }));
+    expect(matching!.status).toBe(202);
+  });
+
   it("FD-IFC-028 FD-INT-015 a run the manifest does not list for dispatch answers 404 run_not_found", async () => {
     const h = await harness();
     const r = await dispatch(h, dispatchRequest("nightly", { inputs: { sha: HEAD } }));

@@ -166,7 +166,9 @@ export class JwksCache {
 
   constructor(
     private readonly issuer: string,
-    private readonly fetcher: typeof fetch = fetch,
+    // Workers reject `fetch` called with another `this`; `this.fetcher(...)` would bind the cache, so the default
+    // calls the global through a closure.
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   async #load(): Promise<readonly AccessJwk[] | null> {
