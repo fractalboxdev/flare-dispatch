@@ -56,7 +56,7 @@ sequenceDiagram
 | Input             | Required | Default           | Notes                                                                                                                                                                                          |
 | ----------------- | -------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `run`             | yes      | —                 | Run slug. Must exist on the target Dispatcher deploy.                                                                                                                                          |
-| `endpoint`        | yes      | —                 | Dispatcher base URL, e.g. `https://flare-dispatch.<account>.workers.dev`.                                                                                                                      |
+| `endpoint`        | yes      | —                 | Dispatcher base URL, e.g. `https://dispatcher.example.com`.                                                                                                                                    |
 | `hmac-secret`     | yes      | —                 | Shared HMAC secret. Same value as the Worker's `HMAC_SECRET`.                                                                                                                                  |
 | `inputs`          | no       | `{}`              | JSON object of run inputs. Validated against the run's Schema on the Worker side.                                                                                                              |
 | `collect-command` | no       | `""`              | Optional consumer-side observability collector — see [Collecting signals](#collecting-signals-collect-command).                                                                                |
@@ -131,7 +131,7 @@ merged inputs carry signals but no `firedAt`. The machine-readable contract is
 
 ## Failure handling
 
-Per [`specs/04-gha-integration.md` § Failure handling](../../specs/04-gha-integration.md):
+The step decides on the HTTP status of each attempt:
 
 ```mermaid
 flowchart TB

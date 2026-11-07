@@ -1,0 +1,21 @@
+---
+// Starlight's header has no navigation of its own, so the Roadmap tab sits beside the social icons.
+// Starlight renders this component in the header and in the mobile menu footer.
+import Default from "@astrojs/starlight/components/SocialIcons.astro";
+---
+
+<a class="roadmap-tab" href="/roadmap/">Roadmap</a>
+<Default />
+
+<style>
+  .roadmap-tab {
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .roadmap-tab:hover {
+    color: var(--sl-color-white);
+  }
+</style>
