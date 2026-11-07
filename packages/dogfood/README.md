@@ -8,7 +8,7 @@ MAMEKO-ISO-001 forbids job code on the device OS, and no conformant macOS runtim
 
 - the Worker's committed `DEPLOYMENT` is `production`, whose catalogue leaves out a host execution, so its dispatch answers `404 run_not_found`, and only this command overrides it locally;
 - the runner entry takes `development` only from `FD_DEPLOYMENT=development`; any other value empties its catalogue, so a lease answers `RunNotInCatalog`;
-- the `production` profile refuses the key helper's software key at registration with `registration_refused`.
+- from phase 1, the `production` profile refuses the key helper's software key at registration with `registration_refused`; in phase 0 no verifier exists, so production admits software keys and the first two rules carry the guarantee.
 
 ## What runs
 

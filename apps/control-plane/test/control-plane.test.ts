@@ -209,9 +209,10 @@ describe("a production deployment", () => {
     expect(await r.json()).toMatchObject({ error: "run_not_found" });
   });
 
-  it("FD-IFC-087 refuses a software key and writes no executor row", async () => {
+  it("FD-IFC-087 at phase 0 refuses a key that claims a hardware store nothing attests, and writes no executor row", async () => {
     const { identity } = await newDevice();
-    const r = await post(production, "/v1/executors/register", registration("mac", identity));
+    const claimed = { ...identity, key_store: "secure-enclave" };
+    const r = await post(production, "/v1/executors/register", registration("mac", claimed));
     expect(r.status).toBe(403);
     const body = (await r.json()) as { error: string; message: string };
     expect(body.error).toBe("registration_refused");

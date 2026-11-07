@@ -33,9 +33,9 @@ export type Phase = 0 | 1 | 2 | 3 | 4;
 export const CURRENT_PHASE: Phase = 0;
 
 const registrationFor = (deployment: Deployment, phase: Phase): Profile["registration"] =>
-  deployment === "development"
+  deployment === "development" || phase === 0
     ? { key_stores: ["software"], attestation: "none" }
-    : { key_stores: ["secure-enclave"], attestation: phase >= 1 ? "verifier" : "none" };
+    : { key_stores: ["secure-enclave"], attestation: "verifier" };
 
 /**
  * Each deployment has its own version, and a phase after 0 adds its own suffix: mameko's loader rejects one version

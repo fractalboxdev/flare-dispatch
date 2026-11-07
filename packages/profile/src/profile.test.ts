@@ -726,8 +726,8 @@ describe("deployments", () => {
   const development = profileDocumentFor("development");
   const developmentContext: ValidationContext = { ...validationContext, deployment: "development" };
 
-  it("[FD-PROF-052] [FD-PROF-064] production admits secure-enclave keys, attested from phase 1", () => {
-    expect(profile.registration).toEqual({ key_stores: ["secure-enclave"], attestation: "none" });
+  it("[FD-PROF-052] [FD-PROF-064] production admits software keys before phase 1 and attested secure-enclave keys from it", () => {
+    expect(profile.registration).toEqual({ key_stores: ["software"], attestation: "none" });
     expect(buildProfile("production", 1).registration).toEqual({
       key_stores: ["secure-enclave"],
       attestation: "verifier",
@@ -739,19 +739,23 @@ describe("deployments", () => {
     expect(accepted.registration).toEqual({ key_stores: ["software"], attestation: "none" });
   });
 
-  it("the development build differs from production only in version and registration", () => {
-    const { policy_version: _pv, registration: _pr, ...prod } = buildProfile("production");
-    const { policy_version: _dv, registration: _dr, ...dev } = buildProfile("development");
+  it("at phase 0 the development build differs from production only in version", () => {
+    const { policy_version: _pv, ...prod } = buildProfile("production");
+    const { policy_version: _dv, ...dev } = buildProfile("development");
     expect(dev).toEqual(prod);
     expect(development.policyVersion).not.toBe(profileDocument.policyVersion);
   });
 
-  it("[FD-PROF-052] a production deployment rejects the development document", () => {
-    expect(rejections(development.document, development.policyVersion)).toEqual([
+  it("[FD-PROF-052] a production deployment at phase 0 rejects a hardware key store nothing attests", () => {
+    const unattested = {
+      ...committed,
+      registration: { key_stores: ["secure-enclave"], attestation: "none" },
+    } as typeof committed;
+    expect(rejections(unattested, committed.policy_version)).toEqual([
       {
         item: "registration",
         path: "registration.key_stores",
-        reason: "a production deployment admits only secure-enclave keys",
+        reason: "a production deployment at phase 0 admits only software keys",
       },
     ]);
   });
@@ -760,6 +764,11 @@ describe("deployments", () => {
     expect(
       rejections(committed, committed.policy_version, { ...validationContext, phase: 1 }),
     ).toEqual([
+      {
+        item: "registration",
+        path: "registration.key_stores",
+        reason: "a production deployment at phase 1 admits only secure-enclave keys",
+      },
       {
         item: "registration",
         path: "registration.attestation",
@@ -809,6 +818,7 @@ describe("phases", () => {
   it("[FD-PROF-064] the validator rejects a phase 4 document at phase 0", () => {
     const four = buildProfile("production", 4);
     expect(rejections(four, four.policy_version).map((r) => [r.path, r.reason])).toEqual([
+      ["registration.key_stores", "a production deployment at phase 0 admits only software keys"],
       ["registration.attestation", "a production deployment at phase 0 sets attestation none"],
       ["classes[release].cloud_kinds", "gha enters at phase 4"],
       ["classes[required].cloud_kinds", "aws enters at phase 3"],
