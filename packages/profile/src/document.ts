@@ -131,7 +131,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     opens_surface: true,
     in_order: true,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: checkRunMarker,
   },
   "check.start": {
@@ -144,7 +144,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     void_after_outcome: true,
     in_order: true,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: checkRunMarker,
   },
   // Generated at each step and placement-state change; one coalescing key per execution, so a newer row voids
@@ -160,7 +160,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     void_after_outcome: true,
     in_order: true,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: checkRunMarker,
   },
   "check.conclude": {
@@ -170,7 +170,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     in_order: true,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: checkRunMarker,
   },
   "check.summary": {
@@ -179,7 +179,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: "the check run found by external_id",
   },
   "check.annotations": {
@@ -188,7 +188,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: "annotations read back by check-run id",
   },
   comment: {
@@ -197,7 +197,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "issueComment",
+    actuator: "issueComment",
     marker: bodyMarker,
   },
   review: {
@@ -206,7 +206,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "pullReview",
+    actuator: "pullReview",
     marker: bodyMarker,
   },
   issue: {
@@ -215,7 +215,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "issue",
+    actuator: "issue",
     marker: bodyMarker,
   },
   "pr.propose": {
@@ -226,7 +226,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: ["success"],
     priority: 2,
     effect_class: "adoptable",
-    applier: "pullRequest",
+    actuator: "pullRequest",
     marker: "the head branch name",
   },
   "release.draft": {
@@ -235,7 +235,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: ["success"],
     priority: 2,
     effect_class: "adoptable",
-    applier: "release",
+    actuator: "release",
     marker: "the tag name",
   },
   "release.publish": {
@@ -244,7 +244,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: ["success"],
     priority: 2,
     effect_class: "adoptable",
-    applier: "release",
+    actuator: "release",
     marker: "the tag name",
   },
   "canary.push": {
@@ -254,7 +254,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     priority: 2,
     ops: true,
     effect_class: "adoptable",
-    applier: "canary",
+    actuator: "canary",
     marker: "the tick time in the commit message",
   },
   "delivery.redeliver": {
@@ -264,7 +264,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     priority: 2,
     ops: true,
     effect_class: "adoptable",
-    applier: "webhookRedelivery",
+    actuator: "webhookRedelivery",
     marker: "the delivery's attempts, read back before a repeat",
   },
   label: {
@@ -273,7 +273,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "labels",
+    actuator: "labels",
   },
   "pr.close": {
     origin: "run",
@@ -281,7 +281,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "pullRequest",
+    actuator: "pullRequest",
   },
   "dispatch.followOn": {
     origin: "run",
@@ -289,7 +289,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "followOn",
+    actuator: "followOn",
   },
   "notify.email": {
     origin: "both",
@@ -297,7 +297,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "notifyEmail",
+    actuator: "notifyEmail",
   },
   "notify.slack": {
     origin: "both",
@@ -305,7 +305,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "notifySlack",
+    actuator: "notifySlack",
   },
   "notice.publish": {
     origin: "both",
@@ -313,7 +313,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "notice",
+    actuator: "notice",
   },
 };
 

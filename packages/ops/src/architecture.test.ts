@@ -57,11 +57,11 @@ describe("components", () => {
 describe("composition", () => {
   it("[FD-ARCH-039] phase 0 needs a Layer per always-port plus the presigner and the credential minter", () => {
     expect(requiredPorts(0)).toEqual([
-      "effect-applier",
+      "actuator",
       "gate-decision-source",
       "configuration-source",
       "alarm-port",
-      "applier-rate-limit",
+      "actuator-rate-limit",
       "object-store-presigner",
       "credential-minter",
     ]);
@@ -88,8 +88,8 @@ describe("composition", () => {
       "gate-decision-source",
     ]);
     expect(compositionFindings(0, Object.keys(SUPPLIED_HERE)).map((f) => f.path)).toEqual([
-      "effect-applier",
-      "applier-rate-limit",
+      "actuator",
+      "actuator-rate-limit",
       "object-store-presigner",
       "credential-minter",
     ]);

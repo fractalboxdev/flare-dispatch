@@ -1,4 +1,4 @@
-import { EffectApplier, type IntentRow } from "@fractalboxdev/mameko-ports";
+import { type Actuator, Actuators, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ANNOTATION_BATCH, CheckRunApplierLive } from "./applier.ts";
@@ -20,14 +20,11 @@ const details = {
   settled_micro_usd: 12_000,
 };
 
-const withApplier = <A>(
-  gh: FakeGithub,
-  f: (applier: EffectApplier["Service"]) => Effect.Effect<A>,
-) =>
+const withApplier = <A>(gh: FakeGithub, f: (applier: Required<Actuator>) => Effect.Effect<A>) =>
   Effect.runPromise(
     Effect.provide(
       Effect.gen(function* () {
-        return yield* f(yield* EffectApplier);
+        return yield* f((yield* Actuators).get("checkRun") as Required<Actuator>);
       }),
       CheckRunApplierLive.pipe(Layer.provide(fakeLayers(gh))),
     ),

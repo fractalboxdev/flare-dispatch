@@ -1,11 +1,11 @@
-// The applier rate limit keyed by GitHub App installation
+// The actuator rate limit keyed by GitHub App installation
 // (specs/github-output.md § Installation quota; mameko specs/outbox.md § The
-// applier port and the applier rate limit). `InstallationQuota` holds what each
-// installation's responses report and which permits are out; `ApplierRateLimitLive`
+// actuator port and the actuator rate limit). `InstallationQuota` holds what each
+// installation's responses report and which permits are out; `ActuatorRateLimitLive`
 // answers mameko's `acquire` and `release` from it, one permit per call. The
 // drainer requests permits in grant order, so each request is decided as it comes.
 import {
-  ApplierRateLimit,
+  ActuatorRateLimit,
   type PermitAnswer,
   type PermitRequest,
 } from "@fractalboxdev/mameko-ports";
@@ -232,9 +232,9 @@ export const installationQuotaLayer = (options: QuotaOptions = quotaOptionsDefau
     }),
   );
 
-/** mameko's applier rate limit, served by the installation quota; the limit key is the installation id. */
-export const ApplierRateLimitLive = Layer.effect(
-  ApplierRateLimit,
+/** mameko's actuator rate limit, served by the installation quota; the limit key is the installation id. */
+export const ActuatorRateLimitLive = Layer.effect(
+  ActuatorRateLimit,
   Effect.gen(function* () {
     const quota = yield* InstallationQuota;
     return { acquire: quota.acquire, release: quota.release };

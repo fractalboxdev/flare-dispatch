@@ -1,24 +1,26 @@
-// The applier and the applier rate limit under mameko's `drainOnce` over the
+// The applier and the actuator rate limit under mameko's `drainOnce` over the
 // testkit's outbox store: what the coordinator does with each closed answer.
 import { drainOnce } from "@fractalboxdev/mameko-coordinator";
 import { newRow } from "@fractalboxdev/mameko-kernel";
 import {
   AlarmPort,
-  type ApplierRateLimit,
-  type EffectApplier,
+  type ActuatorRateLimit,
+  type Actuators,
   type IntentRow,
   type StoredOutboxRow,
 } from "@fractalboxdev/mameko-ports";
 import { memoryOutboxStore } from "@fractalboxdev/mameko-testkit";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { CheckRunApplierLive, InstallationDirectory } from "./applier.ts";
+import { CheckRunApplierLive, InstallationDirectory, Payloads } from "./applier.ts";
 import { GithubHttpError, GithubNetworkError } from "./client.ts";
 import { fakeGithub, fakeLayers, row, type FakeGithub } from "./fake.test-support.ts";
 import { githubApplicationLayer } from "./layer.ts";
-import { ApplierRateLimitLive, installationQuotaLayer } from "./rate-limit.ts";
+import { ActuatorRateLimitLive, installationQuotaLayer } from "./rate-limit.ts";
 
 const NOW = 1_800_000_000_000;
+/** The check-run kinds name the `checkRun` actuator binding. */
+const actuatorOf = Object.fromEntries(Object.keys(Payloads).map((kind) => [kind, "checkRun"]));
 const ref = { name: "flare-dispatch/check", head_sha: "abc123" };
 const details = {
   class: "required",
@@ -45,12 +47,12 @@ const stored = (
 });
 
 const pass = (
-  application: Layer.Layer<EffectApplier | ApplierRateLimit>,
+  application: Layer.Layer<Actuators | ActuatorRateLimit>,
   outbox: ReturnType<typeof memoryOutboxStore>,
   now: number,
 ) =>
   Effect.runPromise(
-    drainOnce({ now, token: (id) => `tok-${id}-${now}`, random: () => 0 }).pipe(
+    drainOnce({ now, token: (id) => `tok-${id}-${now}`, random: () => 0, actuatorOf }).pipe(
       Effect.provide(Layer.merge(outbox.layer, application)),
     ),
   );
@@ -58,7 +60,7 @@ const pass = (
 const fakeApplication = (gh: FakeGithub) =>
   Layer.mergeAll(
     CheckRunApplierLive.pipe(Layer.provide(fakeLayers(gh))),
-    ApplierRateLimitLive.pipe(Layer.provide(installationQuotaLayer())),
+    ActuatorRateLimitLive.pipe(Layer.provide(installationQuotaLayer())),
   );
 
 const state = (outbox: ReturnType<typeof memoryOutboxStore>, id: string) =>

@@ -49,7 +49,7 @@ export {
 export { drainOutbox, githubApplicationLayer, githubLiveLayer } from "./layer.ts";
 export { leaseReadToken, type LeaseCredential } from "./lease-token.ts";
 export {
-  ApplierRateLimitLive,
+  ActuatorRateLimitLive,
   decidePermit,
   InstallationQuota,
   installationQuotaLayer,
@@ -82,7 +82,7 @@ export {
   type OpsIntent,
 } from "./bindings.ts";
 export { QuarantinedFailure, quarantineAnnotations } from "./conclusion.ts";
-export { GithubApplierLive } from "./github-applier.ts";
+export { GithubApplierLive, makeGithubActuators, SIDE_OUTPUT_BINDINGS } from "./github-applier.ts";
 export {
   intentMarker,
   isSideKind,

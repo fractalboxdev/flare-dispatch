@@ -190,14 +190,14 @@ describe("load", () => {
     ]);
   });
 
-  it("MAMEKO-PROF-013 an applier without lookup rejects its adoptable kinds", () => {
+  it("MAMEKO-PROF-013 an actuator without lookup rejects its adoptable kinds", () => {
     const context = {
       ...validationContext,
-      bindings: { ...bindings, appliers: { ...bindings.appliers, checkRun: ["apply"] } },
+      bindings: { ...bindings, actuators: { ...bindings.actuators, checkRun: ["apply"] } },
     };
     const paths = rejections(committed, committed.policy_version, context).map((r) => r.path);
-    expect(paths).toContain("intent_kinds.check.open.applier");
-    expect(paths).toContain("intent_kinds.check.conclude.applier");
+    expect(paths).toContain("intent_kinds.check.open.actuator");
+    expect(paths).toContain("intent_kinds.check.conclude.actuator");
   });
 
   it("MAMEKO-PROF-013 an emitted kind without an entry is rejected", () => {
@@ -791,12 +791,12 @@ describe("deployments", () => {
 });
 
 describe("phases", () => {
-  /** The application ports whose Layers exist: `checkRun` serves the effect applier. */
+  /** The application ports whose Layers exist: `checkRun` serves the actuator registry. */
   const supplied = [
-    "effect-applier",
+    "actuator",
     "gate-decision-source",
     "configuration-source",
-    "applier-rate-limit",
+    "actuator-rate-limit",
   ];
   const always = APPLICATION_PORTS.filter((p) => p.required === "always").map((p) => p.id);
 

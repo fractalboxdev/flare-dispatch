@@ -7,7 +7,7 @@ This file specifies how FlareDispatch turns executions into GitHub effects: the 
 mameko's [outbox.md](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/outbox.md) specifies the outbox: rows and their states, the effect classes, lifecycle and ops intents, the drainer, the applier and applier rate limit ports, and the delivery and settle sweeps. FlareDispatch inherits that mechanism and supplies, as an application:
 
 - the intent kinds and their delivery settings, declared in [profile.md](profile.md);
-- one `EffectApplier` Layer that selects a handler by `row.kind` and classifies every GitHub response into one answer of the applier port;
+- one `Actuators` registry that holds the check-run applier under the `checkRun` binding and the side-output applier under every other GitHub binding, each classifying every GitHub response into one answer of the actuator port;
 - the applier rate limit, keyed by installation;
 - the outcome mapping onto check conclusions.
 

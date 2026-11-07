@@ -1,5 +1,5 @@
 // The agentic area on the control plane: the local-work ports over the D1 database with the reads they take from the
-// control plane, and the `pr.propose` and `pr.close` appliers inside the one `EffectApplier`. A read this deploy
+// control plane, and the `pr.propose` and `pr.close` appliers inside every registered actuator. A read this deploy
 // cannot make fails, so no caller decides on an answer that was never read.
 import {
   CapacityUsage,
@@ -17,7 +17,14 @@ import {
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
 import { GithubApp, GithubRead, tokenFromApp } from "@fractalboxdev/flare-dispatch-github";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
-import { EffectApplier, PostureSource, type IntentRow } from "@fractalboxdev/mameko-ports";
+import {
+  type Actuator,
+  Actuators,
+  actuatorRegistry,
+  PostureSource,
+  type IntentRow,
+  type LookupAnswer,
+} from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { deployment, type ControlPlaneEnv } from "./config.ts";
 import { boundFetch } from "./github.ts";
@@ -140,26 +147,26 @@ export const localPorts = (env: ControlPlaneEnv) =>
 const WRITEBACK_KINDS: ReadonlySet<string> = new Set(["pr.propose", "pr.close"]);
 
 /**
- * The one `EffectApplier`: `pr.propose` and `pr.close` go to the agentic appliers, every other kind to the GitHub
- * package's applier underneath.
+ * The actuators the drainer calls: in each registered actuator, `pr.propose` and `pr.close` go to the agentic appliers
+ * and every other kind to the GitHub package's actuator underneath.
  */
 export const writebackApplier = (appLogin: string) =>
   Layer.effect(
-    EffectApplier,
+    Actuators,
     Effect.gen(function* () {
-      const base = yield* EffectApplier;
+      const base = yield* Actuators;
       const context = yield* Effect.context<GitData | WritebackRecords>();
       const writeback = writebackAppliers(appLogin);
       const ours = (row: IntentRow) => WRITEBACK_KINDS.has(row.kind);
-      return {
+      const wrap = (a: Actuator): Actuator => ({
         apply: (row: IntentRow) =>
           ours(row)
             ? (row.kind === "pr.propose"
                 ? writeback["pr.propose"].apply(row)
                 : writeback["pr.close"].apply(row)
               ).pipe(Effect.provide(context))
-            : base.apply(row),
-        lookup: (row: IntentRow) =>
+            : a.apply(row),
+        lookup: (row: IntentRow): Effect.Effect<LookupAnswer> =>
           row.kind === "pr.propose"
             ? writeback["pr.propose"].lookup(row).pipe(Effect.provide(context))
             : row.kind === "pr.close"
@@ -167,14 +174,26 @@ export const writebackApplier = (appLogin: string) =>
                   _tag: "undetermined" as const,
                   reason: "pr.close is replay-safe and has no lookup",
                 })
-              : base.lookup(row),
-        reconcile: (row: IntentRow) =>
-          ours(row)
-            ? Effect.succeed({
-                _tag: "undetermined" as const,
-                reason: `${row.kind} is not reconcile-only`,
-              })
-            : base.reconcile(row),
-      };
+              : a.lookup === undefined
+                ? Effect.succeed({
+                    _tag: "undetermined" as const,
+                    reason: `${row.kind}: the actuator has no lookup`,
+                  })
+                : a.lookup(row),
+        ...(a.reconcile === undefined
+          ? {}
+          : {
+              reconcile: (row: IntentRow) =>
+                ours(row)
+                  ? Effect.succeed({
+                      _tag: "undetermined" as const,
+                      reason: `${row.kind} is not reconcile-only`,
+                    })
+                  : a.reconcile!(row),
+            }),
+      });
+      return actuatorRegistry(
+        Object.fromEntries(base.names().map((name) => [name, wrap(base.get(name)!)])),
+      );
     }),
   );

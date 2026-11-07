@@ -1,29 +1,39 @@
-// The one `EffectApplier` the control plane runs: it selects a handler by
-// `row.kind`, the check-run kinds to the check-run applier and every other
-// declared kind to the side-output applier (specs/github-output.md § Scope).
-import { EffectApplier, type IntentRow } from "@fractalboxdev/mameko-ports";
+// The actuators the control plane runs, one per actuator binding the profile names: the check-run applier under
+// `checkRun` and the side-output applier under every other GitHub binding. The drainer sends each row to the binding
+// its kind names (mameko specs/outbox.md § The actuator port and the actuator rate limit; specs/github-output.md
+// § Scope).
+import { type Actuator, Actuators, actuatorRegistry } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
-import { makeCheckRunApplier, Payloads } from "./applier.ts";
-import { isSideKind, makeSideOutputApplier } from "./side-applier.ts";
+import { makeCheckRunApplier } from "./applier.ts";
+import { makeSideOutputApplier } from "./side-applier.ts";
 
-const isCheckKind = (kind: string) => Object.hasOwn(Payloads, kind);
+/** The actuator bindings the side-output applier serves. */
+export const SIDE_OUTPUT_BINDINGS = [
+  "issueComment",
+  "pullReview",
+  "issue",
+  "pullRequest",
+  "release",
+  "canary",
+  "webhookRedelivery",
+  "labels",
+  "followOn",
+  "notifyEmail",
+  "notifySlack",
+  "notice",
+] as const;
 
+/** Every GitHub binding's actuator, keyed by binding name. */
+export const makeGithubActuators = Effect.gen(function* () {
+  const checkRun = yield* makeCheckRunApplier;
+  const sides = yield* makeSideOutputApplier;
+  const byName: Record<string, Required<Actuator>> = { checkRun };
+  for (const name of SIDE_OUTPUT_BINDINGS) byName[name] = sides;
+  return byName;
+});
+
+/** The `Actuators` registry over every GitHub binding. */
 export const GithubApplierLive = Layer.effect(
-  EffectApplier,
-  Effect.gen(function* () {
-    const checks = yield* makeCheckRunApplier;
-    const sides = yield* makeSideOutputApplier;
-    const pick = (row: IntentRow) =>
-      isCheckKind(row.kind) ? checks : isSideKind(row.kind) ? sides : null;
-    const unserved = (row: IntentRow) => `applier: no handler for kind ${row.kind}`;
-    return {
-      apply: (row) =>
-        pick(row)?.apply(row) ?? Effect.succeed({ _tag: "refused", reason: unserved(row) }),
-      lookup: (row) =>
-        pick(row)?.lookup(row) ?? Effect.succeed({ _tag: "undetermined", reason: unserved(row) }),
-      reconcile: (row) =>
-        pick(row)?.reconcile(row) ??
-        Effect.succeed({ _tag: "undetermined", reason: unserved(row) }),
-    };
-  }),
+  Actuators,
+  Effect.map(makeGithubActuators, (byName) => actuatorRegistry(byName)),
 );

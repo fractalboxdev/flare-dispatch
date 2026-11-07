@@ -1,7 +1,9 @@
 import { profile } from "@fractalboxdev/flare-dispatch-profile";
 import {
-  ApplierRateLimit,
-  EffectApplier,
+  type Actuator,
+  ActuatorRateLimit,
+  Actuators,
+  actuatorRegistry,
   type IntentRow,
   type PermitRequest,
 } from "@fractalboxdev/mameko-ports";
@@ -49,19 +51,26 @@ const monitor = () => {
 const appliers = () => {
   const applied: IntentRow[] = [];
   const permits: PermitRequest[] = [];
-  const layer = Layer.merge(
-    Layer.succeed(EffectApplier, {
-      apply: (row) =>
-        Effect.sync(
-          () => (
-            applied.push(row),
-            { _tag: "applied" as const, externalRef: `ref:${row.intentKey}` }
-          ),
+  const actuator: Actuator = {
+    apply: (row) =>
+      Effect.sync(
+        () => (
+          applied.push(row),
+          { _tag: "applied" as const, externalRef: `ref:${row.intentKey}` }
         ),
-      lookup: () => Effect.succeed({ _tag: "absent" as const }),
-      reconcile: () => Effect.succeed({ _tag: "absent" as const }),
-    }),
-    Layer.succeed(ApplierRateLimit, {
+      ),
+    lookup: () => Effect.succeed({ _tag: "absent" as const }),
+    reconcile: () => Effect.succeed({ _tag: "absent" as const }),
+  };
+  const layer = Layer.merge(
+    // The one fake actuator under every binding the profile names.
+    Layer.succeed(
+      Actuators,
+      actuatorRegistry(
+        Object.fromEntries(Object.values(profile.intent_kinds).map((k) => [k.actuator, actuator])),
+      ),
+    ),
+    Layer.succeed(ActuatorRateLimit, {
       acquire: (r) =>
         Effect.sync(
           () => (permits.push(r), { _tag: "granted" as const, permitId: `p${permits.length}` }),

@@ -3,7 +3,7 @@
 import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { AlarmPort, EffectApplier, type Alarm, type IntentRow } from "@fractalboxdev/mameko-ports";
+import { Actuators, AlarmPort, type Alarm, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { GithubApp } from "./app.ts";
@@ -138,16 +138,35 @@ const row = (kind: string, payload: unknown, overrides: Partial<IntentRow> = {})
   ...overrides,
 });
 
+/** The actuator binding the profile names for each kind these tests apply; an undeclared kind takes `pullRequest`. */
+const BINDING: Readonly<Record<string, string>> = {
+  comment: "issueComment",
+  review: "pullReview",
+  issue: "issue",
+  label: "labels",
+  "pr.propose": "pullRequest",
+  "pr.close": "pullRequest",
+  "release.draft": "release",
+  "release.publish": "release",
+  "dispatch.followOn": "followOn",
+  "notice.publish": "notice",
+  "notify.slack": "notifySlack",
+};
+const actuatorFor = (r: IntentRow) =>
+  Actuators.use((registry) => Effect.succeed(registry.get(BINDING[r.kind] ?? "pullRequest")!));
+
 const apply = (w: World, r: IntentRow, installations?: Record<string, number>) =>
   Effect.runPromise(
-    EffectApplier.use((a) => a.apply(r)).pipe(
+    actuatorFor(r).pipe(
+      Effect.flatMap((a) => a.apply(r)),
       Effect.provide(GithubApplierLive),
       Effect.provide(layers(w, installations)),
     ),
   );
 const lookup = (w: World, r: IntentRow) =>
   Effect.runPromise(
-    EffectApplier.use((a) => a.lookup(r)).pipe(
+    actuatorFor(r).pipe(
+      Effect.flatMap((a) => a.lookup!(r)),
       Effect.provide(GithubApplierLive),
       Effect.provide(layers(w)),
     ),
@@ -369,7 +388,8 @@ describe("pr.propose", () => {
   it("FD-GH-080 a deployment with no staged-write gate refuses pr.propose", async () => {
     const w = world();
     const answer = await Effect.runPromise(
-      EffectApplier.use((a) => a.apply(row("pr.propose", proposal()))).pipe(
+      actuatorFor(row("pr.propose", proposal())).pipe(
+        Effect.flatMap((a) => a.apply(row("pr.propose", proposal()))),
         Effect.provide(GithubApplierLive),
         Effect.provide(layers(w, { [REPO]: 7 }, false)),
       ),
@@ -604,7 +624,7 @@ describe("answers", () => {
     const w = world();
     expect(await apply(w, row("git.notes", {}))).toEqual({
       _tag: "refused",
-      reason: "applier: no handler for kind git.notes",
+      reason: "applier: git.notes is not a side-output kind",
     });
     expect(await apply(w, row("comment", { body: 1 }))).toMatchObject({ _tag: "refused" });
     expect(w.side.calls).toEqual([]);

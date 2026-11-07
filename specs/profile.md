@@ -182,7 +182,7 @@ The listed details are `draft-pr`, `author-excluded`, `path-filter`, `not-config
 
 No kind is `reconcile-only` and no kind is `gated`. `check.conclude` is the one kind of tier `outcome` and `check.progress` the one kind of tier `progress`; every other kind is tier `effect`. The marker column is the idempotency marker the applier's `lookup` searches by.
 
-| Kind | Origin | Generated | Priority | Applied for | Flags | Effect class | Applier | Marker | GitHub behaviour |
+| Kind | Origin | Generated | Priority | Applied for | Flags | Effect class | Actuator | Marker | GitHub behaviour |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `check.open` | `control-plane` | `on: admitted`, payload `checkOpenPayload` | 0 | `any` | `opens_surface`, `draws_reserve`, `in_order` | `adoptable` | `checkRun` | `external_id` equal to the execution id | FD-GH-005 |
 | `check.start` | `control-plane` | `on: lease-granted`, payload `checkStartPayload` | 1 | `any` | `void_after_outcome`, `in_order` | `adoptable` | `checkRun` | as `check.open` | FD-GH-011 |
@@ -355,7 +355,7 @@ FlareDispatch's phase n document is compared with the reference profile's form f
 
 ### Intent kinds, delivery and gate policy
 
-- **FD-PROF-046** · phase 0 · `V-UNIT` — The profile's `intent_kinds` must declare exactly the kinds of § Intent kinds, each with the origin, lifecycle trigger, payload and coalesce bindings, priority, applied-for outcomes, flags, effect class, applier and marker that table gives ([MAMEKO-PROF-013](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/profiles.md)).
+- **FD-PROF-046** · phase 0 · `V-UNIT` — The profile's `intent_kinds` must declare exactly the kinds of § Intent kinds, each with the origin, lifecycle trigger, payload and coalesce bindings, priority, applied-for outcomes, flags, effect class, actuator binding and marker that table gives ([MAMEKO-PROF-013](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/profiles.md)).
 - **FD-PROF-047** · phase 0 · `V-UNIT` `V-LIVE` — The profile's `delivery` must key the applier rate limit by installation through `installationOf`, set the ops class to `required` and name the undelivered-outcome alarm `undelivered-verdict` ([MAMEKO-OUT-046](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/outbox.md), [github-output.md](github-output.md) FD-GH-056).
 - **FD-PROF-048** · phase 0 · `V-UNIT` — The profile's `gate_policy` must list no key and set `max_expiry_seconds` to 86400, and no kind may declare `gated`.
 

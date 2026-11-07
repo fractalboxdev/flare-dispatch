@@ -45,7 +45,7 @@ export interface ValidationContext {
   readonly deployment: Deployment;
   /** The roadmap phase the control plane serves. */
   readonly phase: Phase;
-  /** The bindings and appliers registered in code. */
+  /** The bindings and actuators registered in code. */
   readonly bindings: Bindings;
   /** The kinds a registered run may emit or the control plane generates. */
   readonly emittedKinds: readonly string[];

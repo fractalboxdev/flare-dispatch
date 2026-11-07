@@ -96,11 +96,11 @@ export const requiredPorts = (
   phase: Phase,
   deployment: Deployment = "production",
 ): readonly string[] => [
-  "effect-applier",
+  "actuator",
   "gate-decision-source",
   "configuration-source",
   "alarm-port",
-  "applier-rate-limit",
+  "actuator-rate-limit",
   "object-store-presigner",
   "credential-minter",
   ...(phase >= 1 ? ["posture-source", "local-registration"] : []),

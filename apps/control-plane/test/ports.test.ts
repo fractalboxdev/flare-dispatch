@@ -16,8 +16,8 @@ describe("the composition's application ports", () => {
 
   it("[FD-ARCH-039] MAMEKO-HOST-045 names the applier ports a deploy without the App lacks", () => {
     expect(missingPorts(buildProfile("production"), suppliedPorts(env({})))).toEqual([
-      "effect-applier",
-      "applier-rate-limit",
+      "actuator",
+      "actuator-rate-limit",
     ]);
   });
 });

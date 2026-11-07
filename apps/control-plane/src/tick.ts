@@ -3,7 +3,7 @@
 import { GithubApp } from "@fractalboxdev/flare-dispatch-github";
 import { planTick, releaseHeld, runTickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import { tickDepsFromEnv, type TickDeps, type TickStep } from "@fractalboxdev/flare-dispatch-ops";
-import type { ApplierRateLimit, EffectApplier } from "@fractalboxdev/mameko-ports";
+import type { ActuatorRateLimit, Actuators } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { isolateServices } from "./composition.ts";
 import { profileOf, type ControlPlaneEnv } from "./config.ts";
@@ -39,7 +39,7 @@ export const tickDeps = (
   return tickDepsFromEnv(env as unknown as Parameters<typeof tickDepsFromEnv>[0], {
     profile: profileOf(env),
     ...(withApp
-      ? { appliers: services as unknown as Layer.Layer<EffectApplier | ApplierRateLimit> }
+      ? { appliers: services as unknown as Layer.Layer<Actuators | ActuatorRateLimit> }
       : {}),
     units: (now) => [
       // Held requests whose cooldown window ended are admitted on every tick, whatever triggered them (FD-INT-057).
