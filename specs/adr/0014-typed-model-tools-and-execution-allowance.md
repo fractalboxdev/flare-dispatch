@@ -31,8 +31,13 @@
   call's `maxTokens`. A reservation that exceeds the remaining allowance fails
   with `ModelAllowanceExhausted`, before any request reaches a provider. After
   the call, the gateway settles the reservation to the metered usage.
-- TODO(owner): decide whether `ModelAllowanceExhausted` concludes the
-  check-run `neutral`, like `RunSkipped`, or `failure`.
+- `ModelAllowanceExhausted` concludes the check-run `failure`.
+  - The summary states the allowance, the tokens used, and the setting that
+    raises it.
+  - A run must not convert it into `RunSkipped`.
+  - `RunSkipped` is `neutral` because it reports a platform capacity limit.
+    An exhausted allowance reports the run's own configuration or a loop bug.
+    A `neutral` check would let a pull request merge with no verdict.
 
 ### Typed model tools
 
