@@ -10,8 +10,12 @@ import { readSpend, readSpendLimits, readSpendStatus, warnSpendOnce } from "./sp
 import { ADMISSION_TTL_MS } from "./run-admission-d1";
 import { makeTestBindings, type TestBindings } from "./test-support-workers";
 
-const NOW = Date.UTC(2026, 9, 22, 12, 0);
-const MONTH_START = Date.UTC(2026, 9, 1);
+// The month is the current UTC month: KV rejects a marker whose expiration (seven days past the month's reset) is
+// already behind the wall clock, so a fixed past month fails once that week ends.
+const TODAY = new Date();
+const NOW = Date.UTC(TODAY.getUTCFullYear(), TODAY.getUTCMonth(), 22, 12, 0);
+const MONTH_START = Date.UTC(TODAY.getUTCFullYear(), TODAY.getUTCMonth(), 1);
+const MONTH_KEY = `${TODAY.getUTCFullYear()}-${String(TODAY.getUTCMonth() + 1).padStart(2, "0")}`;
 const HOUR = 3_600_000;
 
 describe("spend-d1", () => {
@@ -73,7 +77,7 @@ describe("spend-d1", () => {
       _kind: "closed",
       reason: "spend budget reached: $50.60 of $50.00 this month",
     });
-    expect(status.month.key).toBe("2026-10");
+    expect(status.month.key).toBe(MONTH_KEY);
   });
 
   it("reads the CONFIG_KV overrides over the vars", async () => {
@@ -100,8 +104,8 @@ describe("spend-d1", () => {
     expect(await Effect.runPromise(warnSpendOnce({ kv: bindings.kv, status, notify }))).toBe(true);
     expect(await Effect.runPromise(warnSpendOnce({ kv: bindings.kv, status, notify }))).toBe(false);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toContain("2026-10: FlareDispatch spend reached $44.00 of the $50.00 monthly budget");
-    expect(await bindings.kv.get("spend.warned:2026-10")).toBe("44000000");
+    expect(sent[0]).toContain(`${MONTH_KEY}: FlareDispatch spend reached $44.00 of the $50.00 monthly budget`);
+    expect(await bindings.kv.get(`spend.warned:${MONTH_KEY}`)).toBe("44000000");
   });
 
   it("sends no warning under the warn ratio", async () => {
@@ -113,6 +117,6 @@ describe("spend-d1", () => {
     );
     expect(warned).toBe(false);
     expect(calls).toBe(0);
-    expect(await bindings.kv.get("spend.warned:2026-10")).toBeNull();
+    expect(await bindings.kv.get(`spend.warned:${MONTH_KEY}`)).toBeNull();
   });
 });
