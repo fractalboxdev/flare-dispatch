@@ -1,5 +1,5 @@
 // The mameko application ports the composition supplies a Layer for, by port id, which configuration validation reads
-// (MAMEKO-HOST-045). Each entry names the Layer `composition.ts` builds for it.
+// (MAMEKO-HOST-046). Each entry names the Layer `composition.ts` builds for it.
 import type { ControlPlaneEnv } from "./config.ts";
 
 const hasApp = (env: ControlPlaneEnv) =>

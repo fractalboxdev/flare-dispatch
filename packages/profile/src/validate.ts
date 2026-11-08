@@ -264,7 +264,7 @@ export const portUses = (p: Profile): PortUses => ({
   attestationVerifier: p.registration.attestation === "verifier",
 });
 
-/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-045 rejects. */
+/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-046 rejects. */
 export const missingPorts = (p: Profile, supplied: readonly string[]): readonly string[] =>
   missingApplicationPorts(portUses(p), supplied);
 

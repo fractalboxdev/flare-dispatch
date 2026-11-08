@@ -24,7 +24,7 @@ export type Deployment = "production" | "development";
 /**
  * The roadmap phase the document serves. A kind, launcher or verifier enters the profile only in the phase whose
  * Layer the dispatcher supplies, because mameko rejects a control plane that uses a port with no Layer
- * (FD-PROF-064, MAMEKO-HOST-045).
+ * (FD-PROF-064, MAMEKO-HOST-046).
  */
 export type Phase = 0 | 1 | 2 | 3 | 4;
 
@@ -508,7 +508,7 @@ const baseProfile = (deployment: Deployment, phase: Phase): Profile => ({
   },
   /**
    * The result-acceptance check rejects a result with `provenance: <check>`, and the execution concludes `failure`
-   * with that reason (MAMEKO-LEASE-091).
+   * with that reason (MAMEKO-LEASE-092).
    */
   reason_kinds: { provenance: "policy" },
 });

@@ -61,7 +61,7 @@ export const newDevice = async () => {
   };
 };
 
-/** A device's registration; a host-process device advertises `isolation:none` (MAMEKO-LEASE-084). */
+/** A device's registration; a host-process device advertises `isolation:none` (MAMEKO-LEASE-085). */
 export const registration = (
   executorId: string,
   identity: unknown,
