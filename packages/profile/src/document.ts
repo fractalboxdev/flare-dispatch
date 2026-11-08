@@ -9,11 +9,10 @@
 import { CATEGORIES } from "@fractalboxdev/mameko-coordinator";
 import {
   ConfigurationSource,
-  decodeProfile,
   GateDecisionSource,
   type ProfileDocument,
 } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer, Match } from "effect";
+import { Effect, Layer } from "effect";
 import type { Predicate, Profile } from "./schema.ts";
 
 /**
@@ -25,7 +24,7 @@ export type Deployment = "production" | "development";
 /**
  * The roadmap phase the document serves. A kind, launcher or verifier enters the profile only in the phase whose
  * Layer the dispatcher supplies, because mameko rejects a control plane that uses a port with no Layer
- * (FD-PROF-064, MAMEKO-HOST-045).
+ * (FD-PROF-064, MAMEKO-HOST-046).
  */
 export type Phase = 0 | 1 | 2 | 3 | 4;
 
@@ -132,7 +131,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     opens_surface: true,
     in_order: true,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: checkRunMarker,
   },
   "check.start": {
@@ -145,7 +144,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     void_after_outcome: true,
     in_order: true,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: checkRunMarker,
   },
   // Generated at each step and placement-state change; one coalescing key per execution, so a newer row voids
@@ -161,7 +160,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     void_after_outcome: true,
     in_order: true,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: checkRunMarker,
   },
   "check.conclude": {
@@ -171,7 +170,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     in_order: true,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: checkRunMarker,
   },
   "check.summary": {
@@ -180,7 +179,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: "the check run found by external_id",
   },
   "check.annotations": {
@@ -189,7 +188,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "checkRun",
+    actuator: "checkRun",
     marker: "annotations read back by check-run id",
   },
   comment: {
@@ -198,7 +197,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "issueComment",
+    actuator: "issueComment",
     marker: bodyMarker,
   },
   review: {
@@ -207,7 +206,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "pullReview",
+    actuator: "pullReview",
     marker: bodyMarker,
   },
   issue: {
@@ -216,7 +215,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "adoptable",
-    applier: "issue",
+    actuator: "issue",
     marker: bodyMarker,
   },
   "pr.propose": {
@@ -227,7 +226,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: ["success"],
     priority: 2,
     effect_class: "adoptable",
-    applier: "pullRequest",
+    actuator: "pullRequest",
     marker: "the head branch name",
   },
   "release.draft": {
@@ -236,7 +235,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: ["success"],
     priority: 2,
     effect_class: "adoptable",
-    applier: "release",
+    actuator: "release",
     marker: "the tag name",
   },
   "release.publish": {
@@ -245,7 +244,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: ["success"],
     priority: 2,
     effect_class: "adoptable",
-    applier: "release",
+    actuator: "release",
     marker: "the tag name",
   },
   "canary.push": {
@@ -255,7 +254,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     priority: 2,
     ops: true,
     effect_class: "adoptable",
-    applier: "canary",
+    actuator: "canary",
     marker: "the tick time in the commit message",
   },
   "delivery.redeliver": {
@@ -265,7 +264,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     priority: 2,
     ops: true,
     effect_class: "adoptable",
-    applier: "webhookRedelivery",
+    actuator: "webhookRedelivery",
     marker: "the delivery's attempts, read back before a repeat",
   },
   label: {
@@ -274,7 +273,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "labels",
+    actuator: "labels",
   },
   "pr.close": {
     origin: "run",
@@ -282,7 +281,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "pullRequest",
+    actuator: "pullRequest",
   },
   "dispatch.followOn": {
     origin: "run",
@@ -290,7 +289,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "followOn",
+    actuator: "followOn",
   },
   "notify.email": {
     origin: "both",
@@ -298,7 +297,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "notifyEmail",
+    actuator: "notifyEmail",
   },
   "notify.slack": {
     origin: "both",
@@ -306,7 +305,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "notifySlack",
+    actuator: "notifySlack",
   },
   "notice.publish": {
     origin: "both",
@@ -314,7 +313,7 @@ const intent_kinds: Profile["intent_kinds"] = {
     applied_for: "any",
     priority: 2,
     effect_class: "replay-safe",
-    applier: "notice",
+    actuator: "notice",
   },
 };
 
@@ -509,7 +508,7 @@ const baseProfile = (deployment: Deployment, phase: Phase): Profile => ({
   },
   /**
    * The result-acceptance check rejects a result with `provenance: <check>`, and the execution concludes `failure`
-   * with that reason (MAMEKO-LEASE-091).
+   * with that reason (MAMEKO-LEASE-092).
    */
   reason_kinds: { provenance: "policy" },
 });
@@ -539,8 +538,6 @@ export const developmentRuntimeFields = (
 const withDevelopmentRuntime = (base: Profile, deployment: Deployment): Profile => {
   const fields = developmentRuntimeFields(deployment);
   if (fields.development_runtime === undefined) return base;
-  // The two fields are outside the `Profile` type of the vendored mameko; the document carries them only where that
-  // mameko's schema decodes them (`MAMEKO_DECLARES_DEVELOPMENT_RUNTIME`).
   return {
     ...base,
     development_runtime: true,
@@ -549,45 +546,21 @@ const withDevelopmentRuntime = (base: Profile, deployment: Deployment): Profile 
         ? c
         : { ...c, isolation: fields.classIsolation[c.name] },
     ),
-  } as unknown as Profile;
+  };
 };
-
-/**
- * Whether the vendored mameko's `Profile` schema declares `development_runtime` and the class isolation `none`. The
- * schema decodes with excess properties rejected, so a document carrying either field under a mameko that does not
- * declare it fails its decode; the development document carries them only where this holds.
- */
-export const MAMEKO_DECLARES_DEVELOPMENT_RUNTIME: boolean = Match.value(
-  decodeProfile(withDevelopmentRuntime(baseProfile("development", CURRENT_PHASE), "development")),
-).pipe(
-  Match.tag("Accepted", () => true),
-  Match.tag("Rejected", () => false),
-  Match.exhaustive,
-);
-
-/** How `buildProfile` treats the development runtime fields; tests override the probe of the vendored schema. */
-export interface BuildOptions {
-  readonly developmentRuntime?: boolean;
-}
 
 /**
  * The profile for a deployment at a phase. Deployments differ only in the policy version, `registration`,
  * `development_runtime` and each device class's `isolation` (FD-PROF-065); phases differ in the cloud kinds, the
  * placement launcher and constraints, and the attestation of `registration`.
  */
-export const buildProfile = (
-  deployment: Deployment,
-  phase: Phase = CURRENT_PHASE,
-  options: BuildOptions = {},
-): Profile =>
-  (options.developmentRuntime ?? MAMEKO_DECLARES_DEVELOPMENT_RUNTIME)
-    ? withDevelopmentRuntime(baseProfile(deployment, phase), deployment)
-    : baseProfile(deployment, phase);
+export const buildProfile = (deployment: Deployment, phase: Phase = CURRENT_PHASE): Profile =>
+  withDevelopmentRuntime(baseProfile(deployment, phase), deployment);
 
 /** The committed production profile at the current phase. */
 export const profile: Profile = buildProfile("production");
 
-/** The result-acceptance check's reason kinds, which MAMEKO-PROF-033 requires the profile to declare. */
+/** The result-acceptance check's reason kinds, which MAMEKO-PROF-036 requires the profile to declare. */
 export const acceptanceReasonKinds: readonly string[] = ["provenance"];
 
 /** The profile as the configuration source delivers it: the document and its policy version. */

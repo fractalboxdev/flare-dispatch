@@ -107,6 +107,7 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
       oidcAudience: undefined,
       dispatchers: [],
       allows: () => true,
+      confidentiality: () => "unclassified",
     },
   });
   const layer = Layer.mergeAll(

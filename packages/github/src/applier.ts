@@ -1,11 +1,13 @@
-// FlareDispatch's effect applier for the check-run kinds (mameko specs/outbox.md
-// § The applier port; specs/github-output.md § Check-run lifecycle, § Outbox).
+// FlareDispatch's applier for the check-run kinds, an actuator in mameko's sense (mameko specs/outbox.md
+// § The actuator port and the actuator rate limit; specs/github-output.md § Check-run lifecycle, § Outbox).
 // Every GitHub response becomes one closed answer; the drainer never sees a
 // status code. Each kind is `adoptable`: `lookup` finds the check run by its
 // `external_id`, the execution id, and reports whether the row's effect is on it.
 import {
+  Actuators,
+  actuatorRegistry,
   AlarmPort,
-  EffectApplier,
+  type Actuator,
   type ApplyAnswer,
   type IntentRow,
   type LookupAnswer,
@@ -428,7 +430,7 @@ export const makeCheckRunApplier = Effect.gen(function* () {
       Match.orElse(reasonOf),
     );
 
-  const service: EffectApplier["Service"] = {
+  const service: Required<Actuator> = {
     apply,
     lookup: (row) =>
       adoptedRun(row).pipe(
@@ -448,4 +450,8 @@ export const makeCheckRunApplier = Effect.gen(function* () {
   return service;
 });
 
-export const CheckRunApplierLive = Layer.effect(EffectApplier, makeCheckRunApplier);
+/** The check-run applier registered as the actuator of the profile's `checkRun` binding. */
+export const CheckRunApplierLive = Layer.effect(
+  Actuators,
+  Effect.map(makeCheckRunApplier, (checkRun) => actuatorRegistry({ checkRun })),
+);

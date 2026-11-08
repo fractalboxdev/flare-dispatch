@@ -36,7 +36,7 @@ export const localPortsLayer = (config: LocalPortsConfig) => {
   >;
 };
 
-/** The `pr.propose` and `pr.close` applier calls for a composite `EffectApplier` keyed by intent kind. */
+/** The `pr.propose` and `pr.close` applier calls for a registered actuator to route by intent kind. */
 export const writebackAppliers = (appLogin: string) => ({
   "pr.propose": {
     apply: applyPrPropose({ writebackFor: agenticWriteback, appLogin }),

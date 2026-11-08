@@ -1,10 +1,10 @@
-import { ApplierRateLimit, type PermitRequest } from "@fractalboxdev/mameko-ports";
+import { ActuatorRateLimit, type PermitRequest } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 import { GithubClient, githubClientLayer, GithubHttpError, observeHeaders } from "./client.ts";
 import {
-  ApplierRateLimitLive,
+  ActuatorRateLimitLive,
   InstallationQuota,
   installationQuotaLayer,
   quotaOptionsDefault,
@@ -26,7 +26,7 @@ const NOW = 1_000_000;
 
 /** Runs against a fresh quota at a fixed test time. */
 const withQuota = <A, E>(
-  effect: Effect.Effect<A, E, ApplierRateLimit | InstallationQuota>,
+  effect: Effect.Effect<A, E, ActuatorRateLimit | InstallationQuota>,
   options = quotaOptionsDefault,
 ) =>
   Effect.runPromise(
@@ -35,14 +35,14 @@ const withQuota = <A, E>(
       return yield* effect;
     }).pipe(
       // One quota instance serves both services.
-      Effect.provide(Layer.provideMerge(ApplierRateLimitLive, installationQuotaLayer(options))),
+      Effect.provide(Layer.provideMerge(ActuatorRateLimitLive, installationQuotaLayer(options))),
       Effect.provide(TestClock.layer()),
     ),
   );
 
 const acquire = (r: PermitRequest) =>
   Effect.gen(function* () {
-    const limit = yield* ApplierRateLimit;
+    const limit = yield* ActuatorRateLimit;
     return yield* limit.acquire(r);
   });
 const observe = (key: string, o: Parameters<InstallationQuota["Service"]["observe"]>[1]) =>
@@ -149,7 +149,7 @@ describe("applier rate limit", () => {
   it("FD-GH-063 MAMEKO-OUT-039 a 9th concurrent call waits until a permit is released", async () => {
     const result = await withQuota(
       Effect.gen(function* () {
-        const limit = yield* ApplierRateLimit;
+        const limit = yield* ActuatorRateLimit;
         const permits: string[] = [];
         for (let i = 0; i < 8; i++) {
           const answer = yield* limit.acquire(permit({ call: i % 2 === 0 ? "apply" : "lookup" }));
@@ -181,7 +181,7 @@ describe("applier rate limit", () => {
   it("MAMEKO-OUT-039 releasing an unknown or already released permit changes nothing", async () => {
     const tags = await withQuota(
       Effect.gen(function* () {
-        const limit = yield* ApplierRateLimit;
+        const limit = yield* ActuatorRateLimit;
         const out: string[] = [];
         for (let i = 0; i < 8; i++) {
           const answer = yield* limit.acquire(permit());
@@ -248,9 +248,9 @@ describe("live client", () => {
       Effect.gen(function* () {
         const github = yield* GithubClient;
         yield* github.createCheckRun({ installation: 7, repo: "acme/app", body: { name: "n" } });
-        const limit = yield* ApplierRateLimit;
+        const limit = yield* ActuatorRateLimit;
         return yield* limit.acquire(permit({ drawsReserve: true }));
-      }).pipe(Effect.provide(Layer.provideMerge(ApplierRateLimitLive, live(fetch)))),
+      }).pipe(Effect.provide(Layer.provideMerge(ActuatorRateLimitLive, live(fetch)))),
     );
     expect(calls).toEqual(["POST https://github.test/repos/acme/app/check-runs"]);
     expect(answer).toEqual({ _tag: "wait", retryAt: 4_102_444_800_000 });

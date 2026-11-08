@@ -59,6 +59,7 @@ export default {
         profile,
         installations: () => Effect.succeed("installation-1"),
         resolveClass: ({ run, requested }) => Effect.succeed(requested ?? run.spec.limits.qosClass),
+        confidentiality: () => "unclassified",
       }),
       d1DeviceRegistry({
         db: env.DB,

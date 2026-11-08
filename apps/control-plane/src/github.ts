@@ -9,7 +9,7 @@ import {
   SideOutputConfig,
   type AppOptions,
 } from "@fractalboxdev/flare-dispatch-github";
-import type { AlarmPort, ApplierRateLimit, EffectApplier } from "@fractalboxdev/mameko-ports";
+import type { ActuatorRateLimit, Actuators, AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import type { ControlPlaneEnv } from "./config.ts";
 import { devFile, devRepositoryOf, type DevRepository } from "./dev-repository.ts";
@@ -55,7 +55,7 @@ export const appServices = (
 ) => githubLiveLayer(app).pipe(Layer.provide(Layer.merge(sideOutputLayer(env, app), alarms)));
 
 export type AppServices = Layer.Success<ReturnType<typeof appServices>>;
-export type { EffectApplier, ApplierRateLimit };
+export type { Actuators, ActuatorRateLimit };
 
 const unknown = (what: string) =>
   Effect.fail(new GithubUnexpected({ message: `the captured repository does not hold ${what}` }));

@@ -7,9 +7,11 @@ import { requestConstraints } from "@fractalboxdev/mameko-coordinator";
 import {
   eligibleKinds as foldConstraints,
   placeAtAdmission,
+  placementIsolation,
   type ClassPlacement,
   type ConfidentialityMode,
   type ExecutorKind,
+  type Isolation,
   type PostureTier,
 } from "@fractalboxdev/mameko-kernel";
 import { Match } from "effect";
@@ -73,6 +75,31 @@ const stricter = (a: PostureTier | null, b: PostureTier): PostureTier =>
  * constraints, intersected with the class's cloud kinds plus `device` where the class is device-eligible. An empty
  * set is unplaceable.
  */
+/** What the placement's isolation depends on besides the class (MAMEKO-LEASE-083). */
+export interface IsolationRequest {
+  readonly class: string;
+  /** The request carries `untrusted-input`: a fork pull request (FD-PROF-018). */
+  readonly untrustedInput: boolean;
+  /** The repository's confidentiality mode; a repository no rule classifies is `unclassified`. */
+  readonly confidentiality: ConfidentialityMode;
+  /** The run declares a grant in its `setup` or `agent` egress phase. */
+  readonly declaresGrant: boolean;
+}
+
+/**
+ * The weakest job sandbox isolation the placement admits: the class's `isolation` (`vm` when it declares none), which
+ * mameko's `placementIsolation` raises from `none` to `container` for untrusted input, a scope that is not
+ * `non-confidential` or a run that declares a grant, so no such request reaches a host-process device
+ * (MAMEKO-LEASE-083, FD-PROF-065).
+ */
+export const isolationOf = (profile: Profile, request: IsolationRequest): Isolation =>
+  placementIsolation({
+    classIsolation: classNamed(profile, request.class)?.isolation ?? "vm",
+    untrustedInput: request.untrustedInput,
+    confidentiality: request.confidentiality,
+    declaresGrant: request.declaresGrant,
+  });
+
 export const eligibleKinds = (profile: Profile, request: PlacementRequest): EligibleSet => {
   const { placement } = profile;
   const cls = classNamed(profile, request.class);

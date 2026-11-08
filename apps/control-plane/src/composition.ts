@@ -1,5 +1,5 @@
 // The services one isolate builds once and every request and tick reads: the GitHub services, intake's Layers and the
-// application ports mameko's validation counts (MAMEKO-HOST-045). A cache or token held here outlives one request.
+// application ports mameko's validation counts (MAMEKO-HOST-046). A cache or token held here outlives one request.
 import { catalogRuns } from "@fractalboxdev/flare-dispatch-intake";
 import {
   d1Admission,
@@ -24,6 +24,7 @@ import {
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { Context, Effect, Layer, Scope } from "effect";
 import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { devRepositoryOf } from "./dev-repository.ts";
 import {
   gitData,
   gitDataWithoutApp,
@@ -48,6 +49,7 @@ const listOf = (value: unknown): readonly string[] => {
 export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
   const raw = env as unknown as Readonly<Record<string, unknown>>;
   const events = listOf(raw["WEBHOOK_EVENTS"]);
+  const dev = devRepositoryOf(env);
   return {
     catalog: catalogRuns(deployment(env)),
     profile: profileOf(env),
@@ -57,6 +59,10 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     oidcAudience: env.DISPATCH_OIDC_AUDIENCE === "" ? undefined : env.DISPATCH_OIDC_AUDIENCE,
     dispatchers: listOf(raw["DISPATCHERS"]).map((d) => d.trim().toLowerCase()),
     allows: () => true,
+    // No policy rule classifies a repository yet; a development deployment's captured repository carries its own mode.
+    confidentiality: (repo) =>
+      (dev !== undefined && dev.repository === repo ? dev.confidentiality : undefined) ??
+      "unclassified",
   };
 };
 

@@ -18,7 +18,7 @@ import { capture, CommandFailed, startService, type RunOptions } from "./process
 import { EXIT_NO_VERDICT, exitCodeOf, verdictLines } from "./verdict.ts";
 
 const ISOLATION_NOTICE =
-  "isolation: MAMEKO-ISO-001 forbids job code on the device OS and no conformant macOS runtime exists, so this run executes on the host. It is reachable only under the development deployment; production refuses it.";
+  "isolation: the device executor runs this check under mameko's host-process development runtime, on the device OS with no job sandbox (isolation:none). Only the development deployment admits it; a production profile rejects a class with isolation none.";
 
 const REPOSITORY = "fractalboxdev/flare-dispatch";
 
@@ -143,6 +143,8 @@ const devRepository = (sha: string) =>
       default_branch: "main",
       head: sha,
       files: { [MANIFEST_PATH]: manifest },
+      // The repository is public, so its runs may reach a host-process device (MAMEKO-LEASE-083).
+      confidentiality: "non-confidential",
     })),
   );
 
@@ -277,6 +279,9 @@ const startDevice = (input: {
     yield* startService(
       binaries.deviceExecutor,
       [
+        "--job-runtime",
+        "host-process",
+        "--allow-host-process",
         "--url",
         `${origin.replace("http://", "ws://")}/v1/executors/connect`,
         "--plane-id",

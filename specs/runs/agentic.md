@@ -9,12 +9,12 @@ This file covers the eight agentic recipes, the staged write and its gate, model
 - [../model-gateway.md](../model-gateway.md) for task tiers, confidentiality routing and allowances;
 - [../run-model.md](../run-model.md) for `defineRun`, the verdict partition and intents;
 - [../github-output.md](../github-output.md) for the outbox, the check-run lifecycle, the quota and how the drain applies the `pr.propose`, `pr.close`, `comment`, `review`, `issue`, `label`, `release.draft` and `release.publish` intent kinds;
-- [../profile.md](../profile.md) for classes, queue age and the staleness point, and mameko's [admission-qos.md](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/admission-qos.md) for `deadline_at` and supersession;
+- [../profile.md](../profile.md) for classes, queue age and the staleness point, and mameko's [admission-qos.md](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/admission-qos.md) for `deadline_at` and supersession;
 - [../isolation-egress.md](../isolation-egress.md) for the job sandbox, the `setup` and `agent` egress profiles and per-lease credentials;
 - [../cache-artifacts.md](../cache-artifacts.md) for the artifact store that holds staged-write blobs;
 - [../provenance.md](../provenance.md) for the record of model-authored changes.
 
-[ADR-0016](../adr/0016-run-catalog-scope.md) records why these recipes ship in the tree; mameko's [ADR-0014](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/adr/0014-model-routing.md) records the model routing they rely on; [ADR-0018](../adr/0018-formal-models.md) records the formal model of the staged-write path allowlist.
+[ADR-0016](../adr/0016-run-catalog-scope.md) records why these recipes ship in the tree; mameko's [ADR-0014](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/adr/0014-model-routing.md) records the model routing they rely on; [ADR-0018](../adr/0018-formal-models.md) records the formal model of the staged-write path allowlist.
 
 Not specified: `finops-audit`, a model-written cost report, because the reservation and usage rows in D1 ([../spend.md](../spend.md)) hold the same numbers deterministically; `org-spec-audit`; a separate pull-request metadata file that overrides the staged write's `pr` field.
 
@@ -34,7 +34,7 @@ A **staged write** is the set of file changes an execution proposes: a manifest 
 
 The **staged-write gate** is the pure function `stagedWriteGate(manifest, writebackSpec, modelAuthored) → accept | reject(reasons)`, run by FlareDispatch's `pr.propose` applier on the manifest before any GitHub call. It evaluates every check on every entry and returns all rejection reasons at once.
 
-A staged write reaches the outbox as one `pr.propose` row that the control plane generates `on: accepted` when it accepts a `success` result that carries one, keyed `cp:pr:propose` ([MAMEKO-OUT-058](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/outbox.md), [profile.md](../profile.md) § Intent kinds). Because the gate runs in the applier, a rejected manifest ends that row `refused` and leaves the execution's outcome as accepted ([MAMEKO-OUT-015](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/outbox.md)).
+A staged write reaches the outbox as one `pr.propose` row that the control plane generates `on: accepted` when it accepts a `success` result that carries one, keyed `cp:pr:propose` ([MAMEKO-OUT-058](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/outbox.md), [profile.md](../profile.md) § Intent kinds). Because the gate runs in the applier, a rejected manifest ends that row `refused` and leaves the execution's outcome as accepted ([MAMEKO-OUT-015](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/outbox.md)).
 
 ```mermaid
 stateDiagram-v2
@@ -144,13 +144,13 @@ flowchart LR
 
 | Recipe | Trigger | Default class | Model calls | Output |
 | --- | --- | --- | --- | --- |
-| `pr-review` | Pull request opened, synchronized or ready for review; Actions dispatch | `interactive` | `bulk` retrieval and pre-pass, `judgment` reviewers | One review comment, check-run annotations |
+| `pr-review` | Pull request opened, synchronized or ready for review; Actions dispatch | `interactive` | `transform` retrieval and pre-pass, `judgment` reviewers | One review comment, check-run annotations |
 | `improve-pr` | Cron or dispatch, per dimension in the repo manifest | `batch` | `judgment` interpretation and edits | Draft pull request |
 | `self-heal-pr` | Dispatch with an `incident/v1` pack | `interactive` | `judgment` edit loop | Draft pull request on a green verify |
 | `spec-drift-pr` | Cron, default `0 5 * * *` | `batch` | `judgment` reconciliation | Rolling draft pull request on `specs/**` |
-| `triage-issues` | Cron or dispatch | `batch` | `bulk` classification | Labels, templated comments, duplicate close |
-| `triage-prs` | Cron or dispatch | `batch` | `bulk` digest lines | One digest staged write |
-| `ci-triage-pr` | Cron, default `0 6 * * *` | `batch` | `bulk` classification, `judgment` write-up | Rolling draft pull request |
+| `triage-issues` | Cron or dispatch | `batch` | `transform` classification | Labels, templated comments, duplicate close |
+| `triage-prs` | Cron or dispatch | `batch` | `transform` digest lines | One digest staged write |
+| `ci-triage-pr` | Cron, default `0 6 * * *` | `batch` | `transform` classification, `judgment` write-up | Rolling draft pull request |
 | `release-notes` | Cron per repo manifest, default `0 9 * * 1`, or dispatch; approval of its release pull request starts the publish execution | `batch` | `judgment` notes | Release pull request; the publish execution returns `release.draft` and `release.publish` intents |
 
 ## Requirements
@@ -204,10 +204,10 @@ flowchart LR
 
 ### Applying a staged write
 
-- **FD-AGT-034** · phase 0 · `V-UNIT` `V-REPLAY` — When the control plane accepts a `success` result that carries a staged write, the `pr.propose` payload binding must return the manifest, so that the control plane inserts exactly one `pr.propose` row for that execution ([MAMEKO-OUT-058](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/outbox.md)); for a result with no staged write it must return `none`.
+- **FD-AGT-034** · phase 0 · `V-UNIT` `V-REPLAY` — When the control plane accepts a `success` result that carries a staged write, the `pr.propose` payload binding must return the manifest, so that the control plane inserts exactly one `pr.propose` row for that execution ([MAMEKO-OUT-058](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/outbox.md)); for a result with no staged write it must return `none`.
 - **FD-AGT-035** · phase 0 · `V-UNIT` — When the staged-write gate accepts a manifest, the `pr.propose` applier must create the blobs, the tree and the commit on the base commit, then create or update the branch ref and open or reuse the pull request.
 - **FD-AGT-037** · phase 0 · `V-UNIT` — An agentic recipe must set the `draft` flag of every staged write it returns to true, except `release-notes`, which sets it to false on its release pull request ([../github-output.md](../github-output.md) FD-GH-083).
-- **FD-AGT-038** · phase 0 · `V-UNIT` — If the `pr.propose` row ends `refused` or `expired`, then the control plane must show the reason on the execution's dashboard page and must not change the execution's verdict ([MAMEKO-OUT-015](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/outbox.md)).
+- **FD-AGT-038** · phase 0 · `V-UNIT` — If the `pr.propose` row ends `refused` or `expired`, then the control plane must show the reason on the execution's dashboard page and must not change the execution's verdict ([MAMEKO-OUT-015](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/outbox.md)).
 - **FD-AGT-039** · phase 0 · `V-UNIT` — The control plane must offer no merge intent kind, and a recipe must not merge a model-authored pull request.
 - **FD-AGT-040** · phase 4 · `V-UNIT` — When the `pr.propose` applier writes a model-authored commit, it must add a `Drafted-With:` trailer whose model entry ids come from the model gateway's records and the device executor's local-call report, never from the run's result.
 
@@ -234,7 +234,7 @@ flowchart LR
 - **FD-AGT-054** · phase 2 · `V-UNIT` — `pr-review` must emit each finding that names a path and line as a check-run annotation, at most 50 per execution.
 - **FD-AGT-055** · phase 2 · `V-UNIT` — While the repo manifest sets `pr-review` to `advisory`, the default, `pr-review` must conclude `success` whatever its coordinated outcome.
 - **FD-AGT-056** · phase 2 · `V-UNIT` — While the repo manifest sets `pr-review` to `gating`, `pr-review` must conclude `failure` with the reason `review: changes requested` when its coordinated outcome is `request-changes`.
-- **FD-AGT-057** · phase 2 · `V-UNIT` `V-SIM` — If every reviewer's call ends `rate-limited` after its wait bound, then `pr-review` must conclude `failure` with the reason `capacity: model unavailable` ([mameko admission-qos.md § Capacity outcomes](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/admission-qos.md#capacity-outcomes)).
+- **FD-AGT-057** · phase 2 · `V-UNIT` `V-SIM` — If every reviewer's call ends `rate-limited` after its wait bound, then `pr-review` must conclude `failure` with the reason `capacity: model unavailable` ([mameko admission-qos.md § Capacity outcomes](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/admission-qos.md#capacity-outcomes)).
 - **FD-AGT-058** · phase 2 · `V-UNIT` — If every reviewer's call ends `context-overflow` after the shrink retries, then `pr-review` must conclude `failure` with the reason `capacity: context overflow`.
 - **FD-AGT-059** · phase 2 · `V-UNIT` — `pr-review` must store its diff artifact readable only through the dashboard's authenticated artifact route.
 
@@ -260,13 +260,13 @@ flowchart LR
 
 ### `ci-triage-pr`
 
-- **FD-AGT-071** · phase 2 · `V-UNIT` — `ci-triage-pr` must read failed executions from the executions table and their failed job logs over the last 24 h, classify each failure with a `bulk` call and write one triage report with a `judgment` call.
+- **FD-AGT-071** · phase 2 · `V-UNIT` — `ci-triage-pr` must read failed executions from the executions table and their failed job logs over the last 24 h, classify each failure with a `transform` call and write one triage report with a `judgment` call.
 - **FD-AGT-072** · phase 2 · `V-UNIT` — `ci-triage-pr` must stage the report as `.flare-dispatch/ci-triage-<YYYY-MM-DD>.md` on the branch `flare-dispatch/ci-triage` with the path allowlist `.flare-dispatch/**`.
 - **FD-AGT-073** · phase 2 · `V-UNIT` — When the executions read succeeds and returns no failure in the window, `ci-triage-pr` must return a `pr.close` intent for its open pull request, which the drain refuses while that branch carries a commit the GitHub App did not author ([../github-output.md](../github-output.md) FD-GH-087).
 
 ### `triage-issues`
 
-- **FD-AGT-074** · phase 3 · `V-UNIT` — `triage-issues` must classify each open issue with one `bulk` call into exactly one of `duplicate`, `needs-repro`, `feature`, `question`, `bug-with-repro`, `bug-without-repro` and `unclassified`, considering at most 40 duplicate candidates.
+- **FD-AGT-074** · phase 3 · `V-UNIT` — `triage-issues` must classify each open issue with one `transform` call into exactly one of `duplicate`, `needs-repro`, `feature`, `question`, `bug-with-repro`, `bug-without-repro` and `unclassified`, considering at most 40 duplicate candidates.
 - **FD-AGT-075** · phase 3 · `V-UNIT` — `triage-issues` must map verdicts to intents: `duplicate` to a templated comment naming the original and a close as duplicate; `needs-repro` to the label `triage:needs-repro` and a templated request; `feature` and `question` to `triage:not-actionable`; `bug-with-repro` to `triage:fix-pending` with the repro and the reporter's `author_association`; `bug-without-repro` to `triage:needs-human`; `unclassified` to no intent.
 - **FD-AGT-076** · phase 3 · `V-UNIT` — `triage-issues` must build every comment from a template, taking from model output only the verdict and the original issue number.
 - **FD-AGT-077** · phase 3 · `V-UNIT` — `triage-issues` must close an issue only for the verdict `duplicate`.
@@ -274,7 +274,7 @@ flowchart LR
 ### `triage-prs`
 
 - **FD-AGT-078** · phase 3 · `V-UNIT` — `triage-prs` must derive each open pull request's state (check health, review state, days since last update, labels) without a model call, and route it to exactly one of `auto-merge`, `nudge`, `unstick` and `ask`.
-- **FD-AGT-079** · phase 3 · `V-UNIT` — `triage-prs` may write each pull request's digest line with one `bulk` call, and the route must not depend on that call's output.
+- **FD-AGT-079** · phase 3 · `V-UNIT` — `triage-prs` may write each pull request's digest line with one `transform` call, and the route must not depend on that call's output.
 - **FD-AGT-080** · phase 3 · `V-UNIT` — `triage-prs` must report its routes as one staged write to the repository its repo manifest names, with the path allowlist `.flare-dispatch/triage/**`, and must return no merge, assignment or close intent.
 
 ### `release-notes`
@@ -293,4 +293,4 @@ flowchart LR
 - TODO(maintainer): decide whether the URL scan of added blob lines (FD-AGT-032) also accepts hosts present elsewhere in the repository at the base commit, which lowers false rejections on documentation edits.
 - TODO(maintainer): set the default `maxDiffChars` for `pr-review` from measured diff sizes on enrolled repositories.
 - TODO(operator): name the repository that receives the `triage-prs` digest in its repo manifest.
-- TODO(maintainer): Until mameko gates an `on: accepted` kind before acceptance (mameko [outbox.md § Open items](https://github.com/fractalboxdev/mameko/blob/51ce06e7d4c38ccf5e3824f5be822948c2754cf3/specs/outbox.md#open-items)), `pr.propose` is keyed `cp:pr:propose`, the staged-write gate runs in its applier, and a rejected manifest ends the row `refused` while the outcome stands; with that gate, the row is keyed `cp:writeback:<branch>` and a rejected manifest concludes the execution `failure` with `writeback: <first reason kind>`.
+- TODO(maintainer): Until mameko gates an `on: accepted` kind before acceptance (mameko [outbox.md § Open items](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/outbox.md#open-items)), `pr.propose` is keyed `cp:pr:propose`, the staged-write gate runs in its applier, and a rejected manifest ends the row `refused` while the outcome stands; with that gate, the row is keyed `cp:writeback:<branch>` and a rejected manifest concludes the execution `failure` with `writeback: <first reason kind>`.

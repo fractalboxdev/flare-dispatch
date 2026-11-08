@@ -169,6 +169,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     oidcAudience: AUDIENCE,
     dispatchers: ["dev@example.com"],
     allows: () => true,
+    confidentiality: () => "unclassified",
     ...options.settings,
   };
   const fetch = (async (input: string | URL | Request) => {

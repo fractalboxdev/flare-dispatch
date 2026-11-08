@@ -1,4 +1,4 @@
-// `ci-triage-pr`: the last 24 h of failed executions and their failed job logs, a `bulk` classification of each, one
+// `ci-triage-pr`: the last 24 h of failed executions and their failed job logs, a `transform` classification of each, one
 // `judgment` write-up staged as a dated report, or a `pr.close` when nothing failed (specs/runs/agentic.md
 // § `ci-triage-pr`).
 import type { RunResult } from "@fractalboxdev/mameko-run";
@@ -54,7 +54,7 @@ const classify = (f: FailedExecution, log: string) =>
     const model = yield* ModelClient;
     const text = yield* model.complete({
       callSite: "classify",
-      tier: "bulk",
+      tier: "transform",
       maxTokens: 16,
       messages: [
         {

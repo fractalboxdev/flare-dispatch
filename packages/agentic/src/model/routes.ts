@@ -7,6 +7,7 @@ import {
   type HostedRoute,
   type RouteAnswer,
 } from "@fractalboxdev/mameko-gateway";
+import type { ModelCallTier } from "@fractalboxdev/mameko-kernel";
 import { Effect } from "effect";
 import { signRequest, type AwsCredentials } from "./sigv4.ts";
 
@@ -33,7 +34,8 @@ export interface RegistryEntry {
   readonly id: string;
   readonly providerId: string;
   readonly routeKind: string;
-  readonly tier: "judgment" | "bulk";
+  /** The model-call tiers the entry serves; never empty. */
+  readonly serves: readonly ModelCallTier[];
   readonly inputPriceMicroUsdPerMTok?: number;
   readonly outputPriceMicroUsdPerMTok?: number;
   /** A `workers-ai` entry's Neurons per million tokens, from which its per-token rate derives (FD-MDL-022). */

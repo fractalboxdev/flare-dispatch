@@ -1,6 +1,12 @@
 // The bindings and rules beside the appliers: `installationOf`, the check label, fan-out children, the conclusion
 // mapping's closure, the neutral invariant, quarantined failures and the check-run lookup's answers.
-import { AlarmPort, EffectApplier, type Alarm, type IntentRow } from "@fractalboxdev/mameko-ports";
+import {
+  type Actuator,
+  Actuators,
+  AlarmPort,
+  type Alarm,
+  type IntentRow,
+} from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { CheckRunApplierLive, InstallationDirectory } from "./applier.ts";
@@ -122,9 +128,9 @@ const details = {
   settled_micro_usd: 0,
 };
 
-const withApplier = <A>(gh: FakeGithub, f: (a: EffectApplier["Service"]) => Effect.Effect<A>) =>
+const withApplier = <A>(gh: FakeGithub, f: (a: Required<Actuator>) => Effect.Effect<A>) =>
   Effect.runPromise(
-    EffectApplier.use(f).pipe(
+    Actuators.use((registry) => f(registry.get("checkRun") as Required<Actuator>)).pipe(
       Effect.provide(CheckRunApplierLive.pipe(Layer.provide(fakeLayers(gh)))),
     ),
   );

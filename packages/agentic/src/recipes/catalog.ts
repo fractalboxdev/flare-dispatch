@@ -85,8 +85,8 @@ export const AGENTIC_CATALOG: Readonly<Record<string, AgenticCatalogEntry>> = {
     ]),
     declaration: {
       callSites: [
-        { name: "retrieval", tier: "bulk" },
-        { name: "pre-pass", tier: "bulk" },
+        { name: "retrieval", tier: "transform" },
+        { name: "pre-pass", tier: "transform" },
         { name: "reviewer", tier: "judgment" },
       ],
       needsModel: true,
@@ -133,7 +133,7 @@ export const AGENTIC_CATALOG: Readonly<Record<string, AgenticCatalogEntry>> = {
   "triage-issues": {
     spec: spec("triage-issues", "batch", 1800, ["label", "comment", "issue"]),
     declaration: {
-      callSites: [{ name: "classify", tier: "bulk" }],
+      callSites: [{ name: "classify", tier: "transform" }],
       needsModel: true,
       dataClasses: classes(true, true, false),
       intentKinds: ["label", "comment", "issue"],
@@ -143,7 +143,7 @@ export const AGENTIC_CATALOG: Readonly<Record<string, AgenticCatalogEntry>> = {
   "triage-prs": {
     spec: spec("triage-prs", "batch", 1800, ["pr.propose"]),
     declaration: {
-      callSites: [{ name: "digest", tier: "bulk" }],
+      callSites: [{ name: "digest", tier: "transform" }],
       needsModel: false,
       dataClasses: classes(true, false, true),
       intentKinds: ["pr.propose"],
@@ -157,7 +157,7 @@ export const AGENTIC_CATALOG: Readonly<Record<string, AgenticCatalogEntry>> = {
     }),
     declaration: {
       callSites: [
-        { name: "classify", tier: "bulk" },
+        { name: "classify", tier: "transform" },
         { name: "write-up", tier: "judgment" },
       ],
       needsModel: true,

@@ -146,12 +146,12 @@ describe("load", () => {
     ]);
   });
 
-  it("MAMEKO-LEASE-091 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
+  it("MAMEKO-LEASE-092 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
     expect(profile.reason_kinds).toEqual({ provenance: "policy" });
     expect(acceptanceReasonKinds).toEqual(["provenance"]);
   });
 
-  it("MAMEKO-PROF-033 every terminal reason and acceptance-check reason kind is built in or declared", () => {
+  it("MAMEKO-PROF-036 every terminal reason and acceptance-check reason kind is built in or declared", () => {
     expect(
       validateProfile(profile, validationContext).filter((r) => r.item === "reason_kinds"),
     ).toEqual([]);
@@ -190,14 +190,14 @@ describe("load", () => {
     ]);
   });
 
-  it("MAMEKO-PROF-013 an applier without lookup rejects its adoptable kinds", () => {
+  it("MAMEKO-PROF-013 an actuator without lookup rejects its adoptable kinds", () => {
     const context = {
       ...validationContext,
-      bindings: { ...bindings, appliers: { ...bindings.appliers, checkRun: ["apply"] } },
+      bindings: { ...bindings, actuators: { ...bindings.actuators, checkRun: ["apply"] } },
     };
     const paths = rejections(committed, committed.policy_version, context).map((r) => r.path);
-    expect(paths).toContain("intent_kinds.check.open.applier");
-    expect(paths).toContain("intent_kinds.check.conclude.applier");
+    expect(paths).toContain("intent_kinds.check.open.actuator");
+    expect(paths).toContain("intent_kinds.check.conclude.actuator");
   });
 
   it("MAMEKO-PROF-013 an emitted kind without an entry is rejected", () => {
@@ -214,7 +214,7 @@ describe("load", () => {
     expect(paths).toContain("delivery.limit_key");
   });
 
-  it("MAMEKO-PROF-031 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
+  it("MAMEKO-PROF-034 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
     const { lean: _, ...withoutLean } = poolAdmissionCaps;
     const undeclared = { ...validationContext, declaredPools: withoutLean };
     expect(rejections(committed, committed.policy_version, undeclared)).toEqual([
@@ -739,19 +739,27 @@ describe("deployments", () => {
     expect(accepted.registration).toEqual({ key_stores: ["software"], attestation: "none" });
   });
 
-  it("at phase 0 the development build differs from production only in version", () => {
+  it("[FD-PROF-065] at phase 0 the development build differs from production only in version and the development runtime", () => {
     const { policy_version: _pv, ...prod } = buildProfile("production");
-    const { policy_version: _dv, ...dev } = buildProfile("development");
-    expect(dev).toEqual(prod);
+    const { policy_version: _dv, development_runtime: _drt, ...dev } = buildProfile("development");
+    expect({
+      ...dev,
+      classes: dev.classes.map(({ isolation: _i, ...c }) => c),
+    }).toEqual(prod);
     expect(development.policyVersion).not.toBe(profileDocument.policyVersion);
   });
 
-  it("[FD-PROF-052] a production deployment at phase 0 rejects a hardware key store nothing attests", () => {
+  it("[FD-PROF-052] MAMEKO-PROF-037 a production deployment at phase 0 rejects a hardware key store nothing attests", () => {
     const unattested = {
       ...committed,
       registration: { key_stores: ["secure-enclave"], attestation: "none" },
     } as typeof committed;
     expect(rejections(unattested, committed.policy_version)).toEqual([
+      {
+        item: "registration",
+        path: "registration.key_stores",
+        reason: "hardware key store under attestation: none; list only software or set attestation: verifier",
+      },
       {
         item: "registration",
         path: "registration.key_stores",
@@ -792,23 +800,23 @@ describe("deployments", () => {
 });
 
 describe("phases", () => {
-  /** The application ports whose Layers exist: `checkRun` serves the effect applier. */
+  /** The application ports whose Layers exist: `checkRun` serves the actuator registry. */
   const supplied = [
-    "effect-applier",
+    "actuator",
     "gate-decision-source",
     "configuration-source",
-    "applier-rate-limit",
+    "actuator-rate-limit",
   ];
   const always = APPLICATION_PORTS.filter((p) => p.required === "always").map((p) => p.id);
 
-  it("[FD-PROF-064] MAMEKO-HOST-045 the phase 0 document needs no port beyond the always-ports", () => {
+  it("[FD-PROF-064] MAMEKO-HOST-046 the phase 0 document needs no port beyond the always-ports", () => {
     expect(requiredApplicationPorts(portUses(profile))).toEqual(always);
     // The alarm port's Layer is the dispatcher's (FD-OPS-053), outside the profile.
     expect(missingPorts(profile, supplied)).toEqual(["alarm-port"]);
     expect(missingPorts(buildProfile("development"), supplied)).toEqual(["alarm-port"]);
   });
 
-  it("[FD-PROF-064] MAMEKO-HOST-045 phase 4 needs the gha launcher and the attestation verifier", () => {
+  it("[FD-PROF-064] MAMEKO-HOST-046 phase 4 needs the gha launcher and the attestation verifier", () => {
     expect(missingPorts(phase4, [...supplied, "alarm-port"])).toEqual([
       "launcher:gha",
       "attestation-verifier",

@@ -2,9 +2,9 @@
 // monitor, drains the outbox once, and every 15 min runs the GitHub probes; 5 min after a canary push it reads the
 // canary's check. Each step runs on its own, so one failing step leaves the others running.
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
-import { drainOnce } from "@fractalboxdev/mameko-coordinator";
+import { actuatorBindings, drainOnce } from "@fractalboxdev/mameko-coordinator";
 import { d1OutboxStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import type { AlarmPort, ApplierRateLimit, EffectApplier } from "@fractalboxdev/mameko-ports";
+import type { ActuatorRateLimit, Actuators, AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Layer } from "effect";
 import { lastTick, recordTick, runOpsMigrations } from "./liveness.ts";
 import {
@@ -36,8 +36,11 @@ export interface TickEnv {
 export interface TickDeps {
   readonly profile: Profile;
   readonly alarmPort: Layer.Layer<AlarmPort>;
-  /** The GitHub App package's effect applier and `InstallationQuota` rate limit; without them the tick drains nothing. */
-  readonly appliers?: Layer.Layer<EffectApplier | ApplierRateLimit>;
+  /**
+   * The GitHub App package's actuators, one per binding the profile's intent kinds name, and its `InstallationQuota`
+   * rate limit; without them the tick drains nothing.
+   */
+  readonly appliers?: Layer.Layer<Actuators | ActuatorRateLimit>;
   /** The App-JWT reads; without them the installation and delivery probes do not run. */
   readonly githubReads?: Layer.Layer<GithubAppReads>;
   /** The canary's fixture repository and installation; without them no canary is pushed. */
@@ -136,12 +139,15 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
 
     steps.push(
       deps.appliers === undefined
-        ? yield* skipped("drain", "no effect applier or applier rate limit Layer")
+        ? yield* skipped("drain", "no actuator or actuator rate limit Layer")
         : yield* run(
             "drain",
-            drainOnce({ now, token: () => crypto.randomUUID(), random: Math.random }).pipe(
-              Effect.provide(Layer.merge(d1OutboxStore(db), deps.appliers)),
-            ),
+            drainOnce({
+              now,
+              token: () => crypto.randomUUID(),
+              random: Math.random,
+              actuatorOf: actuatorBindings(deps.profile.intent_kinds),
+            }).pipe(Effect.provide(Layer.merge(d1OutboxStore(db), deps.appliers))),
           ),
     );
 

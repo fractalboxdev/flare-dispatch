@@ -45,7 +45,7 @@ export interface ValidationContext {
   readonly deployment: Deployment;
   /** The roadmap phase the control plane serves. */
   readonly phase: Phase;
-  /** The bindings and appliers registered in code. */
+  /** The bindings and actuators registered in code. */
   readonly bindings: Bindings;
   /** The kinds a registered run may emit or the control plane generates. */
   readonly emittedKinds: readonly string[];
@@ -264,7 +264,7 @@ export const portUses = (p: Profile): PortUses => ({
   attestationVerifier: p.registration.attestation === "verifier",
 });
 
-/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-045 rejects. */
+/** The application ports the profile needs and `supplied` lacks, which MAMEKO-HOST-046 rejects. */
 export const missingPorts = (p: Profile, supplied: readonly string[]): readonly string[] =>
   missingApplicationPorts(portUses(p), supplied);
 
@@ -288,7 +288,7 @@ const context = (p: Profile, c: ValidationContext): Rejection[] =>
     runs: c.runs,
   }).map(({ path, reason }) => ({ item: path.split(".")[0] ?? path, path, reason }));
 
-/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-033). */
+/** Every terminal failure reason and acceptance-check reason kind is built in or declared (MAMEKO-PROF-036). */
 const reasonKinds = (p: Profile): Rejection[] =>
   validateReasonKinds({
     declared: p.reason_kinds ?? {},

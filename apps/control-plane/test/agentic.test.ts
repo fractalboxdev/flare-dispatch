@@ -1,7 +1,7 @@
-// The one `EffectApplier`: the agentic `pr.propose` and `pr.close` appliers over the GitHub package's applier.
+// The actuators: the agentic `pr.propose` and `pr.close` appliers over the GitHub package's actuator.
 import { GitData, GitDataError } from "@fractalboxdev/flare-dispatch-agentic";
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
-import { EffectApplier, type IntentRow } from "@fractalboxdev/mameko-ports";
+import { Actuators, actuatorRegistry, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { writebackApplier, writebackRecordsDeferred } from "../src/agentic.ts";
@@ -17,13 +17,22 @@ const row = (kind: string, payload: unknown): IntentRow =>
     payload,
   }) as unknown as IntentRow;
 
-const base = (seen: string[]) =>
-  Layer.succeed(EffectApplier, {
-    apply: (r) =>
+/** The profile's binding for each kind these tests apply. */
+const BINDING: Readonly<Record<string, string>> = {
+  "pr.propose": "pullRequest",
+  "pr.close": "pullRequest",
+  "check.conclude": "checkRun",
+};
+
+const base = (seen: string[]) => {
+  const actuator = {
+    apply: (r: IntentRow) =>
       Effect.sync(() => (seen.push(r.kind), { _tag: "applied" as const, externalRef: "base" })),
     lookup: () => Effect.succeed({ _tag: "absent" as const }),
     reconcile: () => Effect.succeed({ _tag: "absent" as const }),
-  });
+  };
+  return Layer.succeed(Actuators, actuatorRegistry({ checkRun: actuator, pullRequest: actuator }));
+};
 
 /** Git data whose every call fails as GitHub refusing it, so a routed row answers the agentic applier's refusal. */
 const refusingGit = Layer.succeed(
@@ -41,10 +50,12 @@ const applierWith = (seen: string[]) =>
 
 const apply = (seen: string[], r: IntentRow) =>
   Effect.runPromise(
-    Effect.flatMap(EffectApplier, (a) => a.apply(r)).pipe(Effect.provide(applierWith(seen))),
+    Effect.flatMap(Actuators, (a) => a.get(BINDING[r.kind]!)!.apply(r)).pipe(
+      Effect.provide(applierWith(seen)),
+    ),
   );
 
-describe("the writeback appliers inside the one applier", () => {
+describe("the writeback appliers inside every actuator", () => {
   it("FD-AGT-009 routes pr.close to the agentic applier, which checks its branch before any GitHub call", async () => {
     const seen: string[] = [];
     const answer = await apply(

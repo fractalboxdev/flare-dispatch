@@ -94,7 +94,9 @@ export const makeClient = (origin: string, accessJwt: string): ControlPlaneClien
         post({
           executor_id: executorId,
           identity,
-          labels: [],
+          // The host-process runtime advertises only `isolation:none`; a claim checks it against the placement's
+          // isolation (MAMEKO-LEASE-085).
+          labels: ["isolation:none"],
           protocol_version: "1",
           code_hash: null,
         }),

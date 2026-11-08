@@ -5,7 +5,7 @@ import { Exit, Schema } from "effect";
 import { WritebackSpec } from "./staged-write/manifest.ts";
 
 /** The model-call tiers of mameko's gateway. */
-export const Tier = Schema.Literals(["bulk", "judgment"]);
+export const Tier = Schema.Literals(["transform", "judgment"]);
 export type Tier = typeof Tier.Type;
 
 /**

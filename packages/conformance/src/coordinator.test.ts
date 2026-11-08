@@ -22,7 +22,7 @@ import {
   OUTBOX_STORE_SCENARIOS,
   RUNTIME_SCENARIOS,
 } from "@fractalboxdev/mameko-conformance";
-import { drainOnce } from "@fractalboxdev/mameko-coordinator";
+import { actuatorBindings, drainOnce } from "@fractalboxdev/mameko-coordinator";
 import {
   d1AllowanceStore,
   d1CapacityLeaseStore,
@@ -35,10 +35,11 @@ import {
 } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { cloudflareRuntimeLayer } from "@fractalboxdev/mameko-host-cloudflare/runtime";
 import {
+  ActuatorRateLimit,
+  Actuators,
+  actuatorRegistry,
   AlarmPort,
-  ApplierRateLimit,
   ConfigurationSource,
-  EffectApplier,
   GateDecisionSource,
   type IntentRow,
 } from "@fractalboxdev/mameko-ports";
@@ -98,14 +99,22 @@ describe("FlareDispatch's application ports on the runtime Layer", () => {
     await runOpsMigrations(db);
     const applied: IntentRow[] = [];
     const permits: string[] = [];
+    const actuator = {
+      apply: (row: IntentRow) =>
+        Effect.sync(() => (applied.push(row), { _tag: "applied" as const, externalRef: "sha" })),
+      lookup: () => Effect.succeed({ _tag: "absent" as const }),
+      reconcile: () => Effect.succeed({ _tag: "absent" as const }),
+    };
     const fakeGithub = Layer.merge(
-      Layer.succeed(EffectApplier, {
-        apply: (row) =>
-          Effect.sync(() => (applied.push(row), { _tag: "applied" as const, externalRef: "sha" })),
-        lookup: () => Effect.succeed({ _tag: "absent" as const }),
-        reconcile: () => Effect.succeed({ _tag: "absent" as const }),
-      }),
-      Layer.succeed(ApplierRateLimit, {
+      Layer.succeed(
+        Actuators,
+        actuatorRegistry(
+          Object.fromEntries(
+            Object.values(profile.intent_kinds).map((k) => [k.actuator, actuator]),
+          ),
+        ),
+      ),
+      Layer.succeed(ActuatorRateLimit, {
         acquire: (r) =>
           Effect.sync(
             () => (permits.push(r.limitKey), { _tag: "granted" as const, permitId: "p" }),
@@ -125,11 +134,11 @@ describe("FlareDispatch's application ports on the runtime Layer", () => {
       fakeGithub,
     );
     const supplied = [
-      "effect-applier",
+      "actuator",
       "gate-decision-source",
       "configuration-source",
       "alarm-port",
-      "applier-rate-limit",
+      "actuator-rate-limit",
     ];
     expect(missingPorts(profile, supplied)).toEqual([]);
     await Effect.runPromise(
@@ -151,7 +160,12 @@ describe("FlareDispatch's application ports on the runtime Layer", () => {
         yield* ConfigurationSource;
         yield* GateDecisionSource;
         yield* AlarmPort;
-        yield* drainOnce({ now: 2_000, token: () => "t", random: () => 0.5 });
+        yield* drainOnce({
+          now: 2_000,
+          token: () => "t",
+          random: () => 0.5,
+          actuatorOf: actuatorBindings(profile.intent_kinds),
+        });
       }).pipe(Effect.provide(composed)),
     );
     expect(applied.map((r) => r.kind)).toEqual(["canary.push"]);
