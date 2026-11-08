@@ -1,6 +1,36 @@
-# / is the product page and /docs/ the specifications. Workers static assets apply these
-# before asset lookup.
-/docs/design/adr/*  /docs/adr/:splat  301
-/design/adr/*       /docs/adr/:splat  301
-/spec/*             /docs/:splat      301
-/specs/*            /docs/:splat      301
+# / is the product page, /docs/ the documentation and /specs/ the specifications. Workers static
+# assets apply these rules before asset lookup, so a rule must not name a page that exists; each
+# specification path is listed because /docs/ also holds live pages. test/specs.test.ts checks both.
+/docs/architecture/        /specs/architecture/        301
+/docs/profile/             /specs/profile/             301
+/docs/run-model/           /specs/run-model/           301
+/docs/intake/              /specs/intake/              301
+/docs/spend/               /specs/spend/               301
+/docs/executor-protocol/   /specs/executor-protocol/   301
+/docs/executors/           /specs/executors/           301
+/docs/isolation-egress/    /specs/isolation-egress/    301
+/docs/cache-artifacts/     /specs/cache-artifacts/     301
+/docs/github-output/       /specs/github-output/       301
+/docs/model-gateway/       /specs/model-gateway/       301
+/docs/local-scheduler/     /specs/local-scheduler/     301
+/docs/interfaces/          /specs/interfaces/          301
+/docs/provenance/          /specs/provenance/          301
+/docs/operability/         /specs/operability/         301
+/docs/runs/gate/           /specs/runs/gate/           301
+/docs/runs/agentic/        /specs/runs/agentic/        301
+/docs/verification/        /specs/verification/        301
+/docs/roadmap/             /specs/roadmap/             301
+/docs/adr/*                /specs/adr/:splat           301
+/docs/design/adr/*         /specs/adr/                 301
+/docs/design/dispatcher/*  /specs/                     301
+/design/adr/*              /specs/adr/                 301
+/design/dispatcher/*       /specs/                     301
+/design/substrate/*        /docs/design/substrate/:splat  301
+/spec/*                    /specs/:splat               301
+/actions/*                 /docs/actions/:splat        301
+/reference/*               /docs/reference/:splat      301
+/runs/                     /docs/runs/                 301
+/substrate/*               /docs/substrate/:splat      301
+/actions                   /docs/actions/              301
+/runs                      /docs/runs/                 301
+/substrate                 /docs/substrate/            301

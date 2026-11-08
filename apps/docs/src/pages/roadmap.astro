@@ -1,0 +1,128 @@
+---
+// /roadmap/: the one page that reports status. "Status now" comes from src/data/status.ts; the
+// phases, their goals and their requirement counts are read from specs/roadmap.md at build time.
+import { getEntry } from "astro:content";
+import Landing from "../layouts/Landing.astro";
+import { DOGFOOD_PR, doesNotProve, proves, states } from "../data/status";
+import { phaseTable } from "../lib/specs.mjs";
+
+const roadmap = await getEntry("docs", "specs/roadmap");
+const { phases, total } = phaseTable(roadmap?.body ?? "");
+---
+
+<Landing
+  title="Roadmap and status | FlareDispatch"
+  description="What deploys today, what runs in development and what is specified, with FlareDispatch's phases and goals from specs/roadmap.md."
+>
+  <div class="page">
+    <header class="page-intro">
+      <div>
+        <span class="section-marker">§ / Roadmap</span>
+        <h1>Roadmap and status.</h1>
+      </div>
+      <div>
+        <p>
+          FlareDispatch has three states. v1 deploys today. v2 runs in development on one machine. The rest of v2 is
+          specified. The specifications state how v2 must behave, in the present tense, and this page states how much
+          of that exists.
+        </p>
+      </div>
+    </header>
+
+    <section id="status">
+      <div class="tenets__header">
+        <span class="section-marker">§01 / Status now</span>
+        <h2>Each capability, in one state.</h2>
+      </div>
+      {
+        states.map((s) => (
+          <div id={s.id} class="compare__wrap compare__wrap--spaced">
+            <h3 class="sub-head">{s.title}</h3>
+            <p class="sub-lede">{s.lede}</p>
+            <table class="compare__table">
+              <caption class="sr-only">{s.title}: each capability and where it stands</caption>
+              <thead>
+                <tr>
+                  <th>Capability</th>
+                  <th>Where</th>
+                </tr>
+              </thead>
+              <tbody>
+                {
+                  s.capabilities.map((c) => (
+                    <tr>
+                      <td>{c.what}</td>
+                      <td>{c.detail}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+        ))
+      }
+    </section>
+
+    <section id="dogfood" class="compare__wrap--spaced">
+      <div class="tenets__header">
+        <span class="section-marker">§02 / pnpm dogfood</span>
+        <h2>What the development run proves.</h2>
+        <p class="section-lede">
+          <code>pnpm dogfood</code> lives on the unmerged <a href={DOGFOOD_PR}>#247</a>. It runs FlareDispatch's own CI
+          on one machine through a local control plane under <code>wrangler dev</code>, the Rust device executor and a
+          real lease.
+        </p>
+      </div>
+      <div class="split split--even">
+        <div>
+          <h3 class="sub-head">It proves</h3>
+          <ul class="facts">{proves.map((p) => <li>{p}</li>)}</ul>
+        </div>
+        <div>
+          <h3 class="sub-head">It does not prove</h3>
+          <ul class="facts">{doesNotProve.map((p) => <li>{p}</li>)}</ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="phases" class="compare__wrap--spaced">
+      <div class="tenets__header">
+        <span class="section-marker">§03 / Phases</span>
+        <h2>Five phases, {total} requirements.</h2>
+        <p class="section-lede">
+          A phase starts only after the gate of the phase before it passes. Gates and kill lines are in the
+          <a href="/specs/roadmap/">roadmap specification</a>, which this table reads at build time.
+        </p>
+      </div>
+      <div class="compare__wrap">
+        <table class="compare__table">
+          <caption class="sr-only">Phases, their goals, their requirement counts and what each waits on</caption>
+          <thead>
+            <tr>
+              <th>Phase</th>
+              <th>Goal</th>
+              <th>Requirements</th>
+              <th>Waits on</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              phases.map((p) => (
+                <tr>
+                  <td>{p.phase}</td>
+                  <td>{p.goal}</td>
+                  <td>{p.requirements}</td>
+                  <td>{p.waitsOn}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+      <p class="more">
+        <a href="/specs/roadmap/">Gates and kill lines →</a>
+        <a href="/docs/v2/">v1 and v2 →</a>
+      </p>
+    </section>
+  </div>
+</Landing>
