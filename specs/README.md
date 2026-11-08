@@ -56,6 +56,12 @@ Each term has one meaning in every file. A file that needs a new term adds it he
 | **Conclusion** | The GitHub check-run conclusion `checkConclusion` derives from a verdict. |
 | **Check family** | All attempts of one run's check on one commit. They share a check name; each re-run is a new execution with dedup suffix `:attempt-<n>`. This number counts executions of the family; the `attempt` of a run payload counts earlier leases of one execution. |
 | **InstallationQuota** | The Durable Object, one per GitHub App installation, that implements mameko's applier rate limit for that installation: it records each response's rate-limit headers and grants or defers one permit per applier call. |
+| **Scan bundle** | The signed, digest-pinned envelope that holds the scanner configuration, baseline checks, exit maps and suppression policy for `security-gate` ([runs/gate.md](runs/gate.md)). |
+| **Baseline check** | A scan bundle entry that decides one control from one change. |
+| **Advisory snapshot** | One OSV archive per ecosystem in the deploying account's R2, which OSV-Scanner reads offline. |
+| **Read-only scan run** | A run that takes no command input, makes no model call and declares only the `check.*` intent kinds. |
+| **Verdict record** | A signed `POST` that tells a deploying organization's own monitoring one execution's verdict ([github-output.md](github-output.md)). |
+| **Containment hold** | A control-plane flag a `containment` identity's `pause-key` sets, under which intake pauses each newly seen delivery key; an `operators` identity's `halt run` clears it. |
 | **Staged write** | The file changes an execution proposes: a manifest (branch, base commit, message, pull-request fields, entries of path, mode and blob digest) plus blobs in the artifact store. It reaches GitHub only through the `pr.propose` applier after the staged-write gate accepts it. |
 | **Staged-write gate** | The pure function `stagedWriteGate(manifest, writebackSpec, modelAuthored)` that the `pr.propose` applier runs before any GitHub call. It checks paths, the deny list, sensitive paths, the allowlist, sizes, modes, branch and the secret and URL scans. |
 | **Cache namespace** | A named partition of the cache (`protected/<repo>/cloud`, `protected/<repo>/device`, `pr/<repo>/<number>`, `exec/<repo>/<execution_id>`, `cas/<sha256>`) that the profile's `cache_namespaces` binding gives an execution at each lease grant as readable or writable. The executor takes it from its lease. |

@@ -29,7 +29,7 @@ Every surface passes exactly one identity check before any route logic runs.
 | Surface | Served by | Callers | Identity | Phase |
 | --- | --- | --- | --- | --- |
 | HTTP API, `/v1/*` | Dispatcher | People, `fd`, automation | Cloudflare Access JWT (people and service tokens) | 0 |
-| `POST /v1/dispatch/:run` | Dispatcher | A GitHub Actions workflow step, or a member or service token through `fd` | GitHub Actions OIDC token, or Access JWT of an identity in `dispatchers` | 0 |
+| `POST /v1/dispatch/:run` | Dispatcher | A GitHub Actions workflow step, or a member or service token through `fd` | GitHub Actions OIDC token, or Access JWT of an identity in `dispatchers` or `dispatch.scoped` | 0 |
 | `POST /v1/webhooks/github` | Dispatcher | GitHub | HMAC-SHA256 over the raw body ([intake.md](intake.md)) | 0 |
 | `/v1/executors/connect` | Dispatcher, then the `ExecutorChannel` Durable Object | Device executors and `gha` runners | A `connect` signature by the device key on the upgrade, verified against the executor row's `device_public_key` ([MAMEKO-PROTO-002](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/executor-protocol.md)); for a `gha` runner, the launcher port's `verify` of its OIDC token ([executors.md](executors.md)) | 1 |
 | `POST /v1/executors/register` | Dispatcher | An operator enrolling a device | Access JWT of an identity in `operators` | 1 |
@@ -164,6 +164,7 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `POST /v1/ops/drain` | Drain one executor | 1 |
 | `POST /v1/ops/revoke` | Revoke one device key | 1 |
 | `POST /v1/ops/pause-key`, `POST /v1/ops/resume-key` | Pause or resume one delivery key: an installation's `limit_key` | 1 |
+| `GET /v1/ops/delivery-keys` | Every installation's delivery key, read from the GitHub App | 2 |
 | `GET /v1/ops/health` | Installation, delivery, cron, executor, outbox and control-state health ([operability.md](operability.md) FD-OPS-036) | 0 |
 | `GET /v1/spend` | Month-to-date spend per class line ([spend.md](spend.md)) | 0 |
 | `GET /.well-known/openid-configuration`, `GET /.well-known/jwks.json` | OIDC discovery and keys | 0 |
@@ -232,7 +233,7 @@ stateDiagram-v2
 | `fd logs <id>` | `GET /v1/executions/:id/logs/:file` | 0 |
 | `fd cancel <id>` | `POST /v1/executions/:id/cancel`, or the local scheduler for a local id | 0 |
 | `fd ls` | `GET /v1/executions` | 0 |
-| `fd ops halt`, `drain`, `quarantine`, `release`, `force-admit`, `top-up`, `revoke`, `pause-key`, `resume-key` | `/v1/ops/*` | 0 |
+| `fd ops halt`, `drain`, `quarantine`, `release`, `force-admit`, `top-up`, `revoke`, `pause-key`, `resume-key`, `delivery-keys` | `/v1/ops/*` | 0 |
 | `fd deploy`, `fd doctor` | As [operability.md](operability.md) specifies | 0 |
 | `fd rehearse <run>`, `fd queue`, `fd lease` | The local scheduler socket; commands mameko's `<cli>` defines | 1 |
 | `fd identity` | The key helper socket; a command mameko's `<cli>` defines ([MAMEKO-EXEC-141](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/executors.md)) | 1 |
@@ -306,7 +307,7 @@ flowchart LR
 - **FD-IFC-013** · phase 0 · `V-UNIT` — If a gated route receives no Access JWT, then the dispatcher must answer 401 `unauthenticated`, or redirect a browser request to the Access login.
 - **FD-IFC-014** · phase 0 · `V-UNIT` `V-DEPLOY` — If the operator overlay sets no Access team domain or audience, then the dispatcher must answer 503 `not_configured` on every gated route.
 - **FD-IFC-015** · phase 0 · `V-UNIT` `V-DEPLOY` — The dispatcher must not offer any mode that serves a gated route without identity.
-- **FD-IFC-016** · phase 0 · `V-UNIT` — If the identity on a `/v1/ops/*` request is not in the operator overlay's `operators`, then the dispatcher must answer 403 `forbidden`.
+- **FD-IFC-016** · phase 0 · `V-UNIT` — If the identity on a `/v1/ops/*` request is not in the operator overlay's `operators`, and is not a `containment` identity on a route FD-IFC-095 names, then the dispatcher must answer 403 `forbidden`.
 - **FD-IFC-017** · phase 0 · `V-UNIT` — The dispatcher must serve a log or an artifact only to an Access identity or to a request with an unexpired, unrevoked link token bound to that execution or artifact.
 
 ### Link tokens
@@ -323,7 +324,7 @@ flowchart LR
 - **FD-IFC-024** · phase 0 · `V-UNIT` `V-LIVE` — When `POST /v1/dispatch/:run` carries a GitHub Actions OIDC token, the dispatcher must verify it against GitHub's OIDC keys with `iss` equal to `https://token.actions.githubusercontent.com` and `aud` equal to the operator overlay's `dispatch.oidcAudience`.
 - **FD-IFC-025** · phase 0 · `V-UNIT` — When a dispatch carries an Actions OIDC token, the dispatcher must take the repository, ref and workflow ref from the token's claims.
 - **FD-IFC-026** · phase 0 · `V-UNIT` — If a dispatch body names a repository other than the token's `repository` claim, then the dispatcher must answer 403 `repository_mismatch`.
-- **FD-IFC-027** · phase 0 · `V-UNIT` — If a dispatch carries neither a valid Actions OIDC token nor an Access JWT of an identity in the operator overlay's `dispatchers`, then the dispatcher must answer 401 `unauthenticated` before it looks up the run.
+- **FD-IFC-027** · phase 0 · `V-UNIT` — If a dispatch carries neither a valid Actions OIDC token nor an Access JWT of an identity in the operator overlay's `dispatchers` or `dispatch.scoped`, then the dispatcher must answer 401 `unauthenticated` before it looks up the run.
 - **FD-IFC-028** · phase 0 · `V-UNIT` — If the dispatched run is not in the catalog or the repository's manifest, then the dispatcher must answer 404 `run_not_found`.
 - **FD-IFC-029** · phase 0 · `V-UNIT` — If a dispatch's inputs fail the run's input schema, then the dispatcher must answer 400 `invalid_inputs`.
 - **FD-IFC-030** · phase 0 · `V-UNIT` — If a dispatch's `signals` exceed the `signals/v1` caps (source 120, title 200, detail 2000 and url 1000 characters; at most 50 entries), then the dispatcher must answer 400 `invalid_signals`.
@@ -343,7 +344,7 @@ flowchart LR
 - **FD-IFC-043** · phase 0 · `V-UNIT` — If a failure summary is requested for an execution whose verdict is not `failure`, then the dispatcher must answer 409 `not_failed`.
 - **FD-IFC-044** · phase 0 · `V-UNIT` — If a failure summary is requested for an execution that is not `done`, then the dispatcher must answer 409 `not_finished`.
 - **FD-IFC-045** · phase 4 · `V-UNIT` — Where a repository's confidentiality mode is `confidential-compute` ([profile.md](profile.md) FD-PROF-025), the dispatcher must return in its failure summaries only the reason and the failing step names, with no log tail, path or file content.
-- **FD-IFC-046** · phase 0 · `V-UNIT` — If a cancel request comes from an identity that neither dispatched the execution nor is in the operator overlay's `operators`, then the dispatcher must answer 403 `forbidden`.
+- **FD-IFC-046** · phase 0 · `V-UNIT` — If a cancel request comes from an identity that did not dispatch the execution and is in neither the operator overlay's `operators` nor its `containment`, then the dispatcher must answer 403 `forbidden`.
 
 ### Operator API
 
@@ -351,6 +352,27 @@ flowchart LR
 - **FD-IFC-049** · phase 0 · `V-UNIT` — If the store transaction of an operator operation fails, then the dispatcher must answer 503 `unavailable`, and the control state stays unchanged.
 - **FD-IFC-050** · phase 0 · `V-UNIT` — If the coordinator rejects a force-admit or top-up request for its `expires_at` ([MAMEKO-OPS-033](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/operability.md)), then the dispatcher must answer 400 `invalid_body`.
 - **FD-IFC-083** · phase 0 · `V-UNIT` — The dispatcher must pass the request id it assigns to every `/v1/ops/*` call, the operator's Access identity and the `reason` to the coordinator's operation, which writes them on the audit row ([MAMEKO-OPS-032](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/operability.md)).
+
+### Scoped dispatch
+
+- **FD-IFC-089** · phase 2 · `V-UNIT` — If an identity in `dispatch.scoped` names a run outside its entry's `runs`, then the dispatcher must answer 403 `forbidden` before it looks up the run.
+- **FD-IFC-090** · phase 2 · `V-UNIT` — If an identity in `dispatch.scoped` names a repository outside its entry's `repositories`, then the dispatcher must answer 403 `forbidden` before it looks up the run.
+- **FD-IFC-091** · phase 2 · `V-UNIT` — When an identity in `dispatch.scoped` dispatches a run, the dispatcher must pass its entry's `classCeiling` to `resolveClass`.
+- **FD-IFC-092** · phase 2 · `V-UNIT` — If a dispatch of a read-only scan run carries no `Idempotency-Key` header, then the dispatcher must answer 400 `invalid_idempotency_key`.
+- **FD-IFC-093** · phase 2 · `V-UNIT` — If a dispatch names the run `security-gate`, then the dispatcher must answer 403 `forbidden`, for every identity.
+
+### Containment
+
+A `containment` identity tightens controls and does not release them. The order of its calls is runbook R16 in [operability.md](operability.md).
+
+- **FD-IFC-094** · phase 2 · `V-UNIT` `V-LIVE` — `GET /v1/ops/delivery-keys` must return the id of every installation of the GitHub App, following every page of `GET /app/installations`.
+- **FD-IFC-095** · phase 2 · `V-UNIT` — The dispatcher must admit a `containment` identity on the `/v1/ops/*` routes `POST /v1/ops/halt`, `POST /v1/ops/quarantine`, `POST /v1/ops/pause-key` and `GET /v1/ops/delivery-keys`, and on no other `/v1/ops/*` route.
+- **FD-IFC-096** · phase 2 · `V-UNIT` — If a `containment` identity requests the state `run` on `POST /v1/ops/halt`, then the dispatcher must answer 403 `forbidden`.
+- **FD-IFC-097** · phase 2 · `V-UNIT` — If a `containment` identity requests `halt-cloud` while the control state is `halt-all`, then the dispatcher must answer 403 `forbidden`.
+- **FD-IFC-098** · phase 2 · `V-UNIT` — If a `containment` identity requests `POST /v1/ops/pause-key` for the key `records`, then the dispatcher must answer 403 `forbidden`.
+- **FD-IFC-099** · phase 2 · `V-UNIT` — If a page of `GET /app/installations` fails, then the dispatcher must answer `GET /v1/ops/delivery-keys` with 503 `unavailable` and no list.
+- **FD-IFC-100** · phase 2 · `V-UNIT` — When the dispatcher applies `POST /v1/ops/pause-key` for a `containment` identity, it must set the containment hold in the operation's store transaction.
+- **FD-IFC-101** · phase 2 · `V-UNIT` — When an identity in `operators` sets the control state `run`, the dispatcher must clear the containment hold in the operation's store transaction.
 
 ### Executor connection and enrollment
 

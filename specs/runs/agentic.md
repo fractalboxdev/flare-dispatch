@@ -224,7 +224,7 @@ flowchart LR
 ### `pr-review`
 
 - **FD-AGT-045** · phase 2 · `V-UNIT` — When a pull request is opened, synchronized or marked ready for review, or an Actions dispatch names `pr-review`, intake must start a `pr-review` execution for the head commit.
-- **FD-AGT-046** · phase 2 · `V-UNIT` — If the pull request is a draft without the label `request-ai-review`, carries the label `skip-ai-review`, or has an author whose login ends in `[bot]`, then `pr-review` must conclude `skipped` with the reason `not-applicable: draft-pr`, `not-applicable: not-configured` or `not-applicable: author-excluded` respectively.
+- **FD-AGT-046** · phase 2 · `V-UNIT` — If the pull request is a draft without the label `request-ai-review`, carries the label `skip-ai-review`, or has an author whose login ends in `[bot]`, then `pr-review` must conclude `skipped` with the reason `not-applicable: draft-pr`, `not-applicable: not-configured` or `not-applicable: author-excluded` respectively, under the narrowing of FD-AGT-091 and FD-AGT-092.
 - **FD-AGT-047** · phase 2 · `V-UNIT` `V-SIM` — `pr-review` must run in class `interactive` by default, with that class's claim deadline of 300 s ([../profile.md](../profile.md) § Class catalogue) and a run ceiling of 1500 s set in the repo manifest.
 - **FD-AGT-049** · phase 2 · `V-UNIT` — The executor must build the review diff with `git diff` in the checkout, drop lockfile, generated and vendored paths, cap it at `maxDiffChars` from the repo manifest, and add lint grounding of at most 60 files and 8000 characters.
 - **FD-AGT-050** · phase 2 · `V-UNIT` — `pr-review` must classify the change as `full`, `lite` or `trivial` and run 7, 4 or 1 reviewers respectively, each reviewer in its own `Activity`.
@@ -237,6 +237,13 @@ flowchart LR
 - **FD-AGT-057** · phase 2 · `V-UNIT` `V-SIM` — If every reviewer's call ends `rate-limited` after its wait bound, then `pr-review` must conclude `failure` with the reason `capacity: model unavailable` ([mameko admission-qos.md § Capacity outcomes](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/admission-qos.md#capacity-outcomes)).
 - **FD-AGT-058** · phase 2 · `V-UNIT` — If every reviewer's call ends `context-overflow` after the shrink retries, then `pr-review` must conclude `failure` with the reason `capacity: context overflow`.
 - **FD-AGT-059** · phase 2 · `V-UNIT` — `pr-review` must store its diff artifact readable only through the dashboard's authenticated artifact route.
+
+### Finding identity
+
+- **FD-AGT-089** · phase 2 · `V-UNIT` — `pr-review` must set each finding's `ruleId` to `pr-review/<reviewer>`.
+- **FD-AGT-090** · phase 2 · `V-UNIT` — `pr-review` must set each finding's `fingerprint` to the SHA-256 of the canonical JSON of its `ruleId`, `path` and `startLine`.
+- **FD-AGT-091** · phase 2 · `V-UNIT` — Where the repo manifest's `prReview.reviewBots` lists a pull request's author login, `pr-review` must not conclude `not-applicable: author-excluded` for that pull request.
+- **FD-AGT-092** · phase 2 · `V-UNIT` — While `pr-review`'s check name is in the target branch's required set, `pr-review` must ignore the label `skip-ai-review`.
 
 ### `improve-pr`
 
@@ -291,6 +298,8 @@ flowchart LR
 ## Open items
 
 - TODO(maintainer): decide whether the URL scan of added blob lines (FD-AGT-032) also accepts hosts present elsewhere in the repository at the base commit, which lowers false rejections on documentation edits.
+- TODO(operator): decide whether FD-AGT-056's `gating` mode stays available now that `security-gate` holds the security merge check, or a repository may also gate on `pr-review`.
+- TODO(operator): decide whether a repository that requires `pr-review` still concludes `author-excluded` for a bot outside `prReview.reviewBots`, which GitHub treats as passing.
 - TODO(maintainer): set the default `maxDiffChars` for `pr-review` from measured diff sizes on enrolled repositories.
 - TODO(operator): name the repository that receives the `triage-prs` digest in its repo manifest.
 - TODO(maintainer): Until mameko gates an `on: accepted` kind before acceptance (mameko [outbox.md § Open items](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/outbox.md#open-items)), `pr.propose` is keyed `cp:pr:propose`, the staged-write gate runs in its applier, and a rejected manifest ends the row `refused` while the outcome stands; with that gate, the row is keyed `cp:writeback:<branch>` and a rejected manifest concludes the execution `failure` with `writeback: <first reason kind>`.

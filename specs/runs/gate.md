@@ -1,6 +1,6 @@
 # Gate recipes
 
-This file specifies the gate and test recipes in the catalog (`check`, `oxlint`, `offload-test`, `worker-deploy`, `deploy-smoke` and `sandbox-image`), the job-matrix primitive that fans one execution out into separately placed jobs, and the rule that maps each job's exit to a verdict. A red test never concludes `success`.
+This file specifies the gate and test recipes in the catalog (`check`, `oxlint`, `offload-test`, `security-gate`, `security-rescan`, `worker-deploy`, `deploy-smoke` and `sandbox-image`), the job-matrix primitive that fans one execution out into separately placed jobs, and the rule that maps each job's exit to a verdict. A red test never concludes `success`.
 
 ## Scope
 
@@ -33,6 +33,8 @@ The class in this table is the recipe's default; `resolveClass` ([profile.md](..
 | `check` | `required` | 4500 s | any eligible executor | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`), `merge_group`, Actions dispatch | `check` |
 | `oxlint` | `required` | 600 s | any eligible executor | as `check` | `oxlint` |
 | `offload-test` | `required` | 3600 s | any eligible executor | as `check` | `offloadTest` |
+| `security-gate` | `required` | 1800 s | `cloud-only` | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`), `merge_group`, check re-runs | `securityGate` |
+| `security-rescan` | `batch` | 1800 s | `cloud-only` | Dispatch | `securityGate` |
 | `worker-deploy` | `release` | 1800 s | `cloud-pinned` | `push` to the deploy branch, Actions dispatch | `workerDeploy` |
 | `deploy-smoke` | `release` | 300 s | `control` pool, no container | `worker-deploy` success, `deployment_status` success | `deploySmoke` |
 | `sandbox-image` | `required` on a pull request, `release` on publish | 3600 s | `cloud-pinned` on publish | `pull_request` and `push` to the default branch that change `sandboxImage.paths` | `sandboxImage` |
@@ -46,6 +48,7 @@ check:
     timeoutSec: 900
 oxlint:
   version: 1.79.0
+securityGate: {}
 offloadTest:
   install: pnpm install --frozen-lockfile
   window: 8
@@ -156,6 +159,9 @@ Every gate job outcome maps to exactly one verdict and reason. [github-output.md
 | Infrastructure error after the class's retries | `failure` | `infra: <error tag>` |
 | Install command non-zero | `failure` | `install: exit <code>` |
 | Invalid manifest entry | `failure` | `config: <field>` |
+| Scan bundle or advisory snapshot unusable | `failure` | `config: <field>` |
+| A scanner or baseline check reports a finding | `failure` | `scan: <scanner or control ids>` |
+| A scanner or baseline check exit maps to `tool-error` or to nothing | `failure` | `scan-error: <scanner or control id> exit <code>` |
 | Parent or execution superseded | `cancelled` | `superseded` |
 
 ```mermaid
@@ -191,6 +197,73 @@ flowchart TB
 ```
 
 *exit-to-verdict · no branch from a non-zero exit reaches success.*
+
+### Security gate
+
+`security-gate` reports whether a change adds a known-vulnerable dependency, a secret, an unsafe workflow or a failed baseline check. It is the required check for that question; [ADR-0019](../adr/0019-security-gate-scan-bundle.md) records why it takes this shape.
+
+| Term | Meaning |
+| --- | --- |
+| **Scan bundle** | The DSSE envelope, with payload type `application/vnd.flare-dispatch.scan-bundle.v1+json`, whose payload holds the fields below. The overlay's `scan.bundleDigest` pins one envelope. |
+| **Baseline check** | A bundle entry that decides one control from one change: `controlId`, `rule`, `tool`, `argv` and `exitMap`. |
+| **Advisory snapshot** | One OSV `all.zip` archive per ecosystem in `cas/<sha256>`, with its digest and `Last-Modified` time in the control-plane store. |
+| **Scan result** | What one scanner or baseline check reports: `clean`, `finding`, `tool-error` or `nothing-in-scope`. |
+| **Read-only scan run** | A run whose declaration sets `readOnlyScan`, takes no command input, declares no model call site and declares no intent kind other than the `check.*` kinds. `security-rescan` is the one in the catalog. |
+
+| Scan bundle field | Holds |
+| --- | --- |
+| `version` | The bundle's version string |
+| `gitleaks.config`, `zizmor.config` | The configuration file each scanner runs with |
+| `scanners.<name>.versions` | The accepted semver range for `gitleaks`, `zizmor` and `osv-scanner` |
+| `scanners.<name>.exitMap`, `baselineChecks[].exitMap` | Each exit code's scan result |
+| `suppression.files` | The base names the recipe restores from the base commit; at least `.gitleaksignore` and `osv-scanner.toml` |
+| `suppression.markers` | The regular expressions the recipe removes from added lines; at least the one for `# zizmor: ignore[...]` |
+| `baselineChecks[]` | The baseline checks |
+
+A run takes these steps, and every scanner and baseline check runs even after an earlier one reports a finding:
+
+1. Verify the scan bundle's digest, the scanner versions and the snapshot's age.
+2. Check out the head commit and read the scan range: the merge base with the target branch, or `merge_group.base_sha`, to the head.
+3. Restore each file named in `suppression.files` that the range changes, from the base commit, or delete the file where the base commit has none.
+4. Remove each `suppression.markers` match from the lines the range adds, in the checkout.
+5. Run each scanner on its scope, then each baseline check.
+6. Conclude from the scan results.
+
+```mermaid
+flowchart TB
+  accTitle: From a pull request to the security-gate verdict
+  pr([Pull request or merge group event]) --> ver{Bundle digest, versions and snapshot age valid?}
+  ver e1@-->|no| cfg["failure: config"]
+  ver -->|yes| strip[Restore suppression files and remove added markers]
+  strip --> scan[Run every scanner and baseline check]
+  scan --> res{Scan results?}
+  res e2@-->|any tool-error or unmapped exit| err["failure: scan-error"]
+  res e3@-->|any finding| fnd["failure: scan"]
+  res -->|only clean and nothing-in-scope| ok([success])
+  class pr accent
+  class ver,res warn
+  class strip,scan accent
+  class ok ok
+  class cfg,err,fnd danger
+  class e1,e2,e3 failure
+```
+
+*Security gate · no path ends `skipped` or `neutral`; a tool error outranks a finding in the reason.*
+
+| Scanner | Scope | Invocation | A head input it would honour | How the recipe removes that input |
+| --- | --- | --- | --- | --- |
+| gitleaks | Every commit of the range | `gitleaks git --log-opts=<range> --config <bundle file> --ignore-gitleaks-allow --redact=100 --exit-code 42 --report-format json` | `.gitleaks.toml` | `--config` replaces it |
+| | | | `gitleaks:allow` on an added line | `--ignore-gitleaks-allow`; the scope holds added lines only, so a target-branch marker on an unchanged line stays out of scope |
+| | | | `.gitleaksignore` | Step 3; `--gitleaks-ignore-path` does not stop gitleaks reading the file in the scanned directory |
+| zizmor | Each workflow and composite action the range changes | `zizmor --offline --no-progress --format json --config <bundle file> <files>` | `zizmor.yml`, `.github/zizmor.yml` | `--config` replaces them |
+| | | | `# zizmor: ignore[...]` on an added line | Step 4; `--no-ignores` is not used because it also drops target-branch markers |
+| OSV-Scanner | Each lockfile the range changes | `osv-scanner scan source --offline-vulnerabilities --format json -L <files>`, with `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY` set to the snapshot and no `--download-offline-databases` | `osv-scanner.toml` beside a lockfile | Step 3; `--config` is not used because it also drops the target branch's file |
+
+| Scanner | `clean` | `finding` | `tool-error` | `nothing-in-scope` | Fingerprint locator |
+| --- | --- | --- | --- | --- | --- |
+| gitleaks | 0 | 42 | 1 | No commit in the range | `<path>:<start line>` |
+| zizmor | 0 | 11 to 14 | 1, 2, 3 | No workflow in the range | `<path>:<start line>` |
+| OSV-Scanner | 0 | 1 | 127 | 128, or no lockfile in the range | `<lockfile path>:<package>@<version>` |
 
 ### Deploy and smoke
 
@@ -234,7 +307,7 @@ sequenceDiagram
 
 ### Every gate recipe
 
-- **FD-GATE-001** · phase 0 · `V-UNIT` — Where a gate recipe runs a command, the recipe must take that command only from the repository's repo manifest entry or from the dispatch inputs, and the control plane must not hold a default command that applies to every repository.
+- **FD-GATE-001** · phase 0 · `V-UNIT` — Where a gate recipe runs a command, other than `security-gate` or `security-rescan`, the recipe must take that command only from the repository's repo manifest entry or from the dispatch inputs, and the control plane must not hold a default command that applies to every repository.
 - **FD-GATE-002** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — When a gate job's command exits with code 0, the recipe must record the verdict `success` for that job.
 - **FD-GATE-003** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — When a gate job's command exits with a non-zero code, the recipe must record the verdict `failure` with the reason `exit: <code>`.
 - **FD-GATE-004** · phase 0 · `V-UNIT` — The gate recipes and the job matrix must not offer any manifest field, input or default that maps a non-zero exit, a failed job or a failed shard to `success`.
@@ -342,7 +415,45 @@ sequenceDiagram
 - **FD-GATE-080** · phase 0 · `V-UNIT` `V-PROOF` `V-DIFF` — The control plane must place a publishing `sandbox-image` execution at class `release` under the `cloud-pinned` constraint on an executor that carries the label `container-artifact` ([executors.md](../executors.md) § Capability labels).
 - **FD-GATE-082** · phase 0 · `V-UNIT` — When a `sandbox-image` execution runs the smoke commands of a `linux/arm64` image on an executor that does not advertise `linux-arm64`, the recipe must run them under QEMU user-mode emulation with `--platform linux/arm64`, and if emulation is unavailable on that executor, then the recipe must record `failure` with the reason `image: <name> linux/arm64 emulation unavailable` and publish no image.
 
+### Security gate
+
+- **FD-GATE-083** · phase 2 · `V-UNIT` — The run catalog must ship the gate recipes `security-gate` and `security-rescan`, which a repo manifest enrolls with the key `securityGate`.
+- **FD-GATE-084** · phase 2 · `V-UNIT` — The `securityGate` manifest entry and the input schemas of `security-gate` and `security-rescan` must hold no command, scanner, flag or skip field.
+- **FD-GATE-085** · phase 2 · `V-UNIT` `V-E2E-LOCAL` — `security-gate` must run on every `pull_request` and `merge_group` trigger its table row names, whatever the pull request's author, labels or draft state.
+- **FD-GATE-086** · phase 2 · `V-UNIT` — `security-gate` and `security-rescan` must not conclude `skipped` on any path.
+- **FD-GATE-087** · phase 2 · `V-UNIT` — When a scan runs, the recipe must run every scanner and every baseline check, including those after a `finding`.
+- **FD-GATE-088** · phase 2 · `V-UNIT` — When a scanner has no input in the scan range, the recipe must record `nothing-in-scope` for that scanner with no invocation.
+- **FD-GATE-089** · phase 2 · `V-UNIT` — When every scan result is `clean` or `nothing-in-scope`, the recipe must record `success`.
+- **FD-GATE-090** · phase 2 · `V-UNIT` — If a scanner or baseline check's exit code maps to `tool-error` or is absent from its exit map, then the recipe must record `failure` with the reason `scan-error: <scanner or control id> exit <code>`, ahead of any `scan:` reason.
+- **FD-GATE-091** · phase 2 · `V-UNIT` — If a scan result is `finding` and no result is `tool-error`, then the recipe must record `failure` with the reason `scan: <scanners and control ids>`.
+- **FD-GATE-092** · phase 2 · `V-UNIT` — The recipe must fetch every commit of the scan range before any scanner runs.
+- **FD-GATE-093** · phase 2 · `V-UNIT` `V-E2E-LOCAL` — Before any scanner runs, the recipe must restore from the base commit each file whose base name `suppression.files` lists and the range changes, and must delete that file where the base commit has none.
+- **FD-GATE-094** · phase 2 · `V-UNIT` `V-E2E-LOCAL` — Before any scanner runs, the recipe must remove every `suppression.markers` match from the lines the scan range adds, in the checkout, and must leave every other line unchanged.
+- **FD-GATE-095** · phase 2 · `V-UNIT` — The recipe must run gitleaks, zizmor and OSV-Scanner with exactly the invocation § Security gate gives, on the scope that table names.
+- **FD-GATE-096** · phase 2 · `V-UNIT` — The recipe must report each finding with `scanner`, `ruleId`, `path`, `startLine`, `level` and `fingerprint`, where `ruleId` is the gitleaks rule id, the zizmor audit id or the OSV advisory id.
+- **FD-GATE-097** · phase 2 · `V-UNIT` — The recipe must set each scan finding's `fingerprint` to the SHA-256 of the canonical JSON of its scanner, `ruleId` and fingerprint locator.
+- **FD-GATE-098** · phase 2 · `V-UNIT` — The recipe must not derive a fingerprint from a matched secret's value, and must not write a matched value to a log, annotation, check summary, artifact or finding.
+- **FD-GATE-099** · phase 2 · `V-UNIT` — The check summary must name the scan bundle's digest and version, each advisory snapshot's digest and `Last-Modified` time, each scanner's version and each scan result.
+- **FD-GATE-100** · phase 2 · `V-UNIT` `V-CONF` — When a scan starts, the executor must read the scan bundle from `cas/<scan.bundleDigest>` and verify the SHA-256 of the bytes against that digest.
+- **FD-GATE-101** · phase 2 · `V-UNIT` — If the deployment sets no `scan.bundleDigest`, then the recipe must record `failure` with the reason `config: scan bundle not pinned` and run no scanner.
+- **FD-GATE-102** · phase 2 · `V-UNIT` `V-SIM` — If the scan bundle object is absent or unreadable, then the recipe must record `failure` with the reason `config: scan bundle missing` and run no scanner.
+- **FD-GATE-103** · phase 2 · `V-UNIT` — If the scan bundle's digest differs from `scan.bundleDigest`, then the recipe must record `failure` with the reason `config: scan bundle digest` and run no scanner.
+- **FD-GATE-104** · phase 2 · `V-UNIT` `V-CONF` — The executor must place the scan bundle and the advisory snapshot on a read-only path outside the checkout.
+- **FD-GATE-105** · phase 2 · `V-UNIT` — If a scanner's version in the image falls outside `scanners.<name>.versions`, then the recipe must record `failure` with the reason `config: scanner version <name>` and run no scanner.
+- **FD-GATE-106** · phase 2 · `V-UNIT` — If the scan range changes a lockfile of an ecosystem whose advisory snapshot is absent, then the recipe must record `failure` with the reason `config: advisory snapshot missing <ecosystem>` and run no scanner.
+- **FD-GATE-107** · phase 2 · `V-UNIT` `V-SIM` — If the scan range changes a lockfile of an ecosystem whose advisory snapshot's `Last-Modified` time is older than `scan.advisoryMaxAgeHours`, then the recipe must record `failure` with the reason `config: advisory snapshot stale <ecosystem>` and run no scanner.
+- **FD-GATE-108** · phase 2 · `V-UNIT` — The recipe must run each baseline check's `argv` with no shell, in the checkout, with a job timeout of 600 s.
+- **FD-GATE-109** · phase 2 · `V-UNIT` — If a baseline check's `tool` is not a binary that the image's `/etc/flare-dispatch/scan-tools` file lists, then the recipe must record `failure` with the reason `config: baseline check <control id>` and run no scanner.
+- **FD-GATE-110** · phase 2 · `V-UNIT` `V-CONF` — The control plane must give a `security-gate` or `security-rescan` job sandbox no egress host and no tenant-scope secret.
+- **FD-GATE-111** · phase 2 · `V-UNIT` — `security-rescan` must start only from a dispatch, and must report under the check name `flare-dispatch/security-rescan`.
+- **FD-GATE-112** · phase 2 · `V-UNIT` — When `security-rescan` runs, the recipe must use the merge base of the dispatched commit and the default branch head as the base of its scan range.
+- **FD-GATE-113** · phase 2 · `V-UNIT` `V-DEPLOY` — If a run declaration sets `readOnlyScan` and holds a command input, a model call site or an intent kind other than the `check.*` kinds, then the registry validator must reject the declaration at deploy.
+- **FD-GATE-114** · phase 2 · `V-UNIT` — When `sandbox-image` builds the image that holds the scanners, its smoke commands must run each scanner against a fixture with a planted finding and a head suppression, and must fail unless the exit code maps to `finding`.
+- **FD-GATE-115** · phase 2 · `V-UNIT` — When `sandbox-image` builds the image that holds the scanners, its smoke commands must run each scanner on a tool-error fixture, and must fail unless the exit code maps to `tool-error`.
+
 ## Open items
 
 - TODO(maintainer): confirm that a Cloudflare Container can register QEMU `binfmt_misc` handlers for FD-GATE-082, and measure the emulated smoke slowdown against a native `linux-arm64` run.
+- TODO(maintainer): decide whether a finding that already exists at the base commit, in a lockfile or workflow the range changes, concludes `failure`, or whether the recipe subtracts the base commit's fingerprints. FD-GATE-091 concludes `failure` until this is decided.
+- TODO(maintainer): set the default `scan.advisoryEcosystems` from measured archive sizes; the npm archive is 209 MiB.
 - TODO(maintainer): decide whether `worker-deploy` waits for every required check on its commit to conclude `success` before the deploy command starts.

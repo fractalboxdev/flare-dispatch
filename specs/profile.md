@@ -55,20 +55,21 @@ No class declares `device_eligible` or `deadline_offset`, so every class may run
 
 ### Class resolution
 
-`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. It applies six steps in order.
+`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. It applies seven steps in order.
 
 | Step | Rule |
 | --- | --- |
 | 1 | A run on the in-code `release` allowlist triggered by a release trigger resolves to `release`. The release triggers are a push of a tag a ruleset protects, a `check_suite` or `deployment_status` event on the default branch, a `push` to a ruleset-protected branch named by `workerDeploy.branch`, an Actions dispatch whose OIDC `ref` is that branch, and a follow-on intent of a `release` execution |
-| 2 | A gating run (`check`, `oxlint`, `offload-test`) on `pull_request`, `merge_group` or a `gh-readonly-queue/*` push resolves to `required` when its check name is in the target branch's required set, and to `interactive` when it is not |
+| 2 | A gating run (`check`, `oxlint`, `offload-test`, `security-gate`) on `pull_request`, `merge_group` or a `gh-readonly-queue/*` push resolves to `required` when its check name is in the target branch's required set, and to `interactive` when it is not |
 | 3 | The first matching policy rule may lower the class, and raises it only to a `required` that step 2 verified and only up to the run's `limits.qosCeiling`, unless the rule lifts the ceiling |
 | 4 | The run default `limits.qosClass`, capped at `limits.qosCeiling`; a run that declares no `limits.qosClass` resolves to `batch` with the `local-only` constraint |
 | 5 | A child takes the lower of its parent's class and its own result |
 | 6 | The dispatch `class` input lowers freely, and raises only as a policy rule allows for the caller's OIDC identity scoped to (repository, workflow ref) on a protected branch |
+| 7 | A dispatch from an identity in `dispatch.scoped` resolves no higher than that entry's `classCeiling` |
 
 ```mermaid
 flowchart TB
-  accTitle: resolveClass applies six steps in order
+  accTitle: resolveClass applies seven steps in order
   in([Run definition, trigger, protection snapshot, policy rules, parent class, class input])
   s1{1. On the release allowlist and a release trigger?}
   s2{2. Gating run whose check the target branch requires?}
@@ -77,6 +78,7 @@ flowchart TB
   s4[4. Run default limits.qosClass, capped by limits.qosCeiling]
   s5[5. Lower of parent class and result]
   s6["6. Class input: lowers freely; raises only as a rule allows for the caller"]
+  s7["7. Scoped dispatch: no higher than the entry's classCeiling"]
   rel([release])
   out([Class, labels and alarm returned to admission])
   in --> s1
@@ -90,11 +92,12 @@ flowchart TB
   s3 --> s4
   s4 --> s5
   s5 --> s6
-  s6 --> out
+  s6 --> s7
+  s7 --> out
   rel --> out
   class in muted
   class s1,s2,look warn
-  class s3,s4,s5,s6 accent
+  class s3,s4,s5,s6,s7 accent
   class rel,out ok
 ```
 
@@ -201,6 +204,8 @@ No kind is `reconcile-only` and no kind is `gated`. `check.conclude` is the one 
 | `label` | `run` | — | 2 | `any` | — | `replay-safe` | `labels` | — | — |
 | `pr.close` | `run` | — | 2 | `any` | — | `replay-safe` | `pullRequest` | — | FD-GH-087 |
 | `dispatch.followOn` | `run` | — | 2 | `any` | — | `replay-safe` | `followOn` | — | FD-GH-088 |
+| `job.record` | `control-plane` | `on: lease-granted`, payload `jobRecordPayload`; from phase 2 | 2 | `any` | — | `replay-safe` | `verdictRecord` | Delivery id derived from the key | FD-GH-093 |
+| `verdict.record` | `control-plane` | ops intent; from phase 2 | 2 | `any` | `ops` | `replay-safe` | `verdictRecord` | Delivery id derived from the key | FD-GH-094 |
 | `notify.email` | `both` | — | 2 | `any` | — | `replay-safe` | `notifyEmail` | — | FD-GH-078 |
 | `notify.slack` | `both` | — | 2 | `any` | — | `replay-safe` | `notifySlack` | — | FD-GH-078, FD-GH-079 |
 | `notice.publish` | `both` | — | 2 | `any` | — | `replay-safe` | `notice` | — | FD-GH-078 |
@@ -302,7 +307,7 @@ FlareDispatch's phase n document is compared with the reference profile's form f
 
 ### Class resolution
 
-- **FD-PROF-011** · phase 0 · `V-UNIT` — The profile must name `resolveClass` as the class-resolution binding with the inputs `protection-snapshot` and `policy-rules` and the default class `batch`, and `resolveClass` must apply the six steps of § Class resolution in order, with no clock, store or service ([MAMEKO-ADM-005](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/admission-qos.md)).
+- **FD-PROF-011** · phase 0 · `V-UNIT` — The profile must name `resolveClass` as the class-resolution binding with the inputs `protection-snapshot` and `policy-rules` and the default class `batch`, and `resolveClass` must apply the seven steps of § Class resolution in order, with no clock, store or service ([MAMEKO-ADM-005](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/admission-qos.md)).
 - **FD-PROF-012** · phase 0 · `V-UNIT` — `resolveClass` must not return `release` except for a run on the in-code `release` allowlist triggered by one of the release triggers of step 1.
 - **FD-PROF-013** · phase 0 · `V-UNIT` — When a gating run (`check`, `oxlint` or `offload-test`) is triggered by `pull_request`, `merge_group` or a `gh-readonly-queue/*` push, `resolveClass` must return `required` when its check name is in the target branch's required set, unless a later step lowers it, and `interactive` when it is not, whatever its run default.
 - **FD-PROF-014** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — FlareDispatch must cache each branch's required set, the `protection-snapshot` input, for at most 10 min, and must refresh it on every `repository_ruleset` and `branch_protection_rule` webhook for that repository.
@@ -355,8 +360,8 @@ FlareDispatch's phase n document is compared with the reference profile's form f
 
 ### Intent kinds, delivery and gate policy
 
-- **FD-PROF-046** · phase 0 · `V-UNIT` — The profile's `intent_kinds` must declare exactly the kinds of § Intent kinds, each with the origin, lifecycle trigger, payload and coalesce bindings, priority, applied-for outcomes, flags, effect class, actuator binding and marker that table gives ([MAMEKO-PROF-013](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/profiles.md)).
-- **FD-PROF-047** · phase 0 · `V-UNIT` `V-LIVE` — The profile's `delivery` must key the applier rate limit by installation through `installationOf`, set the ops class to `required` and name the undelivered-outcome alarm `undelivered-verdict` ([MAMEKO-OUT-046](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/outbox.md), [github-output.md](github-output.md) FD-GH-056).
+- **FD-PROF-046** · phase 0 · `V-UNIT` — The profile's `intent_kinds` must declare exactly the kinds of § Intent kinds that apply at the document's phase, each with the origin, lifecycle trigger, payload and coalesce bindings, priority, applied-for outcomes, flags, effect class, actuator binding and marker that table gives ([MAMEKO-PROF-013](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/profiles.md)).
+- **FD-PROF-047** · phase 0 · `V-UNIT` `V-LIVE` — The profile's `delivery` must key the applier rate limit by installation through `installationOf`, for every kind FD-PROF-068 does not name, set the ops class to `required` and name the undelivered-outcome alarm `undelivered-verdict` ([MAMEKO-OUT-046](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/outbox.md), [github-output.md](github-output.md) FD-GH-056).
 - **FD-PROF-048** · phase 0 · `V-UNIT` — The profile's `gate_policy` must list no key and set `max_expiry_seconds` to 86400, and no kind may declare `gated`.
 
 ### Isolation and signing
@@ -379,6 +384,12 @@ FlareDispatch's phase n document is compared with the reference profile's form f
 - **FD-PROF-059** · phase 3 · `V-UNIT` `V-SIM` — FlareDispatch must set the firm-hold look-ahead of `required` to 5 queued entries ([MAMEKO-SPD-044](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/spend.md)).
 - **FD-PROF-060** · phase 0 · `V-UNIT` — FlareDispatch must set the warn ratio to 0.8 of `B` ([MAMEKO-SPD-060](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/spend.md)).
 - **FD-PROF-061** · phase 4 · `V-UNIT` — FlareDispatch's rate card must price `gha` at the runner's per-minute rate with a billing increment of 1 min and a per-scope override of 0 for standard runners on public repositories ([MAMEKO-SPD-064](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/spend.md), [MAMEKO-SPD-065](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/spend.md)).
+
+### Security gate and scoped dispatch
+
+- **FD-PROF-066** · phase 2 · `V-UNIT` — The profile must make `cloud-only` hold for the runs `security-gate` and `security-rescan`.
+- **FD-PROF-067** · phase 2 · `V-UNIT` — When `resolveClass` receives a `classCeiling` input, it must return no class above that ceiling, whatever the earlier steps resolved.
+- **FD-PROF-068** · phase 2 · `V-UNIT` — The profile's `delivery.limit_key` binding must return the key `records` for the kinds `job.record` and `verdict.record`.
 
 ## Open items
 

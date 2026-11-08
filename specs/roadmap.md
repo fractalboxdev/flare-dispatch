@@ -18,10 +18,10 @@ Requirement counts and ID ranges come from the requirement lines under `specs/`;
 | --- | --- | --- | --- | --- |
 | 0 | Measure the bet: the cloud path on `host-cloudflare` with the profile, the GitHub appliers and the installation rate limit, so no capacity path concludes `neutral`, and warm runs on an owned device measured against the best cloud setup | 521 | mameko phase 0 | A warm run reaches its verdict at least 30% faster than the best cloud setup |
 | 1 | Batch on owned devices: mameko's device bundle and FlareDispatch's device extension, capacity leases and the local scheduler; only `batch` runs locally | 54 | mameko phase 1 | Owned devices take most eligible `batch` executions for 14 days with no verdict audit disagreement |
-| 2 | Interactive with cloud placement: `interactive` runs local first with a 300 s claim deadline, egress profiles, staged writeback and rehearsal reuse | 56 | mameko phase 2 | `interactive` p95 time to verdict is no worse than cloud-only |
+| 2 | Interactive with cloud placement: `interactive` runs local first with a 300 s claim deadline, egress profiles, staged writeback and rehearsal reuse | 135 | mameko phase 2 | `interactive` p95 time to verdict is no worse than cloud-only |
 | 3 | Required checks: `required` runs local first with a 60 s claim deadline, firm cloud holds, preemption at step boundaries and the AWS launcher as a floor | 25 | mameko phase 3; the firm-hold rate | `required` p95 time to verdict is within 60 s of cloud-only |
 | 4 | Harden and generalise: provenance tiers, confidential mode with local models, macOS VM jobs, the `gha` launcher and device-aware placement | 100 | mameko phase 4; the DSSE signing purpose | — |
-| All | | 756 | | |
+| All | | 835 | | |
 
 ```mermaid
 stateDiagram-v2
@@ -194,18 +194,19 @@ flowchart LR
 
 **Waits on.** mameko phase 2: interactive work local-first with cloud placement after its claim deadline, the egress profiles, the model gateway and the local model route on devices.
 
-**Closes** 56 requirements:
+**Closes** 135 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
 | `CACHE` | 1 | 014 |
-| `GH` | 1 | 077 |
-| `INT` | 2 | 062–063 |
-| `IFC` | 3 | 072–074 |
+| `GH` | 11 | 077, 093–102 |
+| `INT` | 4 | 062–063, 071–072 |
+| `IFC` | 16 | 072–074, 089–101 |
 | `LOCAL` | 14 | 077–089, 094 |
-| `PROF` | 1 | 031 |
-| `AGT` | 33 | 001, 005–007, 010, 029–033, 045–047, 049–062, 068–073 |
-| `GATE` | 1 | 081 |
+| `OPS` | 14 | 090–103 |
+| `PROF` | 4 | 031, 066–068 |
+| `AGT` | 37 | 001, 005–007, 010, 029–033, 045–047, 049–062, 068–073, 089–092 |
+| `GATE` | 34 | 081, 083–115 |
 
 **Gate 2.**
 

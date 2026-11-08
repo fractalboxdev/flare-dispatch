@@ -143,7 +143,7 @@ describe("spec-tags", () => {
       (_m, n) => `| \`OPS\` | ${Number(n) + 1} |`,
     );
     expect(countChecks(reqs, off, roadmap).map((f) => f.message)).toContain(
-      "OPS total: the table says 61, the lines count 60",
+      "OPS total: the table says 75, the lines count 74",
     );
     const ids = roadmap.replace("| `OPS` | 1 | 071 |", "| `OPS` | 1 | 072 |");
     expect(countChecks(reqs, verification, ids).map((f) => f.message)).toContain(
