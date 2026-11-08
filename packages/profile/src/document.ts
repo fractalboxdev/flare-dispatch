@@ -560,7 +560,7 @@ export const buildProfile = (deployment: Deployment, phase: Phase = CURRENT_PHAS
 /** The committed production profile at the current phase. */
 export const profile: Profile = buildProfile("production");
 
-/** The result-acceptance check's reason kinds, which MAMEKO-PROF-033 requires the profile to declare. */
+/** The result-acceptance check's reason kinds, which MAMEKO-PROF-036 requires the profile to declare. */
 export const acceptanceReasonKinds: readonly string[] = ["provenance"];
 
 /** The profile as the configuration source delivers it: the document and its policy version. */

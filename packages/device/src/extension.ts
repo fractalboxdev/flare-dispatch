@@ -1,5 +1,5 @@
 // FlareDispatch's device extension: the plane's process beside mameko's device executor, answering the extension
-// interface on file descriptor 3 (MAMEKO-EXEC-132). It holds L1 per cache namespace and `LocalContent` per tenant
+// interface on file descriptor 3 (MAMEKO-EXEC-140). It holds L1 per cache namespace and `LocalContent` per tenant
 // scope, and restores a cache entry only for a namespace a lease it was handed may read (FD-EXEC-007).
 import { createHash } from "node:crypto";
 import { decodeExtensionLine, type ExtensionMessage } from "@fractalboxdev/mameko-protocol";

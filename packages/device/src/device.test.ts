@@ -55,7 +55,7 @@ const send = (s: ExtensionState, message: Record<string, unknown>) =>
 const b64 = (t: string) => Buffer.from(t).toString("base64");
 
 describe("device extension", () => {
-  it("MAMEKO-EXEC-132 says hello naming the plane, the version and its operations, without a statement operation", () => {
+  it("MAMEKO-EXEC-140 says hello naming the plane, the version and its operations, without a statement operation", () => {
     const h = hello("plane-1");
     expect(answerHello(h, { planeId: "plane-1", accepted: { min: 1, max: 1 } }).type).toBe(
       "extension.welcome",
@@ -127,7 +127,7 @@ describe("device extension", () => {
     });
   });
 
-  it("MAMEKO-EXEC-132 the process answers over file descriptor 3", async () => {
+  it("MAMEKO-EXEC-140 the process answers over file descriptor 3", async () => {
     const [ours, theirs] = await socketPair();
     const main = fileURLToPath(new URL("./extension-main.ts", import.meta.url));
     const child = spawn(

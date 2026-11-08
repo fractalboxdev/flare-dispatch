@@ -151,7 +151,7 @@ describe("load", () => {
     expect(acceptanceReasonKinds).toEqual(["provenance"]);
   });
 
-  it("MAMEKO-PROF-033 every terminal reason and acceptance-check reason kind is built in or declared", () => {
+  it("MAMEKO-PROF-036 every terminal reason and acceptance-check reason kind is built in or declared", () => {
     expect(
       validateProfile(profile, validationContext).filter((r) => r.item === "reason_kinds"),
     ).toEqual([]);
@@ -214,7 +214,7 @@ describe("load", () => {
     expect(paths).toContain("delivery.limit_key");
   });
 
-  it("MAMEKO-PROF-031 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
+  it("MAMEKO-PROF-034 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
     const { lean: _, ...withoutLean } = poolAdmissionCaps;
     const undeclared = { ...validationContext, declaredPools: withoutLean };
     expect(rejections(committed, committed.policy_version, undeclared)).toEqual([
@@ -749,12 +749,17 @@ describe("deployments", () => {
     expect(development.policyVersion).not.toBe(profileDocument.policyVersion);
   });
 
-  it("[FD-PROF-052] a production deployment at phase 0 rejects a hardware key store nothing attests", () => {
+  it("[FD-PROF-052] MAMEKO-PROF-037 a production deployment at phase 0 rejects a hardware key store nothing attests", () => {
     const unattested = {
       ...committed,
       registration: { key_stores: ["secure-enclave"], attestation: "none" },
     } as typeof committed;
     expect(rejections(unattested, committed.policy_version)).toEqual([
+      {
+        item: "registration",
+        path: "registration.key_stores",
+        reason: "hardware key store under attestation: none; list only software or set attestation: verifier",
+      },
       {
         item: "registration",
         path: "registration.key_stores",

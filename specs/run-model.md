@@ -24,7 +24,7 @@ FlareDispatch's run catalogue calls mameko's `defineRun(spec, body, catalogue)`,
 
 ### Runner entry
 
-FlareDispatch's run-catalogue bundle has one entry, which imports the run registry and calls mameko's `runnerMain` with it, so the catalogue and the runner carry one copy of `effect`. On a device, the device configuration pins the bundle ([MAMEKO-EXEC-123](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/executors.md)), and the device executor starts one runner child per lease with a run payload built from the `exec.lease` fields ([MAMEKO-PROTO-084](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/executor-protocol.md)). That payload's `attempt` counts the earlier leases of one execution and is not the attempt number of a check family ([README.md](README.md) § Glossary).
+FlareDispatch's run-catalogue bundle has one entry, which imports the run registry and calls mameko's `runnerMain` with it, so the catalogue and the runner carry one copy of `effect`. On a device, the device configuration pins the bundle ([MAMEKO-EXEC-131](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/executors.md)), and the device executor starts one runner child per lease with a run payload built from the `exec.lease` fields ([MAMEKO-PROTO-084](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/executor-protocol.md)). That payload's `attempt` counts the earlier leases of one execution and is not the attempt number of a check family ([README.md](README.md) § Glossary).
 
 ### Triggers
 
@@ -99,7 +99,7 @@ FlareDispatch's intent kinds, the outcomes each applies for and the GitHub call 
 
 - **FD-RUN-061** · phase 0 · `V-UNIT` — The run catalogue must pass `defineRun` the rank of each class of the profile as its `catalogue` argument ([MAMEKO-RUN-006](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/run-model.md)).
 - **FD-RUN-062** · phase 0 · `V-UNIT` — The run catalogue must keep every declaration `defineRun` does not decode in the run's catalogue entry, and must list in `requires` only mameko's capability names, so that `GithubRead` stays out of `requires`.
-- **FD-RUN-063** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — FlareDispatch's run-catalogue bundle must have one entry that calls `runnerMain` with the run registry, the only list of runs ([MAMEKO-RUN-008](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/run-model.md), [MAMEKO-EXEC-123](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/executors.md)).
+- **FD-RUN-063** · phase 1 · `V-UNIT` `V-E2E-LOCAL` — FlareDispatch's run-catalogue bundle must have one entry that calls `runnerMain` with the run registry, the only list of runs ([MAMEKO-RUN-008](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/run-model.md), [MAMEKO-EXEC-131](https://github.com/fractalboxdev/mameko/blob/738d91dcef5411b48819f4091b5c60cfbbf2a3d4/specs/executors.md)).
 
 ### Capabilities
 
