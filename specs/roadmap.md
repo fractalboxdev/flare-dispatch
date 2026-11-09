@@ -128,6 +128,17 @@ flowchart LR
 
 *Area dependencies · an arrow points from the area that defines a mechanism or value to the area that builds on it; every area builds on mameko through the profile and the composed control plane.*
 
+### mameko dependency order
+
+The control plane pins mameko at f4b48b0, which holds the composed `admit`, the admission sweep and the amended outbox `retryable` rule ([MAMEKO-OUT-018](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/outbox.md)). Production intake admits every request through mameko's `admit`, so admission applies the placeability check and the class refusal conclusion ([intake.md](intake.md)).
+
+Two changes depend on further mameko work and are delivered in this order. Each step waits on the step before it and on the mameko work that step names.
+
+1. `Operations.apply` calls mameko's operator transaction for halt, drain, quarantine, release, cancel, force-admit, top-up and revoke, each with a reason and an audit row ([MAMEKO-OPS-030](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/operability.md) to MAMEKO-OPS-034). Waits on: mameko's operator transaction.
+2. The `pause-key` and `resume-key` operations and the `containment` list. Waits on: step 1, and mameko's `pauseKey` and `resumeKey` ([MAMEKO-OUT-068](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/outbox.md)).
+
+Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and admission quarantines no repository. Until step 2, no delivery key can be paused.
+
 ## Phase 0: measure the bet
 
 **Goal.** Close every capacity path that concludes `neutral` and make the cloud path correct and metered before any owned device takes guaranteed work: FlareDispatch's profile on mameko's admission, spend and outbox, the check-run appliers and the installation rate limit, the cache trust tiers, the operator routes, the runbook and the staged-write proofs. Each Container class is locked down from this phase: `enableInternet` false with HTTPS interception, deny-all egress except the grants, and the containers' CA bundle in each image's trust store ([MAMEKO-ISO-018](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/isolation-egress.md), [MAMEKO-ISO-021](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/isolation-egress.md), [MAMEKO-ISO-022](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/isolation-egress.md)). Alongside, required suites run warm on an owned device by hand against the best cloud setup (the cold container cache plus prebuilt dependencies), with executor and cache columns on every execution.
@@ -264,5 +275,6 @@ flowchart LR
 
 ## Open items
 
+- TODO(maintainer): [interfaces.md](interfaces.md) lists `pause-key` and `resume-key` at phase 0, and mameko specifies `pauseKey` at its phase 1 (MAMEKO-OUT-068). Move the two operations to phase 1, or ask mameko to move MAMEKO-OUT-068 to phase 0.
 - TODO(operator): confirm the 14-day windows of gates 0, 2 and 3 and the 30% threshold of gate 0 before phase 0 closes.
 - TODO(operator): name the record that counts manual interventions on a device for the operator-toil kill line.
