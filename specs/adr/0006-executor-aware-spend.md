@@ -1,6 +1,6 @@
 # ADR-0006: Executor-aware spend meter with holds, nested lines and burn lanes
 
-Status: Superseded by mameko [ADR-0008](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/adr/0008-executor-aware-spend.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0008](https://github.com/fractalboxdev/mameko/blob/99a15595842968650a1d97c1ebf06255dd6df6ea/specs/adr/0008-executor-aware-spend.md) · 2026-10-24
 
 ## Context
 

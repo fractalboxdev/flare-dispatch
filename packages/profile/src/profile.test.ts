@@ -426,7 +426,7 @@ describe("class catalogue", () => {
     expect(cls("batch").terminal_outcome).toBe("deferred");
   });
 
-  it("MAMEKO-ADM-073 only interactive and batch are sheddable", () => {
+  it("MAMEKO-ADM-072 only interactive and batch are sheddable", () => {
     expect(profile.classes.filter((c) => c.sheddable === true).map((c) => c.name)).toEqual([
       "interactive",
       "batch",
