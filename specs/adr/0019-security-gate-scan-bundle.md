@@ -81,7 +81,9 @@ zizmor documents exit codes 11 to 14 for findings by highest severity and 1 to 3
 - Every enrolled repository depends on a fresh advisory snapshot: an `advisory-refresh` outage longer than 48 h turns `security-gate` red on pull requests that change a lockfile. `advisory-snapshot-stale` pages at 24 h.
 - `zizmor.yml` and `.gitleaks.toml` on a target branch have no effect on a scan, because each scanner takes one configuration file and the bundle's replaces it. A repository suppresses through `.gitleaksignore`, `osv-scanner.toml` or a marker on a target-branch line.
 - `flare-dispatch/security-gate` runs for dependabot and every other author, so a dependency bump with a known vulnerability reports `failure`.
-- `check` and `pr-review` keep their `neutral` paths for excluded authors. A repository that requires them and accepts bot pull requests relies on `security-gate` for those pull requests.
+- `check` keeps its `neutral` path for excluded authors, so a repository that requires `check` and accepts bot pull requests relies on `security-gate` for those pull requests.
+- A required `pr-review` concludes `failure` for a bot author outside `prReview.reviewBots` (FD-AGT-093). Off the required set, `pr-review` keeps its `author-excluded` skip.
+- `pr-review`'s `gating` mode stays available. It gates a merge on review quality, and the security merge check is `security-gate` in either mode.
 - A check re-run of `security-gate` on the same commit runs the same scan under the same check name, and it may conclude differently after the bundle or the snapshot changes.
 - A pause of an installation's delivery key leaves `check.open` and `check.conclude` pending, which blocks a merge on a check that has not concluded. A check that already concluded `success` stays mergeable.
 - Bundle signing keys and their history become an operator duty.
