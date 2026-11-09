@@ -285,6 +285,10 @@ const context = (p: Profile, c: ValidationContext): Rejection[] =>
       minimums: Object.fromEntries(pool.classes.map((cap) => [cap.class, cap.min])),
     })),
     declared_pools: c.declaredPools,
+    required_placements: p.placement.required.map((shape) => ({
+      class: shape.class,
+      labels: shape.labels,
+    })),
     runs: c.runs,
   }).map(({ path, reason }) => ({ item: path.split(".")[0] ?? path, path, reason }));
 

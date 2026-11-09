@@ -62,9 +62,12 @@ export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHAN
     .filter((c) => c.terminal_outcome === "deferred")
     .map((c) => c.name),
   localContent: false,
-  anyOutcomeKinds: Object.entries(profile.intent_kinds)
-    .filter(([, kind]) => kind.applied_for === "any")
-    .map(([name]) => name),
+  anyOutcomeKinds: Object.fromEntries(
+    Object.entries(profile.intent_kinds)
+      .filter(([, kind]) => kind.applied_for === "any")
+      .map(([name, kind]) => [name, kind.effect_class]),
+  ),
+  notApplicableDetails: [...profile.outcome_mapping.not_applicable_details],
   executorKind: "device",
   planeShare: deviceSlotDefaults.total,
 });

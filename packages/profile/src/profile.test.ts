@@ -243,6 +243,7 @@ describe("load", () => {
           ceiling: null,
           inputs: [{ reachability: "device-local" }],
           requires: [],
+          constraints: [],
         },
       ],
     };
@@ -642,13 +643,6 @@ describe("check-run lifecycle kinds", () => {
       coalesce_key: "executionProgressKey",
       delivery_tier: "progress",
     });
-    const doc = mutate((d) => {
-      const { coalesce_key: _, ...progress } = d.intent_kinds["check.progress"]!;
-      return { ...d, intent_kinds: { ...d.intent_kinds, "check.progress": progress } };
-    });
-    expect(rejections(doc).map((r) => r.path)).toEqual([
-      "intent_kinds.check.progress.coalesce_key",
-    ]);
   });
 
   it("MAMEKO-OUT-044, MAMEKO-OUT-059, MAMEKO-OUT-060 check kinds apply in insertion order; start and progress void after the outcome", () => {

@@ -2,6 +2,7 @@
 // on stdin and one result line on stdout, against a real git repository.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,29 @@ let root: string;
 let workspaces: string;
 let repo: string;
 let sha: string;
+let socketPath: string;
+let jobSocket: Server;
+
+/**
+ * The device executor's side of the execution socket under the host-process job runtime: the runner asks it to prepare
+ * the job's workspace before the run program and to stop the job's commands after it (MAMEKO-ISO-044).
+ */
+const startJobSocket = (path: string) =>
+  new Promise<Server>((resolve) => {
+    const server = createServer((socket) => {
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        for (let i = buffer.indexOf("\n"); i >= 0; i = buffer.indexOf("\n")) {
+          const m = JSON.parse(buffer.slice(0, i)) as { type: string; id?: string };
+          buffer = buffer.slice(i + 1);
+          const type = m.type === "job.prepare" ? "job.prepare.ok" : m.type === "job.stop" ? "job.stop.ok" : "socket.error";
+          socket.write(`${JSON.stringify({ type, ref: m.id })}\n`);
+        }
+      });
+    });
+    server.listen(path, () => resolve(server));
+  });
 
 const git = (...args: readonly string[]) =>
   execFileSync("git", args, {
@@ -31,8 +55,10 @@ const git = (...args: readonly string[]) =>
     },
   }).trim();
 
-beforeAll(() => {
+beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), "fd-catalog-test-"));
+  socketPath = join(root, "job.sock");
+  jobSocket = await startJobSocket(socketPath);
   workspaces = join(root, "workspaces");
   execFileSync("mkdir", [workspaces]);
   repo = join(root, "repo");
@@ -47,7 +73,10 @@ beforeAll(() => {
   git("commit", "-q", "-am", "later");
 });
 
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(() => {
+  jobSocket.close();
+  rmSync(root, { recursive: true, force: true });
+});
 
 interface Finished {
   readonly lines: readonly string[];
@@ -67,6 +96,8 @@ const runEntry = (
         entry,
         "--journal",
         join(root, `${crypto.randomUUID()}.sqlite`),
+        "--content-socket",
+        socketPath,
       ],
       {
         env: {
