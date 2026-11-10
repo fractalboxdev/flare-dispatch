@@ -20,6 +20,7 @@ import { Effect, Layer } from "effect";
 import {
   ClassResolver,
   d1Admission,
+  type AdmissionPorts,
   IntakeConfig,
   type ClassRequest,
   type IntakeSettings,
@@ -37,13 +38,20 @@ export interface IntakeLayerOptions {
   readonly fetch: typeof globalThis.fetch;
   /** Runs after each queued admission, for the Worker to wake standing claims. */
   readonly queued?: (className: string) => Effect.Effect<void>;
+  /** Starts an admitted execution's `Execution` workflow (MAMEKO-ADM-030). */
+  readonly startExecution?: AdmissionPorts["startExecution"];
+  readonly alarms?: AdmissionPorts["alarms"];
 }
 
 /** Every intake service except `ClassResolver`, `AccessIdentity` and `ExecutionCanceller`; needs the GitHub services. */
 export const intakeLayer = (options: IntakeLayerOptions) =>
   Layer.mergeAll(
     Layer.succeed(IntakeConfig, options.settings),
-    d1Admission(options.db, options.queued),
+    d1Admission(options.db, options.settings.profile, {
+      ...(options.queued === undefined ? {} : { queued: options.queued }),
+      ...(options.startExecution === undefined ? {} : { startExecution: options.startExecution }),
+      ...(options.alarms === undefined ? {} : { alarms: options.alarms }),
+    }),
     d1IntakeStore(options.db),
     d1ShedRecorder(options.db),
     manifestSourceLayer,

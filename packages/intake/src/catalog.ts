@@ -61,7 +61,7 @@ export const catalogRuns =
         ownsCheck: true,
         gating: true,
         retries: entry.spec.retries,
-        declaresGrant: entry.spec.grants.setup.length + entry.spec.grants.agent.length > 0,
+        grants: { setup: [...entry.spec.grants.setup], agent: [...entry.spec.grants.agent] },
         placement: (inputs) => requestPlacement(entry.spec, inputs),
       })),
       Match.orElse(() => undefined),

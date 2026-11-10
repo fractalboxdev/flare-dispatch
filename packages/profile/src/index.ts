@@ -58,6 +58,7 @@ export {
   drawsReserve,
   eligibleKinds,
   isolationOf,
+  placementInputs,
   lifecycleKey,
   staleAt,
   type EligibleSet,

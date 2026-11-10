@@ -172,7 +172,7 @@ export const d1Intake = (options: D1IntakeOptions): Layer.Layer<Intake> =>
             declaresGrant: entry.spec.grants.setup.length + entry.spec.grants.agent.length > 0,
           }),
         }).pipe(
-          Effect.catchTag("IntakeUnavailable", () =>
+          Effect.catchTag(["IntakeUnavailable", "ExecutionIdTaken"], () =>
             dropExecutionRows(db, id).pipe(
               Effect.andThen(
                 Effect.fail(

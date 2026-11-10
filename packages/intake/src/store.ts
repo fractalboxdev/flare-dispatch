@@ -3,12 +3,9 @@
 // a lease, a check re-run and a cancel all need them, so intake keeps one row
 // per execution beside mameko's. Cooldown windows, held requests and webhook
 // delivery times live here too; shed rows are mameko's `shed` table.
-import {
-  recordShed,
-  type D1AdmitInput,
-  type D1Like,
-} from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { recordShed, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import type { IntakeAdmitInput } from "./config.ts";
 import { CacheTriggerRecord, OTHER_CACHE_TRIGGER, type RecordedTrigger } from "./event.ts";
 
 export const INTAKE_MIGRATIONS: readonly string[] = [
@@ -103,7 +100,7 @@ export const HELD_STATUS = "held";
 
 /** A held request: its admission input and the cooldown bucket it arms once admitted. */
 export interface HeldRequest {
-  readonly admit: D1AdmitInput;
+  readonly admit: IntakeAdmitInput;
   readonly cooldownBucket: string;
   readonly notBefore: number;
 }
@@ -364,7 +361,7 @@ export const d1IntakeStore = (db: D1Like) =>
         Effect.map(({ results }) =>
           (results as { admit_json: string; cooldown_bucket: string; not_before: number }[]).map(
             (row) => ({
-              admit: JSON.parse(row.admit_json) as D1AdmitInput,
+              admit: JSON.parse(row.admit_json) as IntakeAdmitInput,
               cooldownBucket: row.cooldown_bucket,
               notBefore: row.not_before,
             }),
@@ -372,9 +369,9 @@ export const d1IntakeStore = (db: D1Like) =>
         ),
       ),
     release: (id) =>
-      query(() =>
-        db.prepare("delete from intake_held where execution_id = ?").bind(id).run(),
-      ).pipe(Effect.asVoid),
+      query(() => db.prepare("delete from intake_held where execution_id = ?").bind(id).run()).pipe(
+        Effect.asVoid,
+      ),
     put: (r) =>
       query(() =>
         db

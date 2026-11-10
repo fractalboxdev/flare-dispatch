@@ -509,15 +509,22 @@ describe("cooldown", () => {
     expect(
       h.rows("select armed_at from intake_cooldowns where execution_id = ?", id)[0]!.armed_at,
     ).toBe(windowEnd);
-    // Admission at release writes the record's eligible kinds on the placement row, and the record's deadline, counted
-    // from the end of the window, on the execution and placement rows.
+    // Admission at release writes the record's eligible kinds on the placement row, and counts the deadline it writes on
+    // the execution and placement rows from the release, as it counted the first execution's from its admission.
     const placed = h.rows(
-      "select p.eligible_kinds, p.deadline_at as p_deadline, e.deadline_at as e_deadline from placements p join executions e on e.id = p.execution_id where p.execution_id = ?",
+      "select p.eligible_kinds, p.deadline_at as p_deadline, e.deadline_at as e_deadline, e.enqueued_at from placements p join executions e on e.id = p.execution_id where p.execution_id = ?",
       id,
     )[0]!;
+    const firstRow = h.rows(
+      "select deadline_at, enqueued_at from executions where id = ?",
+      first!.execution_id as string,
+    )[0]!;
     expect(placed.eligible_kinds).toBe(held!.eligible_kinds);
-    expect(placed.p_deadline).toBe(held!.deadline_at);
-    expect(placed.e_deadline).toBe(held!.deadline_at);
+    expect(placed.e_deadline).toBe(placed.p_deadline);
+    expect(placed.enqueued_at as number).toBeGreaterThanOrEqual(windowEnd);
+    expect((placed.e_deadline as number) - (placed.enqueued_at as number)).toBe(
+      (firstRow.deadline_at as number) - (firstRow.enqueued_at as number),
+    );
   });
 
   it("FD-INT-057 MAMEKO-ADM-041 a held request released into a full queue concludes capacity: queue full and leaves the hold", async () => {

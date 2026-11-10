@@ -100,14 +100,18 @@ export const isolationOf = (profile: Profile, request: IsolationRequest): Isolat
     declaresGrant: request.declaresGrant,
   });
 
-export const eligibleKinds = (profile: Profile, request: PlacementRequest): EligibleSet => {
+/**
+ * What mameko's `requestConstraints` reads of a request: its facts, with the profile's predicates evaluated, and the
+ * constraint parameters, with each declared constraint's predicate evaluated. Admission takes the same pair through its
+ * placement binding (MAMEKO-ADM-084).
+ */
+export const placementInputs = (profile: Profile, request: PlacementRequest) => {
   const { placement } = profile;
-  const cls = classNamed(profile, request.class);
   const kinds = ["cloudflare", "device", "aws", ...placement.launcher_kinds];
   const has = (label: string) => request.labels.includes(label);
   const held = placement.constraints.filter((c) => holds(c.holds_for, request));
-  const constraints = requestConstraints(
-    {
+  return {
+    facts: {
       labels: request.labels,
       runLabels: request.labels,
       confidentiality: request.confidentiality ?? "unclassified",
@@ -119,12 +123,20 @@ export const eligibleKinds = (profile: Profile, request: PlacementRequest): Elig
       deviceLocalInput: request.deviceLocalInput === true,
       needsLocalModel: request.needsLocalModel === true,
     },
-    {
+    params: {
       kinds,
       cloudPinnedKinds: placement.cloud_pinned_kinds,
       declared: held.map((c) => ({ name: c.name, holds: true, removes: c.removes })),
     },
-  );
+    held,
+  };
+};
+
+export const eligibleKinds = (profile: Profile, request: PlacementRequest): EligibleSet => {
+  const cls = classNamed(profile, request.class);
+  const { facts, params, held } = placementInputs(profile, request);
+  const kinds = params.kinds;
+  const constraints = requestConstraints(facts, params);
   const eligible = foldConstraints(kinds, constraints);
   const classKinds: readonly ExecutorKind[] =
     cls === undefined

@@ -38,8 +38,8 @@ export interface IntakeRun {
   readonly gating: boolean;
   readonly retries: number;
   readonly cooldown?: Cooldown;
-  /** The run declares a grant in its `setup` or `agent` egress phase, which keeps it off a host-process device. */
-  readonly declaresGrant?: boolean;
+  /** The run's grants per egress phase; any grant keeps it off a host-process device (MAMEKO-LEASE-083). */
+  readonly grants?: { readonly setup: readonly string[]; readonly agent: readonly string[] };
   /**
    * The placement constraints and capability labels a request with these inputs declares, e.g. `cloud-pinned` for
    * `worker-deploy` and a publishing `sandbox-image` (FD-GATE-061, FD-GATE-080); none when absent.

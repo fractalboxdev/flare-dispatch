@@ -3,12 +3,13 @@
 // dedup-key and `placements` row is admission's.
 import {
   eligibleKinds,
-  isolationOf,
+  placementInputs,
+  type ConfidentialityMode,
   type EligibleSet,
+  type PlacementRequest,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
-import { executionId as newExecutionId } from "@fractalboxdev/mameko-coordinator";
-import type { D1AdmitInput, D1AdmitResult } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { executionId as newExecutionId, type AdmitAnswer } from "@fractalboxdev/mameko-coordinator";
 import { Clock, Effect, Match } from "effect";
 import {
   Admission,
@@ -16,6 +17,7 @@ import {
   ClassResolver,
   IntakeConfig,
   intakeError,
+  type IntakeAdmitInput,
   type IntakeError,
 } from "./config.ts";
 import { requestKey, type KeyedRequest } from "./dedup.ts";
@@ -103,7 +105,7 @@ export interface Admitted {
   readonly notBefore: number | null;
 }
 
-type Concluded = Extract<D1AdmitResult, { readonly _tag: "Concluded" }>;
+type Concluded = Extract<AdmitAnswer, { readonly _tag: "Concluded" }>;
 
 const concludedReason = (c: Concluded): string =>
   Match.value(c.outcome).pipe(
@@ -137,15 +139,15 @@ const cooldownWait = (s: Submission, now: number) =>
  * constraints the run declares for these inputs, so a `cloud-pinned` run never reaches a device (FD-GATE-061,
  * FD-GATE-080).
  */
-export const placementOf = (
-  profile: Profile,
+const placementRequest = (
   s: Submission,
   className: string,
   labels: readonly string[],
-): EligibleSet => {
+  confidentiality?: ConfidentialityMode,
+): PlacementRequest => {
   const declared = s.run.placement?.(s.inputs) ?? { constraints: [], labels: [] };
   const tagPush = s.cacheTrigger._tag === "Push" && s.cacheTrigger.ref.startsWith("refs/tags/");
-  return eligibleKinds(profile, {
+  return {
     class: className,
     labels: [
       ...new Set([
@@ -156,7 +158,41 @@ export const placementOf = (
     ],
     constraints: declared.constraints,
     ...(tagPush ? { trigger: "tag-push" } : {}),
-  });
+    ...(confidentiality === undefined ? {} : { confidentiality }),
+  };
+};
+
+export const placementOf = (
+  profile: Profile,
+  s: Submission,
+  className: string,
+  labels: readonly string[],
+  confidentiality?: ConfidentialityMode,
+): EligibleSet => eligibleKinds(profile, placementRequest(s, className, labels, confidentiality));
+
+/** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-084). */
+const admissionPlacement = (
+  profile: Profile,
+  s: Submission,
+  className: string,
+  labels: readonly string[],
+  confidentiality: ConfidentialityMode,
+): IntakeAdmitInput["placement"] => {
+  const { facts, params } = placementInputs(
+    profile,
+    placementRequest(s, className, labels, confidentiality),
+  );
+  return {
+    facts: {
+      runLabels: facts.runLabels,
+      confidentiality: facts.confidentiality,
+      cloudPinned: facts.cloudPinned,
+      cloudOnly: facts.cloudOnly,
+      localOnly: facts.localOnly,
+      needsLocalModel: facts.needsLocalModel,
+    },
+    params,
+  };
 };
 
 export const submit = (
@@ -201,14 +237,17 @@ export const submit = (
       Match.exhaustive,
     );
     const className = resolved.class;
-    const bounds = yield* boundsOf(config.profile, className);
+    yield* boundsOf(config.profile, className);
     const key = yield* requestKey({ ...s, run: s.run.name });
     const cooldown = yield* cooldownWait(s, now);
     const id = newExecutionId(now, Math.random);
 
-    const labels = [...new Set([...resolved.labels, ...s.extraLabels])];
+    // A fork pull request's input stays untrusted on every attempt, re-runs included (FD-PROF-018).
+    const untrusted = s.trigger === "fork-pr" ? ["untrusted-input"] : [];
+    const labels = [...new Set([...resolved.labels, ...s.extraLabels, ...untrusted])];
     const notBefore = cooldown?.notBefore ?? null;
-    const placement = placementOf(config.profile, s, className, labels);
+    const confidentiality = config.confidentiality(s.repo);
+    const placement = placementOf(config.profile, s, className, labels, confidentiality);
     const record: IntakeRecord = {
       executionId: id,
       trigger: s.trigger,
@@ -233,13 +272,15 @@ export const submit = (
       eligibleKinds: placement.kinds,
       createdAt: now,
     };
-    // Admission writes the eligible kinds, the constraints that held and the deadline on the execution and placement
-    // rows in its own transaction, before any executor can claim the placement (MAMEKO-LEASE-014, MAMEKO-ADM-082).
-    const admitInput: D1AdmitInput = {
+    // mameko's `admit` writes the execution, dedup key and placement rows under this id in one transaction, with the
+    // eligible kinds, the constraints, the isolation and the deadline it derives from the class and these facts
+    // (MAMEKO-ADM-024, MAMEKO-ADM-100, MAMEKO-LEASE-083).
+    const admitInput: IntakeAdmitInput = {
       executionId: id,
       scopeId: s.repo,
       run: s.run.name,
       className,
+      labels,
       enqueuedAtMs: now,
       dedup: {
         sha256: key.sha256,
@@ -247,18 +288,9 @@ export const submit = (
         requestDigest: key.requestDigest,
         onMismatch: key.onMismatch,
       },
-      bounds,
-      eligibleKinds: placement.kinds,
-      constraints: placement.constraints,
-      deadlineAt: record.deadlineAtMs,
-      // A class with isolation none reaches a host-process device only for trusted input from a non-confidential
-      // repository and a run with no grant (MAMEKO-LEASE-083, FD-PROF-065).
-      isolation: isolationOf(config.profile, {
-        class: className,
-        untrustedInput: s.trigger === "fork-pr" || labels.includes("untrusted-input"),
-        confidentiality: config.confidentiality(s.repo),
-        declaresGrant: s.run.declaresGrant === true,
-      }),
+      placement: admissionPlacement(config.profile, s, className, labels, confidentiality),
+      maxDurationSec: s.run.maxDurationSec,
+      grants: s.run.grants ?? { setup: [], agent: [] },
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the
