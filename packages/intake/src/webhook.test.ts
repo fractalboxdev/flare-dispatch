@@ -379,6 +379,23 @@ describe("check re-runs", () => {
     expect(h.recorded.resolved).toHaveLength(1);
   });
 
+  it("FD-INT-054 a re-run keeps the labels and the placement constraint of the attempt it re-runs", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(manifest([{ recipe: "check", label: "ci", triggers: ["pull_request"] }])),
+      },
+      resolve: () => ({ _tag: "Class", class: "batch", labels: ["gpu"], alarm: null }),
+    });
+    const opened = await bodyOf(await deliver(h, "pull_request", pullRequestPayload()));
+    const id = (opened.executions as string[])[0]!;
+    settle(h, "failure");
+    await deliver(h, "check_run", checkRunRerequested(id), "d-2");
+    const [first, second] = h.records();
+    expect(JSON.parse(first!.labels_json as string)).toContain("gpu");
+    expect(second!.labels_json).toBe(first!.labels_json);
+    expect(second!.placement_constraint).toBe(first!.placement_constraint);
+  });
+
   it.each([
     ["foreign_app", (id: string) => checkRunRerequested(id, 1)],
     ["unknown_check_run", () => checkRunRerequested("no-such-execution")],

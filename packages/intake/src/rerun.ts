@@ -72,6 +72,8 @@ const nextAttempt = (family: readonly RecordWithStatus[]) =>
         attempt: latest.attempt + 1,
         familyRoot: latest.familyRoot,
         forcedClass: latest.className,
+        extraLabels: latest.labels,
+        placementConstraint: latest.placementConstraint,
         spendLine,
         cacheTrigger: latest.cacheTrigger,
         applyCooldown: false,
