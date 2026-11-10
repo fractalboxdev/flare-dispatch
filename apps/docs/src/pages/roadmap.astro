@@ -3,7 +3,7 @@
 // phases, their goals and their requirement counts are read from specs/roadmap.md at build time.
 import { getEntry } from "astro:content";
 import Landing from "../layouts/Landing.astro";
-import { DOGFOOD_PR, doesNotProve, proves, states } from "../data/status";
+import { LOCAL_CI_PR, doesNotProve, proves, states } from "../data/status";
 import { phaseTable } from "../lib/specs.mjs";
 
 const roadmap = await getEntry("docs", "specs/roadmap");
@@ -63,12 +63,12 @@ const { phases, total } = phaseTable(roadmap?.body ?? "");
       }
     </section>
 
-    <section id="dogfood" class="compare__wrap--spaced">
+    <section id="local-ci" class="compare__wrap--spaced">
       <div class="tenets__header">
-        <span class="section-marker">§02 / pnpm dogfood</span>
+        <span class="section-marker">§02 / pnpm ci:local</span>
         <h2>What the development run proves.</h2>
         <p class="section-lede">
-          <code>pnpm dogfood</code> lives on the unmerged <a href={DOGFOOD_PR}>#247</a>. It runs FlareDispatch's own CI
+          <code>pnpm ci:local</code> lives on the unmerged <a href={LOCAL_CI_PR}>#247</a>. It runs FlareDispatch's own CI
           on one machine through a local control plane under <code>wrangler dev</code>, the Rust device executor and a
           real lease.
         </p>

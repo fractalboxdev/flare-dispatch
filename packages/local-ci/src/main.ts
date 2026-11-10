@@ -1,4 +1,4 @@
-// `pnpm dogfood [<git ref>]`: runs FlareDispatch's CI on this machine through a real execution. A control plane under
+// `pnpm ci:local [<git ref>]`: runs FlareDispatch's CI on this machine through a real execution. A control plane under
 // `wrangler dev`, the key helper and the device executor start here; the device takes the lease, its runner child runs
 // the `check` run, and the verdict printed is the control plane's execution record.
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync, mkdtempSync } from "node:fs";
@@ -12,7 +12,7 @@ import { Console, Effect, Runtime, Schedule, Schema } from "effect";
 import { Argument, Command } from "effect/cli";
 import { placeholderOverlay } from "@fractalboxdev/flare-dispatch-ops/overlay";
 import { renderTemplate } from "@fractalboxdev/flare-dispatch-ops/render";
-import { DOGFOOD_IDENTITY, startAccessTeam, type LocalAccessTeam } from "./access.ts";
+import { LOCAL_CI_IDENTITY, startAccessTeam, type LocalAccessTeam } from "./access.ts";
 import { DeviceIdentity, health, makeClient, type ControlPlaneClient } from "./client.ts";
 import { capture, CommandFailed, startService, type RunOptions } from "./processes.ts";
 import { EXIT_NO_VERDICT, exitCodeOf, verdictLines } from "./verdict.ts";
@@ -40,7 +40,7 @@ const POLL_MS = 2_000;
 const LOG_TAIL_LINES = 40;
 
 /** The command's failure: a process exit code and no second report, since the program printed its own. */
-class DogfoodExit extends Schema.TaggedError<DogfoodExit>()("DogfoodExit", {
+class LocalCiExit extends Schema.TaggedError<LocalCiExit>()("LocalCiExit", {
   code: Schema.Number,
 }) {
   get [Runtime.errorExitCode]() {
@@ -169,7 +169,7 @@ const renderedConfig = (appDir: string) =>
             }),
         ),
       );
-      const path = join(appDir, `.dogfood-${process.pid}.wrangler.jsonc`);
+      const path = join(appDir, `.local-ci-${process.pid}.wrangler.jsonc`);
       writeFileSync(path, rendered);
       return path;
     }),
@@ -184,8 +184,8 @@ const startControlPlane = (runtimeDir: string, team: LocalAccessTeam, sha: strin
       DEPLOYMENT: "development",
       ACCESS_TEAM_DOMAIN: team.teamDomain,
       ACCESS_AUD: team.aud,
-      OPERATORS: literal([DOGFOOD_IDENTITY]),
-      DISPATCHERS: literal([DOGFOOD_IDENTITY]),
+      OPERATORS: literal([LOCAL_CI_IDENTITY]),
+      DISPATCHERS: literal([LOCAL_CI_IDENTITY]),
       FD_DEV_REPOSITORY: literal(yield* devRepository(sha)),
       // The template's overlay placeholders that a local run has no value for: no alert sink and no GitHub App.
       ALERT_SINK: "",
@@ -271,7 +271,7 @@ const startDevice = (input: {
       { ...options, name: "key helper", logPath: join(runtimeDir, "key-helper.log") },
     );
     const identity = yield* deviceIdentity(binaries.cli, options);
-    const executorId = `dogfood-${hostname().split(".")[0]}`;
+    const executorId = `local-ci-${hostname().split(".")[0]}`;
     yield* client.register({ executorId, identity });
     yield* Console.log(`enrolled ${executorId} with a ${identity.key_store} key`);
     const catalog = join(repoRoot, "packages/catalog/src");
@@ -328,7 +328,7 @@ const awaitVerdict = (client: ControlPlaneClient, executionId: string) =>
       if (view.status === "done") return view;
       if (view.status === "queued" && Date.now() - started > LEASE_WAIT_MS) {
         yield* Console.error(`no device took the lease within ${LEASE_WAIT_MS / 1000} s`);
-        return yield* new DogfoodExit({ code: EXIT_NO_VERDICT });
+        return yield* new LocalCiExit({ code: EXIT_NO_VERDICT });
       }
       yield* Effect.sleep(POLL_MS);
     }
@@ -337,16 +337,16 @@ const awaitVerdict = (client: ControlPlaneClient, executionId: string) =>
 const logTail = (path: string) =>
   readFileSync(path, "utf8").split("\n").slice(-LOG_TAIL_LINES).join("\n");
 
-const dogfood = (ref: string) =>
+const ciLocal = (ref: string) =>
   Effect.gen(function* () {
     yield* Console.log(ISOLATION_NOTICE);
     const sha = yield* resolveCommit(ref);
     yield* Console.log(`commit: ${sha} (${ref})`);
     const binaries = yield* buildDevicePrograms;
-    const runtimeDir = resolve(repoRoot, ".tmp/dogfood", String(Date.now()));
+    const runtimeDir = resolve(repoRoot, ".tmp/local-ci", String(Date.now()));
     mkdirSync(runtimeDir, { recursive: true });
     const workspaceRoot = yield* Effect.acquireRelease(
-      Effect.sync(() => mkdtempSync(join(tmpdir(), "fd-dogfood-"))),
+      Effect.sync(() => mkdtempSync(join(tmpdir(), "fd-local-ci-"))),
       (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
     );
     const team = yield* startAccessTeam;
@@ -370,7 +370,7 @@ const dogfood = (ref: string) =>
     const code = exitCodeOf(view.verdict);
     if (code !== 0) {
       yield* Console.log(`device log tail:\n${logTail(join(runtimeDir, "device.log"))}`);
-      return yield* new DogfoodExit({ code });
+      return yield* new LocalCiExit({ code });
     }
   }).pipe(
     Effect.scoped,
@@ -382,14 +382,14 @@ const dogfood = (ref: string) =>
   );
 
 const reportAndExit = (message: string) =>
-  Console.error(`dogfood stopped: ${message}`).pipe(
-    Effect.andThen(Effect.fail(new DogfoodExit({ code: EXIT_NO_VERDICT }))),
+  Console.error(`ci:local stopped: ${message}`).pipe(
+    Effect.andThen(Effect.fail(new LocalCiExit({ code: EXIT_NO_VERDICT }))),
   );
 
 const command = Command.make(
-  "dogfood",
+  "local-ci",
   { ref: Argument.String("ref").pipe(Argument.withDefault("HEAD")) },
-  ({ ref }) => dogfood(ref),
+  ({ ref }) => ciLocal(ref),
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url))

@@ -2,7 +2,7 @@
 // about what deploys comes from main; one about development comes from the unmerged #246 and #247;
 // one about the design comes from specs/, with its phase from specs/roadmap.md.
 
-export const DOGFOOD_PR = "https://github.com/fractalboxdev/flare-dispatch/pull/247";
+export const LOCAL_CI_PR = "https://github.com/fractalboxdev/flare-dispatch/pull/247";
 export const IMPL_PR = "https://github.com/fractalboxdev/flare-dispatch/pull/246";
 
 export interface Capability {
@@ -69,7 +69,7 @@ export const states: readonly State[] = [
   },
 ];
 
-/** What `pnpm dogfood` shows, from the verification record of #247. */
+/** What `pnpm ci:local` shows, from the verification record of #247. */
 export const proves: readonly string[] = [
   "A device enrolls by key, connects with a signed upgrade and takes a real execution lease from the control plane.",
   "The check run installs, lints, typechecks and tests one commit in a clean directory.",
