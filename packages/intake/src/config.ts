@@ -5,14 +5,16 @@ import {
   type ConfidentialityMode,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
-import type { Resolution } from "@fractalboxdev/mameko-coordinator";
-import type {
-  D1AdmitInput,
-  D1AdmitResult,
-  D1Like,
-  IntakeUnavailable,
-} from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { admitExecution } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import {
+  admit,
+  type AdmitAnswer,
+  type ConstraintParams,
+  type ExecutionPayload,
+  type RequestFacts,
+  type Resolution,
+} from "@fractalboxdev/mameko-coordinator";
+import { d1ExecutionStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Context, Effect, Layer, Schema } from "effect";
 import type { Caller, RecordedTrigger } from "./event.ts";
 import type { IntakeRun, RunCatalog } from "./runs.ts";
@@ -61,21 +63,144 @@ export class IntakeConfig extends Context.Service<IntakeConfig, IntakeSettings>(
   "@fractalboxdev/flare-dispatch-intake/IntakeConfig",
 ) {}
 
-/** mameko's admission transaction, and what follows a queued admission. */
+/**
+ * One request as intake hands it to mameko's `admit`: the id intake writes its record under, the class and labels
+ * intake's class resolution returned, the dedup key, the placement facts and the run's limits. It is plain data, so a
+ * request held for its cooldown window is admitted later from the stored value under the same id (MAMEKO-ADM-100).
+ */
+export interface IntakeAdmitInput {
+  readonly executionId: string;
+  readonly scopeId: string;
+  readonly run: string;
+  readonly className: string;
+  /** The labels class resolution returned; `untrusted-input` and `local-only` are the only ones (FD-PROF-018). */
+  readonly labels: readonly string[];
+  readonly enqueuedAtMs: number;
+  readonly dedup: {
+    /** The SHA-256 of `canonical`, as `dedupKey` computes it and admission stores it (MAMEKO-ADM-035). */
+    readonly sha256: string;
+    readonly canonical: string;
+    readonly requestDigest: string | null;
+    readonly onMismatch: "duplicate" | "conflict";
+  };
+  /** The request's facts and constraint parameters under its class, from the profile's placement. */
+  readonly placement: {
+    readonly facts: Omit<RequestFacts, "labels" | "deviceLocalInput">;
+    readonly params: ConstraintParams;
+  };
+  readonly maxDurationSec: number;
+  readonly grants: { readonly setup: readonly string[]; readonly agent: readonly string[] };
+}
+
+/** Admission did not answer: the store transaction failed, and nothing was written. */
+export class IntakeUnavailable extends Schema.TaggedError<IntakeUnavailable>()(
+  "IntakeUnavailable",
+  {
+    cause: Schema.String,
+  },
+) {}
+
+/** mameko's admission function, and what follows a queued admission. */
 export class Admission extends Context.Service<
   Admission,
   {
-    readonly admit: (input: D1AdmitInput) => Effect.Effect<D1AdmitResult, IntakeUnavailable>;
+    readonly admit: (input: IntakeAdmitInput) => Effect.Effect<AdmitAnswer, IntakeUnavailable>;
     /** Runs after a request is queued, for the caller to wake standing claims. */
     readonly queued: (className: string) => Effect.Effect<void>;
   }
 >()("@fractalboxdev/flare-dispatch-intake/Admission") {}
 
-/** Admission on the deployment's D1, with the Worker's wake-up after each queued request. */
-export const d1Admission = (
-  db: D1Like,
-  queued: (className: string) => Effect.Effect<void> = () => Effect.void,
-) => Layer.succeed(Admission, { admit: (input) => admitExecution(db, input), queued });
+/** What the Worker supplies to admission beside the database. */
+export interface AdmissionPorts {
+  /** Wakes the standing claims of the class's device executors after a queued admission. */
+  readonly queued?: (className: string) => Effect.Effect<void>;
+  /** Starts an admitted execution's `Execution` workflow in its `ExecutionEngine` object (MAMEKO-ADM-030). */
+  readonly startExecution?: (payload: ExecutionPayload) => Effect.Effect<void>;
+  readonly alarms?: Layer.Layer<AlarmPort>;
+  /**
+   * Whether an operator has quarantined the repository (MAMEKO-ADM-038). The operator operations are not served yet,
+   * so no repository is quarantined while this is absent.
+   */
+  readonly quarantined?: (scopeId: string) => Effect.Effect<boolean>;
+}
+
+/** Without an alarm sink an admission alarm is logged and delivered nowhere; admission does not decide on delivery. */
+const loggedAlarms = Layer.succeed(AlarmPort, {
+  deliver: (alarm) => Effect.logWarning("admission alarm with no alarm sink", alarm),
+});
+
+/**
+ * Every request goes through mameko's one admission function (MAMEKO-ADM-024). Intake has already resolved the class,
+ * so the class-resolution binding answers that class and its labels. The profile declares no capability labels per
+ * executor kind, so each kind is taken to advertise the request's own labels, and placement is decided by the
+ * constraint fold alone, as `eligibleKinds` decides it.
+ */
+export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts = {}) =>
+  Layer.succeed(Admission, {
+    queued: ports.queued ?? (() => Effect.void),
+    admit: (input) =>
+      Effect.gen(function* () {
+        const quarantined =
+          ports.quarantined === undefined ? false : yield* ports.quarantined(input.scopeId);
+        const cls = classNamed(profile, input.className);
+        const bounds =
+          cls?.bounds === undefined
+            ? { global: 0, perScope: 0 }
+            : {
+                global: cls.bounds.global,
+                perScope:
+                  "per_scope" in cls.bounds ? cls.bounds.per_scope : cls.bounds.per_run_scope,
+              };
+        const runLabels = input.placement.facts.runLabels;
+        return yield* admit<IntakeAdmitInput>({
+          request: input,
+          executionId: input.executionId,
+          scopeId: input.scopeId,
+          run: input.run,
+          now: input.enqueuedAtMs,
+          random: Math.random,
+          quarantined,
+          inputs: {},
+          resolution: {
+            binding: (r) => ({ class: r.className, labels: r.labels, alarm: null }),
+            catalogue: profile.classes as never,
+            allowedLabels: input.labels,
+          },
+          parent: null,
+          recipes: [
+            {
+              name: "intake",
+              run: (r) => r.dedup.canonical,
+              ...(input.dedup.requestDigest === null
+                ? {}
+                : { digest: (r: IntakeAdmitInput) => r.dedup.requestDigest }),
+              onMismatch: input.dedup.onMismatch,
+            },
+          ],
+          placement: () => input.placement,
+          pools: profile.pools.map((pool) => ({
+            name: pool.name,
+            classes: pool.classes.filter((c) => c.max > 0).map((c) => c.class),
+            ...(pool.reserved_for === undefined ? {} : { reserved_for: pool.reserved_for }),
+          })),
+          advertised: Object.fromEntries(
+            input.placement.params.kinds.map((kind) => [kind, runLabels]),
+          ),
+          limits: { maxDurationSec: input.maxDurationSec },
+          schedule: null,
+          defaults: { queueAgeSec: 3_600, bounds },
+          estimatedCostMicroUsd: 0,
+          outcomeIntent: null,
+          startExecution: ports.startExecution ?? (() => Effect.void),
+          grants: input.grants,
+        }).pipe(
+          Effect.provide(Layer.merge(d1ExecutionStore(db), ports.alarms ?? loggedAlarms)),
+          Effect.catch((cause) =>
+            Effect.fail(new IntakeUnavailable({ cause: String(cause._tag ?? cause) })),
+          ),
+        );
+      }),
+  });
 
 /** The request class resolution sees (specs/profile.md § Class resolution). */
 export interface ClassRequest {

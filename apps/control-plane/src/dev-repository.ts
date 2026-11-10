@@ -15,7 +15,12 @@ export const DevRepository = Schema.Struct({
   files: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
   /** The repository's confidentiality mode; absent is `unclassified`, mameko's fail-closed default. */
   confidentiality: Schema.optionalKey(
-    Schema.Literals(["non-confidential", "unclassified", "confidential-model", "confidential-compute"]),
+    Schema.Literals([
+      "non-confidential",
+      "unclassified",
+      "confidential-model",
+      "confidential-compute",
+    ]),
   ),
 });
 export type DevRepository = typeof DevRepository.Type;

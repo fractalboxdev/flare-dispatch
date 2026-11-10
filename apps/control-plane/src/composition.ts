@@ -14,6 +14,7 @@ import {
   oidcVerifierLayer,
   profileClassResolver,
   protectionSnapshotsLayer,
+  type AdmissionPorts,
   type IntakeSettings,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
@@ -21,6 +22,7 @@ import {
   ConfigurationSourceLive,
   GateDecisionSourceLive,
 } from "@fractalboxdev/flare-dispatch-profile";
+import type { ExecutionPayload } from "@fractalboxdev/mameko-coordinator";
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { Context, Effect, Layer, Scope } from "effect";
 import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
@@ -73,6 +75,19 @@ const wake = (env: ControlPlaneEnv) => (className: string) =>
   );
 
 /**
+ * What admission needs of the Worker: the wake-up after a queued admission, the `ExecutionEngine` start of an admitted
+ * execution whose class does not defer its workflow (MAMEKO-ADM-030), and the alarm sink.
+ */
+const admissionPorts = (env: ControlPlaneEnv, alarms: AdmissionPorts["alarms"]) => ({
+  queued: wake(env),
+  startExecution: (payload: ExecutionPayload) =>
+    Effect.promise(() =>
+      env.EXECUTION.get(env.EXECUTION.idFromName(payload.executionId)).start(payload),
+    ),
+  alarms,
+});
+
+/**
  * mameko offers no cancel of an admitted execution, so a superseded merge group's execution runs to its end; the cancel
  * is a logged no-op, and nothing downstream decides on it.
  */
@@ -120,7 +135,7 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     return Layer.mergeAll(
       profileClassResolver.pipe(
         Layer.provideMerge(
-          intakeLayer({ db: env.DB, settings, fetch: boundFetch, queued: wake(env) }),
+          intakeLayer({ db: env.DB, settings, fetch: boundFetch, ...admissionPorts(env, alarms) }),
         ),
       ),
       localPorts(env),
@@ -128,7 +143,7 @@ const isolateLayer = (env: ControlPlaneEnv) => {
   }
   return Layer.mergeAll(
     Layer.succeed(IntakeConfig, settings),
-    d1Admission(env.DB, wake(env)),
+    d1Admission(env.DB, settings.profile, admissionPorts(env, alarms)),
     d1IntakeStore(env.DB),
     d1ShedRecorder(env.DB),
     manifestSourceLayer,

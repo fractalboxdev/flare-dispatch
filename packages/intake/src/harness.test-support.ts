@@ -189,7 +189,7 @@ export const harness = async (options: HarnessOptions = {}) => {
       : recordingResolver(recorded.resolved, options.resolve);
   const layer = Layer.mergeAll(
     config,
-    d1Admission(db),
+    d1Admission(db, settings.profile, { alarms }),
     d1IntakeStore(db),
     d1ShedRecorder(db),
     manifestSourceLayer,

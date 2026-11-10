@@ -7,7 +7,10 @@ export {
   IntakeConfig,
   IntakeError,
   intakeError,
+  IntakeUnavailable,
+  type AdmissionPorts,
   type ClassRequest,
+  type IntakeAdmitInput,
   type IntakeSettings,
 } from "./config.ts";
 export { cronDrift, cronMatches, MINUTE_TICK, minuteIso, parseCron } from "./cron.ts";
