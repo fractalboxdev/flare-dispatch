@@ -3,10 +3,17 @@
 import { GithubApp } from "@fractalboxdev/flare-dispatch-github";
 import { planTick, releaseHeld, runTickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import { tickDepsFromEnv, type TickDeps, type TickStep } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  startStaleExecutions,
+  startUnstartedExecutions,
+  type ExecutionPayload,
+} from "@fractalboxdev/mameko-coordinator";
+import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
+import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import type { ActuatorRateLimit, Actuators } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { isolateServices } from "./composition.ts";
-import { profileOf, type ControlPlaneEnv } from "./config.ts";
+import { channelConfig, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { appOptionsOf } from "./github.ts";
 
 /**
@@ -29,6 +36,37 @@ export const intakeUnits = (now: number) =>
     }
     return report;
   });
+
+/**
+ * mameko's two start sweeps: an execution past its `stale_at` with no engine execution (MAMEKO-ARCH-038), and an
+ * admitted execution whose workflow start failed (the admission sweep). Each starts the `Execution` workflow in its
+ * `ExecutionEngine` object, as admission and the executor channel do.
+ */
+export const startSweeps = (env: ControlPlaneEnv, now: number): readonly TickStep[] => {
+  const profile = profileOf(env);
+  const deferredClasses = channelConfig(profile).deferredClasses ?? [];
+  const start = (payload: ExecutionPayload) =>
+    Effect.promise(() =>
+      env.EXECUTION.get(env.EXECUTION.idFromName(payload.executionId)).start(payload),
+    );
+  const store = d1ExecutionStore(env.DB);
+  return [
+    {
+      step: "stale-start",
+      effect: startStaleExecutions(now, { deferredClasses, start }).pipe(Effect.provide(store)),
+    },
+    {
+      step: "admission-sweep",
+      effect: startUnstartedExecutions(now, {
+        catalogue: profile.classes,
+        deferredClasses,
+        start,
+        wake: (placement) =>
+          Effect.promise(() => wakeStandingClaims(env.DB, env.CHANNEL, placement)),
+      }).pipe(Effect.provide(store)),
+    },
+  ];
+};
 
 export const tickDeps = (
   env: ControlPlaneEnv,
@@ -61,6 +99,7 @@ export const tickDeps = (
             },
           ]
         : []),
+      ...startSweeps(env, now),
       ...steps(now),
     ],
   });
