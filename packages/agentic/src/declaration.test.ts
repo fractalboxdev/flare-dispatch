@@ -186,7 +186,7 @@ describe("credential boundary", () => {
 });
 
 describe("model-authored text", () => {
-  it("[FD-AGT-041] escapes mentions, strips HTML, renders links as code and closes an open fence", () => {
+  it("escapes mentions, strips HTML, renders links as code and closes an open fence", () => {
     const text =
       "Hi @octocat and @org/team <b>bold</b><!-- hidden -->\nSee [docs](https://evil.example) and ![i](x.png)\n```ts\nconst a = '@keep';\n";
     expect(sanitizeModelText(text)).toBe(

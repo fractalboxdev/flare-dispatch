@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { Context } from "effect";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   accessClaims,
   actionsClaims,
@@ -9,12 +10,18 @@ import {
   MEMBER,
   now,
   OPERATOR,
+  ORIGIN,
+  portsContext,
   type Harness,
 } from "./api.test-support.ts";
-import { apiConfigFromEnv, ConfigInvalid, distinctLinkKey } from "./config.ts";
+import { ApiConfig, apiConfigFromEnv, ConfigInvalid, distinctLinkKey } from "./config.ts";
 import { constantTimeEqual } from "./crypto.ts";
+import { declaredGroups } from "./groups.ts";
 import { signBody, verifyBody } from "./hmac.ts";
+import { ACTIONS_JWKS } from "./identity.ts";
+import { JWKS_TTL_MS, JwksSourceLive } from "./jwt.ts";
 import { checkLinkToken, LINK_LABELS, mintLinkToken } from "./link-token.ts";
+import { mount, toFetchHandler } from "./router.ts";
 
 let h: Harness;
 beforeAll(async () => {
@@ -108,6 +115,32 @@ describe("Access gate", () => {
     expect((await h.fetch("/v1/ops/health", await h.asAccess(OPERATOR))).status).toBe(200);
   });
 
+  it("[FD-IFC-016], [FD-IFC-027]: a valid service-token JWT grants only the operator or dispatcher role its common name is listed under", async () => {
+    const operator = "operator-ci.access";
+    const dispatcher = "dispatcher-ci.access";
+    const config = baseConfig({ operators: [operator], dispatchers: [dispatcher] });
+    const before = h.doubles.calls.submissions.length;
+    for (const commonName of [operator, dispatcher, "unlisted-ci.access"]) {
+      const jwt = await h.access.sign(
+        accessClaims("", { email: undefined, common_name: commonName }),
+      );
+      expect((await h.fetch("/v1/executions", { ...withJwt(jwt), config })).status).toBe(200);
+      expect((await h.fetch("/v1/ops/health", { ...withJwt(jwt), config })).status).toBe(
+        commonName === operator ? 200 : 403,
+      );
+      const dispatched = await h.fetch("/v1/dispatch/check", {
+        ...withJwt(jwt, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ repository: "acme/widgets", inputs: {} }),
+        }),
+        config,
+      });
+      expect(dispatched.status).toBe(commonName === dispatcher ? 202 : 401);
+    }
+    expect(h.doubles.calls.submissions.length).toBe(before + 1);
+  });
+
   it("[FD-IFC-088]: an identity outside operators answers 403 on executor registration", async () => {
     const init = {
       method: "POST",
@@ -174,6 +207,36 @@ describe("dispatch identity", () => {
     }
   });
 
+  it("[FD-INT-035]: an Actions token passes only with GitHub's issuer, the audience, an unexpired exp and an RS256 signature from the issuer's JWKS", async () => {
+    const before = h.doubles.calls.submissions.length;
+    const forger = await makeSigner(h.actions.kid);
+    for (const jwt of [
+      await h.actions.sign(actionsClaims("acme/widgets", { iss: "https://example.com" })),
+      await h.actions.sign(actionsClaims("acme/widgets", { aud: "https://other.example.com" })),
+      // Expired beyond the 60 s skew, or carrying no `exp` at all.
+      await h.actions.sign(actionsClaims("acme/widgets", { exp: now() - 120 })),
+      await h.actions.sign(actionsClaims("acme/widgets", { exp: undefined })),
+      // A header naming another algorithm over the same RS256 signature.
+      await h.actions.sign(actionsClaims("acme/widgets"), { alg: "RS512" }),
+      // The issuer's kid, signed by a key outside its JWKS.
+      await forger.sign(actionsClaims("acme/widgets")),
+    ]) {
+      const response = await h.fetch(
+        "/v1/dispatch/check",
+        dispatchInit({ authorization: `Bearer ${jwt}` }),
+      );
+      expect(response.status).toBe(401);
+      expect((await body(response))["error"]).toBe("unauthenticated");
+    }
+    expect(h.doubles.calls.submissions.length).toBe(before);
+    const valid = await h.actions.sign(actionsClaims("acme/widgets"));
+    const accepted = await h.fetch(
+      "/v1/dispatch/check",
+      dispatchInit({ authorization: `Bearer ${valid}` }),
+    );
+    expect(accepted.status).toBe(202);
+  });
+
   it("[FD-IFC-025]: an Actions dispatch takes its repository, ref and workflow ref from the token", async () => {
     const jwt = await h.actions.sign(actionsClaims("Acme/Widgets", { ref: "refs/heads/feature" }));
     await h.fetch(
@@ -197,6 +260,41 @@ describe("dispatch identity", () => {
     );
     expect(response.status).toBe(403);
     expect((await body(response))["error"]).toBe("repository_mismatch");
+  });
+
+  it("[FD-INT-035]: the live JWKS source fetches GitHub's keys once per hour, and again once the hour has passed", async () => {
+    const started = Date.parse("2026-01-01T00:00:00Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(started);
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (input: Request | string | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      fetched.push(url);
+      return Response.json({ keys: [h.actions.jwk] });
+    });
+    try {
+      const handler = toFetchHandler(mount(...declaredGroups), { shared: JwksSourceLive });
+      const dispatch = async () => {
+        const jwt = await h.actions.sign(actionsClaims("acme/widgets"));
+        const services = portsContext(h.doubles).pipe(Context.add(ApiConfig, baseConfig()));
+        const request = new Request(
+          `${ORIGIN}/v1/dispatch/check`,
+          dispatchInit({ authorization: `Bearer ${jwt}` }),
+        );
+        return (await handler.fetch(request, services as never)).status;
+      };
+      expect(await dispatch()).toBe(202);
+      vi.setSystemTime(started + JWKS_TTL_MS - 1_000);
+      expect(await dispatch()).toBe(202);
+      expect(fetched).toEqual([ACTIONS_JWKS]);
+      vi.setSystemTime(started + JWKS_TTL_MS + 1_000);
+      expect(await dispatch()).toBe(202);
+      expect(fetched).toEqual([ACTIONS_JWKS, ACTIONS_JWKS]);
+      await handler.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 
   it("[FD-IFC-024]: with no OIDC audience configured an Actions dispatch answers 503 not_configured", async () => {

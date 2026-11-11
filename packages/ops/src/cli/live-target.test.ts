@@ -280,7 +280,7 @@ describe("live deploy target", () => {
     expect(await use(layerFor(world({ health: 503 })).layer, (t) => t.probe(worker))).toBe(false);
     const w = world();
     await use(layerFor(w).layer, (t) =>
-      t.raiseAlarm("deploy-probe-failed", "control-plane: GET /health failed"),
+      t.raiseAlarm("deploy-probe-failed", "control-plane: GET /health failed", "page"),
     );
     expect(w.calls).toContain("POST alerts.example.com/hook");
   });

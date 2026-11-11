@@ -3,11 +3,14 @@
 // `profileDriftFindings`), and the drift stage of `fd deploy` on the fakes of `support.ts`.
 import {
   buildProfile,
+  loadProfile,
   missingPorts,
   poolAdmissionCaps,
   profileDocumentFor,
+  profileLoader,
+  validationContext,
 } from "@fractalboxdev/flare-dispatch-profile";
-import { AlarmPort } from "@fractalboxdev/mameko-ports";
+import { AlarmPort, type ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { Effect } from "effect";
@@ -252,6 +255,59 @@ describe("the alert sink", () => {
 });
 
 describe("the drift check over the production profile", () => {
+  it("[FD-OPS-021] fd deploy and fd doctor fail a deploy whose profile document the profile validator rejects, listing every rejection the validator returns, before any Cloudflare write", async () => {
+    // The production document is accepted, and the deploy that carries it goes out.
+    const accepted = world();
+    expect(
+      (await deploy(accepted, OVERLAY, { profile: profileDocumentFor("production") })).ok,
+    ).toBe(true);
+
+    const production = profileDocumentFor("production");
+    const documents: ProfileDocument[] = [
+      // Later phases' documents: validation rejections, several at once.
+      profileDocumentFor("production", 1),
+      profileDocumentFor("production", 4),
+      // A section that does not decode: one rejection with an empty path, named by its item.
+      { ...production, document: { ...(production.document as object), placement: null } },
+      // An envelope whose policy version is not the document's.
+      { ...production, policyVersion: "flare-dispatch.v2.other" },
+    ];
+    for (const document of documents) {
+      const rejections = Effect.runSync(
+        Effect.flip(loadProfile(profileLoader(validationContext), document)),
+      ).rejections;
+      expect(rejections.length).toBeGreaterThan(0);
+      const lines = rejections.map((r) => `${r.path === "" ? r.item : r.path}: ${r.reason}`);
+
+      const w = world();
+      const report = await deploy(w, OVERLAY, { profile: document });
+      expect(report.ok).toBe(false);
+      expect(report.stages.at(-1)).toEqual({
+        stage: "drift",
+        ok: false,
+        detail: lines.join("\n"),
+      });
+      expect(w.calls.filter(isWrite)).toEqual([]);
+      expect(w.runs).toEqual([]);
+
+      const doctor = await Effect.runPromise(fd(w, { profile: document }).doctor(OVERLAY));
+      expect(doctor.ok).toBe(false);
+      expect(driftStage(doctor)).toEqual({
+        stage: "drift",
+        ok: false,
+        detail: lines.map((l) => `failure ${l}`).join("\n"),
+      });
+    }
+    // The phase 4 document carries more than one rejection, and every one reaches the report.
+    expect(
+      Effect.runSync(
+        Effect.flip(
+          loadProfile(profileLoader(validationContext), profileDocumentFor("production", 4)),
+        ),
+      ).rejections.length,
+    ).toBeGreaterThan(3);
+  });
+
   it("[FD-PROF-064] passes the phase 0 production profile and fails a document that lists aws or gha, registers a launcher, declares a constraint or sets attestation before its phase", () => {
     const committed = buildProfile("production");
     expect(Effect.runSync(profileDriftFindings())).toEqual([]);

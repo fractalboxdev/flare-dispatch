@@ -1,15 +1,26 @@
 // `fd deploy` and `fd doctor`: overlay decode, render, drift check, D1 migrations, Worker deploys in service-binding
-// order, post-deploy probes and the floor canary, then the record of the deploy (specs/operability.md § Deploy
-// pipeline). The stages run in that order and stop at the first that fails (FD-OPS-009); the Cloudflare and GitHub
-// reads and writes go through the `DeployTarget` port, so `fd doctor` runs the same checks with no write (FD-OPS-024).
+// order and the committed Access applications, post-deploy probes and the floor canary, then the record of the deploy
+// (specs/operability.md § Deploy pipeline). The stages run in that order and stop at the first that fails
+// (FD-OPS-009); the Cloudflare and GitHub reads and writes go through the `DeployTarget` port, so `fd doctor` runs the
+// same checks with no write (FD-OPS-024).
 import { Context, Effect, Schema } from "effect";
 import {
+  accessChanges,
+  type AccessApplication,
+  type AccessChanges,
+  type CommittedAccess,
+  type DeployedAccessApplication,
+} from "./access-application.ts";
+import {
+  accessAudCheck,
+  accessDrift,
   appRegistrationCheck,
   failed,
   rulesetCheck,
   settingsDrift,
   templateInvariants,
   unrenderedCheck,
+  withProfileStep,
   type AppPermissions,
   type DeployedSettings,
   type Finding,
@@ -98,7 +109,20 @@ export class DeployTarget extends Context.Service<
       rendered: readonly RenderedWorker[],
     ) => Effect.Effect<CanaryResult, TargetFailed>;
     readonly writeRecord: (worker: RenderedWorker) => Effect.Effect<void, TargetFailed>;
-    readonly raiseAlarm: (name: string, detail: string) => Effect.Effect<void>;
+    /** Sends one alarm of specs/operability.md § Liveness and alerts to the overlay's alert sink. */
+    readonly raiseAlarm: (
+      name: string,
+      detail: string,
+      severity: "page" | "notify",
+    ) => Effect.Effect<void>;
+    /** Every Access application of the account (FD-OPS-088). */
+    readonly accessApplications: Effect.Effect<readonly DeployedAccessApplication[], TargetFailed>;
+    /** Creates an Access application, or replaces the one `id` names. */
+    readonly putAccessApplication: (
+      application: AccessApplication,
+      id: string | null,
+    ) => Effect.Effect<void, TargetFailed>;
+    readonly deleteAccessApplication: (id: string) => Effect.Effect<void, TargetFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-ops/DeployTarget") {}
 
@@ -210,9 +234,16 @@ export const renderAll = (overlayText: string, workers: readonly WorkerTemplate[
     return { overlay, rendered };
   });
 
+/** The Access applications a deploy carries, from its decoded overlay; none for a deploy without the dispatcher. */
+export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
+
 /**
  * Every drift finding: the templates' invariants, the rendered configuration, the deployed Workers against the record
- * of the last deploy, the GitHub App's registration and the default branch's ruleset.
+ * of the last deploy, the GitHub App's registration, the default branch's ruleset and, given `access`, the Access
+ * applications on the dispatcher's hostname, then the profile step's findings from `more` (`withProfileStep`, the
+ * composition the pull-request drift check shares). `fd deploy` passes no `access`: it checks only the hostname
+ * application's AUD tag, then applies the committed applications and reports each one it changed, where `fd doctor`
+ * fails on each difference.
  */
 export const driftFindings = (
   workers: readonly WorkerTemplate[],
@@ -220,10 +251,11 @@ export const driftFindings = (
   manifest: AppPermissions,
   extra: (worker: string, config: WorkerConfig) => readonly Finding[] = () => [],
   more: Effect.Effect<readonly Finding[]> = Effect.succeed([]),
+  access: CommittedAccess | null = null,
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
-    const findings: Finding[] = [...(yield* more)];
+    const findings: Finding[] = [];
     for (const w of workers) findings.push(...templateInvariants(w.worker, parseJsonc(w.template)));
     for (const r of rendered) {
       findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config));
@@ -234,7 +266,8 @@ export const driftFindings = (
     }
     findings.push(...appRegistrationCheck(manifest, yield* target.appRegistration));
     findings.push(...rulesetCheck(yield* target.requiredChecks));
-    return findings;
+    if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));
+    return yield* withProfileStep(findings, more);
   }).pipe(Effect.mapError(stageFailed("drift")));
 
 /** `fd doctor`: every drift check, no Cloudflare or GitHub write (FD-OPS-024). */
@@ -244,15 +277,45 @@ export const fdDoctor = (
   manifest: AppPermissions,
   extra?: (worker: string, config: WorkerConfig) => readonly Finding[],
   more?: Effect.Effect<readonly Finding[]>,
+  access?: AccessFor,
 ) =>
   Effect.gen(function* () {
-    const { rendered } = yield* renderAll(overlayText, workers);
-    return yield* driftFindings(workers, rendered, manifest, extra, more);
+    const { overlay, rendered } = yield* renderAll(overlayText, workers);
+    return yield* driftFindings(
+      workers,
+      rendered,
+      manifest,
+      extra,
+      more,
+      access?.(overlay) ?? null,
+    );
+  });
+
+/**
+ * Makes the account's Access applications on the dispatcher's hostname the committed ones (FD-OPS-088): creates each
+ * absent one, replaces each that differs and removes each the commit does not hold. It runs after the Worker deploys,
+ * so a newly bypassed path is served by a Worker that runs its own identity check, and before the probes, which reach
+ * `/health` through Access.
+ */
+export const applyAccess = (committed: CommittedAccess) =>
+  Effect.gen(function* () {
+    const target = yield* DeployTarget;
+    const changes = accessChanges(committed, yield* target.accessApplications);
+    for (const a of changes.create) yield* target.putAccessApplication(a, null);
+    for (const u of changes.update) yield* target.putAccessApplication(u.application, u.id);
+    for (const r of changes.remove) yield* target.deleteAccessApplication(r.id);
+    return changes;
   });
 
 /**
  * `fd deploy`: the stages of FD-OPS-009 in order, stopping at the first that fails. A failed probe or floor canary
  * exits non-zero, raises `deploy-probe-failed` and prints each Worker's rollback line; nothing rolls back by itself.
+ *
+ * With Access to apply, the drift stage reads the account's Access applications, so a token that cannot read them
+ * stops the deploy before any write, and fails on a hostname application whose AUD tag is not the overlay's
+ * `access.aud`. Cloudflare gives a created application a new AUD tag, so a deploy that creates the hostname
+ * application fails the deploy stage with that tag: the dispatcher checks Access JWTs against `access.aud`, and would
+ * reject every one.
  */
 export const fdDeploy = (
   overlayText: string,
@@ -260,11 +323,20 @@ export const fdDeploy = (
   manifest: AppPermissions,
   extra?: (worker: string, config: WorkerConfig) => readonly Finding[],
   more?: Effect.Effect<readonly Finding[]>,
+  access?: AccessFor,
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
-    const { rendered } = yield* renderAll(overlayText, workers);
-    const drift = yield* driftFindings(workers, rendered, manifest, extra, more);
+    const { overlay, rendered } = yield* renderAll(overlayText, workers);
+    const committed = access?.(overlay) ?? null;
+    const drift = [...(yield* driftFindings(workers, rendered, manifest, extra, more))];
+    if (committed !== null)
+      drift.push(
+        ...accessAudCheck(
+          committed,
+          yield* target.accessApplications.pipe(Effect.mapError(stageFailed("drift"))),
+        ),
+      );
     if (failed(drift))
       return yield* new DeployFailed({ stage: "drift", findings: findingsOf(drift), rollback: [] });
     const d1 = yield* target
@@ -290,6 +362,28 @@ export const fdDeploy = (
         ),
       );
     }
+    const deployStageFailed = (e: TargetFailed) =>
+      new DeployFailed({
+        stage: "deploy",
+        findings: [{ path: e.operation, detail: e.message }],
+        rollback: deployed.map(rollbackOf),
+      });
+    const accessApplied: AccessChanges | null =
+      committed === null
+        ? null
+        : yield* applyAccess(committed).pipe(Effect.mapError(deployStageFailed));
+    if (committed !== null && accessApplied?.create.some((a) => a.domain === committed.hostname)) {
+      const aud = accessAudCheck(
+        committed,
+        yield* target.accessApplications.pipe(Effect.mapError(deployStageFailed)),
+      );
+      if (failed(aud))
+        return yield* new DeployFailed({
+          stage: "deploy",
+          findings: findingsOf(aud),
+          rollback: deployed.map(rollbackOf),
+        });
+    }
     const probes: { path: string; detail: string }[] = [];
     for (const d of deployed) {
       const r = rendered.find((x) => x.worker === d.worker)!;
@@ -311,6 +405,7 @@ export const fdDeploy = (
       yield* target.raiseAlarm(
         "deploy-probe-failed",
         probes.map((p) => `${p.path}: ${p.detail}`).join("; "),
+        "page",
       );
       return yield* new DeployFailed({
         stage: "probes",
@@ -323,6 +418,7 @@ export const fdDeploy = (
     return {
       deployed,
       migrations: d1,
+      access: accessApplied,
       canary,
       warnings: drift.filter((f) => f.severity === "warning"),
     };

@@ -1,11 +1,13 @@
 // The live `DeployTarget`: the Cloudflare API for the deployed Workers, their schedules, domains and Container
 // applications and the record of the last deploy in the artifacts bucket; `wrangler` for D1 migrations and Worker
 // deploys; the GitHub API with the App JWT for the App's registration and the default branch's ruleset; the Workers'
-// own hostnames for the post-deploy probes; and the overlay's alert sink for `deploy-probe-failed`.
+// own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; and the overlay's
+// alert sink for `deploy-probe-failed`.
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Effect, Layer } from "effect";
-import { alarmMessage } from "../alarms.ts";
+import type { DeployedAccessApplication } from "../access-application.ts";
+import { alarmMessage, RUNBOOK } from "../alarms.ts";
 import {
   DeployTarget,
   scriptName,
@@ -65,6 +67,9 @@ export interface DeployRecord {
 export const recordKey = (scriptName: string): string => `deploys/${scriptName}/last.json`;
 
 const RECORD_BUCKET = "ARTIFACTS";
+
+/** The page size the Access applications are listed in. */
+const ACCESS_PAGE = 100;
 
 export { scriptName };
 
@@ -159,8 +164,33 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
     return appJwt(c.overlay.github.appId, c.appPrivateKey, Math.floor(now() / 1000));
   });
 
+  /** Every Access application, page by page until a page holds no application not already listed. */
+  const accessApplications = Effect.gen(function* () {
+    const all = new Map<string, DeployedAccessApplication>();
+    for (let page = 1; ; page++) {
+      const listed = arr<DeployedAccessApplication>(
+        yield* c.cloudflare.json(
+          "GET",
+          `${account}/access/apps?page=${page}&per_page=${ACCESS_PAGE}`,
+        ),
+      );
+      const fresh = listed.filter((a) => !all.has(a.id));
+      for (const a of fresh) all.set(a.id, a);
+      if (listed.length < ACCESS_PAGE || fresh.length === 0) return [...all.values()];
+    }
+  });
+
   return Layer.succeed(DeployTarget, {
     deployedSettings,
+    accessApplications,
+    putAccessApplication: (application, id) =>
+      Effect.asVoid(
+        id === null
+          ? c.cloudflare.json("POST", `${account}/access/apps`, application)
+          : c.cloudflare.json("PUT", `${account}/access/apps/${id}`, application),
+      ),
+    deleteAccessApplication: (id) =>
+      Effect.asVoid(c.cloudflare.json("DELETE", `${account}/access/apps/${id}`)),
     lastRecord: (r) =>
       Effect.map(readRecord(r), (rec): DeployedSettings | null => {
         if (rec === null) return null;
@@ -309,11 +339,11 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
           } satisfies DeployRecord),
         );
       }),
-    raiseAlarm: (name, detail) =>
+    raiseAlarm: (name, detail, severity) =>
       Effect.gen(function* () {
         const alarm = {
           name,
-          severity: "page" as const,
+          severity,
           dedupeKey: name,
           state: "raised" as const,
           detail,
@@ -331,10 +361,10 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               alarm: name,
-              severity: "page",
+              severity,
               state: "raised",
               dedupe_key: name,
-              runbook: "R4",
+              runbook: severity === "page" ? (RUNBOOK[name] ?? null) : null,
               detail,
               message: alarmMessage(alarm),
             }),

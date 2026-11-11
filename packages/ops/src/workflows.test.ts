@@ -135,6 +135,27 @@ describe("merge gate and nightly", () => {
     expect(MERGE_GATE_CHECKS as readonly string[]).not.toContain("fallback-ci");
   });
 
+  it("[FD-VER-028] [FD-VER-029] the phase-gate job fetches the control plane's records into the file the gate reads", () => {
+    const job = ci.jobs["phase-gate"]!;
+    const fetchAt = stepIndex(job, (s) => (s.run ?? "").includes("--fetch"));
+    const gateAt = stepIndex(job, (s) => s.name === "phase-gate");
+    expect(fetchAt).toBeGreaterThanOrEqual(0);
+    expect(fetchAt).toBeLessThan(gateAt);
+    const fetchStep = job.steps![fetchAt]!;
+    expect(fetchStep.run).toContain(
+      'phase-gate.ts --base "$BASE" --fetch --records .tmp/phase-gate-records.json',
+    );
+    expect(Object.keys(fetchStep.env ?? {}).sort()).toEqual([
+      "BASE",
+      "FD_ACCESS_CLIENT_ID",
+      "FD_ACCESS_CLIENT_SECRET",
+      "FD_OPERATOR_OVERLAY",
+    ]);
+    // The overlay is the one the deploy reads, so the records come from the control plane it targets.
+    expect(fetchStep.env!["FD_OPERATOR_OVERLAY"]).toBe("${{ secrets.FD_OPERATOR_OVERLAY }}");
+    expect(job.steps![gateAt]!.run).toContain("--records .tmp/phase-gate-records.json");
+  });
+
   it("[FD-OPS-031] CI renders every spec diagram and builds the documentation site", () => {
     const runs = ci.jobs["docs"]!.steps!.map((s) => s.run ?? "");
     expect(runs).toContain(
@@ -301,7 +322,10 @@ describe("Access configuration", () => {
     const apps = accessApplications("dispatch.example.com", ["ops@acme.com"]);
     expect(apps[0]).toMatchObject({
       domain: "dispatch.example.com",
-      policies: [{ decision: "allow" }],
+      policies: [
+        { decision: "allow", include: [{ email: { email: "ops@acme.com" } }] },
+        { decision: "non_identity", include: [{ any_valid_service_token: {} }] },
+      ],
     });
     expect(apps.slice(1).every((a) => a.policies[0]!.decision === "bypass")).toBe(true);
     expect(apps.slice(1).map((a) => a.domain)).toContain("dispatch.example.com/v1/webhooks/github");

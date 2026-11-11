@@ -107,7 +107,7 @@ describe("catalogue", () => {
     expect(interactive?.claim_deadline).toEqual({ seconds: 300 });
   });
 
-  it("[FD-AGT-069] [FD-AGT-072] [FD-AGT-080] the writeback blocks name each recipe's branch and allowlist", () => {
+  it("[FD-AGT-069] [FD-AGT-072] the writeback blocks name each recipe's branch and allowlist", () => {
     expect(agenticWriteback("spec-drift-pr")?.writeback).toMatchObject({ allowlist: ["specs/**"] });
     expect(agenticWriteback("ci-triage-pr")?.writeback).toMatchObject({
       allowlist: [".flare-dispatch/**"],
@@ -233,7 +233,7 @@ describe("pr-review", () => {
     expect(merged.findings).toEqual([finding({ level: "failure", startLine: 5, endLine: 5 })]);
   });
 
-  it("[FD-AGT-053] [FD-AGT-041] keeps one marked review comment of at most 25 findings, sanitized", async () => {
+  it("keeps one marked review comment of at most 25 findings, sanitized", async () => {
     const findings = Array.from({ length: 30 }, (_, i) =>
       finding({ path: `src/f${i}.ts`, title: `@octocat <b>x</b>` }),
     );
@@ -413,7 +413,7 @@ describe("improve-pr", () => {
     expect(rec.staged[0]?.pr.body).toContain("from 120 to 100 (gain 20, floor 10)");
   });
 
-  it("[FD-AGT-067] an edit loop that cannot start concludes infra: edit loop unavailable", async () => {
+  it("improve-pr concludes infra: edit loop unavailable when the edit loop exits 127", async () => {
     const rec = recorder();
     const result = await Effect.runPromise(
       improvePrRun.workflow.execute(payload("improve-pr", { baseBranch: "main", dimension })).pipe(

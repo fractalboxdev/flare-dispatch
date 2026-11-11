@@ -221,6 +221,44 @@ describe("operator routes", () => {
     expect(s.calls).toEqual([]);
   });
 
+  it("[FD-VER-028] [FD-VER-029] GET /v1/ops/phase-gate serves an operator gate n's records over the 14-day window", async () => {
+    const now = 1_800_000_000_000;
+    const s = await setup({}, now);
+    await t.db
+      .prepare(
+        "insert into fd_alarms (dedupe_key, name, severity, state, detail_json, first_raised_at, updated_at) values ('kill-line:toil', 'kill-line', 'notify', 'raised', 'null', ?, ?)",
+      )
+      .bind(now - 1000, now - 1000)
+      .run();
+    const res = await s.call(s.operator, "/v1/ops/phase-gate?gate=0");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      gate: number;
+      windowStart: number;
+      windowEnd: number;
+      measures: { name: string }[];
+      killLines: string[];
+    };
+    expect(body).toMatchObject({
+      gate: 0,
+      windowStart: now - 14 * 86_400_000,
+      windowEnd: now,
+      pageAlarms: [],
+      killLines: ["kill-line:toil"],
+    });
+    expect(body.measures.map((m) => m.name)).toEqual([
+      "warm-verdict",
+      "cache-hit-rate",
+      "estimate-drift",
+    ]);
+    expect((await s.call(s.viewer, "/v1/ops/phase-gate?gate=0")).status).toBe(403);
+    expect((await s.call(s.operator, "/v1/ops/phase-gate")).status).toBe(400);
+    expect((await s.call(s.operator, "/v1/ops/phase-gate?gate=4")).status).toBe(400);
+    for (const gate of ["", "0x1", "1e0", " 1"])
+      expect((await s.call(s.operator, `/v1/ops/phase-gate?gate=${encodeURIComponent(gate)}`)).status).toBe(400);
+    expect((await s.call(s.operator, "/v1/ops/phase-gate?gate=0", post({}))).status).toBe(405);
+  });
+
   it("[FD-OPS-077] a missing or over-long reason answers reason_required; a grant expiry beyond 7 days is refused", async () => {
     const s = await setup();
     const noReason = await s.call(s.operator, "/v1/ops/revoke", post({ executor: "dev-1" }));

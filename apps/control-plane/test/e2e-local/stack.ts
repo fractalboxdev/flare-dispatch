@@ -3,9 +3,12 @@
 // renderer; the test's Access team; and the recorded GitHub fixture server, which answers every request the Worker
 // addresses to GitHub. Clients reach the Worker over HTTP through a front that records each request it forwards.
 //
-// The deployment is `development` with the development repository binding, as `pnpm dogfood` runs it: the stack holds
-// no GitHub App key, so the Worker reads its repository from that binding and applies nothing to GitHub. Executors are
-// the test's own signed WebSockets (`../support.ts`); no container runs.
+// The deployment is `development`. By default it has the development repository binding, as `pnpm dogfood` runs it: the
+// stack holds no GitHub App key, so the Worker reads its repository from that binding and applies nothing to GitHub.
+// Started with a recorded GitHub state, the stack instead holds an App key of its own and no repository binding, so the
+// Worker reads and writes GitHub through the App, and the fixture server answers from that state. Executors are the
+// test's own signed WebSockets (`../support.ts`); no container runs.
+import { generateKeyPairSync } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,7 +23,11 @@ import {
   Response as MfResponse,
 } from "miniflare";
 import { AUD, OPERATOR, startAccessTeam, type AccessTeam } from "../support.ts";
-import { startGithubFixtureServer, type GithubFixtureServer } from "./fixtures/github-server.ts";
+import {
+  startGithubFixtureServer,
+  type GithubFixtureServer,
+  type GithubState,
+} from "./fixtures/github-server.ts";
 
 const APP = join(import.meta.dirname, "../..");
 
@@ -31,6 +38,10 @@ export const HEAD = "1".repeat(40);
 export const WEBHOOK_SECRET = "e2e-webhook-secret";
 export const OIDC_AUDIENCE = "e2e-control-plane";
 export const PLANE_ID = "e2e-plane";
+/** The link key log and artifact link tokens are signed under (FD-IFC-018). */
+export const LINK_KEY = "e2e-link-key";
+/** The secret compile-cache tokens derive from (FD-CACHE-057). */
+export const COMPILE_CACHE_SECRET = "e2e-compile-cache-secret";
 
 const MANIFEST = {
   version: 1,
@@ -54,8 +65,8 @@ const DEV_REPOSITORY = {
   },
 };
 
-/** The overlay the stack deploys with: the placeholder values, with the stack's own Access team and plane. */
-const overlayFor = (team: AccessTeam) =>
+/** The overlay the stack deploys with: the placeholder values, with the stack's own Access team, plane and App id. */
+const overlayFor = (team: AccessTeam, appId: string) =>
   Effect.runSync(
     decodeOverlay(
       JSON.stringify({
@@ -67,7 +78,7 @@ const overlayFor = (team: AccessTeam) =>
         access: { teamDomain: team.teamDomain, aud: AUD },
         operators: [OPERATOR],
         dispatchers: [OPERATOR],
-        github: { appId: "0", fixtureRepo: REPOSITORY },
+        github: { appId, fixtureRepo: REPOSITORY },
         dispatch: { oidcAudience: OIDC_AUDIENCE },
         executors: { planeId: PLANE_ID },
         alerts: { sink: "https://alerts.example.com/hook" },
@@ -178,10 +189,29 @@ const GITHUB_HOSTS: ReadonlySet<string> = new Set([
   "token.actions.githubusercontent.com",
 ]);
 
-export const startStack = async (): Promise<Stack> => {
+export interface StackOptions {
+  /** GitHub's recorded state: the Worker holds an App key and reads and writes GitHub through the App. */
+  readonly github?: GithubState;
+}
+
+/** An App key pair, as the operator's `GITHUB_APP_PRIVATE_KEY` secret holds the private half. */
+const appKey = () => {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  return {
+    publicKey,
+    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+  };
+};
+
+export const startStack = async (options: StackOptions = {}): Promise<Stack> => {
   const team = await startAccessTeam();
-  const github = await startGithubFixtureServer();
-  const overlay = overlayFor(team);
+  const key = options.github === undefined ? undefined : appKey();
+  const github = await startGithubFixtureServer(
+    options.github === undefined || key === undefined
+      ? undefined
+      : { state: options.github, publicKey: key.publicKey },
+  );
+  const overlay = overlayFor(team, options.github?.app.id ?? "0");
   const config = render(overlay);
   const containerClasses = new Set((config.containers ?? []).map((c) => c.class_name));
   const vars = Object.fromEntries(
@@ -205,9 +235,13 @@ export const startStack = async (): Promise<Stack> => {
       ...vars,
       // What `wrangler dev` for local work overrides, and the Worker secrets `fd deploy` would set.
       DEPLOYMENT: "development",
-      FD_DEV_REPOSITORY: JSON.stringify(DEV_REPOSITORY),
+      ...(key === undefined
+        ? { FD_DEV_REPOSITORY: JSON.stringify(DEV_REPOSITORY) }
+        : { GITHUB_APP_PRIVATE_KEY: key.privateKeyPem }),
       WEBHOOK_SECRET,
       CACHE_TOKEN_SECRET: "e2e-cache-token-secret",
+      COMPILE_CACHE_SECRET,
+      LINK_KEY,
       // The template renders neither; the overlay holds both (`dispatchers`, `dispatch.oidcAudience`).
       DISPATCHERS: JSON.stringify(overlay.dispatchers ?? []),
       DISPATCH_OIDC_AUDIENCE: overlay.dispatch?.oidcAudience ?? "",

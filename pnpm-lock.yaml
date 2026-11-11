@@ -647,6 +647,9 @@ importers:
       '@fractalboxdev/flare-dispatch-agentic':
         specifier: workspace:*
         version: link:../agentic
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../cache
       '@fractalboxdev/flare-dispatch-profile':
         specifier: workspace:*
         version: link:../profile

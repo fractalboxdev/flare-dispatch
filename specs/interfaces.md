@@ -167,6 +167,7 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `POST /v1/ops/revoke` | Revoke one device key | 1 |
 | `POST /v1/ops/pause-key`, `POST /v1/ops/resume-key` | Pause or resume one delivery key: an installation's `limit_key` | 1 |
 | `GET /v1/ops/health` | Installation, delivery, cron, executor, outbox and control-state health ([operability.md](operability.md) FD-OPS-036) | 0 |
+| `GET /v1/ops/phase-gate?gate=<n>` | Gate n's `V-MEASURE` thresholds, page alarms and unresolved `kill-line` notifications over the gate window ([verification.md](verification.md) FD-VER-028, FD-VER-029) | 0 |
 | `GET /v1/spend` | Month-to-date spend per class line ([spend.md](spend.md)) | 0 |
 | `GET /.well-known/openid-configuration`, `GET /.well-known/jwks.json` | OIDC discovery and keys | 0 |
 | `GET /.well-known/flare-dispatch/provenance-policy.json` | The verification policy | 4 |
