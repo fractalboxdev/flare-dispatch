@@ -268,10 +268,10 @@ A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the reposito
 
 ### `triage-issues`
 
-- **FD-AGT-074** · phase 3 · `V-UNIT` — `triage-issues` must classify each open issue with one `transform` call into exactly one of `duplicate`, `needs-repro`, `feature`, `question`, `bug-with-repro`, `bug-without-repro` and `unclassified`, considering at most 40 duplicate candidates.
-- **FD-AGT-075** · phase 3 · `V-UNIT` — `triage-issues` must map verdicts to intents: `duplicate` to a templated comment naming the original and a close as duplicate; `needs-repro` to the label `triage:needs-repro` and a templated request; `feature` and `question` to `triage:not-actionable`; `bug-with-repro` to `triage:fix-pending` with the repro and the reporter's `author_association`; `bug-without-repro` to `triage:needs-human`; `unclassified` to no intent.
+- **FD-AGT-074** · phase 3 · `V-UNIT` — `triage-issues` must classify each open issue that carries none of the labels FD-AGT-075 names with one `transform` call into exactly one of `duplicate`, `needs-repro`, `feature`, `question`, `bug-with-repro`, `bug-without-repro` and `unclassified`, considering at most 40 duplicate candidates.
+- **FD-AGT-075** · phase 3 · `V-UNIT` — `triage-issues` must map verdicts to intents: `duplicate` to a templated comment naming the original and a close as duplicate; `needs-repro` to the label `triage:needs-repro` and a templated request; `feature` and `question` to `triage:not-actionable`; `bug-with-repro` whose body holds a command block to `triage:fix-pending` with that repro and the reporter's `author_association`, and one whose body holds none to `triage:needs-human`; `bug-without-repro` to `triage:needs-human`; `unclassified` to no intent.
 - **FD-AGT-076** · phase 3 · `V-UNIT` — `triage-issues` must build every comment from a template, taking from model output only the verdict and the original issue number.
-- **FD-AGT-077** · phase 3 · `V-UNIT` — `triage-issues` must close an issue only for the verdict `duplicate`.
+- **FD-AGT-077** · phase 3 · `V-UNIT` — `triage-issues` must close an issue only for the verdict `duplicate` whose original stays open after every close of the same execution, and never an issue whose `state_reason` is `reopened`.
 
 ### `triage-prs`
 

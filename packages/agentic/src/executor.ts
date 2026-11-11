@@ -8,5 +8,6 @@ export {
   prReviewRun,
   selfHealPrRun,
   specDriftRun,
+  triageIssuesRun,
 } from "./recipes/runs.ts";
 export * from "./recipes/executions-read.ts";

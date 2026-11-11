@@ -98,6 +98,10 @@ export class GithubWrites extends Context.Service<
     readonly updateIssue: (
       c: Repo & { readonly issue: number; readonly title: string; readonly body: string },
     ) => Effect.Effect<IssueRef, GithubError>;
+    /** Closes the issue with the state reason, such as `duplicate`. */
+    readonly closeIssue: (
+      c: Repo & { readonly issue: number; readonly reason: "duplicate" },
+    ) => Effect.Effect<IssueRef, GithubError>;
     readonly addLabels: (
       c: Repo & { readonly issue: number; readonly labels: readonly string[] },
     ) => Effect.Effect<void, GithubError>;
@@ -233,6 +237,11 @@ export const githubWritesLayer = (options: WritesOptions) =>
           request(installation, "POST", `/repos/${repo}/issues`, { title, body, labels }),
         updateIssue: ({ installation, repo, issue, title, body }) =>
           request(installation, "PATCH", `/repos/${repo}/issues/${issue}`, { title, body }),
+        closeIssue: ({ installation, repo, issue, reason }) =>
+          request(installation, "PATCH", `/repos/${repo}/issues/${issue}`, {
+            state: "closed",
+            state_reason: reason,
+          }),
         addLabels: ({ installation, repo, issue, labels }) =>
           Effect.asVoid(
             request(installation, "POST", `/repos/${repo}/issues/${issue}/labels`, { labels }),
