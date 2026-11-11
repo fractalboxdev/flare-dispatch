@@ -8,6 +8,7 @@ import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
   deviceSlotDefaults,
+  drawsReserve,
   type Deployment,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
@@ -142,7 +143,7 @@ export const concludeKindOf = (profile: Profile): ConcludeKind => {
     tier: entry?.delivery_tier ?? "outcome",
     priority: entry?.priority ?? 0,
     effectClass: entry?.effect_class ?? "adoptable",
-    drawsReserve: entry?.draws_reserve === true,
+    drawsReserve: entry === undefined || drawsReserve(entry),
     classRanks: Object.fromEntries(profile.classes.map((c) => [c.name, c.rank])),
   };
 };
