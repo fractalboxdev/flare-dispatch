@@ -88,7 +88,8 @@ describe("triggers reaching the Worker", () => {
         run: "check",
         repo: REPOSITORY,
         sha,
-        caller: expect.stringContaining(`repo:${REPOSITORY}`),
+        // The caller is the token's repository and workflow ref claims, not its `sub`.
+        caller: `actions:${REPOSITORY}:${REPOSITORY}/.github/workflows/ci.yml@refs/heads/main`,
       },
     ]);
     // The Worker read the issuer's keys from GitHub, and nothing else.
