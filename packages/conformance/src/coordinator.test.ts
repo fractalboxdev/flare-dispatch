@@ -7,6 +7,7 @@ import {
   d1Admission,
   d1IntakeStore,
   d1ShedRecorder,
+  HeldCheckReporter,
   IntakeConfig,
   migrateIntake,
   submission,
@@ -249,6 +250,8 @@ const startingPlane = async () => {
       d1Admission(db, deployed, { startExecution: startExecutionOf(env) }),
       d1IntakeStore(db),
       d1ShedRecorder(db),
+      // `check` declares no cooldown, so no request is held.
+      Layer.succeed(HeldCheckReporter, { queued: () => Effect.void, dropped: () => Effect.void }),
       recordingResolver([], (r) => ({
         _tag: "Class",
         class: classOf.get(r.sha) ?? "batch",
