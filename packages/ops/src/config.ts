@@ -24,8 +24,7 @@ export const OpsConfig = Schema.Struct({
   GITHUB_FIXTURE_REPO: Schema.optional(NonEmpty),
   /** `alerts.webhookSilentHours`, default 24. */
   WEBHOOK_SILENT_HOURS: Schema.optional(Schema.Union([Schema.Number, Schema.NumberFromString])),
-  /** Worker secrets: the link key (FD-IFC-018) and the install-state key (FD-OPS-073). */
-  LINK_KEY: Schema.optional(NonEmpty),
+  /** A Worker secret: the install-state key (FD-OPS-073). The link bindings are the API configuration's. */
   INSTALL_STATE_KEY: Schema.optional(NonEmpty),
 });
 export type OpsConfig = typeof OpsConfig.Type;

@@ -1,4 +1,6 @@
 import { refusalReason } from "@fractalboxdev/flare-dispatch-agentic";
+import { DASHBOARD_LINK_LIFETIME_S } from "@fractalboxdev/flare-dispatch-api/config";
+import { checkLinkToken, mintLinkToken } from "@fractalboxdev/flare-dispatch-api/link-token";
 import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow } from "@fractalboxdev/mameko-kernel";
 import { Effect } from "effect";
@@ -6,13 +8,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
 import {
   classFigures,
-  DASHBOARD_LINK_TTL_S,
-  dashboardLink,
+  dashboardLogLink,
   executionDetail,
   executionPath,
   fleet,
+  linkConfigFrom,
   listExecutions,
-  mintLinkToken,
   overview,
   parseExecutionQuery,
   percentile,
@@ -21,7 +22,6 @@ import {
   renderExecutions,
   renderFleet,
   renderOverview,
-  verifyLinkToken,
 } from "./index.ts";
 
 let t: TestDb;
@@ -323,59 +323,74 @@ describe("fleet view", () => {
 
 describe("link tokens", () => {
   const key = "link-key-material";
-  it("[FD-OPS-067] a dashboard link carries a token for that one object that expires within 3600 s", async () => {
-    const nowS = 1_800_000_000;
-    const link = await dashboardLink({
-      linkKey: key,
-      purpose: "log",
-      id: "e1",
-      path: "/v1/executions/e1/logs/run.log",
-      nowSeconds: nowS,
+  const nowS = 1_800_000_000;
+  const configOf = (env: Record<string, unknown>) =>
+    Effect.runPromise(linkConfigFrom({ LINK_KEY: key, ...env }, "https://fd.example.com"));
+  const tokenOf = (link: string) => new URL(link).searchParams.get("t")!;
+  const check = (token: string, over: Partial<Parameters<typeof checkLinkToken>[2]> = {}) =>
+    checkLinkToken(key, token, {
+      purpose: "logs",
+      objectId: "e 1",
+      nowS,
+      currentEpoch: 3,
+      ...over,
+    });
+
+  it("[FD-OPS-067] a dashboard link carries the API's link token for that one execution, expiring within 3600 s", async () => {
+    const config = await configOf({ LINK_EPOCH: "3" });
+    const link = (await Effect.runPromise(dashboardLogLink(config, "e 1", nowS)))!;
+    expect(link.split("?")[0]).toBe("https://fd.example.com/v1/executions/e%201/logs");
+    const token = tokenOf(link);
+    expect(Number(token.split(".")[0])).toBe(nowS + DASHBOARD_LINK_LIFETIME_S);
+    expect(await check(token)).toEqual({ _tag: "Granted" });
+    expect(await check(token, { objectId: "e 2" })).toEqual({ _tag: "Invalid" });
+    expect(await check(token, { purpose: "artifact" })).toEqual({ _tag: "Invalid" });
+    expect(await check(token, { nowS: nowS + 3600 })).toEqual({ _tag: "Expired" });
+    expect(await check(token, { currentEpoch: 4 })).toEqual({ _tag: "Revoked" });
+    const forged = await mintLinkToken("other", {
+      purpose: "logs",
+      objectId: "e 1",
+      expiresAtS: nowS + 60,
       epoch: 3,
     });
-    const token = decodeURIComponent(link.split("?t=")[1]!);
-    expect(Number(token.split(".")[0])).toBe(nowS + DASHBOARD_LINK_TTL_S);
-    const verify = (over: Partial<Parameters<typeof verifyLinkToken>[0]>) =>
-      Effect.runPromise(
-        Effect.result(
-          verifyLinkToken({
-            linkKey: key,
-            purpose: "log",
-            id: "e1",
-            token,
-            nowSeconds: nowS,
-            currentEpoch: 3,
-            ...over,
-          }),
-        ),
+    expect(await check(forged)).toEqual({ _tag: "Invalid" });
+    expect(
+      await Effect.runPromise(
+        dashboardLogLink(await configOf({ LINK_KEY: undefined }), "e 1", nowS),
+      ),
+    ).toBeNull();
+  });
+
+  it("[FD-IFC-019] a dashboard link lasts 3600 s, or the configured link lifetime where that is shorter", async () => {
+    const expiryUnder = async (lifetime: string | undefined) =>
+      Number(
+        tokenOf(
+          (await Effect.runPromise(
+            dashboardLogLink(await configOf({ LINK_LIFETIME_S: lifetime }), "e 1", nowS),
+          ))!,
+        ).split(".")[0],
+      ) - nowS;
+    expect(await expiryUnder(undefined)).toBe(3600);
+    expect(await expiryUnder("604800")).toBe(3600);
+    expect(await expiryUnder("600")).toBe(600);
+  });
+
+  it("[FD-IFC-023] the dashboard refuses a link key equal to another capability secret", async () => {
+    for (const name of [
+      "WEBHOOK_SECRET",
+      "OIDC_SIGNING_JWK",
+      "PROVENANCE_KEY",
+      "COMPILE_CACHE_SECRET",
+      "INSTALL_STATE_KEY",
+    ]) {
+      const refused = await Effect.runPromise(
+        Effect.result(linkConfigFrom({ LINK_KEY: key, [name]: key }, "https://fd.example.com")),
       );
-    expect(await verify({})).toMatchObject({ _tag: "Success" });
-    expect(await verify({ id: "e2" })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "forbidden" },
-    });
-    expect(await verify({ purpose: "artifact" })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "forbidden" },
-    });
-    expect(await verify({ nowSeconds: nowS + 3600 })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "link_expired" },
-    });
-    expect(await verify({ currentEpoch: 4 })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "link_revoked" },
-    });
-    const forged = await mintLinkToken({
-      linkKey: "other",
-      purpose: "log",
-      id: "e1",
-      expiresAt: nowS + 60,
-      epoch: 3,
-    });
-    expect(await verify({ token: forged })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "forbidden" },
-    });
+      expect(refused, name).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "ConfigInvalid", issues: [`LINK_KEY: the link key equals ${name}`] },
+      });
+    }
+    expect((await configOf({ COMPILE_CACHE_SECRET: "another" })).linkKey).toBe(key);
   });
 });

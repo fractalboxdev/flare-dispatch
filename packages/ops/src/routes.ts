@@ -25,7 +25,7 @@ import {
   renderPage,
 } from "./dashboard.ts";
 import { installCallback, ManifestConversion, startInstall } from "./install.ts";
-import { dashboardLink } from "./link-token.ts";
+import { dashboardLogLink, linkConfigFrom } from "./link-token.ts";
 import { livenessReport, runOpsMigrations } from "./liveness.ts";
 import { matchOperatorRoute, operatorRoute, OperatorOperations } from "./operator-routes.ts";
 import { spendRoute, SpendView } from "./spend.ts";
@@ -38,8 +38,6 @@ export interface OpsRouteDeps {
   readonly operations?: Layer.Layer<OperatorOperations>;
   readonly spend?: Layer.Layer<SpendView>;
   readonly manifestConversion?: Layer.Layer<ManifestConversion>;
-  /** The current link revocation epoch (FD-IFC-021). */
-  readonly linkEpoch?: number;
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
 }
@@ -145,20 +143,8 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
     }
     if (pathname.startsWith("/v1/ops/")) return null;
     yield* requireAccess(request, access);
-    const linkKey = config.LINK_KEY;
-    const linkFor = (id: string) =>
-      linkKey === undefined
-        ? Effect.succeed(null)
-        : Effect.promise(() =>
-            dashboardLink({
-              linkKey,
-              purpose: "log",
-              id,
-              path: `/v1/executions/${encodeURIComponent(id)}/logs/run.log`,
-              nowSeconds: Math.floor(now / 1000),
-              epoch: deps.linkEpoch ?? 0,
-            }),
-          );
+    const linkConfig = yield* linkConfigFrom(env, url.origin);
+    const linkFor = (id: string) => dashboardLogLink(linkConfig, id, Math.floor(now / 1000));
     const executionPage = EXECUTION_PAGE.exec(pathname);
     if (executionPage !== null) {
       const id = decodeSegment(executionPage[1] as string);

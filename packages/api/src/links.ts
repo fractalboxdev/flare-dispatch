@@ -10,13 +10,20 @@ export interface ExecutionLinks {
   readonly logs_url: string;
 }
 
-/** Where a link is shown decides its lifetime: a check run's for the configured lifetime, the dashboard's for 1 h. */
+/**
+ * Where a link is shown decides its lifetime: a check run's for the configured lifetime (FD-IFC-019), the dashboard's
+ * for at most 1 h (FD-OPS-067).
+ */
 export type LinkAudience = "check-run" | "dashboard";
 
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+/** A link token for one object, minted `nowS` seconds after the epoch; without a link key, none. */
 export const linkToken = (
   purpose: LinkPurpose,
   objectId: string,
   audience: LinkAudience,
+  nowS: number = nowSeconds(),
 ): Effect.Effect<string | undefined, never, ApiConfig> =>
   Effect.gen(function* () {
     const config = yield* ApiConfig;
@@ -26,7 +33,7 @@ export const linkToken = (
       audience === "dashboard"
         ? Math.min(DASHBOARD_LINK_LIFETIME_S, config.linkLifetimeS)
         : config.linkLifetimeS;
-    const expiresAtS = Math.floor(Date.now() / 1000) + lifetime;
+    const expiresAtS = nowS + lifetime;
     return yield* Effect.promise(() =>
       mintLinkToken(key, { purpose, objectId, expiresAtS, epoch: config.linkEpoch }),
     );
@@ -38,10 +45,11 @@ const withToken = (url: string, token: string | undefined) =>
 export const executionLinks = (
   executionId: string,
   audience: LinkAudience,
+  nowS: number = nowSeconds(),
 ): Effect.Effect<ExecutionLinks, never, ApiConfig> =>
   Effect.gen(function* () {
     const { publicOrigin } = yield* ApiConfig;
-    const token = yield* linkToken("logs", executionId, audience);
+    const token = yield* linkToken("logs", executionId, audience, nowS);
     const id = encodeURIComponent(executionId);
     return {
       details_url: withToken(`${publicOrigin}/executions/${id}`, token),

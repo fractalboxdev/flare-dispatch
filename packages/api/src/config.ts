@@ -53,6 +53,9 @@ export interface ApiEnv {
   readonly WEBHOOK_SECRET?: string;
   readonly OIDC_SIGNING_JWK?: string;
   readonly PROVENANCE_KEY?: string;
+  /** The other capability secrets: compile-cache tokens (FD-CACHE-057) and install states (FD-OPS-073). */
+  readonly COMPILE_CACHE_SECRET?: string;
+  readonly INSTALL_STATE_KEY?: string;
 }
 
 export class ConfigInvalid extends Schema.TaggedError<ConfigInvalid>()("ConfigInvalid", {
@@ -76,8 +79,9 @@ const identityList = (path: string, raw: string | undefined): readonly string[] 
 };
 
 /**
- * The link key must differ from the webhook secret, the OIDC key and the provenance key (FD-IFC-023), so a value one
- * purpose reveals never forges another.
+ * The link key must differ from the webhook secret, the OIDC key and the provenance key (FD-IFC-023), and from the
+ * secrets the compile-cache tokens and the install states derive from, so a value one purpose reveals never forges
+ * another.
  */
 export const distinctLinkKey = (env: ApiEnv): ConfigInvalid | undefined => {
   const link = present(env.LINK_KEY);
@@ -86,6 +90,8 @@ export const distinctLinkKey = (env: ApiEnv): ConfigInvalid | undefined => {
     ["WEBHOOK_SECRET", env.WEBHOOK_SECRET],
     ["OIDC_SIGNING_JWK", env.OIDC_SIGNING_JWK],
     ["PROVENANCE_KEY", env.PROVENANCE_KEY],
+    ["COMPILE_CACHE_SECRET", env.COMPILE_CACHE_SECRET],
+    ["INSTALL_STATE_KEY", env.INSTALL_STATE_KEY],
   ];
   const same = others.find(([, value]) => present(value) === link);
   return same === undefined
