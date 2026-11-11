@@ -10,6 +10,8 @@ import { fakeGithub, fakeGithubLayers } from "@fractalboxdev/flare-dispatch-gith
 import {
   Admission,
   d1Admission,
+  d1IntakeStore,
+  IntakeStore,
   type IntakeAdmitInput,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
@@ -19,7 +21,7 @@ import { d1OutboxStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { concludeFactsLayer } from "../../src/github.ts";
-import { envOf, NOW, type TestD1 } from "../conclude.test-support.ts";
+import { envOf, NOW, record, type TestD1 } from "../conclude.test-support.ts";
 
 const profile = buildProfile("production");
 const HEAD_SHA = "b".repeat(40);
@@ -63,9 +65,9 @@ const admitInput = (executionId: string): IntakeAdmitInput => {
   };
 };
 
-const admit = (db: TestD1, executionId: string) =>
+const admit = (db: TestD1, executionId: string, overrides: Partial<IntakeAdmitInput> = {}) =>
   Effect.runPromise(
-    Admission.use((a) => a.admit(admitInput(executionId))).pipe(
+    Admission.use((a) => a.admit({ ...admitInput(executionId), ...overrides })).pipe(
       Effect.provide(d1Admission(db, profile)),
     ),
   );
@@ -76,7 +78,7 @@ const drain = (db: TestD1, gh: ReturnType<typeof fakeGithub>, now: number) =>
       now,
       token: (id) => `tok-${id}-${now}`,
       random: () => 0,
-      actuatorOf: { "check.open": "checkRun" },
+      actuatorOf: { "check.open": "checkRun", "check.conclude": "checkRun" },
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -98,6 +100,81 @@ const outbox = (db: TestD1) =>
     .all();
 
 describe("the check.open row under a replayed admission", () => {
+  it.each([
+    { check: null, labels: [] },
+    { check: { name: "flare-dispatch/check:ci", headSha: HEAD_SHA }, labels: ["local-only"] },
+  ])(
+    "[FD-PROF-043] admission concludes no-check and local-only requests without GitHub rows: %j",
+    async (overrides) => {
+      const db = await migratedD1();
+      const input = admitInput(FIRST);
+      expect(
+        await admit(db, FIRST, {
+          ...overrides,
+          placement: { ...input.placement, params: { ...input.placement.params, kinds: [] } },
+        }),
+      ).toMatchObject({ _tag: "Concluded" });
+      expect(outbox(db)).toEqual([]);
+    },
+  );
+
+  it("[FD-GH-005] [FD-GH-027] supersession concludes an already opened check through a durable outcome row", async () => {
+    const db = await migratedD1();
+    const gh = fakeGithub();
+    const group = "acme/app:12:check:ci";
+    for (const id of [FIRST, SECOND])
+      await Effect.runPromise(
+        IntakeStore.use((s) => s.put(record(id))).pipe(Effect.provide(d1IntakeStore(db))),
+      );
+    await admit(db, FIRST, { supersessionKey: group });
+    await drain(db, gh, NOW + 1_000);
+    expect(gh.runs.find((r) => r.external_id === FIRST)?.status).toBe("queued");
+
+    const next = {
+      supersessionKey: group,
+      enqueuedAtMs: NOW + 1,
+      dedup: { ...admitInput(SECOND).dedup, sha256: "2".repeat(64), canonical: "next-head" },
+    };
+    await admit(db, SECOND, next);
+    expect(outbox(db)).toContainEqual(
+      expect.objectContaining({
+        execution_id: FIRST,
+        kind: "check.conclude",
+        intent_key: "outcome",
+        state: "pending",
+      }),
+    );
+    await drain(db, gh, NOW + 2_000);
+    expect(gh.runs.find((r) => r.external_id === FIRST)).toMatchObject({
+      status: "completed",
+      conclusion: "cancelled",
+    });
+    const before = outbox(db);
+    expect(await admit(db, SECOND, next)).toEqual({ _tag: "Duplicate", executionId: SECOND });
+    expect(outbox(db)).toEqual(before);
+  });
+
+  it("[FD-GH-027] [FD-GH-052] an unplaceable checked request creates a completed check from its admission outcome", async () => {
+    const db = await migratedD1();
+    const gh = fakeGithub();
+    await Effect.runPromise(
+      IntakeStore.use((s) => s.put(record(FIRST))).pipe(Effect.provide(d1IntakeStore(db))),
+    );
+    const input = admitInput(FIRST);
+    const answer = await admit(db, FIRST, {
+      placement: { ...input.placement, params: { ...input.placement.params, kinds: [] } },
+    });
+    expect(answer).toMatchObject({ _tag: "Concluded" });
+    await drain(db, gh, NOW + 1_000);
+    expect(gh.runs).toEqual([
+      expect.objectContaining({
+        external_id: FIRST,
+        status: "completed",
+        conclusion: "failure",
+      }),
+    ]);
+  });
+
   it("[FD-GH-005] admission inserts cp:check:open once, and its applier creates one queued check run on the head SHA", async () => {
     const db = await migratedD1();
     const gh = fakeGithub();

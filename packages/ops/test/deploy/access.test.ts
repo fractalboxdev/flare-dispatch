@@ -83,6 +83,7 @@ describe("the committed Access configuration", () => {
           { email: { email: "ci@acme.com" } },
         ],
       },
+      { decision: "non_identity", include: [{ any_valid_service_token: {} }] },
     ]);
     for (const b of ACCESS_BYPASS)
       expect(policiesOf(hosted.get(`${HOST}${b.path}`))).toEqual([
@@ -127,6 +128,23 @@ describe("the committed Access configuration", () => {
     expect((await deploy(w)).ok).toBe(true);
     expect(w.calls.filter((c) => c.startsWith(`GET ${ACCESS}`)).length).toBeGreaterThan(0);
     expect(accessWrites(w.calls)).toEqual([]);
+  });
+
+  it("[FD-OPS-088] deploy admits service tokens through Service Auth without turning their common names into email rules", async () => {
+    const w = world();
+    const overlay = withAud(placeholderOverlay.access.aud, {
+      operators: ["operator-ci.access"],
+      dispatchers: ["dispatcher-ci.access"],
+    });
+    expect((await deploy(w, overlay)).ok).toBe(true);
+    expect(policiesOf(onHost(w).get(HOST))).toEqual([
+      { decision: "non_identity", include: [{ any_valid_service_token: {} }] },
+    ]);
+    expect((await Effect.runPromise(fd(w).doctor(overlay))).ok).toBe(true);
+    for (const b of ACCESS_BYPASS)
+      expect(policiesOf(onHost(w).get(`${HOST}${b.path}`))).toEqual([
+        { decision: "bypass", include: [{ everyone: {} }] },
+      ]);
   });
 
   it("[FD-OPS-088] fd doctor fails on a removed bypass, an edited policy and an uncommitted application on the hostname, and changes nothing", async () => {

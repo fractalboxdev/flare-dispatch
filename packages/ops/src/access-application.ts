@@ -53,14 +53,16 @@ export interface AccessApplication {
   readonly session_duration: string;
   readonly policies: readonly {
     readonly name: string;
-    readonly decision: "allow" | "bypass";
+    readonly decision: "allow" | "bypass" | "non_identity";
     readonly include: readonly unknown[];
   }[];
 }
 
 /**
  * The applications for the dispatcher's hostname: the hostname behind Access for the overlay's operators and
- * dispatchers, and each bypass path with a bypass policy for everyone, which Access matches before the hostname.
+ * dispatchers, a Service Auth policy for valid service tokens, and each bypass path with a bypass policy for
+ * everyone. The Worker verifies the resulting JWT and checks the service token's common name against the overlay's
+ * operator or dispatcher list on privileged routes; passing the edge's Service Auth policy grants neither role.
  */
 export const accessApplications = (
   hostname: string,
@@ -72,10 +74,21 @@ export const accessApplications = (
     domain: hostname,
     session_duration: "24h",
     policies: [
+      ...(identities.some((id) => id.includes("@"))
+        ? [
+            {
+              name: "identities",
+              decision: "allow" as const,
+              include: identities
+                .filter((id) => id.includes("@"))
+                .map((email) => ({ email: { email } })),
+            },
+          ]
+        : []),
       {
-        name: "identities",
-        decision: "allow",
-        include: identities.map((email) => ({ email: { email } })),
+        name: "service tokens",
+        decision: "non_identity",
+        include: [{ any_valid_service_token: {} }],
       },
     ],
   },

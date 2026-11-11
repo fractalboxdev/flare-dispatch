@@ -56,7 +56,7 @@ export default {
     ctx: { waitUntil(p: Promise<unknown>): void },
   ): Promise<Response> {
     const { pathname } = new URL(request.url);
-    // The deployment and plane id, which `pnpm dogfood` checks before it enrolls a device.
+    // The deployment and plane id, which `pnpm ci:local` checks before it enrolls a device.
     if (pathname === "/health")
       return Response.json({ status: "ok", deployment: deployment(env), plane_id: env.PLANE_ID });
     await migrate(env);

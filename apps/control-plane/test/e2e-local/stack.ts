@@ -3,7 +3,7 @@
 // renderer; the test's Access team; and the recorded GitHub fixture server, which answers every request the Worker
 // addresses to GitHub. Clients reach the Worker over HTTP through a front that records each request it forwards.
 //
-// The deployment is `development`. By default it has the development repository binding, as `pnpm dogfood` runs it: the
+// The deployment is `development`. By default it has the development repository binding, as `pnpm ci:local` runs it: the
 // stack holds no GitHub App key, so the Worker reads its repository from that binding and applies nothing to GitHub.
 // Started with a recorded GitHub state, the stack instead holds an App key of its own and no repository binding, so the
 // Worker reads and writes GitHub through the App, and the fixture server answers from that state. Executors are the

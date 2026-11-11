@@ -1,6 +1,6 @@
 // The device path of the end-to-end stack on one machine (specs/verification.md § V-E2E-LOCAL): the control plane
 // under `wrangler dev` for the development deployment, mameko's key helper and device executor from the pinned
-// `vendor/mameko`, and the device's runner child executing the catalogue's runs on the host. `pnpm dogfood` and the
+// `vendor/mameko`, and the device's runner child executing the catalogue's runs on the host. `pnpm ci:local` and the
 // device-path suites of `apps/control-plane/test/e2e-local/device/` start the same stack.
 import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Effect, Schedule, Schema } from "effect";
 import { placeholderOverlay } from "@fractalboxdev/flare-dispatch-ops/overlay";
 import { renderTemplate } from "@fractalboxdev/flare-dispatch-ops/render";
-import { DOGFOOD_IDENTITY, startAccessTeam, type LocalAccessTeam } from "./access.ts";
+import { LOCAL_CI_IDENTITY, startAccessTeam, type LocalAccessTeam } from "./access.ts";
 import { DeviceIdentity, health, makeClient, type ControlPlaneClient } from "./client.ts";
 import { capture, CommandFailed, startService, type RunOptions } from "./processes.ts";
 
@@ -117,7 +117,7 @@ const renderedConfig = (appDir: string) =>
             }),
         ),
       );
-      const path = join(appDir, `.dogfood-${process.pid}-${Date.now()}.wrangler.jsonc`);
+      const path = join(appDir, `.local-ci-${process.pid}-${Date.now()}.wrangler.jsonc`);
       writeFileSync(path, rendered);
       return path;
     }),
@@ -139,8 +139,8 @@ export const startControlPlane = (input: {
       DEPLOYMENT: "development",
       ACCESS_TEAM_DOMAIN: team.teamDomain,
       ACCESS_AUD: team.aud,
-      OPERATORS: literal([DOGFOOD_IDENTITY]),
-      DISPATCHERS: literal([DOGFOOD_IDENTITY]),
+      OPERATORS: literal([LOCAL_CI_IDENTITY]),
+      DISPATCHERS: literal([LOCAL_CI_IDENTITY]),
       FD_DEV_REPOSITORY: literal(devRepository),
       // The template's overlay placeholders that a local run has no value for: no alert sink and no GitHub App.
       ALERT_SINK: "",
