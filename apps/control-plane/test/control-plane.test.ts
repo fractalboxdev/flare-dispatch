@@ -63,7 +63,7 @@ const miniflare = (
   deployment: string,
   access: boolean,
   repository: object = DEV_REPOSITORY,
-  extra: Record<string, string> = {},
+  extra: Record<string, unknown> = {},
 ) =>
   new Miniflare({
     modules: [{ type: "ESModule", path: "worker.js", contents: script }],
@@ -80,7 +80,7 @@ const miniflare = (
     bindings: {
       DEPLOYMENT: deployment,
       PLANE_ID: PLANE,
-      ...extra,
+      ...(extra as Record<string, string>),
       ...(access
         ? {
             ACCESS_TEAM_DOMAIN: team.teamDomain,
@@ -301,6 +301,57 @@ describe("the operability routes", () => {
         expect(body).toMatchObject({ error: "method_not_allowed" });
         expect(typeof body["request_id"]).toBe("string");
       }
+  });
+});
+
+describe("the spend configuration the overlay delivers", () => {
+  const spendOf = async (mf: Miniflare) => {
+    const r = await mf.dispatchFetch("http://x/v1/spend", {
+      headers: await headersFor("member@example.com"),
+    });
+    return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+  };
+  const reserveOf = (body: Record<string, unknown>, name: string) =>
+    Schema.decodeUnknownSync(SpendViewBody)(body).classes.find((c) => c.class === name)?.reserve;
+
+  it("[FD-PROF-054] GET /v1/spend reads B and the reserves from the SPEND var, and their defaults where it sets none", async () => {
+    // The rendered `{{spend}}` of an overlay that sets B, the release reserve and R_m,min; the rest at their defaults.
+    const configured = miniflare("development", true, DEV_REPOSITORY, {
+      SPEND: {
+        budgetUsd: 120,
+        fixedUsd: 0,
+        releaseReserveUsd: 15,
+        opsReserveUsd: 5,
+        measuredReserveMinUsd: 25,
+        measuredReserveDays: 10,
+        overheadFactor: 1.1,
+      },
+    });
+    const malformed = miniflare("development", true, DEV_REPOSITORY, {
+      SPEND: { budgetUsd: -1 },
+    });
+    try {
+      await Promise.all([configured.ready, malformed.ready]);
+      const set = await spendOf(configured);
+      expect(set.status).toBe(200);
+      expect(set.body["budget"]).toBe(120_000_000);
+      expect(reserveOf(set.body, "release")).toBe(15_000_000);
+      expect(reserveOf(set.body, "required")).toBe(25_000_000);
+
+      // The development deployment here carries no SPEND var: every value is at its default.
+      const unset = await spendOf(development);
+      expect(unset.status).toBe(200);
+      expect(unset.body["budget"]).toBe(50_000_000);
+      expect(reserveOf(unset.body, "release")).toBe(10_000_000);
+      expect(reserveOf(unset.body, "required")).toBe(20_000_000);
+
+      // A var that is not the overlay's spend values reports no budget at all.
+      const refused = await spendOf(malformed);
+      expect(refused.status).toBe(503);
+      expect(refused.body).toMatchObject({ error: "spend_unreadable" });
+    } finally {
+      await Promise.all([configured.dispose(), malformed.dispose()]);
+    }
   });
 });
 

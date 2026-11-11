@@ -58,7 +58,8 @@ export interface WorkerSpec {
 
 /**
  * The Workers of specs/architecture.md: the dispatcher (the v2 control plane) and the documentation Worker. The
- * dispatcher declares `ALERT_SINK`, the sink its alarm port sends to, so no deploy goes out without one (FD-OPS-053).
+ * dispatcher declares `ALERT_SINK`, the sink its alarm port sends to, so no deploy goes out without one (FD-OPS-053),
+ * and `SPEND`, the spend configuration the coordinator reads (FD-PROF-054).
  */
 export const V2_WORKERS: readonly WorkerSpec[] = [
   {
@@ -74,6 +75,7 @@ export const V2_WORKERS: readonly WorkerSpec[] = [
       "PLANE_ID",
       "DEPLOYMENT",
       "ALERT_SINK",
+      "SPEND",
     ],
     dispatcher: true,
   },

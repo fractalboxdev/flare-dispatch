@@ -1,8 +1,9 @@
 // The renderer: each Worker's configuration is its committed template with every placeholder replaced by its overlay
 // value and nothing else changed (FD-OPS-005, FD-OPS-006). A placeholder is a JSON string `"{{<value path>}}"`; the
-// renderer writes the value's JSON in its place, so a string stays a string and an array stays an array.
+// renderer writes the value's JSON in its place, so a string stays a string and an array stays an array. A `spend`
+// value the overlay leaves out renders at its default (specs/profile.md § Spend configuration, FD-PROF-054).
 import { Effect, Schema } from "effect";
-import type { OverlayValues } from "./overlay.ts";
+import { renderValuesOf, type OverlayValues } from "./overlay.ts";
 
 /** A placeholder token: the quoted `{{path}}` in a template. */
 const PLACEHOLDER = /"\{\{([A-Za-z0-9_.-]+)\}\}"/g;
@@ -34,10 +35,11 @@ export const placeholdersOf = (template: string): readonly string[] => [
  */
 export const renderTemplate = (worker: string, template: string, overlay: OverlayValues) =>
   Effect.gen(function* () {
-    const missing = placeholdersOf(template).filter((p) => valueAt(overlay, p) === undefined);
+    const values = renderValuesOf(overlay);
+    const missing = placeholdersOf(template).filter((p) => valueAt(values, p) === undefined);
     if (missing.length > 0) return yield* new RenderFailed({ worker, paths: missing });
     return template.replace(PLACEHOLDER, (_token, path: string) =>
-      JSON.stringify(valueAt(overlay, path)),
+      JSON.stringify(valueAt(values, path)),
     );
   });
 
