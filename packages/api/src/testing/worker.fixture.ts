@@ -8,6 +8,7 @@ import {
   d1Admission,
   d1IntakeStore,
   d1ShedRecorder,
+  HeldCheckReporter,
   IntakeConfig,
   migrateIntake,
   submission,
@@ -70,6 +71,8 @@ const intakeOverAdmission = (db: D1Like, deployment: Deployment, profile: Profil
     d1Admission(db, profile),
     d1IntakeStore(db),
     d1ShedRecorder(db),
+    // No run this fixture admits declares a cooldown, so no request is held.
+    Layer.succeed(HeldCheckReporter, { queued: () => Effect.void, dropped: () => Effect.void }),
   );
   const refused = (e: IntakeError) =>
     apiError(

@@ -20,7 +20,7 @@ import {
   submission,
   submit,
 } from "../../../intake/src/index.ts";
-import { migratedD1, recordingResolver } from "../../../intake/src/testing.ts";
+import { migratedD1, recordingHeldChecks, recordingResolver } from "../../../intake/src/testing.ts";
 import {
   seededRandom,
   throwOnViolations,
@@ -108,6 +108,7 @@ export const simulateSerialDeploys = async (seed: number): Promise<SerialOutcome
     d1Admission(db, profile),
     d1IntakeStore(db),
     d1ShedRecorder(db),
+    recordingHeldChecks(),
     recordingResolver(),
     d1PlacementStore(db),
     d1ExecutionSteps(db, stageConfig(profile)),

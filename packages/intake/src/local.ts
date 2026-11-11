@@ -6,6 +6,7 @@
 import { LocalRegistration } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, Schema } from "effect";
 import { IntakeConfig, type Admission, type ClassResolver } from "./config.ts";
+import type { HeldCheckReporter } from "./ports.ts";
 import type { IntakeStore, ShedRecorder } from "./store.ts";
 import { submission, submit } from "./submit.ts";
 
@@ -30,7 +31,7 @@ export const localRegistrationLayer = Layer.effect(
   LocalRegistration,
   Effect.gen(function* () {
     const context = yield* Effect.context<
-      IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder
+      IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder | HeldCheckReporter
     >();
     const rejected = { _tag: "rejected" } as const;
     return {

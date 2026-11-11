@@ -5,6 +5,7 @@
 import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
 import { Effect, Layer, Result, Schema } from "effect";
 import { IntakeConfig, type Admission, type ClassResolver } from "./config.ts";
+import type { HeldCheckReporter } from "./ports.ts";
 import { IntakeStore, type ShedRecorder } from "./store.ts";
 import { submission, submit } from "./submit.ts";
 
@@ -12,7 +13,7 @@ export const followOnSubmitterLayer = Layer.effect(
   FollowOnSubmitter,
   Effect.gen(function* () {
     const context = yield* Effect.context<
-      IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder
+      IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder | HeldCheckReporter
     >();
     return {
       submit: (intent) =>
