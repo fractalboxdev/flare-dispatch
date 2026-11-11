@@ -27,7 +27,7 @@ import { AccessIdentity } from "./mcp.ts";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
 import { manifestSourceLayer } from "./manifest.ts";
 import { profileClassResolver } from "./layer.ts";
-import { ExecutionCanceller, InstallationEviction, ManifestReporter } from "./ports.ts";
+import { InstallationEviction, ManifestReporter } from "./ports.ts";
 import { protectionSnapshotsLayer } from "./protection.ts";
 import type { IntakeRun } from "./runs.ts";
 import { signBody } from "./signature.ts";
@@ -96,8 +96,10 @@ export const DEFAULT_MANIFEST = manifest([
 export interface Recorded {
   readonly resolved: ClassRequest[];
   readonly reported: { repo: string; sha: string; errors: readonly string[] }[];
-  readonly cancelled: { executionId: string; cause: string }[];
-  /** Every workflow cancel admission or a group cancel asked for, in order (MAMEKO-ADM-062, MAMEKO-ADM-064). */
+  /**
+   * Every workflow cancel admission, a group cancel or a per-execution cancel asked for, in order (MAMEKO-ADM-062,
+   * MAMEKO-ADM-064, MAMEKO-ADM-065).
+   */
   readonly workflowCancels: { executionId: string; cause: string }[];
   readonly evicted: string[];
   readonly alarms: Alarm[];
@@ -133,7 +135,6 @@ export const harness = async (options: HarnessOptions = {}) => {
   const recorded: Recorded = {
     resolved: [],
     reported: [],
-    cancelled: [],
     workflowCancels: [],
     evicted: [],
     alarms: [],
@@ -188,10 +189,6 @@ export const harness = async (options: HarnessOptions = {}) => {
       installation: (id) => Effect.sync(() => void recorded.evicted.push(`installation ${id}`)),
       repositories: (repos) =>
         Effect.sync(() => void recorded.evicted.push(...repos.map((r) => `repo ${r}`))),
-    }),
-    Layer.succeed(ExecutionCanceller, {
-      cancel: (executionId, cause) =>
-        Effect.sync(() => void recorded.cancelled.push({ executionId, cause })),
     }),
     Layer.succeed(AccessIdentity, {
       identity: (r) => Effect.succeed(r.headers.get("x-test-identity")),

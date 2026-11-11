@@ -139,7 +139,7 @@ const concludedReason = (c: Concluded): string =>
     Match.exhaustive,
   );
 
-/** Records a request rejected before admission (MAMEKO-ADM-090). */
+/** Records a request rejected before admission (MAMEKO-ADM-091). */
 export const shed = (repo: string, run: string | null, reason: string) =>
   ShedRecorder.use((s) => s.record({ scopeId: repo, run, reason, estimatedCost: null }));
 
@@ -187,7 +187,7 @@ const placementRequest = (
   };
 };
 
-/** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-088). */
+/** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-089). */
 const admissionPlacement = (
   profile: Profile,
   s: Submission,
@@ -328,7 +328,7 @@ export const submit = (
     };
     // mameko's `admit` writes the execution, dedup key and placement rows under this id in one transaction, with the
     // eligible kinds, the constraints, the isolation and the deadline it derives from the class and these facts
-    // (MAMEKO-ADM-023, MAMEKO-ADM-104, MAMEKO-LEASE-083).
+    // (MAMEKO-ADM-023, MAMEKO-ADM-105, MAMEKO-LEASE-084).
     const admitInput: IntakeAdmitInput = {
       executionId: id,
       scopeId: s.repo,

@@ -34,7 +34,7 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     created_at integer not null)`,
   `create index if not exists intake_records_family on intake_records (family_root)`,
   `create index if not exists intake_records_commit on intake_records (repo, sha)`,
-  // Admission writes the placement row's eligible kinds itself (MAMEKO-LEASE-014); the trigger that copied them from the
+  // Admission writes the placement row's eligible kinds itself (MAMEKO-LEASE-015); the trigger that copied them from the
   // record goes, on a database that still has it.
   `drop trigger if exists intake_placement_kinds`,
   `create table if not exists intake_cooldowns (
@@ -230,7 +230,7 @@ export class IntakeStore extends Context.Service<
 >()("@fractalboxdev/flare-dispatch-intake/IntakeStore") {}
 
 /**
- * `recordShed(scope_id, run, reason, estimated cost)` (MAMEKO-ADM-090): a request rejected before admission, written to
+ * `recordShed(scope_id, run, reason, estimated cost)` (MAMEKO-ADM-091): a request rejected before admission, written to
  * mameko's `shed` table with a null class.
  */
 export class ShedRecorder extends Context.Service<

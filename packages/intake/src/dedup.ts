@@ -88,7 +88,7 @@ export interface RequestKey {
   readonly recipe: string;
   readonly canonical: string;
   readonly sha256: string;
-  /** The SHA-256 of the dispatch body's canonical JSON, for the `idempotency-key` recipe only (MAMEKO-ADM-093). */
+  /** The SHA-256 of the dispatch body's canonical JSON, for the `idempotency-key` recipe only (MAMEKO-ADM-094). */
   readonly requestDigest: string | null;
   readonly onMismatch: "duplicate" | "conflict";
 }

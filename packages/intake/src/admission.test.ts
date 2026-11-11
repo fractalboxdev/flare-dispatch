@@ -164,7 +164,7 @@ describe("placement at admission", () => {
     expect(h.recorded.started).toEqual([]);
   });
 
-  it("[FD-PROF-037] a fork pull request concludes placement: no eligible executor while no pool open to its class runs separated (MAMEKO-ADM-102)", async () => {
+  it("[FD-PROF-037] a fork pull request concludes placement: no eligible executor while no pool open to its class runs separated (MAMEKO-ADM-103)", async () => {
     const h = await harness();
     await h.run(
       handleIntake(
@@ -349,7 +349,7 @@ describe("supersession and serial groups at admission", () => {
   });
 
   it("[FD-PROF-029] a fork pull request's check re-run joins no supersession group and cancels no newer member", async () => {
-    // A separated `lean` pool places the fork requests, so the newer head's execution stays pending (MAMEKO-ADM-102).
+    // A separated `lean` pool places the fork requests, so the newer head's execution stays pending (MAMEKO-ADM-103).
     const production = buildProfile("production");
     const h = await harness({
       settings: {

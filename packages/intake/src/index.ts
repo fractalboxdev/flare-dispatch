@@ -70,7 +70,6 @@ export {
 } from "./manifest.ts";
 export { AccessIdentity, mcpDispatch, McpDispatchArgs } from "./mcp.ts";
 export {
-  ExecutionCanceller,
   InstallationEviction,
   installationEvictionLayer,
   MANIFEST_CHECK,

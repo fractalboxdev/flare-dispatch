@@ -45,7 +45,7 @@ export interface IntakeRun {
   readonly gating: boolean;
   readonly retries: number;
   readonly cooldown?: Cooldown;
-  /** The run's grants per egress phase; any grant keeps it off a host-process device (MAMEKO-LEASE-083). */
+  /** The run's grants per egress phase; any grant keeps it off a host-process device (MAMEKO-LEASE-084). */
   readonly grants?: { readonly setup: readonly string[]; readonly agent: readonly string[] };
   /**
    * The placement constraints and capability labels a request with these inputs declares, e.g. `cloud-pinned` for
@@ -57,7 +57,7 @@ export interface IntakeRun {
   };
   /**
    * The serial group a request with these inputs joins, for a run that declares `serialize`: one `worker-deploy`
-   * target, `worker-deploy:<repo>@<branch>[:<label>]` (FD-GATE-063). Absent or null joins none (MAMEKO-ADM-067).
+   * target, `worker-deploy:<repo>@<branch>[:<label>]` (FD-GATE-063). Absent or null joins none (MAMEKO-ADM-068).
    */
   readonly serialKey?: (inputs: unknown) => string | null;
 }

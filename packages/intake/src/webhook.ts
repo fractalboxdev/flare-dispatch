@@ -4,10 +4,16 @@
 // specs/github-output.md § Merge queue, FD-GH-066).
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { Clock, Effect, Option, Schema } from "effect";
-import { Admission, IntakeConfig, intakeError } from "./config.ts";
+import {
+  Admission,
+  IntakeConfig,
+  intakeError,
+  type IntakeError,
+  type IntakeUnavailable,
+} from "./config.ts";
 import { commitOf, isForkPr, WebhookFields, type WebhookEvent } from "./event.ts";
 import { json, parseJson, readBody } from "./http.ts";
-import { ExecutionCanceller, InstallationEviction } from "./ports.ts";
+import { InstallationEviction } from "./ports.ts";
 import { PROTECTION_EVENTS, ProtectionSnapshots } from "./protection.ts";
 import { rerunCheckRun, rerunCheckSuite } from "./rerun.ts";
 import { checkName } from "./runs.ts";
@@ -45,20 +51,33 @@ const answer = (o: TriggerOutcome) =>
 const branchOf = (ref: string) =>
   ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
 
+/** A cancel the store could not record answers 503, so GitHub redelivers the event. */
+const cancelUnavailable =
+  (what: string) =>
+  <A>(cancel: Effect.Effect<A, IntakeUnavailable | IntakeError>) =>
+    cancel.pipe(
+      Effect.catchTag("IntakeUnavailable", (e) =>
+        Effect.fail(intakeError(503, "intake_unavailable", `${what} failed: ${e.cause}`)),
+      ),
+    );
+
 /**
  * `merge_group` `checks_requested`: the base branch's required gating runs open their check runs on the group's head
- * (FD-GH-075). `destroyed`: every non-terminal execution on the head ends `cancelled(merge-group-destroyed)`
- * (FD-GH-076); the mapping concludes its check run `cancelled`.
+ * (FD-GH-075). `destroyed`: every non-terminal execution on the head ends `cancelled(merge-group-destroyed)` through
+ * mameko's cancel of one execution (FD-GH-076, MAMEKO-ADM-065); the mapping concludes its check run `cancelled`.
  */
 const mergeGroup = (event: WebhookEvent, fields: WebhookFields, repo: string, sha: string) =>
   Effect.gen(function* () {
     if (event.action === "destroyed") {
-      const store = yield* IntakeStore;
-      const canceller = yield* ExecutionCanceller;
-      const live = (yield* store.atCommit(repo, sha)).filter(
+      const admission = yield* Admission;
+      const live = (yield* (yield* IntakeStore).atCommit(repo, sha)).filter(
         (r) => r.status !== null && !TERMINAL_STATUSES.has(r.status),
       );
-      yield* Effect.forEach(live, (r) => canceller.cancel(r.executionId, "merge-group-destroyed"));
+      yield* Effect.forEach(live, (r) =>
+        admission
+          .cancel(r.executionId, "merge-group-destroyed")
+          .pipe(cancelUnavailable("execution cancel")),
+      );
       return nothing;
     }
     if (event.action !== "checks_requested") return nothing;
@@ -83,13 +102,7 @@ const pullRequestClosed = (repo: string, number: number) =>
     const admission = yield* Admission;
     const groups = yield* (yield* IntakeStore).liveSupersessionGroups(repo, `${repo}:${number}:`);
     const cancelled = yield* Effect.forEach(groups, (key) =>
-      admission
-        .cancelGroup(key, "pr-closed")
-        .pipe(
-          Effect.catchTag("IntakeUnavailable", (e) =>
-            Effect.fail(intakeError(503, "intake_unavailable", `group cancel failed: ${e.cause}`)),
-          ),
-        ),
+      admission.cancelGroup(key, "pr-closed").pipe(cancelUnavailable("group cancel")),
     );
     return json({ executions: [], cancelled: cancelled.flat() }, 202);
   });
