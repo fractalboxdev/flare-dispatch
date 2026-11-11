@@ -17,6 +17,8 @@ import {
 
 export interface Recorder {
   readonly commands: string[];
+  /** Each shell command's timeout, in the order of `commands`. */
+  readonly timeouts: (number | undefined)[];
   readonly modelCalls: ModelRequest[];
   readonly intents: { step: string; kind: string; payload: unknown }[];
   readonly artifacts: { name: string; access: string; text: string }[];
@@ -30,11 +32,13 @@ export interface FakeOptions {
   /** The model's answer per call; a thrown `ModelCallError` kind fails the call. */
   readonly model?: (request: ModelRequest, call: number) => string | ModelCallError;
   readonly files?: Record<string, string>;
-  readonly editLoop?: (prompt: string, files: Map<string, string>) => number | null;
+  /** The edit loop's exit code; null when its executable cannot start, `"killed"` when a signal ends it. */
+  readonly editLoop?: (prompt: string, files: Map<string, string>) => number | null | "killed";
 }
 
 export const recorder = (files: Record<string, string> = {}): Recorder => ({
   commands: [],
+  timeouts: [],
   modelCalls: [],
   intents: [],
   artifacts: [],
@@ -46,9 +50,10 @@ export const recorder = (files: Record<string, string> = {}): Recorder => ({
 export const fakeServices = (rec: Recorder, options: FakeOptions = {}) =>
   Layer.mergeAll(
     Layer.succeed(Shell, {
-      run: (command) =>
+      run: (command, runOptions) =>
         Effect.sync(() => {
           rec.commands.push(command);
+          rec.timeouts.push(runOptions?.timeoutMs);
           return options.shell?.(command) ?? { exitCode: 0, stdout: "", stderr: "" };
         }),
     }),
@@ -91,7 +96,10 @@ export const fakeServices = (rec: Recorder, options: FakeOptions = {}) =>
       run: (prompt) =>
         Effect.sync(() => {
           rec.prompts.push(prompt);
-          return { exitCode: options.editLoop?.(prompt, rec.files) ?? 0 };
+          const exit = options.editLoop === undefined ? 0 : options.editLoop(prompt, rec.files);
+          return exit === "killed"
+            ? { started: true, exitCode: null }
+            : { started: exit !== null, exitCode: exit };
         }),
     }),
     WorkflowEngine.layerMemory,

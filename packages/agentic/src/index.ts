@@ -16,6 +16,7 @@ export * from "./local/writeback-gate.ts";
 export * from "./recipes/services.ts";
 export * from "./recipes/pr-review.ts";
 export * from "./recipes/improve-pr.ts";
+export * from "./recipes/self-heal-pr.ts";
 export * from "./recipes/spec-drift-pr.ts";
 export * from "./recipes/ci-triage-pr.ts";
 export * from "./recipes/executions-read.ts";

@@ -6,6 +6,7 @@ export {
   ciTriageRun,
   improvePrRun,
   prReviewRun,
+  selfHealPrRun,
   specDriftRun,
 } from "./recipes/runs.ts";
 export * from "./recipes/executions-read.ts";

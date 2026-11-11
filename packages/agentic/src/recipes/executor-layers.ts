@@ -21,6 +21,7 @@ import {
   Checkout,
   EditLoop,
   modelGatewayClientLayer,
+  type EditLoopResult,
   ModelClient,
   RecipeIntents,
   Shell,
@@ -40,8 +41,8 @@ const runProcess = (
     readonly stdin?: string;
     readonly env?: NodeJS.ProcessEnv;
   },
-): Effect.Effect<CommandResult> =>
-  Effect.callback<CommandResult>((resume) => {
+): Effect.Effect<CommandResult & { readonly started: boolean }> =>
+  Effect.callback<CommandResult & { readonly started: boolean }>((resume) => {
     let stdout = "";
     let stderr = "";
     const child = spawn(command, [...args], { cwd: options.cwd, env: options.env ?? process.env });
@@ -54,11 +55,12 @@ const runProcess = (
     });
     child.on("error", (e) => {
       clearTimeout(timer);
-      resume(Effect.succeed({ exitCode: null, stdout, stderr: e.message }));
+      resume(Effect.succeed({ started: false, exitCode: null, stdout, stderr: e.message }));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resume(Effect.succeed({ exitCode: code, stdout, stderr }));
+      // A null code here means a signal ended a process that started, such as the timeout's SIGKILL.
+      resume(Effect.succeed({ started: true, exitCode: code, stdout, stderr }));
     });
     if (options.stdin !== undefined) child.stdin.end(options.stdin);
     else child.stdin.end();
@@ -100,11 +102,14 @@ export const sandboxEnv = (
 export const shellLayer = (checkout: string, env?: NodeJS.ProcessEnv): Layer.Layer<Shell> =>
   Layer.succeed(Shell, {
     run: (command, options) =>
-      runProcess("sh", ["-c", command], {
-        cwd: options?.cwd ?? checkout,
-        timeoutMs: options?.timeoutMs ?? 600_000,
-        ...(env === undefined ? {} : { env }),
-      }),
+      Effect.map(
+        runProcess("sh", ["-c", command], {
+          cwd: options?.cwd ?? checkout,
+          timeoutMs: options?.timeoutMs ?? 600_000,
+          ...(env === undefined ? {} : { env }),
+        }),
+        ({ exitCode, stdout, stderr }): CommandResult => ({ exitCode, stdout, stderr }),
+      ),
   });
 
 const walk = async (root: string, dir: string): Promise<string[]> => {
@@ -154,9 +159,7 @@ export const editLoopLayer = (
           stdin: prompt,
           ...(env === undefined ? {} : { env }),
         }),
-        (r) => ({
-          exitCode: r.exitCode,
-        }),
+        (r): EditLoopResult => ({ started: r.started, exitCode: r.exitCode }),
       ),
   });
 
@@ -239,6 +242,8 @@ export interface CloudAgenticConfig {
   readonly stagingDir: string;
   /** The coding-agent command of the edit loop. */
   readonly editLoop: readonly [string, ...string[]];
+  /** The edit loop's timeout; 30 min when absent. */
+  readonly editLoopTimeoutMs?: number;
   /** The model route's URL; the egress proxy attaches the per-lease token to a request to it (FD-AGT-010). */
   readonly modelGatewayUrl: string;
   /** The control plane's origin, whose executions and log routes `ExecutionsRead` reads through the egress proxy. */
@@ -282,7 +287,7 @@ export const cloudAgenticLayers = (
     }),
     shellLayer(config.checkout, env),
     checkoutLayer(config.checkout),
-    editLoopLayer(config.checkout, config.editLoop, undefined, env),
+    editLoopLayer(config.checkout, config.editLoop, config.editLoopTimeoutMs, env),
     stagedWritesLayer(config.checkout, config.baseCommit, config.stagingDir, config.artifacts),
     artifactsLayer(config.artifacts),
     runnerIntentsLayer,
