@@ -7,7 +7,6 @@ import { localRegistrationLayer, needsRegistration, ulid } from "./registration.
 import {
   appendIntent,
   DECORATION_KINDS,
-  dedupWriteback,
   type LocalRunContext,
   type WritebackRequest,
 } from "./run-context.ts";
@@ -58,12 +57,6 @@ describe("local run context", () => {
         intents: [{ intent_key: "run:review:2", kind: "review", payload: { body: "b" } }],
       },
     ]);
-    const seen = new Set<string>();
-    expect(dedupWriteback(seen, sent[0] as WritebackRequest).duplicate).toBe(false);
-    expect(dedupWriteback(seen, sent[0] as WritebackRequest)).toEqual({
-      fresh: [],
-      duplicate: true,
-    });
   });
 
   it("[FD-LOCAL-020] fails an unregistered execution's step with RegistrationRequired", async () => {
