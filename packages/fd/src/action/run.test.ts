@@ -184,6 +184,40 @@ describe("dispatch action", () => {
     expect(ok).toHaveLength(1);
   });
 
+  it("[FD-INT-049] the action refuses to send more than 50 signals or a field over its cap", async () => {
+    const signal = { source: "s", title: "t", detail: "d", url: "https://example.com" };
+    const over = [
+      Array(51).fill(signal),
+      [{ ...signal, source: "s".repeat(121) }],
+      [{ ...signal, title: "t".repeat(201) }],
+      [{ ...signal, detail: "d".repeat(2001) }],
+      [{ ...signal, url: "u".repeat(1001) }],
+    ];
+    const seen = fresh();
+    for (const signals of over) {
+      const failure = await Effect.runPromise(
+        Effect.flip(
+          runAction({ ...base, signals: JSON.stringify(signals) }, oidc, fetchWith(seen)),
+        ),
+      );
+      expect(failure.code).toBe("invalid_signals");
+    }
+    expect(seen.dispatches).toHaveLength(0);
+    const atCaps = [
+      ...Array(49).fill(signal),
+      {
+        source: "s".repeat(120),
+        title: "t".repeat(200),
+        detail: "d".repeat(2000),
+        url: "u".repeat(1000),
+      },
+    ];
+    await Effect.runPromise(
+      runAction({ ...base, signals: JSON.stringify(atCaps) }, oidc, fetchWith(seen)),
+    );
+    expect(seen.dispatches).toHaveLength(1);
+  });
+
   it("[FD-IFC-002]: the action's requests go through the client derived from the declaration", async () => {
     const seen = fresh();
     await Effect.runPromise(runAction({ ...base, class: "batch" }, oidc, fetchWith(seen)));
