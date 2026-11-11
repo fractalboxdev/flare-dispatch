@@ -1,15 +1,18 @@
 // The actuator rate limit keyed by GitHub App installation
 // (specs/github-output.md § Installation quota; mameko specs/outbox.md § The
-// actuator port and the actuator rate limit). `InstallationQuota` holds what each
-// installation's responses report and which permits are out; `ActuatorRateLimitLive`
-// answers mameko's `acquire` and `release` from it, one permit per call. The
-// drainer requests permits in grant order, so each request is decided as it comes.
+// actuator port and the actuator rate limit). The quota ledger holds what each
+// installation's responses report and which permits are out; `InstallationQuota`
+// serves it, from one isolate's memory or from the shared `InstallationQuota`
+// Durable Object of each installation, and `ActuatorRateLimitLive` answers mameko's
+// `acquire` and `release` from it, one permit per call. The drainer requests
+// permits in grant order, so each request is decided as it comes.
+import { CLAIM_TTL_MS } from "@fractalboxdev/mameko-kernel";
 import {
   ActuatorRateLimit,
   type PermitAnswer,
   type PermitRequest,
 } from "@fractalboxdev/mameko-ports";
-import { Clock, Context, Effect, Layer, Ref } from "effect";
+import { Clock, Context, Effect, Layer, Ref, Schema } from "effect";
 import { InstallationDirectory } from "./directory.ts";
 
 /** What one GitHub response says about its installation's budget. */
@@ -37,6 +40,12 @@ export interface QuotaOptions {
   readonly concurrent: number;
   /** How long a request turned away at the concurrency bound waits before it asks again. */
   readonly concurrentRetryMs: number;
+  /**
+   * How long a granted permit counts as outstanding without a release: the drainer's claim on the row, after which
+   * the row's call has expired unanswered (MAMEKO-OUT-039). It frees the slot of a drainer that stopped before it
+   * released, which a shared ledger outlives.
+   */
+  readonly permitLifetimeMs: number;
 }
 
 export const quotaOptionsDefault: QuotaOptions = {
@@ -48,6 +57,7 @@ export const quotaOptionsDefault: QuotaOptions = {
   perHour: 500,
   concurrent: 8,
   concurrentRetryMs: 1000,
+  permitLifetimeMs: CLAIM_TTL_MS,
 };
 
 interface InstallationState {
@@ -61,8 +71,32 @@ interface InstallationState {
   readonly outstanding: number;
 }
 
+/** One granted permit not yet released. */
+interface OutstandingPermit {
+  readonly limitKey: string;
+  readonly grantedAt: number;
+}
+
+/**
+ * Every installation's state and every outstanding permit, as plain data, so the `InstallationQuota` Durable Object
+ * stores it as it is.
+ */
+export interface QuotaLedger {
+  readonly installations: Readonly<Record<string, InstallationState>>;
+  readonly permits: Readonly<Record<string, OutstandingPermit>>;
+  readonly issued: number;
+}
+
+export const emptyQuotaLedger: QuotaLedger = { installations: {}, permits: {}, issued: 0 };
+
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
+
+/** The shared quota object could not be reached, so its answer is unknown. */
+export class QuotaUnavailable extends Schema.TaggedError<QuotaUnavailable>()("QuotaUnavailable", {
+  limitKey: Schema.String,
+  message: Schema.String,
+}) {}
 
 export class InstallationQuota extends Context.Service<
   InstallationQuota,
@@ -70,8 +104,11 @@ export class InstallationQuota extends Context.Service<
     readonly observe: (limitKey: string, observation: QuotaObservation) => Effect.Effect<void>;
     readonly acquire: (request: PermitRequest) => Effect.Effect<PermitAnswer>;
     readonly release: (permitId: string) => Effect.Effect<void>;
-    /** The installation's remaining budget as a share of its limit; 1 before any response reports one. */
-    readonly remainingShare: (limitKey: string) => Effect.Effect<number>;
+    /**
+     * The installation's remaining budget as a share of its limit; 1 before any response reports one. A shared quota
+     * that cannot be reached fails `QuotaUnavailable` rather than guess a share.
+     */
+    readonly remainingShare: (limitKey: string) => Effect.Effect<number, QuotaUnavailable>;
   }
 >()("@fractalboxdev/flare-dispatch-github/InstallationQuota") {}
 
@@ -155,86 +192,201 @@ const fresh = (options: QuotaOptions): InstallationState => ({
   outstanding: 0,
 });
 
-interface QuotaState {
-  readonly installations: ReadonlyMap<string, InstallationState>;
-  /** Each outstanding permit's limit key. */
-  readonly permits: ReadonlyMap<string, string>;
-  readonly issued: number;
-}
+const stateOf = (options: QuotaOptions, ledger: QuotaLedger, limitKey: string) =>
+  Object.hasOwn(ledger.installations, limitKey)
+    ? ledger.installations[limitKey]!
+    : fresh(options);
 
+const withState = (
+  ledger: QuotaLedger,
+  limitKey: string,
+  state: InstallationState,
+): QuotaLedger => ({ ...ledger, installations: { ...ledger.installations, [limitKey]: state } });
+
+/** The ledger without `permitId`, its installation's outstanding count lowered; an unknown permit changes nothing. */
+export const releasePermit = (ledger: QuotaLedger, permitId: string): QuotaLedger => {
+  if (!Object.hasOwn(ledger.permits, permitId)) return ledger;
+  const { limitKey } = ledger.permits[permitId]!;
+  const permits = { ...ledger.permits };
+  delete permits[permitId];
+  const s = ledger.installations[limitKey];
+  return s === undefined
+    ? { ...ledger, permits }
+    : withState({ ...ledger, permits }, limitKey, {
+        ...s,
+        outstanding: Math.max(0, s.outstanding - 1),
+      });
+};
+
+/** The ledger after one response's rate-limit headers for `limitKey` (FD-GH-057, FD-GH-060). */
+export const observeQuota = (
+  options: QuotaOptions,
+  ledger: QuotaLedger,
+  limitKey: string,
+  o: QuotaObservation,
+): QuotaLedger => {
+  const s = stateOf(options, ledger, limitKey);
+  return withState(ledger, limitKey, {
+    ...s,
+    limit: o.limit ?? s.limit,
+    remaining: o.remaining ?? s.remaining,
+    resetAt: o.resetAt ?? s.resetAt,
+    blockedUntil: Math.max(s.blockedUntil, o.retryAfterAt ?? 0),
+  });
+};
+
+/**
+ * Decides one permit request at `now` against the ledger. A permit outstanding for `permitLifetimeMs` is released
+ * first, since the drainer's claim on its row has expired (MAMEKO-OUT-039).
+ */
+export const acquirePermit = (
+  options: QuotaOptions,
+  ledger: QuotaLedger,
+  request: PermitRequest,
+  now: number,
+): readonly [PermitAnswer, QuotaLedger] => {
+  const live = Object.entries(ledger.permits)
+    .filter(([, p]) => p.grantedAt <= now - options.permitLifetimeMs)
+    .reduce((l, [id]) => releasePermit(l, id), ledger);
+  const permitId = `${request.limitKey}:${live.issued + 1}`;
+  const prev = stateOf(options, live, request.limitKey);
+  const [answer, next] = decidePermit(options, prev, request, now, permitId);
+  // Only a grant adds an outstanding permit.
+  if (next.outstanding <= prev.outstanding)
+    return [answer, withState(live, request.limitKey, next)];
+  return [
+    answer,
+    {
+      installations: { ...live.installations, [request.limitKey]: next },
+      permits: { ...live.permits, [permitId]: { limitKey: request.limitKey, grantedAt: now } },
+      issued: live.issued + 1,
+    },
+  ];
+};
+
+/** The installation's remaining budget as a share of its limit at `now`; 1 before any response reports one. */
+export const remainingShareOf = (ledger: QuotaLedger, limitKey: string, now: number): number => {
+  const s = Object.hasOwn(ledger.installations, limitKey)
+    ? ledger.installations[limitKey]!
+    : undefined;
+  if (s === undefined || s.limit <= 0) return 1;
+  if (s.resetAt > 0 && now >= s.resetAt) return 1;
+  return s.remaining / s.limit;
+};
+
+/** One isolate's quota: the ledger in memory, which no other isolate sees. */
 export const installationQuotaLayer = (options: QuotaOptions = quotaOptionsDefault) =>
   Layer.effect(
     InstallationQuota,
     Effect.gen(function* () {
-      const states = yield* Ref.make<QuotaState>({
-        installations: new Map(),
-        permits: new Map(),
-        issued: 0,
-      });
-      const update = (key: string, f: (s: InstallationState) => InstallationState) =>
-        Ref.update(states, (q) => ({
-          ...q,
-          installations: new Map(q.installations).set(
-            key,
-            f(q.installations.get(key) ?? fresh(options)),
-          ),
-        }));
+      const ledger = yield* Ref.make<QuotaLedger>(emptyQuotaLedger);
       return {
-        observe: (limitKey, o) =>
-          update(limitKey, (s) => ({
-            ...s,
-            limit: o.limit ?? s.limit,
-            remaining: o.remaining ?? s.remaining,
-            resetAt: o.resetAt ?? s.resetAt,
-            blockedUntil: Math.max(s.blockedUntil, o.retryAfterAt ?? 0),
-          })),
+        observe: (limitKey, o) => Ref.update(ledger, (l) => observeQuota(options, l, limitKey, o)),
         acquire: (request) =>
           Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis;
-            return yield* Ref.modify(states, (q) => {
-              const permitId = `${request.limitKey}:${q.issued + 1}`;
-              const prev = q.installations.get(request.limitKey) ?? fresh(options);
-              const [answer, next] = decidePermit(options, prev, request, now, permitId);
-              // Only a grant adds an outstanding permit.
-              const granted = next.outstanding > prev.outstanding;
-              return [
-                answer,
-                {
-                  installations: new Map(q.installations).set(request.limitKey, next),
-                  permits: granted ? new Map(q.permits).set(permitId, request.limitKey) : q.permits,
-                  issued: granted ? q.issued + 1 : q.issued,
-                },
-              ] as const;
-            });
+            return yield* Ref.modify(ledger, (l) => acquirePermit(options, l, request, now));
           }),
         remainingShare: (limitKey) =>
           Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis;
-            const s = (yield* Ref.get(states)).installations.get(limitKey);
-            if (s === undefined || s.limit <= 0) return 1;
-            if (s.resetAt > 0 && now >= s.resetAt) return 1;
-            return s.remaining / s.limit;
+            return remainingShareOf(yield* Ref.get(ledger), limitKey, now);
           }),
         // An unknown or already released permit changes nothing, so a repeated release is harmless.
-        release: (permitId) =>
-          Ref.update(states, (q) => {
-            const key = q.permits.get(permitId);
-            const s = key === undefined ? undefined : q.installations.get(key);
-            if (key === undefined || s === undefined) return q;
-            const permits = new Map(q.permits);
-            permits.delete(permitId);
-            return {
-              ...q,
-              permits,
-              installations: new Map(q.installations).set(key, {
-                ...s,
-                outstanding: Math.max(0, s.outstanding - 1),
-              }),
-            };
-          }),
+        release: (permitId) => Ref.update(ledger, (l) => releasePermit(l, permitId)),
       };
     }),
   );
+
+/**
+ * The remote surface of one `InstallationQuota` Durable Object: the ledger of the limit keys routed to it. The caller
+ * passes its clock reading, so the object decides at the instant the drainer asks.
+ */
+export interface QuotaObject {
+  observe(limitKey: string, observation: QuotaObservation): Promise<void>;
+  acquire(request: PermitRequest, now: number): Promise<PermitAnswer>;
+  release(permitId: string): Promise<void>;
+  remainingShare(limitKey: string, now: number): Promise<number>;
+}
+
+/** A `QuotaObject` over one ledger; the Durable Object keeps it in its storage between calls. */
+export const quotaObjectOver = (
+  options: QuotaOptions,
+  store: {
+    readonly read: () => QuotaLedger;
+    readonly write: (ledger: QuotaLedger) => Promise<void>;
+  },
+): QuotaObject => ({
+  observe: (limitKey, o) => store.write(observeQuota(options, store.read(), limitKey, o)),
+  acquire: async (request, now) => {
+    const [answer, next] = acquirePermit(options, store.read(), request, now);
+    await store.write(next);
+    return answer;
+  },
+  release: async (permitId) => {
+    const before = store.read();
+    const next = releasePermit(before, permitId);
+    if (next !== before) await store.write(next);
+  },
+  remainingShare: async (limitKey, now) => remainingShareOf(store.read(), limitKey, now),
+});
+
+/** The limit key a permit id was granted under: `<limit key>:<sequence>`. */
+const limitKeyOfPermit = (permitId: string) => {
+  const at = permitId.lastIndexOf(":");
+  return at < 0 ? permitId : permitId.slice(0, at);
+};
+
+/** One call to a quota object; a rejection, or an object that cannot be named, fails with its message. */
+const reach = <A>(call: () => Promise<A>) =>
+  Effect.tryPromise({ try: call, catch: (e) => (e instanceof Error ? e.message : String(e)) });
+
+/**
+ * The quota shared across isolates: every call for a limit key goes to the object `objectOf` names for it, the
+ * `InstallationQuota` Durable Object of that installation (FD-ARCH-003). An object that cannot be reached grants
+ * nothing: `acquire` answers `wait`, so no call goes out uncounted, and `remainingShare` fails `QuotaUnavailable`. An
+ * observation or a release that does not reach it is logged; the next response reports the budget again, and an
+ * unreleased permit frees its slot when its lifetime ends.
+ */
+export const installationQuotaObjectLayer = (
+  objectOf: (limitKey: string) => QuotaObject,
+  options: QuotaOptions = quotaOptionsDefault,
+) =>
+  Layer.succeed(InstallationQuota, {
+    observe: (limitKey, o) =>
+      reach(() => objectOf(limitKey).observe(limitKey, o)).pipe(
+        Effect.catch((reason) =>
+          Effect.logWarning("quota observation not recorded", { limitKey, reason }),
+        ),
+      ),
+    acquire: (request) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        return yield* reach(() => objectOf(request.limitKey).acquire(request, now)).pipe(
+          Effect.catch((reason) =>
+            Effect.logWarning("quota unreachable; permit deferred", {
+              limitKey: request.limitKey,
+              reason,
+            }).pipe(
+              Effect.as<PermitAnswer>({ _tag: "wait", retryAt: now + options.concurrentRetryMs }),
+            ),
+          ),
+        );
+      }),
+    release: (permitId) =>
+      reach(() => objectOf(limitKeyOfPermit(permitId)).release(permitId)).pipe(
+        Effect.catch((reason) =>
+          Effect.logWarning("permit release not recorded", { permitId, reason }),
+        ),
+      ),
+    remainingShare: (limitKey) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        return yield* reach(() => objectOf(limitKey).remainingShare(limitKey, now)).pipe(
+          Effect.mapError((message) => new QuotaUnavailable({ limitKey, message })),
+        );
+      }),
+  });
 
 /** A repository scope, `<owner>/<repo>`, as a row keyed by its scope carries it. */
 const isRepository = (limitKey: string) => limitKey.includes("/");

@@ -17,6 +17,7 @@ import {
   GithubUncredentialed,
   GithubUnexpected,
   githubLiveLayer,
+  installationQuotaObjectLayer,
   SideOutputConfig,
   type AppOptions,
 } from "@fractalboxdev/flare-dispatch-github";
@@ -104,13 +105,22 @@ export const concludeFactsLayer = (env: ControlPlaneEnv) =>
     }),
   ).pipe(Layer.provide(d1IntakeStore(env.DB)));
 
-/** Every GitHub service under the App's authority; built once per isolate. */
+/**
+ * The quota of every limit key: its `InstallationQuota` object, so each isolate's applier calls for one installation
+ * take their permits from one ledger (FD-ARCH-003).
+ */
+export const sharedQuota = (env: Pick<ControlPlaneEnv, "INSTALLATION_QUOTA">) =>
+  installationQuotaObjectLayer((limitKey) =>
+    env.INSTALLATION_QUOTA.get(env.INSTALLATION_QUOTA.idFromName(limitKey)),
+  );
+
+/** Every GitHub service under the App's authority, over the shared quota; built once per isolate. */
 export const appServices = (
   env: ControlPlaneEnv,
   app: AppOptions,
   alarms: Layer.Layer<AlarmPort>,
 ) =>
-  githubLiveLayer(app).pipe(
+  githubLiveLayer(app, sharedQuota(env)).pipe(
     Layer.provide(Layer.mergeAll(sideOutputLayer(env, app), alarms, concludeFactsLayer(env))),
   );
 

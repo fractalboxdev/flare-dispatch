@@ -12,9 +12,15 @@ import {
 import { InstallationDirectory } from "./directory.ts";
 import {
   ActuatorRateLimitLive,
+  emptyQuotaLedger,
   InstallationQuota,
   installationQuotaLayer,
+  installationQuotaObjectLayer,
+  quotaObjectOver,
   quotaOptionsDefault,
+  QuotaUnavailable,
+  type QuotaLedger,
+  type QuotaObject,
 } from "./rate-limit.ts";
 
 const permit = (overrides: Partial<PermitRequest> = {}): PermitRequest => ({
@@ -420,5 +426,153 @@ describe("live client", () => {
     expect(secondary).toBeInstanceOf(GithubHttpError);
     expect(secondary).toMatchObject({ status: 403, rateLimited: true });
     expect(forbidden).toMatchObject({ status: 403, rateLimited: false });
+  });
+});
+
+describe("shared installation quota", () => {
+  /** `InstallationQuota` objects by name, each holding its ledger in memory, and the name each call reached. */
+  const objects = () => {
+    const ledgers = new Map<string, QuotaObject>();
+    const reached: string[] = [];
+    const objectOf = (name: string): QuotaObject => {
+      reached.push(name);
+      let object = ledgers.get(name);
+      if (object === undefined) {
+        let ledger: QuotaLedger = emptyQuotaLedger;
+        object = quotaObjectOver(quotaOptionsDefault, {
+          read: () => ledger,
+          write: async (next) => {
+            ledger = next;
+          },
+        });
+        ledgers.set(name, object);
+      }
+      return object;
+    };
+    return { objectOf, reached };
+  };
+
+  /** One isolate's rate limit and quota: fresh services, so nothing it holds outlives the effect it runs. */
+  const isolate =
+    (objectOf: (name: string) => QuotaObject) =>
+    <A, E>(effect: Effect.Effect<A, E, ActuatorRateLimit | InstallationQuota>) =>
+      effect.pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            ActuatorRateLimitLive,
+            Layer.merge(installationQuotaObjectLayer(objectOf), directory),
+          ),
+        ),
+      );
+
+  const atNow = <A, E>(effect: Effect.Effect<A, E>) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW);
+        return yield* effect;
+      }).pipe(Effect.provide(TestClock.layer())),
+    );
+
+  it("[FD-ARCH-003] applier calls in two isolates take their permits from the one InstallationQuota object of their installation", async () => {
+    const { objectOf, reached } = objects();
+    const a = isolate(objectOf);
+    const b = isolate(objectOf);
+    const result = await atNow(
+      Effect.gen(function* () {
+        const granted: string[] = [];
+        for (let i = 0; i < 8; i++) {
+          const answer = yield* a(acquire(permit({ limitKey: i % 2 === 0 ? "7" : "acme/app" })));
+          if (answer._tag === "granted") granted.push(answer.permitId);
+        }
+        // The second isolate holds no state of its own: installation 7's object is at its concurrency bound.
+        const ninth = yield* b(acquire(permit({ limitKey: "acme/app" })));
+        const otherInstallation = (yield* b(acquire(permit({ limitKey: "8" }))))._tag;
+        // A release from the first isolate frees the slot the second isolate asks for.
+        yield* a(ActuatorRateLimit.use((l) => l.release(granted[0]!)));
+        const afterRelease = (yield* b(acquire(permit({ limitKey: "7" }))))._tag;
+        return { granted: granted.length, ninth, otherInstallation, afterRelease };
+      }),
+    );
+    expect(result).toEqual({
+      granted: 8,
+      ninth: { _tag: "wait", retryAt: NOW + 1000 },
+      otherInstallation: "granted",
+      afterRelease: "granted",
+    });
+    // A row keyed by its repository reaches its installation's object; no object exists per repository.
+    expect(new Set(reached)).toEqual(new Set(["7", "8"]));
+  });
+
+  it("[FD-ARCH-003] a response one isolate's client observes stops the next permit another isolate asks for", async () => {
+    const { objectOf } = objects();
+    const fetch: typeof globalThis.fetch = async () =>
+      new Response(JSON.stringify({ id: 5 }), {
+        status: 201,
+        headers: {
+          "content-type": "application/json",
+          "x-ratelimit-limit": "100",
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String((NOW + 600_000) / 1000),
+        },
+      });
+    const writer = Layer.provideMerge(
+      githubClientLayer({ fetch, token: () => Effect.succeed("t"), baseUrl: "https://github.test" }),
+      installationQuotaObjectLayer(objectOf),
+    );
+    const answers = await atNow(
+      Effect.gen(function* () {
+        const before = yield* isolate(objectOf)(acquire(permit({ limitKey: "acme/app" })));
+        yield* GithubClient.use((github) =>
+          github.createCheckRun({ installation: 7, repo: "acme/app", body: { name: "n" } }),
+        ).pipe(Effect.provide(writer));
+        const after = yield* isolate(objectOf)(acquire(permit({ limitKey: "acme/app" })));
+        const share = yield* isolate(objectOf)(InstallationQuota.use((q) => q.remainingShare("7")));
+        return { before: before._tag, after, share };
+      }),
+    );
+    expect(answers).toEqual({
+      before: "granted",
+      after: { _tag: "wait", retryAt: NOW + 600_000 },
+      share: 0,
+    });
+  });
+
+  it("[FD-ARCH-003] an InstallationQuota object that cannot be reached grants nothing and reports no budget share", async () => {
+    const unreachable = (): QuotaObject => {
+      throw new Error("object unreachable");
+    };
+    const run = isolate(unreachable);
+    const out = await atNow(
+      Effect.gen(function* () {
+        const answer = yield* run(acquire(permit({ drawsReserve: true })));
+        const share = yield* run(
+          InstallationQuota.use((q) => q.remainingShare("7")).pipe(Effect.flip),
+        );
+        // An observation or a release that does not arrive is logged; the drainer's run goes on.
+        yield* run(observe("7", { remaining: 10 }));
+        yield* run(ActuatorRateLimit.use((l) => l.release("7:1")));
+        return { answer, share };
+      }),
+    );
+    expect(out.answer).toEqual({ _tag: "wait", retryAt: NOW + 1000 });
+    expect(out.share).toBeInstanceOf(QuotaUnavailable);
+    expect(out.share).toMatchObject({ limitKey: "7" });
+  });
+
+  it("[FD-GH-063] MAMEKO-OUT-039 a permit no drainer released stops counting once the drainer's claim on its row has expired", async () => {
+    const { objectOf } = objects();
+    const run = isolate(objectOf);
+    const out = await atNow(
+      Effect.gen(function* () {
+        for (let i = 0; i < 8; i++) yield* run(acquire(permit({ call: "lookup" })));
+        const held = (yield* run(acquire(permit({ call: "lookup" }))))._tag;
+        yield* TestClock.adjust(quotaOptionsDefault.permitLifetimeMs - 1);
+        const before = (yield* run(acquire(permit({ call: "lookup" }))))._tag;
+        yield* TestClock.adjust(1);
+        const after = (yield* run(acquire(permit({ call: "lookup" }))))._tag;
+        return { held, before, after };
+      }),
+    );
+    expect(out).toEqual({ held: "wait", before: "wait", after: "granted" });
   });
 });

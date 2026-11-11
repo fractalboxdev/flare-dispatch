@@ -2,7 +2,7 @@
 // document decides both.
 import type { ApiEnv } from "@fractalboxdev/flare-dispatch-api";
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
-import type { ConcludeKind } from "@fractalboxdev/flare-dispatch-github";
+import type { ConcludeKind, QuotaObject } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import {
   spendConfigOfVar,
@@ -51,6 +51,14 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly INTAKE_UNITS: {
     idFromName(name: string): unknown;
     get(id: unknown): { enqueue(units: readonly TickUnit[]): Promise<number> };
+  };
+  /**
+   * One `InstallationQuota` object per GitHub App installation, by `idFromName(<installation id>)`: the permit ledger
+   * every isolate's applier calls share (FD-ARCH-003).
+   */
+  readonly INSTALLATION_QUOTA: {
+    idFromName(name: string): unknown;
+    get(id: unknown): QuotaObject;
   };
   /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
   readonly ALERT_SINK?: string;

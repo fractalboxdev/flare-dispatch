@@ -92,7 +92,8 @@ const recordingRateLimit = (log: PermitLog[]) =>
         acquire: (request: PermitRequest) =>
           Effect.gen(function* () {
             const at = yield* Clock.currentTimeMillis;
-            const share = yield* quota.remainingShare(request.limitKey);
+            // The in-isolate quota is always reachable.
+            const share = yield* quota.remainingShare(request.limitKey).pipe(Effect.orDie);
             const answer = yield* quota.acquire(request);
             log.push({
               at,
