@@ -1,6 +1,7 @@
 // The drift check: a rendered configuration against the template's invariants, the environment schema, the pool
-// caps and mameko's profile validator; the deployed Workers against the record of the last deploy; and the GitHub
-// App's registration against the committed manifest (specs/operability.md § Drift check). Every check here is a pure
+// caps and mameko's profile validator; the deployed Workers against the record of the last deploy; the GitHub App's
+// registration against the committed manifest (specs/operability.md § Drift check); and, for a deploy that carries
+// the `aws` kind, the AWS account's Budgets actions against the AWS limit (FD-EXEC-083). Every check here is a pure
 // function of what it compares; `fd deploy` and `fd doctor` read the inputs through the ports of deploy.ts.
 import {
   checkRegistry,
@@ -441,6 +442,100 @@ export const accessDrift = (
       ),
     ),
     ...accessAudCheck(committed, deployed),
+  ];
+};
+
+/** One budget of the deploying organization's AWS account, as AWS Budgets `DescribeBudgets` reports it. */
+export const AwsBudget = Schema.Struct({
+  name: Schema.String,
+  /** `COST`, `USAGE` and the reservation and savings-plan types. */
+  type: Schema.String,
+  limitAmount: Schema.Number,
+  limitUnit: Schema.String,
+});
+export type AwsBudget = typeof AwsBudget.Type;
+
+/** One Budgets action of the account, as `DescribeBudgetActionsForAccount` reports it. */
+export const AwsBudgetAction = Schema.Struct({
+  id: Schema.String,
+  budgetName: Schema.String,
+  /** `ACTUAL` or `FORECASTED`. */
+  notificationType: Schema.String,
+  /** `APPLY_IAM_POLICY`, `APPLY_SCP_POLICY` or `RUN_SSM_DOCUMENTS`. */
+  actionType: Schema.String,
+  /** `AUTOMATIC` or `MANUAL`. */
+  approvalModel: Schema.String,
+  /** `ABSOLUTE_VALUE`, in the budget's unit, or `PERCENTAGE` of the budget's limit. */
+  thresholdType: Schema.String,
+  thresholdValue: Schema.Number,
+});
+export type AwsBudgetAction = typeof AwsBudgetAction.Type;
+
+/** The account the AWS credentials belong to, with its budgets and Budgets actions. */
+export const AwsBudgets = Schema.Struct({
+  account: Schema.String,
+  budgets: Schema.Array(AwsBudget),
+  actions: Schema.Array(AwsBudgetAction),
+});
+export type AwsBudgets = typeof AwsBudgets.Type;
+
+/** The action types that apply a policy, the form a denial of new task launches takes. */
+const DENY_ACTIONS: ReadonlySet<string> = new Set(["APPLY_IAM_POLICY", "APPLY_SCP_POLICY"]);
+
+/** Why one Budgets action does not deny new task launches when actual spend reaches `limitUsd`; null when it does. */
+const budgetActionGap = (
+  action: AwsBudgetAction,
+  budgets: readonly AwsBudget[],
+  limitUsd: number,
+): string | null => {
+  if (action.notificationType !== "ACTUAL") return "runs on forecast spend, not actual spend";
+  if (!DENY_ACTIONS.has(action.actionType))
+    return `is ${action.actionType}, which applies no deny policy`;
+  if (action.approvalModel !== "AUTOMATIC") return "waits for manual approval";
+  const budget = budgets.find((b) => b.name === action.budgetName);
+  if (budget === undefined) return `names budget ${action.budgetName}, which the account lacks`;
+  if (budget.type !== "COST" || budget.limitUnit !== "USD")
+    return `belongs to budget ${budget.name}, which is not a USD cost budget`;
+  const atUsd =
+    action.thresholdType === "PERCENTAGE"
+      ? (budget.limitAmount * action.thresholdValue) / 100
+      : action.thresholdValue;
+  // A cent of tolerance absorbs the decimal strings AWS reports amounts in.
+  return atUsd <= limitUsd + 0.005
+    ? null
+    : `runs at ${atUsd} USD, above aws.budgetUsd ${limitUsd} USD`;
+};
+
+/**
+ * The AWS Budgets action MAMEKO-EXEC-087 requires where a deploy carries the `aws` kind (FD-EXEC-083): the account
+ * must carry an action that applies an IAM or SCP policy, with no approval step, once actual spend on a USD cost
+ * budget reaches the overlay's `aws.budgetUsd`. An action that runs below the limit qualifies: launches are denied by
+ * the time spend reaches it. One failure when no action qualifies, listing why each action read falls short.
+ */
+export const awsBudgetCheck = (
+  limitUsd: number | undefined,
+  read: AwsBudgets,
+): readonly Finding[] => {
+  if (limitUsd === undefined)
+    return [
+      fail(
+        "aws-budget",
+        "aws.budgetUsd",
+        "the overlay carries the aws kind and sets no AWS limit for the Budgets action to enforce",
+      ),
+    ];
+  const gaps = read.actions.map((a) => ({ a, gap: budgetActionGap(a, read.budgets, limitUsd) }));
+  if (gaps.some((g) => g.gap === null)) return [];
+  const why =
+    gaps.length === 0
+      ? "it carries no Budgets action"
+      : gaps.map((g) => `action ${g.a.id} ${g.gap!}`).join("; ");
+  return [
+    fail(
+      "aws-budget",
+      "aws.budgetAction",
+      `AWS account ${read.account} carries no Budgets action that denies new task launches when actual spend reaches aws.budgetUsd ${limitUsd} USD: ${why}`,
+    ),
   ];
 };
 

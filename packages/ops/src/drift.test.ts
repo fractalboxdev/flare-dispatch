@@ -6,12 +6,14 @@ import {
   APP_PERMISSIONS,
   appManifest,
   appRegistrationCheck,
+  awsBudgetCheck,
   bindingCheck,
   failed,
   MERGE_GATE_CHECKS,
   profileCheck,
   rulesetCheck,
   settingsDrift,
+  type AwsBudgetAction,
   type DeployedSettings,
 } from "./index.ts";
 import { validationContext } from "@fractalboxdev/flare-dispatch-profile";
@@ -155,5 +157,72 @@ describe("drift check", () => {
       expect(default_permissions.administration).toBe("read");
       expect(Object.values(default_permissions)).not.toContain("admin");
     }
+  });
+});
+
+const budgets = [{ name: "fd-aws", type: "COST", limitAmount: 400, limitUnit: "USD" }];
+const denyAction = (over: Partial<AwsBudgetAction> = {}): AwsBudgetAction => ({
+  id: "act-1",
+  budgetName: "fd-aws",
+  notificationType: "ACTUAL",
+  actionType: "APPLY_IAM_POLICY",
+  approvalModel: "AUTOMATIC",
+  thresholdType: "PERCENTAGE",
+  thresholdValue: 100,
+  ...over,
+});
+
+describe("AWS budget check", () => {
+  it("[FD-EXEC-083] passes on a Budgets action that applies a deny policy without approval once actual spend reaches the AWS limit", () => {
+    const read = (actions: AwsBudgetAction[]) => ({ account: "111122223333", budgets, actions });
+    expect(awsBudgetCheck(400, read([denyAction()]))).toEqual([]);
+    expect(awsBudgetCheck(400, read([denyAction({ actionType: "APPLY_SCP_POLICY" })]))).toEqual([]);
+    expect(
+      awsBudgetCheck(
+        400,
+        read([denyAction({ thresholdType: "ABSOLUTE_VALUE", thresholdValue: 400 })]),
+      ),
+    ).toEqual([]);
+    // 100% of a 400 USD budget runs above a 300 USD limit; 75% of it runs at the limit.
+    expect(failed(awsBudgetCheck(300, read([denyAction()])))).toBe(true);
+    expect(awsBudgetCheck(300, read([denyAction({ thresholdValue: 75 })]))).toEqual([]);
+  });
+
+  it("[FD-EXEC-083] fails when the account carries no Budgets action, or none that qualifies", () => {
+    expect(awsBudgetCheck(400, { account: "111122223333", budgets, actions: [] })).toEqual([
+      {
+        check: "aws-budget",
+        path: "aws.budgetAction",
+        detail:
+          "AWS account 111122223333 carries no Budgets action that denies new task launches when actual spend reaches aws.budgetUsd 400 USD: it carries no Budgets action",
+        severity: "failure",
+      },
+    ]);
+    for (const over of [
+      { notificationType: "FORECASTED" },
+      { actionType: "RUN_SSM_DOCUMENTS" },
+      { approvalModel: "MANUAL" },
+      { thresholdValue: 101 },
+      { budgetName: "other" },
+    ]) {
+      const findings = awsBudgetCheck(400, {
+        account: "111122223333",
+        budgets,
+        actions: [denyAction(over)],
+      });
+      expect(findings.map((f) => [f.path, f.severity])).toEqual([["aws.budgetAction", "failure"]]);
+    }
+    expect(
+      awsBudgetCheck(400, {
+        account: "111122223333",
+        budgets: [{ ...budgets[0]!, limitUnit: "EUR" }],
+        actions: [denyAction()],
+      }).map((f) => f.path),
+    ).toEqual(["aws.budgetAction"]);
+    expect(
+      awsBudgetCheck(undefined, { account: "111122223333", budgets, actions: [denyAction()] }).map(
+        (f) => f.path,
+      ),
+    ).toEqual(["aws.budgetUsd"]);
   });
 });

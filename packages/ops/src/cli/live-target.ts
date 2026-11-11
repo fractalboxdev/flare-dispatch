@@ -1,8 +1,9 @@
 // The live `DeployTarget`: the Cloudflare API for the deployed Workers, their schedules, domains and Container
 // applications and the record of the last deploy in the artifacts bucket; `wrangler` for D1 migrations and Worker
 // deploys; the GitHub API with the App JWT for the App's registration and the default branch's ruleset; the Workers'
-// own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; and the overlay's
-// alert sink for `deploy-probe-failed`.
+// own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; AWS STS and AWS Budgets,
+// signed with SigV4, for the AWS account's Budgets actions; and the overlay's alert sink for `deploy-probe-failed`.
+import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Effect, Layer } from "effect";
@@ -16,7 +17,13 @@ import {
   type Deployed,
   type RenderedWorker,
 } from "../deploy.ts";
-import type { AppPermissions, DeployedSettings } from "../drift.ts";
+import type {
+  AppPermissions,
+  AwsBudget,
+  AwsBudgetAction,
+  AwsBudgets,
+  DeployedSettings,
+} from "../drift.ts";
 import type { OverlayValues } from "../overlay.ts";
 import { parseJsonc } from "../render.ts";
 import { migrationTags, settingsFromApi, settingsFromConfig, type ApiWorker } from "../settings.ts";
@@ -44,6 +51,11 @@ export interface LiveTargetConfig {
   readonly appPrivateKey?: string;
   /** `<owner>/<repo>` whose default branch's ruleset the drift check reads. */
   readonly repository?: string;
+  /**
+   * The AWS credentials the Budgets read signs with, from the deploy job's environment; the drift check of a deploy
+   * that carries the `aws` kind fails without them (FD-EXEC-083).
+   */
+  readonly aws?: AwsCredentials;
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
   /** Writes a rendered configuration beside its template, for `wrangler -c`; removed after use. */
@@ -72,6 +84,13 @@ const RECORD_BUCKET = "ARTIFACTS";
 const ACCESS_PAGE = 100;
 
 export { scriptName };
+
+/** AWS STS and AWS Budgets serve from one global endpoint each, signed for `us-east-1`. */
+const AWS_REGION = "us-east-1";
+const STS_HOST = "sts.amazonaws.com";
+const BUDGETS_HOST = "budgets.amazonaws.com";
+/** The largest page `DescribeBudgets` and `DescribeBudgetActionsForAccount` return. */
+const BUDGETS_PAGE = 100;
 
 const arr = <T>(v: unknown): readonly T[] => (Array.isArray(v) ? (v as T[]) : []);
 
@@ -180,8 +199,137 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
     }
   });
 
+  /** One signed `POST /` to an AWS endpoint; answers the response text. */
+  const awsPost = (
+    operation: string,
+    host: string,
+    service: string,
+    headers: Record<string, string>,
+    body: string,
+  ) =>
+    Effect.gen(function* () {
+      const credentials = c.aws;
+      if (credentials === undefined)
+        return yield* new TargetFailed({
+          operation,
+          message: "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not set",
+        });
+      const failed = (e: unknown) => new TargetFailed({ operation, message: String(e) });
+      const signed = yield* Effect.tryPromise({
+        try: () =>
+          signRequest({
+            credentials,
+            region: AWS_REGION,
+            service,
+            host,
+            canonicalPath: "/",
+            body,
+            now: new Date(now()),
+          }),
+        catch: failed,
+      });
+      const res = yield* Effect.tryPromise({
+        try: () =>
+          fetcher(`https://${host}/`, { method: "POST", headers: { ...signed, ...headers }, body }),
+        catch: failed,
+      });
+      const text = yield* Effect.tryPromise({ try: () => res.text(), catch: failed });
+      if (!res.ok)
+        return yield* new TargetFailed({
+          operation,
+          message: `${res.status} ${text.slice(0, 500)}`,
+        });
+      return text;
+    });
+
+  /** One AWS Budgets operation of the JSON 1.1 protocol. */
+  const budgetsCall = (target: string, request: Record<string, unknown>) =>
+    Effect.flatMap(
+      awsPost(
+        `aws-budgets ${target}`,
+        BUDGETS_HOST,
+        "budgets",
+        {
+          "content-type": "application/x-amz-json-1.1",
+          "x-amz-target": `AWSBudgetServiceGateway.${target}`,
+        },
+        JSON.stringify(request),
+      ),
+      (text) =>
+        Effect.try({
+          try: () => JSON.parse(text) as Record<string, unknown>,
+          catch: (e) =>
+            new TargetFailed({ operation: `aws-budgets ${target}`, message: String(e) }),
+        }),
+    );
+
+  /** Every item of a paged AWS Budgets list, following `NextToken`. */
+  const budgetsPages = <T>(target: string, key: string, account: string) =>
+    Effect.gen(function* () {
+      const items: T[] = [];
+      let next: string | undefined;
+      do {
+        const page = yield* budgetsCall(target, {
+          AccountId: account,
+          MaxResults: BUDGETS_PAGE,
+          ...(next === undefined ? {} : { NextToken: next }),
+        });
+        items.push(...arr<T>(page[key]));
+        next = typeof page["NextToken"] === "string" ? page["NextToken"] : undefined;
+      } while (next !== undefined && next !== "");
+      return items;
+    });
+
+  const awsBudgets = Effect.gen(function* () {
+    const identity = yield* awsPost(
+      "aws-sts GetCallerIdentity",
+      STS_HOST,
+      "sts",
+      { "content-type": "application/x-www-form-urlencoded; charset=utf-8" },
+      "Action=GetCallerIdentity&Version=2011-06-15",
+    );
+    const account = /<Account>\s*([^<\s]+)\s*<\/Account>/.exec(identity)?.[1];
+    if (account === undefined)
+      return yield* new TargetFailed({
+        operation: "aws-sts GetCallerIdentity",
+        message: "the response names no account",
+      });
+    const budgets = yield* budgetsPages<{
+      BudgetName?: string;
+      BudgetType?: string;
+      BudgetLimit?: { Amount?: string; Unit?: string };
+    }>("DescribeBudgets", "Budgets", account);
+    const actions = yield* budgetsPages<{
+      ActionId?: string;
+      BudgetName?: string;
+      NotificationType?: string;
+      ActionType?: string;
+      ApprovalModel?: string;
+      ActionThreshold?: { ActionThresholdValue?: number; ActionThresholdType?: string };
+    }>("DescribeBudgetActionsForAccount", "Actions", account);
+    return {
+      account,
+      budgets: budgets.map((b): AwsBudget => ({
+        name: b.BudgetName ?? "",
+        type: b.BudgetType ?? "",
+        limitAmount: Number(b.BudgetLimit?.Amount ?? Number.NaN),
+        limitUnit: b.BudgetLimit?.Unit ?? "",
+      })),
+      actions: actions.map((a): AwsBudgetAction => ({
+        id: a.ActionId ?? "",
+        budgetName: a.BudgetName ?? "",
+        notificationType: a.NotificationType ?? "",
+        actionType: a.ActionType ?? "",
+        approvalModel: a.ApprovalModel ?? "",
+        thresholdType: a.ActionThreshold?.ActionThresholdType ?? "",
+        thresholdValue: a.ActionThreshold?.ActionThresholdValue ?? Number.NaN,
+      })),
+    } satisfies AwsBudgets;
+  });
+
   return Layer.succeed(DeployTarget, {
     deployedSettings,
+    awsBudgets,
     accessApplications,
     putAccessApplication: (application, id) =>
       Effect.asVoid(
