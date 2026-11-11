@@ -98,7 +98,8 @@ export const executionTrailer = (executionId: string) => `Flare-Dispatch-Executi
 
 const decodePayload = Schema.decodeUnknownExit(PrProposePayload);
 
-const textOf = (bytes: Uint8Array): string | null => {
+/** The bytes as UTF-8 text, or null when they are not valid UTF-8. */
+export const textOf = (bytes: Uint8Array): string | null => {
   try {
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
   } catch {

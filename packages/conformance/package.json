@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fractalboxdev/flare-dispatch-agentic": "workspace:*",
     "@fractalboxdev/flare-dispatch-ops": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
     "@fractalboxdev/mameko-conformance": "workspace:*",

@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildStagedWrite } from "./build.ts";
+import { stagedWritesLayer } from "../recipes/executor-layers.ts";
+import { StagedWrites } from "../recipes/services.ts";
+import { artifactPrefixSink, buildStagedWrite, uploadStagedWrite } from "./build.ts";
+import { STAGED_WRITE_MANIFEST, stagedBlobName } from "./manifest.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -98,6 +101,78 @@ describe("buildStagedWrite", () => {
       "#!/bin/sh\r\necho hi\r\n",
     );
     expect(JSON.parse(await readFile(join(staging, "manifest.json"), "utf8"))).toEqual(manifest);
+  });
+
+  it("[FD-AGT-013] uploads each blob byte for byte under its digest, then the manifest, to the execution's artifact prefix", async () => {
+    const { dir, base } = await repo();
+    const binary = Uint8Array.from([0, 255, 10, 13, 128, 7]);
+    await writeFile(join(dir, "bin.dat"), binary);
+    await writeFile(join(dir, "copy.dat"), binary);
+    await writeFile(join(dir, "edited.txt"), "after\r\n");
+    const staging = await mkdtemp(join(tmpdir(), "fd-staging-"));
+    dirs.push(staging);
+    const stored = new Map<string, { bytes: Uint8Array; sha256: string }>();
+    const prefix = "artifacts/x1/2/";
+    const layer = stagedWritesLayer(
+      dir,
+      base,
+      staging,
+      artifactPrefixSink(prefix, async (key, bytes, sha256) => {
+        stored.set(key, { bytes: new Uint8Array(bytes), sha256 });
+      }),
+    );
+    const manifest = await Effect.runPromise(
+      Effect.flatMap(StagedWrites, (s) =>
+        s.stage({
+          branch: "flare-dispatch/x",
+          baseBranch: "main",
+          message: "m",
+          pr: { title: "t", body: "b", draft: true, labels: [] },
+        }),
+      ).pipe(Effect.provide(layer)),
+    );
+    expect(manifest.entries.map((e) => e.path)).toEqual(["bin.dat", "copy.dat", "edited.txt"]);
+    expect([...stored.keys()]).toEqual([
+      `${prefix}${stagedBlobName(sha(binary))}`,
+      `${prefix}${stagedBlobName(sha("after\r\n"))}`,
+      `${prefix}${STAGED_WRITE_MANIFEST}`,
+    ]);
+    const bin = stored.get(`${prefix}${stagedBlobName(sha(binary))}`);
+    expect(bin).toEqual({ bytes: binary, sha256: sha(binary) });
+    const text = stored.get(`${prefix}${stagedBlobName(sha("after\r\n"))}`);
+    expect(new TextDecoder().decode(text?.bytes)).toBe("after\r\n");
+    const uploaded = stored.get(`${prefix}${STAGED_WRITE_MANIFEST}`);
+    expect(JSON.parse(new TextDecoder().decode(uploaded?.bytes))).toEqual(manifest);
+    expect(uploaded?.sha256).toBe(sha(uploaded?.bytes as Uint8Array));
+  });
+
+  it("[FD-AGT-013] refuses to upload a staged blob whose bytes no longer hash to its digest", async () => {
+    const { dir, base } = await repo();
+    await writeFile(join(dir, "edited.txt"), "after\n");
+    const staging = await mkdtemp(join(tmpdir(), "fd-staging-"));
+    dirs.push(staging);
+    const { manifest } = await Effect.runPromise(
+      buildStagedWrite({
+        checkout: dir,
+        baseCommit: base,
+        stagingDir: staging,
+        branch: "flare-dispatch/x",
+        baseBranch: "main",
+        message: "m",
+        pr: { title: "t", body: "b", draft: true, labels: [] },
+      }),
+    );
+    await writeFile(join(staging, "blobs", sha("after\n")), "tampered\n");
+    const stored: string[] = [];
+    const failure = await Effect.runPromise(
+      uploadStagedWrite(staging, manifest, {
+        put: async (name) => {
+          stored.push(name);
+        },
+      }).pipe(Effect.flip),
+    );
+    expect(failure).toMatchObject({ _tag: "StagingFailed", step: "upload" });
+    expect(stored).toEqual([]);
   });
 
   it("a git failure is a StagingFailed error, never an empty staged write", async () => {

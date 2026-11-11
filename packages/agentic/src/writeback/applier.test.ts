@@ -15,6 +15,9 @@ import {
   type LoadedBlob,
 } from "./applier.ts";
 import { BASE_SHA, fakeGitLayer, fakeRepo, type FakeRepo } from "./fake-git.test-support.ts";
+import { writebackRecordsLayer } from "./records.ts";
+import { artifactPath, memoryBucket, recordsDb } from "./records.test-support.ts";
+import { stagedBlobName } from "../staged-write/manifest.ts";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const enc = (text: string) => new TextEncoder().encode(text);
@@ -131,6 +134,40 @@ describe("pr.propose", () => {
       head: "flare-dispatch/spec-drift",
       labels: ["spec-drift"],
     });
+  });
+
+  it("[FD-AGT-013] commits the blobs read back from the artifact store byte for byte, and refuses a swapped one", async () => {
+    const db = recordsDb();
+    db.exec(
+      "insert into placements values ('x1', 'accepted', 1, 'e1', 1); insert into executors values ('e1', 'cloudflare')",
+    );
+    const bucket = memoryBucket();
+    const binary = Uint8Array.from([0, 255, 10, 13, 128, 7]);
+    const crlf = enc("# A\r\nno newline at end");
+    for (const bytes of [binary, crlf])
+      bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(bytes))), bytes);
+    const live = writebackRecordsLayer({
+      db,
+      artifacts: bucket,
+      artifactPath,
+      issuedCredentials: () => Effect.succeed([]),
+    });
+    const m = manifest({
+      entries: [
+        { path: "specs/a.md", mode: "100644", digest: sha256(crlf) },
+        { path: "specs/logo.bin", mode: "100644", digest: sha256(binary) },
+      ],
+    });
+    const repo = fakeRepo();
+    expect((await apply(repo, m, live))._tag).toBe("applied");
+    expect([...repo.blobs.values()]).toEqual([crlf, binary]);
+
+    bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(binary))), enc("swapped"));
+    const swapped = fakeRepo();
+    const refused = await apply(swapped, m, live);
+    expect(refused).toMatchObject({ _tag: "refused" });
+    expect((refused as { reason: string }).reason).toMatch(/^writeback: digest-mismatch/);
+    expect(swapped.calls.filter((c) => WRITES.includes(c))).toEqual([]);
   });
 
   it("[FD-GH-083] reuses the open pull request whose head is the manifest's branch", async () => {
