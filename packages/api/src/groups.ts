@@ -5,6 +5,7 @@ import {
   ExecutionsGroup,
   ExecutorsGroup,
   LogsGroup,
+  OperabilityGroup,
   OpsGroup,
   WellKnownGroup,
 } from "./declaration.ts";
@@ -94,6 +95,28 @@ export const artifactsGroup = <R>(
   apiGroup({
     group: ArtifactsGroup,
     surfaces: { get: artifactLink, list: member },
+    handlers,
+  });
+
+/** The install flow runs in a browser, so a browser with no identity is sent to the Access login (FD-IFC-013). */
+const installOperator: Surface = { _tag: "Access", group: "operators", redirectBrowser: true };
+
+/**
+ * The operability group, mounted with the operability area's handlers: the fleet view, the phase gate's records and
+ * the install flow serve an operator (FD-IFC-016, FD-OPS-072); the spend view serves any Access identity (FD-SPD-057).
+ */
+export const operabilityGroup = <R>(
+  handlers: Layer.Layer<HttpApiGroup.Service<"flare-dispatch", "operability">, never, R>,
+) =>
+  apiGroup({
+    group: OperabilityGroup,
+    surfaces: {
+      fleet: operator,
+      phaseGate: operator,
+      spend: member,
+      installNew: installOperator,
+      installCallback: installOperator,
+    },
     handlers,
   });
 

@@ -5,6 +5,7 @@
 // requirement that names it.
 import { HIT_RATE_WINDOW_MS } from "@fractalboxdev/flare-dispatch-cache";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { PageAlarmEpisode, PhaseGateRecords } from "@fractalboxdev/flare-dispatch-api/declaration";
 import { Effect, Schema } from "effect";
 import { decodeStrict } from "../decode.ts";
 import type { MeasureRecord, PageAlarmRecord } from "./phase-gate.ts";
@@ -21,31 +22,11 @@ export const WARM_SPEEDUP = 0.3;
 /** The executor kind of an owned device; every other kind is a cloud setup. */
 const DEVICE_KIND = "device";
 
-const MeasureRecordSchema = Schema.Struct({
-  name: Schema.String,
-  holds: Schema.Boolean,
-  detail: Schema.String,
-});
-
-/** One page-alarm episode of the window: raised at `raisedAt` (no earlier than the window start), resolved or not. */
-export const PageAlarmEpisode = Schema.Struct({
-  name: Schema.String,
-  dedupeKey: Schema.String,
-  raisedAt: Schema.Number,
-  resolvedAt: Schema.NullOr(Schema.Number),
-});
-export type PageAlarmEpisode = typeof PageAlarmEpisode.Type;
-
-/** What `GET /v1/ops/phase-gate?gate=<n>` answers and the `phase-gate` job's records file holds. */
-export const PhaseGateRecords = Schema.Struct({
-  gate: Schema.Number,
-  windowStart: Schema.Number,
-  windowEnd: Schema.Number,
-  measures: Schema.Array(MeasureRecordSchema),
-  pageAlarms: Schema.Array(PageAlarmEpisode),
-  killLines: Schema.Array(Schema.String),
-});
-export type PhaseGateRecords = typeof PhaseGateRecords.Type;
+/**
+ * What `GET /v1/ops/phase-gate?gate=<n>` answers and the `phase-gate` job's records file holds, with its page-alarm
+ * episodes: the declaration's response schemas.
+ */
+export { PageAlarmEpisode, PhaseGateRecords };
 
 /** A table the records read could not be read. */
 export class RecordsUnreadable extends Schema.TaggedError<RecordsUnreadable>()(
@@ -260,31 +241,6 @@ export const phaseGateRecords = (db: D1Like, gate: number, now: number) =>
       pageAlarms: alarmEpisodes(transitions, windowStart, now),
       killLines: killLines.map((k) => k.dedupe_key),
     } satisfies PhaseGateRecords;
-  });
-
-const errorResponse = (status: number, code: string, message: string, requestId: string) =>
-  Response.json({ error: code, message, request_id: requestId }, { status });
-
-/** `GET /v1/ops/phase-gate?gate=<n>` for an operator: the records of gate n, or `503 records_unreadable`. */
-export const phaseGateRoute = (
-  request: Request,
-  url: URL,
-  db: D1Like,
-  now: number,
-  requestId: string,
-) =>
-  Effect.gen(function* () {
-    if (request.method !== "GET")
-      return errorResponse(405, "method_not_allowed", "the phase-gate records take GET", requestId);
-    const raw = url.searchParams.get("gate") ?? "";
-    if (!/^[0-3]$/.test(raw))
-      return errorResponse(400, "invalid_query", "gate must be a phase from 0 to 3", requestId);
-    return yield* phaseGateRecords(db, Number(raw), now).pipe(
-      Effect.map((records) => Response.json(records)),
-      Effect.catchTag("RecordsUnreadable", (e) =>
-        Effect.succeed(errorResponse(503, "records_unreadable", e.reason, requestId)),
-      ),
-    );
   });
 
 const ALARM_NAME =

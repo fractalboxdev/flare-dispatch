@@ -10,12 +10,16 @@
     "./config": "./src/config.ts",
     "./declaration": "./src/declaration.ts",
     "./errors": "./src/errors.ts",
+    "./groups": "./src/groups.ts",
+    "./identity": "./src/identity.ts",
     "./incident": "./src/incident.ts",
     "./link-token": "./src/link-token.ts",
     "./links": "./src/links.ts",
     "./mcp-tools": "./src/mcp/tools.ts",
     "./ports": "./src/ports.ts",
     "./registry": "./src/live/registry.ts",
+    "./request-id": "./src/request-id.ts",
+    "./router": "./src/router.ts",
     "./test-support": "./src/api.test-support.ts"
   },
   "scripts": {
