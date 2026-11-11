@@ -1,7 +1,7 @@
 // The control plane's local-work side for the local simulations and replays: mameko's D1 tables and the local store's
-// over one in-memory SQLite database, FlareDispatch's registration port and writeback gate over it, a fake GitHub
-// repository, and mameko's outbox insert for the intents a `local.writeback` request carries. Every D1 statement that
-// changes a row, every GitHub call and every outbox row inserted is recorded as an effect.
+// over one in-memory SQLite database, FlareDispatch's registration port and `WritebackGate` port over it, a fake GitHub
+// repository, and mameko's `onLocalWriteback` and outbox insert for the intents a `local.writeback` request carries.
+// Every D1 statement that changes a row, every GitHub call and every outbox row inserted is recorded as an effect.
 import { createHash } from "node:crypto";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
@@ -11,16 +11,12 @@ import {
   type D1Statement,
 } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow, onLocalRegister, onLocalWriteback } from "@fractalboxdev/mameko-kernel";
-import { LocalRegistration, type IntentRow } from "@fractalboxdev/mameko-ports";
+import { LocalRegistration, WritebackGate, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { localRegistrationLayer } from "../src/local/registration.ts";
 import type { WritebackIntent, WritebackRequest } from "../src/local/run-context.ts";
 import { LOCAL_STORE_MIGRATIONS, LocalStore, localStoreD1 } from "../src/local/store.ts";
-import {
-  CapacityUsage,
-  receiveWriteback,
-  type WritebackReceipt,
-} from "../src/local/writeback-gate.ts";
+import { CapacityUsage, writebackGateLayer } from "../src/local/writeback-gate.ts";
 import type { Manifest, WritebackSpec } from "../src/staged-write/manifest.ts";
 import { WritebackRecords, type LoadedBlob } from "../src/writeback/applier.ts";
 import { BASE_SHA, fakeGitLayer, fakeRepo } from "../src/writeback/fake-git.test-support.ts";
@@ -134,6 +130,12 @@ const recordingD1 = (sqlite: DatabaseSync, effects: PlaneEffect[], fail: { on: b
   return db;
 };
 
+/** The `local.writeback.ack` the control plane answers for the gate's decision. */
+export interface WritebackAck {
+  readonly type: "local.writeback.ack";
+  readonly status: "accepted" | "rejected";
+}
+
 export type RegisterAnswer =
   | { readonly type: "local.registered"; readonly execution_id: string; readonly nonce: string }
   | { readonly type: "local.registered"; readonly status: "lease_stale" | "rejected" };
@@ -168,23 +170,13 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
   const registration = localRegistrationLayer({ runKnown: (r) => r === RUN }).pipe(
     Layer.provide(store),
   );
-  const gate = {
+  const gate = writebackGateLayer({
     writebackFor: (run: string) => (run === RUN ? WRITEBACK : undefined),
     ...(opts.rate === undefined ? {} : { rate: opts.rate }),
-  };
+  }).pipe(Layer.provide(deps));
 
   const githubFrom = (at: number): PlaneEffect[] =>
     repo.calls.slice(at).map((call) => ({ kind: "github", key: call }));
-
-  /** The intent keys the outbox holds for an execution. */
-  const held = (executionId: string): ReadonlySet<string> =>
-    new Set(
-      (
-        sqlite.prepare("select intent_key from outbox where execution_id = ?").all(executionId) as {
-          intent_key: string;
-        }[]
-      ).map((r) => r.intent_key),
-    );
 
   /**
    * `local.register` under the lease: mameko answers `lease_stale` for a lease that is not current and asks the
@@ -240,17 +232,30 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
     };
   };
 
+  /** The intent keys the outbox holds for an execution. */
+  const held = (executionId: string): ReadonlySet<string> =>
+    new Set(
+      (
+        sqlite.prepare("select intent_key from outbox where execution_id = ?").all(executionId) as {
+          intent_key: string;
+        }[]
+      ).map((r) => r.intent_key),
+    );
+
   /**
-   * The control plane receives one `local.writeback`: FlareDispatch's receipt decides it against the keys the outbox
-   * holds, and mameko inserts the accepted intents as outbox rows of the execution (MAMEKO-PROTO-083).
+   * The control plane receives one `local.writeback`: the `WritebackGate` port decides it, mameko's `onLocalWriteback`
+   * answers the gate's decision for the request's intents, and mameko inserts the accepted intents as outbox rows of
+   * the execution (MAMEKO-PROTO-083).
    */
-  const receive = async (request: WritebackRequest): Promise<WritebackReceipt["ack"]> => {
-    const receipt = await Effect.runPromise(
-      receiveWriteback(gate, request, held(request.execution_id)).pipe(Effect.provide(deps)),
+  const receive = async (request: WritebackRequest): Promise<WritebackAck> => {
+    const accepted = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WritebackGate).decide(request.execution_id, request.intents);
+      }).pipe(Effect.provide(gate)),
     );
     const out = onLocalWriteback(
-      { executionId: request.execution_id, intents: receipt.insert },
-      (_x, intents) => intents.length > 0,
+      { executionId: request.execution_id, intents: request.intents },
+      () => accepted,
     );
     if (out.insert !== null) {
       const before = held(request.execution_id);
@@ -262,7 +267,7 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
         if (!before.has(key))
           effects.push({ kind: "intent", key: `${request.execution_id}/${key}` });
     }
-    return receipt.ack;
+    return { type: "local.writeback.ack", status: out.status };
   };
 
   /** Every (execution id, intent key) the outbox holds, sorted. */

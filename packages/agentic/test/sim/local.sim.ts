@@ -112,7 +112,7 @@ export interface GrantOutcome {
   readonly heldAfterRejection: boolean;
   /** A request sent before its execution's rejecting grant reached the control plane after it. */
   readonly inFlightAtGrant: boolean;
-  /** A request reached the control plane twice and the second answered `duplicate`. */
+  /** A request reached the control plane twice and the second wrote nothing. */
   readonly redelivered: boolean;
   readonly heldOffline: boolean;
 }
@@ -185,8 +185,16 @@ export const checkGrantRejection = async (seed: number): Promise<GrantOutcome> =
           if (!finished.has(e) && !rejectedAt.has(e)) rejectedAt.set(e, ev.at);
       } else if (ev.type === "arrive") {
         const key = JSON.stringify(ev.request);
+        const fromEffect = plane.effects.length;
+        const fromCall = plane.repo.calls.length;
         const ack = await plane.receive(ev.request);
-        acks.set(key, [...(acks.get(key) ?? []), ack.status]);
+        const statuses = acks.get(key) ?? [];
+        // The gate port absorbs a redelivered accepted request: no GitHub call, D1 write or intent.
+        if (statuses[0] === "accepted") {
+          const wrote = [...plane.effects.slice(fromEffect), ...plane.githubFrom(fromCall)];
+          if (wrote.length > 0) v(`a redelivered request wrote ${JSON.stringify(wrote)}: ${key}`);
+        }
+        acks.set(key, [...statuses, ack.status]);
         const e = ids.indexOf(ev.request.execution_id);
         const rejected = rejectedAt.get(e);
         if (rejected !== undefined && ev.sentAt < rejected && ev.at >= rejected)
@@ -239,7 +247,7 @@ export const checkGrantRejection = async (seed: number): Promise<GrantOutcome> =
     for (const [key, statuses] of acks)
       if (statuses.length > 1) {
         outcome.redelivered = true;
-        if (statuses.slice(1).some((s) => s !== "duplicate"))
+        if (statuses.some((s) => s !== statuses[0]))
           v(`a redelivered request answered ${statuses.join(", ")}: ${key}`);
       }
     // The outbox holds exactly the intents the device sent, none appended after a rejecting grant.

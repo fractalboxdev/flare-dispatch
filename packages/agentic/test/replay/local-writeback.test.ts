@@ -39,8 +39,9 @@ describe("a local execution's writeback under a replayed workflow", () => {
         { kind: "github", key: "branchProtected" },
       ]);
       expect(first.acks).toEqual(Array(6).fill("accepted"));
-      // The rerun steps' requests each answer duplicate before the gate reads GitHub or counts a rate-window entry.
-      expect(second.acks).toEqual(Array(6).fill("duplicate"));
+      // The gate port absorbs each rerun request's held intent before it reads GitHub or counts a rate-window entry, and
+      // the outbox insert leaves the held row as it is.
+      expect(second.acks).toEqual(Array(6).fill("accepted"));
     } finally {
       plane.close();
     }

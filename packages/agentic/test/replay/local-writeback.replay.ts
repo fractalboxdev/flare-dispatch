@@ -1,7 +1,7 @@
 // A local execution's writeback as a `V-REPLAY` workflow (specs/local-scheduler.md FD-LOCAL-055). One run registers two
 // local executions under one capacity lease, records their `success` verdicts, and runs the same steps in each: a
 // `pr.propose`, two reviews and a check summary, every append through FlareDispatch's local run context. Each
-// `local.writeback` request reaches the control plane's writeback receipt, gate and outbox over one D1 database
+// `local.writeback` request reaches the control plane's `WritebackGate` port, `onLocalWriteback` and outbox over one D1 database
 // (local-plane.test-support.ts). A second run reruns every step over the same control plane, as a device that lost its
 // step results runs them again under the same execution ids.
 import { Effect } from "effect";

@@ -10,7 +10,6 @@ import {
 } from "../staged-write/manifest.ts";
 import { gateStagedWrite, StagedWriteReadFailed, WritebackRecords } from "../writeback/applier.ts";
 import { GitData } from "../writeback/git-data.ts";
-import type { WritebackIntent, WritebackRequest } from "./run-context.ts";
 import { LocalStore } from "./store.ts";
 
 /** The default `local_writeback_rate`: requests per capacity lease per hour (FD-LOCAL-089). */
@@ -122,8 +121,29 @@ export const decideWriteback = (
   );
 
 /**
- * The `WritebackGate` port Layer. The port answers a boolean, so `rate_limited` reaches the device as a rejection;
- * `decideWriteback` carries the `retry_after` for a caller that answers `local.writeback.ack` itself.
+ * Decides one `local.writeback` as the `WritebackGate` port receives it. An intent whose (execution id,
+ * `run:<step>:<index>`) the outbox already holds is absorbed before `decideWriteback`, so a rerun step's request makes
+ * no GitHub read and no rate-window entry: a request of held intents only is accepted, and mameko's outbox insert
+ * leaves each held row as it is, so the rerun step writes nothing twice (FD-LOCAL-055). `decideWriteback` decides the
+ * fresh intents. A failed outbox read rejects the request.
+ */
+export const gateWriteback = (config: WritebackGateConfig, executionId: string, intents: unknown) =>
+  Effect.gen(function* () {
+    const decoded = decodeIntents(intents);
+    if (Exit.isFailure(decoded) || decoded.value.length === 0) return reject("intents-invalid");
+    const held = yield* (yield* LocalStore).heldIntents(executionId);
+    const fresh = decoded.value.filter((i) => !held.has(i.intent_key));
+    if (fresh.length === 0) return { _tag: "accepted" } satisfies WritebackDecision;
+    return yield* decideWriteback(config, executionId, fresh);
+  }).pipe(
+    Effect.catchTag("LocalStoreFailed", (e) =>
+      Effect.succeed(reject(`read-failed: ${e.operation}`)),
+    ),
+  );
+
+/**
+ * The `WritebackGate` port Layer over `gateWriteback`. The port answers a boolean, so `rate_limited` reaches the device
+ * as a rejection; `gateWriteback` carries the `retry_after` for a caller that answers `local.writeback.ack` itself.
  */
 export const writebackGateLayer = (
   config: WritebackGateConfig,
@@ -136,7 +156,7 @@ export const writebackGateLayer = (
       >();
       return {
         decide: (executionId, intents) =>
-          decideWriteback(config, executionId, intents).pipe(
+          gateWriteback(config, executionId, intents).pipe(
             Effect.map((d) => d._tag === "accepted"),
             Effect.provide(context),
           ),
@@ -153,37 +173,3 @@ export const writebackAck = (decision: WritebackDecision) =>
         retry_after_ms: decision.retryAfterMs,
       }
     : { type: "local.writeback.ack" as const, status: decision._tag };
-
-/** What the control plane does with one `local.writeback`: the ack it answers and the intents it inserts. */
-export interface WritebackReceipt {
-  readonly ack:
-    | ReturnType<typeof writebackAck>
-    | { readonly type: "local.writeback.ack"; readonly status: "duplicate" };
-  /** The intents to insert as outbox rows of the request's execution; empty unless the gate accepted them. */
-  readonly insert: readonly WritebackIntent[];
-}
-
-/**
- * Receives one `local.writeback` (MAMEKO-PROTO-083). `held` is the set of intent keys the control plane already holds
- * as outbox rows of the request's execution. An intent whose (execution id, `run:<step>:<index>`) is held is absorbed
- * before the gate decides, so a rerun step's request answers `duplicate` with no read, no rate-window entry and no
- * insert (FD-LOCAL-055); the gate decides only the fresh intents, and an accepted request inserts exactly those.
- */
-export const receiveWriteback = (
-  config: WritebackGateConfig,
-  request: WritebackRequest,
-  held: ReadonlySet<string>,
-) =>
-  Effect.gen(function* () {
-    const fresh = request.intents.filter((i) => !held.has(i.intent_key));
-    if (request.intents.length > 0 && fresh.length === 0)
-      return {
-        ack: { type: "local.writeback.ack", status: "duplicate" },
-        insert: [],
-      } satisfies WritebackReceipt;
-    const decision = yield* decideWriteback(config, request.execution_id, fresh);
-    return {
-      ack: writebackAck(decision),
-      insert: decision._tag === "accepted" ? fresh : [],
-    } satisfies WritebackReceipt;
-  });
