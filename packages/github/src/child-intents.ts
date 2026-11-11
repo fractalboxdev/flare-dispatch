@@ -25,7 +25,9 @@ export const CHILD_CONCLUSIONS_INDEXES: readonly string[] = [
 
 /** Creates `CHILD_CONCLUSIONS_INDEXES` on a store mameko's migrations have run on. */
 export const migrateChildConclusions = (db: D1Like) =>
-  attempt("indexes", () => db.batch(CHILD_CONCLUSIONS_INDEXES.map((s) => db.prepare(s)))).pipe(Effect.asVoid);
+  attempt("indexes", () => db.batch(CHILD_CONCLUSIONS_INDEXES.map((s) => db.prepare(s)))).pipe(
+    Effect.asVoid,
+  );
 
 /** The control plane's store could not be read or written; the next pass tries again. */
 export class ChildConclusionsUnavailable extends Schema.TaggedError<ChildConclusionsUnavailable>()(
@@ -51,25 +53,22 @@ interface ChildRow {
   readonly concluded: number;
 }
 
-/** How far back a pass looks for ended parents: a parent is read on every pass for an hour after its end. */
-export const CHILD_CONCLUSIONS_LOOKBACK_MS = 3_600_000;
+/** Child conclusions one tick stages; later passes continue from the remaining durable backlog. */
+export const CHILD_CONCLUSIONS_BATCH = 100;
 
 /**
- * Every child of a parent that ended in the lookback and owns a check run (admission inserted its `cp:check:open`)
- * and has no `cp:check:conclude` row yet, with whether a `check.conclude` row of it is already applied. The parent
- * counts as ended under the cascade's own test: a status other than `pending` and `running` (MAMEKO-RUN-084). The
- * read starts from the parents in the lookback through `executions_finished` and reaches their children through
- * `executions_parent`, so it reads no execution outside the lookback; `cross join` holds that order, since SQLite's
- * planner would otherwise walk every child in `id` order to serve the `order by`.
+ * The oldest ended parents' still-unconcluded child check runs, bounded by the pass limit. There is no age cutoff:
+ * a control-plane outage must not make an unreported child disappear from the backlog (FD-GH-020). A durable
+ * `cp:check:conclude` row, or an already applied conclusion of any key, removes the child from later passes.
+ * `cross join` keeps the indexed parent-finished / child-parent traversal, ordered oldest first.
  */
-export const CHILDREN = `select c.id, c.scope_id, c.class, c.status, c.reason,
-    exists (select 1 from outbox o where o.execution_id = c.id and o.kind = 'check.conclude' and o.state = 'applied')
-      as concluded
+export const CHILDREN = `select c.id, c.scope_id, c.class, c.status, c.reason, 0 as concluded
   from executions p cross join executions c on c.parent_id = p.id
-  where p.finished_at >= ? and p.status not in ('pending', 'running')
+  where p.finished_at <= ? and p.status not in ('pending', 'running')
     and exists (select 1 from outbox o where o.execution_id = c.id and o.intent_key = 'cp:check:open')
     and not exists (select 1 from outbox o where o.execution_id = c.id and o.intent_key = '${CHILD_CONCLUDE_KEY}')
-  order by c.id`;
+    and not exists (select 1 from outbox o where o.execution_id = c.id and o.kind = 'check.conclude' and o.state = 'applied')
+  order by p.finished_at, c.id limit ?`;
 
 /** A child's own verdict: none while it is not terminal, and none when the parent-ended cascade cancelled it. */
 const ownVerdict = (row: ChildRow) =>
@@ -99,10 +98,7 @@ const attempt = <A>(what: string, f: () => Promise<A>) =>
 export const insertChildConclusions = (db: D1Like, kind: ConcludeKind, now: number) =>
   Effect.gen(function* () {
     const { results } = yield* attempt("children", () =>
-      db
-        .prepare(CHILDREN)
-        .bind(now - CHILD_CONCLUSIONS_LOOKBACK_MS)
-        .all(),
+      db.prepare(CHILDREN).bind(now, CHILD_CONCLUSIONS_BATCH).all(),
     );
     const rows = results as readonly ChildRow[];
     const byId = new Map(rows.map((r) => [r.id, r]));

@@ -208,7 +208,7 @@ describe("the landing page", () => {
     /deploys? today/i,
     /\bphases?\s+\d/i,
     /(?<!stateDiagram-)\bv[12]\b/i,
-    /dogfood/i,
+    /ci:local/i,
     /#24[67]/,
     /\bdraft\b(?! PR)/i,
     /not for production/i,

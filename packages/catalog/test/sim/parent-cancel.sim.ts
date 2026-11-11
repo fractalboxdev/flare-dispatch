@@ -10,7 +10,7 @@ import { ExecutionSteps } from "@fractalboxdev/mameko-coordinator";
 import { admitExecution, d1PlacementStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { d1ExecutionSteps } from "@fractalboxdev/mameko-host-cloudflare/d1-execution";
 import { PlacementStore, type AdmissionRequest } from "@fractalboxdev/mameko-ports";
-import { Deferred, Effect, Fiber, Layer, ManagedRuntime } from "effect";
+import { Deferred, Effect, Fiber, Layer, ManagedRuntime, Queue } from "effect";
 import { migratedD1 } from "../../../intake/src/testing.ts";
 import {
   seededRandom,
@@ -81,11 +81,6 @@ const job = (key: string): ExpandedJob => ({
   source: { key, command: "pnpm test" },
 });
 
-/** Lets the matrix fiber take every finished job and start the next before the scenario's next step. */
-const settle = Effect.forEach(Array.from({ length: 50 }), () => Effect.yieldNow, {
-  discard: true,
-});
-
 export const simulateParentCancel = async (seed: number): Promise<ParentCancelOutcome> => {
   const random = seededRandom(seed);
   const violations: SimViolation[] = [];
@@ -147,10 +142,12 @@ export const simulateParentCancel = async (seed: number): Promise<ParentCancelOu
             readonly id: string;
             epoch: number | null;
             readonly verdict: Deferred.Deferred<ChildVerdict>;
+            waiter?: Fiber.Fiber<unknown, unknown>;
           }
         >();
         const finished = new Set<string>();
         const cancelled: string[] = [];
+        const ready = yield* Queue.unbounded<string>();
         let admittedAt = T0;
 
         const children = Layer.succeed(MatrixChildren, {
@@ -164,13 +161,24 @@ export const simulateParentCancel = async (seed: number): Promise<ParentCancelOu
               trace.push(`start ${r.key}${epoch === null ? "" : " claimed"}`);
               return { key: r.key, executionId: id };
             }).pipe(Effect.provide(layer)),
-          await: (handle) => Deferred.await(started.get(handle.key)!.verdict),
+          await: (handle) =>
+            Effect.withFiber((waiter) =>
+              Effect.gen(function* () {
+                const child = started.get(handle.key)!;
+                child.waiter = waiter;
+                yield* Queue.offer(ready, handle.key);
+                return yield* Deferred.await(child.verdict);
+              }),
+            ),
           cancel: (handle) => Effect.sync(() => void cancelled.push(handle.executionId)),
           discover: () => Effect.succeed({ _tag: "Exited", code: 0, output: "[]" } as const),
         });
 
         const fiber = yield* Effect.forkChild(runMatrix(plan).pipe(Effect.provide(children)));
-        yield* settle;
+        // A job is ready only once the matrix has registered its handle and forked its verdict waiter. Counting
+        // scheduler yields cannot establish this: D1 admission crosses Promise boundaries even on in-memory SQLite.
+        const initial = Math.min(size, plan.window);
+        for (let i = 0; i < initial; i++) yield* Queue.take(ready);
         for (let step = 0; step < cancelAfter; step++) {
           const open = [...started].filter(([key]) => !finished.has(key));
           if (open.length === 0) break;
@@ -180,12 +188,16 @@ export const simulateParentCancel = async (seed: number): Promise<ParentCancelOu
             s.applyOutbox(child.id, { _tag: "Success", epoch: child.epoch ?? 1 }, null),
           );
           finished.add(key);
+          trace.push(`finish ${key}`);
           yield* Deferred.succeed(child.verdict, {
             _tag: "Recorded",
             outcome: Outcome.success(),
           });
-          trace.push(`finish ${key}`);
-          yield* settle;
+          // The waiter exits after runMatrix has offered the verdict to its completion queue. Drain the scheduler
+          // so the parent consumes it, including when all jobs have started and there is no replacement to await.
+          yield* Fiber.await(child.waiter!);
+          yield* Effect.sync(() => fiber.currentDispatcher.flush());
+          if (initial + finished.size <= size) yield* Queue.take(ready);
         }
 
         // The parent is cancelled: its workflow is interrupted, then its own end runs the cascade.

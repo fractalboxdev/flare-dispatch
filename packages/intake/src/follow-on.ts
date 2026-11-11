@@ -3,9 +3,11 @@
 // as `<execution_id>/<intent_key>`, so a repeated apply starts no second
 // execution (FD-GH-088).
 import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
+import { DeploySmokeEntrySchema } from "@fractalboxdev/flare-dispatch-catalog";
 import { Effect, Layer, Result, Schema } from "effect";
 import { IntakeConfig, type Admission, type ClassResolver } from "./config.ts";
 import type { HeldCheckReporter } from "./ports.ts";
+import { ManifestSource } from "./manifest.ts";
 import { IntakeStore, type ShedRecorder } from "./store.ts";
 import { submission, submit } from "./submit.ts";
 
@@ -13,7 +15,13 @@ export const followOnSubmitterLayer = Layer.effect(
   FollowOnSubmitter,
   Effect.gen(function* () {
     const context = yield* Effect.context<
-      IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder | HeldCheckReporter
+      | IntakeConfig
+      | Admission
+      | ClassResolver
+      | IntakeStore
+      | ShedRecorder
+      | HeldCheckReporter
+      | ManifestSource
     >();
     return {
       submit: (intent) =>
@@ -28,7 +36,37 @@ export const followOnSubmitterLayer = Layer.effect(
           const run = config.catalog(intent.run);
           if (run === undefined)
             return { _tag: "refused" as const, reason: `follow-on: no run named ${intent.run}` };
-          const inputs = Schema.decodeUnknownResult(run.input)(intent.inputs);
+          let requested = intent.inputs;
+          if (parent.run === "worker-deploy" && intent.run === "deploy-smoke") {
+            // The deploy executor cannot select another commit or arbitrary probe targets. The parent pins the
+            // repository and commit; that commit's manifest supplies deploySmoke.hosts and paths (FD-GATE-069/071).
+            const manifest = yield* (yield* ManifestSource).read(
+              parent.repo,
+              parent.sha,
+              config.catalog,
+            );
+            if (manifest._tag === "Unreadable")
+              return {
+                _tag: "unavailable" as const,
+                reason: `follow-on manifest: ${manifest.reason}`,
+              };
+            if (manifest._tag !== "Valid")
+              return {
+                _tag: "refused" as const,
+                reason: "follow-on: deploy-smoke manifest absent or invalid",
+              };
+            const entry = manifest.manifest.runs.find(
+              (e) => e.recipe === "deploy-smoke" && (e.label ?? null) === intent.label,
+            );
+            const params = Schema.decodeUnknownResult(DeploySmokeEntrySchema)(entry?.params);
+            if (Result.isFailure(params))
+              return {
+                _tag: "refused" as const,
+                reason: "follow-on: deploy-smoke entry absent or invalid",
+              };
+            requested = { ...params.success, scope: parent.repo, sha: parent.sha };
+          }
+          const inputs = Schema.decodeUnknownResult(run.input)(requested);
           if (Result.isFailure(inputs))
             return {
               _tag: "refused" as const,

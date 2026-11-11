@@ -32,7 +32,13 @@ import {
 import { profileRequestOf } from "./layer.ts";
 import { heldCheckOf, HeldCheckReporter } from "./ports.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
-import { IntakeStore, ShedRecorder, type IntakeRecord, type StoreUnavailable } from "./store.ts";
+import {
+  HELD_STATUS,
+  IntakeStore,
+  ShedRecorder,
+  type IntakeRecord,
+  type StoreUnavailable,
+} from "./store.ts";
 
 export const COOLDOWN_MIN_SEC = 60;
 export const COOLDOWN_MAX_SEC = 86_400;
@@ -378,6 +384,12 @@ export const submit = (
             held.executionId,
           ),
         );
+      // A prior delivery may have committed the hold before its outbox insert failed. Rebuild the same cp key from
+      // the authoritative held record, so redelivery repairs reporting without creating or admitting another request.
+      const known = yield* store.get(held.executionId);
+      const check = heldCheckOf(admitInput);
+      if (known?.status === HELD_STATUS && check !== null)
+        yield* (yield* HeldCheckReporter).queued({ ...check, executionId: held.executionId });
       return {
         executionId: held.executionId,
         className,
@@ -494,10 +506,10 @@ export const releaseHeld = (
       }
       const dropped = (answeredBy: string) =>
         Effect.gen(function* () {
-          yield* store.release(id);
-          yield* store.drop(id);
           const check = heldCheckOf(held.admit);
           if (check !== null) yield* checks.dropped(check, answeredBy);
+          yield* store.release(id);
+          yield* store.drop(id);
           duplicate++;
         });
       // The placement row tells a queued execution from one admission concluded, whichever pass admitted it.
