@@ -64,6 +64,13 @@ const reserveOf = (c: Profile["classes"][number], spend: SpendConfig): number =>
       ? spend.measured_reserve_min
       : (spend.reserves[c.reserve] ?? 0);
 
+/**
+ * Each class's reserve in micro-USD under the spend configuration: the named reserve, `R_m,min` for the measured reserve
+ * and 0 for a class that carries none.
+ */
+export const reservesOf = (p: Profile, spend: SpendConfig): Readonly<Record<string, number>> =>
+  Object.fromEntries(p.classes.map((c) => [c.name, reserveOf(c, spend)]));
+
 /** Each class's line in micro-USD under the spend configuration (mameko specs/spend.md § Budget, reserves and lines). */
 export const linesOf = (p: Profile, spend: SpendConfig): Readonly<Record<string, number>> => {
   const classes = byRank(p);
@@ -81,7 +88,7 @@ export const linesOf = (p: Profile, spend: SpendConfig): Readonly<Record<string,
   });
   return resolveLines(p.classes, {
     budgetMicroUsd: spend.budget,
-    reservesMicroUsd: Object.fromEntries(p.classes.map((c) => [c.name, reserveOf(c, spend)])),
+    reservesMicroUsd: reservesOf(p, spend),
     lowestLineMicroUsd: lowest === undefined ? 0 : (lines[lowest.name] ?? 0),
   });
 };

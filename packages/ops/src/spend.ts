@@ -13,9 +13,11 @@ export const SpendViewBody = Schema.Struct({
     Schema.Struct({
       class: Schema.String,
       line: Schema.Number,
-      lane: Schema.Number,
+      /** List micro-USD per hour; null for a class with no burn lane. */
+      lane: Schema.NullOr(Schema.Number),
       admitted_list_rate: Schema.Number,
-      reserve: Schema.Number,
+      /** Null for the lowest-rank class, whose share is the floor `φ` rather than a reserve. */
+      reserve: Schema.NullOr(Schema.Number),
     }),
   ),
   floor: Schema.Number,
