@@ -66,7 +66,7 @@ export class IntakeConfig extends Context.Service<IntakeConfig, IntakeSettings>(
 /**
  * One request as intake hands it to mameko's `admit`: the id intake writes its record under, the class and labels
  * intake's class resolution returned, the dedup key, the placement facts and the run's limits. It is plain data, so a
- * request held for its cooldown window is admitted later from the stored value under the same id (MAMEKO-ADM-100).
+ * request held for its cooldown window is admitted later from the stored value under the same id (MAMEKO-ADM-104).
  */
 export interface IntakeAdmitInput {
   readonly executionId: string;
@@ -77,10 +77,10 @@ export interface IntakeAdmitInput {
   readonly labels: readonly string[];
   readonly enqueuedAtMs: number;
   readonly dedup: {
-    /** The SHA-256 of `canonical`, as `dedupKey` computes it and admission stores it (MAMEKO-ADM-035). */
+    /** The SHA-256 of `canonical`, as `dedupKey` computes it and admission stores it (MAMEKO-ADM-034). */
     readonly sha256: string;
     readonly canonical: string;
-    /** The SHA-256 of the dispatch body's canonical JSON, as admission stores it beside the key (MAMEKO-ADM-089). */
+    /** The SHA-256 of the dispatch body's canonical JSON, as admission stores it beside the key (MAMEKO-ADM-093). */
     readonly requestDigest: string | null;
     /** The dispatch body the digest covers; admission hashes its canonical JSON itself, so it gets the body, not the digest. */
     readonly digestBody: unknown;
@@ -105,7 +105,7 @@ export class IntakeUnavailable extends Schema.TaggedError<IntakeUnavailable>()(
 
 /**
  * The `ExecutionEngine` start that follows admission's commit failed. The execution stays queued with no recorded engine
- * start, and the admission sweep starts it (MAMEKO-ADM-031).
+ * start, and the admission sweep starts it (MAMEKO-ADM-030).
  */
 export class ExecutionStartFailed extends Schema.TaggedError<ExecutionStartFailed>()(
   "ExecutionStartFailed",
@@ -132,13 +132,13 @@ export class Admission extends Context.Service<
 export interface AdmissionPorts {
   /** Wakes the standing claims of the class's device executors after a queued admission. */
   readonly queued?: (className: string) => Effect.Effect<void>;
-  /** Starts an admitted execution's `Execution` workflow in its `ExecutionEngine` object (MAMEKO-ADM-030). */
+  /** Starts an admitted execution's `Execution` workflow in its `ExecutionEngine` object (MAMEKO-ADM-029). */
   readonly startExecution?: (
     payload: ExecutionPayload,
   ) => Effect.Effect<void, ExecutionStartFailed>;
   readonly alarms?: Layer.Layer<AlarmPort>;
   /**
-   * Whether an operator has quarantined the repository (MAMEKO-ADM-038). The operator operations are not served yet,
+   * Whether an operator has quarantined the repository (MAMEKO-ADM-037). The operator operations are not served yet,
    * so no repository is quarantined while this is absent.
    */
   readonly quarantined?: (scopeId: string) => Effect.Effect<boolean>;
@@ -150,7 +150,7 @@ const loggedAlarms = Layer.succeed(AlarmPort, {
 });
 
 /**
- * Every request goes through mameko's one admission function (MAMEKO-ADM-024). Intake has already resolved the class,
+ * Every request goes through mameko's one admission function (MAMEKO-ADM-023). Intake has already resolved the class,
  * so the class-resolution binding answers that class and its labels. The profile declares no capability labels per
  * executor kind, so each kind is taken to advertise the request's own labels, and placement is decided by the
  * constraint fold alone, as `eligibleKinds` decides it.

@@ -532,15 +532,19 @@ describe("cooldown", () => {
     );
   });
 
-  it("[FD-INT-057] MAMEKO-ADM-041 a held request released into a full queue concludes capacity: queue full and leaves the hold", async () => {
+  it("[FD-INT-057] MAMEKO-ADM-041 a held batch request released while the run's earlier execution still queues takes its place, and the earlier one is recorded deferred", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
     await h.adjust(10_000);
     await deliver(h, "pull_request", pullRequestPayload({ head: "2".repeat(40) }), "d-2");
-    const id = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
+    const [earlier, id] = h
+      .records()
+      .filter((r) => r.run === "lint")
+      .map((r) => r.execution_id as string);
     await h.adjust(50_000);
-    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0, concluded: 1 });
-    expect(h.executions().find((e) => e.id === id)?.status).toBe("failure");
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 1, concluded: 0 });
+    expect(h.executions().find((e) => e.id === earlier)?.status).toBe("deferred");
+    expect(h.executions().find((e) => e.id === id)?.status).toBe("pending");
     expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
   });
 

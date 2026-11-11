@@ -124,7 +124,7 @@ export const containerClassOf = (pool: string): string =>
 
 /**
  * Each pool's admission cap must be strictly below its Container class's `max_instances` (FD-OPS-020, FD-PROF-033,
- * MAMEKO-ADM-047); a pool with no Container class fails too (FD-ARCH-001).
+ * MAMEKO-ADM-046); a pool with no Container class fails too (FD-ARCH-001).
  */
 export const admissionCapCheck = (
   worker: string,

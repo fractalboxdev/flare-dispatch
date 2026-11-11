@@ -84,7 +84,19 @@ describe("mameko's coordinator suite on host-cloudflare in FlareDispatch's contr
       await s.run({ layer: d1OutboxStore(db), seed: (rows) => insertOutboxRows(db, rows) });
     });
   for (const s of EXECUTION_STORE_SCENARIOS)
-    it(title(s.ids, s.name), async () => s.run({ layer: d1ExecutionStore(await freshDb()) }));
+    it(title(s.ids, s.name), async () => {
+      const db = await freshDb();
+      await s.run({
+        layer: d1ExecutionStore(db),
+        // The claim of a serial group member's first lease takes the group (MAMEKO-ADM-069).
+        takeGroup: async (executionId, at) => {
+          await db
+            .prepare("update executions set serial_held_at = ? where id = ?")
+            .bind(at, executionId)
+            .run();
+        },
+      });
+    });
   for (const s of LEASE_STORE_SCENARIOS)
     it(title(s.ids, s.name), async () => s.run({ layer: d1LeaseStore(await freshDb()) }));
   for (const s of ALLOWANCE_STORE_SCENARIOS)

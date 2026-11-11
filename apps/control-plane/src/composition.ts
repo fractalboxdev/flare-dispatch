@@ -76,7 +76,7 @@ const wake = (env: ControlPlaneEnv) => (className: string) =>
   );
 
 /**
- * The `ExecutionEngine` start of an admitted execution whose class does not defer its workflow (MAMEKO-ADM-030). A
+ * The `ExecutionEngine` start of an admitted execution whose class does not defer its workflow (MAMEKO-ADM-029). A
  * rejected start is `ExecutionStartFailed`: the execution stays queued, and the admission sweep starts it.
  */
 export const startExecutionOf =

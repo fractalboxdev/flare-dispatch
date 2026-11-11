@@ -1,7 +1,10 @@
 // Intake in front of mameko's admission: the workflow start after the commit, unplaceable requests, the eligible kinds
 // the record keeps, the request digest of an idempotent retry inside a cooldown window, and a held request's release.
 import { createHash } from "node:crypto";
-import { startUnstartedExecutions } from "@fractalboxdev/mameko-coordinator";
+import {
+  executionId as newExecutionId,
+  startUnstartedExecutions,
+} from "@fractalboxdev/mameko-coordinator";
 import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -56,7 +59,7 @@ const placementKinds = (h: Harness, id: string) =>
 
 describe("the workflow start at admission", () => {
   it.each(["required", "interactive"])(
-    "MAMEKO-ADM-030 starts a queued %s execution's workflow once, under its id, after the commit",
+    "MAMEKO-ADM-029 starts a queued %s execution's workflow once, under its id, after the commit",
     async (cls) => {
       let committed: unknown;
       const h: Harness = await harness({
@@ -77,7 +80,7 @@ describe("the workflow start at admission", () => {
     },
   );
 
-  it("MAMEKO-ADM-032 starts no workflow for a batch execution, whose class defers it", async () => {
+  it("MAMEKO-ADM-031 starts no workflow for a batch execution, whose class defers it", async () => {
     const h = await harness({ resolve: requested });
     const body = await bodyOf(await dispatch(h, "check", check("batch")));
     expect(executionRow(h, body.execution_id as string)).toMatchObject({
@@ -87,7 +90,7 @@ describe("the workflow start at admission", () => {
     expect(h.recorded.started).toEqual([]);
   });
 
-  it("MAMEKO-ADM-031 a start that fails after the commit leaves the execution queued, and the admission sweep starts it", async () => {
+  it("MAMEKO-ADM-030 a start that fails after the commit leaves the execution queued, and the admission sweep starts it", async () => {
     const h = await harness({
       resolve: requested,
       startExecution: (payload) =>
@@ -121,7 +124,7 @@ describe("the workflow start at admission", () => {
 });
 
 describe("placement at admission", () => {
-  it("MAMEKO-ADM-036 an unplaceable request concludes placement: no eligible executor, with no placement and no start", async () => {
+  it("MAMEKO-ADM-035 an unplaceable request concludes placement: no eligible executor, with no placement and no start", async () => {
     const h = await harness({
       resolve: () => ({
         _tag: "Class",
@@ -140,7 +143,7 @@ describe("placement at admission", () => {
     expect(h.recorded.started).toEqual([]);
   });
 
-  it("[FD-PROF-037] a fork pull request concludes placement: no eligible executor while no pool open to its class runs separated (MAMEKO-ADM-098)", async () => {
+  it("[FD-PROF-037] a fork pull request concludes placement: no eligible executor while no pool open to its class runs separated (MAMEKO-ADM-102)", async () => {
     const h = await harness();
     await h.run(
       handleIntake(
@@ -247,6 +250,36 @@ describe("a held request's release", () => {
     expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0, concluded: 1, duplicate: 0 });
     expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
     expect(recordKinds(h, id)).toBe("[]");
+    expect(
+      h.rows("select execution_id from intake_cooldowns where execution_id = ?", id),
+    ).toHaveLength(0);
+  });
+
+  it("[FD-INT-057] MAMEKO-ADM-042 concludes a held batch request released into the class's full global bound deferred, and arms no window", async () => {
+    const { h, id } = await held();
+    const [request] = await h.run(IntakeStore.use((s) => s.due(NOW + 60_000, 1)));
+    expect(request!.admit.className).toBe("batch");
+    // Fill `batch`'s global bound with one queued execution per repository, each under its own per-(run, repository)
+    // bound.
+    const global = (h.settings.profile.classes.find((c) => c.name === "batch")!.bounds as {
+      global: number;
+    })!.global;
+    for (let i = 0; i < global; i++) {
+      const answer = await h.run(
+        Admission.use((a) =>
+          a.admit({
+            ...request!.admit,
+            executionId: newExecutionId(NOW + i, Math.random),
+            scopeId: `acme/filler-${i}`,
+            dedup: { ...request!.admit.dedup, canonical: `lint:acme/filler-${i}:${BASE}` },
+          }),
+        ),
+      );
+      expect(answer._tag).toBe("Queued");
+    }
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0, concluded: 1, duplicate: 0 });
+    expect(executionRow(h, id)).toMatchObject({ status: "deferred", engine_started_at: null });
+    expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
     expect(
       h.rows("select execution_id from intake_cooldowns where execution_id = ?", id),
     ).toHaveLength(0);
