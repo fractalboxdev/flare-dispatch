@@ -688,6 +688,9 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@fractalboxdev/mameko-egress':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/egress
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1

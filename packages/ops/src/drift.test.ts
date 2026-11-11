@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   admissionCapCheck,
   APP_PERMISSIONS,
+  appManifest,
   appRegistrationCheck,
   bindingCheck,
   failed,
@@ -146,5 +147,13 @@ describe("drift check", () => {
     expect(
       rulesetCheck(MERGE_GATE_CHECKS.filter((c) => c !== "formal")).map((f) => f.path),
     ).toEqual(["required_status_checks.formal", "required_status_checks.flare-dispatch/check:ci"]);
+  });
+
+  it("[FD-OPS-029] the App asks administration at read, below the write a ruleset change needs", () => {
+    // GitHub refuses a ruleset create, update or delete to an installation without `administration: write`.
+    for (const { default_permissions } of [APP_PERMISSIONS, appManifest("https://cp.example")]) {
+      expect(default_permissions.administration).toBe("read");
+      expect(Object.values(default_permissions)).not.toContain("admin");
+    }
   });
 });
