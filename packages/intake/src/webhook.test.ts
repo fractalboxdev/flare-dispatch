@@ -239,6 +239,30 @@ describe("webhook to admission", () => {
     expect(errors).toContain("runs[2].recipe: no recipe named missing");
   });
 
+  it("[FD-INT-018] [FD-AGT-060] two improve-pr entries without a label make the whole manifest invalid", async () => {
+    const dimension = (name: string) => ({
+      name,
+      measure: `node scripts/${name}.js`,
+      better: "lower",
+      materialityFloor: 10,
+      verify: "pnpm test",
+    });
+    const text = manifest([
+      { recipe: "improve-pr", triggers: ["cron"], params: { dimension: dimension("size") } },
+      { recipe: "improve-pr", triggers: ["cron"], params: { dimension: dimension("lint") } },
+    ]);
+    const h = await harness({
+      settings: { catalog: catalogRuns("development") },
+      repos: { [REPO]: repoWithManifest(text) },
+    });
+    await deliver(h, "pull_request", pullRequestPayload());
+    expect(h.executions()).toEqual([]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: invalid" }]);
+    expect(h.recorded.reported[0]!.errors).toEqual([
+      "runs[1].label: duplicate label none for recipe improve-pr",
+    ]);
+  });
+
   it("[FD-INT-019] a manifest read that fails with a 5xx submits nothing and sheds manifest: unreadable", async () => {
     const h = await harness();
     h.reads.failures.set(
@@ -921,6 +945,78 @@ describe("the catalogue's request decoders through the webhook route", () => {
     expect(h.executions()).toEqual([]);
     await deliver(h, "push", pushPayload("refs/heads/release"), "d-3");
     expect(h.executions().map((e) => e.run)).toEqual(["worker-deploy"]);
+  });
+
+  it("[FD-AGT-045] a pull request opened, synchronized or ready for review starts pr-review for its head commit", async () => {
+    const h = await catalogHarness([
+      {
+        recipe: "pr-review",
+        triggers: ["pull_request", "dispatch"],
+        params: { mode: "gating", maxDiffChars: 60_000 },
+      },
+    ]);
+    const reviewable = (action: string, head: string, headRepo?: string) => {
+      const payload = pullRequestPayload({ action, head, ...(headRepo ? { headRepo } : {}) });
+      return {
+        ...payload,
+        pull_request: {
+          ...payload.pull_request,
+          draft: false,
+          labels: [{ name: "area:api" }],
+          user: { login: "octocat" },
+          author_association: "MEMBER",
+        },
+      };
+    };
+    const heads = ["1", "2", "3", "4", "5", "6"].map((d) => d.repeat(40));
+    await deliver(h, "pull_request", reviewable("opened", heads[0]!));
+    await deliver(h, "pull_request", reviewable("synchronize", heads[1]!), "d-2");
+    await deliver(h, "pull_request", reviewable("ready_for_review", heads[2]!, "fork/app"), "d-3");
+    for (const [i, action] of ["closed", "labeled", "edited"].entries())
+      await deliver(h, "pull_request", reviewable(action, heads[3 + i]!), `d-${4 + i}`);
+
+    const input = (headSha: string, forkHead: boolean) => ({
+      repo: { owner: "acme", name: "app" },
+      number: 12,
+      baseSha: "d".repeat(40),
+      headSha,
+      draft: false,
+      labels: ["area:api"],
+      authorLogin: "octocat",
+      authorAssociation: "MEMBER",
+      forkHead,
+      mode: "gating",
+      maxDiffChars: 60_000,
+    });
+    expect(inputsOf(h)).toEqual([
+      ["pr-review", input(heads[0]!, false)],
+      ["pr-review", input(heads[1]!, false)],
+      ["pr-review", input(heads[2]!, true)],
+    ]);
+    expect(h.records().map((r) => [r.trigger, r.sha])).toEqual([
+      ["webhook", heads[0]],
+      ["webhook", heads[1]],
+      ["fork-pr", heads[2]],
+    ]);
+
+    const dispatched = await admit(
+      h,
+      authenticated({
+        run: "pr-review",
+        sha: HEAD,
+        label: null,
+        inputs: input(HEAD, false),
+      }),
+    );
+    expect(dispatched.duplicate).toBe(false);
+    expect(h.records().at(-1)).toMatchObject({ run: "pr-review", trigger: "dispatch", sha: HEAD });
+  });
+
+  it("[FD-AGT-045] a pr-review entry without maxDiffChars makes the manifest invalid", async () => {
+    const h = await catalogHarness([{ recipe: "pr-review", triggers: ["pull_request"] }]);
+    await deliver(h, "pull_request", pullRequestPayload({ action: "opened" }));
+    expect(h.executions()).toEqual([]);
+    expect(h.sheds().map((s) => s.reason)).toEqual(["manifest: invalid"]);
   });
 
   it("[FD-GATE-070] a successful production deployment_status with an environment_url requests deploy-smoke; a failed one requests nothing", async () => {

@@ -57,7 +57,7 @@ export const dedupRecipes: readonly DedupRecipe<KeyedRequest>[] = [
     run: (r) => {
       if (r.local !== null)
         return `local:${r.local.leaseId}:${r.run}:${r.local.treeHash}:${r.local.inputsDigest}`;
-      if (r.cronMinute !== null) return `${r.run}:${r.repo}:cron:${minuteIso(r.cronMinute)}`;
+      if (r.cronMinute !== null) return `${runLabel(r)}:${r.repo}:cron:${minuteIso(r.cronMinute)}`;
       const base = `${runLabel(r)}:${r.repo}:${r.sha}`;
       return r.attempt >= 2 ? `${base}:attempt-${r.attempt}` : base;
     },
