@@ -3,6 +3,8 @@
 // secret, dispatches with the shared retry and no `Idempotency-Key`, fails the step at once on any 4xx, and with
 // `wait` polls until the verdict, failing the step unless it is `success`.
 import {
+  Signal,
+  SIGNALS_MAX_ENTRIES,
   SignalsV1,
   type SignalsV1 as Signals,
 } from "@fractalboxdev/flare-dispatch-api/declaration";
@@ -49,26 +51,63 @@ export interface ActionResult {
 
 const formatter = SchemaIssue.makeFormatterStandardSchemaV1();
 
+/** The step's failure naming the first field of `prefix` that fails its schema. */
+const signalsFailure =
+  (prefix: string, fallback: string) =>
+  (error: Schema.SchemaError): ActionFailed => {
+    const first = formatter(error.issue).issues[0];
+    const path = (first?.path ?? [])
+      .map((p) =>
+        typeof p === "object" && p !== null && "key" in p
+          ? String((p as { key: PropertyKey }).key)
+          : String(p),
+      )
+      .join(".");
+    return new ActionFailed({
+      code: "invalid_signals",
+      message: `${prefix}${path === "" ? "" : `.${path}`}: ${first?.message ?? fallback}`,
+    });
+  };
+
 /** The signals, or the step's failure naming the first field over its cap (FD-IFC-061). */
 export const checkSignals = (raw: string): Effect.Effect<Signals | undefined, ActionFailed> => {
   if (raw.trim() === "") return Effect.succeed(undefined);
   return Schema.decodeUnknownEffect(Schema.fromJsonString(SignalsV1))(raw).pipe(
-    Effect.mapError((error) => {
-      const first = formatter(error.issue).issues[0];
-      const path = (first?.path ?? [])
-        .map((p) =>
-          typeof p === "object" && p !== null && "key" in p
-            ? String((p as { key: PropertyKey }).key)
-            : String(p),
-        )
-        .join(".");
-      return new ActionFailed({
-        code: "invalid_signals",
-        message: `signals${path === "" ? "" : `.${path}`}: ${first?.message ?? "not a signals/v1 array"}`,
-      });
-    }),
+    Effect.mapError(signalsFailure("signals", "not a signals/v1 array")),
   );
 };
+
+/** An `inputs.signals` entry: the `signals/v1` field caps, with `detail` optional as the dispatcher reads it. */
+const InputSignal = Schema.Struct({
+  ...Signal.fields,
+  detail: Schema.optionalKey(Signal.fields.detail),
+});
+
+/**
+ * The run inputs' own `signals` merged with the `signals` input, within the caps the dispatcher applies to the same
+ * merge (FD-INT-049): at most `SIGNALS_MAX_ENTRIES` entries, each field within its `signals/v1` cap.
+ */
+export const checkMergedSignals = (
+  runInputs: unknown,
+  signals: Signals | undefined,
+): Effect.Effect<void, ActionFailed> =>
+  Effect.gen(function* () {
+    const collected =
+      runInputs !== null &&
+      typeof runInputs === "object" &&
+      Array.isArray((runInputs as { signals?: unknown }).signals)
+        ? ((runInputs as { signals: unknown[] }).signals as readonly unknown[])
+        : [];
+    yield* Schema.decodeUnknownEffect(Schema.Array(InputSignal))(collected).pipe(
+      Effect.mapError(signalsFailure("inputs.signals", "not a signals/v1 array")),
+    );
+    const total = collected.length + (signals?.length ?? 0);
+    if (total > SIGNALS_MAX_ENTRIES)
+      return yield* new ActionFailed({
+        code: "invalid_signals",
+        message: `inputs.signals and signals: ${total} signals; at most ${SIGNALS_MAX_ENTRIES}`,
+      });
+  });
 
 /** The job's OIDC token for the audience, from the Actions token endpoint (FD-IFC-055). */
 export const oidcToken = (
@@ -121,8 +160,9 @@ export const runAction = (
   log: (line: string) => Effect.Effect<void> = () => Effect.void,
 ): Effect.Effect<ActionResult, ActionFailed> =>
   Effect.gen(function* () {
-    const signals = yield* checkSignals(inputs.signals);
     const runInputs = yield* parseInputs(inputs.inputs);
+    const signals = yield* checkSignals(inputs.signals);
+    yield* checkMergedSignals(runInputs, signals);
     const token = yield* oidcToken(oidc, inputs.audience, fetch);
     const client = yield* makeClient(inputs.url, { _tag: "Bearer", token }, fetch);
     const dispatched = yield* dispatchWithRetry(

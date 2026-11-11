@@ -275,7 +275,7 @@ export const refusal = (h: Harness, d: AuthenticatedDispatch) =>
 // Webhook fixtures
 
 export const signedWebhook = async (
-  event: string,
+  event: string | null,
   payload: unknown,
   options: {
     secret?: string;
@@ -291,10 +291,8 @@ export const signedWebhook = async (
       : await Effect.runPromise(signBody(options.secret ?? SECRET, body));
   const sent =
     options.tamper === true ? new TextEncoder().encode(JSON.stringify(payload) + " ") : body;
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    "x-github-event": event,
-  };
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (event !== null) headers["x-github-event"] = event;
   if (signature !== null) headers["x-hub-signature-256"] = signature;
   if (options.delivery !== null) headers["x-github-delivery"] = options.delivery ?? "d-1";
   return new Request("https://control-plane.example.com/v1/webhooks/github", {

@@ -84,14 +84,15 @@ describe("dispatch validation", () => {
         signals: Array(21).fill(signal),
       }),
     );
-    const long = await refusal(
-      h,
-      authenticated({ signals: [{ source: "s".repeat(121), title: "t" }] }),
-    );
-    expect([many, long]).toEqual([
-      { status: 400, code: "invalid_signals" },
-      { status: 400, code: "invalid_signals" },
-    ]);
+    const long = [];
+    for (const s of [
+      { source: "s".repeat(121), title: "t" },
+      { source: "s", title: "t".repeat(201) },
+      { source: "s", title: "t", detail: "d".repeat(2001) },
+      { source: "s", title: "t", url: "u".repeat(1001) },
+    ])
+      long.push(await refusal(h, authenticated({ signals: [s] })));
+    expect([many, ...long]).toEqual(Array(5).fill({ status: 400, code: "invalid_signals" }));
     expect(h.executions()).toEqual([]);
   });
 });
