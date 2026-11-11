@@ -244,6 +244,7 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
             name: pool.name,
             classes: pool.classes.filter((c) => c.max > 0).map((c) => c.class),
             ...(pool.reserved_for === undefined ? {} : { reserved_for: pool.reserved_for }),
+            ...(pool.runner === undefined ? {} : { runner: pool.runner }),
           })),
           advertised: Object.fromEntries(
             input.placement.params.kinds.map((kind) => [kind, runLabels]),

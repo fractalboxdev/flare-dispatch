@@ -224,7 +224,10 @@ const supersessionKeyOf = (
 ): string | null =>
   supersessionKey({
     ...profileRequestOf(request, false),
-    ...(s.cacheTrigger._tag === "PullRequest" ? { pullRequest: s.cacheTrigger.number } : {}),
+    ...Match.value(s.cacheTrigger).pipe(
+      Match.tag("PullRequest", (t) => ({ pullRequest: t.number })),
+      Match.orElse(() => ({})),
+    ),
     ...(s.label === null ? {} : { label: s.label }),
     ...(s.familyRoot === null ? {} : { rerun: { firstAttemptClass: className as ClassName } }),
   });

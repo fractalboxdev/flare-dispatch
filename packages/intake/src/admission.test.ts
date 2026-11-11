@@ -6,6 +6,7 @@ import {
   startUnstartedExecutions,
 } from "@fractalboxdev/mameko-coordinator";
 import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { fakeRepo } from "@fractalboxdev/flare-dispatch-github/testing";
@@ -14,7 +15,9 @@ import { Admission, ExecutionStartFailed } from "./config.ts";
 import { canonicalJson } from "./dedup.ts";
 import {
   actionsToken,
+  APP_ID,
   BASE,
+  checkRunRerequested,
   bodyOf,
   dispatchRequest,
   harness,
@@ -338,6 +341,42 @@ describe("supersession and serial groups at admission", () => {
     // The superseded member's workflow is cancelled with the cause its row records (MAMEKO-ADM-062).
     const cancelledId = h.rows("select id from executions where status = 'cancelled'")[0]!.id;
     expect(h.recorded.workflowCancels).toEqual([{ executionId: cancelledId, cause: "superseded" }]);
+  });
+
+  it("[FD-PROF-029] a fork pull request's check re-run joins no supersession group and cancels no newer member", async () => {
+    // A separated `lean` pool places the fork requests, so the newer head's execution stays pending (MAMEKO-ADM-102).
+    const production = buildProfile("production");
+    const h = await harness({
+      settings: {
+        profile: {
+          ...production,
+          pools: production.pools.map((p) =>
+            p.name === "lean" ? { ...p, runner: "separated" as const } : p,
+          ),
+        },
+      },
+    });
+    const [first, second] = ["1", "2"].map((c) => c.repeat(40));
+    const fork = (head: string) => pullRequestPayload({ head, headRepo: "mallory/app" });
+    await webhook(h, "pull_request", fork(first!), "d-1");
+    await h.adjust(1_000);
+    await webhook(h, "pull_request", fork(second!), "d-2");
+    const firstId = h.rows(
+      "select execution_id as id from intake_records where run = 'check' and sha = ?",
+      first,
+    )[0]!.id as string;
+    await h.adjust(1_000);
+    await webhook(h, "check_run", checkRunRerequested(firstId, APP_ID, first), "d-3");
+    expect(h.rows("select trigger from intake_records where run = 'check'")).toEqual([
+      { trigger: "fork-pr" },
+      { trigger: "fork-pr" },
+      { trigger: "fork-pr" },
+    ]);
+    expect(groupRows(h, "check")).toEqual([
+      { status: "cancelled", reason: "superseded", key: `${REPO}:12:check:ci`, sha: first },
+      { status: "pending", reason: null, key: `${REPO}:12:check:ci`, sha: second },
+      { status: "pending", reason: null, key: null, sha: first },
+    ]);
   });
 
   it("[FD-PROF-030] a closed pull request cancels every supersession group of that pull request with cause pr-closed", async () => {
