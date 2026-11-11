@@ -149,7 +149,7 @@ describe("the identity gate", () => {
     expect((await post(development, "/v1/dispatch/nothing", {}, "invalid")).status).toBe(401);
   });
 
-  it("[FD-IFC-012] refuses an Access token outside operators on an operator route", async () => {
+  it("[FD-IFC-088] refuses executor registration from an Access identity outside operators", async () => {
     const { identity } = await newDevice();
     const r = await post(
       development,
@@ -158,6 +158,7 @@ describe("the identity gate", () => {
       "member@example.com",
     );
     expect(r.status).toBe(403);
+    expect(await r.json()).toMatchObject({ error: "forbidden" });
   });
 
   it("serves health without identity and names the deployment", async () => {
