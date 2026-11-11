@@ -1,5 +1,5 @@
 // FlareDispatch's local registration port: what a rehearsal registers, and the execution id and nonce it receives
-// (specs/local-scheduler.md § Rehearsal and registration, MAMEKO-PROTO-081, MAMEKO-LOCAL-069).
+// (specs/local-scheduler.md § Rehearsal and registration, MAMEKO-PROTO-082, MAMEKO-LOCAL-069).
 import { LocalRegistration } from "@fractalboxdev/mameko-ports";
 import { Clock, Effect, Exit, Layer, Schema } from "effect";
 import { LocalStore, Provenance } from "./store.ts";

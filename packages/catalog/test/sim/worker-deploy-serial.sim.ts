@@ -285,7 +285,7 @@ export const simulateSerialDeploys = async (seed: number): Promise<SerialOutcome
       }
       checkSerial(`step ${i}`);
     }
-    // A newer push cancels the older waiters of the group, never its holder (MAMEKO-ADM-072).
+    // A newer push cancels the older waiters of the group, never its holder (MAMEKO-ADM-073).
     reached.superseded = rows(
       "select count(*) as n from executions where serial_key = ? and reason = 'superseded'",
       GROUP,

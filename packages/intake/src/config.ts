@@ -16,7 +16,7 @@ import {
   type Resolution,
 } from "@fractalboxdev/mameko-coordinator";
 import { d1ExecutionStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { AlarmPort } from "@fractalboxdev/mameko-ports";
+import { AlarmPort, type CancelTarget } from "@fractalboxdev/mameko-ports";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 import type { Caller, RecordedTrigger } from "./event.ts";
 import type { IntakeRun, RunCatalog } from "./runs.ts";
@@ -50,7 +50,7 @@ export interface IntakeSettings {
   /** The operator policy: whether a repository may run a run at all (FD-INT-015). */
   readonly allows: (repo: string, run: string) => boolean;
   /**
-   * A repository's confidentiality mode, which the placement's isolation reads (MAMEKO-LEASE-083). No policy rule sets
+   * A repository's confidentiality mode, which the placement's isolation reads (MAMEKO-LEASE-084). No policy rule sets
    * one yet, so a deployment answers `unclassified`, mameko's fail-closed default, for every repository it does not
    * know to be `non-confidential`.
    */
@@ -69,7 +69,7 @@ export class IntakeConfig extends Context.Service<IntakeConfig, IntakeSettings>(
 /**
  * One request as intake hands it to mameko's `admit`: the id intake writes its record under, the class and labels
  * intake's class resolution returned, the dedup key, the placement facts and the run's limits. It is plain data, so a
- * request held for its cooldown window is admitted later from the stored value under the same id (MAMEKO-ADM-104).
+ * request held for its cooldown window is admitted later from the stored value under the same id (MAMEKO-ADM-105).
  */
 export interface IntakeAdmitInput {
   readonly executionId: string;
@@ -83,7 +83,7 @@ export interface IntakeAdmitInput {
     /** The SHA-256 of `canonical`, as `dedupKey` computes it and admission stores it (MAMEKO-ADM-034). */
     readonly sha256: string;
     readonly canonical: string;
-    /** The SHA-256 of the dispatch body's canonical JSON, as admission stores it beside the key (MAMEKO-ADM-093). */
+    /** The SHA-256 of the dispatch body's canonical JSON, as admission stores it beside the key (MAMEKO-ADM-094). */
     readonly requestDigest: string | null;
     /** The dispatch body the digest covers; admission hashes its canonical JSON itself, so it gets the body, not the digest. */
     readonly digestBody: unknown;
@@ -101,7 +101,7 @@ export interface IntakeAdmitInput {
    * (MAMEKO-ADM-061, FD-PROF-027).
    */
   readonly supersessionKey?: string | null;
-  /** The serial group the request joins, for a run that declares `serialize`; null or absent joins none (MAMEKO-ADM-067). */
+  /** The serial group the request joins, for a run that declares `serialize`; null or absent joins none (MAMEKO-ADM-068). */
   readonly serialKey?: string | null;
   /**
    * The check run the execution owns, as the `checkOpenPayload` binding reads it: `flare-dispatch/<run>[:<checkLabel>]`
@@ -148,6 +148,14 @@ export class Admission extends Context.Service<
       supersessionKey: string,
       cause: string,
     ) => Effect.Effect<readonly string[], IntakeUnavailable | IntakeError>;
+    /**
+     * Cancels one execution, queued or claimed, with `cause`, and answers whether it was live; a terminal execution is
+     * left unchanged (MAMEKO-ADM-065). A cause outside the profile's closed set is `misconfigured`.
+     */
+    readonly cancel: (
+      executionId: string,
+      cause: string,
+    ) => Effect.Effect<boolean, IntakeUnavailable | IntakeError>;
   }
 >()("@fractalboxdev/flare-dispatch-intake/Admission") {}
 
@@ -161,8 +169,8 @@ export interface AdmissionPorts {
   ) => Effect.Effect<void, ExecutionStartFailed>;
   readonly alarms?: Layer.Layer<AlarmPort>;
   /**
-   * Records the cancel of an execution's workflow and its lease, for a member a supersession or a group cancel ended
-   * (MAMEKO-ADM-062, MAMEKO-ADM-065); absent, the member's workflow ends at its deadline.
+   * Records the cancel of an execution's workflow and its lease, for a member a supersession, a group cancel or a
+   * per-execution cancel ended (MAMEKO-ADM-062, MAMEKO-ADM-066); absent, the member's workflow ends at its deadline.
    */
   readonly cancelExecution?: (executionId: string, cause: string) => Effect.Effect<void>;
   /**
@@ -207,30 +215,34 @@ const admittedIntents = (profile: Profile, input: IntakeAdmitInput) => ({
  * executor kind, so each kind is taken to advertise the request's own labels, and placement is decided by the
  * constraint fold alone, as `eligibleKinds` decides it.
  */
-export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts = {}) =>
-  Layer.succeed(Admission, {
+export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts = {}) => {
+  /** mameko's application cancel of a group or of one execution, under the profile's closed set of causes. */
+  const cancelTarget = (target: CancelTarget, cause: string) =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      composedGroupCancel({
+        profile,
+        target,
+        cause,
+        now,
+        cancelExecution: ports.cancelExecution ?? (() => Effect.void),
+      }),
+    ).pipe(
+      Effect.provide(d1ExecutionStore(db)),
+      Effect.catchTags({
+        CancelCauseUndeclared: (e) =>
+          Effect.fail(
+            intakeError(503, "misconfigured", `the profile declares no cancel cause ${e.cause}`),
+          ),
+        ExecutionIntakeUnavailable: (e) =>
+          Effect.fail(new IntakeUnavailable({ cause: String(e.cause) })),
+      }),
+    );
+  return Layer.succeed(Admission, {
     queued: ports.queued ?? (() => Effect.void),
     cancelGroup: (supersessionKey, cause) =>
-      Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        composedGroupCancel({
-          profile,
-          supersessionKey,
-          groupKind: "supersession",
-          cause,
-          now,
-          cancelExecution: ports.cancelExecution ?? (() => Effect.void),
-        }),
-      ).pipe(
-        Effect.provide(d1ExecutionStore(db)),
-        Effect.catchTags({
-          CancelCauseUndeclared: (e) =>
-            Effect.fail(
-              intakeError(503, "misconfigured", `the profile declares no cancel cause ${e.cause}`),
-            ),
-          ExecutionIntakeUnavailable: (e) =>
-            Effect.fail(new IntakeUnavailable({ cause: String(e.cause) })),
-        }),
-      ),
+      cancelTarget({ supersessionKey, groupKind: "supersession" }, cause),
+    cancel: (executionId, cause) =>
+      Effect.map(cancelTarget({ executionId }, cause), (members) => members.length > 0),
     admit: (input) =>
       Effect.gen(function* () {
         const quarantined =
@@ -319,6 +331,7 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
         );
       }),
   });
+};
 
 /** The request class resolution sees (specs/profile.md § Class resolution). */
 export interface ClassRequest {

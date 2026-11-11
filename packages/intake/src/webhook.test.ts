@@ -378,10 +378,18 @@ describe("merge queue", () => {
     const opened = await bodyOf(
       await deliver(h, "merge_group", mergeGroupPayload("checks_requested")),
     );
-    await deliver(h, "merge_group", mergeGroupPayload("destroyed"), "d-2");
-    expect(h.recorded.cancelled).toEqual([
-      { executionId: (opened.executions as string[])[0], cause: "merge-group-destroyed" },
+    const [executionId] = opened.executions as string[];
+    const destroyed = await deliver(h, "merge_group", mergeGroupPayload("destroyed"), "d-2");
+    expect(destroyed!.status).toBe(202);
+    expect(h.rows("select status, reason from executions where id = ?", executionId)).toEqual([
+      { status: "cancelled", reason: "merge-group-destroyed" },
     ]);
+    // The execution's workflow and lease are cancelled with the declared cause.
+    expect(h.recorded.workflowCancels).toEqual([{ executionId, cause: "merge-group-destroyed" }]);
+    // The cancel writes the outcome row its check run concludes from.
+    expect(
+      h.rows("select kind from outbox where execution_id = ? order by kind", executionId),
+    ).toEqual([{ kind: "check.conclude" }, { kind: "check.open" }]);
   });
 });
 

@@ -75,7 +75,7 @@ const stricter = (a: PostureTier | null, b: PostureTier): PostureTier =>
  * constraints, intersected with the class's cloud kinds plus `device` where the class is device-eligible. An empty
  * set is unplaceable.
  */
-/** What the placement's isolation depends on besides the class (MAMEKO-LEASE-083). */
+/** What the placement's isolation depends on besides the class (MAMEKO-LEASE-084). */
 export interface IsolationRequest {
   readonly class: string;
   /** The request carries `untrusted-input`: a fork pull request (FD-PROF-018). */
@@ -90,7 +90,7 @@ export interface IsolationRequest {
  * The weakest job sandbox isolation the placement admits: the class's `isolation` (`vm` when it declares none), which
  * mameko's `placementIsolation` raises from `none` to `container` for untrusted input, a scope that is not
  * `non-confidential` or a run that declares a grant, so no such request reaches a host-process device
- * (MAMEKO-LEASE-083, FD-PROF-065).
+ * (MAMEKO-LEASE-084, FD-PROF-065).
  */
 export const isolationOf = (profile: Profile, request: IsolationRequest): Isolation =>
   placementIsolation({
@@ -103,7 +103,7 @@ export const isolationOf = (profile: Profile, request: IsolationRequest): Isolat
 /**
  * What mameko's `requestConstraints` reads of a request: its facts, with the profile's predicates evaluated, and the
  * constraint parameters, with each declared constraint's predicate evaluated. Admission takes the same pair through its
- * placement binding (MAMEKO-ADM-088).
+ * placement binding (MAMEKO-ADM-089).
  */
 export const placementInputs = (profile: Profile, request: PlacementRequest) => {
   const { placement } = profile;

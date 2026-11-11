@@ -5,7 +5,6 @@ import {
   d1Admission,
   d1IntakeStore,
   d1ShedRecorder,
-  ExecutionCanceller,
   ExecutionStartFailed,
   InstallationEviction,
   IntakeConfig,
@@ -103,9 +102,9 @@ export const startExecutionOf =
     }).pipe(Effect.asVoid);
 
 /**
- * The cancel of a member a supersession or a group cancel recorded `cancelled`: its `ExecutionEngine` records the cancel,
- * which ends its wait for a lease or a result (MAMEKO-ADM-062), and a leased member's executor gets `exec.cancel` over
- * its channel (MAMEKO-ADM-065).
+ * The cancel of an execution a supersession, a group cancel or a per-execution cancel recorded `cancelled`: its
+ * `ExecutionEngine` records the cancel, which ends its wait for a lease or a result (MAMEKO-ADM-062), and a leased
+ * execution's executor gets `exec.cancel` over its channel (MAMEKO-ADM-066).
  */
 export const cancelExecutionOf =
   (env: Pick<ControlPlaneEnv, "DB" | "EXECUTION" | "CHANNEL">) =>
@@ -126,25 +125,13 @@ export const cancelExecutionOf =
 
 /**
  * What admission needs of the Worker: the wake-up after a queued admission, the workflow start, the cancel of a
- * superseded member and the alarm sink.
+ * superseded or cancelled execution's workflow and lease, and the alarm sink.
  */
 const admissionPorts = (env: ControlPlaneEnv, alarms: AdmissionPorts["alarms"]) => ({
   queued: wake(env),
   startExecution: startExecutionOf(env),
   cancelExecution: cancelExecutionOf(env),
   alarms,
-});
-
-/**
- * mameko offers no cancel of an admitted execution, so a superseded merge group's execution runs to its end; the cancel
- * is a logged no-op, and nothing downstream decides on it.
- */
-const cancellerDeferred = Layer.succeed(ExecutionCanceller, {
-  cancel: (executionId, cause) =>
-    Effect.logWarning("execution cancel needs mameko's cancel of an admitted execution", {
-      executionId,
-      cause,
-    }),
 });
 
 /** Without the App no check run can be written; the shed row already records the invalid manifest (FD-INT-018). */
@@ -167,12 +154,7 @@ const isolateLayer = (env: ControlPlaneEnv) => {
   const settings = intakeSettings(env);
   const alarms = alarmPortFromEnv(env);
   const app = appOptionsOf(env);
-  const common = Layer.mergeAll(
-    cancellerDeferred,
-    alarms,
-    ConfigurationSourceLive,
-    GateDecisionSourceLive,
-  );
+  const common = Layer.mergeAll(alarms, ConfigurationSourceLive, GateDecisionSourceLive);
   if (app !== undefined) {
     const github = appServices(env, app, alarms);
     // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.

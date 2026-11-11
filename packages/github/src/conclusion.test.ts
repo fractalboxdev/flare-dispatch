@@ -18,7 +18,7 @@ describe("checkConclusion", () => {
       });
   });
 
-  it("MAMEKO-LEASE-092 an acceptance-check rejection concludes failure with the reason kind it returns", () => {
+  it("MAMEKO-LEASE-093 an acceptance-check rejection concludes failure with the reason kind it returns", () => {
     expect(
       checkConclusion({
         _tag: "failure",

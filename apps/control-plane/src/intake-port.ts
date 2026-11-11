@@ -1,13 +1,16 @@
-// The HTTP API's `Intake` port over intake's admission. The declared dispatch route authenticates the caller and
-// decodes the body (FD-IFC-001); this port hands the submission to intake's `admitDispatch`, and every refusal leaves
-// as an error of the error-model table (FD-IFC-009).
+// The HTTP API's `Intake` and `Cancellation` ports over intake's admission. The declared dispatch route authenticates
+// the caller and decodes the body (FD-IFC-001); this port hands the submission to intake's `admitDispatch`, and every
+// refusal leaves as an error of the error-model table (FD-IFC-009). The cancel route has checked who may cancel
+// (FD-IFC-046); the cancel goes through mameko's cancel of one execution.
 import { apiError, isErrorCode, type ApiError } from "@fractalboxdev/flare-dispatch-api/errors";
 import {
+  Cancellation,
   Intake,
   type DispatchSubmission,
   type IntakeAnswer,
 } from "@fractalboxdev/flare-dispatch-api/ports";
 import {
+  Admission,
   admitDispatch,
   type AuthenticatedDispatch,
   type IntakeError,
@@ -81,6 +84,34 @@ export const intakePort = Layer.effect(
               Effect.fail(apiError("unavailable", "the intake store did not answer")),
           }),
           Effect.provide(services),
+        ),
+    });
+  }),
+);
+
+/** The cause an API cancel records: the route admits only the dispatcher or an operator (FD-IFC-046). */
+export const API_CANCEL_CAUSE = "operator-cancel";
+
+/**
+ * The `Cancellation` port: mameko records the execution `cancelled(operator-cancel)` with its outcome row and cancels its
+ * workflow and lease, queued or claimed; a terminal execution is left unchanged (MAMEKO-ADM-065).
+ */
+export const intakeCancellation = Layer.effect(
+  Cancellation,
+  Effect.gen(function* () {
+    const admission = yield* Admission;
+    return Cancellation.of({
+      cancel: ({ executionId, identity, requestId }) =>
+        admission.cancel(executionId, API_CANCEL_CAUSE).pipe(
+          Effect.tap((live) =>
+            Effect.logInfo("execution cancel", { executionId, identity, requestId, live }),
+          ),
+          Effect.asVoid,
+          Effect.catchTags({
+            IntakeError: (e) => Effect.flatMap(refusalOf(e), Effect.fail),
+            IntakeUnavailable: () =>
+              Effect.fail(apiError("unavailable", "the execution store did not answer")),
+          }),
         ),
     });
   }),

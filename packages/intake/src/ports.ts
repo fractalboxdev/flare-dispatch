@@ -70,12 +70,3 @@ export const installationEvictionLayer = Layer.effect(
     return { installation: app.evictInstallation, repositories: app.evictRepositories };
   }),
 );
-
-/**
- * Ends a non-terminal execution `cancelled(<cause>)`. mameko's host adapter exposes no cancel of an admitted
- * execution, so this port has no live Layer in this package.
- */
-export class ExecutionCanceller extends Context.Service<
-  ExecutionCanceller,
-  { readonly cancel: (executionId: string, cause: string) => Effect.Effect<void> }
->()("@fractalboxdev/flare-dispatch-intake/ExecutionCanceller") {}
