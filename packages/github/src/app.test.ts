@@ -5,13 +5,7 @@ import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
-import {
-  GithubApp,
-  githubAppLayer,
-  JWT_BACKDATE_SEC,
-  JWT_LIFETIME_SEC,
-  LEASE_READ_PERMISSIONS,
-} from "./app.ts";
+import { GithubApp, githubAppLayer, LEASE_READ_PERMISSIONS } from "./app.ts";
 import { fakeConcludeFacts, fakeGithub } from "./fake.test-support.ts";
 import { githubLiveLayer } from "./layer.ts";
 import { leaseReadToken } from "./lease-token.ts";
@@ -83,12 +77,11 @@ const run = <A, E>(
   );
 
 describe("the App JWT", () => {
-  it.each([
+  for (const [encoding, pem] of [
     ["PKCS#1", PKCS1],
     ["PKCS#8", PKCS8],
-  ])(
-    "FD-GH-068 FD-GH-067 a %s key signs an RS256 JWT with iat 60 s back and exp 600 s after iat",
-    async (_, pem) => {
+  ] as const)
+    it(`[FD-GH-067] [FD-GH-068] a ${encoding} key signs an RS256 JWT with iat 60 s back and exp 600 s after iat`, async () => {
       const jwt = await run(
         GithubApp.use((a) => a.jwt),
         fakeApi({}, []),
@@ -97,8 +90,8 @@ describe("the App JWT", () => {
       const [header, payload, signature] = jwt.split(".");
       expect(decodeSegment(header!)).toEqual({ alg: "RS256", typ: "JWT" });
       const claims = decodeSegment(payload!);
-      expect(claims.iat).toBe(NOW / 1000 - JWT_BACKDATE_SEC);
-      expect(Number(claims.exp) - Number(claims.iat)).toBe(JWT_LIFETIME_SEC);
+      expect(claims.iat).toBe(NOW / 1000 - 60);
+      expect(Number(claims.exp) - Number(claims.iat)).toBe(600);
       expect(claims.iss).toBe("123");
       const ok = verify(
         "RSA-SHA256",
@@ -107,8 +100,7 @@ describe("the App JWT", () => {
         Buffer.from(signature!.replaceAll("-", "+").replaceAll("_", "/"), "base64"),
       );
       expect(ok).toBe(true);
-    },
-  );
+    });
 
   it("[FD-GH-068] a PEM of another type fails AppKeyInvalid", async () => {
     const pem = "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----";
