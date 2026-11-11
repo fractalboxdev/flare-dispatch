@@ -26,7 +26,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -50,6 +50,7 @@ import {
   operabilityCommand,
   repositoryRoot,
   V2_WORKERS,
+  type WorkerSpec,
 } from "../../src/cli/index.ts";
 import { accessStore } from "../../src/access-application.test-support.ts";
 import {
@@ -302,9 +303,28 @@ const deployedBy = async (argv: readonly string[]) => {
         { id: "hostname", domain: values.hostnames["dispatcher"]!, aud: values.access.aud },
       ]),
     });
-  const service = makeOperability({ fail: (m) => new Error(m), root: ROOT, target });
+  const service = makeOperability({
+    fail: (m) => new Error(m),
+    root: ROOT,
+    workers: builtWorkers(),
+    target,
+  });
   const report = await Effect.runPromise(operabilityCommand(service, argv, (m) => new Error(m)));
   return { report, received };
+};
+
+/**
+ * The Workers of the deploy with the docs Worker's committed template copied beside a site build, as the deploy
+ * workflow's build step leaves it: `fd deploy` stops at its drift stage without one.
+ */
+const builtWorkers = (): readonly WorkerSpec[] => {
+  const app = join(scratch, "docs-built");
+  mkdirSync(join(app, "dist"), { recursive: true });
+  return V2_WORKERS.map((w) => {
+    if (w.worker !== "docs") return w;
+    copyFileSync(join(ROOT, w.templatePath), join(app, "wrangler.jsonc"));
+    return { ...w, templatePath: relative(ROOT, join(app, "wrangler.jsonc")) };
+  });
 };
 
 /** Each Worker's configuration as the one renderer produces it from its committed template and `overlay`. */

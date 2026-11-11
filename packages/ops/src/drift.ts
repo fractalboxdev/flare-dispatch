@@ -59,7 +59,7 @@ const accountSpecific = (c: WorkerConfig): readonly { path: string; value: unkno
   ...arr(c["routes"]).map((r, i) => ({ path: `routes[${i}].pattern`, value: r["pattern"] })),
 ];
 
-/** The cron set every template declares: the single minute tick (FD-INT-050). */
+/** The cron set every template with a Worker script declares: the single minute tick (FD-INT-050). */
 export const MINUTE_TICK = "* * * * *";
 
 const cronsOf = (c: WorkerConfig): readonly string[] => {

@@ -150,6 +150,35 @@ export const renderedChecks =
   };
 
 /**
+ * The check `fd deploy` adds to its drift stage: a Worker's `assets.directory`, resolved beside its template, exists.
+ * The directory is a build output (the documentation site's is `pnpm --filter @fractalboxdev/flare-dispatch-docs run
+ * build`), so a deploy without it stops before its first write, where wrangler would fail on it after the migrations
+ * and the deploys ahead of it in service-binding order. `fd doctor` and the pull-request drift check build nothing and
+ * leave it out.
+ */
+export const assetsDirectoryCheck =
+  (root: string, specs: readonly WorkerSpec[]) =>
+  (worker: string, config: WorkerConfig): readonly Finding[] => {
+    const spec = specs.find((s) => s.worker === worker);
+    const assets = config["assets"];
+    const directory =
+      typeof assets === "object" && assets !== null
+        ? (assets as { directory?: unknown }).directory
+        : undefined;
+    if (spec === undefined || typeof directory !== "string") return [];
+    return existsSync(join(root, dirname(spec.templatePath), directory))
+      ? []
+      : [
+          {
+            check: "assets",
+            path: `${worker}.assets.directory`,
+            detail: `${join(dirname(spec.templatePath), directory)} does not exist; build the Worker's assets before fd deploy`,
+            severity: "failure",
+          },
+        ];
+  };
+
+/**
  * mameko's profile validator over a profile document at the current phase, with its spend lines at the spend
  * configuration the overlay delivers; the deploy carries the production document (FD-OPS-021, FD-PROF-054,
  * FD-PROF-064).
@@ -187,6 +216,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
   const env = options.env ?? process.env;
   const specs = options.workers ?? V2_WORKERS;
   const checks = renderedChecks(specs, options.agenticRegistry ?? AGENTIC_CATALOG);
+  const assetsBuilt = assetsDirectoryCheck(root, specs);
   const profileDocument = options.profile ?? profileDocumentFor("production");
   const profileFindings = (overlay: OverlayValues) =>
     profileDriftFindings(profileDocument, spendConfigOf(overlay));
@@ -282,7 +312,14 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
       request.dryRun
         ? doctor(request.overlay)
         : report(
-            fdDeploy(request.overlay, workers(), APP_PERMISSIONS, checks, profileFindings, access),
+            fdDeploy(
+              request.overlay,
+              workers(),
+              APP_PERMISSIONS,
+              (worker, config) => [...checks(worker, config), ...assetsBuilt(worker, config)],
+              profileFindings,
+              access,
+            ),
             (r) => ({
               ok: true,
               stages: stageReport({

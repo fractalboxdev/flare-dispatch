@@ -37,9 +37,14 @@ const ACME: OverlayValues = {
 
 let dir: string;
 let n = 0;
-/** The Workers of the deploy, with the docs Worker deployed from `template`, written beside the committed templates. */
-const workersWithDocs = (template: string): readonly WorkerSpec[] => {
-  const path = join(dir, `docs-${++n}.jsonc`);
+/**
+ * The Workers of the deploy, with the docs Worker deployed from `template`, written to a directory of its own under the
+ * repository root; `built` puts the site build's `dist` beside it.
+ */
+const workersWithDocs = (template: string, built = true): readonly WorkerSpec[] => {
+  const app = join(dir, `docs-${++n}`);
+  mkdirSync(built ? join(app, "dist") : app, { recursive: true });
+  const path = join(app, "wrangler.jsonc");
   writeFileSync(path, template);
   return V2_WORKERS.map((s) =>
     s.worker === "docs" ? { ...s, templatePath: relative(ROOT, path) } : s,
@@ -92,7 +97,7 @@ describe("the committed Worker templates", () => {
 
   it("[FD-OPS-001] fd deploy deploys the docs Worker on its hostname from the overlay, and a hostname written into its template stops the deploy at the drift stage", async () => {
     const w = world();
-    const report = await deploy(w, OVERLAY, { workers: V2_WORKERS });
+    const report = await deploy(w, OVERLAY, { workers: workersWithDocs(DOCS_TEMPLATE) });
     expect(driftStage(report)).toMatchObject({ ok: true });
     expect(report.ok).toBe(true);
     expect(w.calls).toContain("wrangler deploy flare-dispatch-docs");
@@ -108,6 +113,16 @@ describe("the committed Worker templates", () => {
     expect(driftStage(failed)).toMatchObject({ ok: false });
     expect(driftStage(failed)!.detail).toContain("docs.routes[0].pattern");
     expect(hardCoded.calls.filter(isWrite)).toEqual([]);
+  });
+
+  it("[FD-OPS-009] fd deploy with no site build beside the docs template stops at the drift stage, before any migration or deploy", async () => {
+    const w = world();
+    const report = await deploy(w, OVERLAY, { workers: workersWithDocs(DOCS_TEMPLATE, false) });
+    expect(report.ok).toBe(false);
+    expect(driftStage(report)).toMatchObject({ ok: false });
+    expect(driftStage(report)!.detail).toContain("docs.assets.directory");
+    expect(report.stages.map((s) => s.stage)).not.toContain("migrations");
+    expect(w.calls.filter(isWrite)).toEqual([]);
   });
 
   it("[FD-OPS-012] every committed template sets keep_vars to false, and a docs template that does not fails the drift check and stops fd deploy", async () => {
