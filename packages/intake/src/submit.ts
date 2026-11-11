@@ -266,8 +266,6 @@ export const submit = (
       sha: s.sha,
       ref: s.ref,
       inputs: s.inputs,
-      // A held request's duration counts from the end of its window.
-      deadlineAtMs: (notBefore ?? now) + s.run.maxDurationSec * 1000,
       className,
       labels,
       attempt: s.attempt,
@@ -406,8 +404,8 @@ export interface ReleaseReport {
 /**
  * Admits every held request whose cooldown window has ended (FD-INT-057). An admitted request arms its bucket's window
  * from now; a request admission answers as a duplicate of another execution, or as a conflict, loses its record, as at
- * submit. A duplicate of the request's own id is a release whose admission committed before the pass ended, so it is
- * admitted.
+ * submit. A duplicate of the request's own id is a release whose admission committed before an earlier pass ended: it
+ * is admitted when that admission wrote a placement row, and concluded, arming no window, when it did not.
  */
 export const releaseHeld = (
   limit: number = RELEASE_PER_PASS,
@@ -435,25 +433,23 @@ export const releaseHeld = (
         unavailable++;
         continue;
       }
-      const queued = Effect.gen(function* () {
+      // The placement row tells a queued execution from one admission concluded, whichever pass admitted it.
+      const answered = Effect.gen(function* () {
         yield* store.release(id);
-        yield* store.placed(id);
+        if (!(yield* store.placed(id))) {
+          concluded++;
+          return;
+        }
         yield* store.armCooldown(held.cooldownBucket, id, now);
         yield* admission.queued(held.admit.className);
         admitted++;
       });
       yield* Match.value(result).pipe(
-        Match.tag("Queued", () => queued),
-        Match.tag("Concluded", () =>
-          Effect.gen(function* () {
-            yield* store.release(id);
-            yield* store.placed(id);
-            concluded++;
-          }),
-        ),
+        Match.tag("Queued", () => answered),
+        Match.tag("Concluded", () => answered),
         Match.tag("Duplicate", ({ executionId }) =>
           executionId === id
-            ? queued
+            ? answered
             : Effect.gen(function* () {
                 yield* store.release(id);
                 yield* store.drop(id);

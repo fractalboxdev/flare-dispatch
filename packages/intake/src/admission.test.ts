@@ -225,6 +225,33 @@ describe("a held request's release", () => {
     ).toHaveLength(1);
   });
 
+  it("[FD-INT-057] concludes a request whose admission concluded it before an earlier pass ended, and arms no window", async () => {
+    const { h, id } = await held();
+    const [request] = await h.run(IntakeStore.use((s) => s.due(NOW + 60_000, 1)));
+    // An admission with no executor kind to place on concludes the request and writes its dedup key, so the next pass
+    // answers its own id.
+    const { placement } = request!.admit;
+    await h.run(
+      Admission.use((a) =>
+        a.admit({
+          ...request!.admit,
+          placement: { ...placement, params: { ...placement.params, kinds: [] } },
+          enqueuedAtMs: NOW + 60_000,
+        }),
+      ),
+    );
+    expect(executionRow(h, id)).toMatchObject({
+      status: "failure",
+      reason: "placement: no eligible executor",
+    });
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0, concluded: 1, duplicate: 0 });
+    expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
+    expect(recordKinds(h, id)).toBe("[]");
+    expect(
+      h.rows("select execution_id from intake_cooldowns where execution_id = ?", id),
+    ).toHaveLength(0);
+  });
+
   it("[FD-INT-057] admits a request whose workflow start fails, and leaves it for the admission sweep", async () => {
     const { h, id } = await held({
       resolve: () => ({ _tag: "Class", class: "required", labels: [], alarm: null }),

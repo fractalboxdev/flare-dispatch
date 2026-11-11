@@ -18,7 +18,6 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     sha text not null,
     ref text not null,
     inputs_json text not null,
-    deadline_at integer not null,
     class text not null,
     labels_json text not null,
     attempt integer not null,
@@ -67,7 +66,6 @@ export interface IntakeRecord {
   readonly sha: string;
   readonly ref: string;
   readonly inputs: unknown;
-  readonly deadlineAtMs: number;
   readonly className: string;
   readonly labels: readonly string[];
   readonly attempt: number;
@@ -162,9 +160,10 @@ export class IntakeStore extends Context.Service<
     readonly release: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
     /**
      * Copies the eligible kinds admission wrote on the execution's placement row to its record, or none when admission
-     * wrote no placement row.
+     * wrote no placement row. True when the placement row exists: admission queued the execution rather than
+     * concluding it.
      */
-    readonly placed: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
+    readonly placed: (executionId: string) => Effect.Effect<boolean, StoreUnavailable>;
     /** Removes the row of an id admission did not keep. */
     readonly drop: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
     readonly get: (executionId: string) => Effect.Effect<RecordWithStatus | null, StoreUnavailable>;
@@ -215,7 +214,6 @@ interface Row {
   readonly sha: string;
   readonly ref: string;
   readonly inputs_json: string;
-  readonly deadline_at: number;
   readonly class: string;
   readonly labels_json: string;
   readonly attempt: number;
@@ -252,7 +250,6 @@ const fromRow = (r: Row): RecordWithStatus => ({
   sha: r.sha,
   ref: r.ref,
   inputs: JSON.parse(r.inputs_json) as unknown,
-  deadlineAtMs: r.deadline_at,
   className: r.class,
   labels: JSON.parse(r.labels_json) as string[],
   attempt: r.attempt,
@@ -274,7 +271,7 @@ const SELECT = `select r.*,
   left join executions e on e.id = r.execution_id
   left join intake_held h on h.execution_id = r.execution_id`;
 
-const RECORD_COLUMNS = `execution_id, trigger, run, label, repo, sha, ref, inputs_json, deadline_at,
+const RECORD_COLUMNS = `execution_id, trigger, run, label, repo, sha, ref, inputs_json,
   class, labels_json, attempt, family_root, installation, caller, not_before, spend_line,
   placement_constraint, cache_trigger_json, eligible_kinds, created_at`;
 
@@ -288,7 +285,6 @@ const recordValues = (r: IntakeRecord) =>
     r.sha,
     r.ref,
     JSON.stringify(r.inputs ?? null),
-    r.deadlineAtMs,
     r.className,
     JSON.stringify(r.labels),
     r.attempt,
@@ -393,11 +389,14 @@ export const d1IntakeStore = (db: D1Like) =>
           .prepare(
             `update intake_records set eligible_kinds =
                coalesce((select eligible_kinds from placements where execution_id = ?), '[]')
-             where execution_id = ?`,
+             where execution_id = ?
+             returning exists (select 1 from placements where execution_id = ?) as placed`,
           )
-          .bind(id, id)
-          .run(),
-      ).pipe(Effect.asVoid),
+          .bind(id, id, id)
+          .all(),
+      ).pipe(
+        Effect.map(({ results }) => (results[0] as { placed: number } | undefined)?.placed === 1),
+      ),
     drop: (id) =>
       query(() =>
         db.prepare("delete from intake_records where execution_id = ?").bind(id).run(),

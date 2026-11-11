@@ -486,10 +486,6 @@ describe("cooldown", () => {
     const id = held!.execution_id as string;
     expect(h.executions().map((e) => e.id)).not.toContain(id);
     expect((await h.run(IntakeStore.use((s) => s.get(id))))?.status).toBe(HELD_STATUS);
-    // The held execution's duration counts from the end of its window.
-    expect((held!.deadline_at as number) - windowEnd).toBe(
-      (first!.deadline_at as number) - (first!.created_at as number),
-    );
 
     expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0 });
     await h.adjust(50_000);
