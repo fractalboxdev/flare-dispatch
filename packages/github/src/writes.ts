@@ -16,6 +16,8 @@ import { InstallationQuota } from "./rate-limit.ts";
 export interface Commented {
   readonly id: number;
   readonly body: string | null;
+  /** The account that wrote it, as GitHub's REST response reports it. */
+  readonly user?: { readonly login: string } | null;
 }
 export interface IssueRef {
   readonly id: number;
