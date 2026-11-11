@@ -48,8 +48,7 @@ const plane = async () => {
     appId: 1,
     webhookSecret: undefined,
     webhookEvents: undefined,
-    oidcAudience: undefined,
-    dispatchers: [],
+    writeCredentialIn: () => null,
     allows: () => true,
     confidentiality: () => "unclassified",
   };
