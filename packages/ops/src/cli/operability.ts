@@ -1,6 +1,7 @@
 // The `Operability` service `fd deploy` and `fd doctor` run (specs/interfaces.md FD-IFC-070, specs/operability.md
 // FD-OPS-003 to FD-OPS-025): the deploy pipeline and the drift check over the live Cloudflare and GitHub target, as
 // the stage report `fd` prints. A stage that fails is a report with `ok: false`; only a defect is the caller's error.
+import { AGENTIC_CATALOG } from "@fractalboxdev/flare-dispatch-agentic";
 import {
   CURRENT_PHASE,
   profileDocumentFor,
@@ -24,11 +25,13 @@ import {
 } from "../deploy.ts";
 import {
   admissionCapCheck,
+  agenticRegistryCheck,
   bindingCheck,
   failed,
   profileCheck,
   templateInvariants,
   unrenderedCheck,
+  type AgenticRegistry,
   type Finding,
 } from "../drift.ts";
 import { decodeOverlay, type OverlayValues } from "../overlay.ts";
@@ -100,6 +103,8 @@ export interface OperabilityOptions<E> {
   readonly target?: (overlay: OverlayValues) => Layer.Layer<DeployTarget>;
   /** The profile document the deploy carries; the production document at the current phase by default (FD-OPS-021). */
   readonly profile?: ProfileDocument;
+  /** The agentic recipes the run catalogue carries; `AGENTIC_CATALOG` by default (FD-AGT-002, FD-AGT-004). */
+  readonly agenticRegistry?: AgenticRegistry;
 }
 
 /** What `fd doctor` does beyond the drift check. */
@@ -121,10 +126,11 @@ export const repositoryRoot = (from: string = process.cwd()): string => {
 
 /**
  * The checks over one rendered configuration: the bindings its env declares (FD-OPS-019) and, on the dispatcher, the
- * pool caps (FD-OPS-020, FD-PROF-033) and the components (FD-ARCH-001).
+ * pool caps (FD-OPS-020, FD-PROF-033), the components (FD-ARCH-001) and the registry validator over the agentic
+ * recipes of the run catalogue it serves (FD-AGT-002, FD-AGT-004).
  */
 export const renderedChecks =
-  (specs: readonly WorkerSpec[]) =>
+  (specs: readonly WorkerSpec[], registry: AgenticRegistry = AGENTIC_CATALOG) =>
   (worker: string, config: WorkerConfig): readonly Finding[] => {
     const spec = specs.find((s) => s.worker === worker);
     if (spec === undefined) return [];
@@ -134,6 +140,7 @@ export const renderedChecks =
         ? [
             ...admissionCapCheck(worker, config),
             ...architectureFindings(worker, config, CURRENT_PHASE),
+            ...agenticRegistryCheck(registry),
           ]
         : []),
     ];
@@ -151,14 +158,19 @@ export const profileDriftFindings = (
  * The pull-request part of the drift check (FD-OPS-019 to FD-OPS-021, FD-OPS-026): one Worker's template rendered
  * from `overlay`, against the template's invariants and `renderedChecks`. Answers the rendered text with the findings.
  */
-export const staticDrift = (spec: WorkerSpec, template: string, overlay: OverlayValues) =>
+export const staticDrift = (
+  spec: WorkerSpec,
+  template: string,
+  overlay: OverlayValues,
+  registry: AgenticRegistry = AGENTIC_CATALOG,
+) =>
   renderTemplate(spec.worker, template, overlay).pipe(
     Effect.map((rendered) => ({
       rendered,
       findings: [
         ...templateInvariants(spec.worker, parseJsonc(template)),
         ...unrenderedCheck(spec.worker, rendered),
-        ...renderedChecks([spec])(spec.worker, parseJsonc(rendered)),
+        ...renderedChecks([spec], registry)(spec.worker, parseJsonc(rendered)),
       ],
     })),
   );
@@ -171,6 +183,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
   const root = options.root ?? repositoryRoot();
   const env = options.env ?? process.env;
   const specs = options.workers ?? V2_WORKERS;
+  const checks = renderedChecks(specs, options.agenticRegistry ?? AGENTIC_CATALOG);
   const profileFindings = profileDriftFindings(options.profile);
   const workers = (): WorkerTemplate[] =>
     specs.map((s) => ({
@@ -236,7 +249,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
         ? Effect.flatMap(DeployTarget, (t) => t.raiseAlarm("drift", detail, "notify"))
         : Effect.void;
     return report(
-      fdDoctor(overlay, workers(), APP_PERMISSIONS, renderedChecks(specs), profileFindings, access).pipe(
+      fdDoctor(overlay, workers(), APP_PERMISSIONS, checks, profileFindings, access).pipe(
         Effect.tap((findings) => (failed(findings) ? drift(problemsOf(findings)) : Effect.void)),
         Effect.tapError((f) =>
           f.stage === "decode"
@@ -268,7 +281,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
               request.overlay,
               workers(),
               APP_PERMISSIONS,
-              renderedChecks(specs),
+              checks,
               profileFindings,
               access,
             ),

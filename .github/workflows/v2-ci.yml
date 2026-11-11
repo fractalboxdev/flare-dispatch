@@ -60,8 +60,9 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: $STRIP_TYPES packages/ops/scripts/spec-tags.ts --report ${BASE:+--base "$BASE"}
 
-  # FD-OPS-019 to FD-OPS-021, FD-OPS-026, FD-INT-050: each v2 template rendered from the placeholder overlay through the
-  # one renderer, the drift check's static checks, then `wrangler deploy --dry-run` on the rendered configuration. The
+  # FD-OPS-019 to FD-OPS-021, FD-OPS-026, FD-INT-050, FD-AGT-002, FD-AGT-004: each v2 template rendered from the
+  # placeholder overlay through the one renderer, the drift check's static checks with the registry validator over the
+  # agentic recipes' declarations, then `wrangler deploy --dry-run` on the rendered configuration. The
   # deploy suites (`test/deploy/`) run `fd deploy` and `fd doctor` over the committed templates against fakes.
   deploy-dry-run:
     runs-on: ubuntu-latest

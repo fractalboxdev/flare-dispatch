@@ -2,7 +2,11 @@
 // caps and mameko's profile validator; the deployed Workers against the record of the last deploy; and the GitHub
 // App's registration against the committed manifest (specs/operability.md § Drift check). Every check here is a pure
 // function of what it compares; `fd deploy` and `fd doctor` read the inputs through the ports of deploy.ts.
-import { checkRegistry, type RegistryEntry } from "@fractalboxdev/flare-dispatch-agentic";
+import {
+  checkRegistry,
+  validateDeclaration,
+  type RegistryEntry,
+} from "@fractalboxdev/flare-dispatch-agentic";
 import {
   loadProfile,
   poolAdmissionCaps,
@@ -175,6 +179,22 @@ export const unrenderedCheck = (worker: string, rendered: string): readonly Find
  */
 export const modelRegistryCheck = (entries: readonly RegistryEntry[]): readonly Finding[] =>
   checkRegistry(entries).map((r) => fail("model-registry", `models.registry.${r.entry}`, r.reason));
+
+/** The agentic recipes of the run catalogue a deploy carries, each by run name with its declaration. */
+export type AgenticRegistry = Readonly<Record<string, { readonly declaration: unknown }>>;
+
+/**
+ * The registry validator over the agentic recipes' declarations (specs/runs/agentic.md § Declaration and catalog): one
+ * failure per rejection of `validateDeclaration`, among them a call site without its tier, a declaration without its
+ * data classes or its intent kinds (FD-AGT-002), and one that sets `privateData`, `untrustedInput` and `outbound`
+ * together (FD-AGT-004).
+ */
+export const agenticRegistryCheck = (registry: AgenticRegistry): readonly Finding[] =>
+  Object.entries(registry).flatMap(([run, entry]) =>
+    validateDeclaration(run, entry.declaration).map((r) =>
+      fail("agentic-registry", `runs.${r.run}.declaration`, r.reason),
+    ),
+  );
 
 /** mameko's profile validator over the document the deploy carries, every rejection listed (FD-OPS-021). */
 export const profileCheck = (document: ProfileDocument, context: ValidationContext) =>
