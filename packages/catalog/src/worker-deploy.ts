@@ -2,6 +2,7 @@
 // reached only through the `cf-api` grant, then start `deploy-smoke` on the same commit (FD-GATE-061 to FD-GATE-069).
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { Intents } from "@fractalboxdev/mameko-run";
 import { Context, Effect, Layer, Option } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { CREDENTIAL_PLACEHOLDER } from "./egress.ts";
@@ -9,7 +10,6 @@ import { GithubRead } from "./github-read.ts";
 import { checkedOutWorkspace, runStep, uploadLog } from "./job.ts";
 import { WORKER_DEPLOY_MAX_DURATION_SEC, type WorkerDeployInput } from "./inputs.ts";
 import { timeoutProblem } from "./manifest.ts";
-import { GateIntents } from "./ports.ts";
 import { isSuccess, Outcome } from "./reasons.ts";
 
 export const DEFAULT_DEPLOY_TIMEOUT_SEC = 900;
@@ -89,10 +89,9 @@ export const runWorkerDeploy = (input: WorkerDeployInput) =>
       }),
     );
     if (isSuccess(outcome)) {
-      const intents = yield* GateIntents;
-      yield* intents.emit({
+      const intents = yield* Intents;
+      yield* intents.emit("deploy-smoke", {
         kind: "dispatch.followOn",
-        key: "deploy-smoke:0",
         payload: { run: "deploy-smoke", repository: input.scope, sha: input.sha, ref: input.ref },
       });
     }
@@ -102,6 +101,7 @@ export const runWorkerDeploy = (input: WorkerDeployInput) =>
       CheckoutFailed: () => Effect.succeed(Outcome.failure("infra: CheckoutFailed")),
       GithubReadFailed: () => Effect.succeed(Outcome.failure("infra: GithubReadFailed")),
       GithubUncredentialed: () => Effect.succeed(Outcome.failure("infra: GithubUncredentialed")),
-      IntentRejected: () => Effect.succeed(Outcome.failure("intent: undeclared kind")),
+      DuplicateIntentKey: () => Effect.succeed(Outcome.failure("infra: DuplicateIntentKey")),
+      IntentLimitExceeded: () => Effect.succeed(Outcome.failure("infra: IntentLimitExceeded")),
     }),
   );

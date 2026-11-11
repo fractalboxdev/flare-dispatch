@@ -1,12 +1,12 @@
 // The job matrix (specs/runs/gate.md § Job matrix): one parent execution that expands its jobs, starts each as a child
 // execution inside its window, waits for their verdicts and returns one. The parent makes no sandbox call
-// (FD-GATE-045): its only services are `MatrixChildren`, `GateIntents` and `GithubRead`.
+// (FD-GATE-045): its only services are `MatrixChildren`, mameko's `Intents` and `GithubRead`.
+import { Intents } from "@fractalboxdev/mameko-run";
 import { Effect, Match, Queue, Ref } from "effect";
 import { GithubRead } from "./github-read.ts";
 import { DEFAULT_JOB_TIMEOUT_SEC, type GateJobInput } from "./inputs.ts";
 import { isKey, type GateContext, type MatrixEntry, type MatrixJob } from "./manifest.ts";
 import {
-  GateIntents,
   MatrixChildren,
   type ChildHandle,
   type ChildVerdict,
@@ -483,7 +483,7 @@ export const runRelease = (
     const release = releaseRefOf(plan.ctx.ref);
     if (release._tag === "NotRelease") return Outcome.failure("config: release ref");
     const github = yield* GithubRead;
-    const intents = yield* GateIntents;
+    const intents = yield* Intents;
     const dryRun = release._tag === "DryRun";
     if (!dryRun) {
       const reachable = yield* github.reachableFrom(
@@ -492,9 +492,8 @@ export const runRelease = (
         options.defaultBranch,
       );
       if (!reachable) return Outcome.failure("release: tag not on default branch");
-      yield* intents.emit({
+      yield* intents.emit("release-draft", {
         kind: "release.draft",
-        key: "release-draft:0",
         payload: { tag: release.tag, sha: plan.ctx.sha },
       });
     }
@@ -502,9 +501,8 @@ export const runRelease = (
     if (dryRun || !isSuccess(outcome)) return outcome;
     const now = yield* github.tagCommit(options.scope, release.tag);
     if (now !== plan.ctx.sha) return Outcome.failure("release: tag moved");
-    yield* intents.emit({
+    yield* intents.emit("release-publish", {
       kind: "release.publish",
-      key: "release-publish:0",
       payload: { tag: release.tag, sha: plan.ctx.sha },
     });
     return outcome;
@@ -512,6 +510,7 @@ export const runRelease = (
     Effect.catchTags({
       GithubReadFailed: () => Effect.succeed(Outcome.failure("infra: GithubReadFailed")),
       GithubUncredentialed: () => Effect.succeed(Outcome.failure("infra: GithubUncredentialed")),
-      IntentRejected: () => Effect.succeed(Outcome.failure("intent: undeclared kind")),
+      DuplicateIntentKey: () => Effect.succeed(Outcome.failure("infra: DuplicateIntentKey")),
+      IntentLimitExceeded: () => Effect.succeed(Outcome.failure("infra: IntentLimitExceeded")),
     }),
   );
