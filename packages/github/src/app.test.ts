@@ -5,7 +5,16 @@ import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
-import { GithubApp, githubAppLayer, LEASE_READ_PERMISSIONS } from "./app.ts";
+import {
+  APP_LIST_MAX_PAGES,
+  GithubApp,
+  githubAppLayer,
+  LEASE_READ_PERMISSIONS,
+  listAppDeliveries,
+  listAppInstallations,
+  nextPagePath,
+  readAppInstallation,
+} from "./app.ts";
 import { fakeConcludeFacts, fakeGithub } from "./fake.test-support.ts";
 import { githubLiveLayer } from "./layer.ts";
 import { leaseReadToken } from "./lease-token.ts";
@@ -27,7 +36,10 @@ interface Call {
 
 /** A GitHub that answers the App and read endpoints from fixed tables and records every call. */
 const fakeApi = (
-  routes: Record<string, (call: Call) => { status: number; body: unknown }>,
+  routes: Record<
+    string,
+    (call: Call) => { status: number; body: unknown; headers?: Record<string, string> }
+  >,
   calls: Call[],
 ): typeof fetch =>
   (async (input: string | URL | Request, init?: RequestInit) => {
@@ -42,9 +54,11 @@ const fakeApi = (
     };
     calls.push(call);
     const route = routes[`${method} ${url.pathname}`];
-    const { status, body } =
-      route === undefined ? { status: 404, body: { message: "Not Found" } } : route(call);
-    return Response.json(body, { status });
+    const { status, body, headers } =
+      route === undefined
+        ? { status: 404, body: { message: "Not Found" }, headers: undefined }
+        : route(call);
+    return Response.json(body, { status, ...(headers === undefined ? {} : { headers }) });
   }) as typeof fetch;
 
 let minted = 0;
@@ -456,5 +470,160 @@ describe("GithubRead", () => {
       ]),
     );
     expect(ruleCalls.every((c) => c.method === "GET" && c.body === undefined)).toBe(true);
+  });
+});
+
+describe("the probes' App-JWT reads", () => {
+  const installationRoute = () => ({
+    "GET /app/installations/1": () => ({
+      status: 200,
+      body: { id: 1, account: { login: "acme" }, suspended_at: null },
+    }),
+    "GET /app/installations/2": () => ({
+      status: 200,
+      body: { id: 2, account: { login: "globex" }, suspended_at: "2026-11-01T00:00:00Z" },
+    }),
+    "GET /app/installations/5": () => ({ status: 500, body: { message: "boom" } }),
+  });
+
+  it("[FD-OPS-041] [FD-OPS-042] reads an installation through GET /app/installations/{id} under the App JWT: active, suspended or a 404", async () => {
+    const calls: Call[] = [];
+    const reads = await run(
+      Effect.gen(function* () {
+        const app = yield* GithubApp;
+        return [
+          yield* readAppInstallation(app, "1"),
+          yield* readAppInstallation(app, "2"),
+          yield* readAppInstallation(app, "3"),
+        ];
+      }),
+      fakeApi(installationRoute(), calls),
+    );
+    expect(reads).toEqual([
+      { status: "active", accountLogin: "acme" },
+      { status: "suspended", accountLogin: "globex" },
+      { status: "not-found" },
+    ]);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "GET /app/installations/1",
+      "GET /app/installations/2",
+      "GET /app/installations/3",
+    ]);
+    // The App JWT, not an installation token: three dot-separated segments with the App as issuer.
+    for (const c of calls) {
+      const [, payload] = c.authorization.replace(/^Bearer /, "").split(".");
+      expect(decodeSegment(payload!).iss).toBe("123");
+    }
+  });
+
+  it("[FD-OPS-042] an installation read that answers neither 2xx nor 404 fails instead of reading lost", async () => {
+    const exit = await run(
+      Effect.exit(GithubApp.use((app) => readAppInstallation(app, "5"))),
+      fakeApi(installationRoute(), []),
+    );
+    expect(JSON.stringify(exit)).toContain("GithubHttpError");
+  });
+
+  it("[FD-OPS-041] lists the App's installations with their account logins", async () => {
+    const listed = await run(
+      GithubApp.use((app) => listAppInstallations(app)),
+      fakeApi(
+        {
+          "GET /app/installations": () => ({
+            status: 200,
+            body: [
+              { id: 1, account: { login: "acme" }, suspended_at: null },
+              { id: 2, account: null },
+            ],
+          }),
+        },
+        [],
+      ),
+    );
+    expect(listed).toEqual([
+      { installationId: "1", accountLogin: "acme" },
+      { installationId: "2", accountLogin: "" },
+    ]);
+  });
+
+  const delivery = (id: number, at: number, status_code: number, guid = `g${id}`) => ({
+    id,
+    guid,
+    delivered_at: new Date(at).toISOString(),
+    redelivery: false,
+    status_code,
+    status: status_code === 200 ? "OK" : "failed",
+    event: "push",
+  });
+
+  it("[FD-OPS-044] lists the deliveries since a time through GET /app/hook/deliveries, following the cursor until a page reaches back past it", async () => {
+    const calls: Call[] = [];
+    const since = NOW - 900_000;
+    const fetch = fakeApi(
+      {
+        "GET /app/hook/deliveries": (call) =>
+          call.path.includes("cursor=p2")
+            ? {
+                status: 200,
+                body: [delivery(3, NOW - 600_000, 200), delivery(2, NOW - 1_200_000, 200)],
+                headers: {
+                  link: '<https://api.github.com/app/hook/deliveries?per_page=100&cursor=p3>; rel="next"',
+                },
+              }
+            : {
+                status: 200,
+                body: [delivery(5, NOW - 60_000, 502), delivery(4, NOW - 120_000, 200)],
+                headers: {
+                  link: '<https://api.github.com/app/hook/deliveries?per_page=100&cursor=p2>; rel="next"',
+                },
+              },
+      },
+      calls,
+    );
+    const listed = await run(
+      GithubApp.use((app) => listAppDeliveries(app, since)),
+      fetch,
+    );
+    expect(listed).toEqual([
+      { id: 5, guid: "g5", statusCode: 502, deliveredAt: NOW - 60_000, redelivery: false },
+      { id: 4, guid: "g4", statusCode: 200, deliveredAt: NOW - 120_000, redelivery: false },
+      { id: 3, guid: "g3", statusCode: 200, deliveredAt: NOW - 600_000, redelivery: false },
+    ]);
+    // The second page reached back past `since`, so its next page is never read.
+    expect(calls.map((c) => c.path)).toEqual([
+      "/app/hook/deliveries?per_page=100",
+      "/app/hook/deliveries?per_page=100&cursor=p2",
+    ]);
+  });
+
+  it("[FD-OPS-044] a listing reads at most its page bound", async () => {
+    const calls: Call[] = [];
+    let n = 0;
+    const fetch = fakeApi(
+      {
+        "GET /app/hook/deliveries": () => ({
+          status: 200,
+          body: [delivery(++n, NOW, 200)],
+          headers: {
+            link: `<https://api.github.com/app/hook/deliveries?per_page=100&cursor=p${n + 1}>; rel="next"`,
+          },
+        }),
+      },
+      calls,
+    );
+    await run(
+      GithubApp.use((app) => listAppDeliveries(app, NOW - 900_000)),
+      fetch,
+    );
+    expect(calls).toHaveLength(APP_LIST_MAX_PAGES);
+  });
+
+  it("names the next page of a Link header, and none on the last page", () => {
+    expect(
+      nextPagePath(
+        '<https://api.github.com/app/hook/deliveries?cursor=a>; rel="prev", <https://api.github.com/app/hook/deliveries?cursor=b>; rel="next"',
+      ),
+    ).toBe("/app/hook/deliveries?cursor=b");
+    expect(nextPagePath(null)).toBeNull();
   });
 });

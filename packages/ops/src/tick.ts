@@ -44,8 +44,12 @@ export interface TickDeps {
   readonly appliers?: Layer.Layer<Actuators | ActuatorRateLimit>;
   /** The App-JWT reads; without them the installation and delivery probes do not run. */
   readonly githubReads?: Layer.Layer<GithubAppReads>;
-  /** The canary's fixture repository and installation; without them no canary is pushed. */
-  readonly probes?: ProbeConfig;
+  /**
+   * The canary's fixture repository and installation, or the read that resolves them, such as the App's lookup of the
+   * fixture repository's installation; without them no canary is pushed. A failed read fails the canary step of that
+   * tick alone.
+   */
+  readonly probes?: ProbeConfig | Effect.Effect<ProbeConfig, unknown>;
   /** The limit key the App-JWT `delivery.redeliver` intents take. */
   readonly appLimitKey?: string;
   readonly webhookSilentHours: number;
@@ -81,6 +85,9 @@ const run = <A, R>(step: string, effect: Effect.Effect<A, unknown, R>) =>
 
 const skipped = (step: string, reason: string) =>
   Effect.succeed<StepOutcome>({ step, status: "skipped", reason });
+
+const probeConfigOf = (probes: ProbeConfig | Effect.Effect<ProbeConfig, unknown>) =>
+  Effect.isEffect(probes) ? probes : Effect.succeed(probes);
 
 /** Whether `now` falls in the first minute of a 15 min window. */
 export const isProbeMinute = (now: number): boolean => now % PROBE_INTERVAL_MS < 60_000;
@@ -177,7 +184,8 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
           : yield* run(
               "canary-push",
               Effect.gen(function* () {
-                const key = yield* pushCanary(db, deps.profile, deps.probes!, now);
+                const config = yield* probeConfigOf(deps.probes!);
+                const key = yield* pushCanary(db, deps.profile, config, now);
                 yield* writeKey(db, "canary-pushed", now);
                 return key;
               }),
@@ -221,7 +229,8 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
           yield* run(
             "canary-check",
             Effect.gen(function* () {
-              const stage = yield* checkCanary(db, deps.probes!, pushed, now);
+              const config = yield* probeConfigOf(deps.probes!);
+              const stage = yield* checkCanary(db, config, pushed, now);
               yield* writeKey(db, "canary-checked", pushed);
               return { stage };
             }),
