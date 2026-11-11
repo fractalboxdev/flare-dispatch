@@ -21,7 +21,7 @@ import {
 } from "./executor-layers.ts";
 import { executionsApiReadLayer, executionsReadLayer, type LogObjects } from "./executions-read.ts";
 import { payload } from "./fakes.test-support.ts";
-import { ciTriageRun, prReviewRun } from "./runs.ts";
+import { ciTriageRun, prReviewRun, selfHealPrRun } from "./runs.ts";
 import { Artifacts, Checkout, EditLoop, ModelClient, Shell } from "./services.ts";
 
 const dirs: string[] = [];
@@ -274,6 +274,49 @@ describe("the cloud executor's agentic layers", () => {
     const published = JSON.stringify(intents.intents());
     expect(published).not.toContain("+more");
     expect(published).not.toContain("artifacts/");
+  });
+
+  it("[FD-AGT-064] [FD-AGT-065] [FD-AGT-066] self-heal-pr's repro runs on the checkout its edit loop edited, and only a green repro stages the edit", async () => {
+    const repro = "grep -qx fixed src/status.txt";
+    const selfHeal = async (editLoop: readonly [string, ...string[]]) => {
+      const { dir, head } = await repository();
+      const { config, stored } = cloudConfig({ checkout: dir, baseCommit: head, editLoop });
+      const result = await Effect.runPromise(
+        selfHealPrRun.workflow
+          .execute(
+            payload("self-heal-pr", {
+              incident: {
+                contractVersion: "v1",
+                incidentId: "ci-1",
+                class: "ci",
+                repo: "o/r",
+                repro: { kind: "command", command: repro },
+              },
+            }),
+          )
+          .pipe(Effect.provide(Layer.provideMerge(selfHealPrRun.layer, cloud(config).layer))),
+      );
+      return { result, stored };
+    };
+    const fixed = await selfHeal([
+      "sh",
+      "-c",
+      "mkdir -p src && printf 'fixed\\n' > src/status.txt",
+    ]);
+    expect(fixed.result).toEqual({ _tag: "success" });
+    const key = `artifacts/01HEXEC0000000000000000000/1/${STAGED_WRITE_MANIFEST}`;
+    const manifest = JSON.parse(new TextDecoder().decode(fixed.stored.get(key)?.bytes)) as {
+      branch: string;
+      entries: { path: string }[];
+      pr: { labels: string[] };
+    };
+    expect(manifest.branch).toBe("flare-dispatch/self-heal-ci-1");
+    expect(manifest.entries.map((e) => e.path)).toEqual(["src/status.txt"]);
+    expect(manifest.pr.labels).toEqual(["self-heal", "self-heal:verified"]);
+
+    const unfixed = await selfHeal(["sh", "-c", "true"]);
+    expect(unfixed.result).toEqual({ _tag: "failure", reason: "no-fix" });
+    expect([...unfixed.stored.keys()]).toEqual([]);
   });
 
   it("[FD-AGT-059] refuses an artifact name outside the store's grammar and a store that fails", async () => {
