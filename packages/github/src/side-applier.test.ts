@@ -260,6 +260,29 @@ describe("comment, review and issue", () => {
     expect(w.side.issues).toHaveLength(150);
   });
 
+  it("[FD-AGT-075] an issue close as a duplicate closes with state reason duplicate and writes nothing else", async () => {
+    const w = world();
+    w.side.issues.push({ id: 9, number: 9, title: "dup", body: "same crash", labels: [] });
+    const r = row("issue", { number: 9, close_as_duplicate_of: 3 }, { intentKey: "run:close:0" });
+    expect(await apply(w, r)).toMatchObject({ _tag: "applied", externalRef: "9" });
+    expect(writes(w)).toEqual(["closeIssue"]);
+    expect(w.side.issues[0]).toMatchObject({
+      title: "dup",
+      body: "same crash",
+      stateReason: "duplicate",
+    });
+    expect(await lookup(w, r)).toMatchObject({ _tag: "absent" });
+    expect(await apply(w, row("issue", { close_as_duplicate_of: 3 }))).toMatchObject({
+      _tag: "refused",
+      reason: "issue: a close names no issue",
+    });
+    expect(await apply(w, row("issue", { number: 9 }))).toMatchObject({
+      _tag: "refused",
+      reason: "issue: a title and a body are required",
+    });
+    expect(writes(w)).toEqual(["closeIssue"]);
+  });
+
   it("[FD-GH-092] an issue list longer than the search bound is undetermined, never absent", async () => {
     const w = world();
     for (let n = 1; n <= ISSUE_PAGES * 100; n++)
@@ -746,7 +769,7 @@ describe("write authority", () => {
 
   it("[FD-GH-001] only the appliers call a GitHub write for an execution", () => {
     const writeCall =
-      /\.(createCheckRun|updateCheckRun|createComment|createReview|createIssue|updateIssue|addLabels|removeLabel|createBlob|createTree|createCommit|setBranch|createPull|closePull|createDraftRelease|publishRelease|uploadAsset)\(/;
+      /\.(createCheckRun|updateCheckRun|createComment|createReview|createIssue|updateIssue|closeIssue|addLabels|removeLabel|createBlob|createTree|createCommit|setBranch|createPull|closePull|createDraftRelease|publishRelease|uploadAsset)\(/;
     expect(controlPlaneFiles.map(rel)).toContain("../apps/control-plane/src/tick.ts");
     const callers = controlPlaneFiles
       .filter((f) => writeCall.test(readFileSync(f, "utf8")))

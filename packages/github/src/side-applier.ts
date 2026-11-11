@@ -44,11 +44,14 @@ export const SidePayloads = {
     commit_id: Schema.optionalKey(Schema.String),
   }),
   issue: Schema.Struct({
-    title: Schema.String,
-    body: Schema.String,
+    /** Required to create or update an issue; a close carries neither. */
+    title: Schema.optionalKey(Schema.String),
+    body: Schema.optionalKey(Schema.String),
     labels: Schema.optionalKey(Schema.Array(Schema.String)),
     /** Updates this issue instead of creating one. */
     number: Schema.optionalKey(Schema.Number),
+    /** Closes the issue `number` names with the state reason `duplicate`, in favour of this issue. */
+    close_as_duplicate_of: Schema.optionalKey(Schema.Number),
   }),
   label: Schema.Struct({
     issue_number: Schema.Number,
@@ -337,6 +340,12 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
     apply: (ctx, p) =>
       Effect.gen(function* () {
         const w = yield* writes;
+        if (p.close_as_duplicate_of !== undefined)
+          return p.number === undefined
+            ? yield* refuse("issue: a close names no issue")
+            : applied((yield* w.closeIssue({ ...ctx, issue: p.number, reason: "duplicate" })).id);
+        if (p.title === undefined || p.body === undefined)
+          return yield* refuse("issue: a title and a body are required");
         const marker = intentMarker(ctx.row);
         const body = withMarker(p.body, marker);
         if (p.number !== undefined)
@@ -349,8 +358,13 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
           (yield* w.createIssue({ ...ctx, title: p.title, body, labels: p.labels ?? [] })).id,
         );
       }),
-    lookup: (ctx) =>
-      Effect.flatMap(issuesWithMarker(ctx, intentMarker(ctx.row)), (is) => single(is, (i) => i.id)),
+    // A close carries no marker; closing a closed issue again changes nothing, so the drainer applies it again.
+    lookup: (ctx, p) =>
+      p.close_as_duplicate_of !== undefined
+        ? notLooked()
+        : Effect.flatMap(issuesWithMarker(ctx, intentMarker(ctx.row)), (is) =>
+            single(is, (i) => i.id),
+          ),
   },
   label: {
     github: true,

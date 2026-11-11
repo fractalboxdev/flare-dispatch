@@ -15,6 +15,7 @@ import {
 } from "../staged-write/build.ts";
 import { ExecutionsRead } from "./ci-triage-pr.ts";
 import { executionsApiReadLayer } from "./executions-read.ts";
+import { githubIssuesReadLayer, IssuesRead } from "./triage-issues.ts";
 import {
   ArtifactFailed,
   Artifacts,
@@ -249,6 +250,8 @@ export interface CloudAgenticConfig {
   readonly modelGatewayUrl: string;
   /** The control plane's origin, whose executions and log routes `ExecutionsRead` reads through the egress proxy. */
   readonly controlPlaneUrl: string;
+  /** The GitHub REST API origin `IssuesRead` reads through the egress proxy; `https://api.github.com` when absent. */
+  readonly githubApiBase?: string;
   /** The job's `fetch`, whose requests leave through the egress proxy. */
   readonly fetch: typeof globalThis.fetch;
   /** The execution's artifact store under the lease's artifact prefix. */
@@ -270,6 +273,7 @@ export type CloudAgenticServices =
   | Artifacts
   | RecipeIntents
   | ExecutionsRead
+  | IssuesRead
   | SuppressionLedger;
 
 /**
@@ -277,7 +281,8 @@ export type CloudAgenticServices =
  * route through the egress proxy, which alone holds the per-lease token; the shell and the edit loop start with the
  * sandbox environment, so no runner variable reaches them (FD-AGT-010). Artifacts go to the execution's artifact store
  * (FD-AGT-059). `ExecutionsRead` reads the control plane's executions and log routes, so the job holds no binding of the
- * executions table or the log store (FD-AGT-071). The suppression ledger is the read the runner entry supplies.
+ * executions table or the log store (FD-AGT-071). `IssuesRead` reads GitHub's issue list through the egress proxy. The
+ * suppression ledger is the read the runner entry supplies.
  */
 export const cloudAgenticLayers = (
   config: CloudAgenticConfig,
@@ -296,6 +301,10 @@ export const cloudAgenticLayers = (
     artifactsLayer(config.artifacts),
     runnerIntentsLayer,
     executionsApiReadLayer({ baseUrl: config.controlPlaneUrl, fetch: config.fetch }),
+    githubIssuesReadLayer({
+      apiBase: config.githubApiBase ?? "https://api.github.com",
+      fetch: config.fetch,
+    }),
     config.suppressionLedger,
   );
 };

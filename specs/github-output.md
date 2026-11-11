@@ -31,7 +31,7 @@ The profile declares every kind the control plane accepts ([profile.md](profile.
 | `check.annotations` | run | `run:<step name>:<index>` | Annotations on the check run, at most 50 per request | Annotations read back by check-run id |
 | `comment` | run | `run:<step name>:<index>` | Create issue or pull-request comment; when the payload names a `marker`, update in place the earliest comment the App wrote carrying it, unless a later execution's intent marker is on it | Hidden marker `<!-- flare-dispatch:intent <execution_id>/<intent_key> -->` |
 | `review` | run | `run:<step name>:<index>` | Create pull-request review, event `COMMENT` | Hidden marker in the body |
-| `issue` | run | `run:<step name>:<index>` | Create or update an issue | Hidden marker in the body |
+| `issue` | run | `run:<step name>:<index>` | Create or update an issue; when the payload names `close_as_duplicate_of`, close the issue `number` names with the state reason `duplicate` | Hidden marker in the body; a close is idempotent |
 | `label` | run | `run:<step name>:<index>` | Add or remove labels | Set semantics |
 | `pr.propose` | control plane, `on: accepted` for `success` | `cp:pr:propose` | The staged-write gate, then Git Data API commit and a pull request, a draft unless the manifest sets `draft` to false | Head branch name |
 | `pr.close` | run | `run:<step name>:<index>` | Close a pull request whose head branch is under `flare-dispatch/` | Update is idempotent |

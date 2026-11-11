@@ -22,7 +22,7 @@ interface FakeCommit {
 export interface FakeSide {
   readonly comments: Map<number, { id: number; body: string; user?: { login: string } }[]>;
   readonly reviews: Map<number, { id: number; body: string }[]>;
-  readonly issues: (IssueRef & { title: string; labels: string[] })[];
+  readonly issues: (IssueRef & { title: string; labels: string[]; stateReason?: string })[];
   readonly labels: Map<number, Set<string>>;
   readonly branches: Map<string, { sha: string; protected: boolean }>;
   readonly commits: Map<string, FakeCommit>;
@@ -166,6 +166,16 @@ export const fakeWritesLayer = (s: FakeSide) => {
         () => {
           const i = s.issues.find((x) => x.number === issue)!;
           Object.assign(i, { title, body });
+          return i;
+        },
+        true,
+      ),
+    closeIssue: ({ issue, reason }) =>
+      call(
+        "closeIssue",
+        () => {
+          const i = s.issues.find((x) => x.number === issue)!;
+          Object.assign(i, { stateReason: reason });
           return i;
         },
         true,
