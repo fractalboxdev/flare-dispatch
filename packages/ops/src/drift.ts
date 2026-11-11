@@ -2,6 +2,7 @@
 // caps and mameko's profile validator; the deployed Workers against the record of the last deploy; and the GitHub
 // App's registration against the committed manifest (specs/operability.md § Drift check). Every check here is a pure
 // function of what it compares; `fd deploy` and `fd doctor` read the inputs through the ports of deploy.ts.
+import { checkRegistry, type RegistryEntry } from "@fractalboxdev/flare-dispatch-agentic";
 import {
   loadProfile,
   poolAdmissionCaps,
@@ -167,6 +168,13 @@ export const unrenderedCheck = (worker: string, rendered: string): readonly Find
   placeholdersOf(rendered).map((p) =>
     fail("render", `${worker}.${p}`, "placeholder left unrendered"),
   );
+
+/**
+ * The provider registry the overlay holds, against the route kinds configuration validation accepts (FD-MDL-020) and
+ * each `workers-ai` entry's per-token rate against its Neurons price (FD-MDL-022): one failure per rejected entry.
+ */
+export const modelRegistryCheck = (entries: readonly RegistryEntry[]): readonly Finding[] =>
+  checkRegistry(entries).map((r) => fail("model-registry", `models.registry.${r.entry}`, r.reason));
 
 /** mameko's profile validator over the document the deploy carries, every rejection listed (FD-OPS-021). */
 export const profileCheck = (document: ProfileDocument, context: ValidationContext) =>

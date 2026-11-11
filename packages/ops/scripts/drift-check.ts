@@ -1,9 +1,9 @@
 // The pull-request part of the drift check (specs/operability.md FD-OPS-019 to FD-OPS-021, FD-OPS-026, FD-ARCH-001,
-// FD-INT-050, specs/profile.md FD-PROF-033, FD-PROF-064): the dispatcher's template rendered from the placeholder
-// overlay, against the template's invariants, the environment schema, the pool caps, the components of
-// specs/architecture.md and mameko's profile validator over the production profile. The profile step's findings follow
-// the configuration checks' (`driftCheckFindings`); `fd deploy` and `fd doctor` compose their drift stage the same way
-// (`withProfileStep`).
+// FD-INT-050, specs/profile.md FD-PROF-033, FD-PROF-064, specs/model-gateway.md FD-MDL-020, FD-MDL-022): the
+// placeholder overlay's provider registry, and the dispatcher's template rendered from that overlay, against the
+// template's invariants, the environment schema, the pool caps, the components of specs/architecture.md and mameko's
+// profile validator over the production profile. The profile step's findings follow the configuration checks'
+// (`driftCheckFindings`); `fd deploy` and `fd doctor` compose their drift stage the same way (`withProfileStep`).
 //
 //   node --experimental-strip-types packages/ops/scripts/drift-check.ts [--out <dir>]
 //
@@ -13,13 +13,13 @@ import { Effect } from "effect";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { staticDrift, V2_WORKERS } from "../src/cli/operability.ts";
-import { driftCheckFindings, type Finding } from "../src/drift.ts";
-import { placeholderOverlay } from "../src/overlay.ts";
+import { driftCheckFindings, modelRegistryCheck, type Finding } from "../src/drift.ts";
+import { modelRegistryOf, placeholderOverlay } from "../src/overlay.ts";
 import { args, ROOT } from "./repo.ts";
 
 const opts = args(process.argv.slice(2));
 const out = opts.get("out");
-const configFindings: Finding[] = [];
+const configFindings: Finding[] = [...modelRegistryCheck(modelRegistryOf(placeholderOverlay))];
 for (const spec of V2_WORKERS.filter((w) => w.dispatcher === true)) {
   const template = readFileSync(join(ROOT, spec.templatePath), "utf8");
   const checked = Effect.runSync(staticDrift(spec, template, placeholderOverlay));
