@@ -82,8 +82,8 @@ export const profileOf = (env: ControlPlaneEnv): Profile => buildProfile(deploym
 /**
  * One channel per device executor. No catalogue run requires `LocalContent` yet. A class whose terminal outcome is
  * `deferred` starts no workflow at admission, so the channel starts one at the winning claim (MAMEKO-ARCH-037). A claim
- * keyed by a name outside the catalogue answers `unknown-key` (MAMEKO-PROTO-031), and a run's staged intents may carry
- * every kind the profile declares, under that kind's effect class.
+ * keyed by a name outside the catalogue answers `unknown-key` (MAMEKO-PROTO-031). Executor batches may carry only
+ * kinds whose origin is `run`; the control plane's generated payloads never come from an executor.
  */
 export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHANNEL_CONFIG"] => ({
   reclaimPolicy: profile.reclaim_policy,
@@ -94,11 +94,13 @@ export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHAN
   localContent: false,
   anyOutcomeKinds: Object.fromEntries(
     Object.entries(profile.intent_kinds)
-      .filter(([, kind]) => kind.applied_for === "any")
+      .filter(([, kind]) => kind.origin === "run" && kind.applied_for === "any")
       .map(([name, kind]) => [name, kind.effect_class]),
   ),
   intentKinds: Object.fromEntries(
-    Object.entries(profile.intent_kinds).map(([name, kind]) => [name, kind.effect_class]),
+    Object.entries(profile.intent_kinds)
+      .filter(([, kind]) => kind.origin === "run")
+      .map(([name, kind]) => [name, kind.effect_class]),
   ),
   notApplicableDetails: [...profile.outcome_mapping.not_applicable_details],
   executorKind: "device",
