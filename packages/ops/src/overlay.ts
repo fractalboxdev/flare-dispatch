@@ -1,5 +1,6 @@
 // The operator overlay: a JSON document of values only, decoded against the value schema with every undeclared key
 // rejected (specs/operability.md § Template, overlay and rendered configuration, FD-OPS-002 to FD-OPS-004, FD-OPS-056).
+import type { RegistryEntry } from "@fractalboxdev/flare-dispatch-agentic";
 import { spendConfigWith, type SpendConfig } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Schema } from "effect";
 import { decodeStrict, type DecodeIssue } from "./decode.ts";
@@ -18,6 +19,24 @@ export const AlertSink = NonEmpty.check(
       : "an HTTPS URL or an email address",
   ),
 );
+
+/**
+ * One provider registry entry under `models.registry`, keyed by its entry id (MAMEKO-MDL-020). The route kind stays a
+ * string here: the drift check names an unregistered one (FD-MDL-020), and a `workers-ai` entry's rate is checked
+ * against its Neurons price there (FD-MDL-022).
+ */
+export const ModelEntryValues = Schema.Struct({
+  providerId: NonEmpty,
+  routeKind: NonEmpty,
+  serves: Schema.Array(Schema.Literals(["judgment", "transform"])).check(Schema.isMinLength(1)),
+  upstreamModel: NonEmpty,
+  inputPriceMicroUsdPerMTok: opt(Usd),
+  outputPriceMicroUsdPerMTok: opt(Usd),
+  neuronsPerMTok: opt(Schema.Struct({ input: Usd, output: Usd })),
+  contextWindow: opt(Count),
+  weights: opt(NonEmpty),
+  quantization: opt(NonEmpty),
+});
 
 /** Every value path the overlay may hold; nothing else (FD-OPS-002). */
 export const OverlayValues = Schema.Struct({
@@ -64,7 +83,7 @@ export const OverlayValues = Schema.Struct({
   egress: opt(Schema.Struct({ targetPatterns: Schema.Array(NonEmpty) })),
   models: opt(
     Schema.Struct({
-      registry: opt(Schema.Record(Schema.String, Schema.Unknown)),
+      registry: opt(Schema.Record(Schema.String, ModelEntryValues)),
       fallbackPriceUsdPerMTok: opt(Usd),
       bucketShares: opt(Schema.Record(Schema.String, Schema.Number)),
       breaker: opt(Schema.Number),
@@ -121,7 +140,27 @@ export const spendConfigOf = (overlay: OverlayValues): SpendConfig => {
   });
 };
 
-/** A complete overlay of placeholder values, for CI's dry run and the drift check on every pull request. */
+/** The overlay's provider registry as the deploy check reads it, each entry under its key as its id. */
+export const modelRegistryOf = (overlay: OverlayValues): readonly RegistryEntry[] =>
+  Object.entries(overlay.models?.registry ?? {}).map(([id, e]) => ({
+    id,
+    providerId: e.providerId,
+    routeKind: e.routeKind,
+    serves: e.serves,
+    upstreamModel: e.upstreamModel,
+    ...(e.inputPriceMicroUsdPerMTok === undefined
+      ? {}
+      : { inputPriceMicroUsdPerMTok: e.inputPriceMicroUsdPerMTok }),
+    ...(e.outputPriceMicroUsdPerMTok === undefined
+      ? {}
+      : { outputPriceMicroUsdPerMTok: e.outputPriceMicroUsdPerMTok }),
+    ...(e.neuronsPerMTok === undefined ? {} : { neuronsPerMTok: e.neuronsPerMTok }),
+  }));
+
+/**
+ * A complete overlay of placeholder values, for CI's dry run and the drift check on every pull request. Its provider
+ * registry holds one entry per route kind FlareDispatch registers, each priced as the deploy check requires.
+ */
 export const placeholderOverlay: OverlayValues = {
   accountId: "00000000000000000000000000000000",
   d1: { DB: "00000000-0000-0000-0000-000000000000" },
@@ -133,4 +172,25 @@ export const placeholderOverlay: OverlayValues = {
   github: { appId: "0", fixtureRepo: "example/canary" },
   executors: { planeId: "flare-dispatch" },
   alerts: { sink: "https://alerts.example.com/hook" },
+  models: {
+    registry: {
+      "workers-ai-example": {
+        providerId: "workers-ai",
+        routeKind: "workers-ai",
+        serves: ["transform"],
+        upstreamModel: "@cf/example/model",
+        neuronsPerMTok: { input: 25_608, output: 75_147 },
+        inputPriceMicroUsdPerMTok: 25_608 * 11,
+        outputPriceMicroUsdPerMTok: 75_147 * 11,
+      },
+      "bedrock-example": {
+        providerId: "bedrock",
+        routeKind: "bedrock",
+        serves: ["judgment"],
+        upstreamModel: "example.model-v1",
+        inputPriceMicroUsdPerMTok: 3_000_000,
+        outputPriceMicroUsdPerMTok: 15_000_000,
+      },
+    },
+  },
 };
