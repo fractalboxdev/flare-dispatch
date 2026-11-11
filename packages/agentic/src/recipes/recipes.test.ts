@@ -1,7 +1,8 @@
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
+import { Payloads as CheckPayloads } from "../../../github/src/applier.ts";
 import { validateDeclaration } from "../declaration.ts";
 import { AGENTIC_CATALOG, agenticWriteback } from "./catalog.ts";
 import { ExecutionsRead, CI_TRIAGE_BRANCH, reportPath } from "./ci-triage-pr.ts";
@@ -16,6 +17,7 @@ import {
   buildReviewDiff,
   classifyChange,
   coordinate,
+  PR_REVIEW_CHECK_NAME,
   PR_REVIEW_MARKER,
   prReviewSkip,
   prReviewTrigger,
@@ -233,7 +235,7 @@ describe("pr-review", () => {
     expect(merged.findings).toEqual([finding({ level: "failure", startLine: 5, endLine: 5 })]);
   });
 
-  it("keeps one marked review comment of at most 25 findings, sanitized", async () => {
+  it("[FD-AGT-053] keeps one marked review comment of at most 25 findings, sanitized", async () => {
     const findings = Array.from({ length: 30 }, (_, i) =>
       finding({ path: `src/f${i}.ts`, title: `@octocat <b>x</b>` }),
     );
@@ -262,8 +264,12 @@ describe("pr-review", () => {
       model: () => JSON.stringify({ findings }),
     });
     const intent = rec.intents.find((i) => i.kind === "check.annotations");
-    const annotations = (intent?.payload as { annotations: unknown[] } | undefined)?.annotations;
-    expect(annotations).toHaveLength(50);
+    // The payload decodes under the check-run applier's schema, naming the run's check and head commit.
+    const decoded = Schema.decodeUnknownSync(CheckPayloads["check.annotations"])(intent?.payload);
+    expect(decoded.name).toBe(PR_REVIEW_CHECK_NAME);
+    expect(decoded.head_sha).toBe(prInput().headSha);
+    expect(decoded.annotations).toHaveLength(50);
+    expect(decoded.annotations.some((a) => a.path === "src/nolines.ts")).toBe(false);
   });
 
   it("[FD-AGT-055] [FD-AGT-056] advisory always succeeds; gating fails on request-changes", async () => {

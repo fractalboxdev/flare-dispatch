@@ -16,6 +16,8 @@ import { InstallationQuota } from "./rate-limit.ts";
 export interface Commented {
   readonly id: number;
   readonly body: string | null;
+  /** The account that wrote it, as GitHub's REST response reports it. */
+  readonly user?: { readonly login: string } | null;
 }
 export interface IssueRef {
   readonly id: number;
@@ -71,6 +73,10 @@ export class GithubWrites extends Context.Service<
     ) => Effect.Effect<readonly Commented[], GithubError>;
     readonly createComment: (
       c: Repo & { readonly issue: number; readonly body: string },
+    ) => Effect.Effect<Commented, GithubError>;
+    /** Replaces the body of an issue or pull-request comment. */
+    readonly updateComment: (
+      c: Repo & { readonly comment: number; readonly body: string },
     ) => Effect.Effect<Commented, GithubError>;
     readonly listReviews: (
       c: Repo & { readonly pull: number },
@@ -207,6 +213,8 @@ export const githubWritesLayer = (options: WritesOptions) =>
           request(installation, "GET", `/repos/${repo}/issues/${issue}/comments?per_page=100`),
         createComment: ({ installation, repo, issue, body }) =>
           request(installation, "POST", `/repos/${repo}/issues/${issue}/comments`, { body }),
+        updateComment: ({ installation, repo, comment, body }) =>
+          request(installation, "PATCH", `/repos/${repo}/issues/comments/${comment}`, { body }),
         listReviews: ({ installation, repo, pull }) =>
           request(installation, "GET", `/repos/${repo}/pulls/${pull}/reviews?per_page=100`),
         createReview: ({ installation, repo, pull, body, commitId }) =>
