@@ -172,6 +172,14 @@ export class IntakeStore extends Context.Service<
       repo: string,
       sha: string,
     ) => Effect.Effect<readonly RecordWithStatus[], StoreUnavailable>;
+    /**
+     * The keys of the repository's supersession groups that start with `prefix` and still have a live member, e.g.
+     * every group of one pull request (FD-PROF-030).
+     */
+    readonly liveSupersessionGroups: (
+      repo: string,
+      prefix: string,
+    ) => Effect.Effect<readonly string[], StoreUnavailable>;
     readonly familySpend: (root: string) => Effect.Effect<FamilySpend, StoreUnavailable>;
     readonly cooldown: (
       bucket: string,
@@ -419,6 +427,18 @@ export const d1IntakeStore = (db: D1Like) =>
           .bind(repo, sha)
           .all(),
       ).pipe(Effect.map(({ results }) => (results as Row[]).map(fromRow))),
+    liveSupersessionGroups: (repo, prefix) =>
+      query(() =>
+        db
+          .prepare(
+            `select distinct supersession_key as key from executions
+             where scope_id = ? and status in ('pending', 'running')
+               and substr(supersession_key, 1, length(?)) = ?
+             order by supersession_key`,
+          )
+          .bind(repo, prefix, prefix)
+          .all(),
+      ).pipe(Effect.map(({ results }) => (results as { key: string }[]).map((r) => r.key))),
     familySpend: (root) =>
       query(() =>
         db

@@ -55,6 +55,11 @@ export interface IntakeRun {
     readonly constraints: readonly string[];
     readonly labels: readonly string[];
   };
+  /**
+   * The serial group a request with these inputs joins, for a run that declares `serialize`: one `worker-deploy`
+   * target, `worker-deploy:<repo>@<branch>[:<label>]` (FD-GATE-063). Absent or null joins none (MAMEKO-ADM-067).
+   */
+  readonly serialKey?: (inputs: unknown) => string | null;
 }
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */

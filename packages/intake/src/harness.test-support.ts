@@ -130,6 +130,8 @@ export interface Recorded {
   readonly resolved: ClassRequest[];
   readonly reported: { repo: string; sha: string; errors: readonly string[] }[];
   readonly cancelled: { executionId: string; cause: string }[];
+  /** Every workflow cancel admission or a group cancel asked for, in order (MAMEKO-ADM-062, MAMEKO-ADM-064). */
+  readonly workflowCancels: { executionId: string; cause: string }[];
   readonly evicted: string[];
   readonly alarms: Alarm[];
   /** Every `ExecutionEngine` start admission asked for, in order. */
@@ -166,6 +168,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     resolved: [],
     reported: [],
     cancelled: [],
+    workflowCancels: [],
     evicted: [],
     alarms: [],
     started: [],
@@ -202,6 +205,8 @@ export const harness = async (options: HarnessOptions = {}) => {
     config,
     d1Admission(db, settings.profile, {
       alarms,
+      cancelExecution: (executionId, cause) =>
+        Effect.sync(() => void recorded.workflowCancels.push({ executionId, cause })),
       startExecution: (payload) =>
         Effect.andThen(
           Effect.sync(() => void recorded.started.push(payload)),

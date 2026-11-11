@@ -3,6 +3,8 @@
 // dedup-key and `placements` row is admission's.
 import {
   placementInputs,
+  supersessionKey,
+  type ClassName,
   type ConfidentialityMode,
   type PlacementRequest,
   type Profile,
@@ -15,6 +17,7 @@ import {
   ClassResolver,
   IntakeConfig,
   intakeError,
+  type ClassRequest,
   type ExecutionStartFailed,
   type IntakeAdmitInput,
   type IntakeError,
@@ -26,6 +29,7 @@ import {
   type Caller,
   type RecordedTrigger,
 } from "./event.ts";
+import { profileRequestOf } from "./layer.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
 import { IntakeStore, ShedRecorder, type IntakeRecord, type StoreUnavailable } from "./store.ts";
 
@@ -208,6 +212,26 @@ const admissionPlacement = (
   };
 };
 
+/**
+ * The supersession group a request joins, through the profile's `supersessionKey` binding: a pull-request request of a
+ * run that declares `supersede` joins `<owner>/<repo>:<pull request number>:<run>[:<label>]`, and every other request,
+ * a check re-run included, joins none (FD-PROF-027, FD-PROF-029).
+ */
+const supersessionKeyOf = (
+  s: Submission,
+  request: ClassRequest,
+  className: string,
+): string | null =>
+  supersessionKey({
+    ...profileRequestOf(request, false),
+    ...Match.value(s.cacheTrigger).pipe(
+      Match.tag("PullRequest", (t) => ({ pullRequest: t.number })),
+      Match.orElse(() => ({})),
+    ),
+    ...(s.label === null ? {} : { label: s.label }),
+    ...(s.familyRoot === null ? {} : { rerun: { firstAttemptClass: className as ClassName } }),
+  });
+
 export const submit = (
   s: Submission,
 ): Effect.Effect<
@@ -222,22 +246,23 @@ export const submit = (
     const now = yield* Clock.currentTimeMillis;
     const name = checkName(s.run.name, s.label);
 
+    const classRequest: ClassRequest = {
+      run: s.run,
+      trigger: s.trigger,
+      event: s.event,
+      repo: s.repo,
+      ref: s.ref,
+      sha: s.sha,
+      defaultBranch: s.defaultBranch,
+      targetBranch: s.targetBranch,
+      refProtection: s.refProtection,
+      checkName: name,
+      classInput: s.classInput,
+      caller: s.caller,
+    };
     const resolution =
       s.forcedClass === null
-        ? yield* (yield* ClassResolver).resolve({
-            run: s.run,
-            trigger: s.trigger,
-            event: s.event,
-            repo: s.repo,
-            ref: s.ref,
-            sha: s.sha,
-            defaultBranch: s.defaultBranch,
-            targetBranch: s.targetBranch,
-            refProtection: s.refProtection,
-            checkName: name,
-            classInput: s.classInput,
-            caller: s.caller,
-          })
+        ? yield* (yield* ClassResolver).resolve(classRequest)
         : ({ _tag: "Class", class: s.forcedClass, labels: [], alarm: null } as const);
     const resolved = yield* Match.value(resolution).pipe(
       Match.tag("Class", (r) => Effect.succeed(r)),
@@ -303,6 +328,10 @@ export const submit = (
       placement: admissionPlacement(config.profile, s, className, labels, confidentiality),
       maxDurationSec: s.run.maxDurationSec,
       grants: s.run.grants ?? { setup: [], agent: [] },
+      supersessionKey: supersessionKeyOf(s, classRequest, className),
+      // A run that declares `serialize` names its serial group from its inputs, e.g. one `worker-deploy` target
+      // (FD-GATE-063).
+      serialKey: s.run.serialKey?.(s.inputs) ?? null,
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the

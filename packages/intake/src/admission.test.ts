@@ -6,19 +6,26 @@ import {
   startUnstartedExecutions,
 } from "@fractalboxdev/mameko-coordinator";
 import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import { fakeRepo } from "@fractalboxdev/flare-dispatch-github/testing";
+import { catalogRuns } from "./catalog.ts";
 import { Admission, ExecutionStartFailed } from "./config.ts";
 import { canonicalJson } from "./dedup.ts";
 import {
   actionsToken,
+  APP_ID,
   BASE,
+  checkRunRerequested,
   bodyOf,
   dispatchRequest,
   harness,
   HEAD,
   NOW,
   pullRequestPayload,
+  pushPayload,
+  REPO,
   signedWebhook,
   type Harness,
   type HarnessOptions,
@@ -301,5 +308,156 @@ describe("a held request's release", () => {
     expect(executionRow(h, id)).toMatchObject({ status: "pending", engine_started_at: null });
     expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
     expect(recordKinds(h, id)).toBe(placementKinds(h, id));
+  });
+});
+
+describe("supersession and serial groups at admission", () => {
+  const webhook = async (h: Harness, event: string, payload: unknown, delivery: string) =>
+    h.run(handleIntake(await signedWebhook(event, payload, { delivery }), "webhooks/github"));
+
+  const groupRows = (h: Harness, run: string) =>
+    h.rows(
+      `select e.status, e.reason, e.supersession_key as key, r.sha from executions e
+       join intake_records r on r.execution_id = e.id where e.run = ? order by e.enqueued_at`,
+      run,
+    );
+
+  it("[FD-PROF-027] a pull request's newer check request supersedes the older one in its group; another pull request and a push join no shared group", async () => {
+    const h = await harness();
+    const [first, second, other] = ["1", "2", "3"].map((c) => c.repeat(40));
+    await webhook(h, "pull_request", pullRequestPayload({ head: first }), "d-1");
+    await h.adjust(1_000);
+    await webhook(h, "pull_request", pullRequestPayload({ number: 13, head: other }), "d-2");
+    await h.adjust(1_000);
+    await webhook(h, "push", pushPayload("refs/heads/feature", HEAD), "d-3");
+    await h.adjust(1_000);
+    await webhook(h, "pull_request", pullRequestPayload({ head: second }), "d-4");
+    expect(groupRows(h, "check")).toEqual([
+      { status: "cancelled", reason: "superseded", key: `${REPO}:12:check:ci`, sha: first },
+      { status: "pending", reason: null, key: `${REPO}:13:check:ci`, sha: other },
+      { status: "pending", reason: null, key: null, sha: HEAD },
+      { status: "pending", reason: null, key: `${REPO}:12:check:ci`, sha: second },
+    ]);
+    // The superseded member's workflow is cancelled with the cause its row records (MAMEKO-ADM-062).
+    const cancelledId = h.rows("select id from executions where status = 'cancelled'")[0]!.id;
+    expect(h.recorded.workflowCancels).toEqual([{ executionId: cancelledId, cause: "superseded" }]);
+  });
+
+  it("[FD-PROF-029] a fork pull request's check re-run joins no supersession group and cancels no newer member", async () => {
+    // A separated `lean` pool places the fork requests, so the newer head's execution stays pending (MAMEKO-ADM-102).
+    const production = buildProfile("production");
+    const h = await harness({
+      settings: {
+        profile: {
+          ...production,
+          pools: production.pools.map((p) =>
+            p.name === "lean" ? { ...p, runner: "separated" as const } : p,
+          ),
+        },
+      },
+    });
+    const [first, second] = ["1", "2"].map((c) => c.repeat(40));
+    const fork = (head: string) => pullRequestPayload({ head, headRepo: "mallory/app" });
+    await webhook(h, "pull_request", fork(first!), "d-1");
+    await h.adjust(1_000);
+    await webhook(h, "pull_request", fork(second!), "d-2");
+    const firstId = h.rows(
+      "select execution_id as id from intake_records where run = 'check' and sha = ?",
+      first,
+    )[0]!.id as string;
+    await h.adjust(1_000);
+    await webhook(h, "check_run", checkRunRerequested(firstId, APP_ID, first), "d-3");
+    expect(h.rows("select trigger from intake_records where run = 'check'")).toEqual([
+      { trigger: "fork-pr" },
+      { trigger: "fork-pr" },
+      { trigger: "fork-pr" },
+    ]);
+    expect(groupRows(h, "check")).toEqual([
+      { status: "cancelled", reason: "superseded", key: `${REPO}:12:check:ci`, sha: first },
+      { status: "pending", reason: null, key: `${REPO}:12:check:ci`, sha: second },
+      { status: "pending", reason: null, key: null, sha: first },
+    ]);
+  });
+
+  it("[FD-PROF-030] a closed pull request cancels every supersession group of that pull request with cause pr-closed", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: fakeRepo({
+          branches: { main: BASE },
+          files: {
+            [`${BASE}:.github/flare-dispatch.json`]: JSON.stringify({
+              version: 1,
+              runs: [
+                { recipe: "check", label: "unit", triggers: ["pull_request"] },
+                { recipe: "check", label: "e2e", triggers: ["pull_request"] },
+              ],
+            }),
+          },
+        }),
+      },
+    });
+    await webhook(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }), "d-1");
+    await webhook(
+      h,
+      "pull_request",
+      pullRequestPayload({ number: 13, head: "3".repeat(40) }),
+      "d-2",
+    );
+    const closed = await bodyOf(
+      await webhook(
+        h,
+        "pull_request",
+        pullRequestPayload({ action: "closed", head: "1".repeat(40) }),
+        "d-3",
+      ),
+    );
+    const rows = h.rows(
+      "select id, status, reason, supersession_key as key from executions order by supersession_key",
+    );
+    expect(rows.map(({ id: _id, ...r }) => r)).toEqual([
+      { status: "cancelled", reason: "pr-closed", key: `${REPO}:12:check:e2e` },
+      { status: "cancelled", reason: "pr-closed", key: `${REPO}:12:check:unit` },
+      { status: "pending", reason: null, key: `${REPO}:13:check:e2e` },
+      { status: "pending", reason: null, key: `${REPO}:13:check:unit` },
+    ]);
+    const ended = rows.filter((r) => r.status === "cancelled").map((r) => r.id);
+    expect([...(closed.cancelled as string[])].sort()).toEqual([...ended].sort());
+    expect(h.recorded.workflowCancels.map((c) => c.cause)).toEqual(["pr-closed", "pr-closed"]);
+    // A closed pull request submits no run.
+    expect(closed.executions).toEqual([]);
+  });
+
+  it("[FD-GATE-063] a worker-deploy request joins the serial group of its repository, branch and label", async () => {
+    const text = JSON.stringify({
+      version: 1,
+      runs: [
+        {
+          recipe: "worker-deploy",
+          label: "api",
+          triggers: ["push"],
+          params: { command: "pnpm deploy" },
+        },
+      ],
+    });
+    const h = await harness({
+      settings: { catalog: catalogRuns("development") },
+      repos: {
+        [REPO]: fakeRepo({
+          branches: { main: BASE },
+          files: {
+            [`${BASE}:.github/flare-dispatch.json`]: text,
+            [`${HEAD}:.github/flare-dispatch.json`]: text,
+          },
+        }),
+      },
+    });
+    await webhook(h, "push", pushPayload("refs/heads/main", HEAD), "d-1");
+    expect(h.rows("select run, serial_key, supersession_key from executions")).toEqual([
+      {
+        run: "worker-deploy",
+        serial_key: `worker-deploy:${REPO}@main:api`,
+        supersession_key: null,
+      },
+    ]);
   });
 });
