@@ -1,13 +1,14 @@
-// The device extension's L1 eviction under the free-disk floor over 100 seeds plus every kept seed. A failing seed
-// goes into `seeds.jsonl` as `{"scenario": "evict", "seed": n}` so every later run replays it.
+// The device extension's L1 eviction under the free-disk floor over 100 seeds plus every kept seed in the repository's
+// `test/sim/seeds.jsonl`, where the nightly run appends each failing seed.
 import { describe, expect, it } from "vitest";
-import { seeds, simulateEviction } from "./evict.sim.ts";
+import { PR_SEEDS, readKeptSeeds, seedsOf } from "../../../ops/src/verification/harness.ts";
+import { simulateEviction } from "./evict.sim.ts";
 
 describe("simulation: L1 eviction under the free-disk floor", () => {
   it("[FD-CACHE-010] cache.evict(target_bytes) evicts L1 entries least recently read first until target_bytes are freed or L1 is empty, and answers the bytes freed", () => {
     const violations: string[] = [];
     const reached: Record<string, number> = {};
-    for (const seed of seeds("evict")) {
+    for (const seed of seedsOf("evict", PR_SEEDS, readKeptSeeds())) {
       const run = simulateEviction(seed);
       violations.push(...run.violations.map((v) => v.message));
       for (const [k, n] of Object.entries(run.reached)) reached[k] = (reached[k] ?? 0) + n;

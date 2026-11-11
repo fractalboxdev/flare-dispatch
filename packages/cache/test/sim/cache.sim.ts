@@ -4,13 +4,19 @@
 // it saw, the cases the seed reached and a trace that replays exactly. R2's own conditional writes are checked against
 // Miniflare by the unit suites; here the bucket keeps every run in one process and on one clock.
 //
-// - `simulateReclaim`: an execution is reclaimed onto other executors while the executors of earlier epochs keep
-//   asking for URLs and using their compile-cache tokens (FD-CACHE-051), and every executor tries to reach what an
-//   earlier epoch left behind (FD-CACHE-002).
+// - `simulateReclaim`: an execution is reclaimed onto other executors and its lease revoked, while the executors of
+//   earlier epochs keep asking for URLs, using their compile-cache tokens and committing manifests for their uploads
+//   (FD-CACHE-051, FD-CACHE-040), and every executor tries to reach what an earlier epoch left behind (FD-CACHE-002).
 // - `simulateSweep`: entries are committed and read over 40 days while the cache sweep ticks (FD-CACHE-062).
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+//
+// `scenarios` is what the `sim` job runs (packages/ops/scripts/harness.ts): each seed fails on any violation.
 import { Effect, Exit } from "effect";
+import {
+  seededRandom,
+  throwOnViolations,
+  type SimScenario,
+  type SimViolation,
+} from "../../../ops/src/verification/harness.ts";
 import { compileObjectKey, handleCompileCache } from "../../src/compile-cache.ts";
 import { sha256Hex } from "../../src/crypto.ts";
 import { leaseCacheFields, type LeaseState, type UploadGrant } from "../../src/lease.ts";
@@ -23,52 +29,39 @@ import {
   type ManifestSignerService,
 } from "../../src/manifest.ts";
 import { protectedCloud, pullRequestNamespace } from "../../src/namespaces.ts";
-import { MAX_URL_LIFETIME_MS, presignForExecution, PresignRefused } from "../../src/presign.ts";
+import { presignForExecution, PresignRefused } from "../../src/presign.ts";
 import { sweepCache } from "../../src/sweep.ts";
 import { grantCarriesNoWorkspace } from "../../src/workspace.ts";
-import { failureOf, layers, SECRET, world, type World } from "../../src/support.test-support.ts";
+import {
+  failureOf,
+  layers,
+  SECRET,
+  signerFor,
+  signingKeys,
+  world,
+  type World,
+} from "../../src/support.test-support.ts";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 /** The simulated clock starts here. */
 const START = Date.UTC(2026, 0, 1);
+/** The longest URL lifetime FD-CACHE-051 allows. */
+const URL_LIFETIME_MS = 15 * MINUTE;
 /** The TTL FD-CACHE-062 states. */
 export const CACHE_TTL_MS = 14 * DAY;
 
-/** A seeded PRNG (mulberry32): one seed fixes every draw. */
-export const seededRandom = (seed: number): (() => number) => {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
-  };
-};
-
-const kept = readFileSync(join(import.meta.dirname, "seeds.jsonl"), "utf8")
-  .split("\n")
-  .filter((l) => l.trim() !== "")
-  .map((l) => JSON.parse(l) as { scenario: string; seed: number });
-
-/** 100 seeds per scenario plus every kept seed (specs/verification.md § V-SIM). */
-export const seeds = (scenario: string): readonly number[] => [
-  ...Array.from({ length: 100 }, (_, i) => i + 1),
-  ...kept.filter((k) => k.scenario === scenario).map((k) => k.seed),
-];
-
-export interface Violation {
-  readonly id: string;
-  readonly message: string;
-}
-
 export interface SimOutcome {
-  readonly violations: readonly Violation[];
+  readonly violations: readonly SimViolation[];
   readonly reached: Readonly<Record<string, number>>;
   readonly trace: readonly string[];
 }
+
+let signer: Promise<ManifestSignerService> | undefined;
+/** The control plane's manifest signer, built once for every run in the process. */
+export const signerOnce = (): Promise<ManifestSignerService> =>
+  (signer ??= signingKeys().then((keys) => signerFor(keys.pair.privateKey)));
 
 const encoder = new TextEncoder();
 
@@ -188,19 +181,34 @@ const WORKSPACE_KEYS = (executionId: string, epoch: number) => [
 
 interface Holder {
   readonly epoch: number;
+  readonly kind: (typeof KINDS)[number];
   readonly grant: UploadGrant;
   readonly write: string | null;
+}
+
+/** A cache object an executor uploaded through its URL, under entry `entry` of `namespace`. */
+interface Upload {
+  readonly key: string;
+  readonly epoch: number;
+  readonly namespace: string;
+  readonly entry: string;
+  readonly size: number;
+  committed: boolean;
 }
 
 const hexOf = (random: () => number) =>
   Array.from({ length: 64 }, () => Math.floor(random() * 16).toString(16)).join("");
 
 /**
- * One execution of a pull request, reclaimed onto another executor of a seeded kind at seeded times. Between
- * reclaims, the holder of the current epoch or of an earlier one asks `exec.presign` for cache and log `PUT`s, uses
- * its compile-cache token, or tries to fetch an earlier epoch's uploads and to write a workspace-shaped key.
+ * One execution of a pull request, reclaimed onto another executor of a seeded kind at seeded times and sometimes
+ * revoked, which leaves no current epoch until the next reclaim. Between those events, the holder of the current
+ * epoch or of an earlier one asks `exec.presign` for cache and log `PUT`s, uses its compile-cache token, commits a
+ * manifest for its uploads, or tries to fetch an earlier epoch's uploads and to write a workspace-shaped key.
  */
-export const simulateReclaim = async (seed: number, signer: ManifestSignerService): Promise<SimOutcome> => {
+export const simulateReclaim = async (
+  seed: number,
+  signer: ManifestSignerService,
+): Promise<SimOutcome> => {
   const random = seededRandom(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(random() * xs.length)]!;
   const executionId = `exec-sim-${seed}`;
@@ -208,29 +216,33 @@ export const simulateReclaim = async (seed: number, signer: ManifestSignerServic
   w.now = START + Math.floor(random() * HOUR);
   const bucket = simBucket(() => w.now);
   const holders: Holder[] = [];
-  const uploads: { readonly key: string; readonly epoch: number }[] = [];
-  const violations: Violation[] = [];
+  /** The epoch the control plane's lease carries; `null` once the lease is revoked, until the next reclaim. */
+  let live: number | null = null;
+  const uploads: Upload[] = [];
+  const violations: SimViolation[] = [];
   const trace: string[] = [];
   const reached: Record<string, number> = {
     reclaims: 0,
+    revokes: 0,
     stalePresign: 0,
     currentPresign: 0,
     staleToken: 0,
     currentToken: 0,
+    staleCommit: 0,
+    currentCommit: 0,
     refusedTransfer: 0,
     refusedWorkspaceKey: 0,
   };
   const flag = (id: string, message: string) =>
     violations.push({ id, message: `seed ${seed} at +${w.now - START} ms: ${message}` });
-  const current = () => holders.at(-1)!;
+  const ended = () => (live === null ? "the revoke" : `the reclaim to ${live}`);
+  const provide = Effect.provide(layers(w, bucket, signer));
   const presign = (
     epoch: number,
     objects: readonly { key: string; method: "GET" | "PUT"; length: number | null }[],
   ) =>
     Effect.runPromiseExit(
-      presignForExecution({ execution_id: executionId, epoch, objects }).pipe(
-        Effect.provide(layers(w, bucket, signer)),
-      ),
+      presignForExecution({ execution_id: executionId, epoch, objects }).pipe(provide),
     );
 
   const reclaim = async () => {
@@ -260,45 +272,64 @@ export const simulateReclaim = async (seed: number, signer: ManifestSignerServic
       deadlineAt,
     };
     w.leases.set(executionId, lease);
-    holders.push({ epoch, grant: fields.upload_grant, write: fields.cache_namespaces.write });
+    holders.push({
+      epoch,
+      kind: executorKind,
+      grant: fields.upload_grant,
+      write: fields.cache_namespaces.write,
+    });
     if (epoch > 1) reached.reclaims!++;
+    live = epoch;
     trace.push(`reclaim ${epoch} ${executorKind}`);
     if (!grantCarriesNoWorkspace(fields.upload_grant, executionId, epoch))
-      flag("FD-CACHE-002", `epoch ${epoch}'s upload grant names a prefix outside cache, artifacts and logs`);
+      flag(
+        "FD-CACHE-002",
+        `epoch ${epoch}'s upload grant names a prefix outside cache, artifacts and logs`,
+      );
     for (const earlier of holders.slice(0, -1))
       for (const prefix of [fields.upload_grant.artifact_prefix, fields.upload_grant.log_prefix])
         if (prefix === earlier.grant.artifact_prefix || prefix === earlier.grant.log_prefix)
-          flag("FD-CACHE-002", `epoch ${epoch} is granted epoch ${earlier.epoch}'s prefix ${prefix}`);
+          flag(
+            "FD-CACHE-002",
+            `epoch ${epoch} is granted epoch ${earlier.epoch}'s prefix ${prefix}`,
+          );
   };
 
   /** A cache-object or log `PUT` by the holder of `h`'s epoch. */
   const put = async (h: Holder, step: number) => {
     const log = random() < 0.4;
-    const key = log
-      ? await logObjectName({
-          executionId,
-          epoch: h.epoch,
-          journalName: `step-${step}`,
-          stream: "stdout",
-          start: 0,
-          end: step,
-        })
-      : h.write === null
-        ? undefined
-        : `${objectPrefix(h.write, hexOf(random), executionId, h.epoch)}blob-${step}`;
+    const namespace = h.write;
+    const entry = log || namespace === null ? undefined : hexOf(random);
+    const key =
+      entry !== undefined && namespace !== null
+        ? `${objectPrefix(namespace, entry, executionId, h.epoch)}blob-${step}`
+        : log
+          ? await logObjectName({
+              executionId,
+              epoch: h.epoch,
+              journalName: `step-${step}`,
+              stream: "stdout",
+              start: 0,
+              end: step,
+            })
+          : undefined;
     if (key === undefined) return;
     const length = 1 + Math.floor(random() * 512);
     const signedBefore = w.signed.length;
     const exit = await presign(h.epoch, [{ key, method: "PUT", length }]);
     const answer = Exit.isSuccess(exit) ? exit.value : undefined;
-    const stale = h.epoch !== current().epoch;
-    trace.push(`put ${h.epoch}/${current().epoch} ${log ? "log" : "cache"} ${answer === undefined ? "refused" : "status" in answer ? answer.status : "urls"}`);
-    if (stale) {
+    trace.push(
+      `put ${h.epoch}/${live ?? "-"} ${log ? "log" : "cache"} ${answer === undefined ? "refused" : "status" in answer ? answer.status : "urls"}`,
+    );
+    if (h.epoch !== live) {
       reached.stalePresign!++;
       if (answer === undefined || !("status" in answer) || answer.status !== "stale")
-        flag("FD-CACHE-051", `epoch ${h.epoch}'s URL request after the reclaim to ${current().epoch} was not answered stale`);
+        flag(
+          "FD-CACHE-051",
+          `epoch ${h.epoch}'s URL request after ${ended()} was not answered stale`,
+        );
       if (w.signed.length !== signedBefore)
-        flag("FD-CACHE-051", `epoch ${h.epoch}'s URL request after the reclaim got a URL signed`);
+        flag("FD-CACHE-051", `epoch ${h.epoch}'s URL request after ${ended()} got a URL signed`);
       return;
     }
     if (answer === undefined || "status" in answer) {
@@ -307,28 +338,87 @@ export const simulateReclaim = async (seed: number, signer: ManifestSignerServic
     }
     reached.currentPresign!++;
     for (const url of answer.urls) {
-      if (url.expires_at > w.now + MAX_URL_LIFETIME_MS)
+      if (url.expires_at > w.now + URL_LIFETIME_MS)
         flag("FD-CACHE-051", `${url.key} lives ${url.expires_at - w.now} ms, past 15 min`);
       const inEpochPath =
         url.key.startsWith(`logs/${executionId}/${h.epoch}/`) ||
         (h.write !== null &&
           url.key.startsWith(`cache/${h.write}/`) &&
           url.key.slice(`cache/${h.write}/`.length).split("/")[1] === `${executionId}.${h.epoch}`);
-      if (!inEpochPath) flag("FD-CACHE-051", `${url.key} is outside epoch ${h.epoch}'s object path`);
+      if (!inEpochPath)
+        flag("FD-CACHE-051", `${url.key} is outside epoch ${h.epoch}'s object path`);
     }
     // The executor uploads through the URL it was handed.
     await bucket.put(key, "x".repeat(length));
-    if (!log) uploads.push({ key, epoch: h.epoch });
+    if (entry !== undefined && namespace !== null)
+      uploads.push({ key, epoch: h.epoch, namespace, entry, size: length, committed: false });
   };
 
-  /** The current holder tries to fetch an earlier epoch's upload, and to write a workspace-shaped key. */
+  /**
+   * The holder of `h`'s epoch commits a manifest for one entry it uploaded and never committed. Before its lease ends
+   * the commit is accepted; after a reclaim or a revoke it is `stale` and no manifest is written, so the uploads never
+   * become an entry. A device executor's current-epoch commit needs its registered key's signature and is left out.
+   */
+  const commit = async (h: Holder) => {
+    const stale = h.epoch !== live;
+    if (!stale && h.kind === "device") return;
+    const pending = uploads.filter((u) => u.epoch === h.epoch && !u.committed);
+    if (pending.length === 0) return;
+    const { namespace, entry } = pick(pending);
+    const objects = pending.filter((u) => u.namespace === namespace && u.entry === entry);
+    const exit = await Effect.runPromiseExit(
+      commitCacheManifest({
+        execution_id: executionId,
+        epoch: h.epoch,
+        manifest: {
+          key: entry,
+          namespace,
+          objects: await Promise.all(
+            objects.map(async (u) => ({
+              path: u.key,
+              size: u.size,
+              sha256: await sha256Hex("x".repeat(u.size)),
+            })),
+          ),
+        },
+      }).pipe(provide),
+    );
+    const ack = Exit.isSuccess(exit) ? exit.value : `refused ${String(failureOf(exit))}`;
+    const manifest = (await bucket.head(manifestPath(namespace, entry))) !== null;
+    trace.push(`commit ${h.epoch}/${live ?? "-"} ${ack}`);
+    if (stale) {
+      reached.staleCommit!++;
+      if (ack !== "stale")
+        flag("FD-CACHE-040", `epoch ${h.epoch}'s commit after ${ended()} was answered ${ack}`);
+      if (manifest)
+        flag(
+          "FD-CACHE-051",
+          `epoch ${h.epoch}'s uploads under ${entry.slice(0, 8)} became an entry after ${ended()}`,
+        );
+      return;
+    }
+    if (ack !== "accepted" || !manifest) {
+      flag("FD-CACHE-040", `the current epoch ${h.epoch}'s commit was answered ${ack}`);
+      return;
+    }
+    reached.currentCommit!++;
+    for (const u of objects) u.committed = true;
+  };
+
+  /**
+   * The current holder tries to fetch an upload an earlier epoch never got committed, and to write a workspace-shaped
+   * key. An entry an earlier epoch committed while it was current is ordinary cache, readable by a later epoch.
+   */
   const transfer = async () => {
-    const h = current();
-    const earlier = uploads.filter((u) => u.epoch < h.epoch);
+    const h = holders.find((x) => x.epoch === live);
+    if (h === undefined) return;
+    const earlier = uploads.filter((u) => u.epoch < h.epoch && !u.committed);
     if (earlier.length > 0) {
       const u = pick(earlier);
       const exit = await presign(h.epoch, [{ key: u.key, method: "GET", length: null }]);
-      trace.push(`fetch-earlier ${u.epoch}/${h.epoch} ${Exit.isSuccess(exit) ? "signed" : "refused"}`);
+      trace.push(
+        `fetch-earlier ${u.epoch}/${h.epoch} ${Exit.isSuccess(exit) ? "signed" : "refused"}`,
+      );
       if (Exit.isSuccess(exit) || !(failureOf(exit) instanceof PresignRefused))
         flag("FD-CACHE-002", `epoch ${h.epoch} was handed epoch ${u.epoch}'s upload ${u.key}`);
       else reached.refusedTransfer!++;
@@ -369,18 +459,41 @@ export const simulateReclaim = async (seed: number, signer: ManifestSignerServic
       },
     );
     const status = response?.status ?? 0;
-    trace.push(`compile ${method} ${h.epoch}/${current().epoch} ${status}`);
-    if (h.epoch !== current().epoch) {
+    trace.push(`compile ${method} ${h.epoch}/${live ?? "-"} ${status}`);
+    if (h.epoch !== live) {
       reached.staleToken!++;
       if (status !== 403)
-        flag("FD-CACHE-051", `epoch ${h.epoch}'s compile-cache token after the reclaim answered ${status}`);
-      if (method === "PUT" && h.write !== null && (await bucket.head(compileObjectKey(h.write, name))) !== null)
+        flag(
+          "FD-CACHE-051",
+          `epoch ${h.epoch}'s compile-cache token after ${ended()} answered ${status}`,
+        );
+      if (
+        method === "PUT" &&
+        h.write !== null &&
+        (await bucket.head(compileObjectKey(h.write, name))) !== null
+      )
         flag("FD-CACHE-051", `epoch ${h.epoch}'s stale token wrote ${name}`);
       return;
     }
     reached.currentToken!++;
     if (status === 403)
       flag("FD-CACHE-051", `the current epoch ${h.epoch}'s compile-cache token was refused`);
+  };
+
+  /**
+   * The control plane revokes the lease: the placement goes, so the lease answers no epoch. The revoked holder at once
+   * asks for a URL, uses its token and commits, and every one is refused.
+   */
+  const revoke = async (step: number) => {
+    const revoked = holders.find((h) => h.epoch === live);
+    if (revoked === undefined) return;
+    w.leases.delete(executionId);
+    live = null;
+    reached.revokes!++;
+    trace.push(`revoke ${revoked.epoch}`);
+    await put(revoked, step);
+    await compile(revoked, step);
+    await commit(revoked);
   };
 
   await reclaim();
@@ -392,10 +505,19 @@ export const simulateReclaim = async (seed: number, signer: ManifestSignerServic
       await reclaim();
       continue;
     }
-    // An executor of an earlier epoch keeps acting about half the time after a reclaim.
-    const h = holders.length > 1 && random() < 0.5 ? pick(holders.slice(0, -1)) : current();
-    if (roll < 0.55) await put(h, step);
-    else if (roll < 0.75) await transfer();
+    if (roll < 0.2 && live !== null) {
+      await revoke(step);
+      continue;
+    }
+    // After a reclaim an executor of an earlier epoch keeps acting about half the time; after a revoke every
+    // executor's epoch is an earlier one.
+    const current = holders.find((x) => x.epoch === live);
+    const earlier = holders.filter((x) => x !== current);
+    const h =
+      current === undefined || (earlier.length > 0 && random() < 0.5) ? pick(earlier) : current;
+    if (roll < 0.5) await put(h, step);
+    else if (roll < 0.62) await commit(h);
+    else if (roll < 0.77) await transfer();
     else await compile(h, step);
   }
   return { violations, reached, trace };
@@ -407,7 +529,10 @@ export const simulateReclaim = async (seed: number, signer: ManifestSignerServic
  * or 1 ms past, an entry's TTL. Before each tick the scenario reads every entry's `last_read_at`, and after it checks
  * that the sweep deleted exactly the entries whose `last_read_at` is older than the TTL, each with all its objects.
  */
-export const simulateSweep = async (seed: number, signer: ManifestSignerService): Promise<SimOutcome> => {
+export const simulateSweep = async (
+  seed: number,
+  signer: ManifestSignerService,
+): Promise<SimOutcome> => {
   const random = seededRandom(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(random() * xs.length)]!;
   const ttlMs = CACHE_TTL_MS;
@@ -426,11 +551,20 @@ export const simulateSweep = async (seed: number, signer: ManifestSignerService)
   const w: World = world([reader]);
   w.now = START;
   const bucket = simBucket(() => w.now);
-  const violations: Violation[] = [];
+  const violations: SimViolation[] = [];
   const trace: string[] = [];
-  const reached: Record<string, number> = { expired: 0, kept: 0, refreshed: 0, boundary: 0, ticks: 0 };
+  const reached: Record<string, number> = {
+    expired: 0,
+    kept: 0,
+    refreshed: 0,
+    boundary: 0,
+    ticks: 0,
+  };
   const flag = (message: string) =>
-    violations.push({ id: "FD-CACHE-062", message: `seed ${seed} at +${w.now - START} ms: ${message}` });
+    violations.push({
+      id: "FD-CACHE-062",
+      message: `seed ${seed} at +${w.now - START} ms: ${message}`,
+    });
   const entries: { namespace: string; key: string; objects: string[]; gone: boolean }[] = [];
   const total = 3 + Math.floor(random() * 6);
   const run = <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromiseExit(effect);
@@ -457,7 +591,11 @@ export const simulateSweep = async (seed: number, signer: ManifestSignerService)
       objects.push({ path, size: body.length, sha256: await sha256Hex(body) });
     }
     const exit = await run(
-      commitCacheManifest({ execution_id: writer, epoch: 1, manifest: { key, namespace, objects } }).pipe(provide),
+      commitCacheManifest({
+        execution_id: writer,
+        epoch: 1,
+        manifest: { key, namespace, objects },
+      }).pipe(provide),
     );
     trace.push(`commit ${i} ${Exit.isSuccess(exit) ? exit.value : "refused"}`);
     entries.push({ namespace, key, objects: objects.map((o) => o.path), gone: false });
@@ -476,7 +614,9 @@ export const simulateSweep = async (seed: number, signer: ManifestSignerService)
       }).pipe(provide),
     );
     const after = await lastReadOf(e);
-    trace.push(`read ${entries.indexOf(e)} ${Exit.isSuccess(exit) ? "signed" : "refused"} ${after - START}`);
+    trace.push(
+      `read ${entries.indexOf(e)} ${Exit.isSuccess(exit) ? "signed" : "refused"} ${after - START}`,
+    );
     if (after !== before) reached.refreshed!++;
   };
 
@@ -496,14 +636,20 @@ export const simulateSweep = async (seed: number, signer: ManifestSignerService)
       const expired = age > ttlMs;
       if (age === ttlMs || age === ttlMs + 1) reached.boundary!++;
       const manifest = (await bucket.head(manifestPath(e.namespace, e.key))) !== null;
-      const objects = await Promise.all(e.objects.map(async (p) => (await bucket.head(p)) !== null));
+      const objects = await Promise.all(
+        e.objects.map(async (p) => (await bucket.head(p)) !== null),
+      );
       if (expired) {
         if (manifest || objects.some(Boolean))
-          flag(`entry ${e.key.slice(0, 8)} last read ${age} ms ago, past the ${ttlMs} ms TTL, was not deleted whole`);
+          flag(
+            `entry ${e.key.slice(0, 8)} last read ${age} ms ago, past the ${ttlMs} ms TTL, was not deleted whole`,
+          );
         else reached.expired!++;
         e.gone = true;
       } else if (!manifest || objects.some((o) => !o)) {
-        flag(`entry ${e.key.slice(0, 8)} last read ${age} ms ago, within the ${ttlMs} ms TTL, lost its manifest or an object`);
+        flag(
+          `entry ${e.key.slice(0, 8)} last read ${age} ms ago, within the ${ttlMs} ms TTL, lost its manifest or an object`,
+        );
         e.gone = true;
       } else reached.kept!++;
     }
@@ -524,3 +670,19 @@ export const simulateSweep = async (seed: number, signer: ManifestSignerService)
   }
   return { violations, reached, trace };
 };
+
+/** The scenarios the `sim` job runs, 100 seeds each on a pull request and 10,000 nightly (FD-VER-024). */
+export const scenarios: readonly SimScenario[] = [
+  {
+    name: "reclaim",
+    ids: ["FD-CACHE-051", "FD-CACHE-040", "FD-CACHE-002"],
+    run: async (seed) =>
+      throwOnViolations((await simulateReclaim(seed, await signerOnce())).violations),
+  },
+  {
+    name: "sweep",
+    ids: ["FD-CACHE-062"],
+    run: async (seed) =>
+      throwOnViolations((await simulateSweep(seed, await signerOnce())).violations),
+  },
+];
