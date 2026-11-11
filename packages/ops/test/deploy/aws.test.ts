@@ -18,6 +18,38 @@ const BUDGET = {
   BudgetLimit: { Amount: "500.0", Unit: "USD" },
 };
 
+/** A policy document that denies every ECS call on every resource. */
+const DENY_ECS = {
+  Version: "2012-10-17",
+  Statement: [{ Effect: "Deny", Action: ["ecs:*"], Resource: "*" }],
+};
+
+/** The account's policies: the deny-launch SCP and IAM policy, and an IAM policy that denies only S3 writes. */
+const POLICIES = {
+  "p-denyrunt": DENY_ECS,
+  [`arn:aws:iam::${AWS_ACCOUNT}:policy/fd-deny-launch`]: {
+    Version: "2012-10-17",
+    Statement: { Effect: "Deny", Action: ["ecs:RunTask", "ecs:StartTask"], Resource: ["*"] },
+  },
+  [`arn:aws:iam::${AWS_ACCOUNT}:policy/deny-s3-write`]: {
+    Version: "2012-10-17",
+    Statement: [{ Effect: "Deny", Action: "s3:PutObject", Resource: "*" }],
+  },
+};
+
+/** An account whose budget sits at the overlay's limit and whose policies the actions name. */
+const awsWorld = () => {
+  const w = world();
+  w.state.awsBudgets = [BUDGET];
+  w.state.awsPolicies = POLICIES;
+  return w;
+};
+
+/** An `APPLY_IAM_POLICY` definition: the policy, attached to the launcher's role unless `roles` says otherwise. */
+const iamDefinition = (policy: string, roles: string[] = ["fd-launcher"]) => ({
+  IamActionDefinition: { PolicyArn: `arn:aws:iam::${AWS_ACCOUNT}:policy/${policy}`, Roles: roles },
+});
+
 /** A Budgets action that applies a deny-launch SCP, with no approval, when actual spend reaches the budget's limit. */
 const action = (id: string, over: Record<string, unknown> = {}) => ({
   ActionId: id,
@@ -46,8 +78,7 @@ const missing = (why: string) =>
 
 describe("the AWS budget check of the drift check", () => {
   it("[FD-EXEC-083] fd doctor reads the AWS account's Budgets actions where the overlay carries the aws kind, and passes when one denies new launches at aws.budgetUsd", async () => {
-    const w = world();
-    w.state.awsBudgets = [BUDGET];
+    const w = awsWorld();
     // The qualifying action sits on the second page: the read follows `NextToken`.
     w.state.awsActions = [
       action("act-ssm", { ActionType: "RUN_SSM_DOCUMENTS" }),
@@ -61,6 +92,8 @@ describe("the AWS budget check of the drift check", () => {
       "POST budgets.amazonaws.com/",
       "POST budgets.amazonaws.com/",
       "POST budgets.amazonaws.com/",
+      // The SCP's content; the SSM action applies no policy, so nothing reads one for it.
+      "POST organizations.us-east-1.amazonaws.com/",
     ]);
     expect(w.calls.filter(isWrite)).toEqual([]);
 
@@ -69,11 +102,33 @@ describe("the AWS budget check of the drift check", () => {
       { ActionThresholdValue: LIMIT_USD, ActionThresholdType: "ABSOLUTE_VALUE" },
       { ActionThresholdValue: 80, ActionThresholdType: "PERCENTAGE" },
     ]) {
-      const at = world();
-      at.state.awsBudgets = [BUDGET];
+      const at = awsWorld();
       at.state.awsActions = [action("act-deny", { ActionThreshold: threshold })];
       expect((await doctor(at)).ok).toBe(true);
     }
+
+    // An IAM policy that denies both launch calls to the launcher's role qualifies, read as its default version.
+    const iam = awsWorld();
+    iam.state.awsActions = [
+      action("act-iam", {
+        ActionType: "APPLY_IAM_POLICY",
+        Definition: iamDefinition("fd-deny-launch"),
+      }),
+    ];
+    expect((await doctor(iam)).ok).toBe(true);
+    expect(awsCalls(iam).slice(-2)).toEqual(["POST iam.amazonaws.com/", "POST iam.amazonaws.com/"]);
+
+    // So does an SCP on the organization root, and a budget filtered to the ECS service.
+    const root = awsWorld();
+    root.state.awsBudgets = [
+      { ...BUDGET, CostFilters: { Service: ["Amazon Elastic Container Service"] } },
+    ];
+    root.state.awsActions = [
+      action("act-root", {
+        Definition: { ScpActionDefinition: { PolicyId: "p-denyrunt", TargetIds: ["r-abcd"] } },
+      }),
+    ];
+    expect((await doctor(root)).ok).toBe(true);
 
     // A deploy whose overlay carries no aws kind reads nothing from AWS.
     const none = world();
@@ -82,8 +137,7 @@ describe("the AWS budget check of the drift check", () => {
   });
 
   it("[FD-EXEC-083] fd deploy and fd doctor fail the drift check when the AWS account carries no Budgets action, before any Cloudflare write", async () => {
-    const w = world();
-    w.state.awsBudgets = [BUDGET];
+    const w = awsWorld();
     const line = missing("it carries no Budgets action");
 
     const report = await deploy(w, AWS_OVERLAY);
@@ -103,7 +157,7 @@ describe("the AWS budget check of the drift check", () => {
   });
 
   it("[FD-EXEC-083] fails when no action denies launches on actual spend at the limit, listing why each action falls short", async () => {
-    const w = world();
+    const w = awsWorld();
     w.state.awsBudgets = [
       BUDGET,
       {
@@ -112,6 +166,13 @@ describe("the AWS budget check of the drift check", () => {
         BudgetType: "USAGE",
         BudgetLimit: { Amount: "10", Unit: "GB" },
       },
+      { ...BUDGET, BudgetName: "daily", TimeUnit: "DAILY" },
+      {
+        ...BUDGET,
+        BudgetName: "s3-only",
+        CostFilters: { Service: ["Amazon Simple Storage Service"] },
+      },
+      { ...BUDGET, BudgetName: "tagged", CostFilters: { TagKeyValue: ["user:team$web"] } },
     ];
     w.state.awsActions = [
       action("act-forecast", { NotificationType: "FORECASTED" }),
@@ -122,6 +183,22 @@ describe("the AWS budget check of the drift check", () => {
       }),
       action("act-usage", { BudgetName: "usage" }),
       action("act-gone", { BudgetName: "deleted" }),
+      action("act-daily", { BudgetName: "daily" }),
+      action("act-s3", { BudgetName: "s3-only" }),
+      action("act-tagged", { BudgetName: "tagged" }),
+      action("act-s3-deny", {
+        ActionType: "APPLY_IAM_POLICY",
+        Definition: iamDefinition("deny-s3-write"),
+      }),
+      action("act-no-role", {
+        ActionType: "APPLY_IAM_POLICY",
+        Definition: iamDefinition("fd-deny-launch", []),
+      }),
+      action("act-other-account", {
+        Definition: {
+          ScpActionDefinition: { PolicyId: "p-denyrunt", TargetIds: ["444455556666"] },
+        },
+      }),
     ];
     const report = await doctor(w);
     expect(report.ok).toBe(false);
@@ -136,15 +213,20 @@ describe("the AWS budget check of the drift check", () => {
           `action act-above runs at 600 USD, above aws.budgetUsd ${LIMIT_USD} USD`,
           "action act-usage belongs to budget usage, which is not a USD cost budget",
           "action act-gone names budget deleted, which the account lacks",
+          "action act-daily belongs to budget daily, which resets daily and lets a month's spend run past its limit",
+          "action act-s3 belongs to budget s3-only, whose Service cost filter leaves out Amazon Elastic Container Service",
+          "action act-tagged belongs to budget tagged, whose TagKeyValue cost filter measures only part of the account's spend",
+          `action act-s3-deny applies policy arn:aws:iam::${AWS_ACCOUNT}:policy/deny-s3-write, which does not deny ecs:RunTask and ecs:StartTask on every resource under no condition`,
+          `action act-no-role attaches policy arn:aws:iam::${AWS_ACCOUNT}:policy/fd-deny-launch to no role, user or group`,
+          `action act-other-account attaches policy p-denyrunt to neither account ${AWS_ACCOUNT} nor the organization root`,
         ].join("; "),
       )}`,
     });
   });
 
   it("[FD-EXEC-083] fails the drift stage when the deploy job carries no AWS credentials, or the overlay sets no aws.budgetUsd", async () => {
-    const w = world();
+    const w = awsWorld();
     w.state.awsCredentials = false;
-    w.state.awsBudgets = [BUDGET];
     w.state.awsActions = [action("act-deny")];
     const report = await deploy(w, AWS_OVERLAY);
     expect(report.stages.at(-1)).toEqual({
@@ -155,8 +237,9 @@ describe("the AWS budget check of the drift check", () => {
     expect(awsCalls(w)).toEqual([]);
     expect(w.calls.filter(isWrite)).toEqual([]);
 
-    const unset = world();
-    unset.state.awsBudgets = [BUDGET];
+    // Without aws.budgetUsd the check fails on the overlay and reads nothing from AWS, even with no credentials.
+    const unset = awsWorld();
+    unset.state.awsCredentials = false;
     unset.state.awsActions = [action("act-deny")];
     const checked = await doctor(unset, overlayWith({ launchCap: 4 }));
     expect(checked.ok).toBe(false);
@@ -166,5 +249,6 @@ describe("the AWS budget check of the drift check", () => {
       detail:
         "failure aws.budgetUsd: the overlay carries the aws kind and sets no AWS limit for the Budgets action to enforce",
     });
+    expect(awsCalls(unset)).toEqual([]);
   });
 });

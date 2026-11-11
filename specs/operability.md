@@ -265,6 +265,7 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 | R13 Control-plane outage | Every check pending | Run the GitHub Actions CI workflow on the pull request; apply a temporary ruleset change that accepts its check; revert the ruleset when the control plane serves again | FD-OPS-027, FD-OPS-029 |
 | R14 Secret rotation | Scheduled or after exposure | `wrangler secret put` for each Worker that holds the secret, then `fd doctor` | FD-OPS-024 |
 | R15 Delivery key paused | `delivery-key-paused` | Confirm the pause is intended, or `fd ops resume-key <installation>` | FD-OPS-077, [MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
+| R16 AWS budget check failed | `drift` or a failed deploy naming `aws.budgetAction`, or an `aws-sts`, `aws-budgets`, `aws-iam` or `aws-organizations` read | Where a read failed, set the repository variable `FD_AWS_ROLE_ARN` to an AWS role that trusts GitHub's OIDC provider for this repository and grants `sts:GetCallerIdentity`, `budgets:ViewBudget`, `budgets:DescribeBudgetActionsForAccount`, `iam:GetPolicy`, `iam:GetPolicyVersion` and, for an SCP action, `organizations:DescribePolicy`; otherwise add the Budgets action the listed reasons say is missing; then `fd doctor` | [executors.md](executors.md) FD-EXEC-083 |
 
 ## Requirements
 

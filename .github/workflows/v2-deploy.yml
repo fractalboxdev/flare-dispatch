@@ -8,7 +8,11 @@ name: v2-deploy
 #
 # CREDENTIALS. `FD_OPERATOR_OVERLAY`: the operator overlay's JSON. `CLOUDFLARE_API_TOKEN`: account-scoped, Workers
 # Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit, Account Settings:Read. `GITHUB_APP_PRIVATE_KEY`: the
-# App's key, for the App registration and the ruleset reads of the drift check.
+# App's key, for the App registration and the ruleset reads of the drift check. `FD_AWS_ROLE_ARN`, a repository
+# variable, set where the overlay carries the `aws` kind: the AWS role the deploy and doctor jobs assume through GitHub's
+# OIDC provider, for the drift check's read of the AWS account's Budgets actions (FD-EXEC-083); it needs
+# sts:GetCallerIdentity, budgets:ViewBudget, budgets:DescribeBudgetActionsForAccount, iam:GetPolicy,
+# iam:GetPolicyVersion and, for an SCP action, organizations:DescribePolicy.
 on:
   push:
     branches: [main]
@@ -30,6 +34,10 @@ jobs:
   deploy:
     needs: ci
     runs-on: ubuntu-latest
+    # `id-token: write` lets the job assume the AWS role through GitHub's OIDC provider.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Read the operator overlay
         env:
@@ -47,6 +55,12 @@ jobs:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
       # The docs Worker serves the site build from its assets directory.
       - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run build
+      - name: Assume the AWS role
+        if: vars.FD_AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.FD_AWS_ROLE_ARN }}
+          aws-region: us-east-1
       - name: fd deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -56,6 +70,10 @@ jobs:
   doctor:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    # `id-token: write` lets the job assume the AWS role through GitHub's OIDC provider.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Read the operator overlay
         env:
@@ -71,6 +89,12 @@ jobs:
       - uses: ./.github/actions/v2-setup
         with:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - name: Assume the AWS role
+        if: vars.FD_AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.FD_AWS_ROLE_ARN }}
+          aws-region: us-east-1
       - name: fd doctor
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

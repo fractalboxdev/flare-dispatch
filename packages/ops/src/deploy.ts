@@ -16,6 +16,7 @@ import {
   accessDrift,
   appRegistrationCheck,
   awsBudgetCheck,
+  awsBudgetUnset,
   failed,
   modelRegistryCheck,
   rulesetCheck,
@@ -285,8 +286,11 @@ export const driftFindings = (
     }
     findings.push(...appRegistrationCheck(manifest, yield* target.appRegistration));
     findings.push(...rulesetCheck(yield* target.requiredChecks));
-    if (overlay.aws !== undefined)
-      findings.push(...awsBudgetCheck(overlay.aws.budgetUsd, yield* target.awsBudgets));
+    if (overlay.aws !== undefined) {
+      const limitUsd = overlay.aws.budgetUsd;
+      if (limitUsd === undefined) findings.push(awsBudgetUnset);
+      else findings.push(...awsBudgetCheck(limitUsd, yield* target.awsBudgets));
+    }
     if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));
     return yield* withProfileStep(findings, more(overlay));
   }).pipe(Effect.mapError(stageFailed("drift")));

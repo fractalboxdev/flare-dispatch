@@ -1,8 +1,9 @@
 // The live `DeployTarget`: the Cloudflare API for the deployed Workers, their schedules, domains and Container
 // applications and the record of the last deploy in the artifacts bucket; `wrangler` for D1 migrations and Worker
 // deploys; the GitHub API with the App JWT for the App's registration and the default branch's ruleset; the Workers'
-// own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; AWS STS and AWS Budgets,
-// signed with SigV4, for the AWS account's Budgets actions; and the overlay's alert sink for `deploy-probe-failed`.
+// own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; AWS STS, AWS Budgets, IAM
+// and AWS Organizations, signed with SigV4, for the AWS account's Budgets actions and the policies they apply; and the
+// overlay's alert sink for `deploy-probe-failed`.
 import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,12 +18,15 @@ import {
   type Deployed,
   type RenderedWorker,
 } from "../deploy.ts";
-import type {
-  AppPermissions,
-  AwsBudget,
-  AwsBudgetAction,
-  AwsBudgets,
-  DeployedSettings,
+import {
+  POLICY_ACTION_TYPES,
+  type AppPermissions,
+  type AwsActionPolicy,
+  type AwsBudget,
+  type AwsBudgetAction,
+  type AwsBudgets,
+  type AwsPolicyStatement,
+  type DeployedSettings,
 } from "../drift.ts";
 import type { OverlayValues } from "../overlay.ts";
 import { parseJsonc } from "../render.ts";
@@ -85,14 +89,29 @@ const ACCESS_PAGE = 100;
 
 export { scriptName };
 
-/** AWS STS and AWS Budgets serve from one global endpoint each, signed for `us-east-1`. */
+/** AWS STS, AWS Budgets, IAM and AWS Organizations serve from one global endpoint each, signed for `us-east-1`. */
 const AWS_REGION = "us-east-1";
 const STS_HOST = "sts.amazonaws.com";
 const BUDGETS_HOST = "budgets.amazonaws.com";
+const IAM_HOST = "iam.amazonaws.com";
+const ORGANIZATIONS_HOST = "organizations.us-east-1.amazonaws.com";
 /** The largest page `DescribeBudgets` and `DescribeBudgetActionsForAccount` return. */
 const BUDGETS_PAGE = 100;
 
 const arr = <T>(v: unknown): readonly T[] => (Array.isArray(v) ? (v as T[]) : []);
+
+/** A policy statement's `Action` or `Resource`: one pattern or a list of them. */
+const patterns = (v: unknown): readonly string[] =>
+  typeof v === "string" ? [v] : arr<unknown>(v).filter((p): p is string => typeof p === "string");
+
+/** The text of an XML element's content: its five predefined entities decoded. */
+const xmlText = (s: string): string =>
+  s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 
 export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget> => {
   const account = `/accounts/${c.overlay.accountId}`;
@@ -242,25 +261,47 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       return text;
     });
 
-  /** One AWS Budgets operation of the JSON 1.1 protocol. */
-  const budgetsCall = (target: string, request: Record<string, unknown>) =>
+  /** One operation of an AWS JSON 1.1 API: AWS Budgets or AWS Organizations. */
+  const jsonCall = (
+    operation: string,
+    host: string,
+    service: string,
+    target: string,
+    request: Record<string, unknown>,
+  ) =>
     Effect.flatMap(
       awsPost(
-        `aws-budgets ${target}`,
-        BUDGETS_HOST,
-        "budgets",
-        {
-          "content-type": "application/x-amz-json-1.1",
-          "x-amz-target": `AWSBudgetServiceGateway.${target}`,
-        },
+        operation,
+        host,
+        service,
+        { "content-type": "application/x-amz-json-1.1", "x-amz-target": target },
         JSON.stringify(request),
       ),
       (text) =>
         Effect.try({
           try: () => JSON.parse(text) as Record<string, unknown>,
-          catch: (e) =>
-            new TargetFailed({ operation: `aws-budgets ${target}`, message: String(e) }),
+          catch: (e) => new TargetFailed({ operation, message: String(e) }),
         }),
+    );
+
+  /** One AWS Budgets operation. */
+  const budgetsCall = (target: string, request: Record<string, unknown>) =>
+    jsonCall(
+      `aws-budgets ${target}`,
+      BUDGETS_HOST,
+      "budgets",
+      `AWSBudgetServiceGateway.${target}`,
+      request,
+    );
+
+  /** One IAM operation of the Query protocol; answers the XML response. */
+  const iamCall = (action: string, params: Record<string, string>) =>
+    awsPost(
+      `aws-iam ${action}`,
+      IAM_HOST,
+      "iam",
+      { "content-type": "application/x-www-form-urlencoded; charset=utf-8" },
+      new URLSearchParams({ Action: action, Version: "2010-05-08", ...params }).toString(),
     );
 
   /** Every item of a paged AWS Budgets list, following `NextToken`. */
@@ -280,6 +321,105 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       return items;
     });
 
+  /** A policy document's statements; a document that does not parse fails the read. */
+  const statementsOf = (operation: string, document: string) =>
+    Effect.try({
+      try: () => {
+        const parsed = JSON.parse(document) as { Statement?: unknown };
+        const statement = parsed.Statement;
+        return (Array.isArray(statement) ? statement : statement === undefined ? [] : [statement])
+          .filter((s): s is Record<string, unknown> => typeof s === "object" && s !== null)
+          .map((s): AwsPolicyStatement => ({
+            effect: typeof s["Effect"] === "string" ? s["Effect"] : "",
+            actions: patterns(s["Action"]),
+            resources: patterns(s["Resource"]),
+            conditional: s["Condition"] !== undefined,
+          }));
+      },
+      catch: (e) => new TargetFailed({ operation, message: `the policy document: ${String(e)}` }),
+    });
+
+  /** An IAM managed policy's default version's document: `GetPolicy`, then `GetPolicyVersion`. */
+  const iamPolicyStatements = (policyArn: string) =>
+    Effect.gen(function* () {
+      const policy = yield* iamCall("GetPolicy", { PolicyArn: policyArn });
+      const versionId = /<DefaultVersionId>\s*([^<\s]+)\s*<\/DefaultVersionId>/.exec(policy)?.[1];
+      if (versionId === undefined)
+        return yield* new TargetFailed({
+          operation: "aws-iam GetPolicy",
+          message: `policy ${policyArn} names no default version`,
+        });
+      const version = yield* iamCall("GetPolicyVersion", {
+        PolicyArn: policyArn,
+        VersionId: versionId,
+      });
+      const encoded = /<Document>([^<]*)<\/Document>/.exec(version)?.[1];
+      if (encoded === undefined)
+        return yield* new TargetFailed({
+          operation: "aws-iam GetPolicyVersion",
+          message: `policy ${policyArn} version ${versionId} carries no document`,
+        });
+      const document = yield* Effect.try({
+        try: () => decodeURIComponent(xmlText(encoded)),
+        catch: (e) =>
+          new TargetFailed({ operation: "aws-iam GetPolicyVersion", message: String(e) }),
+      });
+      return yield* statementsOf("aws-iam GetPolicyVersion", document);
+    });
+
+  /** An SCP's content: AWS Organizations `DescribePolicy`. */
+  const scpStatements = (policyId: string) =>
+    Effect.gen(function* () {
+      const described = yield* jsonCall(
+        "aws-organizations DescribePolicy",
+        ORGANIZATIONS_HOST,
+        "organizations",
+        "AWSOrganizationsV20161128.DescribePolicy",
+        { PolicyId: policyId },
+      );
+      const content = (described["Policy"] as { Content?: unknown } | undefined)?.Content;
+      if (typeof content !== "string")
+        return yield* new TargetFailed({
+          operation: "aws-organizations DescribePolicy",
+          message: `policy ${policyId} carries no content`,
+        });
+      return yield* statementsOf("aws-organizations DescribePolicy", content);
+    });
+
+  type ActionDefinition = {
+    IamActionDefinition?: {
+      PolicyArn?: string;
+      Roles?: string[];
+      Users?: string[];
+      Groups?: string[];
+    };
+    ScpActionDefinition?: { PolicyId?: string; TargetIds?: string[] };
+  };
+
+  /** The policy an action's `Definition` applies, with its document read from IAM or AWS Organizations. */
+  const actionPolicy = (definition: ActionDefinition | undefined) =>
+    Effect.gen(function* () {
+      const iam = definition?.IamActionDefinition;
+      if (iam?.PolicyArn !== undefined)
+        return {
+          id: iam.PolicyArn,
+          targets: [
+            ...arr<string>(iam.Roles),
+            ...arr<string>(iam.Users),
+            ...arr<string>(iam.Groups),
+          ],
+          statements: yield* iamPolicyStatements(iam.PolicyArn),
+        } satisfies AwsActionPolicy;
+      const scp = definition?.ScpActionDefinition;
+      if (scp?.PolicyId !== undefined)
+        return {
+          id: scp.PolicyId,
+          targets: arr<string>(scp.TargetIds),
+          statements: yield* scpStatements(scp.PolicyId),
+        } satisfies AwsActionPolicy;
+      return null;
+    });
+
   const awsBudgets = Effect.gen(function* () {
     const identity = yield* awsPost(
       "aws-sts GetCallerIdentity",
@@ -297,7 +437,9 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
     const budgets = yield* budgetsPages<{
       BudgetName?: string;
       BudgetType?: string;
+      TimeUnit?: string;
       BudgetLimit?: { Amount?: string; Unit?: string };
+      CostFilters?: Record<string, unknown>;
     }>("DescribeBudgets", "Budgets", account);
     const actions = yield* budgetsPages<{
       ActionId?: string;
@@ -306,6 +448,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       ActionType?: string;
       ApprovalModel?: string;
       ActionThreshold?: { ActionThresholdValue?: number; ActionThresholdType?: string };
+      Definition?: ActionDefinition;
     }>("DescribeBudgetActionsForAccount", "Actions", account);
     return {
       account,
@@ -314,16 +457,29 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
         type: b.BudgetType ?? "",
         limitAmount: Number(b.BudgetLimit?.Amount ?? Number.NaN),
         limitUnit: b.BudgetLimit?.Unit ?? "",
+        timeUnit: b.TimeUnit ?? "",
+        costFilters: Object.fromEntries(
+          Object.entries(b.CostFilters ?? {}).map(([k, v]) => [k, arr<string>(v)]),
+        ),
       })),
-      actions: actions.map((a): AwsBudgetAction => ({
-        id: a.ActionId ?? "",
-        budgetName: a.BudgetName ?? "",
-        notificationType: a.NotificationType ?? "",
-        actionType: a.ActionType ?? "",
-        approvalModel: a.ApprovalModel ?? "",
-        thresholdType: a.ActionThreshold?.ActionThresholdType ?? "",
-        thresholdValue: a.ActionThreshold?.ActionThresholdValue ?? Number.NaN,
-      })),
+      // Only an action that applies a policy has a document to read.
+      actions: yield* Effect.forEach(actions, (a) =>
+        Effect.map(
+          POLICY_ACTION_TYPES.has(a.ActionType ?? "")
+            ? actionPolicy(a.Definition)
+            : Effect.succeed(null),
+          (policy): AwsBudgetAction => ({
+            id: a.ActionId ?? "",
+            budgetName: a.BudgetName ?? "",
+            notificationType: a.NotificationType ?? "",
+            actionType: a.ActionType ?? "",
+            approvalModel: a.ApprovalModel ?? "",
+            thresholdType: a.ActionThreshold?.ActionThresholdType ?? "",
+            thresholdValue: a.ActionThreshold?.ActionThresholdValue ?? Number.NaN,
+            policy,
+          }),
+        ),
+      ),
     } satisfies AwsBudgets;
   });
 

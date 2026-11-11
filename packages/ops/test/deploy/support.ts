@@ -3,8 +3,8 @@
 // `DeployTarget` on fakes of the Cloudflare API, the GitHub API, `wrangler` and the Workers' hostnames. The fake
 // Cloudflare account keeps each deployed Worker's settings, versions and Container applications and its Access
 // applications between runs, so a suite deploys, changes the account out of band and deploys again. Access sits in
-// front of the dispatcher's hostname as the account's applications configure it. AWS STS and AWS Budgets answer for
-// one AWS account, and only requests whose SigV4 signature verifies.
+// front of the dispatcher's hostname as the account's applications configure it. AWS STS, AWS Budgets, IAM and AWS
+// Organizations answer for one AWS account, and only requests whose SigV4 signature verifies.
 import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -64,6 +64,14 @@ export const AWS_CREDENTIALS: AwsCredentials = {
   sessionToken: "fake-session-token",
 };
 
+/** The AWS endpoints the fakes answer on, with the service each signs for. */
+const AWS_SERVICES: Readonly<Record<string, string>> = {
+  "sts.amazonaws.com": "sts",
+  "budgets.amazonaws.com": "budgets",
+  "iam.amazonaws.com": "iam",
+  "organizations.us-east-1.amazonaws.com": "organizations",
+};
+
 /** The version id the fake `wrangler deploy` prints for the account's n-th deploy. */
 export const version = (n: number) => `${String(n).padStart(8, "0")}-0000-4000-8000-000000000000`;
 
@@ -113,6 +121,8 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     /** The AWS account's budgets and actions, as `DescribeBudgets` and `DescribeBudgetActionsForAccount` list them. */
     awsBudgets: Record<string, unknown>[];
     awsActions: Record<string, unknown>[];
+    /** The documents of the account's IAM managed policies, by ARN, and of its SCPs, by policy id. */
+    awsPolicies: Record<string, unknown>;
   } = {
     health: 200,
     deploys: 0,
@@ -124,6 +134,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     awsCredentials: true,
     awsBudgets: [],
     awsActions: [],
+    awsPolicies: {},
   };
 
   /**
@@ -392,11 +403,58 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     });
   };
 
+  /** IAM's Query operations `GetPolicy` and `GetPolicyVersion`: each policy has the one version `v1`. */
+  const iamApi = (body: string): Response => {
+    const params = new URLSearchParams(body);
+    const arn = params.get("PolicyArn") ?? "";
+    const document = state.awsPolicies[arn];
+    if (document === undefined)
+      return new Response(
+        "<ErrorResponse><Error><Code>NoSuchEntity</Code></Error></ErrorResponse>",
+        {
+          status: 404,
+        },
+      );
+    const action = params.get("Action");
+    if (action === "GetPolicy")
+      return new Response(
+        `<GetPolicyResponse><GetPolicyResult><Policy><Arn>${arn}</Arn><DefaultVersionId>v1</DefaultVersionId></Policy></GetPolicyResult></GetPolicyResponse>`,
+      );
+    if (action === "GetPolicyVersion" && params.get("VersionId") === "v1")
+      return new Response(
+        `<GetPolicyVersionResponse><GetPolicyVersionResult><PolicyVersion><Document>${encodeURIComponent(JSON.stringify(document))}</Document><VersionId>v1</VersionId></PolicyVersion></GetPolicyVersionResult></GetPolicyVersionResponse>`,
+      );
+    return new Response(
+      "<ErrorResponse><Error><Code>InvalidAction</Code></Error></ErrorResponse>",
+      {
+        status: 400,
+      },
+    );
+  };
+
+  /** AWS Organizations' `DescribePolicy`: an SCP's content as a JSON string. */
+  const organizationsApi = (headers: Headers, body: string): Response => {
+    const { PolicyId: id = "" } = JSON.parse(body) as { PolicyId?: string };
+    const document = state.awsPolicies[id];
+    if (headers.get("x-amz-target") !== "AWSOrganizationsV20161128.DescribePolicy")
+      return Response.json({ __type: "InvalidInputException" }, { status: 400 });
+    if (document === undefined)
+      return Response.json({ __type: "PolicyNotFoundException" }, { status: 400 });
+    return Response.json({
+      Policy: {
+        PolicySummary: { Id: id, Type: "SERVICE_CONTROL_POLICY" },
+        Content: JSON.stringify(document),
+      },
+    });
+  };
+
   const aws = async (host: string, headers: Headers, body: string): Promise<Response> => {
-    const service = host === "sts.amazonaws.com" ? "sts" : "budgets";
+    const service = AWS_SERVICES[host]!;
     if (!(await awsSigned(host, service, headers, body)))
       return new Response("<Error><Code>SignatureDoesNotMatch</Code></Error>", { status: 403 });
     if (service === "budgets") return budgetsApi(headers, body);
+    if (service === "iam") return iamApi(body);
+    if (service === "organizations") return organizationsApi(headers, body);
     if (body !== "Action=GetCallerIdentity&Version=2011-06-15")
       return new Response("<Error><Code>InvalidAction</Code></Error>", { status: 400 });
     return new Response(
@@ -410,7 +468,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? init.body : "";
     calls.push(`${method} ${url.host}${url.pathname}${url.search}`);
-    if (url.host === "sts.amazonaws.com" || url.host === "budgets.amazonaws.com")
+    if (AWS_SERVICES[url.host] !== undefined)
       return aws(url.host, new Headers(init?.headers), body);
     if (url.host === "api.cloudflare.com") return cloudflare(method, url, body);
     if (url.host === "api.github.com") return github(url.pathname);
