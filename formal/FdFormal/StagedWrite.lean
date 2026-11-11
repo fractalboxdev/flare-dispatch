@@ -248,7 +248,10 @@ theorem entryReasons_infix (spec : Spec) (ma : Bool) (ev : Evidence) :
 
 /--
 If any entry fails any check, the staged-write gate rejects the whole manifest, and its one result holds every reason
-of every entry, each entry's reasons in order (FD-AGT-017).
+of every entry, each entry's reasons in order (FD-AGT-017), a model-authored entry on a protected path (FD-AGT-020)
+included. The `pr.propose` applier (FD-AGT-016) and the writeback
+gate on a `local.writeback` that proposes file changes (FD-LOCAL-094) both run this gate on the manifest and refuse
+the write on that rejection.
 -/
 theorem reject_whole_manifest (m : Manifest) (spec : Spec) (ma : Bool) (ev : Evidence) (i : Nat)
     (hi : i < m.entries.length)
@@ -291,7 +294,9 @@ theorem protected_mem_pathReasons {spec : Spec} {seen : List String} {e : Entry}
 /--
 A model-authored staged write that touches a path under `runs/`, `infra/` or `.github/workflows/`, or a file named
 `wrangler.jsonc`, in any letter case, is rejected with a `protected-path` reason for that entry, whatever the recipe's
-opt-ins (FD-AGT-020).
+opt-ins (FD-AGT-020). The flag `true` is the model-authored write the `pr.propose` applier gates (FD-AGT-016) and the
+one the writeback gate gates when the capacity lease's usage report records a model call for the execution
+(FD-LOCAL-094); one such entry rejects the whole manifest (FD-AGT-017).
 -/
 theorem model_authored_protected_paths (m : Manifest) (spec : Spec) (ev : Evidence) (e : Entry)
     (he : e ∈ m.entries) (hp : protectedBySpec e.path) :
