@@ -110,6 +110,7 @@ export {
   INTAKE_MIGRATIONS,
   IntakeStore,
   migrateIntake,
+  requestContextOf,
   ShedRecorder,
   StoreUnavailable,
   HELD_STATUS,
@@ -117,6 +118,7 @@ export {
   type HoldResult,
   type IntakeRecord,
   type RecordWithStatus,
+  type RequestContext,
   type ShedRow,
 } from "./store.ts";
 export {

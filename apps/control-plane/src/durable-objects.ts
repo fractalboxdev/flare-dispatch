@@ -10,7 +10,7 @@ import {
 import { Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
 import { leaseCache } from "./cache.ts";
-import { gateInputs, imageDigestOf } from "./lease.ts";
+import { imageDigestOf, requestLeaseFields } from "./lease.ts";
 import {
   channelConfig,
   deployment,
@@ -41,9 +41,10 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
   }
 
   /**
-   * The inputs intake recorded for a won claim, and the `deadline_at` admission wrote on the execution row
-   * (MAMEKO-EXEC-002), which a gate run's input carries as its `deadlineAt` (FD-GATE-007). A payload that carries a
-   * write credential fails the grant (FD-AGT-008).
+   * The inputs and request context intake recorded for a won claim, the run registry's run and workflow versions
+   * (FD-PROF-063), and the `deadline_at` admission wrote on the execution row (MAMEKO-EXEC-002), which a gate run's
+   * input carries as its `deadlineAt` (FD-GATE-007). A payload that carries a write credential fails the grant
+   * (FD-AGT-008).
    */
   protected override leaseFields(executionId: string): Promise<ClaimedLease> {
     const env = this.env;
@@ -74,12 +75,8 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
         return yield* guardLease(env, {
           run: row.run,
           run_digest: yield* Effect.promise(() => sha256(`${row.run}@${run?.version ?? ""}`)),
-          run_version: run?.version ?? "",
-          workflow_version: 1,
-          request_context: null,
+          ...requestLeaseFields(entry, record, row),
           image_digest: yield* imageDigestOf(entry, row.kind ?? "device", env.GATE_IMAGE_DIGEST),
-          scope_id: row.scope_id,
-          inputs: gateInputs(entry, record.inputs, row.deadline_at),
           deadline_at: row.deadline_at,
           server_now: Date.now(),
           progress_timeout_ms: PROGRESS_TIMEOUT_MS,

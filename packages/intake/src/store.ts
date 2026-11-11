@@ -92,6 +92,25 @@ export interface IntakeRecord {
 }
 
 /**
+ * The request context of an execution: what started the request beside the run inputs, as intake recorded it before
+ * admission. A lease carries it as `request_context` (FD-PROF-063).
+ */
+export interface RequestContext {
+  readonly trigger: RecordedTrigger;
+  readonly ref: string;
+  readonly installation: number | null;
+  readonly caller: string | null;
+}
+
+/** The request context the record holds. */
+export const requestContextOf = (record: IntakeRecord): RequestContext => ({
+  trigger: record.trigger,
+  ref: record.ref,
+  installation: record.installation,
+  caller: record.caller,
+});
+
+/**
  * A record with mameko's status of its execution: `held` while it waits for its cooldown window before admission, null
  * when admission kept no execution for it.
  */
