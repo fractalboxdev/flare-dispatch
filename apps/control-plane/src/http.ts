@@ -5,6 +5,7 @@ import {
   ApiConfig,
   apiConfigFromEnv,
   apiError,
+  artifactsGroup,
   authenticateAccess,
   Cancellation,
   ConfigInvalid,
@@ -16,6 +17,7 @@ import {
   FailureSummaries,
   JwksSource,
   JwksSourceLive,
+  logsGroup,
   mount,
   oidcKeyFromSecret,
   Operations,
@@ -34,6 +36,7 @@ import {
 import { livenessReport, runOpsMigrations } from "@fractalboxdev/flare-dispatch-ops";
 import { Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices } from "./composition.ts";
 import { profileOf, type ControlPlaneEnv } from "./config.ts";
 
@@ -88,8 +91,19 @@ export const intakeGroup = routerGroup(
   ) as never,
 );
 
-/** The groups the Worker mounts; `/v1/executors/connect` is answered before the router, since it upgrades. */
-export const router = mount(wellKnownGroup, intakeGroup, executionsGroup, opsGroup, executorsGroup);
+/**
+ * The groups the Worker mounts; `/v1/executors/connect` is answered before the router, since it upgrades. The log and
+ * artifact reads pass the link surface's gate like every other route (FD-IFC-017).
+ */
+export const router = mount(
+  wellKnownGroup,
+  intakeGroup,
+  executionsGroup,
+  opsGroup,
+  executorsGroup,
+  logsGroup(LogsHandlers),
+  artifactsGroup(ArtifactsHandlers),
+);
 
 const handler = toFetchHandler(router, { shared: JwksSourceLive });
 
@@ -152,6 +166,7 @@ const requestServices = (env: ControlPlaneEnv) =>
     cancellationDeferred,
     failureSummariesDeferred,
     operations(env),
+    cacheReads(env),
   );
 
 /** One request through the router, with the isolate's services and the ones its routes read. */

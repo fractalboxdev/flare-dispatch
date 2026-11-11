@@ -3,6 +3,10 @@
 // device executor.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { FlareDispatchApi } from "@fractalboxdev/flare-dispatch-api/declaration";
+import { mintLinkToken, type LinkPurpose } from "@fractalboxdev/flare-dispatch-api/link-token";
+import { ARTIFACT_SCHEMA, logObjectName } from "@fractalboxdev/flare-dispatch-cache";
+import { HttpApi } from "effect/http-api";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -20,6 +24,10 @@ import {
 } from "./support.ts";
 
 const SHA = "a".repeat(40);
+
+/** The link key and epoch of every deployment with an Access team. */
+const LINK_KEY = "link-key-for-control-plane-tests";
+const LINK_EPOCH = 1;
 
 /** The repository the development deployment reads: this one, at one commit. */
 const DEV_REPOSITORY = {
@@ -61,7 +69,6 @@ const miniflare = (
     r2Buckets: ["CACHE"],
     bindings: {
       DEPLOYMENT: deployment,
-      CACHE_TOKEN_SECRET: "cache-token-secret-for-tests",
       PLANE_ID: PLANE,
       ...extra,
       ...(access
@@ -71,6 +78,8 @@ const miniflare = (
             OPERATORS: JSON.stringify([OPERATOR]),
             DISPATCHERS: JSON.stringify([OPERATOR]),
             FD_DEV_REPOSITORY: JSON.stringify(repository),
+            LINK_KEY,
+            LINK_EPOCH: String(LINK_EPOCH),
           }
         : {}),
     },
@@ -190,12 +199,221 @@ describe("the minute tick", () => {
 });
 
 describe("the cache, artifact and log routes", () => {
-  it("[FD-CACHE-083] serves an execution's logs to a member and nothing without a token or identity", async () => {
-    expect((await development.dispatchFetch("http://x/v1/executions/01ABC/logs")).status).toBe(404);
-    const r = await development.dispatchFetch("http://x/v1/executions/01ABC/logs", {
-      headers: await headersFor(OPERATOR),
+  const EXECUTION = "01LOGSANDARTIFACTS";
+  const ARTIFACT = "0123456789abcdef0123456789abcdef";
+  const OTHER_ARTIFACT = "fedcba9876543210fedcba9876543210";
+  let logFile: string;
+
+  const get = async (mf: Miniflare, path: string, init: RequestInit = {}) =>
+    mf.dispatchFetch(`http://x${path}`, init as never);
+  const asMember = async (path: string, init: RequestInit = {}) =>
+    get(development, path, { ...init, headers: await headersFor("member@example.com") });
+  const link = (
+    purpose: LinkPurpose,
+    objectId: string,
+    grant: { expiresAtS?: number; epoch?: number } = {},
+  ) =>
+    mintLinkToken(LINK_KEY, {
+      purpose,
+      objectId,
+      expiresAtS: grant.expiresAtS ?? Math.floor(Date.now() / 1000) + 600,
+      epoch: grant.epoch ?? LINK_EPOCH,
     });
-    expect(r.status).toBe(404);
+  const errorOf = async (r: { json(): Promise<unknown> }) =>
+    (await r.json()) as Record<string, unknown>;
+
+  beforeAll(async () => {
+    // Any request past `/health` runs the migrations the rows below need.
+    await asMember("/v1/executions");
+    const db = await development.getD1Database("DB");
+    await db
+      .prepare(
+        `insert into executions (id, scope_id, run, class, status, enqueued_at)
+         values (?, 'fractalboxdev/flare-dispatch', 'check', 'batch', 'success', ?)`,
+      )
+      .bind(EXECUTION, Date.now())
+      .run();
+    const name = await logObjectName({
+      executionId: EXECUTION,
+      epoch: 1,
+      journalName: "step:test",
+      stream: "stdout",
+      start: 0,
+      end: 17,
+    });
+    logFile = name!.slice(`logs/${EXECUTION}/`.length);
+    const bucket = await development.getR2Bucket("CACHE");
+    await bucket.put(name!, '{"line":"hello"}\n', {
+      customMetadata: { executor_id: "mac-logs", executor_kind: "device" },
+    });
+    for (const sql of ARTIFACT_SCHEMA) await db.prepare(sql).run();
+    await db
+      .prepare(
+        `insert into artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
+           producer_executor_id, producer_executor_kind, repo, private, r2_path, browse, created_at, expires_at)
+         values (?, ?, 1, 'report.txt', 11, ?, 'text/plain', 'mac-logs', 'device', 'fractalboxdev/flare-dispatch',
+           1, ?, 1, ?, ?)`,
+      )
+      .bind(
+        ARTIFACT,
+        EXECUTION,
+        "0".repeat(64),
+        `artifacts/${EXECUTION}/1/report.txt`,
+        Date.now(),
+        Date.now() + 3_600_000,
+      )
+      .run();
+    await bucket.put(`artifacts/${EXECUTION}/1/report.txt`, "report body");
+    await bucket.put(`artifacts/${EXECUTION}/1/report.txt.browse/a/b.txt`, "browse body");
+  });
+
+  const logsPath = () => `/v1/executions/${EXECUTION}/logs/${encodeURIComponent(logFile)}`;
+  const artifactPath = `/v1/artifacts/${ARTIFACT}`;
+
+  it("[FD-IFC-001] serves every declared log and artifact endpoint through the router's gate", async () => {
+    const declared: string[] = [];
+    HttpApi.reflect(FlareDispatchApi, {
+      onGroup: () => {},
+      onEndpoint: ({ group, endpoint }) => {
+        if (group.identifier === "logs" || group.identifier === "artifacts")
+          declared.push(endpoint.path);
+      },
+    });
+    expect(declared.length).toBe(4);
+    for (const path of declared) {
+      const concrete = path
+        .replace(":artifact_id", ARTIFACT)
+        .replace(":id", EXECUTION)
+        .replace(":file", encodeURIComponent(logFile))
+        .replace("/*", "");
+      const r = await get(development, concrete);
+      expect(r.status, concrete).toBe(401);
+      expect(await errorOf(r)).toMatchObject({ error: "unauthenticated" });
+    }
+    const page = await asMember(`/v1/executions/${EXECUTION}/artifacts`);
+    expect(page.status).toBe(200);
+    expect(await page.json()).toMatchObject({
+      artifacts: [{ artifact_id: ARTIFACT, name: "report.txt" }],
+      cursor: null,
+    });
+  });
+
+  it("[FD-IFC-017] serves an execution's logs to an Access identity or a link token bound to that execution only", async () => {
+    const member = await asMember(logsPath());
+    expect(member.status).toBe(200);
+    expect(await member.text()).toBe('{"line":"hello"}\n');
+    const aggregate = await get(
+      development,
+      `/v1/executions/${EXECUTION}/logs?format=text&t=${await link("logs", EXECUTION)}`,
+    );
+    expect(aggregate.status).toBe(200);
+    expect(await aggregate.text()).toBe("hello");
+    expect(
+      (await get(development, `${logsPath()}?t=${await link("logs", EXECUTION)}`)).status,
+    ).toBe(200);
+    for (const token of [await link("logs", "01OTHER"), await link("artifact", EXECUTION)]) {
+      const refused = await get(development, `${logsPath()}?t=${token}`);
+      expect(refused.status).toBe(403);
+      expect(await errorOf(refused)).toMatchObject({ error: "forbidden" });
+    }
+  });
+
+  it("[FD-IFC-017] serves an artifact and its browse paths to an Access identity or a link token bound to that artifact only", async () => {
+    const member = await asMember(artifactPath);
+    expect(member.status).toBe(200);
+    expect(await member.text()).toBe("report body");
+    const token = await link("artifact", ARTIFACT);
+    const linked = await get(development, `${artifactPath}?t=${token}`);
+    expect(linked.status).toBe(200);
+    expect(await linked.text()).toBe("report body");
+    const browse = await get(development, `${artifactPath}/a/b.txt?t=${token}`);
+    expect(browse.status).toBe(200);
+    expect(await browse.text()).toBe("browse body");
+    for (const other of [await link("artifact", OTHER_ARTIFACT), await link("logs", ARTIFACT)]) {
+      const refused = await get(development, `${artifactPath}?t=${other}`);
+      expect(refused.status).toBe(403);
+      expect(await errorOf(refused)).toMatchObject({ error: "forbidden" });
+    }
+  });
+
+  it("[FD-IFC-020] answers 403 link_expired for an expired log or artifact link", async () => {
+    const past = Math.floor(Date.now() / 1000) - 5;
+    for (const path of [
+      `${logsPath()}?t=${await link("logs", EXECUTION, { expiresAtS: past })}`,
+      `${artifactPath}?t=${await link("artifact", ARTIFACT, { expiresAtS: past })}`,
+    ]) {
+      const r = await get(development, path);
+      expect(r.status).toBe(403);
+      expect(await errorOf(r)).toMatchObject({ error: "link_expired" });
+    }
+  });
+
+  it("[FD-IFC-021] answers 403 link_revoked for a link minted below the current link epoch", async () => {
+    for (const path of [
+      `${logsPath()}?t=${await link("logs", EXECUTION, { epoch: LINK_EPOCH - 1 })}`,
+      `${artifactPath}?t=${await link("artifact", ARTIFACT, { epoch: LINK_EPOCH - 1 })}`,
+    ]) {
+      const r = await get(development, path);
+      expect(r.status).toBe(403);
+      expect(await errorOf(r)).toMatchObject({ error: "link_revoked" });
+    }
+  });
+
+  it("[FD-IFC-013] answers 401 with neither identity nor link, and redirects a browser to the Access login", async () => {
+    for (const path of [logsPath(), artifactPath]) {
+      const r = await get(development, path);
+      expect(r.status).toBe(401);
+      expect(await errorOf(r)).toMatchObject({ error: "unauthenticated" });
+      const browser = await get(development, path, {
+        headers: { accept: "text/html" },
+        redirect: "manual",
+      });
+      expect(browser.status).toBe(302);
+      expect(browser.headers.get("location")).toMatch(
+        new RegExp(`^${team.teamDomain}/cdn-cgi/access/login/`),
+      );
+    }
+  });
+
+  it("[FD-IFC-014] answers 503 not_configured on the log and artifact routes with no Access team set", async () => {
+    for (const path of [
+      logsPath(),
+      `/v1/executions/${EXECUTION}/logs`,
+      artifactPath,
+      `${artifactPath}?t=${await link("artifact", ARTIFACT)}`,
+    ]) {
+      const r = await get(unconfigured, path);
+      expect(r.status, path).toBe(503);
+      const body = await errorOf(r);
+      expect(body).toMatchObject({ error: "not_configured" });
+      expect(typeof body["request_id"]).toBe("string");
+    }
+  });
+
+  it("[FD-IFC-003] runs the identity gate before the method check on the log and artifact routes", async () => {
+    for (const path of [logsPath(), artifactPath]) {
+      expect((await get(development, path, { method: "DELETE" })).status).toBe(401);
+      const r = await asMember(path, { method: "DELETE" });
+      expect(r.status).toBe(405);
+      expect(await errorOf(r)).toMatchObject({ error: "method_not_allowed" });
+    }
+  });
+
+  it("[FD-IFC-009] answers an unknown execution, log file or artifact with the error model's JSON", async () => {
+    for (const [path, code] of [
+      ["/v1/executions/01NOSUCH/logs", "execution_not_found"],
+      [`/v1/executions/${EXECUTION}/logs/${encodeURIComponent("1/nothing.ndjson")}`, "not_found"],
+      [`/v1/artifacts/${OTHER_ARTIFACT}`, "not_found"],
+      [`${artifactPath}/a/missing.txt`, "not_found"],
+    ] as const) {
+      const r = await asMember(path);
+      expect(r.status, path).toBe(404);
+      expect(r.headers.get("content-type")).toContain("application/json");
+      const body = await errorOf(r);
+      expect(body).toMatchObject({ error: code });
+      expect(typeof body["message"]).toBe("string");
+      expect(typeof body["request_id"]).toBe("string");
+    }
   });
 
   it("[FD-CACHE-051] refuses a compile-cache request without a signing secret", async () => {

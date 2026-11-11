@@ -346,7 +346,7 @@ export const ARTIFACT_TOKEN_LABEL = "flare-dispatch/artifact/v1";
 export const signArtifactToken = (secret: string, artifactId: string, expiresAt: number, nowMs: number) =>
   signCapability(secret, ARTIFACT_TOKEN_LABEL, artifactId, expiresAt, nowMs);
 
-interface ArtifactRow {
+export interface ArtifactRow {
   readonly artifact_id: string;
   readonly execution_id: string;
   readonly epoch: number;
@@ -364,20 +364,75 @@ interface ArtifactRow {
   readonly expires_at: number;
 }
 
-export interface ArtifactRouteDeps {
+/** What serving an artifact reads, once the caller has been identified. */
+export interface ArtifactServeDeps {
   readonly db: D1Database;
   readonly bucket: Pick<R2Bucket, "get">;
-  readonly secret: string;
   readonly now: () => number;
   readonly terminal: (executionId: string) => Promise<boolean>;
+}
+
+export interface ArtifactRouteDeps extends ArtifactServeDeps {
+  readonly secret: string;
   /** A viewer identity with read access to `repo`, when the request carries one. */
   readonly viewerMayRead?: (request: Request, repo: string) => Promise<boolean>;
 }
 
+/** The answer of an artifact read: the body, nothing to serve, or a row whose body stays on its producing executor. */
+export type ArtifactRead =
+  | { readonly _tag: "Served"; readonly response: Response }
+  | { readonly _tag: "Missing" }
+  | { readonly _tag: "OnExecutor"; readonly artifactId: string; readonly executorId: string };
+
 const notFound = () => new Response("not found", { status: 404 });
+const ARTIFACT_ID = /^[0-9a-f]{32}$/;
 const ARTIFACT_ROUTE = /^\/v1\/artifacts\/([0-9a-f]{32})(?:\/(.+))?$/;
 const LIST_ROUTE = /^\/v1\/executions\/([A-Za-z0-9:_-]{3,128})\/artifacts$/;
 export const ARTIFACT_PAGE_SIZE = 100;
+
+/** The row of an unexpired artifact, or `null` for an id that names none. */
+export const findArtifact = async (
+  deps: Pick<ArtifactServeDeps, "db" | "now">,
+  artifactId: string,
+): Promise<ArtifactRow | null> => {
+  if (!ARTIFACT_ID.test(artifactId)) return null;
+  const row = await deps.db
+    .prepare("select * from artifacts where artifact_id = ?")
+    .bind(artifactId)
+    .first<ArtifactRow>();
+  return row === null || row.expires_at <= deps.now() ? null : row;
+};
+
+/**
+ * One artifact's body or one file of its browse expansion, for a caller already identified. Once the producing
+ * execution is terminal the body is served `Cache-Control: immutable` (FD-CACHE-075).
+ */
+export const serveArtifact = async (
+  request: Request,
+  row: ArtifactRow,
+  browsePath: string | undefined,
+  deps: ArtifactServeDeps,
+): Promise<ArtifactRead> => {
+  if (row.r2_path === null)
+    return { _tag: "OnExecutor", artifactId: row.artifact_id, executorId: row.producer_executor_id };
+  if (browsePath !== undefined && (row.browse !== 1 || !validArtifactName(browsePath))) return { _tag: "Missing" };
+  const object = await deps.bucket.get(browsePath === undefined ? row.r2_path : `${row.r2_path}.browse/${browsePath}`);
+  if (object === null) return { _tag: "Missing" };
+  const terminal = await deps.terminal(row.execution_id);
+  return {
+    _tag: "Served",
+    response: new Response(request.method === "HEAD" ? null : object.body, {
+      headers: {
+        "content-type": browsePath === undefined ? row.content_type : (object.httpMetadata?.contentType ?? "application/octet-stream"),
+        "content-length": String(object.size),
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "sandbox",
+        "cache-control": terminal ? "public, max-age=31536000, immutable" : "no-store",
+        ...(browsePath === undefined ? { etag: `"${row.sha256}"` } : {}),
+      },
+    }),
+  };
+};
 
 const tokenOf = (request: Request, url: URL) => {
   const auth = request.headers.get("authorization");
@@ -398,38 +453,51 @@ export const handleArtifacts = async (request: Request, deps: ArtifactRouteDeps)
   const m = ARTIFACT_ROUTE.exec(url.pathname);
   if (m === null) return null;
   if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405 });
-  const row = await deps.db.prepare("select * from artifacts where artifact_id = ?").bind(m[1]).first<ArtifactRow>();
-  if (row === null || row.expires_at <= deps.now()) return notFound();
+  const row = await findArtifact(deps, m[1]!);
+  if (row === null) return notFound();
   if (row.private === 1) {
     const token = await verifyCapability(deps.secret, ARTIFACT_TOKEN_LABEL, row.artifact_id, tokenOf(request, url), deps.now());
     const viewer = !token && deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, row.repo));
     if (!token && !viewer) return notFound();
   }
-  if (row.r2_path === null)
-    return Response.json(
-      { artifact_id: row.artifact_id, kept_on_executor: row.producer_executor_id },
-      { status: 409 },
-    );
-  const browsePath = m[2];
-  if (browsePath !== undefined && (row.browse !== 1 || !validArtifactName(browsePath))) return notFound();
-  const object = await deps.bucket.get(browsePath === undefined ? row.r2_path : `${row.r2_path}.browse/${browsePath}`);
-  if (object === null) return notFound();
-  const terminal = await deps.terminal(row.execution_id);
-  return new Response(request.method === "HEAD" ? null : object.body, {
-    headers: {
-      "content-type": browsePath === undefined ? row.content_type : (object.httpMetadata?.contentType ?? "application/octet-stream"),
-      "content-length": String(object.size),
-      "x-content-type-options": "nosniff",
-      "content-security-policy": "sandbox",
-      "cache-control": terminal ? "public, max-age=31536000, immutable" : "no-store",
-      ...(browsePath === undefined ? { etag: `"${row.sha256}"` } : {}),
-    },
-  });
+  const read = await serveArtifact(request, row, m[2], deps);
+  if (read._tag === "OnExecutor")
+    return Response.json({ artifact_id: read.artifactId, kept_on_executor: read.executorId }, { status: 409 });
+  return read._tag === "Served" ? read.response : notFound();
 };
 
-const listArtifacts = async (request: Request, url: URL, executionId: string, deps: ArtifactRouteDeps) => {
-  const limit = Math.min(ARTIFACT_PAGE_SIZE, Math.max(1, Number(url.searchParams.get("limit") ?? ARTIFACT_PAGE_SIZE) || ARTIFACT_PAGE_SIZE));
-  const cursor = url.searchParams.get("cursor") ?? "";
+const listArtifacts = (request: Request, url: URL, executionId: string, deps: ArtifactRouteDeps) =>
+  artifactPage(
+    deps,
+    executionId,
+    { limit: Number(url.searchParams.get("limit") ?? ARTIFACT_PAGE_SIZE), cursor: url.searchParams.get("cursor") ?? "" },
+    async (repo) => deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, repo)),
+  ).then((page) => Response.json(page));
+
+/** One artifact as a listing shows it. */
+export interface ArtifactEntry {
+  readonly artifact_id: string;
+  readonly name: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly content_type: string;
+  readonly epoch: number;
+  readonly producer: { readonly executor_id: string; readonly executor_kind: string };
+  readonly expires_at: number;
+}
+
+/**
+ * One page of an execution's unexpired artifacts, at most 100 rows, with the cursor of the next page (FD-CACHE-078).
+ * A private repository's artifact is listed only where `mayRead` admits its repository.
+ */
+export const artifactPage = async (
+  deps: Pick<ArtifactServeDeps, "db" | "now">,
+  executionId: string,
+  page: { readonly limit: number; readonly cursor: string },
+  mayRead: (repo: string) => Promise<boolean>,
+): Promise<{ readonly artifacts: readonly ArtifactEntry[]; readonly cursor: string | null }> => {
+  const limit = Math.min(ARTIFACT_PAGE_SIZE, Math.max(1, Math.floor(page.limit) || ARTIFACT_PAGE_SIZE));
+  const cursor = page.cursor;
   const { results } = await deps.db
     .prepare(
       `select artifact_id, name, size, sha256, content_type, epoch, producer_executor_id, producer_executor_kind,
@@ -438,10 +506,9 @@ const listArtifacts = async (request: Request, url: URL, executionId: string, de
     )
     .bind(executionId, cursor, deps.now(), limit + 1)
     .all<ArtifactRow>();
-  const visible = [];
+  const visible: ArtifactEntry[] = [];
   for (const row of results.slice(0, limit)) {
-    if (row.private === 1 && !(deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, row.repo))))
-      continue;
+    if (row.private === 1 && !(await mayRead(row.repo))) continue;
     visible.push({
       artifact_id: row.artifact_id,
       name: row.name,
@@ -454,7 +521,7 @@ const listArtifacts = async (request: Request, url: URL, executionId: string, de
     });
   }
   const next = results.length > limit ? results[limit - 1]!.artifact_id : null;
-  return Response.json({ artifacts: visible, cursor: next });
+  return { artifacts: visible, cursor: next };
 };
 
 /**

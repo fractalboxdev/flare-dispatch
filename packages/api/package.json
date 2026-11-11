@@ -10,6 +10,7 @@
     "./declaration": "./src/declaration.ts",
     "./errors": "./src/errors.ts",
     "./incident": "./src/incident.ts",
+    "./link-token": "./src/link-token.ts",
     "./mcp-tools": "./src/mcp/tools.ts",
     "./test-support": "./src/api.test-support.ts"
   },
