@@ -2,7 +2,10 @@
 // `workers-ai` model entry is priced (specs/model-gateway.md). Both routes run in the control plane: the Workers AI
 // binding is the `workers-ai` credential, and the gateway signs every `bedrock` request.
 import {
+  DEFAULT_FALLBACK_PRICE_USD_PER_MTOK,
   ModelCallFailed,
+  ModelRequestInvalid,
+  sendHostedCall,
   type HostedEntry,
   type HostedRoute,
   type RouteAnswer,
@@ -103,6 +106,34 @@ export const entryPrice = (
     input: entry.inputPriceMicroUsdPerMTok ?? fallback.input,
     output: entry.outputPriceMicroUsdPerMTok ?? fallback.output,
   };
+};
+
+/**
+ * Sends one hosted call through the model gateway with the entry priced by `entryPrice`: a `workers-ai` entry without
+ * its derived rate is refused before any reservation or upstream request, and every other entry reaches the gateway
+ * with both prices stated, so the gateway never prices a `workers-ai` entry at the fallback rate (FD-MDL-021).
+ */
+export const sendFdHostedCall = (
+  input: Parameters<typeof sendHostedCall>[0],
+): ReturnType<typeof sendHostedCall> => {
+  const fallback = Math.round(
+    (input.fallbackPriceUsdPerMTok ?? DEFAULT_FALLBACK_PRICE_USD_PER_MTOK) * 1_000_000,
+  );
+  const price = entryPrice(input.entry, { input: fallback, output: fallback });
+  return price._tag === "unpriced"
+    ? Effect.fail(
+        new ModelRequestInvalid({
+          reason: `workers-ai entry ${price.entry} states no per-token rate, and the fallback rate never prices it`,
+        }),
+      )
+    : sendHostedCall({
+        ...input,
+        entry: {
+          ...input.entry,
+          inputPriceMicroUsdPerMTok: price.input,
+          outputPriceMicroUsdPerMTok: price.output,
+        },
+      });
 };
 
 /** The capacity reason a provider error text names, so a recipe can conclude on it. */
