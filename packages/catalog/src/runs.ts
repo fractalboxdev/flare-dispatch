@@ -1,8 +1,11 @@
 // The run registry, the only list of runs (FD-RUN-063, MAMEKO-RUN-008). It holds Node process code, so only the
 // runner entry and its tests import it. Each executor kind supplies the Layers of the services its runs require.
 import type { Deployment } from "@fractalboxdev/flare-dispatch-profile";
-import { agenticRuns } from "@fractalboxdev/flare-dispatch-agentic/executor";
-import { defineRun, type LocalContent } from "@fractalboxdev/mameko-run";
+import {
+  agenticRuns,
+  type CloudAgenticServices,
+} from "@fractalboxdev/flare-dispatch-agentic/executor";
+import { defineRun, type Intents, type LocalContent } from "@fractalboxdev/mameko-run";
 import { Effect, Layer } from "effect";
 import { runCheck } from "./check.ts";
 import { processGateExec, type GateExec } from "./command.ts";
@@ -95,17 +98,40 @@ export const deviceLayers: Layer.Layer<GateExec | GateArtifacts | GithubRead, ne
     githubReadLayer({ apiBase: "https://api.github.com", fetch: globalThis.fetch }),
   );
 
+/** The executor a runner entry serves: the device, or the cloud executor with its agentic Layers. */
+export type RunnerExecutor =
+  | { readonly kind: "device" }
+  | {
+      readonly kind: "cloud";
+      /** The agentic recipes' services for the execution's job sandbox, from `cloudAgenticLayers`. */
+      readonly layers: Layer.Layer<CloudAgenticServices, never, Intents>;
+    };
+
+const AGENTIC_NAMES: ReadonlySet<string> = new Set(agenticRuns.map((run) => run.spec.name));
+
 /**
- * The runs a device may execute under a deployment, each with the device's Layers provided. A run `lookupRun` refuses
- * or that needs a service the device lacks is absent, so its lease answers `RunNotInCatalog`.
+ * The runs an executor may execute under a deployment, each with that executor's Layers provided. A run `lookupRun`
+ * refuses, that the catalogue does not serve on the executor's kind, or that needs a service the executor lacks is
+ * absent, so its lease answers `RunNotInCatalog`. The device serves the gate runs; the cloud executor serves the
+ * agentic recipes, whose catalogue entries are cloud-only.
  */
-export const runsFor = (deployment: Deployment) =>
-  registry
+export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kind: "device" }) => {
+  const available = registry
     .filter((run) => lookupRun(deployment, run.spec.name)._tag === "Available")
-    .filter((run) => servedBy(run.spec.name, "device"))
-    .map((run) => ({
-      ...run,
-      layer: (run.layer as Layer.Layer<never, never, GateExec | GateArtifacts | GithubRead>).pipe(
-        Layer.provide(deviceLayers),
-      ),
-    }));
+    .filter((run) => servedBy(run.spec.name, executor.kind));
+  return executor.kind === "device"
+    ? available.map((run) => ({
+        ...run,
+        layer: (run.layer as Layer.Layer<never, never, GateExec | GateArtifacts | GithubRead>).pipe(
+          Layer.provide(deviceLayers),
+        ),
+      }))
+    : available
+        .filter((run) => AGENTIC_NAMES.has(run.spec.name))
+        .map((run) => ({
+          ...run,
+          layer: (run.layer as Layer.Layer<never, never, CloudAgenticServices>).pipe(
+            Layer.provide(executor.layers),
+          ),
+        }));
+};

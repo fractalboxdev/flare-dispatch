@@ -6,6 +6,8 @@
 /** One grant: the hosts it covers and the header the proxy sets on a request to them. */
 export interface GrantRule {
   readonly hosts: readonly string[];
+  /** Where set, the grant covers only a request whose path starts with it. */
+  readonly pathPrefix?: string;
   readonly header: "authorization";
   /** The header's value for a resolved secret. */
   readonly value: (secret: string) => string;
@@ -19,6 +21,29 @@ export const GATE_GRANTS: Readonly<Record<string, GrantRule>> = {
     value: (secret) => `Bearer ${secret}`,
   },
 };
+
+/** The control plane's model route (specs/interfaces.md § Surfaces and their identity gates). */
+export const MODEL_GATEWAY_PATH = "/v1/model/";
+
+/**
+ * The `model-gateway` grant of the `agent` egress profile: a request to the control plane's model route leaves the
+ * proxy under the execution's per-lease token, which only the proxy holds (FD-AGT-010). It covers that route alone, so
+ * the token never reaches another path of the same host.
+ */
+export const modelGatewayGrant = (host: string): GrantRule => ({
+  hosts: [host],
+  pathPrefix: MODEL_GATEWAY_PATH,
+  header: "authorization",
+  value: (token) => `Bearer ${token}`,
+});
+
+/** The grants an execution's proxy attaches: the gate grants and the `model-gateway` grant on the control plane host. */
+export const executionGrantRules = (
+  modelGatewayHost: string,
+): Readonly<Record<string, GrantRule>> => ({
+  ...GATE_GRANTS,
+  "model-gateway": modelGatewayGrant(modelGatewayHost),
+});
 
 /**
  * The job's value for a granted credential's environment variable. Tools such as `wrangler` refuse to start without
@@ -54,21 +79,24 @@ export const hostMatches = (pattern: string, host: string): boolean => {
 
 /**
  * The request as it leaves the proxy: job-authored credential headers removed, and the credential of the first grant
- * that covers the host attached. A grant attaches only over HTTPS. `resolve` answers a grant's secret, or `undefined`
- * where the deploy holds none, in which case the request leaves with no credential.
+ * that covers the host and path attached. A grant attaches only over HTTPS. `resolve` answers a grant's secret, or
+ * `undefined` where the deploy holds none, in which case the request leaves with no credential. `rules` is the grant
+ * catalogue, the gate grants unless the caller passes `executionGrantRules`.
  */
 export const attachGrants = (
   request: Request,
   grants: readonly string[],
   resolve: (grant: string) => string | undefined,
+  rules: Readonly<Record<string, GrantRule>> = GATE_GRANTS,
 ): Request => {
   const url = new URL(request.url);
   const headers = new Headers(request.headers);
   for (const name of JOB_AUTH_HEADERS) headers.delete(name);
   if (url.protocol === "https:") {
     for (const grant of grants) {
-      const rule = GATE_GRANTS[grant];
+      const rule = rules[grant];
       if (rule === undefined || !rule.hosts.some((h) => hostMatches(h, url.hostname))) continue;
+      if (rule.pathPrefix !== undefined && !url.pathname.startsWith(rule.pathPrefix)) continue;
       const secret = resolve(grant);
       if (secret !== undefined) headers.set(rule.header, rule.value(secret));
       break;
