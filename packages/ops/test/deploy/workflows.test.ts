@@ -66,7 +66,6 @@ const ROOT = repositoryRoot(import.meta.dirname);
 const SCRIPT = "packages/ops/scripts/fd-operability.ts";
 const FD_DEPLOY = ["--experimental-strip-types", "--no-warnings", SCRIPT, "deploy", "--overlay"];
 const SHA = "0123456789abcdef0123456789abcdef01234567";
-const CONTROL_PLANE = V2_WORKERS.find((w) => w.worker === "control-plane")!;
 
 /** An operator's overlay whose values differ from the placeholder overlay, so a render shows which overlay it read. */
 const OVERLAY: OverlayValues = {
@@ -303,12 +302,7 @@ const deployedBy = async (argv: readonly string[]) => {
         { id: "hostname", domain: values.hostnames["dispatcher"]!, aud: values.access.aud },
       ]),
     });
-  const service = makeOperability({
-    fail: (m) => new Error(m),
-    root: ROOT,
-    workers: [CONTROL_PLANE],
-    target,
-  });
+  const service = makeOperability({ fail: (m) => new Error(m), root: ROOT, target });
   const report = await Effect.runPromise(operabilityCommand(service, argv, (m) => new Error(m)));
   return { report, received };
 };
@@ -316,7 +310,7 @@ const deployedBy = async (argv: readonly string[]) => {
 /** Each Worker's configuration as the one renderer produces it from its committed template and `overlay`. */
 const rendered = (overlay: OverlayValues) =>
   new Map(
-    [CONTROL_PLANE].map((w) => [
+    V2_WORKERS.map((w) => [
       w.worker,
       Effect.runSync(
         renderTemplate(w.worker, readFileSync(join(ROOT, w.templatePath), "utf8"), overlay),
@@ -588,8 +582,10 @@ const CI_COMMANDS: Readonly<Record<string, RegExp>> = {
   typecheck: /^pnpm typecheck$/,
   "unit tests": /^pnpm test$/,
   "formal build gate": /packages\/ops\/scripts\/formal-gate\.ts/,
-  "wrangler deploy --dry-run on the configuration rendered from the placeholder overlay":
+  "wrangler deploy --dry-run on the control plane's configuration rendered from the placeholder overlay":
     /^pnpm exec wrangler deploy --dry-run -c apps\/control-plane\/control-plane\.jsonc$/,
+  "wrangler deploy --dry-run on the docs Worker's configuration rendered from the placeholder overlay":
+    /^mkdir -p apps\/docs\/dist && pnpm exec wrangler deploy --dry-run -c apps\/docs\/docs\.jsonc$/,
   "the render, cron and drift checks": /packages\/ops\/scripts\/drift-check\.ts/,
   "documentation site build": /^pnpm --filter @fractalboxdev\/flare-dispatch-docs run build$/,
 };
@@ -753,17 +749,29 @@ const pnpmStandIn = (repository: string) => {
   ].join("\n");
 };
 
-/** Runs `job` of `v2-ci` in `workspace`, which already holds the checkout and the install its `uses:` steps make. */
-const runCiJob = (job: string, name: string, workspace: string) => {
+/**
+ * Runs `job` of `v2-ci` in `workspace`, which already holds the checkout and the install its `uses:` steps make: the
+ * job's steps up to `until` (all by default), with `pnpm` played by `pnpm`'s text (`pnpmStandIn` by default).
+ */
+const runCiJob = (
+  job: string,
+  name: string,
+  workspace: string,
+  opts: { readonly until?: (step: Step) => boolean; readonly pnpm?: string } = {},
+) => {
   const r = runner(name, []);
   rmSync(r.workspace, { recursive: true, force: true });
   symlinkSync(workspace, r.workspace);
-  writeFileSync(join(r.bin, "pnpm"), pnpmStandIn(workspace));
+  writeFileSync(join(r.bin, "pnpm"), opts.pnpm ?? pnpmStandIn(workspace));
   chmodSync(join(r.bin, "pnpm"), 0o755);
   const played: string[] = [];
+  const steps = ciWorkflow.jobs[job]!.steps!;
+  const until = opts.until ?? (() => true);
+  const last = steps.reduce((at, step, i) => (until(step) ? i : at), -1);
+  expect(last, `${job}: no step to run until`).toBeGreaterThanOrEqual(0);
   // `node` runs under the real home, as on the hosted runner.
   const results = runSteps(
-    ciWorkflow.jobs[job]!.steps!,
+    steps.slice(0, last + 1),
     r,
     {},
     (step) => {
@@ -885,7 +893,7 @@ describe("the deploy workflow over GitHub's rules", () => {
     );
     expect(results.filter((s) => !s.ok)).toEqual([]);
     expect(fdDeployOf(r.ran()).call.args.slice(FD_DEPLOY.length)).toHaveLength(1);
-  });
+  }, 30_000);
 
   it("[FD-OPS-025] runs fd doctor once every 24 h, and a failed check raises the notify alarm drift at the overlay's sink", async () => {
     const schedule = deployWorkflow.on["schedule"] as unknown as { cron: string }[];
@@ -1011,6 +1019,85 @@ describe("the CI jobs the merge gate and the deploy rest on", () => {
     const w = world();
     expect((await deployOn(w)).ok).toBe(true);
   }, 30_000);
+
+  it("[FD-OPS-026] every pull request runs wrangler deploy --dry-run for every Worker on its configuration rendered from the placeholder overlay", () => {
+    expect(conclusions(ciWorkflow, PULL_REQUEST, allPass).get("deploy-dry-run")).toBe("success");
+    const isDryRun = (s: Step) => /wrangler deploy --dry-run/.test(s.run ?? "");
+    /** A `pnpm` that records each `pnpm exec wrangler` with the configuration its `-c` names, as the call saw it. */
+    const recorder = (name: string) => {
+      const dir = join(scratch, name, "dry-runs");
+      mkdirSync(dir, { recursive: true });
+      const pnpm = [
+        "#!/bin/sh",
+        'if [ "$1" != "exec" ] || [ "$2" != "wrangler" ]; then echo "pnpm stand-in: no $*" >&2; exit 2; fi',
+        'config=""; prev=""',
+        'for a in "$@"; do if [ "$prev" = "-c" ]; then config="$a"; fi; prev="$a"; done',
+        `n=$(ls "${dir}" | wc -l | tr -d ' ')`,
+        `mkdir "${dir}/$n" && cp "$config" "${dir}/$n/config.jsonc" || exit 2`,
+        `printf '%s' "$*" > "${dir}/$n/args"`,
+        "",
+      ].join("\n");
+      const dryRuns = () =>
+        readdirSync(dir)
+          .sort((a, b) => Number(a) - Number(b))
+          .map((n) => ({
+            args: readFileSync(join(dir, n, "args"), "utf8"),
+            config: readFileSync(join(dir, n, "config.jsonc"), "utf8"),
+          }));
+      return { pnpm, dryRuns };
+    };
+
+    // The drift check writes each Worker's rendered configuration beside its template, and each is dry-run.
+    const repository = mirror("dry-run");
+    const clean = recorder("dry-run");
+    const ran = runCiJob("deploy-dry-run", "dry-run", repository, {
+      until: isDryRun,
+      pnpm: clean.pnpm,
+    });
+    expect(ran.results.filter((s) => !s.ok)).toEqual([]);
+    expect(ran.results.map((s) => s.output).join("\n")).toContain(
+      "drift-check: 0 failure(s), 0 warning(s)",
+    );
+    expect(clean.dryRuns()).toEqual(
+      V2_WORKERS.map((w) => ({
+        args: `exec wrangler deploy --dry-run -c ${dirname(w.templatePath)}/${w.worker}.jsonc`,
+        config: Effect.runSync(
+          renderTemplate(
+            w.worker,
+            readFileSync(join(ROOT, w.templatePath), "utf8"),
+            placeholderOverlay,
+          ),
+        ),
+      })),
+    );
+    // The docs Worker's rendered configuration passes wrangler's own dry-run where the job left it.
+    const docsDryRun = spawnSync(
+      join(ROOT, "node_modules/.bin/wrangler"),
+      ["deploy", "--dry-run", "-c", "apps/docs/docs.jsonc"],
+      {
+        cwd: repository,
+        encoding: "utf8",
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "true" },
+      },
+    );
+    expect(docsDryRun.status, `${docsDryRun.stdout}${docsDryRun.stderr}`).toBe(0);
+    expect(docsDryRun.stdout).toContain("--dry-run: exiting now.");
+
+    // A docs template that names its hostname fails the job at the drift check, before any dry-run.
+    const hardCoded = mirror("dry-run-hostname");
+    const template = join(hardCoded, "apps/docs/wrangler.jsonc");
+    const text = readFileSync(template, "utf8");
+    writeFileSync(template, text.replace('"{{hostnames.docs}}"', '"docs.acme.test"'));
+    expect(readFileSync(template, "utf8")).not.toBe(text);
+    const bad = recorder("dry-run-hostname");
+    const failed = runCiJob("deploy-dry-run", "dry-run-hostname", hardCoded, {
+      until: isDryRun,
+      pnpm: bad.pnpm,
+    });
+    expect(failed.results.map((s) => s.ok)).toEqual([true, true, false]);
+    expect(failed.results.at(-1)!.output).toContain("failure placeholder docs.routes[0].pattern");
+    expect(bad.dryRuns()).toEqual([]);
+  }, 120_000);
 
   it("[FD-OPS-031] the docs job builds the site from the Markdown under specs/, and fails on a broken local link or a diagram the check rejects", () => {
     expect(conclusions(ciWorkflow, PULL_REQUEST, allPass).get("docs")).toBe("success");
