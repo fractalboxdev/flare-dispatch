@@ -126,9 +126,10 @@ export interface ExecutionsReadConfig {
 /**
  * `ExecutionsRead` over the executions table and the log store, for a host that holds both bindings. `failedSince`
  * answers the repository's executions that concluded `failure` at or after `since`, newest first; `failedJobLog` the
- * text of the failing epoch's log in step order, empty for an execution that wrote none. The failing epoch is the
- * latest, the one whose result concluded the execution. A database, listing or object read that throws, or a listed
- * object that is gone, fails the read.
+ * text of the failing epoch's log in step order. The accepted placement epoch takes precedence over the current
+ * placement epoch; only a record with neither may fall back to the highest epoch in the log store, matching the
+ * failure-summary source. Missing logs for the selected attempt fail the read, so an older attempt is never offered
+ * as evidence for the current failure. Database, listing and object failures also fail the read.
  */
 export const executionsReadLayer = (config: ExecutionsReadConfig): Layer.Layer<ExecutionsRead> =>
   Layer.succeed(ExecutionsRead, {
@@ -162,11 +163,27 @@ export const executionsReadLayer = (config: ExecutionsReadConfig): Layer.Layer<E
     failedJobLog: (executionId) =>
       Effect.tryPromise({
         try: async () => {
+          const { results } = await config.db
+            .prepare(
+              `select p.accepted_epoch, p.epoch from executions e
+             left join placements p on p.execution_id = e.id
+             where e.id = ? and e.status = 'failure'`,
+            )
+            .bind(executionId)
+            .all();
+          const record = results[0] as
+            | { accepted_epoch: number | null; epoch: number | null }
+            | undefined;
+          if (record === undefined) throw new Error(`no failed execution ${executionId}`);
           const objects = await listLogObjects(config.logs, executionId);
-          if (objects.length === 0) return "";
-          const epoch = Math.max(...objects.map((o) => o.log.epoch));
+          if (objects.length === 0) throw new Error(`no log for failed execution ${executionId}`);
+          const epoch =
+            record.accepted_epoch ?? record.epoch ?? Math.max(...objects.map((o) => o.log.epoch));
+          const atEpoch = objects.filter((o) => o.log.epoch === epoch);
+          if (atEpoch.length === 0)
+            throw new Error(`no log for failed execution ${executionId} at epoch ${epoch}`);
           const texts: string[] = [];
-          for (const o of inStepOrder(objects.filter((o) => o.log.epoch === epoch))) {
+          for (const o of inStepOrder(atEpoch)) {
             const body = await config.logs.get(o.key);
             if (body === null) throw new Error(`log object ${o.key} is listed but missing`);
             texts.push(ndjsonToText(await body.text()));

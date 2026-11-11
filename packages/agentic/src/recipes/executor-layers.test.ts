@@ -465,8 +465,8 @@ describe("the cloud executor's agentic layers", () => {
       success: [{ executionId: "x-1", run: "check", reason: "finding: test", finishedAt: 10 }],
     });
     expect(await read((r) => r.failedJobLog("x-none"))).toMatchObject({
-      _tag: "Success",
-      success: "",
+      _tag: "Failure",
+      failure: { source: "logs" },
     });
     logs.drop(`logs/x-1/1/${STEP_A}/stdout-0-10.ndjson`);
     expect(await read((r) => r.failedJobLog("x-1"))).toMatchObject({
@@ -478,5 +478,48 @@ describe("the cloud executor's agentic layers", () => {
       _tag: "Failure",
       failure: { source: "executions" },
     });
+  });
+
+  it("[FD-AGT-071] [FD-AGT-042] selects the accepted or current epoch and refuses an older attempt's log when the failed attempt wrote none", async () => {
+    const db = memoryD1();
+    await db
+      .prepare(`insert into executions (id, scope_id, run, class, status, enqueued_at, finished_at)
+      values ('reclaimed', 'o/r', 'check', 'required', 'failure', 1, 10)`)
+      .bind()
+      .run();
+    await db
+      .prepare(`insert into placements (execution_id, state, epoch, accepted_epoch)
+      values ('reclaimed', 'failed', 3, 2)`)
+      .bind()
+      .run();
+    const logs = memoryLogs({
+      [`logs/reclaimed/1/${STEP_A}/stdout-0-10.ndjson`]: '{"line":"old attempt"}\n',
+      [`logs/reclaimed/2/${STEP_A}/stdout-0-10.ndjson`]: '{"line":"accepted failure"}\n',
+    });
+    const read = () =>
+      Effect.runPromise(
+        Effect.result(ExecutionsRead.use((r) => r.failedJobLog("reclaimed"))).pipe(
+          Effect.provide(executionsReadLayer({ db, logs })),
+        ),
+      );
+    expect(await read()).toMatchObject({ _tag: "Success", success: "accepted failure" });
+    await db
+      .prepare("update placements set accepted_epoch = null where execution_id = 'reclaimed'")
+      .bind()
+      .run();
+    expect(await read()).toMatchObject({
+      _tag: "Failure",
+      failure: { source: "logs", detail: expect.stringContaining("epoch 3") },
+    });
+    await db
+      .prepare("update placements set epoch = 2 where execution_id = 'reclaimed'")
+      .bind()
+      .run();
+    expect(await read()).toMatchObject({ _tag: "Success", success: "accepted failure" });
+    await db
+      .prepare("update placements set accepted_epoch = 1 where execution_id = 'reclaimed'")
+      .bind()
+      .run();
+    expect(await read()).toMatchObject({ _tag: "Success", success: "old attempt" });
   });
 });
