@@ -7,7 +7,7 @@ import { newRow } from "@fractalboxdev/mameko-kernel";
 import { Effect, Schema } from "effect";
 import { InstallationDirectory } from "./applier.ts";
 import { GithubNetworkError } from "./client.ts";
-import type { Verdict } from "./conclusion.ts";
+import { PARENT_CLOSED, type Verdict } from "./conclusion.ts";
 
 /** No installation serves the row's repository, so it has no delivery key. */
 export class NoInstallation extends Schema.TaggedError<NoInstallation>()("NoInstallation", {
@@ -108,13 +108,6 @@ export interface ChildCheck {
   readonly concluded: boolean;
 }
 
-/** The verdict a child concludes with when its parent reaches its outcome first (FD-GH-020). */
-export const PARENT_CLOSED: Verdict = {
-  _tag: "failure",
-  category: "infra",
-  reason: "parent closed before this part settled",
-};
-
 /**
  * The `check.conclude` intents a fan-out parent's outcome inserts: one per child check run not yet concluded, with the
  * child's recorded outcome or `failure` "parent closed before this part settled" (FD-GH-020).
@@ -128,4 +121,4 @@ export const childConclusions = (children: readonly ChildCheck[]) =>
       verdict: c.verdict ?? PARENT_CLOSED,
     }));
 
-export { checkNeutralInvariant, neutralHolds } from "./conclusion.ts";
+export { checkNeutralInvariant, neutralHolds, PARENT_CLOSED } from "./conclusion.ts";

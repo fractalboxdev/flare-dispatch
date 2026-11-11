@@ -1,6 +1,7 @@
 // The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, the
-// admission of held requests, and intake's sweep and schedule units for every installation of the App.
-import { GithubApp } from "@fractalboxdev/flare-dispatch-github";
+// admission of held requests, intake's sweep and schedule units for every installation of the App, and the conclusions
+// of ended fan-out parents' children.
+import { GithubApp, insertChildConclusions } from "@fractalboxdev/flare-dispatch-github";
 import { planTick, releaseHeld, runTickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import { tickDepsFromEnv, type TickDeps, type TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import {
@@ -13,7 +14,7 @@ import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import type { ActuatorRateLimit, Actuators } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { isolateServices } from "./composition.ts";
-import { channelConfig, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { channelConfig, concludeKindOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { appOptionsOf } from "./github.ts";
 
 /**
@@ -68,6 +69,16 @@ export const startSweeps = (env: ControlPlaneEnv, now: number): readonly TickSte
   ];
 };
 
+/**
+ * Every child check run an ended fan-out parent left open gets its `check.conclude` intent, which the next tick's drain
+ * applies (FD-GH-020). A pass reads each parent for an hour after its end; a child already given its row is
+ * skipped, so a repeat inserts nothing.
+ */
+export const childConclusionsStep = (env: ControlPlaneEnv, now: number): TickStep => ({
+  step: "child-conclusions",
+  effect: insertChildConclusions(env.DB, concludeKindOf(profileOf(env)), now),
+});
+
 export const tickDeps = (
   env: ControlPlaneEnv,
   steps: (now: number) => readonly TickStep[] = () => [],
@@ -100,6 +111,7 @@ export const tickDeps = (
           ]
         : []),
       ...startSweeps(env, now),
+      childConclusionsStep(env, now),
       ...steps(now),
     ],
   });

@@ -115,6 +115,31 @@ export const verdictOf = (
     Match.exhaustive,
   );
 
+/** The cause mameko's parent-ended cascade records on each child a parent's end cancels (MAMEKO-RUN-084). */
+export const PARENT_ENDED = "parent-ended";
+
+/** The verdict a child concludes with when its parent reaches its outcome first (FD-GH-020). */
+export const PARENT_CLOSED: Verdict = {
+  _tag: "failure",
+  category: "infra",
+  reason: "parent closed before this part settled",
+};
+
+/**
+ * The verdict of an outcome row: `verdictOf(outcome)`, except that a child the parent's end cancelled settled no verdict
+ * of its own and concludes `failure` "parent closed before this part settled" (FD-GH-020).
+ */
+export const concludedVerdictOf = (
+  outcome: RecordedOutcome,
+  declared: Readonly<Record<string, Category>> = {},
+): Verdict =>
+  Match.value(outcome).pipe(
+    Match.tag("Cancelled", ({ cause }) =>
+      cause === PARENT_ENDED ? PARENT_CLOSED : verdictOf(outcome, declared),
+    ),
+    Match.orElse(() => verdictOf(outcome, declared)),
+  );
+
 /**
  * The verdict an execution row records in its `status` and `reason` columns, which mameko's terminal write sets with the
  * outcome row; null while the execution is not terminal. A skip's reason reads `<reason>: <detail>`.

@@ -39,10 +39,12 @@ export {
 export {
   checkConclusion,
   ConcludeDetails,
+  concludedVerdictOf,
   concludeSummary,
   NOT_APPLICABLE_DETAILS,
   OUTPUT_LIMIT,
   OutcomePayload,
+  PARENT_ENDED,
   RecordedOutcome,
   recordedVerdict,
   truncate,
@@ -96,6 +98,13 @@ export {
   type OpsIntent,
 } from "./bindings.ts";
 export { QuarantinedFailure, quarantineAnnotations } from "./conclusion.ts";
+export {
+  CHILD_CONCLUDE_KEY,
+  CHILD_CONCLUSIONS_LOOKBACK_MS,
+  ChildConclusionsUnavailable,
+  insertChildConclusions,
+  type ConcludeKind,
+} from "./child-intents.ts";
 export { GithubApplierLive, makeGithubActuators, SIDE_OUTPUT_BINDINGS } from "./github-applier.ts";
 export {
   intentMarker,
