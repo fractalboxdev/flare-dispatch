@@ -2,7 +2,8 @@
 // with a staged write the gate rejects, and its `pr.propose` row drains through mameko's drainer over the control
 // plane's D1 tables on a virtual clock. The seed fixes the manifest's defects, the artifact-store and GitHub faults
 // before the gate answers, the D1 write failures under the drainer, and whether the artifact store stays down until
-// the row expires. The observation is what the execution's dashboard page shows once the row is terminal.
+// the row expires. The observation is what the execution's dashboard page shows once the row is terminal;
+// `checkSeed` asserts it and throws on a violation, as the `sim` job requires of each scenario.
 import { drainOnce } from "@fractalboxdev/mameko-coordinator";
 import {
   d1OutboxStore,
@@ -23,16 +24,19 @@ import {
   OutboxStore,
   type IntentRow,
 } from "@fractalboxdev/mameko-ports";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Effect, Layer } from "effect";
 import { executionDetail, renderExecutionDetail } from "../../../ops/src/dashboard.ts";
 import { sqliteDb } from "../../../ops/src/d1.test-support.ts";
+import type { SimScenario } from "../../../ops/src/verification/harness.ts";
 import { stagedWriteGate } from "../../src/staged-write/gate.ts";
-import type {
-  GateReason,
-  Manifest,
-  ManifestEntry,
-  WritebackSpec,
+import {
+  refusalReason,
+  type GateReason,
+  type Manifest,
+  type ManifestEntry,
+  type WritebackSpec,
 } from "../../src/staged-write/manifest.ts";
 import {
   applyPrPropose,
@@ -161,7 +165,7 @@ export const expectedReasons = (p: Plan): readonly GateReason[] => {
     issuedCredentials: [],
     githubHost: "github.com",
   });
-  return verdict._tag === "reject" ? verdict.reasons : [];
+  return "reasons" in verdict ? verdict.reasons : [];
 };
 
 /** A D1 binding whose outbox writes fail at the planned ordinals, as a failed D1 transaction does. */
@@ -318,3 +322,95 @@ export const runScenario = async (seed: number): Promise<Observation> => {
     await t.dispose();
   }
 };
+
+/** The text of each list item in the page's reason lists, unescaped. */
+const listed = (page: string) =>
+  [...page.matchAll(/<li class="mono">([^<]*)<\/li>/g)].map((m) =>
+    m[1]!
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&"),
+  );
+
+/** The GitHub calls that write; a refused row makes none. */
+const WRITES = new Set([
+  "createBlob",
+  "createTree",
+  "createCommit",
+  "createRef",
+  "updateRef",
+  "createPull",
+  "updatePull",
+  "addLabels",
+  "closePull",
+]);
+
+/** One reason as `refusalReason` lists it. */
+const reasonText = (r: GateReason) => refusalReason([r]).split("; ")[1]!;
+
+/** The paths a seed took through the faults, for a run over many seeds to show it reached each. */
+export interface SeedOutcome {
+  readonly rowState: string;
+  /** A lookup follows only a claim whose answer a D1 failure lost. */
+  readonly d1LostAnswer: boolean;
+  /** A second base-commit read follows only a GitHub 502. */
+  readonly github502: boolean;
+}
+
+/**
+ * Runs one seed and asserts FD-AGT-018 on it, throwing on a violation: the row ends refused with every gate reason
+ * (or expired under a permanent artifact-store outage), the page lists each reason, no GitHub write happens, and
+ * the verdict stays success (MAMEKO-OUT-015).
+ */
+export const checkSeed = async (seed: number): Promise<SeedOutcome> => {
+  const p = plan(seed);
+  const reasons = expectedReasons(p);
+  const o = await runScenario(seed);
+  const at = `seed ${seed}`;
+  assert.ok(reasons.length > 0, `${at}: the plan carries no defect the gate rejects`);
+  assert.equal(o.verdict, "success", at);
+  assert.deepEqual(
+    o.githubCalls.filter((c) => WRITES.has(c)),
+    [],
+    at,
+  );
+  const outcome = {
+    rowState: o.rowState,
+    d1LostAnswer: o.githubCalls.includes("refSha"),
+    github502: o.githubCalls.filter((c) => c === "fileAt").length > 1,
+  };
+  if (p.artifactOutages === Number.POSITIVE_INFINITY) {
+    assert.equal(o.rowState, "expired", at);
+    assert.equal(o.lastError, "writeback: read artifacts", at);
+    assert.ok(
+      o.page.includes('<td class="notify">expired</td>'),
+      `${at}: page shows no expired row`,
+    );
+    assert.ok(
+      o.page.includes('<span class="mono">writeback: read artifacts</span>'),
+      `${at}: page shows no last error of the expired row`,
+    );
+    return outcome;
+  }
+  assert.equal(o.rowState, "refused", at);
+  assert.equal(o.lastError, refusalReason(reasons), at);
+  assert.ok(o.page.includes('<td class="notify">refused</td>'), `${at}: page shows no refused row`);
+  assert.ok(
+    o.page.includes(`writeback: ${reasons[0]!.kind}<ul`),
+    `${at}: page shows no first reason kind ${reasons[0]!.kind}`,
+  );
+  assert.deepEqual(listed(o.page), reasons.map(reasonText), at);
+  return outcome;
+};
+
+export const scenarios: readonly SimScenario[] = [
+  {
+    name: SCENARIO,
+    ids: ["FD-AGT-018"],
+    run: async (seed) => {
+      await checkSeed(seed);
+    },
+  },
+];

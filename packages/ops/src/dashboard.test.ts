@@ -230,7 +230,8 @@ describe("execution page", () => {
     let html = renderExecutionDetail((await executionDetail(t.db, "e1"))!, null);
     expect(html).toContain("<tr><th>Verdict</th><td>success</td></tr>");
     expect(html).toMatch(/<td class="notify">expired<\/td>/);
-    expect(listedReasons(html)).toEqual(["read artifacts"]);
+    expect(html).toContain('<span class="mono">writeback: read artifacts</span>');
+    expect(listedReasons(html)).toEqual([]);
 
     await execution("e2", { status: "success", run: "spec-drift-pr" });
     await outboxRow("e2", "2", "pr.propose", "expired", "github createTree: 502");

@@ -339,11 +339,15 @@ const seconds = (ms: number | null) => (ms === null ? "—" : `${Math.round(ms /
 /** The path of an execution's page. */
 export const executionPath = (id: string): string => `/executions/${encodeURIComponent(id)}`;
 
-/** The reasons a row's answer gives: every staged-write gate reason of a refused or expired `pr.propose` row. */
+/**
+ * The reasons a row's answer gives: every staged-write gate reason of a refused `pr.propose` row. An expired row's
+ * `last_error` is its last retryable failure, not a gate reason, so it shows as recorded.
+ */
 const reasonCell = (row: OutboxEntry): string => {
   if (row.lastError === null)
     return row.state === "expired" ? "expired with no recorded reason" : "—";
-  const view = row.kind === "pr.propose" ? refusalView(row.lastError) : null;
+  const view =
+    row.kind === "pr.propose" && row.state === "refused" ? refusalView(row.lastError) : null;
   if (view === null) return `<span class="mono">${esc(row.lastError)}</span>`;
   return `writeback: ${esc(view.firstKind)}<ul class="reasons">${view.reasons
     .map((r) => `<li class="mono">${esc(r)}</li>`)
@@ -352,8 +356,8 @@ const reasonCell = (row: OutboxEntry): string => {
 
 /**
  * The execution page: the verdict, read from the execution's own row, and each outbox row with its answer. A
- * refused or expired `pr.propose` row lists every reason of its refusal (FD-AGT-018, FD-AGT-038); a row's answer
- * never stands in for the verdict.
+ * refused `pr.propose` row lists every reason of its refusal (FD-AGT-018) and an expired one shows its last error
+ * (FD-AGT-038); a row's answer never stands in for the verdict.
  */
 export const renderExecutionDetail = (detail: ExecutionDetail, logLink: string | null): string => {
   const e = detail.execution;
