@@ -5,6 +5,11 @@
   "description": "`pnpm dogfood`: runs FlareDispatch's own CI through a local control plane and the real device executor.",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./stack": "./src/stack.ts",
+    "./client": "./src/client.ts",
+    "./access": "./src/access.ts"
+  },
   "scripts": {
     "test": "vitest run"
   },

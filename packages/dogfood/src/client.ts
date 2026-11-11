@@ -50,6 +50,17 @@ export interface ControlPlaneClient {
     readonly sha: string;
     readonly inputs: CheckInput;
   }) => Effect.Effect<typeof Dispatched.Type, ControlPlaneError>;
+  /**
+   * A dispatch of any run (`POST /v1/dispatch/:run`). An `idempotencyKey` keys the execution, so two dispatches of one
+   * run and commit with different keys reach two executions (FD-INT-010).
+   */
+  readonly dispatch: (input: {
+    readonly run: string;
+    readonly repository: string;
+    readonly sha: string;
+    readonly inputs: unknown;
+    readonly idempotencyKey?: string;
+  }) => Effect.Effect<typeof Dispatched.Type, ControlPlaneError>;
   readonly execution: (id: string) => Effect.Effect<ExecutionView, ControlPlaneError>;
 }
 
@@ -81,9 +92,9 @@ export const health = (origin: string) =>
 /** A client that sends the operator's Access JWT, as the Access edge would. */
 export const makeClient = (origin: string, accessJwt: string): ControlPlaneClient => {
   const identity = { "cf-access-jwt-assertion": accessJwt };
-  const post = (body: unknown): RequestInit => ({
+  const post = (body: unknown, headers: Readonly<Record<string, string>> = {}): RequestInit => ({
     method: "POST",
-    headers: { ...identity, "content-type": "application/json" },
+    headers: { ...identity, ...headers, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   return {
@@ -102,6 +113,12 @@ export const makeClient = (origin: string, accessJwt: string): ControlPlaneClien
         }),
       ).pipe(Effect.asVoid),
     dispatchCheck: (body) => call(Dispatched, `${origin}/v1/dispatch/check`, post(body)),
+    dispatch: ({ run, idempotencyKey, ...body }) =>
+      call(
+        Dispatched,
+        `${origin}/v1/dispatch/${encodeURIComponent(run)}`,
+        post(body, idempotencyKey === undefined ? {} : { "idempotency-key": idempotencyKey }),
+      ),
     execution: (id) =>
       call(ExecutionView, `${origin}/v1/executions/${encodeURIComponent(id)}`, {
         headers: identity,
