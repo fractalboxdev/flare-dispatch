@@ -205,6 +205,7 @@ const tree = (dir: string): Map<string, string> => {
  * the control plane alone: the committed documentation template still fails the template invariants of the drift check.
  */
 const deployedBy = async (overlay: string) => {
+  const values = JSON.parse(overlay) as OverlayValues;
   const received = new Map<string, string>();
   const target = () =>
     Layer.succeed(DeployTarget, {
@@ -227,7 +228,10 @@ const deployedBy = async (overlay: string) => {
       floorCanary: () => Effect.succeed({ status: "passed" as const, digest: "sha256:0" }),
       writeRecord: () => Effect.void,
       raiseAlarm: () => Effect.void,
-      ...accessStore(),
+      // The hostname application exists with the overlay's AUD tag, as on an account set up before its first deploy.
+      ...accessStore([
+        { id: "hostname", domain: values.hostnames["dispatcher"]!, aud: values.access.aud },
+      ]),
     });
   const report = await Effect.runPromise(
     makeOperability({

@@ -326,8 +326,29 @@ export const rulesetCheck = (required: readonly string[]): readonly Finding[] =>
     );
 
 /**
+ * The hostname application's AUD tag against the overlay's `access.aud` (FD-OPS-064, FD-OPS-088). The dispatcher checks
+ * every Access JWT against `access.aud`, so on a mismatch it rejects each request Access lets through. No finding when
+ * the account holds no application on the hostname.
+ */
+export const accessAudCheck = (
+  committed: CommittedAccess,
+  deployed: readonly DeployedAccessApplication[],
+): readonly Finding[] => {
+  const app = deployed.find((d) => d.domain === committed.hostname);
+  if (app === undefined || app.aud === committed.aud) return [];
+  return [
+    fail(
+      "access",
+      `access.${committed.hostname}.aud`,
+      `the hostname's Access application has AUD ${show(app.aud)}, the overlay's access.aud is ${JSON.stringify(committed.aud)}: set access.aud to the application's AUD and deploy again`,
+    ),
+  ];
+};
+
+/**
  * Each difference between the Access applications on the dispatcher's hostname and the committed ones (FD-OPS-088): a
- * committed application absent, one whose name, domain, session or policies differ, and one the commit does not hold.
+ * committed application absent, one whose name, domain, session or policies differ, one the commit does not hold, and
+ * a hostname application whose AUD tag is not the overlay's `access.aud`.
  */
 export const accessDrift = (
   committed: CommittedAccess,
@@ -353,6 +374,7 @@ export const accessDrift = (
         "an Access application on the dispatcher's hostname the committed configuration does not hold",
       ),
     ),
+    ...accessAudCheck(committed, deployed),
   ];
 };
 

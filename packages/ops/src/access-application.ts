@@ -101,6 +101,8 @@ export const bypassed = (path: string): boolean =>
 /** The committed applications for an overlay: none when it names no dispatcher hostname. */
 export interface CommittedAccess {
   readonly hostname: string;
+  /** The overlay's `access.aud`: the AUD tag the dispatcher checks Access JWTs against (FD-OPS-064). */
+  readonly aud: string;
   readonly applications: readonly AccessApplication[];
 }
 
@@ -112,16 +114,23 @@ export const committedAccess = (overlay: {
   readonly hostnames: Readonly<Record<string, string>>;
   readonly operators: readonly string[];
   readonly dispatchers?: readonly string[] | undefined;
+  readonly access: { readonly aud: string };
 }): CommittedAccess | null => {
   const hostname = overlay.hostnames["dispatcher"];
   if (hostname === undefined) return null;
   const identities = [...new Set([...overlay.operators, ...(overlay.dispatchers ?? [])])];
-  return { hostname, applications: accessApplications(hostname, identities) };
+  return {
+    hostname,
+    aud: overlay.access.aud,
+    applications: accessApplications(hostname, identities),
+  };
 };
 
 /** An Access application as the Cloudflare API lists it: the committed fields, its id and whatever else it holds. */
 export interface DeployedAccessApplication {
   readonly id: string;
+  /** The AUD tag Cloudflare gives the application when it creates it; a replace keeps it. */
+  readonly aud?: string;
   readonly name?: string;
   readonly type?: string;
   readonly domain?: string;

@@ -70,8 +70,8 @@ export interface Script {
 
 /**
  * A Cloudflare account, a GitHub App installation, `wrangler` and the Workers' hostnames, behind one call log. The
- * account holds the committed Access applications for the placeholder overlay unless `access` is `"none"`, as the App
- * registration matches the committed manifest.
+ * account holds the committed Access applications for the placeholder overlay, the hostname's application with the
+ * overlay's `access.aud`, unless `access` is `"none"`, as the App registration matches the committed manifest.
  */
 export const world = (opts: { readonly access?: "committed" | "none" } = {}) => {
   const calls: string[] = [];
@@ -90,15 +90,27 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     wranglerFails: boolean;
     /** Every Access write answers 403, as for a token that may read Access applications and not edit them. */
     accessFails: boolean;
+    /** Every Access call answers 403, as for a token with no Access permission. */
+    accessReadFails: boolean;
     /** The GitHub App's registration as `GET /app` answers it; the committed manifest by default. */
     app: AppPermissions;
-  } = { health: 200, deploys: 0, wranglerFails: false, accessFails: false, app: APP_PERMISSIONS };
+  } = {
+    health: 200,
+    deploys: 0,
+    wranglerFails: false,
+    accessFails: false,
+    accessReadFails: false,
+    app: APP_PERMISSIONS,
+  };
 
-  /** An application as the API stores it: an id, and policies with the ids, precedence and rule lists it adds. */
-  const stored = (id: string, body: Record<string, unknown>) => ({
+  /**
+   * An application as the API stores it: an id, an AUD tag, and policies with the ids, precedence and rule lists it
+   * adds. A created application takes a new AUD tag; a replaced one keeps its own.
+   */
+  const stored = (id: string, body: Record<string, unknown>, aud: unknown = `aud-${id}`) => ({
     ...body,
     id,
-    aud: `aud-${id}`,
+    aud,
     created_at: "2026-11-01T00:00:00Z",
     policies: arr(body["policies"]).map((p, i) => ({
       id: `${id}-policy-${i}`,
@@ -113,7 +125,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   const accessApi = (method: string, url: URL, path: string, body: string): Response | null => {
     const m = /^\/access\/apps(?:\/([^/]+))?$/.exec(path);
     if (m === null) return null;
-    if (state.accessFails && method !== "GET")
+    if (state.accessReadFails || (state.accessFails && method !== "GET"))
       return Response.json(
         {
           success: false,
@@ -135,7 +147,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     }
     if (id === undefined || !access.has(id)) return new Response(null, { status: 404 });
     if (method === "PUT") {
-      const app = stored(id, JSON.parse(body) as Record<string, unknown>);
+      const app = stored(id, JSON.parse(body) as Record<string, unknown>, access.get(id)!["aud"]);
       access.set(id, app);
       return ok(app);
     }
@@ -163,7 +175,11 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   if (opts.access !== "none")
     for (const app of committedAccess(placeholderOverlay)!.applications) {
       const id = `app-${++accessIds}`;
-      access.set(id, stored(id, JSON.parse(JSON.stringify(app)) as Record<string, unknown>));
+      const aud =
+        app.domain === placeholderOverlay.hostnames["dispatcher"]
+          ? placeholderOverlay.access.aud
+          : undefined;
+      access.set(id, stored(id, JSON.parse(JSON.stringify(app)) as Record<string, unknown>, aud));
     }
 
   const secretBindings = (script: string) =>
