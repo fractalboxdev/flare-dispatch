@@ -185,15 +185,12 @@ const leaseOf = async (trigger: unknown, inputs: (dispatched: unknown) => unknow
     .bind(id)
     .first<{ inputs_json: string }>();
   await d1
-    .prepare(
-      "update intake_records set cache_trigger_json = ?, inputs_json = ?, deadline_at = ? where execution_id = ?",
-    )
-    .bind(
-      JSON.stringify(trigger),
-      JSON.stringify(inputs(JSON.parse(row!.inputs_json))),
-      Date.now() + 3_600_000,
-      id,
-    )
+    .prepare("update intake_records set cache_trigger_json = ?, inputs_json = ? where execution_id = ?")
+    .bind(JSON.stringify(trigger), JSON.stringify(inputs(JSON.parse(row!.inputs_json))), id)
+    .run();
+  await d1
+    .prepare("update executions set deadline_at = ? where id = ?")
+    .bind(Date.now() + 3_600_000, id)
     .run();
   const socket = await connect(plane, executorId, device.keys);
   socket.send(hello(executorId));
