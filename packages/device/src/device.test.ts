@@ -4,12 +4,21 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+import { es256Sign, signedBody, type Manifest } from "@fractalboxdev/flare-dispatch-cache";
+import {
+  memoryDisk,
+  nodeDisk,
+  openL1,
+  type L1Disk,
+  type L2Client,
+  type L2Entry,
+} from "@fractalboxdev/flare-dispatch-cache/device";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { answerHello } from "@fractalboxdev/mameko-protocol";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { answerLine, hello, type ExtensionState } from "./extension.ts";
-import { L1 } from "./l1.ts";
+import { absentL2, answerLine, hello, type ExtensionState } from "./extension.ts";
 import { handleMessage, TOOLS } from "./mcp.ts";
 import { cpuPriority } from "./priority.ts";
 import { schedulerSocketLayer } from "./scheduler-socket.ts";
@@ -41,18 +50,92 @@ describe("CPU priority", () => {
 
 const NS_READ = "protected/o/r/device";
 const NS_PR = "pr/o/r/7";
+const NS_EXEC = "exec/o/r/01JDZ8Q6V3M2K9T4WXYZ5ABCDE";
+const key = (n: number) => n.toString(16).padStart(64, "0");
+const utf8 = (t: string) => new TextEncoder().encode(t);
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-const state = async (): Promise<ExtensionState> => ({
+const signingKey = async () => {
+  const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  const publicJwk = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as JsonWebKey;
+  return { privateKey: pair.privateKey, keys: { controlPlane: publicJwk, device: () => null } };
+};
+
+/** An L2 entry a cloud executor committed: one object and its control-plane-signed manifest. */
+const l2Entry = async (
+  privateKey: CryptoKey,
+  namespace: string,
+  k: string,
+  body: Uint8Array,
+): Promise<L2Entry> => {
+  const path = `cache/${namespace}/${k}/e.1/blob`;
+  const unsigned = {
+    key: k,
+    namespace,
+    tier: "protected-device" as const,
+    writer: { executor_id: "cf-1", executor_kind: "cloudflare", execution_id: "e", epoch: 1 },
+    objects: [{ path, size: body.byteLength, sha256: sha256(body) }],
+    created_at: 0,
+  };
+  const manifest: Manifest = {
+    ...unsigned,
+    signature: {
+      alg: "ES256",
+      key_id: "control-plane",
+      value: await es256Sign(privateKey, signedBody(unsigned)),
+    },
+  };
+  return { manifest, objects: new Map([[path, body]]) };
+};
+
+/** L2 in memory, recording every fetch and upload in `events` beside the disk writes. */
+const memoryL2 = (events: string[]) => {
+  const entries = new Map<string, L2Entry>();
+  const client: L2Client = {
+    fetch: async (ns, k) => {
+      events.push(`l2.fetch ${ns}/${k}`);
+      return entries.get(`${ns}/${k}`) ?? null;
+    },
+    upload: async (ns, k) => void events.push(`l2.upload ${ns}/${k}`),
+  };
+  return { entries, client };
+};
+
+const recordingDisk = (events: string[]): L1Disk & { readonly files: Map<string, Uint8Array> } => {
+  const disk = memoryDisk(1_000_000);
+  return {
+    ...disk,
+    write: async (p, b) => {
+      events.push(`l1.write ${p}`);
+      await disk.write(p, b);
+    },
+  };
+};
+
+const state = async (options: Partial<Parameters<typeof openL1>[0]> = {}): Promise<ExtensionState> => ({
   planeId: "plane-1",
-  l1: new L1(await tempDir(), 1024),
+  l1: await openL1({
+    disk: nodeDisk(await tempDir()),
+    l2: absentL2,
+    keys: (await signingKey()).keys,
+    ...options,
+  }),
   content: new Map(),
   readable: new Set(),
   writable: new Set(),
 });
 
 const send = (s: ExtensionState, message: Record<string, unknown>) =>
-  answerLine(s, JSON.stringify(message));
+  Effect.runPromise(answerLine(s, JSON.stringify(message)));
 const b64 = (t: string) => Buffer.from(t).toString("base64");
+const lease = (read: string[], write: string | null) => ({
+  type: "proxies",
+  id: "p1",
+  lease: { execution_id: "x1", cache_namespaces: { read, write } },
+});
 
 describe("device extension", () => {
   it("MAMEKO-EXEC-140 says hello naming the plane, the version and its operations, without a statement operation", () => {
@@ -65,63 +148,158 @@ describe("device extension", () => {
 
   it("[FD-EXEC-007] restores only from a namespace a lease handed to the extension may read", async () => {
     const s = await state();
-    send(s, {
-      type: "proxies",
-      id: "p1",
-      lease: { execution_id: "x1", cache_namespaces: { read: [NS_READ], write: NS_PR } },
-    });
+    await send(s, lease([NS_READ], NS_PR));
     expect(
-      send(s, { type: "cache.put", id: "1", namespace: NS_PR, key: "k", bytes: b64("pr-bytes") })
-        ?.type,
+      (
+        await send(s, {
+          type: "cache.put",
+          id: "1",
+          namespace: NS_PR,
+          key: key(1),
+          bytes: b64("pr-bytes"),
+        })
+      )?.type,
     ).toBe("cache.put.ok");
     // The protected namespace is readable but this lease may not write it.
     expect(
-      send(s, { type: "cache.put", id: "2", namespace: NS_READ, key: "k", bytes: b64("x") })?.type,
+      (await send(s, { type: "cache.put", id: "2", namespace: NS_READ, key: key(1), bytes: b64("x") }))
+        ?.type,
     ).toBe("extension.error");
-    s.l1.put(NS_READ, "k", new TextEncoder().encode("protected-bytes"));
-    expect(send(s, { type: "cache.get", id: "3", namespace: NS_READ, key: "k" })).toMatchObject({
+    await Effect.runPromise(s.l1.put(NS_READ, key(1), utf8("protected-bytes")));
+    expect(await send(s, { type: "cache.get", id: "3", namespace: NS_READ, key: key(1) })).toMatchObject({
       type: "cache.get.ok",
       ref: "3",
       bytes: b64("protected-bytes"),
     });
     // The pull-request namespace holds bytes, but no lease reads it, so nothing restores from it.
-    expect(send(s, { type: "cache.get", id: "4", namespace: NS_PR, key: "k" })).toMatchObject({
+    expect(await send(s, { type: "cache.get", id: "4", namespace: NS_PR, key: key(1) })).toMatchObject({
       bytes: null,
     });
-    expect(send(s, { type: "cache.get", id: "5", namespace: "../etc", key: "k" })).toMatchObject({
+    expect(await send(s, { type: "cache.get", id: "5", namespace: "../etc", key: key(1) })).toMatchObject({
       bytes: null,
     });
   });
 
+  it("[FD-CACHE-006] a cache.get that L1 lacks reads through to L2 and places the entry in L1 only once every digest verifies", async () => {
+    const events: string[] = [];
+    const { privateKey, keys } = await signingKey();
+    const l2 = memoryL2(events);
+    l2.entries.set(`${NS_READ}/${key(1)}`, await l2Entry(privateKey, NS_READ, key(1), utf8("good")));
+    const tampered = await l2Entry(privateKey, NS_READ, key(2), utf8("good"));
+    l2.entries.set(`${NS_READ}/${key(2)}`, {
+      ...tampered,
+      objects: new Map([[tampered.manifest.objects[0]!.path, utf8("evil")]]),
+    });
+    const disk = recordingDisk(events);
+    const s = await state({ disk, l2: l2.client, keys });
+    await send(s, lease([NS_READ, NS_PR], null));
+
+    expect(await send(s, { type: "cache.get", id: "1", namespace: NS_READ, key: key(1) })).toMatchObject({
+      type: "cache.get.ok",
+      bytes: b64("good"),
+    });
+    expect(events).toEqual([`l2.fetch ${NS_READ}/${key(1)}`, `l1.write ${NS_READ}/${key(1)}`]);
+    // The entry is in L1 now: a second read is answered without L2.
+    events.length = 0;
+    expect(await send(s, { type: "cache.get", id: "2", namespace: NS_READ, key: key(1) })).toMatchObject({
+      bytes: b64("good"),
+    });
+    expect(events).toEqual([]);
+    // An object whose bytes do not hash to the manifest's digest is a miss and never reaches L1.
+    expect(await send(s, { type: "cache.get", id: "3", namespace: NS_READ, key: key(2) })).toMatchObject({
+      bytes: null,
+    });
+    expect(disk.files.has(`${NS_READ}/${key(2)}`)).toBe(false);
+    // L2 holds no entry under this namespace and key: a miss.
+    expect(await send(s, { type: "cache.get", id: "4", namespace: NS_PR, key: key(1) })).toMatchObject({
+      bytes: null,
+    });
+  });
+
+  it("[FD-CACHE-007] a cache.put writes the entry to L1 and then uploads it to L2, and a failed upload leaves the put answered", async () => {
+    const events: string[] = [];
+    const disk = recordingDisk(events);
+    const l2 = memoryL2(events);
+    const s = await state({ disk, l2: l2.client });
+    await send(s, lease([NS_EXEC], NS_EXEC));
+    const reply = await send(s, {
+      type: "cache.put",
+      id: "1",
+      namespace: NS_EXEC,
+      key: key(1),
+      bytes: b64("built"),
+    });
+    expect(reply).toMatchObject({ type: "cache.put.ok", digest: `sha256:${sha256(utf8("built"))}` });
+    expect(events).toEqual([`l1.write ${NS_EXEC}/${key(1)}`, `l2.upload ${NS_EXEC}/${key(1)}`]);
+
+    const failing = await state({
+      disk,
+      l2: {
+        ...l2.client,
+        upload: async () => {
+          throw new Error("507");
+        },
+      },
+    });
+    await send(failing, lease([NS_EXEC], NS_EXEC));
+    expect(
+      await send(failing, { type: "cache.put", id: "2", namespace: NS_EXEC, key: key(2), bytes: b64("y") }),
+    ).toMatchObject({ type: "cache.put.ok" });
+    expect(disk.files.has(`${NS_EXEC}/${key(2)}`)).toBe(true);
+    // A key that is not a cache key names no L2 entry and is refused.
+    expect(
+      await send(s, { type: "cache.put", id: "3", namespace: NS_EXEC, key: "k", bytes: b64("z") }),
+    ).toMatchObject({ type: "extension.error", code: "invalid" });
+  });
+
   it("[FD-CACHE-009] [FD-CACHE-010] L1 evicts the least recently read entry first, and evict answers the bytes freed", async () => {
-    const l1 = new L1(await tempDir(), 30);
-    l1.put(NS_READ, "a", new Uint8Array(10));
-    l1.put(NS_READ, "b", new Uint8Array(10));
-    l1.get(NS_READ, "a");
-    l1.put(NS_READ, "c", new Uint8Array(15));
-    expect(l1.get(NS_READ, "b")).toBeNull();
-    expect(l1.get(NS_READ, "a")).not.toBeNull();
-    expect(l1.evict(12)).toBe(15);
-    expect(l1.usedBytes).toBe(10);
+    let t = 0;
+    const disk = memoryDisk(150);
+    const s = await state({ disk, now: () => ++t });
+    await send(s, lease([NS_READ], NS_READ));
+    const put = (k: number, n: number) =>
+      send(s, {
+        type: "cache.put",
+        id: `p${k}`,
+        namespace: NS_READ,
+        key: key(k),
+        bytes: Buffer.from(new Uint8Array(n)).toString("base64"),
+      });
+    const get = (k: number) => send(s, { type: "cache.get", id: `g${k}`, namespace: NS_READ, key: key(k) });
+    // The cap is 20% of the 150 free bytes measured at start: 30.
+    await put(1, 10);
+    await put(2, 10);
+    await get(1);
+    await put(3, 15);
+    expect(await get(2)).toMatchObject({ bytes: null });
+    expect((await get(1))?.bytes).not.toBeNull();
+    expect(await send(s, { type: "cache.evict", id: "e", target_bytes: 12 })).toMatchObject({
+      type: "cache.evict.ok",
+      freed_bytes: 15,
+    });
+    expect([...disk.files.keys()]).toEqual([`${NS_READ}/${key(1)}`]);
   });
 
   it("holds LocalContent per tenant scope and answers malformed lines with extension.error", async () => {
     const s = await state();
-    const put = send(s, {
+    const put = (await send(s, {
       type: "content.put",
       id: "1",
       scope_id: "s1",
       bytes: b64("hi"),
-    }) as unknown as { digest: string };
+    })) as unknown as { digest: string };
     expect(put.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(
-      send(s, { type: "content.get", id: "2", scope_id: "s1", digest: put.digest }),
+      await send(s, { type: "content.get", id: "2", scope_id: "s1", digest: put.digest }),
     ).toMatchObject({ bytes: b64("hi") });
     expect(
-      send(s, { type: "content.get", id: "3", scope_id: "s2", digest: put.digest }),
+      await send(s, { type: "content.get", id: "3", scope_id: "s2", digest: put.digest }),
     ).toMatchObject({ bytes: null });
-    expect(answerLine(s, "not json")).toMatchObject({ type: "extension.error", code: "invalid" });
-    expect(send(s, { type: "statement", id: "9", input: {} })).toMatchObject({
+    expect(await Effect.runPromise(answerLine(s, "not json"))).toMatchObject({
+      type: "extension.error",
+      code: "invalid",
+    });
+    expect(await send(s, { type: "statement", id: "9", input: {} })).toMatchObject({
       code: "unsupported",
       ref: "9",
     });
@@ -129,7 +307,7 @@ describe("device extension", () => {
 
   it("MAMEKO-EXEC-140 the process answers over file descriptor 3", async () => {
     const [ours, theirs] = await socketPair();
-    const main = fileURLToPath(new URL("./extension-main.ts", import.meta.url));
+    const main = fileURLToPath(new URL("./extension-main.ts", import.meta.url).href);
     const child = spawn(
       process.execPath,
       ["--experimental-strip-types", "--no-warnings", main, "plane-1", await tempDir()],
@@ -146,6 +324,20 @@ describe("device extension", () => {
       `${JSON.stringify({ type: "content.put", id: "1", scope_id: "s", bytes: b64("x") })}\n`,
     );
     expect(JSON.parse(await lines.next())).toMatchObject({ type: "content.put.ok", ref: "1" });
+    // L1 on the directory named: a put under the lease's namespace is read back.
+    for (const m of [
+      lease([NS_READ], NS_READ),
+      { type: "cache.put", id: "2", namespace: NS_READ, key: key(1), bytes: b64("on-disk") },
+      { type: "cache.get", id: "3", namespace: NS_READ, key: key(1) },
+    ])
+      ours.write(`${JSON.stringify(m)}\n`);
+    expect(JSON.parse(await lines.next())).toMatchObject({ type: "proxies.ok" });
+    expect(JSON.parse(await lines.next())).toMatchObject({ type: "cache.put.ok", ref: "2" });
+    expect(JSON.parse(await lines.next())).toMatchObject({
+      type: "cache.get.ok",
+      ref: "3",
+      bytes: b64("on-disk"),
+    });
     ours.end();
     await new Promise((ok) => child.on("exit", ok));
   }, 20_000);
