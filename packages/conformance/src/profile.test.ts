@@ -42,12 +42,10 @@ const accepted = (document: ProfileDocument, context: ValidationContext) =>
 
 /** The validator's reasons for refusing `document`, or none when the loader accepts it. */
 const refusals = async (document: ProfileDocument, context: ValidationContext) => {
-  const exit = await Effect.runPromiseExit(loadProfile(profileLoader(context), document));
-  if (Exit.isSuccess(exit)) return [];
-  const failure = await Effect.runPromise(
-    Effect.flip(loadProfile(profileLoader(context), document)),
+  const result = await Effect.runPromise(
+    Effect.result(loadProfile(profileLoader(context), document)),
   );
-  return failure.rejections.map((r) => r.reason);
+  return result._tag === "Success" ? [] : result.failure.rejections.map((r) => r.reason);
 };
 
 describe("the profile each deployment's configuration source supplies, through mameko's loader", () => {

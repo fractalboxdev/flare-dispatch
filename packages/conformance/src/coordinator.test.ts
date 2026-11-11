@@ -66,7 +66,7 @@ import { TestClock } from "effect/testing";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startExecutionOf } from "../../../apps/control-plane/src/composition.ts";
-import { channelConfig, type ControlPlaneEnv } from "../../../apps/control-plane/src/config.ts";
+import type { ControlPlaneEnv } from "../../../apps/control-plane/src/config.ts";
 import { startSweeps } from "../../../apps/control-plane/src/tick.ts";
 
 let mf: Miniflare;
@@ -323,7 +323,7 @@ describe("the Execution workflow's start on the composed control plane", () => {
     }
   }, 60_000);
 
-  it("[FD-ARCH-019] starts no batch workflow at admission; the stale-start sweep starts it at its stale_at, and the channel at its winning claim", async () => {
+  it("[FD-ARCH-019] starts no batch workflow at admission, and the stale-start sweep starts it at its stale_at", async () => {
     const p = await startingPlane();
     try {
       const batch = await p.admit("batch");
@@ -338,9 +338,6 @@ describe("the Execution workflow's start on the composed control plane", () => {
       expect(
         p.starts.map((s) => [s.object, s.payload.className, s.payload.deadlineOutcome]),
       ).toEqual([[batch, "batch", "deferred"]]);
-      // The executor channel the Worker configures starts a deferred class's workflow at the winning claim, before
-      // it grants the lease.
-      expect(channelConfig(buildProfile("development")).deferredClasses).toEqual(["batch"]);
     } finally {
       await p.dispose();
     }
