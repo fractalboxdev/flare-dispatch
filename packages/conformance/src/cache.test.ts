@@ -12,19 +12,11 @@ import {
   ledgersOf,
   lookupEntry,
   manifestPath,
-  presignForExecution,
-  PresignRefused,
   protectedCloud,
   pullRequestNamespace,
   readManifest,
   signCompileCacheToken,
   verifyCompileCacheToken,
-  CacheBucket,
-  CacheClock,
-  CacheLeases,
-  Ledgers,
-  memoryLeases,
-  R2Presigner,
   type Bucket,
   type CacheLedgerApi,
   type CacheNamespaces,
@@ -36,7 +28,7 @@ import {
   openL1,
   type L1Disk,
 } from "@fractalboxdev/flare-dispatch-cache/device";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -328,69 +320,6 @@ describe("the compile-cache route's writes on the composed control plane", () =>
       const refused = await put("k052/b", "y".repeat(10));
       expect(refused.status).toBe(403);
       expect(await r2.head(compileObjectKey(PR, "k052/b"))).toBeNull();
-    },
-    60_000,
-  );
-
-  it(
-    "[FD-CACHE-052] the object-store presigner reserves each PUT's declared length in the control plane's CacheLedger before it mints the URL",
-    async () => {
-      const lease = await pullRequestLease();
-      const executionId = `${lease.execution_id}-presign`;
-      const repoLedger = await ledger(REPO);
-      const usageAtSigning: number[] = [];
-      const signer = {
-        presign: (request: { key: string; expiresAt: number }) =>
-          Effect.promise(async () => {
-            const usage = await repoLedger.usage();
-            usageAtSigning.push(usage.pending + usage.stored);
-            return { url: `fake://PUT/${request.key}`, expiresAt: request.expiresAt };
-          }),
-      };
-      const leases = memoryLeases(
-        new Map([
-          [
-            executionId,
-            {
-              executionId,
-              repo: REPO,
-              epoch: lease.epoch,
-              status: "active" as const,
-              namespaces: lease.cache_namespaces,
-              executorId: "conf-cache-presign",
-              executorKind: "device" as const,
-              class: "batch",
-              deadlineAt: Date.now() + 3_600_000,
-            },
-          ],
-        ]),
-      );
-      const layer = Layer.mergeAll(
-        Layer.succeed(CacheLeases, leases),
-        Layer.succeed(CacheBucket, await bucket()),
-        Layer.succeed(Ledgers, ledgersOf(
-          (await plane.getDurableObjectNamespace("CACHE_LEDGER")) as unknown as DurableObjectNamespace,
-        )),
-        Layer.succeed(R2Presigner, signer),
-        Layer.succeed(CacheClock, { now: Date.now }),
-      );
-      const key = `cache/${PR}/${"a".repeat(64)}/${executionId}.${lease.epoch}/obj`;
-      const presign = (length: number) =>
-        presignForExecution({
-          execution_id: executionId,
-          epoch: lease.epoch,
-          objects: [{ key, method: "PUT", length }],
-        }).pipe(Effect.provide(layer));
-      const before = await repoLedger.usage();
-      expect(await Effect.runPromise(presign(4096))).toMatchObject({ urls: [{ key }] });
-      expect(usageAtSigning).toEqual([before.pending + before.stored + 4096]);
-
-      // An ended execution's reservation is refused, and no URL is minted.
-      await repoLedger.end({ executionId, expiresAt: Date.now() + 3_600_000 });
-      const refused = await Effect.runPromise(Effect.flip(presign(10)));
-      expect(refused).toBeInstanceOf(PresignRefused);
-      expect(refused.status).toBe(403);
-      expect(usageAtSigning).toHaveLength(1);
     },
     60_000,
   );

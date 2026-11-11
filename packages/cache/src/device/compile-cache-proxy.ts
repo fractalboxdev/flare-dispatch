@@ -100,7 +100,13 @@ export const compileCacheProxy = (options: CompileCacheProxyOptions) => {
           });
         const upstream = await forwardRead(path, { method: request.method }, 200);
         if (request.method === "HEAD" || upstream.status !== 200) return upstream;
-        const bytes = new Uint8Array(await upstream.arrayBuffer());
+        // A body that fails after the route answered `200` is a miss as well (FD-CACHE-011).
+        let bytes: Uint8Array<ArrayBuffer>;
+        try {
+          bytes = new Uint8Array(await upstream.arrayBuffer());
+        } catch {
+          return new Response("not found", { status: 404 });
+        }
         const namespace = upstream.headers.get(CACHE_NAMESPACE_HEADER);
         if (namespace !== null && options.read.includes(namespace))
           await Effect.runPromise(options.l1.keep(namespace, await l1Key(path), bytes));

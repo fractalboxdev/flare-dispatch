@@ -5,14 +5,23 @@ import { ObjectStorePresigner } from "@fractalboxdev/mameko-ports";
 import { Effect, Exit, Layer } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "./crypto.ts";
-import { GiB } from "./ledger.ts";
-import { CacheClock } from "./lease.ts";
-import { commitCacheManifest, objectPrefix, readManifest, type Bucket } from "./manifest.ts";
+import { GiB, ledgersOf } from "./ledger.ts";
+import { CacheClock, CacheLeases, memoryLeases } from "./lease.ts";
+import {
+  CacheBucket,
+  commitCacheManifest,
+  Ledgers,
+  objectPrefix,
+  readManifest,
+  type Bucket,
+} from "./manifest.ts";
 import { protectedCloud, pullRequestNamespace } from "./namespaces.ts";
 import {
   MAX_URL_LIFETIME_MS,
   ObjectStorePresignerLive,
   presignForExecution,
+  PresignRefused,
+  R2Presigner,
   R2PresignerLive,
 } from "./presign.ts";
 import { presignV4 } from "./sigv4.ts";
@@ -170,6 +179,43 @@ describe("presign policy", () => {
     expect(await w.ledgers(REPO).usage()).toEqual({ stored: 0, pending: 6 * GiB });
     expect(failureOf(await presign(w, [put(own("c"), 4 * GiB), put(own("d"), 1)]))).toMatchObject({ status: 507 });
     expect(w.signed).toHaveLength(2);
+  });
+
+  it("[FD-CACHE-052] against the CacheLedger Durable Object, a PUT's length is reserved before its URL is minted and an ended execution mints nothing", async () => {
+    const now = Date.now();
+    const repoLedger = ledgersOf(
+      (await mf.mf.getDurableObjectNamespace("CACHE_LEDGER")) as unknown as DurableObjectNamespace,
+    )(REPO);
+    const usageAtSigning: number[] = [];
+    const layer = Layer.mergeAll(
+      Layer.succeed(CacheLeases, memoryLeases(new Map([[EXEC, lease({ deadlineAt: now + 3_600_000 })]]))),
+      Layer.succeed(CacheBucket, bucket),
+      Layer.succeed(Ledgers, () => repoLedger),
+      Layer.succeed(R2Presigner, {
+        presign: (request) =>
+          Effect.promise(async () => {
+            const usage = await repoLedger.usage();
+            usageAtSigning.push(usage.pending + usage.stored);
+            return { url: `fake://PUT/${request.key}`, expiresAt: request.expiresAt };
+          }),
+      }),
+      Layer.succeed(CacheClock, { now: () => now }),
+    );
+    const mint = (length: number) =>
+      Effect.runPromiseExit(
+        presignForExecution({ execution_id: EXEC, epoch: 2, objects: [put(own("a"), length)] }).pipe(
+          Effect.provide(layer),
+        ),
+      );
+    const before = await repoLedger.usage();
+    expect((await answer(mint(4096))).urls).toHaveLength(1);
+    expect(usageAtSigning).toEqual([before.pending + before.stored + 4096]);
+
+    await repoLedger.end({ executionId: EXEC, expiresAt: now + 3_600_000 });
+    const refused = failureOf(await mint(10));
+    expect(refused).toBeInstanceOf(PresignRefused);
+    expect(refused).toMatchObject({ status: 403 });
+    expect(usageAtSigning).toHaveLength(1);
   });
 
   it("[FD-CACHE-053] an object over 4 GiB is refused with 413", async () => {
