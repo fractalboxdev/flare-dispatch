@@ -1,7 +1,6 @@
 // The intake test harness: mameko's real admission over a SQLite D1, the fake
 // GitHub reads, a fixed run catalogue, recording doubles for the ports intake
-// calls, an OIDC issuer whose keys the test holds, and webhook fixtures.
-import { generateKeyPairSync, createPrivateKey, sign } from "node:crypto";
+// calls, and webhook fixtures.
 import { InstallationQuota, installationQuotaLayer } from "@fractalboxdev/flare-dispatch-github";
 import {
   fakeReadLayer,
@@ -20,12 +19,13 @@ import {
   IntakeConfig,
   type AdmissionPorts,
   type ClassRequest,
+  IntakeError,
   type IntakeSettings,
 } from "./config.ts";
-import { AccessIdentity } from "./dispatch.ts";
+import { admitDispatch, type AuthenticatedDispatch } from "./dispatch.ts";
+import { AccessIdentity } from "./mcp.ts";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
 import { manifestSourceLayer } from "./manifest.ts";
-import { ACTIONS_ISSUER, JWKS_URL, oidcVerifierLayer } from "./oidc.ts";
 import { profileClassResolver } from "./layer.ts";
 import { ExecutionCanceller, InstallationEviction, ManifestReporter } from "./ports.ts";
 import { protectionSnapshotsLayer } from "./protection.ts";
@@ -37,7 +37,6 @@ import { migratedD1, recordingResolver } from "./testing.ts";
 export const NOW = Date.UTC(2026, 10, 4, 12, 0, 0);
 export const SECRET = "webhook-secret";
 export const APP_ID = 4242;
-export const AUDIENCE = "https://control-plane.example.com";
 export const REPO = "acme/app";
 export const SHA = "a".repeat(40);
 export const HEAD = "b".repeat(40);
@@ -94,38 +93,6 @@ export const DEFAULT_MANIFEST = manifest([
   { recipe: "nightly", triggers: ["cron"], schedules: [{ cron: "0 3 * * *" }] },
 ]);
 
-/** The test issuer's signing key, published at the Actions JWKS URL the fake `fetch` answers. */
-const issuer = generateKeyPairSync("rsa", { modulusLength: 2048 });
-const jwk = issuer.publicKey.export({ format: "jwk" }) as { n: string; e: string };
-const b64u = (b: Buffer | string) => Buffer.from(b).toString("base64url");
-
-export const actionsToken = (
-  claims: Record<string, unknown>,
-  kid = "k1",
-  key = issuer.privateKey,
-) => {
-  const header = b64u(JSON.stringify({ alg: "RS256", kid, typ: "JWT" }));
-  const payload = b64u(
-    JSON.stringify({
-      iss: ACTIONS_ISSUER,
-      aud: AUDIENCE,
-      exp: NOW / 1000 + 300,
-      sub: `repo:${REPO}:ref:refs/heads/main`,
-      repository: REPO,
-      ref: "refs/heads/main",
-      workflow_ref: `${REPO}/.github/workflows/ci.yml@refs/heads/main`,
-      ...claims,
-    }),
-  );
-  return `${header}.${payload}.${b64u(sign("RSA-SHA256", Buffer.from(`${header}.${payload}`), key))}`;
-};
-export const otherKey = createPrivateKey(
-  generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
-    type: "pkcs8",
-    format: "pem",
-  }),
-);
-
 export interface Recorded {
   readonly resolved: ClassRequest[];
   readonly reported: { repo: string; sha: string; errors: readonly string[] }[];
@@ -136,7 +103,6 @@ export interface Recorded {
   readonly alarms: Alarm[];
   /** Every `ExecutionEngine` start admission asked for, in order. */
   readonly started: ExecutionPayload[];
-  jwksFetches: number;
 }
 
 export interface HarnessOptions {
@@ -172,7 +138,6 @@ export const harness = async (options: HarnessOptions = {}) => {
     evicted: [],
     alarms: [],
     started: [],
-    jwksFetches: 0,
   };
   const settings: IntakeSettings = {
     catalog: (name) => CATALOG[name],
@@ -180,17 +145,10 @@ export const harness = async (options: HarnessOptions = {}) => {
     appId: APP_ID,
     webhookSecret: SECRET,
     webhookEvents: undefined,
-    oidcAudience: AUDIENCE,
-    dispatchers: ["dev@example.com"],
     allows: () => true,
     confidentiality: () => "unclassified",
     ...options.settings,
   };
-  const fetch = (async (input: string | URL | Request) => {
-    if (String(input) !== JWKS_URL) return Response.json({}, { status: 404 });
-    recorded.jwksFetches++;
-    return Response.json({ keys: [{ ...jwk, kty: "RSA", kid: "k1", alg: "RS256", use: "sig" }] });
-  }) as typeof globalThis.fetch;
   const readLayer = fakeReadLayer(reads);
   const config = Layer.succeed(IntakeConfig, settings);
   const protection = protectionSnapshotsLayer.pipe(Layer.provide(readLayer));
@@ -217,7 +175,6 @@ export const harness = async (options: HarnessOptions = {}) => {
     d1ShedRecorder(db),
     manifestSourceLayer,
     readLayer,
-    oidcVerifierLayer(fetch),
     resolver,
     protection,
     alarms,
@@ -261,6 +218,53 @@ export const harness = async (options: HarnessOptions = {}) => {
   };
 };
 export type Harness = Awaited<ReturnType<typeof harness>>;
+
+// ---------------------------------------------------------------------------
+// Dispatch fixtures
+
+/** A dispatch as the HTTP API's declared route hands it to intake: an Actions caller of `REPO` on `main`. */
+export const authenticated = (
+  overrides: Partial<AuthenticatedDispatch> = {},
+): AuthenticatedDispatch => ({
+  trigger: "dispatch",
+  run: "check",
+  repository: REPO,
+  ref: "refs/heads/main",
+  sha: undefined,
+  label: "ci",
+  inputs: { sha: HEAD },
+  signals: undefined,
+  classInput: null,
+  caller: {
+    kind: "actions-oidc",
+    id: `actions:${REPO}:${REPO}/.github/workflows/ci.yml@refs/heads/main`,
+    workflowRef: `${REPO}/.github/workflows/ci.yml@refs/heads/main`,
+    ref: "refs/heads/main",
+  },
+  vouchedSha: undefined,
+  idempotency: null,
+  ...overrides,
+});
+
+/** An authenticated dispatch through intake's admission. */
+export const admit = (h: Harness, d: AuthenticatedDispatch) => h.run(admitDispatch(d));
+
+/** The refusal of an authenticated dispatch: its status, code and the execution a `conflict` names. */
+export const refusal = (h: Harness, d: AuthenticatedDispatch) =>
+  h.run(
+    admitDispatch(d).pipe(
+      Effect.flip,
+      Effect.map((e) =>
+        e instanceof IntakeError
+          ? {
+              status: e.status,
+              code: e.code,
+              ...(e.executionId === undefined ? {} : { executionId: e.executionId }),
+            }
+          : { status: 503, code: "store_unavailable" },
+      ),
+    ),
+  );
 
 // ---------------------------------------------------------------------------
 // Webhook fixtures
@@ -352,17 +356,6 @@ export const checkSuiteRerequested = (head = HEAD, appId = APP_ID) => ({
   installation: { id: 7 },
   check_suite: { head_sha: head, app: { id: appId } },
 });
-
-export const dispatchRequest = (
-  run: string,
-  body: unknown,
-  headers: Record<string, string> = { authorization: `Bearer ${actionsToken({})}` },
-) =>
-  new Request(`https://control-plane.example.com/v1/dispatch/${run}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
 
 /** The JSON body of a response the route group served. */
 export const bodyOf = async (r: Response | null): Promise<Record<string, unknown>> => {

@@ -4,25 +4,16 @@ import { conclusionFactsOf } from "@fractalboxdev/flare-dispatch-github";
 import { describe, expect, it } from "vitest";
 import {
   bodyOf,
-  dispatchRequest,
+  admit,
+  authenticated,
   harness,
-  HEAD,
   NOW,
   type Harness,
 } from "./harness.test-support.ts";
-import { handleIntake } from "./routes.ts";
 import { IntakeStore } from "./store.ts";
 
-const admitCheck = async (h: Harness) => {
-  const r = await h.run(
-    handleIntake(
-      dispatchRequest("check", { inputs: { sha: HEAD }, label: "ci", class: "required" }),
-      "dispatch/check",
-    ),
-  );
-  expect(r!.status).toBe(202);
-  return (await bodyOf(r)).execution_id as string;
-};
+const admitCheck = async (h: Harness) =>
+  (await admit(h, authenticated({ classInput: "required" }))).executionId;
 
 const factsOf = (h: Harness, id: string) => h.run(IntakeStore.use((s) => s.conclusionFacts(id)));
 

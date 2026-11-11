@@ -14,6 +14,7 @@
     "./link-token": "./src/link-token.ts",
     "./links": "./src/links.ts",
     "./mcp-tools": "./src/mcp/tools.ts",
+    "./ports": "./src/ports.ts",
     "./test-support": "./src/api.test-support.ts"
   },
   "scripts": {

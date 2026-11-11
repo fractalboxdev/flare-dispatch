@@ -3,6 +3,10 @@
 // device executor.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { errorBody } from "@fractalboxdev/flare-dispatch-api/errors";
+import { checkLinkToken } from "@fractalboxdev/flare-dispatch-api/link-token";
+import { intakeError } from "@fractalboxdev/flare-dispatch-intake";
+import { Effect } from "effect";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -18,6 +22,7 @@ import {
   startAccessTeam,
   type AccessTeam,
 } from "./support.ts";
+import { authenticatedOf, refusalOf } from "../src/intake-port.ts";
 
 const SHA = "a".repeat(40);
 
@@ -522,4 +527,100 @@ describe("placement of cloud-pinned runs through admission and the lease path", 
       expect(await socket.next("exec.lease")).toMatchObject({ execution_id: id, run });
     },
   );
+});
+
+describe("the declared dispatch route", () => {
+  const LINK_KEY = "link-key-for-tests";
+  let linked: Miniflare;
+  beforeAll(async () => {
+    linked = miniflare("development", true, DEV_REPOSITORY, { LINK_KEY });
+    await linked.ready;
+  });
+  afterAll(async () => {
+    await linked?.dispose();
+  });
+
+  it("[FD-IFC-001] answers a body the declaration's schema rejects with 400, naming the failing path", async () => {
+    const r = await post(linked, "/v1/dispatch/check", {
+      ...dispatchBody("d".repeat(40)),
+      signals: [{ source: "lint", title: "unused import" }],
+    });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: string; message: string };
+    expect(body.error).toBe("invalid_signals");
+    expect(body.message).toMatch(/^signals\.0\.detail/);
+    const db = await linked.getD1Database("DB");
+    expect((await db.prepare("select id from executions").all()).results).toEqual([]);
+  });
+
+  it("[FD-IFC-001] [FD-IFC-035] answers an admitted dispatch with details_url and logs_url signed by a link token for the execution", async () => {
+    const r = await post(linked, "/v1/dispatch/check", dispatchBody("e".repeat(40)));
+    expect(r.status).toBe(202);
+    const body = (await r.json()) as Record<string, string>;
+    const id = body["execution_id"]!;
+    const details = new URL(body["details_url"]!);
+    const logs = new URL(body["logs_url"]!);
+    expect(details.pathname).toBe(`/executions/${id}`);
+    expect(logs.pathname).toBe(`/v1/executions/${id}/logs`);
+    const token = logs.searchParams.get("t")!;
+    expect(details.searchParams.get("t")).toBe(token);
+    const check = (objectId: string) =>
+      checkLinkToken(LINK_KEY, token, {
+        purpose: "logs",
+        objectId,
+        nowS: Math.floor(Date.now() / 1000),
+        currentEpoch: 0,
+      });
+    expect(await check(id)).toEqual({ _tag: "Granted" });
+    expect(await check("01OTHER")).toEqual({ _tag: "Invalid" });
+  });
+});
+
+describe("the intake port", () => {
+  it("[FD-IFC-009] answers an intake refusal with its code from the error-model table, and any other code as internal", async () => {
+    const conflict = await Effect.runPromise(
+      refusalOf(intakeError(409, "conflict", "another body", "01EXISTING")),
+    );
+    expect(errorBody(conflict, "r1")).toEqual({
+      error: "conflict",
+      message: "another body",
+      request_id: "r1",
+      execution_id: "01EXISTING",
+    });
+    const outside = await Effect.runPromise(refusalOf(intakeError(403, "sha_mismatch", "x")));
+    expect(errorBody(outside, "r2")).toEqual({
+      error: "internal",
+      message: "internal error",
+      request_id: "r2",
+    });
+  });
+
+  it("[FD-IFC-025] hands intake an Actions caller with the token's ref, workflow ref and vouched commit", () => {
+    const authenticated = authenticatedOf({
+      trigger: "dispatch",
+      run: "check",
+      repository: "acme/app",
+      ref: "refs/heads/main",
+      sha: "a".repeat(40),
+      workflowRef: "acme/app/.github/workflows/ci.yml@refs/heads/main",
+      vouchedSha: "b".repeat(40),
+      label: undefined,
+      inputs: {},
+      class: undefined,
+      signals: undefined,
+      caller: "actions:acme/app:acme/app/.github/workflows/ci.yml@refs/heads/main",
+      idempotency: { key: "k", canonicalBody: '{"repository":"acme/app"}' },
+    });
+    expect(authenticated).toMatchObject({
+      caller: {
+        kind: "actions-oidc",
+        id: "actions:acme/app:acme/app/.github/workflows/ci.yml@refs/heads/main",
+        workflowRef: "acme/app/.github/workflows/ci.yml@refs/heads/main",
+        ref: "refs/heads/main",
+      },
+      vouchedSha: "b".repeat(40),
+      label: null,
+      idempotency: { key: "k", body: { repository: "acme/app" } },
+    });
+  });
 });

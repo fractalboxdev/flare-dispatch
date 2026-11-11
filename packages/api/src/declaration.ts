@@ -128,7 +128,11 @@ export const DispatchBody = Schema.Struct({
   /** `<owner>/<repo>`, the execution's tenant scope. */
   repository: Schema.NonEmptyString,
   ref: Schema.optionalKey(Schema.String),
-  sha: Schema.optionalKey(Schema.String),
+  sha: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
+  /** The repo manifest entry's label; absent selects the entry with no label. */
+  label: Schema.optionalKey(
+    Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/)),
+  ),
   /** Decoded by the run's input schema at intake (FD-IFC-029). */
   inputs: Schema.Unknown,
   /** Passed to `resolveClass` as its `class` input (FD-IFC-033). */

@@ -21,6 +21,10 @@ export interface DispatchSubmission {
   readonly ref: string | undefined;
   readonly sha: string | undefined;
   readonly workflowRef: string | undefined;
+  /** The commit an Actions OIDC token vouches for; undefined for an Access identity or a token with no `sha`. */
+  readonly vouchedSha: string | undefined;
+  /** The repo manifest entry's label; undefined selects the entry with no label. */
+  readonly label: string | undefined;
   readonly inputs: unknown;
   readonly class: string | undefined;
   readonly signals: DispatchBody["signals"];

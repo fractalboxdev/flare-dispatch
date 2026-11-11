@@ -204,7 +204,7 @@ sequenceDiagram
 - **FD-INT-039** · phase 0 · `V-UNIT` — If an authenticated dispatch names an unknown run, the dispatcher Worker must answer `404` with error `run_not_found`.
 - **FD-INT-040** · phase 0 · `V-UNIT` — If a dispatch body exceeds 1 MiB, the dispatcher Worker must answer `413`; if it fails the dispatch schema, `400` with error `invalid_body`; if its inputs fail the run's input schema, `400` with error `invalid_inputs`.
 - **FD-INT-041** · phase 0 · `V-UNIT` — If a dispatch carries no `ref`, the dispatcher Worker must resolve the repository's default branch head to a commit SHA at intake and dispatch against that SHA.
-- **FD-INT-042** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — If a dispatch carries no installation id, the dispatcher Worker must resolve the installation from the target repository through the GitHub App.
+- **FD-INT-042** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — The dispatcher Worker must resolve a dispatch's installation from the target repository through the GitHub App; a dispatch body names no installation.
 - **FD-INT-043** · phase 0 · `V-UNIT` — If no installation of the GitHub App covers the target repository, the dispatcher Worker must reject the dispatch with `422` and error `installation_not_found` and submit no request.
 - **FD-INT-049** · phase 0 · `V-UNIT` — If a dispatch's signals, after merging the collected and the input signals, exceed 50 entries or a field exceeds its cap (source 120, title 200, detail 2000, url 1000 characters), the dispatcher Worker must reject the dispatch with `400` and error `invalid_signals`, and the dispatch action must refuse to send it.
 

@@ -26,7 +26,6 @@ import {
   type IntakeSettings,
 } from "./config.ts";
 import { manifestSourceLayer } from "./manifest.ts";
-import { oidcVerifierLayer } from "./oidc.ts";
 import { installationEvictionLayer, manifestReporterLayer } from "./ports.ts";
 import { isUnavailable, ProtectionSnapshots, protectionSnapshotsLayer } from "./protection.ts";
 import { d1IntakeStore, d1ShedRecorder } from "./store.ts";
@@ -34,8 +33,6 @@ import { d1IntakeStore, d1ShedRecorder } from "./store.ts";
 export interface IntakeLayerOptions {
   readonly db: D1Like;
   readonly settings: IntakeSettings;
-  /** The `fetch` the OIDC verifier reads the issuer's keys with. */
-  readonly fetch: typeof globalThis.fetch;
   /** Runs after each queued admission, for the Worker to wake standing claims. */
   readonly queued?: (className: string) => Effect.Effect<void>;
   /** Starts an admitted execution's `Execution` workflow (MAMEKO-ADM-029). */
@@ -62,7 +59,6 @@ export const intakeLayer = (options: IntakeLayerOptions) =>
     manifestSourceLayer,
     manifestReporterLayer,
     installationEvictionLayer,
-    oidcVerifierLayer(options.fetch),
     protectionSnapshotsLayer,
   );
 

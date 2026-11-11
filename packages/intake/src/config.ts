@@ -46,10 +46,6 @@ export interface IntakeSettings {
   readonly webhookSecret: string | undefined;
   /** `intake.webhookEvents`; undefined admits every supported event (FD-INT-027). */
   readonly webhookEvents: readonly string[] | undefined;
-  /** `dispatch.oidcAudience`; unset refuses every Actions token. */
-  readonly oidcAudience: string | undefined;
-  /** Access identities that may dispatch (FD-IFC-027). */
-  readonly dispatchers: readonly string[];
   /** The operator policy: whether a repository may run a run at all (FD-INT-015). */
   readonly allows: (repo: string, run: string) => boolean;
   /**
