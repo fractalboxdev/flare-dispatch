@@ -593,6 +593,7 @@ export const harnessTagOf = (path: string): string | null => {
   if (/(^|\/)test\/replay\//.test(path)) return "V-REPLAY";
   if (/(^|\/)test\/e2e-local\//.test(path)) return "V-E2E-LOCAL";
   if (/(^|\/)test\/diff\//.test(path)) return "V-DIFF";
+  if (/(^|\/)test\/deploy\//.test(path)) return "V-DEPLOY";
   if (path.startsWith("packages/conformance/")) return "V-CONF";
   if (path.endsWith(".test.ts")) return "V-UNIT";
   return null;

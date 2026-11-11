@@ -115,22 +115,31 @@ const serviceTargets = (c: WorkerConfig): readonly string[] =>
     .map((s) => s.service)
     .filter((s): s is string => typeof s === "string");
 
+/** The script name a rendered configuration deploys as: its `name`, else the Worker's own name. */
+export const scriptName = (r: {
+  readonly worker: string;
+  readonly config: WorkerConfig;
+}): string => (typeof r.config["name"] === "string" ? r.config["name"] : r.worker);
+
 /**
- * The Workers in deploy order: each after every Worker it binds as a service (FD-OPS-010). A service outside the set
- * is already deployed; a cycle keeps the remaining Workers in their given order.
+ * The Workers in deploy order: each after every Worker it binds as a service (FD-OPS-010). A service binding names the
+ * bound Worker's script, so it matches a Worker of the set by script name. A service outside the set is already
+ * deployed; a cycle keeps the remaining Workers in their given order.
  */
 export const deployOrder = (
   configs: readonly { worker: string; config: WorkerConfig }[],
 ): readonly string[] => {
-  const names = new Set(configs.map((c) => c.worker));
+  const byScript = new Map(configs.map((c) => [scriptName(c), c.worker]));
   const order: string[] = [];
   const visiting = new Set<string>();
   const visit = (w: string) => {
     if (order.includes(w) || visiting.has(w)) return;
     visiting.add(w);
     const c = configs.find((x) => x.worker === w);
-    for (const dep of c === undefined ? [] : serviceTargets(c.config))
-      if (names.has(dep)) visit(dep);
+    for (const service of c === undefined ? [] : serviceTargets(c.config)) {
+      const dep = byScript.get(service);
+      if (dep !== undefined) visit(dep);
+    }
     visiting.delete(w);
     order.push(w);
   };
@@ -138,14 +147,21 @@ export const deployOrder = (
   return order;
 };
 
-/** The line `fd deploy` prints per Worker after a failed probe (FD-OPS-013); it never runs the rollback (FD-OPS-014). */
-export const rollbackLine = (d: Deployed, d1Migrations: readonly string[]): string => {
+/**
+ * The line `fd deploy` prints per Worker after a failed probe (FD-OPS-013); it never runs the rollback (FD-OPS-014).
+ * `script` is the script name `wrangler rollback --name` takes, which a rendered configuration's `name` sets.
+ */
+export const rollbackLine = (
+  d: Deployed,
+  d1Migrations: readonly string[],
+  script: string = d.worker,
+): string => {
   const blocking = [...d.durableObjectMigrations, ...d1Migrations];
   if (blocking.length > 0)
     return `${d.worker}: fix forward: rollback blocked by migration ${blocking[0]}`;
   return d.previousVersion === null
     ? `${d.worker}: fix forward: no previous version`
-    : `wrangler rollback ${d.previousVersion} --name ${d.worker}`;
+    : `wrangler rollback ${d.previousVersion} --name ${script}`;
 };
 
 const findingsOf = (fs: readonly Finding[]) =>
@@ -255,6 +271,10 @@ export const fdDeploy = (
       .applyD1Migrations(rendered)
       .pipe(Effect.mapError(stageFailed("migrations")));
     const deployed: Deployed[] = [];
+    const rollbackOf = (d: Deployed) => {
+      const r = rendered.find((x) => x.worker === d.worker);
+      return rollbackLine(d, d1, r === undefined ? d.worker : scriptName(r));
+    };
     for (const worker of deployOrder(rendered)) {
       const r = rendered.find((x) => x.worker === worker)!;
       deployed.push(
@@ -264,7 +284,7 @@ export const fdDeploy = (
               new DeployFailed({
                 stage: "deploy",
                 findings: [{ path: e.operation, detail: e.message }],
-                rollback: deployed.map((d) => rollbackLine(d, d1)),
+                rollback: deployed.map(rollbackOf),
               }),
           ),
         ),
@@ -295,7 +315,7 @@ export const fdDeploy = (
       return yield* new DeployFailed({
         stage: "probes",
         findings: probes,
-        rollback: deployed.map((d) => rollbackLine(d, d1)),
+        rollback: deployed.map(rollbackOf),
       });
     }
     for (const r of rendered)
