@@ -22,9 +22,8 @@ import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
 import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect } from "effect";
-import type { ControlPlaneEnv } from "./config.ts";
+import { apiEnvOf, type ControlPlaneEnv } from "./config.ts";
 import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
-import { apiEnvOf } from "./http.ts";
 
 /** The bindings this area reads beside the control plane's. */
 export interface CacheEnv {

@@ -1,19 +1,13 @@
 // The profile bindings and control-plane rules this package owns: `installationOf`,
-// the check label, the ops intents of the probes, the conclusions of a fan-out
-// parent's children and the `neutral` invariant.
+// the check label, the ops intents of the probes and the conclusions of a fan-out
+// parent's children. The `neutral` invariant lives beside the conclusion mapping.
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow } from "@fractalboxdev/mameko-kernel";
-import { AlarmPort } from "@fractalboxdev/mameko-ports";
-import { Effect, Match, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { InstallationDirectory } from "./applier.ts";
 import { GithubNetworkError } from "./client.ts";
-import {
-  checkConclusion,
-  NOT_APPLICABLE_DETAILS,
-  type Conclusion,
-  type Verdict,
-} from "./conclusion.ts";
+import type { Verdict } from "./conclusion.ts";
 
 /** No installation serves the row's repository, so it has no delivery key. */
 export class NoInstallation extends Schema.TaggedError<NoInstallation>()("NoInstallation", {
@@ -134,46 +128,4 @@ export const childConclusions = (children: readonly ChildCheck[]) =>
       verdict: c.verdict ?? PARENT_CLOSED,
     }));
 
-/** Whether a `neutral` conclusion agrees with the recorded outcome: a listed `not-applicable` skip, nothing else. */
-export const neutralHolds = (conclusion: Conclusion, recorded: Verdict) =>
-  conclusion !== "neutral" ||
-  Match.value(recorded).pipe(
-    Match.tag(
-      "skipped",
-      ({ reason, detail }) =>
-        reason === "not-applicable" && NOT_APPLICABLE_DETAILS.includes(detail),
-    ),
-    Match.orElse(() => false),
-  );
-
-/** Raises the `neutral-invariant` page alarm when a check run concluded `neutral` on any other outcome (FD-GH-031). */
-export const checkNeutralInvariant = (
-  executionId: string,
-  scopeId: string,
-  conclusion: Conclusion,
-  recorded: Verdict,
-) =>
-  neutralHolds(conclusion, recorded)
-    ? Effect.void
-    : Effect.flatMap(
-        AlarmPort.use((a) => Effect.succeed(a)),
-        (alarms) =>
-          alarms
-            .deliver({
-              name: "neutral-invariant",
-              severity: "page",
-              dedupeKey: `neutral-invariant:${executionId}`,
-              state: "raised",
-              detail: {
-                executionId,
-                scopeId,
-                recorded,
-                mapped: checkConclusion(recorded).conclusion,
-              },
-            })
-            .pipe(
-              Effect.catchTag("AlarmDeliveryFailed", (e) =>
-                Effect.logWarning("alarm not delivered", e.reason),
-              ),
-            ),
-      );
+export { checkNeutralInvariant, neutralHolds } from "./conclusion.ts";

@@ -38,14 +38,28 @@ export {
 } from "./client.ts";
 export {
   checkConclusion,
+  ConcludeDetails,
   concludeSummary,
   NOT_APPLICABLE_DETAILS,
   OUTPUT_LIMIT,
+  OutcomePayload,
+  RecordedOutcome,
+  recordedVerdict,
   truncate,
   Verdict,
   verdictOf,
   type Conclusion,
 } from "./conclusion.ts";
+export {
+  ConcludeFacts,
+  ConcludeFactsUnavailable,
+  conclusionFactsOf,
+  placementReason,
+  type ConclusionFacts,
+  type ExecutionRecordFacts,
+  type PlacementFacts,
+  type ReservationFacts,
+} from "./conclude-facts.ts";
 export { drainOutbox, githubApplicationLayer, githubLiveLayer } from "./layer.ts";
 export { leaseReadToken, type LeaseCredential } from "./lease-token.ts";
 export {

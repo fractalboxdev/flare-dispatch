@@ -12,6 +12,7 @@ import {
   JWT_LIFETIME_SEC,
   LEASE_READ_PERMISSIONS,
 } from "./app.ts";
+import { fakeConcludeFacts, fakeGithub } from "./fake.test-support.ts";
 import { githubLiveLayer } from "./layer.ts";
 import { leaseReadToken } from "./lease-token.ts";
 import { GithubRead, refPatternMatches } from "./read.ts";
@@ -196,6 +197,7 @@ describe("installation tokens", () => {
 
 const alarms = Layer.mergeAll(
   Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+  fakeConcludeFacts(fakeGithub()),
   Layer.succeed(SideOutputConfig, {
     appBot: { login: "flare-dispatch[bot]", name: "flare-dispatch[bot]", email: "bot@example.com" },
     slack: undefined,
