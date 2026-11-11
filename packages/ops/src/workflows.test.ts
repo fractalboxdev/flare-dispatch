@@ -322,7 +322,10 @@ describe("Access configuration", () => {
     const apps = accessApplications("dispatch.example.com", ["ops@acme.com"]);
     expect(apps[0]).toMatchObject({
       domain: "dispatch.example.com",
-      policies: [{ decision: "allow" }],
+      policies: [
+        { decision: "allow", include: [{ email: { email: "ops@acme.com" } }] },
+        { decision: "non_identity", include: [{ any_valid_service_token: {} }] },
+      ],
     });
     expect(apps.slice(1).every((a) => a.policies[0]!.decision === "bypass")).toBe(true);
     expect(apps.slice(1).map((a) => a.domain)).toContain("dispatch.example.com/v1/webhooks/github");
