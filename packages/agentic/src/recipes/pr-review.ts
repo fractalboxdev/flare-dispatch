@@ -10,6 +10,8 @@ import { Artifacts, ModelClient, RecipeIntents, Shell, type ModelCallError } fro
 export const PR_REVIEW_MARKER = "<!-- flare-dispatch: pr-review -->";
 export const MAX_COMMENT_FINDINGS = 25;
 export const MAX_ANNOTATIONS = 50;
+/** The check run `pr-review` reports on; the run declares no `checkLabel` (FD-GH-006). */
+export const PR_REVIEW_CHECK_NAME = "flare-dispatch/pr-review";
 export const LINT_MAX_FILES = 60;
 export const LINT_MAX_CHARS = 8000;
 /** The run ceiling the repo manifest sets for `pr-review` (FD-AGT-047). */
@@ -427,6 +429,8 @@ export const runPrReview = (input: PrReviewInput) =>
     const annotations = reviewAnnotations(merged);
     if (annotations.length > 0)
       yield* intents.append("annotate", "check.annotations", {
+        name: PR_REVIEW_CHECK_NAME,
+        head_sha: input.headSha,
         title: `pr-review: ${outcome}`,
         summary: `${merged.length} findings`,
         annotations,

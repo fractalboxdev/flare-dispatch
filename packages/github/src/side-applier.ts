@@ -29,7 +29,15 @@ export const WRITE_BRANCH_PREFIX = "flare-dispatch/";
 const Mode = Schema.Literals(["100644", "100755"]);
 
 export const SidePayloads = {
-  comment: Schema.Struct({ issue_number: Schema.Number, body: Schema.String }),
+  comment: Schema.Struct({
+    issue_number: Schema.Number,
+    body: Schema.String,
+    /**
+     * A marker the run keeps on one comment per issue or pull request: the comment carrying it is updated in place
+     * instead of a new one being created (FD-AGT-053).
+     */
+    marker: Schema.optionalKey(Schema.String),
+  }),
   review: Schema.Struct({
     pull_number: Schema.Number,
     body: Schema.String,
@@ -242,13 +250,24 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
       Effect.gen(function* () {
         const w = yield* writes;
         const marker = intentMarker(ctx.row);
+        const comments = yield* w.listComments({ ...ctx, issue: p.issue_number });
         const existing = yield* single(
-          (yield* w.listComments({ ...ctx, issue: p.issue_number })).filter((c) =>
-            c.body?.includes(marker),
-          ),
+          comments.filter((c) => c.body?.includes(marker)),
           (c) => c.id,
         );
         if (Option.isSome(existing)) return applied(existing.value);
+        if (p.marker !== undefined) {
+          const runMarker = p.marker;
+          const body = withMarker(
+            p.body.includes(runMarker) ? p.body : withMarker(p.body, runMarker),
+            marker,
+          );
+          // The earliest comment carrying the run's marker is the one kept (FD-AGT-053).
+          const kept = comments.find((c) => c.body?.includes(runMarker));
+          if (kept !== undefined)
+            return applied((yield* w.updateComment({ ...ctx, comment: kept.id, body })).id);
+          return applied((yield* w.createComment({ ...ctx, issue: p.issue_number, body })).id);
+        }
         return applied(
           (yield* w.createComment({
             ...ctx,

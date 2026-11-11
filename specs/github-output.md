@@ -29,7 +29,7 @@ The profile declares every kind the control plane accepts ([profile.md](profile.
 | `check.conclude` | control plane, the outcome mapping's `surface_kind` | `cp:check:conclude` | Update to `completed` with conclusion; create completed when no check run exists | `external_id` = execution id |
 | `check.summary` | run | `run:<step name>:<index>` | Title and Markdown on the check run | The check run found by `external_id` |
 | `check.annotations` | run | `run:<step name>:<index>` | Annotations on the check run, at most 50 per request | Annotations read back by check-run id |
-| `comment` | run | `run:<step name>:<index>` | Create issue or pull-request comment | Hidden marker `<!-- flare-dispatch:intent <execution_id>/<intent_key> -->` |
+| `comment` | run | `run:<step name>:<index>` | Create issue or pull-request comment; when the payload names a `marker`, update in place the earliest comment carrying it | Hidden marker `<!-- flare-dispatch:intent <execution_id>/<intent_key> -->` |
 | `review` | run | `run:<step name>:<index>` | Create pull-request review, event `COMMENT` | Hidden marker in the body |
 | `issue` | run | `run:<step name>:<index>` | Create or update an issue | Hidden marker in the body |
 | `label` | run | `run:<step name>:<index>` | Add or remove labels | Set semantics |

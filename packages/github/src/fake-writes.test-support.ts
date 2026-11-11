@@ -122,6 +122,21 @@ export const fakeWritesLayer = (s: FakeSide) => {
         },
         true,
       ),
+    updateComment: ({ comment, body }) =>
+      call(
+        "updateComment",
+        () => {
+          for (const list of s.comments.values()) {
+            const c = list.find((x) => x.id === comment);
+            if (c !== undefined) {
+              c.body = body;
+              return { ...c };
+            }
+          }
+          throw new Error(`no comment ${comment}`);
+        },
+        true,
+      ),
     listReviews: ({ pull }) => call("listReviews", () => s.reviews.get(pull) ?? []),
     createReview: ({ pull, body }) =>
       call(

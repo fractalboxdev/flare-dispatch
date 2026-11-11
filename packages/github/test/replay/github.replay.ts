@@ -55,6 +55,13 @@ export const OPENED = executionId(T0 + 1, () => 0.5);
 export const CONCLUDED_FIRST = executionId(T0 + 2, () => 0.5);
 export const checkName = (id: string) => `flare-dispatch/run-${id.slice(-4)}:ci`;
 
+/** One intent of a run's `exec.intents` batch. */
+export interface StagedIntent {
+  readonly intent_key: string;
+  readonly kind: string;
+  readonly payload: unknown;
+}
+
 /** The run's `exec.intents` batch: one email, one Slack verdict post and one notice. */
 export const SIDE_INTENTS = [
   {
@@ -123,6 +130,7 @@ export const plane = async () => {
   const db = sqliteD1();
   await runD1Migrations(db);
   const gh: FakeGithub = fakeGithub();
+  const side = fakeSide();
   const sent: Sent[] = [];
   let step = "none";
   const record = (to: Sent["to"], ref: string) => void sent.push({ step, to, ref });
@@ -130,7 +138,7 @@ export const plane = async () => {
   const ports = Layer.mergeAll(
     fakeGithubLayers(gh),
     fakeConcludeFacts(gh),
-    fakeWritesLayer(fakeSide()),
+    fakeWritesLayer(side),
     Layer.succeed(GithubApp, {
       jwt: unused(),
       token: unused,
@@ -191,10 +199,11 @@ export const plane = async () => {
   return {
     db,
     gh,
+    side,
     sent,
     rows,
-    /** Admission's rows: the execution, its epoch-1 placement and its `cp:check:open` row. */
-    admit: (id: string) =>
+    /** Admission's rows: the execution, its epoch-1 placement and its `cp:check:open` row for the check `name`. */
+    admit: (id: string, name = checkName(id)) =>
       during("admit", async () => {
         db.sqlite
           .prepare(
@@ -209,7 +218,7 @@ export const plane = async () => {
           )
           .run(id, EPOCH, EXECUTOR);
         const entry = profile.intent_kinds["check.open"]!;
-        const payload = { name: checkName(id), head_sha: SHA };
+        const payload = { name, head_sha: SHA };
         await insertOutboxRows(db, [
           {
             id: `${id}:cp:check:open`,
@@ -232,7 +241,7 @@ export const plane = async () => {
           },
         ]);
         gh.facts.set(id, {
-          name: checkName(id),
+          name,
           headSha: SHA,
           attempt: 1,
           detailsUrl: undefined,
@@ -248,7 +257,7 @@ export const plane = async () => {
         });
       }),
     /** The executor channel stages the run's `exec.intents` batch under the epoch's lease. */
-    stage: (id: string, intents: typeof SIDE_INTENTS) =>
+    stage: (id: string, intents: readonly StagedIntent[]) =>
       during("stage", () =>
         run(
           d1StageIntents(db, {
