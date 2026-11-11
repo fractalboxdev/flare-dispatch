@@ -39,6 +39,8 @@ export const MAX_OPEN_PRS = 100;
 export const DIGEST_LINE_MAX_CHARS = 160;
 /** Characters of a pull-request title in the digest. */
 export const TITLE_MAX_CHARS = 120;
+/** Pages of 100 check runs or reviews read per pull request; a longer list fails the read rather than truncate it. */
+export const MAX_DETAIL_PAGES = 10;
 
 export interface CheckRun {
   readonly name: string;
@@ -93,6 +95,7 @@ const PullsPage = Schema.Array(
   }),
 );
 const CheckRunsPage = Schema.Struct({
+  total_count: Schema.Number,
   check_runs: Schema.Array(
     Schema.Struct({
       name: Schema.String,
@@ -118,10 +121,19 @@ export interface GithubPullRequestsReadConfig {
   readonly fetch: typeof globalThis.fetch;
 }
 
+/** The `rel="next"` URL of a GitHub `Link` header, or undefined on the last page. */
+const nextLink = (link: string | null) =>
+  link
+    ?.split(",")
+    .map((part) => /<([^>]+)>\s*;\s*rel="next"/.exec(part)?.[1])
+    .find((url) => url !== undefined);
+
 /**
- * `PullRequestsRead` over GitHub's REST API: the first `MAX_OPEN_PRS` open pull requests by latest update, each with the
- * check runs of its head commit and its reviews, 100 of each at most. A request that fails, an answer other than 200
- * and a body outside the shape each fail the read.
+ * `PullRequestsRead` over GitHub's REST API: the first `MAX_OPEN_PRS` open pull requests by latest update, each with
+ * every check run of its head commit and every review, following `Link: rel="next"` for up to `MAX_DETAIL_PAGES`
+ * pages of 100. A request that fails, an answer other than 200, a body outside the shape, a next page off the API
+ * origin, a list longer than `MAX_DETAIL_PAGES` pages and check runs fewer than the answer's `total_count` each fail
+ * the read, so no route is taken on a partial list (FD-AGT-042).
  */
 export const githubPullRequestsReadLayer = (
   config: GithubPullRequestsReadConfig,
@@ -130,18 +142,38 @@ export const githubPullRequestsReadLayer = (
     openPullRequests: (repository) =>
       Effect.tryPromise({
         try: async () => {
-          const get = async (path: string, query: Record<string, string>) => {
-            const response = await config.fetch(
-              `${config.apiBase.replace(/\/+$/, "")}${path}?${new URLSearchParams(query)}`,
-              {
-                headers: {
-                  accept: "application/vnd.github+json",
-                  "x-github-api-version": "2022-11-28",
-                },
+          const apiBase = config.apiBase.replace(/\/+$/, "");
+          const origin = new URL(apiBase).origin;
+          const getUrl = async (url: string) => {
+            const response = await config.fetch(url, {
+              headers: {
+                accept: "application/vnd.github+json",
+                "x-github-api-version": "2022-11-28",
               },
-            );
-            if (response.status !== 200) throw new Error(`GET ${path} answered ${response.status}`);
-            return (await response.json()) as unknown;
+            });
+            const { pathname } = new URL(url);
+            if (response.status !== 200)
+              throw new Error(`GET ${pathname} answered ${response.status}`);
+            const next = nextLink(response.headers.get("link"));
+            if (next !== undefined && new URL(next).origin !== origin)
+              throw new Error(`GET ${pathname} names a next page off ${origin}`);
+            return { body: (await response.json()) as unknown, next };
+          };
+          const url = (path: string, query: Record<string, string>) =>
+            `${apiBase}${path}?${new URLSearchParams(query)}`;
+          const get = async (path: string, query: Record<string, string>) =>
+            (await getUrl(url(path, query))).body;
+          const getAll = async <A>(path: string, decode: (body: unknown) => readonly A[]) => {
+            const items: A[] = [];
+            let next: string | undefined = url(path, { per_page: "100" });
+            for (let page = 0; next !== undefined; page++) {
+              if (page === MAX_DETAIL_PAGES)
+                throw new Error(`GET ${path} lists more than ${MAX_DETAIL_PAGES} pages`);
+              const answer = await getUrl(next);
+              items.push(...decode(answer.body));
+              next = answer.next;
+            }
+            return items;
           };
           const root = `/repos/${repository}`;
           const pulls = decodePulls(
@@ -154,12 +186,16 @@ export const githubPullRequestsReadLayer = (
           );
           const out: OpenPullRequest[] = [];
           for (const p of pulls) {
-            const checks = decodeCheckRuns(
-              await get(`${root}/commits/${p.head.sha}/check-runs`, { per_page: "100" }),
-            );
-            const reviews = decodeReviews(
-              await get(`${root}/pulls/${p.number}/reviews`, { per_page: "100" }),
-            );
+            const checksPath = `${root}/commits/${p.head.sha}/check-runs`;
+            let totalCount = 0;
+            const checkRuns = await getAll(checksPath, (body) => {
+              const page = decodeCheckRuns(body);
+              totalCount = page.total_count;
+              return page.check_runs;
+            });
+            if (checkRuns.length < totalCount)
+              throw new Error(`GET ${checksPath} listed ${checkRuns.length} of ${totalCount} runs`);
+            const reviews = await getAll(`${root}/pulls/${p.number}/reviews`, decodeReviews);
             out.push({
               number: p.number,
               title: p.title,
@@ -168,7 +204,7 @@ export const githubPullRequestsReadLayer = (
               draft: p.draft ?? false,
               updatedAt: Date.parse(p.updated_at),
               labels: p.labels.map((l) => l.name),
-              checkRuns: checks.check_runs,
+              checkRuns,
               reviews: reviews.map((r) => ({ author: r.user?.login ?? "ghost", state: r.state })),
             });
           }
@@ -304,9 +340,8 @@ export interface RoutedPr {
   readonly line: string;
 }
 
-/** The digest's path for a day. */
-export const triageDigestPath = (now: number) =>
-  `.flare-dispatch/triage/prs-${new Date(now).toISOString().slice(0, 10)}.md`;
+/** The digest's path for a day, `YYYY-MM-DD`. */
+export const triageDigestPath = (day: string) => `.flare-dispatch/triage/prs-${day}.md`;
 
 const ROUTE_HEADING: Record<TriageRoute, string> = {
   "auto-merge": "Auto-merge: checks pass and a reviewer approved",
@@ -357,6 +392,7 @@ export const runTriagePrs = (input: TriagePrsInput) =>
     if (suppressed) return { _tag: "success" } satisfies RunResult;
     const now = yield* Clock.currentTimeMillis;
     const read = yield* PullRequestsRead;
+    // The Layer requests `MAX_OPEN_PRS`; the slice bounds any other `PullRequestsRead`.
     const open = (yield* read.openPullRequests(`${input.repo.owner}/${input.repo.name}`)).slice(
       0,
       MAX_OPEN_PRS,
@@ -374,8 +410,8 @@ export const runTriagePrs = (input: TriagePrsInput) =>
         line: yield* digestLine(pr, state, route),
       });
     }
-    const path = triageDigestPath(now);
-    const day = path.slice(-13, -3);
+    const day = new Date(now).toISOString().slice(0, 10);
+    const path = triageDigestPath(day);
     const checkout = yield* Checkout;
     yield* checkout.write(path, renderDigest(day, routed));
     const stage = yield* StagedWrites;

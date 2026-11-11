@@ -281,8 +281,8 @@ A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the reposito
 | --- | --- | --- |
 | 1 | Draft, or a label `do-not-merge`, `wip`, `blocked` or `on-hold` | `ask` |
 | 2 | A check failed, or a check is still pending 1 day or more after the last update | `unstick` |
-| 3 | At least one check passed, none failed or is pending, and a reviewer approved | `auto-merge` |
-| 4 | No approval, and 3 days or more since the last update | `nudge` |
+| 3 | At least one check passed, none failed or is pending, a reviewer approved, and no reviewer's latest review requests changes | `auto-merge` |
+| 4 | No standing approval (none, or a change request), and 3 days or more since the last update | `nudge` |
 | 5 | Any other state | `ask` |
 
 - **FD-AGT-078** · phase 3 · `V-UNIT` — `triage-prs` must derive each open pull request's state (check health, review state, days since last update, labels) without a model call, and route it to exactly one of `auto-merge`, `nudge`, `unstick` and `ask`.

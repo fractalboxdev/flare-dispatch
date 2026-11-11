@@ -93,7 +93,12 @@ const run = (
       ),
       Effect.provide(TestClock.layer()),
     ),
-  ).then((result) => ({ result, rec, reads, digest: rec.files.get(triageDigestPath(NOW)) }));
+  ).then((result) => ({
+    result,
+    rec,
+    reads,
+    digest: rec.files.get(triageDigestPath("2026-11-12")),
+  }));
 };
 
 /** The route each pull request sits under in a digest, read from its section headings. */
@@ -275,6 +280,102 @@ describe("triage-prs", () => {
     );
     expect(Exit.isFailure(exit)).toBe(true);
     expect(JSON.stringify(exit)).toContain("ReadFailed");
+  });
+
+  it("[FD-AGT-042] follows every page of reviews and check runs, and fails a list it cannot read whole", async () => {
+    const API = "https://api.github.com";
+    const pull = {
+      number: 7,
+      title: "fix parser",
+      draft: false,
+      updated_at: "2026-11-08T08:00:00Z",
+      user: { login: "ada" },
+      author_association: "CONTRIBUTOR",
+      labels: [],
+      head: { sha: "abc" },
+    };
+    type Page = { body: unknown; next?: string };
+    const serve = (pages: Record<string, Page>) =>
+      (async (url: string) => {
+        const u = new URL(url);
+        const page = pages[`${u.pathname}#${u.searchParams.get("page") ?? "1"}`];
+        if (page === undefined) return new Response("{}", { status: 404 });
+        return new Response(JSON.stringify(page.body), {
+          status: 200,
+          headers:
+            page.next === undefined
+              ? {}
+              : { link: `<${page.next}>; rel="next", <${page.next}>; rel="last"` },
+        });
+      }) as typeof globalThis.fetch;
+    const readWith = (fetch: typeof globalThis.fetch) =>
+      Effect.runPromiseExit(
+        Effect.gen(function* () {
+          return yield* (yield* PullRequestsRead).openPullRequests("o/r");
+        }).pipe(Effect.provide(githubPullRequestsReadLayer({ apiBase: API, fetch }))),
+      );
+    const base: Record<string, Page> = {
+      "/repos/o/r/pulls#1": { body: [pull] },
+      "/repos/o/r/commits/abc/check-runs#1": {
+        body: { total_count: 2, check_runs: GREEN },
+        next: `${API}/repos/o/r/commits/abc/check-runs?per_page=100&page=2`,
+      },
+      "/repos/o/r/commits/abc/check-runs#2": {
+        body: {
+          total_count: 2,
+          check_runs: [{ name: "e2e", status: "completed", conclusion: "success" }],
+        },
+      },
+      "/repos/o/r/pulls/7/reviews#1": {
+        body: [{ user: { login: "rev" }, state: "APPROVED" }],
+        next: `${API}/repos/o/r/pulls/7/reviews?per_page=100&page=2`,
+      },
+      "/repos/o/r/pulls/7/reviews#2": {
+        body: [{ user: { login: "other" }, state: "CHANGES_REQUESTED" }],
+      },
+    };
+
+    const whole = await readWith(serve(base));
+    expect(Exit.isSuccess(whole)).toBe(true);
+    const pr = (Exit.isSuccess(whole) ? whole.value[0] : undefined) as OpenPullRequest;
+    expect(pr.checkRuns.map((r) => r.name)).toEqual(["ci", "e2e"]);
+    expect(pr.reviews).toEqual([
+      { author: "rev", state: "APPROVED" },
+      { author: "other", state: "CHANGES_REQUESTED" },
+    ]);
+    const state = prState(pr, NOW);
+    expect(state).toMatchObject({ checks: "passing", review: "changes-requested" });
+    expect(routeOf(state)).not.toBe("auto-merge");
+
+    const short = await readWith(
+      serve({
+        ...base,
+        "/repos/o/r/commits/abc/check-runs#1": { body: { total_count: 101, check_runs: GREEN } },
+      }),
+    );
+    expect(Exit.isFailure(short)).toBe(true);
+    expect(JSON.stringify(short)).toContain("ReadFailed");
+
+    const endless: Record<string, Page> = { ...base };
+    for (let n = 1; n <= 11; n++)
+      endless[`/repos/o/r/pulls/7/reviews#${n}`] = {
+        body: [{ user: { login: "rev" }, state: "COMMENTED" }],
+        next: `${API}/repos/o/r/pulls/7/reviews?per_page=100&page=${n + 1}`,
+      };
+    const unbounded = await readWith(serve(endless));
+    expect(Exit.isFailure(unbounded)).toBe(true);
+    expect(JSON.stringify(unbounded)).toContain("more than 10 pages");
+
+    const offOrigin = await readWith(
+      serve({
+        ...base,
+        "/repos/o/r/pulls/7/reviews#1": {
+          body: [],
+          next: "https://elsewhere.example/repos/o/r/pulls/7/reviews?page=2",
+        },
+      }),
+    );
+    expect(Exit.isFailure(offOrigin)).toBe(true);
   });
 
   it("[FD-AGT-079] writes each pull request's digest line with one transform call", async () => {
