@@ -136,7 +136,20 @@ export {
   type ReleaseReport,
   type Submission,
 } from "./submit.ts";
-export { planTick, runTickUnit, sweepEvent, TickUnit, type UnitResult } from "./tick.ts";
+export {
+  enqueueUnits,
+  planTick,
+  runQueuedUnit,
+  runTickUnit,
+  sweepEvent,
+  TickUnit,
+  UNIT_D1_QUERIES,
+  UNIT_SUBREQUESTS,
+  type QueuedRun,
+  type UnitBound,
+  type UnitQueueStorage,
+  type UnitResult,
+} from "./tick.ts";
 export {
   manifestAt,
   readManifest,

@@ -1,14 +1,22 @@
 // FlareDispatch's Durable Object classes: mameko's, with the configuration each reads derived from the profile.
 import { ExecutionInputsMissing } from "@fractalboxdev/flare-dispatch-api";
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
-import { IntakeStore, d1IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
+import {
+  IntakeStore,
+  d1IntakeStore,
+  enqueueUnits,
+  runQueuedUnit,
+  type TickUnit,
+} from "@fractalboxdev/flare-dispatch-intake";
 import {
   ExecutionEngine as MamekoExecutionEngine,
   ExecutorChannel as MamekoExecutorChannel,
   type ClaimedLease,
 } from "@fractalboxdev/mameko-host-cloudflare";
-import { Effect, Match } from "effect";
+import { DurableObject } from "cloudflare:workers";
+import { Context, Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
+import { isolateServices } from "./composition.ts";
 import { leaseCache } from "./cache.ts";
 import { imageDigestOf, requestLeaseFields } from "./lease.ts";
 import {
@@ -92,6 +100,29 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
 export class ExecutionEngine extends MamekoExecutionEngine<EngineEnv> {
   constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
     super(ctx, { ...env, MAMEKO_EXECUTION_CONFIG: executionConfig(profileOf(env)) });
+  }
+}
+
+/**
+ * One per GitHub App installation: the queue of the installation's tick units (FD-INT-067). The tick enqueues; each
+ * alarm runs one unit within its own subrequest and D1-query allowance and queues the unit that continues it.
+ */
+export class IntakeUnits extends DurableObject<ControlPlaneEnv> {
+  enqueue(units: readonly TickUnit[]): Promise<number> {
+    return Effect.runPromise(enqueueUnits(this.ctx.storage, units, Date.now()));
+  }
+
+  override async alarm(): Promise<void> {
+    const services = await isolateServices(this.env);
+    // Only a deploy with the GitHub App enqueues units, and its services carry the installation quota the sweep reads.
+    const ran = await Effect.runPromise(
+      runQueuedUnit(this.ctx.storage, Date.now()).pipe(
+        Effect.provide(
+          services as Context.Context<Effect.Services<ReturnType<typeof runQueuedUnit>>>,
+        ),
+      ),
+    );
+    if (ran !== null) console.log(JSON.stringify({ intakeUnit: ran }));
   }
 }
 
