@@ -14,7 +14,6 @@ import {
   errorBody,
   executionsGroup,
   executorsGroup,
-  FailureSummaries,
   JwksSourceLive,
   logsGroup,
   mount,
@@ -33,6 +32,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
 import { apiEnvOf, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { failureSummaries } from "./failure-summary.ts";
 import { intakePort } from "./intake-port.ts";
 
 /** Intake's webhook route, below the `/v1/` mount: the request and the path below it, as `handleIntake` takes them. */
@@ -88,11 +88,6 @@ const cancellationDeferred = Layer.succeed(Cancellation)({
     Effect.fail(apiError("unavailable", "cancel needs mameko's cancel of an admitted execution")),
 });
 
-/** The `incident/v1` pack reads step logs this deploy does not index yet (FD-IFC-042). */
-const failureSummariesDeferred = Layer.succeed(FailureSummaries)({
-  pack: () => Effect.fail(apiError("unavailable", "no failure summary source is configured")),
-});
-
 /**
  * The liveness report reads the operability package's record; the operator operations need mameko's operator
  * transaction, which this deploy does not supply, so each answers `unavailable`.
@@ -124,7 +119,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     }),
     oidcKeyFromSecret(apiEnvOf(env).OIDC_SIGNING_JWK),
     cancellationDeferred,
-    failureSummariesDeferred,
+    failureSummaries(env),
     operations(env),
     cacheReads(env),
   );

@@ -9,7 +9,7 @@ import { intakeError } from "@fractalboxdev/flare-dispatch-intake";
 import { Effect } from "effect";
 import { FlareDispatchApi } from "@fractalboxdev/flare-dispatch-api/declaration";
 import { mintLinkToken, type LinkPurpose } from "@fractalboxdev/flare-dispatch-api/link-token";
-import { ARTIFACT_SCHEMA, logObjectName } from "@fractalboxdev/flare-dispatch-cache";
+import { ARTIFACT_SCHEMA, logObjectName, stepKey } from "@fractalboxdev/flare-dispatch-cache";
 import { HttpApi } from "effect/http-api";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
@@ -424,6 +424,97 @@ describe("the cache, artifact and log routes", () => {
   it("[FD-CACHE-051] refuses a compile-cache request without a signing secret", async () => {
     const r = await development.dispatchFetch("http://x/v1/compile-cache/acme/widgets/ns/key");
     expect(r.status).toBe(503);
+  });
+});
+
+describe("the failure summary", () => {
+  const FAILED = "01FAILEDWITHLOGS";
+  const SILENT = "01FAILEDNOLOGS";
+  const LONG_RUN = `check-${"r".repeat(3000)}`;
+  const REASON = `exit 1: ${"why ".repeat(1000)}`;
+
+  const summaryOf = async (id: string) => {
+    const r = await development.dispatchFetch(`http://x/v1/executions/${id}/failure-summary`, {
+      headers: await headersFor("member@example.com"),
+    });
+    return { status: r.status, text: await r.text() };
+  };
+
+  /** One NDJSON segment of a step, written after the previous one so step order follows upload order. */
+  const segment = async (epoch: number, step: string, start: number, lines: readonly string[]) => {
+    const body = lines.map((line) => JSON.stringify({ line })).join("\n");
+    const name = await logObjectName({
+      executionId: FAILED,
+      epoch,
+      journalName: step,
+      stream: "stdout",
+      start,
+      end: start + body.length,
+    });
+    await (await development.getR2Bucket("CACHE")).put(name!, body);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  };
+
+  beforeAll(async () => {
+    await development.dispatchFetch("http://x/v1/executions", {
+      headers: await headersFor("member@example.com"),
+    });
+    const db = await development.getD1Database("DB");
+    for (const [id, run] of [
+      [FAILED, "check"],
+      [SILENT, LONG_RUN],
+    ] as const)
+      await db
+        .prepare(
+          `insert into executions (id, scope_id, run, class, status, reason, enqueued_at)
+           values (?, 'fractalboxdev/flare-dispatch', ?, 'batch', 'failure', ?, ?)`,
+        )
+        .bind(id, run, REASON, Date.now())
+        .run();
+    await segment(1, "step:test", 0, ["epoch-one attempt"]);
+    await segment(2, "step:install", 0, ["install-output"]);
+    await segment(
+      2,
+      "step:test",
+      0,
+      Array.from({ length: 300 }, (_, i) => `early ${i} ${"a".repeat(80)}`),
+    );
+    await segment(2, "step:test", 30_000, [
+      ...Array.from({ length: 300 }, () => "b".repeat(80)),
+      "LAST-LINE",
+    ]);
+  });
+
+  it("[FD-IFC-042] serves the failing step's log tail and the reason, bounded to the incident/v1 caps and 16 KiB", async () => {
+    const { status, text } = await summaryOf(FAILED);
+    expect(status, text).toBe(200);
+    expect(new TextEncoder().encode(text).byteLength).toBeLessThanOrEqual(16_384);
+    const pack = JSON.parse(text) as {
+      incidentId: string;
+      repo: string;
+      ciFailures: { kind: string; name: string; conclusion: string; logTail: string }[];
+    };
+    expect(pack).toMatchObject({ incidentId: FAILED, repo: "fractalboxdev/flare-dispatch" });
+    const [failure] = pack.ciFailures;
+    expect(failure!.kind).toBe("run-step");
+    // The failing step is the last one at the highest epoch, named by the run and its step key.
+    expect(failure!.name).toBe(`check/${await stepKey("step:test")}`);
+    expect(failure!.conclusion.length).toBeLessThanOrEqual(200);
+    expect(REASON.startsWith(failure!.conclusion)).toBe(true);
+    expect(failure!.logTail.length).toBe(4000);
+    expect(failure!.logTail.endsWith("LAST-LINE")).toBe(true);
+    for (const other of ["epoch-one", "install-output", "early"])
+      expect(failure!.logTail).not.toContain(other);
+  });
+
+  it("[FD-IFC-042] names the run alone, cut to the 2000-character text cap, for a failed execution with no step log", async () => {
+    const { status, text } = await summaryOf(SILENT);
+    expect(status, text).toBe(200);
+    const pack = JSON.parse(text) as { ciFailures: Record<string, unknown>[] };
+    expect(pack.ciFailures).toHaveLength(1);
+    expect(pack.ciFailures[0]!["name"]).toBe(LONG_RUN.slice(0, 2000));
+    expect(pack.ciFailures[0]!["conclusion"]).toBe(REASON.slice(0, 200));
+    expect(pack.ciFailures[0]).not.toHaveProperty("logTail");
   });
 });
 
