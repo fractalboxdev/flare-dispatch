@@ -71,6 +71,80 @@ export interface ProbeConfig {
   readonly webhookSilentHours: number;
 }
 
+/** The fixture repository names no installation of the App, so no canary can be pushed or read (FD-OPS-038). */
+export class FixtureInstallationMissing extends Schema.TaggedError<FixtureInstallationMissing>()(
+  "FixtureInstallationMissing",
+  { repository: Schema.String },
+) {}
+
+/** The fixture repository and installation a canary's stage read takes. */
+export type CanaryTarget = Pick<ProbeConfig, "fixtureRepo" | "fixtureInstallation">;
+
+/** The latest canary push: its tick time and the fixture repository and installation the push resolved. */
+export interface CanaryPush extends CanaryTarget {
+  readonly pushedAt: number;
+}
+
+/** Records the latest canary push, which the check 5 min later reads instead of resolving the fixture again. */
+export const recordCanaryPush = (db: D1Like, target: CanaryTarget, pushedAt: number) =>
+  Effect.promise(() =>
+    db
+      .prepare(
+        `insert into fd_canary_push (slot, pushed_at, fixture_repo, fixture_installation) values (1, ?, ?, ?)
+         on conflict (slot) do update set pushed_at = excluded.pushed_at, fixture_repo = excluded.fixture_repo,
+           fixture_installation = excluded.fixture_installation`,
+      )
+      .bind(pushedAt, target.fixtureRepo, target.fixtureInstallation)
+      .run(),
+  );
+
+/** The latest canary push, or null before the first. */
+export const lastCanaryPush = (db: D1Like) =>
+  Effect.promise(async (): Promise<CanaryPush | null> => {
+    const { results } = await db
+      .prepare(
+        "select pushed_at, fixture_repo, fixture_installation from fd_canary_push where slot = 1",
+      )
+      .all();
+    const row = results[0] as
+      | { pushed_at: number; fixture_repo: string; fixture_installation: string }
+      | undefined;
+    return row === undefined
+      ? null
+      : {
+          pushedAt: row.pushed_at,
+          fixtureRepo: row.fixture_repo,
+          fixtureInstallation: row.fixture_installation,
+        };
+  });
+
+/**
+ * A fixture repository no installation covers: the canary probe reads not ok and `canary-missed` names the push stage
+ * and the repository, since no canary can be pushed until the fixture is installed (FD-OPS-038, FD-OPS-040).
+ */
+export const canaryUncovered = (db: D1Like, repository: string, now: number) =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() =>
+      recordProbe(
+        db,
+        "canary",
+        false,
+        { stage: "push", reason: `no installation covers ${repository}` },
+        now,
+      ),
+    );
+    yield* raiseOnce(
+      db,
+      {
+        name: "canary-missed",
+        severity: "page",
+        dedupeKey: "canary-missed",
+        detail: { last_stage: "push", repository },
+      },
+      now,
+    );
+  });
+
 /**
  * Inserts the `canary.push` ops intent under the key `canary:<tick time>` (FD-OPS-038). Its payload is the one the
  * GitHub applier decodes: the branch, and the tick time as ISO 8601 text, which the commit message carries.
@@ -96,7 +170,7 @@ export type CanaryStage = (typeof CANARY_STAGES)[number] | "push";
 /** The last stage the canary pushed at `pushedAt` reached, read from the control plane's tables. */
 export const canaryStage = async (
   db: D1Like,
-  config: ProbeConfig,
+  config: CanaryTarget,
   pushedAt: number,
 ): Promise<CanaryStage> => {
   const { results: delivered } = await db
@@ -124,7 +198,7 @@ export const canaryStage = async (
 };
 
 /** Raises `canary-missed` naming the last stage when the canary has not concluded its check (FD-OPS-040). */
-export const checkCanary = (db: D1Like, config: ProbeConfig, pushedAt: number, now: number) =>
+export const checkCanary = (db: D1Like, config: CanaryTarget, pushedAt: number, now: number) =>
   Effect.gen(function* () {
     const stage = yield* Effect.promise(() => canaryStage(db, config, pushedAt));
     const ok = stage === "check";

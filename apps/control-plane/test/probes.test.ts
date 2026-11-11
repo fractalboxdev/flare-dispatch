@@ -3,7 +3,7 @@
 // reaches the canary's stage read (specs/operability.md § Liveness and alerts).
 import { generateKeyPairSync } from "node:crypto";
 import { githubAppLayer, SidePayloads } from "@fractalboxdev/flare-dispatch-github";
-import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
+import { IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import {
   canaryStage,
@@ -19,9 +19,9 @@ import {
 } from "@fractalboxdev/flare-dispatch-ops";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
-import { Effect, Exit, Layer, Schema } from "effect";
+import { type Context, Effect, Exit, Layer, Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withDeliveryTimes } from "../src/composition.ts";
+import { isolateServices } from "../src/composition.ts";
 import type { ControlPlaneEnv } from "../src/config.ts";
 import { APP_LIMIT_KEY, githubAppReadsLayer, tickDeps } from "../src/tick.ts";
 
@@ -185,6 +185,18 @@ describe("the control plane's GitHub probes", () => {
     });
     expect(report.steps.find((s) => s.step === "delivery-probe")?.status).toBe("ran");
     expect(await outbox(env)).toEqual([]);
+    // GitHub's 404 is a definite answer: the canary reads not ok and canary-missed names the push stage.
+    expect((await probeResults(env.DB)).find((p) => p.name === "canary")).toMatchObject({
+      ok: false,
+      detail: { stage: "push", reason: `no installation covers ${FIXTURE}` },
+    });
+    expect(
+      (
+        await env.DB.prepare(
+          "select name, severity, dedupe_key from fd_alarms where name = 'canary-missed'",
+        ).all()
+      ).results,
+    ).toEqual([{ name: "canary-missed", severity: "page", dedupe_key: "canary-missed" }]);
   });
 });
 
@@ -283,17 +295,16 @@ describe("the probes' rows against the GitHub applier", () => {
 });
 
 describe("a verified webhook delivery", () => {
-  it("[FD-OPS-040] reaches the canary's stage read, so a delivered canary reads past the push", async () => {
-    const db = await migratedD1();
-    await runOpsMigrations(db);
-    await registerInstallation(db, "42", "acme");
+  it("[FD-OPS-040] reaches the canary's stage read through the isolate's services, so a delivered canary reads past the push", async () => {
+    const env = await envOf();
+    await runOpsMigrations(env.DB);
+    await registerInstallation(env.DB, "42", "acme");
     const config = { fixtureRepo: FIXTURE, fixtureInstallation: "42", webhookSilentHours: 24 };
-    expect(await canaryStage(db, config, T0)).toBe("push");
+    expect(await canaryStage(env.DB, config, T0)).toBe("push");
+    const services = (await isolateServices(env)) as Context.Context<IntakeStore>;
     await Effect.runPromise(
-      IntakeStore.use((s) => s.recordDelivery(42, T0 + 5_000)).pipe(
-        Effect.provide(withDeliveryTimes({ DB: db }).pipe(Layer.provide(d1IntakeStore(db)))),
-      ),
+      IntakeStore.use((s) => s.recordDelivery(42, T0 + 5_000)).pipe(Effect.provide(services)),
     );
-    expect(await canaryStage(db, config, T0)).toBe("delivery");
+    expect(await canaryStage(env.DB, config, T0)).toBe("delivery");
   });
 });

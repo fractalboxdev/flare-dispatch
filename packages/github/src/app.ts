@@ -456,6 +456,13 @@ const appPages = <A>(
       out.push(...items);
       next = items.length > 0 && more(items) ? nextPagePath(link) : null;
     }
+    // A listing cut at the page bound is partial: the items past it are not read, and the caller sees only the first.
+    if (next !== null)
+      yield* Effect.logWarning("App listing truncated at the page bound", {
+        path,
+        pages: APP_LIST_MAX_PAGES,
+        items: out.length,
+      });
     return out;
   });
 

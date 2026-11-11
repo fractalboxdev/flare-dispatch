@@ -21,6 +21,11 @@ export const OPS_MIGRATIONS: readonly string[] = [
     ok integer not null check (ok in (0, 1)),
     detail_json text not null,
     at integer not null)`,
+  `create table if not exists fd_canary_push (
+    slot integer primary key check (slot = 1),
+    pushed_at integer not null,
+    fixture_repo text not null,
+    fixture_installation text not null)`,
   `create table if not exists fd_install_states (
     state text primary key,
     session text not null,

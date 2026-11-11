@@ -10,6 +10,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-github";
 import { planTick, releaseHeld } from "@fractalboxdev/flare-dispatch-intake";
 import {
+  FixtureInstallationMissing,
   GithubAppReadFailed,
   GithubAppReads,
   tickDepsFromEnv,
@@ -91,12 +92,6 @@ export const githubAppReadsLayer = Layer.effect(
     };
   }),
 );
-
-/** The fixture repository names no installation of the App, so no canary can be pushed or read (FD-OPS-038). */
-export class FixtureInstallationMissing extends Schema.TaggedError<FixtureInstallationMissing>()(
-  "FixtureInstallationMissing",
-  { repository: Schema.String },
-) {}
 
 /**
  * The limit key of the App-JWT `delivery.redeliver` row: its own `InstallationQuota` object, apart from every

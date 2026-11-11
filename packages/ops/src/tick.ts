@@ -10,13 +10,17 @@ import { KILL_LINE_INTERVAL_MS, killLineMonitor } from "./kill-lines.ts";
 import { lastTick, recordTick, runOpsMigrations } from "./liveness.ts";
 import {
   CANARY_DEADLINE_MS,
+  canaryUncovered,
   checkCanary,
   checkWebhookSilence,
+  FixtureInstallationMissing,
   GithubAppReads,
+  lastCanaryPush,
   PROBE_INTERVAL_MS,
   probeDeliveries,
   probeInstallations,
   pushCanary,
+  recordCanaryPush,
   type ProbeConfig,
 } from "./probes.ts";
 import { raiseOnce, resolveAlarm } from "./raise.ts";
@@ -46,8 +50,9 @@ export interface TickDeps {
   readonly githubReads?: Layer.Layer<GithubAppReads>;
   /**
    * The canary's fixture repository and installation, or the read that resolves them, such as the App's lookup of the
-   * fixture repository's installation; without them no canary is pushed. A failed read fails the canary step of that
-   * tick alone.
+   * fixture repository's installation; without them no canary is pushed. The push resolves them once and records them,
+   * and the check reads that record. A failed read fails the canary step of that tick alone; a read that fails with
+   * `FixtureInstallationMissing` also raises `canary-missed` at the push stage.
    */
   readonly probes?: ProbeConfig | Effect.Effect<ProbeConfig, unknown>;
   /** The limit key the App-JWT `delivery.redeliver` intents take. */
@@ -184,9 +189,18 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
           : yield* run(
               "canary-push",
               Effect.gen(function* () {
-                const config = yield* probeConfigOf(deps.probes!);
+                // A fixture repository no installation covers is GitHub's definite answer, not a transient failure: it
+                // raises `canary-missed` at the push stage and records the probe not ok, and the step still fails.
+                const config = yield* probeConfigOf(deps.probes!).pipe(
+                  Effect.tapError((e) =>
+                    e instanceof FixtureInstallationMissing
+                      ? canaryUncovered(db, e.repository, now)
+                      : Effect.void,
+                  ),
+                );
                 const key = yield* pushCanary(db, deps.profile, config, now);
-                yield* writeKey(db, "canary-pushed", now);
+                // The check reads the fixture the push resolved, so it makes no GitHub read of its own.
+                yield* recordCanaryPush(db, config, now);
                 return key;
               }),
             ),
@@ -218,20 +232,19 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
     }
 
     if (deps.probes !== undefined) {
-      const pushed = yield* readKey(db, "canary-pushed");
+      const push = yield* lastCanaryPush(db);
       const checked = yield* readKey(db, "canary-checked");
       if (
-        pushed !== null &&
-        now - pushed >= CANARY_DEADLINE_MS &&
-        (checked === null || checked < pushed)
+        push !== null &&
+        now - push.pushedAt >= CANARY_DEADLINE_MS &&
+        (checked === null || checked < push.pushedAt)
       )
         steps.push(
           yield* run(
             "canary-check",
             Effect.gen(function* () {
-              const config = yield* probeConfigOf(deps.probes!);
-              const stage = yield* checkCanary(db, config, pushed, now);
-              yield* writeKey(db, "canary-checked", pushed);
+              const stage = yield* checkCanary(db, push, push.pushedAt, now);
+              yield* writeKey(db, "canary-checked", push.pushedAt);
               return { stage };
             }),
           ),

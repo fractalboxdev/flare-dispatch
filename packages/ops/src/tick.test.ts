@@ -16,6 +16,7 @@ import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
 import {
   checkCronSilent,
   deliveriesToRedeliver,
+  FixtureInstallationMissing,
   GithubAppReads,
   livenessReport,
   minuteTick,
@@ -486,7 +487,7 @@ describe("the GitHub probes' rows and reads", () => {
     ]);
   });
 
-  it("[FD-OPS-038] [FD-OPS-040] a probe configuration read resolves the fixture installation for the push and the check", async () => {
+  it("[FD-OPS-038] [FD-OPS-040] the push resolves the fixture installation once, and the check reads the installation the push recorded", async () => {
     const a = appliers();
     let reads = 0;
     const { deps: d, alarms } = deps({
@@ -504,9 +505,59 @@ describe("the GitHub probes' rows and reads", () => {
       status: "ran",
       detail: { stage: "push" },
     });
-    expect(reads).toBe(2);
+    expect(reads).toBe(1);
     expect(alarms.delivered.find((x) => x.name === "canary-missed")).toMatchObject({
       detail: { last_stage: "push" },
+    });
+  });
+
+  it("[FD-OPS-040] a probe configuration read that fails after a successful push still lets the check raise canary-missed", async () => {
+    let pushTick = true;
+    const { deps: d, alarms } = deps({
+      probes: Effect.suspend(() =>
+        pushTick
+          ? Effect.succeed({
+              fixtureRepo: "acme/canary",
+              fixtureInstallation: "42",
+              webhookSilentHours: 24,
+            })
+          : Effect.fail("GitHub answered 502"),
+      ),
+    });
+    await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    pushTick = false;
+    await recordVerifiedDelivery(t.db, { id: "42", accountLogin: "acme" }, T0 + 10_000);
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + 300_000);
+    expect(report.steps.find((s) => s.step === "canary-check")).toMatchObject({
+      status: "ran",
+      detail: { stage: "delivery" },
+    });
+    expect(alarms.delivered.find((x) => x.name === "canary-missed")).toMatchObject({
+      state: "raised",
+      detail: { last_stage: "delivery" },
+    });
+  });
+
+  it("[FD-OPS-038] [FD-OPS-040] a fixture repository no installation covers raises canary-missed at the push stage and records the canary probe not ok", async () => {
+    const { deps: d, alarms } = deps({
+      probes: Effect.fail(new FixtureInstallationMissing({ repository: "acme/canary" })),
+    });
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    expect(report.steps.find((s) => s.step === "canary-push")).toMatchObject({
+      status: "failed",
+      cause: expect.stringContaining("FixtureInstallationMissing"),
+    });
+    expect(alarms.delivered).toEqual([
+      expect.objectContaining({
+        name: "canary-missed",
+        severity: "page",
+        state: "raised",
+        detail: { last_stage: "push", repository: "acme/canary" },
+      }),
+    ]);
+    expect((await probeResults(t.db)).find((p) => p.name === "canary")).toMatchObject({
+      ok: false,
+      detail: { stage: "push", reason: "no installation covers acme/canary" },
     });
   });
 
