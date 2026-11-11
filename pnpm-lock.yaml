@@ -397,9 +397,15 @@ importers:
       '@fractalboxdev/flare-dispatch-agentic':
         specifier: workspace:*
         version: link:../agentic
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../api
       '@fractalboxdev/flare-dispatch-cache':
         specifier: workspace:*
         version: link:../cache
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../catalog
       '@fractalboxdev/flare-dispatch-intake':
         specifier: workspace:*
         version: link:../intake

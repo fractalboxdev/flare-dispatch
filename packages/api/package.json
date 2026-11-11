@@ -15,6 +15,7 @@
     "./links": "./src/links.ts",
     "./mcp-tools": "./src/mcp/tools.ts",
     "./ports": "./src/ports.ts",
+    "./registry": "./src/live/registry.ts",
     "./test-support": "./src/api.test-support.ts"
   },
   "scripts": {
