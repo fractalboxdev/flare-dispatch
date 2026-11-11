@@ -3,7 +3,7 @@
 // `self-heal-pr`, FD-AGT-063 to FD-AGT-067).
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Schema } from "effect";
-import { EditLoop, Shell, StagedWrites } from "./services.ts";
+import { EditLoop, editLoopUnavailable, Shell, StagedWrites } from "./services.ts";
 
 /** The `incident/v1` caps on a text field and a path (FD-IFC-042). */
 const TEXT_MAX = 2000;
@@ -48,7 +48,8 @@ export const SelfHealIncident = Schema.Struct({
   ),
   repro: Schema.Struct({
     kind: Schema.Literal("command"),
-    command: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(TEXT_MAX)),
+    /** A command with a non-blank character: `sh -c` over a blank command exits 0 and would verify any edit. */
+    command: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(TEXT_MAX)),
     note: Schema.optionalKey(Text),
   }),
 });
@@ -71,7 +72,17 @@ export type SelfHealPrInput = typeof SelfHealPrInput.Type;
 /** The labels of the pull request a verified fix opens (FD-AGT-065). */
 export const SELF_HEAL_LABELS = ["self-heal", "self-heal:verified"] as const;
 
-/** The staged write's branch: one per incident under `flare-dispatch/self-heal`. */
+/** FNV-1a over the UTF-8 bytes of `text`, as 8 hex characters. */
+const fnv1a = (text: string) => {
+  let h = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(text)) h = Math.imul(h ^ byte, 0x01000193);
+  return (h >>> 0).toString(16).padStart(8, "0");
+};
+
+/**
+ * The staged write's branch: one per incident under `flare-dispatch/self-heal`. The slug of the incident id, cut to 48
+ * characters, is readable; the hash of the full id keeps two incidents whose slugs match on distinct branches.
+ */
 export const selfHealBranch = (incidentId: string) => {
   const slug = incidentId
     .toLowerCase()
@@ -79,7 +90,10 @@ export const selfHealBranch = (incidentId: string) => {
     .replace(/^-+|-+$/g, "")
     .slice(0, 48)
     .replace(/-+$/, "");
-  return slug === "" ? "flare-dispatch/self-heal" : `flare-dispatch/self-heal-${slug}`;
+  const hash = fnv1a(incidentId);
+  return slug === ""
+    ? `flare-dispatch/self-heal-${hash}`
+    : `flare-dispatch/self-heal-${slug}-${hash}`;
 };
 
 /** The edit loop's prompt: the incident's diagnosis, failures, suspect files and repro command. */
@@ -110,7 +124,7 @@ export const runSelfHealPr = (input: SelfHealPrInput) =>
     const incident = input.incident;
     const edit = yield* EditLoop;
     const loop = yield* edit.run(selfHealPrompt(incident));
-    if (loop.exitCode === null || loop.exitCode === 126 || loop.exitCode === 127)
+    if (editLoopUnavailable(loop))
       return { _tag: "failure", reason: "infra: edit loop unavailable" } satisfies RunResult;
 
     // The repro re-runs in the job sandbox the edit loop edited, so it sees exactly the edited checkout (FD-AGT-064).

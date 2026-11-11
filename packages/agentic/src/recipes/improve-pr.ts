@@ -2,7 +2,7 @@
 // materiality floor and a verified staged write (specs/runs/agentic.md § `improve-pr`, FD-AGT-060 to FD-AGT-062).
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Schema } from "effect";
-import { EditLoop, Shell, StagedWrites } from "./services.ts";
+import { EditLoop, editLoopUnavailable, Shell, StagedWrites } from "./services.ts";
 
 export const Dimension = Schema.Struct({
   name: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,31}$/)),
@@ -84,7 +84,7 @@ export const runImprovePr = (input: ImprovePrInput) =>
     const before = yield* measure(d);
     const edit = yield* EditLoop;
     const loop = yield* edit.run(improvePrompt(d, before.output));
-    if (loop.exitCode === null || loop.exitCode === 126 || loop.exitCode === 127)
+    if (editLoopUnavailable(loop))
       return { _tag: "failure", reason: "infra: edit loop unavailable" } satisfies RunResult;
     const after = yield* measure(d);
     const gain = gainOf(d, before.score, after.score);

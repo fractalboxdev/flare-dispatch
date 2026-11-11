@@ -128,6 +128,7 @@ describe("a self-heal-pr dispatch", () => {
       { incident: incident({ repro: { kind: "derived", command: "pnpm test" } }) },
       { incident: incident({ repro: { kind: "none" } }) },
       { incident: incident({ repro: { kind: "command" } }) },
+      { incident: incident({ repro: { kind: "command", command: "  " } }) },
       { incident: incident({ repro: undefined }) },
     ];
     for (const inputs of refused)

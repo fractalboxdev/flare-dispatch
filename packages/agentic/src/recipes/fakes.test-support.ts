@@ -32,7 +32,8 @@ export interface FakeOptions {
   /** The model's answer per call; a thrown `ModelCallError` kind fails the call. */
   readonly model?: (request: ModelRequest, call: number) => string | ModelCallError;
   readonly files?: Record<string, string>;
-  readonly editLoop?: (prompt: string, files: Map<string, string>) => number | null;
+  /** The edit loop's exit code; null when its executable cannot start, `"killed"` when a signal ends it. */
+  readonly editLoop?: (prompt: string, files: Map<string, string>) => number | null | "killed";
 }
 
 export const recorder = (files: Record<string, string> = {}): Recorder => ({
@@ -95,9 +96,10 @@ export const fakeServices = (rec: Recorder, options: FakeOptions = {}) =>
       run: (prompt) =>
         Effect.sync(() => {
           rec.prompts.push(prompt);
-          return {
-            exitCode: options.editLoop === undefined ? 0 : options.editLoop(prompt, rec.files),
-          };
+          const exit = options.editLoop === undefined ? 0 : options.editLoop(prompt, rec.files);
+          return exit === "killed"
+            ? { started: true, exitCode: null }
+            : { started: exit !== null, exitCode: exit };
         }),
     }),
     WorkflowEngine.layerMemory,

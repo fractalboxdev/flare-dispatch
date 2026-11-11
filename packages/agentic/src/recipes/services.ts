@@ -178,8 +178,24 @@ export const modelFailureVerdict = (
       ? { _tag: "failure", reason: "capacity: context overflow" }
       : { _tag: "failure", reason: `infra: model ${e.kind}` };
 
+/**
+ * One edit-loop run. `started` is false when the executable could not start; `exitCode` is null when the process
+ * started and a signal ended it, such as the loop's timeout.
+ */
+export interface EditLoopResult {
+  readonly started: boolean;
+  readonly exitCode: number | null;
+}
+
 /** The edit loop: the coding agent that edits the checkout in the job sandbox under the `agent` egress profile. */
 export class EditLoop extends Context.Service<
   EditLoop,
-  { readonly run: (prompt: string) => Effect.Effect<{ readonly exitCode: number | null }> }
+  { readonly run: (prompt: string) => Effect.Effect<EditLoopResult> }
 >()("@fractalboxdev/flare-dispatch-agentic/EditLoop") {}
+
+/**
+ * Whether the edit loop is unavailable: its executable did not start, or exited 126 (not executable) or 127 (not
+ * found). A loop that started and was killed, or exited any other code, leaves the verdict to the recipe's check.
+ */
+export const editLoopUnavailable = (loop: EditLoopResult) =>
+  !loop.started || loop.exitCode === 126 || loop.exitCode === 127;

@@ -55,6 +55,8 @@ describe("self-heal-pr input", () => {
       { incident: incident({ repro: { kind: "none" } }) },
       { incident: incident({ repro: { kind: "command" } }) },
       { incident: incident({ repro: { kind: "command", command: "" } }) },
+      { incident: incident({ repro: { kind: "command", command: "  " } }) },
+      { incident: incident({ repro: { kind: "command", command: "\n\t" } }) },
     ];
     for (const input of refused) expect(() => decode(input), JSON.stringify(input)).toThrow();
   });
@@ -91,7 +93,7 @@ describe("self-heal-pr", () => {
     expect(result).toEqual({ _tag: "success" });
     expect(rec.staged).toHaveLength(1);
     expect(rec.staged[0]).toMatchObject({
-      branch: "flare-dispatch/self-heal-ci-acme-app-1234",
+      branch: selfHealBranch("ci-acme-app-1234"),
       baseBranch: "develop",
       pr: { draft: true, labels: ["self-heal", "self-heal:verified"] },
     });
@@ -119,15 +121,40 @@ describe("self-heal-pr", () => {
       expect(rec.commands).toEqual([]);
       expect(rec.staged).toEqual([]);
     }
-    // Any other exit leaves the verdict to the repro.
+    // Any other exit, or a signal such as the loop's timeout, leaves the verdict to the repro.
+    for (const exit of [1, "killed"] as const) {
+      const rec = recorder();
+      const { result } = await run({ incident: incident() }, { editLoop: () => exit }, rec);
+      expect(result, String(exit)).toEqual({ _tag: "success" });
+      expect(rec.commands).toEqual([REPRO]);
+    }
     const rec = recorder();
-    const { result } = await run({ incident: incident() }, { editLoop: () => 1 }, rec);
-    expect(result).toEqual({ _tag: "success" });
-    expect(rec.commands).toEqual([REPRO]);
+    const { result } = await run(
+      { incident: incident() },
+      { editLoop: () => "killed", ...reproExits(1, rec, []) },
+      rec,
+    );
+    expect(result).toEqual({ _tag: "failure", reason: "no-fix" });
   });
 
   it("names one branch per incident under flare-dispatch/self-heal", () => {
-    expect(selfHealBranch("CI: acme/app #12")).toBe("flare-dispatch/self-heal-ci-acme-app-12");
-    expect(selfHealBranch("--")).toBe("flare-dispatch/self-heal");
+    expect(selfHealBranch("CI: acme/app #12")).toMatch(
+      /^flare-dispatch\/self-heal-ci-acme-app-12-[0-9a-f]{8}$/,
+    );
+    expect(selfHealBranch("CI: acme/app #12")).toBe(selfHealBranch("CI: acme/app #12"));
+    // Ids whose slugs match, whose slugs the 48-character cut makes equal, or whose slugs are empty differ by hash.
+    const repo = "ci:acme/a-repository-name-longer-than-thirty-five-characters";
+    const ids = [
+      "CI: acme/app #12",
+      "ci-acme-app-12",
+      `${repo}:1111111111111111111111111111111111111111`,
+      `${repo}:2222222222222222222222222222222222222222`,
+      "--",
+      "::",
+    ];
+    const branches = ids.map(selfHealBranch);
+    expect(new Set(branches).size).toBe(ids.length);
+    expect(branches[4]).toMatch(/^flare-dispatch\/self-heal-[0-9a-f]{8}$/);
+    for (const b of branches) expect(b.length).toBeLessThanOrEqual(84);
   });
 });
