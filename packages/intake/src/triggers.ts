@@ -14,7 +14,7 @@ import {
 import { ManifestSource, type ManifestEntry, type RepoManifest } from "./manifest.ts";
 import { ManifestReporter } from "./ports.ts";
 import { isUnavailable, ProtectionSnapshots } from "./protection.ts";
-import type { IntakeRun } from "./runs.ts";
+import type { EntryView, IntakeRun } from "./runs.ts";
 import { shed, submission, submit, type Admitted, type Submission } from "./submit.ts";
 
 /** Where the manifest is read: a branch's head, or one commit (FD-INT-016). */
@@ -134,9 +134,11 @@ export const entriesFor = (manifest: RepoManifest, trigger: string, repo: string
     });
   });
 
-export const viewOf = (entry: ManifestEntry) => ({
+/** One entry as its run's request decoder sees it, with the manifest's `skipAuthors`. */
+export const viewOf = (entry: ManifestEntry, manifest: RepoManifest): EntryView => ({
   label: entry.label ?? null,
   params: entry.params ?? {},
+  ...(manifest.skipAuthors === undefined ? {} : { skipAuthors: manifest.skipAuthors }),
 });
 
 export interface RepositoryEvent {
@@ -167,7 +169,7 @@ export const triggerWebhook = (e: RepositoryEvent) =>
     const ref = refOf(e.event.event, e.fields, defaultBranch);
     const answering = entries.flatMap(({ entry, run }) => {
       if (e.keep !== undefined && !e.keep(run, entry)) return [];
-      return Option.match(run.trigger(e.event, viewOf(entry)), {
+      return Option.match(run.trigger(e.event, viewOf(entry, manifest.value), { defaultBranch }), {
         onNone: () => [],
         onSome: (inputs) => [{ entry, run, inputs }],
       });

@@ -25,7 +25,7 @@ export const GATE_PR_ACTIONS = ["opened", "synchronize", "reopened", "ready_for_
 type Delivery<E extends WebhookDelivery["event"]> = Extract<WebhookDelivery, { event: E }>;
 
 /** The gate context of a webhook a gate answers: a gate pull-request action or a merge-group check request. */
-const gateContextOf = (delivery: WebhookDelivery): Option.Option<GateContext> =>
+export const gateContextOf = (delivery: WebhookDelivery): Option.Option<GateContext> =>
   Match.value(delivery).pipe(
     Match.when({ event: "pull_request" }, (d: Delivery<"pull_request">) =>
       (GATE_PR_ACTIONS as readonly string[]).includes(d.action)

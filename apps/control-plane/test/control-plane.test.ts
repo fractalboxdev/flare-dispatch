@@ -412,11 +412,22 @@ const PLACEMENT_REPOSITORY = {
     ".github/flare-dispatch.json": Buffer.from(
       JSON.stringify({
         version: 1,
-        runs: ["worker-deploy", "sandbox-image"].map((recipe) => ({
-          recipe,
-          triggers: ["dispatch"],
-          params: { steps: [{ label: "run", command: "true" }] },
-        })),
+        runs: [
+          {
+            recipe: "worker-deploy",
+            triggers: ["dispatch"],
+            params: { command: "pnpm deploy" },
+          },
+          {
+            recipe: "sandbox-image",
+            triggers: ["dispatch"],
+            params: {
+              images: [
+                { name: "sandbox", dockerfile: "infra/Dockerfile.sandbox", smoke: ["true"] },
+              ],
+            },
+          },
+        ],
       }),
     ).toString("base64"),
   },

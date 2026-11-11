@@ -1,13 +1,17 @@
 // The webhook route end to end: signed fixtures through the route group, the fake GitHub reads and mameko's real
 // admission transaction on SQLite.
 import { GithubHttpError } from "@fractalboxdev/flare-dispatch-github";
+import { fakeRepo } from "@fractalboxdev/flare-dispatch-github/testing";
 import { describe, expect, it } from "vitest";
+import { catalogRuns } from "./catalog.ts";
 import {
+  actionsToken,
   APP_ID,
   BASE,
   bodyOf,
   checkRunRerequested,
   checkSuiteRerequested,
+  dispatchRequest,
   harness,
   HEAD,
   manifest,
@@ -575,5 +579,170 @@ describe("other webhook events", () => {
     expect(h.reads.calls.filter((c) => c.startsWith("file"))).toHaveLength(1);
     expect(h.executions().map((e) => e.run)).toEqual(["check"]);
     expect(APP_ID).toBeGreaterThan(0);
+  });
+});
+
+describe("the catalogue's request decoders through the webhook route", () => {
+  /** A repository whose manifest, at the default branch head and at the pushed commit, lists `runs`. */
+  const catalogHarness = (runs: unknown[], extra: Record<string, unknown> = {}) => {
+    const text = JSON.stringify({ version: 1, runs, ...extra });
+    return harness({
+      settings: { catalog: catalogRuns("development") },
+      repos: {
+        [REPO]: fakeRepo({
+          branches: { main: BASE },
+          files: {
+            [`${BASE}:.github/flare-dispatch.json`]: text,
+            [`${HEAD}:.github/flare-dispatch.json`]: text,
+          },
+        }),
+      },
+    });
+  };
+  const inputsOf = (h: Harness) =>
+    h.records().map((r) => [r.run, JSON.parse(r.inputs_json as string)] as const);
+
+  const draftPullRequest = (author: string, draft: boolean, head = HEAD) => {
+    const payload = pullRequestPayload({ head });
+    return {
+      ...payload,
+      pull_request: { ...payload.pull_request, draft, user: { login: author } },
+    };
+  };
+
+  it("[FD-GATE-017] a draft pull request or an excluded author reaches check with the facts its recipe skips on", async () => {
+    const h = await catalogHarness(
+      [
+        {
+          recipe: "check",
+          label: "unit",
+          triggers: ["pull_request"],
+          params: { steps: [{ label: "unit", command: "pnpm test" }] },
+        },
+      ],
+      { skipAuthors: ["renovate[bot]"] },
+    );
+    await deliver(h, "pull_request", draftPullRequest("octocat", true));
+    await deliver(
+      h,
+      "pull_request",
+      { ...draftPullRequest("renovate[bot]", false, "e".repeat(40)), action: "reopened" },
+      "d-2",
+    );
+    expect(inputsOf(h)).toEqual([
+      [
+        "check",
+        expect.objectContaining({
+          pullRequest: { draft: true, author: "octocat" },
+          skipAuthors: ["renovate[bot]"],
+          label: "unit",
+        }),
+      ],
+      [
+        "check",
+        expect.objectContaining({
+          pullRequest: { draft: false, author: "renovate[bot]" },
+          skipAuthors: ["renovate[bot]"],
+        }),
+      ],
+    ]);
+  });
+
+  it("[FD-GATE-062] a push to the deploy branch and an Actions dispatch with an Idempotency-Key deploy one commit once", async () => {
+    const h = await catalogHarness([
+      {
+        recipe: "worker-deploy",
+        triggers: ["push", "dispatch"],
+        params: { command: "pnpm deploy" },
+      },
+    ]);
+    const pushed = await bodyOf(await deliver(h, "push", pushPayload("refs/heads/main")));
+    expect(pushed.executions).toHaveLength(1);
+    expect(inputsOf(h)).toEqual([
+      [
+        "worker-deploy",
+        expect.objectContaining({ sha: HEAD, branch: "main", entry: { command: "pnpm deploy" } }),
+      ],
+    ]);
+    const dispatched = await bodyOf(
+      await h.run(
+        handleIntake(
+          dispatchRequest(
+            "worker-deploy",
+            {
+              sha: HEAD,
+              inputs: {
+                repo: `https://github.com/${REPO}.git`,
+                sha: HEAD,
+                ref: "refs/heads/main",
+                scope: REPO,
+                branch: "main",
+                entry: { command: "pnpm deploy" },
+              },
+            },
+            { authorization: `Bearer ${actionsToken({})}`, "idempotency-key": "deploy-1" },
+          ),
+          "dispatch/worker-deploy",
+        ),
+      ),
+    );
+    expect(dispatched).toMatchObject({
+      execution_id: (pushed.executions as string[])[0],
+      duplicate: true,
+    });
+    expect(h.rows("select canonical from dedup_keys")).toEqual([
+      { canonical: `worker-deploy:${REPO}:${HEAD}` },
+    ]);
+  });
+
+  it("[FD-GATE-062] a push to another branch than workerDeploy.branch deploys nothing", async () => {
+    const h = await catalogHarness([
+      {
+        recipe: "worker-deploy",
+        triggers: ["push"],
+        params: { command: "pnpm deploy", branch: "release" },
+      },
+    ]);
+    await deliver(h, "push", pushPayload("refs/heads/main"));
+    await deliver(h, "push", pushPayload("refs/heads/feature"), "d-2");
+    expect(h.executions()).toEqual([]);
+    await deliver(h, "push", pushPayload("refs/heads/release"), "d-3");
+    expect(h.executions().map((e) => e.run)).toEqual(["worker-deploy"]);
+  });
+
+  it("[FD-GATE-070] a successful production deployment_status with an environment_url requests deploy-smoke; a failed one requests nothing", async () => {
+    const h = await catalogHarness([
+      {
+        recipe: "deploy-smoke",
+        triggers: ["deployment_status"],
+        params: { hosts: ["app.example.com"] },
+      },
+    ]);
+    const status = (state: string) => ({
+      action: "created",
+      repository: { full_name: REPO },
+      installation: { id: 7 },
+      deployment: { sha: HEAD, ref: "main", environment: "production" },
+      deployment_status: {
+        state,
+        environment: "production",
+        environment_url: "https://app.example.com",
+      },
+    });
+    await deliver(h, "deployment_status", status("failure"));
+    expect(h.executions()).toEqual([]);
+    const r = await bodyOf(await deliver(h, "deployment_status", status("success"), "d-2"));
+    expect(r.executions).toHaveLength(1);
+    expect(inputsOf(h)).toEqual([
+      [
+        "deploy-smoke",
+        {
+          scope: REPO,
+          sha: HEAD,
+          hosts: ["app.example.com"],
+          targetUrl: "https://app.example.com",
+        },
+      ],
+    ]);
   });
 });
