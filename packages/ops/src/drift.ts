@@ -1,6 +1,7 @@
 // The drift check: a rendered configuration against the template's invariants, the environment schema, the pool
-// caps and mameko's profile validator; the deployed Workers against the record of the last deploy; and the GitHub
-// App's registration against the committed manifest (specs/operability.md § Drift check). Every check here is a pure
+// caps and mameko's profile validator; the deployed Workers against the record of the last deploy; the GitHub App's
+// registration against the committed manifest (specs/operability.md § Drift check); and, for a deploy that carries
+// the `aws` kind, the AWS account's Budgets actions against the AWS limit (FD-EXEC-083). Every check here is a pure
 // function of what it compares; `fd deploy` and `fd doctor` read the inputs through the ports of deploy.ts.
 import {
   checkRegistry,
@@ -441,6 +442,189 @@ export const accessDrift = (
       ),
     ),
     ...accessAudCheck(committed, deployed),
+  ];
+};
+
+/** One budget of the deploying organization's AWS account, as AWS Budgets `DescribeBudgets` reports it. */
+export const AwsBudget = Schema.Struct({
+  name: Schema.String,
+  /** `COST`, `USAGE` and the reservation and savings-plan types. */
+  type: Schema.String,
+  limitAmount: Schema.Number,
+  limitUnit: Schema.String,
+  /** The period the budget's spend resets on: `DAILY`, `MONTHLY`, `QUARTERLY`, `ANNUALLY` or `CUSTOM`. */
+  timeUnit: Schema.String,
+  /** The budget's cost filters, by dimension; empty for a budget that measures the account's whole spend. */
+  costFilters: Schema.Record(Schema.String, Schema.Array(Schema.String)),
+});
+export type AwsBudget = typeof AwsBudget.Type;
+
+/** One statement of an IAM policy or SCP document. */
+export const AwsPolicyStatement = Schema.Struct({
+  /** `Allow` or `Deny`. */
+  effect: Schema.String,
+  /** The `Action` patterns; empty for a statement written with `NotAction`. */
+  actions: Schema.Array(Schema.String),
+  /** The `Resource` patterns; empty for a statement written with `NotResource`. */
+  resources: Schema.Array(Schema.String),
+  /** Whether the statement carries a `Condition`. */
+  conditional: Schema.Boolean,
+});
+export type AwsPolicyStatement = typeof AwsPolicyStatement.Type;
+
+/** The policy a Budgets action applies, with the principals or the organization targets it applies the policy to. */
+export const AwsActionPolicy = Schema.Struct({
+  /** The IAM policy's ARN, or the SCP's policy id. */
+  id: Schema.String,
+  /** The IAM roles, users and groups; or the SCP's target ids: accounts, organizational units and the root. */
+  targets: Schema.Array(Schema.String),
+  /** The statements of the policy's document: the IAM policy's default version, or the SCP's content. */
+  statements: Schema.Array(AwsPolicyStatement),
+});
+export type AwsActionPolicy = typeof AwsActionPolicy.Type;
+
+/** One Budgets action of the account, as `DescribeBudgetActionsForAccount` reports it. */
+export const AwsBudgetAction = Schema.Struct({
+  id: Schema.String,
+  budgetName: Schema.String,
+  /** `ACTUAL` or `FORECASTED`. */
+  notificationType: Schema.String,
+  /** `APPLY_IAM_POLICY`, `APPLY_SCP_POLICY` or `RUN_SSM_DOCUMENTS`. */
+  actionType: Schema.String,
+  /** `AUTOMATIC` or `MANUAL`. */
+  approvalModel: Schema.String,
+  /** `ABSOLUTE_VALUE`, in the budget's unit, or `PERCENTAGE` of the budget's limit. */
+  thresholdType: Schema.String,
+  thresholdValue: Schema.Number,
+  /** The policy the action's `Definition` applies; null when it names none, as a `RUN_SSM_DOCUMENTS` action does. */
+  policy: Schema.NullOr(AwsActionPolicy),
+});
+export type AwsBudgetAction = typeof AwsBudgetAction.Type;
+
+/** The account the AWS credentials belong to, with its budgets and Budgets actions. */
+export const AwsBudgets = Schema.Struct({
+  account: Schema.String,
+  budgets: Schema.Array(AwsBudget),
+  actions: Schema.Array(AwsBudgetAction),
+});
+export type AwsBudgets = typeof AwsBudgets.Type;
+
+/** The Budgets action types that apply a policy, the form a denial of new task launches takes. */
+export const POLICY_ACTION_TYPES: ReadonlySet<string> = new Set([
+  "APPLY_IAM_POLICY",
+  "APPLY_SCP_POLICY",
+]);
+
+/** The ECS calls that start a task: the launches a Budgets action must deny. */
+const LAUNCH_CALLS = ["ecs:RunTask", "ecs:StartTask"] as const;
+
+/** The Cost Explorer service the AWS kind's Fargate tasks bill under. */
+const ECS_SERVICE = "Amazon Elastic Container Service";
+
+/** Whether an IAM action pattern, with its `*` and `?` wildcards, matches `call`; action names ignore case. */
+const actionMatches = (pattern: string, call: string): boolean =>
+  new RegExp(
+    `^${pattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".")}$`,
+    "i",
+  ).test(call);
+
+/** Whether the statements deny every launch call on every resource, under no condition. */
+const deniesLaunches = (statements: readonly AwsPolicyStatement[]): boolean => {
+  const denying = statements.filter(
+    (s) => s.effect === "Deny" && !s.conditional && s.resources.includes("*"),
+  );
+  return LAUNCH_CALLS.every((call) =>
+    denying.some((s) => s.actions.some((p) => actionMatches(p, call))),
+  );
+};
+
+/** Why a budget does not measure the AWS kind's spend over the period `aws.budgetUsd` caps; null when it does. */
+const budgetGap = (budget: AwsBudget): string | null => {
+  if (budget.type !== "COST" || budget.limitUnit !== "USD")
+    return `belongs to budget ${budget.name}, which is not a USD cost budget`;
+  if (budget.timeUnit === "DAILY")
+    return `belongs to budget ${budget.name}, which resets daily and lets a month's spend run past its limit`;
+  for (const [dimension, values] of Object.entries(budget.costFilters)) {
+    if (values.length === 0) continue;
+    if (dimension !== "Service")
+      return `belongs to budget ${budget.name}, whose ${dimension} cost filter measures only part of the account's spend`;
+    if (!values.includes(ECS_SERVICE))
+      return `belongs to budget ${budget.name}, whose Service cost filter leaves out ${ECS_SERVICE}`;
+  }
+  return null;
+};
+
+/** Why an action's policy does not deny the account's launches; null when it does. */
+const policyGap = (action: AwsBudgetAction, account: string): string | null => {
+  const policy = action.policy;
+  if (policy === null) return "names no policy to apply";
+  if (!deniesLaunches(policy.statements))
+    return `applies policy ${policy.id}, which does not deny ${LAUNCH_CALLS.join(" and ")} on every resource under no condition`;
+  if (action.actionType === "APPLY_SCP_POLICY")
+    return policy.targets.some((t) => t === account || t.startsWith("r-"))
+      ? null
+      : `attaches policy ${policy.id} to neither account ${account} nor the organization root`;
+  return policy.targets.length === 0
+    ? `attaches policy ${policy.id} to no role, user or group`
+    : null;
+};
+
+/** Why one Budgets action does not deny new task launches when actual spend reaches `limitUsd`; null when it does. */
+const budgetActionGap = (
+  action: AwsBudgetAction,
+  read: AwsBudgets,
+  limitUsd: number,
+): string | null => {
+  if (action.notificationType !== "ACTUAL") return "runs on forecast spend, not actual spend";
+  if (!POLICY_ACTION_TYPES.has(action.actionType))
+    return `is ${action.actionType}, which applies no deny policy`;
+  if (action.approvalModel !== "AUTOMATIC") return "waits for manual approval";
+  const budget = read.budgets.find((b) => b.name === action.budgetName);
+  if (budget === undefined) return `names budget ${action.budgetName}, which the account lacks`;
+  const measured = budgetGap(budget);
+  if (measured !== null) return measured;
+  const atUsd =
+    action.thresholdType === "PERCENTAGE"
+      ? (budget.limitAmount * action.thresholdValue) / 100
+      : action.thresholdValue;
+  // A cent of tolerance absorbs the decimal strings AWS reports amounts in.
+  if (atUsd > limitUsd + 0.005) return `runs at ${atUsd} USD, above aws.budgetUsd ${limitUsd} USD`;
+  return policyGap(action, read.account);
+};
+
+/** The failure of a deploy that carries the `aws` kind and sets no `aws.budgetUsd`; the check reads nothing from AWS. */
+export const awsBudgetUnset: Finding = fail(
+  "aws-budget",
+  "aws.budgetUsd",
+  "the overlay carries the aws kind and sets no AWS limit for the Budgets action to enforce",
+);
+
+/**
+ * The AWS Budgets action MAMEKO-EXEC-087 requires where a deploy carries the `aws` kind (FD-EXEC-083): the account
+ * must carry an action that, with no approval step, applies a policy denying `ecs:RunTask` and `ecs:StartTask` on
+ * every resource once actual spend reaches the overlay's `aws.budgetUsd`. The action's budget must be a USD cost budget
+ * that resets no more often than monthly and measures the ECS spend: unfiltered, or filtered by a Service filter that
+ * includes ECS. An SCP must target the account or the organization root; an IAM policy must name at least one role,
+ * user or group, since the overlay names no launcher principal to match. An action that runs below the limit
+ * qualifies: launches are denied by the time spend reaches it. One failure when no action qualifies, listing why each
+ * action read falls short.
+ */
+export const awsBudgetCheck = (limitUsd: number, read: AwsBudgets): readonly Finding[] => {
+  const gaps = read.actions.map((a) => ({ a, gap: budgetActionGap(a, read, limitUsd) }));
+  if (gaps.some((g) => g.gap === null)) return [];
+  const why =
+    gaps.length === 0
+      ? "it carries no Budgets action"
+      : gaps.map((g) => `action ${g.a.id} ${g.gap!}`).join("; ");
+  return [
+    fail(
+      "aws-budget",
+      "aws.budgetAction",
+      `AWS account ${read.account} carries no Budgets action that denies new task launches when actual spend reaches aws.budgetUsd ${limitUsd} USD: ${why}`,
+    ),
   ];
 };
 
