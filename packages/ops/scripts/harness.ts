@@ -7,7 +7,7 @@
 // Each discovers its entries across the workspace: `test/diff/*.diff.ts` exporting `subject`, `test/sim/*.sim.ts`
 // exporting `scenarios` and `test/replay/*.replay.ts` exporting `workflows`. `diff` requires the `stagedWriteGate`
 // subject; `--emit` writes the regression line or the failing seeds a nightly run appends through a pull request.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -18,10 +18,10 @@ import {
 } from "../src/verification/diff.ts";
 import {
   PR_SEEDS,
+  readKeptSeeds,
   runReplays,
   runSims,
   seedsToKeep,
-  type KeptSeed,
   type ReplayWorkflow,
   type SimScenario,
 } from "../src/verification/harness.ts";
@@ -82,13 +82,7 @@ if (job === "diff") {
   }
 } else if (job === "sim") {
   const scenarios = await discover<SimScenario>(".sim.ts", "sim", "scenarios");
-  const seedsFile = join(ROOT, "test/sim/seeds.jsonl");
-  const kept = existsSync(seedsFile)
-    ? readFileSync(seedsFile, "utf8")
-        .split("\n")
-        .filter((l) => l.trim() !== "")
-        .map((l) => JSON.parse(l) as KeptSeed)
-    : [];
+  const kept = readKeptSeeds();
   const failures = await runSims(scenarios, Number(opts.get("seeds") ?? PR_SEEDS), kept);
   for (const f of failures) console.error(`sim: ${f.scenario} seed ${f.seed}: ${f.message}`);
   emit(seedsToKeep(failures, kept));

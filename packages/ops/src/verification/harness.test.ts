@@ -8,8 +8,11 @@ import {
   type DiffSubject,
 } from "./diff.ts";
 import {
+  readKeptSeeds,
   runReplays,
   runSims,
+  seededRandom,
+  seedsOf,
   seedsToKeep,
   type ReplayEffect,
   type ReplayWorkflow,
@@ -83,6 +86,16 @@ describe("sim and replay", () => {
     expect(seedsToKeep(failures, [{ scenario: "late-result", seed: 4242 }])).toEqual([
       { scenario: "late-result", seed: 7 },
     ]);
+    expect(
+      seedsOf("late-result", 3, [
+        { scenario: "late-result", seed: 2 },
+        { scenario: "other", seed: 9 },
+      ]),
+    ).toEqual([2, 1, 3]);
+    expect(readKeptSeeds("/nonexistent/seeds.jsonl")).toEqual([]);
+    const draws = (seed: number) => Array.from({ length: 4 }, seededRandom(seed));
+    expect(draws(7)).toEqual(draws(7));
+    expect(draws(7)).not.toEqual(draws(8));
   });
 
   it("[FD-VER-025] a second run over the journal that makes an effect the first did not fails, naming it", async () => {
