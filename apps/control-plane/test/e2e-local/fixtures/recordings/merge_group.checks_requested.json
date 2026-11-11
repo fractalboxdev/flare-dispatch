@@ -1,0 +1,30 @@
+{
+  "action": "checks_requested",
+  "merge_group": {
+    "head_sha": "9999999999999999999999999999999999999999",
+    "head_ref": "refs/heads/gh-readonly-queue/main/pr-12-2222222222222222222222222222222222222222",
+    "base_sha": "2222222222222222222222222222222222222222",
+    "base_ref": "refs/heads/main",
+    "head_commit": {
+      "id": "9999999999999999999999999999999999999999",
+      "tree_id": "8888888888888888888888888888888888888888",
+      "message": "Merge pull request #12 from acme/feature",
+      "timestamp": "2026-11-11T09:00:00Z",
+      "author": { "name": "octocat", "email": "octocat@users.noreply.github.com" },
+      "committer": { "name": "GitHub", "email": "noreply@github.com" }
+    }
+  },
+  "repository": {
+    "id": 700000001,
+    "name": "widgets",
+    "full_name": "acme/widgets",
+    "private": false,
+    "owner": { "login": "acme", "id": 9919, "type": "Organization" },
+    "html_url": "https://github.com/acme/widgets",
+    "clone_url": "https://github.com/acme/widgets.git",
+    "default_branch": "main"
+  },
+  "organization": { "login": "acme", "id": 9919 },
+  "sender": { "login": "octocat", "id": 583231, "type": "User" },
+  "installation": { "id": 41000001, "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNDEwMDAwMDE=" }
+}

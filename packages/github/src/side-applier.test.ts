@@ -654,9 +654,13 @@ describe("write authority", () => {
   it("[FD-GH-001] only the appliers call a GitHub write for an execution", () => {
     const writeCall =
       /\.(createCheckRun|updateCheckRun|createComment|createReview|createIssue|updateIssue|addLabels|removeLabel|createBlob|createTree|createCommit|setBranch|createPull|closePull|createDraftRelease|publishRelease|uploadAsset)\(/;
-    const callers = files.filter((f) => writeCall.test(readFileSync(f, "utf8"))).map(rel);
+    // The agentic package's `pr.propose` and `pr.close` appliers write too, so its sources are scanned as well.
+    const callers = [...files, ...sources(join(root, "agentic/src"))]
+      .filter((f) => writeCall.test(readFileSync(f, "utf8")))
+      .map(rel);
     // `intake/src/ports.ts` posts the `flare-dispatch/manifest` check run, which belongs to no execution.
     expect(callers.sort()).toEqual([
+      "agentic/src/writeback/applier.ts",
       "github/src/applier.ts",
       "github/src/side-applier.ts",
       "intake/src/ports.ts",
