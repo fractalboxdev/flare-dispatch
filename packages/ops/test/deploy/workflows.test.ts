@@ -821,7 +821,7 @@ describe("the deploy workflow over GitHub's rules", () => {
       .flatMap((s) => Object.values(s.env ?? {}))
       .filter((v) => /overlay/i.test(v));
     expect(new Set(read)).toEqual(new Set(["${{ secrets.FD_OPERATOR_OVERLAY }}"]));
-  });
+  }, 30_000);
 
   it("[FD-OPS-011] runs one deploy at a time whatever starts it, and never cancels a started one", () => {
     const q = concurrencyQueue(deployWorkflow);

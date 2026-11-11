@@ -374,6 +374,17 @@ const settle = async () => {
 };
 
 /**
+ * Waits until the route has called `key` more than `before` times, then settles, so the read's sleep and its 10 s
+ * timeout are on the test clock before the clock moves. A clock advanced before they register never fires them.
+ */
+const started = async (calls: readonly string[], key: string, before: number) => {
+  const count = () => calls.filter((c) => c === key).length;
+  for (let i = 0; i < 10_000 && count() <= before; i++)
+    await new Promise((r) => setTimeout(r, 0));
+  await settle();
+};
+
+/**
  * Pull request webhooks whose manifest read answers at once, fails with a GitHub `5xx`, answers slowly within 10 s or
  * stalls past 10 s, pushes to the base branch that move the manifest's commit, and clock advances through the 10 min
  * manifest cache. The model keeps the cache. A read that fails or stalls submits nothing and records one `shed` row
@@ -439,13 +450,14 @@ export const simulateManifestRead = async (seed: number): Promise<SimOutcome> =>
     const head = pick(random, HEADS);
     const sheds = h.sheds().length;
     const executions = h.executions().length;
+    const reads = h.reads.calls.filter((c) => c === fileKey).length;
     let done = false;
     const answer = deliver(h, "pull_request", pullRequestPayload({ head }), `d-${++next}`).then(
       (a) => ((done = true), a),
     );
     let elapsed = 0;
     if (!cached && delay > 0) {
-      await settle();
+      await started(h.reads.calls, fileKey, reads);
       // The read is in flight: a slow one answers at its delay, a stalled one is given up on at 10 s.
       const until = Math.min(delay, 10_000);
       await h.adjust(until - 1);
