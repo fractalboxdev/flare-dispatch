@@ -16,6 +16,8 @@ import {
   sandboxImageDecoder,
   WorkerDeployEntrySchema,
   workerDeployDecoder,
+  WorkerDeployInput,
+  workerDeploySerialGroup,
   type CatalogEntry,
   type CheckInput,
   type DispatchEvent as CatalogEvent,
@@ -100,6 +102,21 @@ export const requestDecoderOf =
     );
   };
 
+/**
+ * The serial group of a request to a run that declares `serialize`: a `worker-deploy` request joins its repository,
+ * branch and label's group (FD-GATE-063); an input that does not decode joins none.
+ */
+const serialKeyOf = (entry: CatalogEntry): Pick<IntakeRun, "serialKey"> =>
+  entry.spec.serialize === true && entry.spec.name === "worker-deploy"
+    ? {
+        serialKey: (inputs) =>
+          Option.match(Schema.decodeUnknownOption(WorkerDeployInput)(inputs), {
+            onNone: () => null,
+            onSome: (i) => workerDeploySerialGroup(i.scope, i.branch, i.entry.label),
+          }),
+      }
+    : {};
+
 /** The deployment's runs; a run the deployment refuses to execute is not in its catalogue. */
 export const catalogRuns =
   (deployment: Deployment): RunCatalog =>
@@ -119,6 +136,7 @@ export const catalogRuns =
         retries: entry.spec.retries,
         grants: { setup: [...entry.spec.grants.setup], agent: [...entry.spec.grants.agent] },
         placement: (inputs) => requestPlacement(entry.spec, inputs),
+        ...serialKeyOf(entry),
       })),
       Match.orElse(() => undefined),
     );

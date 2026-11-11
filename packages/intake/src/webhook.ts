@@ -4,7 +4,7 @@
 // specs/github-output.md § Merge queue, FD-GH-066).
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { Clock, Effect, Option, Schema } from "effect";
-import { IntakeConfig, intakeError } from "./config.ts";
+import { Admission, IntakeConfig, intakeError } from "./config.ts";
 import { commitOf, isForkPr, WebhookFields, type WebhookEvent } from "./event.ts";
 import { json, parseJson, readBody } from "./http.ts";
 import { ExecutionCanceller, InstallationEviction } from "./ports.ts";
@@ -74,6 +74,26 @@ const mergeGroup = (event: WebhookEvent, fields: WebhookFields, repo: string, sh
     });
   });
 
+/**
+ * `pull_request` `closed`: every supersession group of the pull request, `<owner>/<repo>:<number>:*`, is cancelled with
+ * cause `pr-closed` through mameko's group cancel (FD-PROF-030, MAMEKO-ADM-064). A closed pull request submits no run.
+ */
+const pullRequestClosed = (repo: string, number: number) =>
+  Effect.gen(function* () {
+    const admission = yield* Admission;
+    const groups = yield* (yield* IntakeStore).liveSupersessionGroups(repo, `${repo}:${number}:`);
+    const cancelled = yield* Effect.forEach(groups, (key) =>
+      admission
+        .cancelGroup(key, "pr-closed")
+        .pipe(
+          Effect.catchTag("IntakeUnavailable", (e) =>
+            Effect.fail(intakeError(503, "intake_unavailable", `group cancel failed: ${e.cause}`)),
+          ),
+        ),
+    );
+    return json({ executions: [], cancelled: cancelled.flat() }, 202);
+  });
+
 /** A signed, parsed delivery, routed by event. */
 const route = (event: WebhookEvent, fields: WebhookFields) =>
   Effect.gen(function* () {
@@ -109,6 +129,12 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
           : rerunCheckSuite(fields, repo),
       );
     }
+    if (
+      event.event === "pull_request" &&
+      event.action === "closed" &&
+      fields.pull_request !== undefined
+    )
+      return yield* pullRequestClosed(repo, fields.pull_request.number);
     const sha = commitOf(fields);
     if (Option.isNone(sha)) {
       yield* shed(repo, null, "intake: no commit");

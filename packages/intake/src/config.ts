@@ -7,6 +7,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import {
   admit,
+  composedGroupCancel,
   type AdmitAnswer,
   type ConstraintParams,
   type ExecutionPayload,
@@ -15,7 +16,7 @@ import {
 } from "@fractalboxdev/mameko-coordinator";
 import { d1ExecutionStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
 import type { Caller, RecordedTrigger } from "./event.ts";
 import type { IntakeRun, RunCatalog } from "./runs.ts";
 
@@ -93,6 +94,13 @@ export interface IntakeAdmitInput {
   };
   readonly maxDurationSec: number;
   readonly grants: { readonly setup: readonly string[]; readonly agent: readonly string[] };
+  /**
+   * The supersession group the request joins, from the profile's `supersessionKey` binding; null or absent joins none
+   * (MAMEKO-ADM-061, FD-PROF-027).
+   */
+  readonly supersessionKey?: string | null;
+  /** The serial group the request joins, for a run that declares `serialize`; null or absent joins none (MAMEKO-ADM-067). */
+  readonly serialKey?: string | null;
 }
 
 /** Admission did not answer: the store transaction failed, and nothing was written. */
@@ -125,6 +133,14 @@ export class Admission extends Context.Service<
     ) => Effect.Effect<AdmitAnswer, IntakeUnavailable | ExecutionStartFailed>;
     /** Runs after a request is queued, for the caller to wake standing claims. */
     readonly queued: (className: string) => Effect.Effect<void>;
+    /**
+     * Cancels every live member of one supersession group with `cause`, and answers their ids (MAMEKO-ADM-064). A cause
+     * outside the profile's closed set is `misconfigured`.
+     */
+    readonly cancelGroup: (
+      supersessionKey: string,
+      cause: string,
+    ) => Effect.Effect<readonly string[], IntakeUnavailable | IntakeError>;
   }
 >()("@fractalboxdev/flare-dispatch-intake/Admission") {}
 
@@ -137,6 +153,11 @@ export interface AdmissionPorts {
     payload: ExecutionPayload,
   ) => Effect.Effect<void, ExecutionStartFailed>;
   readonly alarms?: Layer.Layer<AlarmPort>;
+  /**
+   * Records the cancel of an execution's workflow and its lease, for a member a supersession or a group cancel ended
+   * (MAMEKO-ADM-062, MAMEKO-ADM-065); absent, the member's workflow ends at its deadline.
+   */
+  readonly cancelExecution?: (executionId: string, cause: string) => Effect.Effect<void>;
   /**
    * Whether an operator has quarantined the repository (MAMEKO-ADM-037). The operator operations are not served yet,
    * so no repository is quarantined while this is absent.
@@ -158,6 +179,27 @@ const loggedAlarms = Layer.succeed(AlarmPort, {
 export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts = {}) =>
   Layer.succeed(Admission, {
     queued: ports.queued ?? (() => Effect.void),
+    cancelGroup: (supersessionKey, cause) =>
+      Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        composedGroupCancel({
+          profile,
+          supersessionKey,
+          groupKind: "supersession",
+          cause,
+          now,
+          cancelExecution: ports.cancelExecution ?? (() => Effect.void),
+        }),
+      ).pipe(
+        Effect.provide(d1ExecutionStore(db)),
+        Effect.catchTags({
+          CancelCauseUndeclared: (e) =>
+            Effect.fail(
+              intakeError(503, "misconfigured", `the profile declares no cancel cause ${e.cause}`),
+            ),
+          ExecutionIntakeUnavailable: (e) =>
+            Effect.fail(new IntakeUnavailable({ cause: String(e.cause) })),
+        }),
+      ),
     admit: (input) =>
       Effect.gen(function* () {
         const quarantined =
@@ -218,6 +260,11 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
               ? () => Effect.void
               : (payload) => Effect.orDie(ports.startExecution!(payload)),
           grants: input.grants,
+          supersessionKey: input.supersessionKey ?? null,
+          serialKey: input.serialKey ?? null,
+          ...(ports.cancelExecution === undefined
+            ? {}
+            : { cancelExecution: ports.cancelExecution }),
         }).pipe(
           Effect.provide(Layer.merge(d1ExecutionStore(db), ports.alarms ?? loggedAlarms)),
           Effect.catch((cause) =>

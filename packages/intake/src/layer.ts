@@ -40,6 +40,8 @@ export interface IntakeLayerOptions {
   readonly queued?: (className: string) => Effect.Effect<void>;
   /** Starts an admitted execution's `Execution` workflow (MAMEKO-ADM-029). */
   readonly startExecution?: AdmissionPorts["startExecution"];
+  /** Cancels a superseded or group-cancelled member's workflow and lease (MAMEKO-ADM-062, MAMEKO-ADM-065). */
+  readonly cancelExecution?: AdmissionPorts["cancelExecution"];
   readonly alarms?: AdmissionPorts["alarms"];
 }
 
@@ -50,6 +52,9 @@ export const intakeLayer = (options: IntakeLayerOptions) =>
     d1Admission(options.db, options.settings.profile, {
       ...(options.queued === undefined ? {} : { queued: options.queued }),
       ...(options.startExecution === undefined ? {} : { startExecution: options.startExecution }),
+      ...(options.cancelExecution === undefined
+        ? {}
+        : { cancelExecution: options.cancelExecution }),
       ...(options.alarms === undefined ? {} : { alarms: options.alarms }),
     }),
     d1IntakeStore(options.db),

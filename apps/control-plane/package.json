@@ -22,6 +22,7 @@
     "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
     "@fractalboxdev/mameko-kernel": "workspace:*",
     "@fractalboxdev/mameko-ports": "workspace:*",
+    "@fractalboxdev/mameko-store-sqlite": "workspace:*",
     "effect": "4.0.6"
   },
   "devDependencies": {

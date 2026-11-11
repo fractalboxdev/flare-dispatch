@@ -25,6 +25,8 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import type { ExecutionPayload } from "@fractalboxdev/mameko-coordinator";
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
+import { d1Sql } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { cancelledLease } from "@fractalboxdev/mameko-store-sqlite";
 import { Context, Effect, Layer, Scope } from "effect";
 import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { devRepositoryOf } from "./dev-repository.ts";
@@ -92,10 +94,36 @@ export const startExecutionOf =
         }),
     }).pipe(Effect.asVoid);
 
-/** What admission needs of the Worker: the wake-up after a queued admission, the workflow start and the alarm sink. */
+/**
+ * The cancel of a member a supersession or a group cancel recorded `cancelled`: its `ExecutionEngine` records the cancel,
+ * which ends its wait for a lease or a result (MAMEKO-ADM-062), and a leased member's executor gets `exec.cancel` over
+ * its channel (MAMEKO-ADM-065).
+ */
+export const cancelExecutionOf =
+  (env: Pick<ControlPlaneEnv, "DB" | "EXECUTION" | "CHANNEL">) =>
+  (executionId: string, cause: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        env.EXECUTION.get(env.EXECUTION.idFromName(executionId)).cancel(executionId, cause),
+      );
+      const lease = yield* cancelledLease(executionId, cause).pipe(
+        Effect.provide(d1Sql(env.DB)),
+        Effect.orDie,
+      );
+      if (lease !== null)
+        yield* Effect.promise(() =>
+          env.CHANNEL.get(env.CHANNEL.idFromName(lease.executorId)).cancelLease(lease.frame),
+        );
+    });
+
+/**
+ * What admission needs of the Worker: the wake-up after a queued admission, the workflow start, the cancel of a
+ * superseded member and the alarm sink.
+ */
 const admissionPorts = (env: ControlPlaneEnv, alarms: AdmissionPorts["alarms"]) => ({
   queued: wake(env),
   startExecution: startExecutionOf(env),
+  cancelExecution: cancelExecutionOf(env),
   alarms,
 });
 
