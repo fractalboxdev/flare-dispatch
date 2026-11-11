@@ -70,7 +70,7 @@ export const installationLimitKey = Effect.gen(function* () {
     );
 });
 
-/** Every intake service except `ClassResolver` and `AccessIdentity`; needs the GitHub services. */
+/** Every intake service except `ClassResolver`; needs the GitHub services. */
 export const intakeLayer = (options: IntakeLayerOptions) =>
   Layer.mergeAll(
     Layer.succeed(IntakeConfig, options.settings),
