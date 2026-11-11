@@ -182,8 +182,9 @@ interface AppState {
 /** GitHub routes owner and repository names case-insensitively, so the mapping does too. */
 const repoKey = (repo: string) => repo.toLowerCase();
 
-const appCall = (
-  options: AppOptions,
+/** One call to the GitHub API under `authorization`, through the App's injected `fetch`. */
+export const appCall = (
+  options: Pick<AppOptions, "fetch" | "baseUrl">,
   authorization: string,
   method: string,
   path: string,

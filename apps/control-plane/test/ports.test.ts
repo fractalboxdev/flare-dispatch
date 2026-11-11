@@ -14,6 +14,13 @@ describe("the composition's application ports", () => {
     expect(missingPorts(buildProfile("development"), suppliedPorts(withApp))).toEqual([]);
   });
 
+  it("[FD-ARCH-039] a deploy with the GitHub App supplies the credential minter, and one without it supplies none", () => {
+    expect(suppliedPorts(env({ GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" }))).toContain(
+      "credential-minter",
+    );
+    expect(suppliedPorts(env({}))).not.toContain("credential-minter");
+  });
+
   it("[FD-ARCH-039] MAMEKO-HOST-046 names the applier ports a deploy without the App lacks", () => {
     expect(missingPorts(buildProfile("production"), suppliedPorts(env({})))).toEqual([
       "actuator",
