@@ -6,7 +6,9 @@ import { Effect, Match, Option, Result } from "effect";
 import { IntakeConfig, type IntakeError } from "./config.ts";
 import {
   cacheTriggerOf,
+  inputAssociationsOf,
   protectableRefOf,
+  repositoryPublicOf,
   type DispatchEvent,
   type RecordedTrigger,
   type WebhookFields,
@@ -215,6 +217,8 @@ export const webhookSubmissions = (e: RepositoryEvent) =>
         defaultBranch,
         targetBranch,
         refProtection,
+        repositoryPublic: repositoryPublicOf(e.fields),
+        inputAssociations: inputAssociationsOf(e.fields),
       }),
     );
   }).pipe(
