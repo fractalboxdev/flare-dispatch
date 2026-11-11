@@ -2,10 +2,8 @@
 // record and, for a refusal before admission, a shed row; every `executions`,
 // dedup-key and `placements` row is admission's.
 import {
-  eligibleKinds,
   placementInputs,
   type ConfidentialityMode,
-  type EligibleSet,
   type PlacementRequest,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
@@ -17,6 +15,7 @@ import {
   ClassResolver,
   IntakeConfig,
   intakeError,
+  type ExecutionStartFailed,
   type IntakeAdmitInput,
   type IntakeError,
 } from "./config.ts";
@@ -107,6 +106,25 @@ export interface Admitted {
 
 type Concluded = Extract<AdmitAnswer, { readonly _tag: "Concluded" }>;
 
+/** Admission's answer, where a failed workflow start after the commit still leaves the execution queued. */
+type Answer = AdmitAnswer | { readonly _tag: "Queued"; readonly executionId: string };
+
+/**
+ * The execution committed queued and its workflow start failed; the admission sweep starts it (MAMEKO-ADM-031), so
+ * intake answers it as queued.
+ */
+const queuedUnstarted = (e: ExecutionStartFailed) =>
+  Effect.as(
+    Effect.logWarning(
+      "execution workflow start failed after admission; the admission sweep starts it",
+      {
+        executionId: e.executionId,
+        cause: e.cause,
+      },
+    ),
+    { _tag: "Queued", executionId: e.executionId } as const,
+  );
+
 const concludedReason = (c: Concluded): string =>
   Match.value(c.outcome).pipe(
     Match.when("failure", () => c.reason ?? "failure"),
@@ -161,14 +179,6 @@ const placementRequest = (
     ...(confidentiality === undefined ? {} : { confidentiality }),
   };
 };
-
-export const placementOf = (
-  profile: Profile,
-  s: Submission,
-  className: string,
-  labels: readonly string[],
-  confidentiality?: ConfidentialityMode,
-): EligibleSet => eligibleKinds(profile, placementRequest(s, className, labels, confidentiality));
 
 /** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-084). */
 const admissionPlacement = (
@@ -247,7 +257,6 @@ export const submit = (
     const labels = [...new Set([...resolved.labels, ...s.extraLabels, ...untrusted])];
     const notBefore = cooldown?.notBefore ?? null;
     const confidentiality = config.confidentiality(s.repo);
-    const placement = placementOf(config.profile, s, className, labels, confidentiality);
     const record: IntakeRecord = {
       executionId: id,
       trigger: s.trigger,
@@ -257,8 +266,6 @@ export const submit = (
       sha: s.sha,
       ref: s.ref,
       inputs: s.inputs,
-      // A held request's duration counts from the end of its window.
-      deadlineAtMs: (notBefore ?? now) + s.run.maxDurationSec * 1000,
       className,
       labels,
       attempt: s.attempt,
@@ -269,7 +276,8 @@ export const submit = (
       spendLine: s.spendLine,
       placementConstraint: s.placementConstraint,
       cacheTrigger: s.cacheTrigger,
-      eligibleKinds: placement.kinds,
+      // Admission decides the kinds; `placed` copies them from its placement row once it answers.
+      eligibleKinds: null,
       createdAt: now,
     };
     // mameko's `admit` writes the execution, dedup key and placement rows under this id in one transaction, with the
@@ -286,6 +294,7 @@ export const submit = (
         sha256: key.sha256,
         canonical: key.canonical,
         requestDigest: key.requestDigest,
+        digestBody: key.requestDigest === null ? null : (s.idempotency?.body ?? null),
         onMismatch: key.onMismatch,
       },
       placement: admissionPlacement(config.profile, s, className, labels, confidentiality),
@@ -323,34 +332,35 @@ export const submit = (
 
     // The record goes in first, so a device that claims the moment admission commits finds the inputs.
     yield* store.put(record);
-    const admitted = yield* admission
-      .admit(admitInput)
-      .pipe(
-        Effect.catchTag("IntakeUnavailable", () =>
+    const admitted: Answer = yield* admission.admit(admitInput).pipe(
+      Effect.catchTags({
+        IntakeUnavailable: () =>
           Effect.andThen(
             store.drop(id),
             Effect.fail(
               intakeError(503, "intake_unavailable", "admission failed; nothing was written"),
             ),
           ),
-        ),
-      );
+        ExecutionStartFailed: queuedUnstarted,
+      }),
+    );
     return yield* Match.value(admitted).pipe(
       Match.tag("Queued", ({ executionId }) =>
         Effect.gen(function* () {
+          yield* store.placed(executionId);
           if (cooldown !== null) yield* store.armCooldown(cooldown.bucket, executionId, now);
           yield* admission.queued(className);
           return { executionId, className, duplicate: false, concluded: null, notBefore: null };
         }),
       ),
       Match.tag("Concluded", (c) =>
-        Effect.succeed<Admitted>({
+        Effect.as(store.placed(c.executionId), {
           executionId: c.executionId,
           className,
           duplicate: false,
           concluded: concludedReason(c),
           notBefore: null,
-        }),
+        } satisfies Admitted),
       ),
       Match.tag("Duplicate", ({ executionId }) =>
         Effect.as(store.drop(id), {
@@ -393,7 +403,9 @@ export interface ReleaseReport {
 
 /**
  * Admits every held request whose cooldown window has ended (FD-INT-057). An admitted request arms its bucket's window
- * from now; a request admission answers as a duplicate or a conflict loses its record, as at submit.
+ * from now; a request admission answers as a duplicate of another execution, or as a conflict, loses its record, as at
+ * submit. A duplicate of the request's own id is a release whose admission committed before an earlier pass ended: it
+ * is admitted when that admission wrote a placement row, and concluded, arming no window, when it did not.
  */
 export const releaseHeld = (
   limit: number = RELEASE_PER_PASS,
@@ -409,29 +421,42 @@ export const releaseHeld = (
     let unavailable = 0;
     for (const held of due) {
       const id = held.admit.executionId;
-      const result = yield* admission
+      const result: Answer | null = yield* admission
         .admit({ ...held.admit, enqueuedAtMs: now })
-        .pipe(Effect.catchTag("IntakeUnavailable", () => Effect.succeed(null)));
+        .pipe(
+          Effect.catchTags({
+            IntakeUnavailable: () => Effect.succeed(null),
+            ExecutionStartFailed: queuedUnstarted,
+          }),
+        );
       if (result === null) {
         unavailable++;
         continue;
       }
+      // The placement row tells a queued execution from one admission concluded, whichever pass admitted it.
+      const answered = Effect.gen(function* () {
+        yield* store.release(id);
+        if (!(yield* store.placed(id))) {
+          concluded++;
+          return;
+        }
+        yield* store.armCooldown(held.cooldownBucket, id, now);
+        yield* admission.queued(held.admit.className);
+        admitted++;
+      });
       yield* Match.value(result).pipe(
-        Match.tag("Queued", () =>
-          Effect.gen(function* () {
-            yield* store.release(id);
-            yield* store.armCooldown(held.cooldownBucket, id, now);
-            yield* admission.queued(held.admit.className);
-            admitted++;
-          }),
+        Match.tag("Queued", () => answered),
+        Match.tag("Concluded", () => answered),
+        Match.tag("Duplicate", ({ executionId }) =>
+          executionId === id
+            ? answered
+            : Effect.gen(function* () {
+                yield* store.release(id);
+                yield* store.drop(id);
+                duplicate++;
+              }),
         ),
-        Match.tag("Concluded", () =>
-          Effect.andThen(
-            store.release(id),
-            Effect.sync(() => void concluded++),
-          ),
-        ),
-        Match.tag("Duplicate", "Conflict", () =>
+        Match.tag("Conflict", () =>
           Effect.gen(function* () {
             yield* store.release(id);
             yield* store.drop(id);

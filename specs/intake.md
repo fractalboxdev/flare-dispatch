@@ -103,6 +103,8 @@ flowchart TB
 
 *Intake path · authentication and the manifest come before the request; quarantine, class, placeability and dedup are mameko's admission.*
 
+Intake writes its record before admission, so a device that claims the moment admission commits finds the inputs, and copies the eligible kinds admission wrote on the placement row into the record once admission answers; an execution admission concludes without a placement row records none. Admission hashes the dispatch body's canonical JSON into the request digest itself, so intake hands it the body and compares the same digest when a retry arrives inside a cooldown window. A workflow start that fails after admission's commit leaves the execution queued with no recorded engine start, and the intake answer is `202` as for any queued execution; the admission sweep starts the workflow ([MAMEKO-ADM-031](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/admission-qos.md)). A lease carries the `deadline_at` admission wrote on the execution row.
+
 ### Webhook delivery and redelivery
 
 ```mermaid

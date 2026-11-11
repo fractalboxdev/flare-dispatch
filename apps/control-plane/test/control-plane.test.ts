@@ -293,6 +293,22 @@ describe("a development deployment", () => {
       inputs: dispatchBody(sha).inputs,
       credentials: {},
     });
+    // The lease carries the deadline admission wrote on the execution and placement rows, and the gate run's input
+    // carries it too (FD-GATE-007).
+    const [deadlines] = (
+      await (
+        await development.getD1Database("DB")
+      )
+        .prepare(
+          `select e.deadline_at as execution, p.deadline_at as placement from executions e
+           join placements p on p.execution_id = e.id where e.id = ?`,
+        )
+        .bind(id)
+        .all()
+    ).results as { execution: number; placement: number }[];
+    expect(deadlines!.placement).toBe(deadlines!.execution);
+    expect(lease["deadline_at"]).toBe(deadlines!.execution);
+    expect((lease["inputs"] as { deadlineAt: unknown }).deadlineAt).toBe(deadlines!.execution);
     const epoch = lease["epoch"];
     // A device restores the device and content tiers and writes none for a dispatch (FD-CACHE-016).
     expect(lease["upload_grant"]).toMatchObject({

@@ -17,7 +17,6 @@ const record = (cacheTrigger: IntakeRecord["cacheTrigger"]): IntakeRecord => ({
   sha: "a".repeat(40),
   ref: "refs/heads/main",
   inputs: {},
-  deadlineAtMs: 0,
   className: "required",
   labels: [],
   attempt: 1,

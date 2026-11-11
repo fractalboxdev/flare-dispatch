@@ -9,7 +9,7 @@ import {
 } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect, Match } from "effect";
 import { leaseCache } from "./cache.ts";
-import { imageDigestOf } from "./lease.ts";
+import { gateInputs, imageDigestOf } from "./lease.ts";
 import {
   channelConfig,
   deployment,
@@ -39,24 +39,31 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
     super(ctx, { ...env, MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)) });
   }
 
-  /** The inputs and deadline intake recorded for a won claim. */
+  /**
+   * The inputs intake recorded for a won claim, and the `deadline_at` admission wrote on the execution row
+   * (MAMEKO-EXEC-002), which a gate run's input carries as its `deadlineAt` (FD-GATE-007).
+   */
   protected override leaseFields(executionId: string): Promise<ClaimedLease> {
     const env = this.env;
     return Effect.runPromise(
       Effect.gen(function* () {
         const record = yield* (yield* IntakeStore).get(executionId);
         if (record === null) return yield* new ExecutionInputsMissing({ executionId });
-        const { inputs, deadlineAtMs } = record;
         const { results } = yield* Effect.promise(() =>
           env.DB.prepare(
-            `select e.run, e.scope_id, x.kind from executions e
+            `select e.run, e.scope_id, e.deadline_at, x.kind from executions e
              left join placements p on p.execution_id = e.id
              left join executors x on x.executor_id = p.executor_id where e.id = ?`,
           )
             .bind(executionId)
             .all(),
         );
-        const row = results[0] as { run: string; scope_id: string; kind: string | null };
+        const row = results[0] as {
+          run: string;
+          scope_id: string;
+          deadline_at: number;
+          kind: string | null;
+        };
         const entry = Match.value(lookupRun(deployment(env), row.run)).pipe(
           Match.tag("Available", ({ entry }) => entry),
           Match.orElse(() => null),
@@ -70,12 +77,12 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           request_context: null,
           image_digest: yield* imageDigestOf(entry, row.kind ?? "device", env.GATE_IMAGE_DIGEST),
           scope_id: row.scope_id,
-          inputs,
-          deadline_at: deadlineAtMs,
+          inputs: gateInputs(entry, record.inputs, row.deadline_at),
+          deadline_at: row.deadline_at,
           server_now: Date.now(),
           progress_timeout_ms: PROGRESS_TIMEOUT_MS,
           credentials: {},
-          ...(yield* Effect.promise(() => leaseCache(env, record))),
+          ...(yield* Effect.promise(() => leaseCache(env, record, row.deadline_at))),
           nonce: crypto.randomUUID(),
         } satisfies ClaimedLease;
       }).pipe(Effect.provide(d1IntakeStore(env.DB))),

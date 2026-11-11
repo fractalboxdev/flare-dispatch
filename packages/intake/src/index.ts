@@ -4,6 +4,7 @@ export {
   boundsOf,
   ClassResolver,
   d1Admission,
+  ExecutionStartFailed,
   IntakeConfig,
   IntakeError,
   intakeError,
