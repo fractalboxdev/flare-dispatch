@@ -139,12 +139,26 @@ describe("executions", () => {
       const id = `01JEXEC${i}`;
       h.doubles.executions.set(
         id,
-        record({ execution_id: id, status: i % 2 === 0 ? "done" : "running" }),
+        record({
+          execution_id: id,
+          status: i % 2 === 0 ? "done" : "running",
+          finished_at: i % 2 === 0 ? 100 + i : null,
+        }),
       );
     }
   });
 
   it("[FD-IFC-037]: the list filters, pages newest first and returns next_before while more rows exist", async () => {
+    const since = await json(
+      await h.fetch("/v1/executions?finished_since=102", await h.asAccess(MEMBER)),
+    );
+    expect((since["executions"] as { execution_id: string }[]).map((e) => e.execution_id)).toEqual([
+      "01JEXEC4",
+      "01JEXEC2",
+    ]);
+    expect(
+      (await h.fetch("/v1/executions?finished_since=-1", await h.asAccess(MEMBER))).status,
+    ).toBe(400);
     const first = await json(await h.fetch("/v1/executions?limit=2", await h.asAccess(MEMBER)));
     const ids = (first["executions"] as { execution_id: string }[]).map((e) => e.execution_id);
     expect(ids).toEqual(["01JEXEC4", "01JEXEC3"]);
@@ -171,6 +185,7 @@ describe("executions", () => {
       "conclusion",
       "reserved_micro_usd",
       "settled_micro_usd",
+      "finished_at",
     ])
       expect(view).toHaveProperty(key);
     expect(view).not.toHaveProperty("input_json");

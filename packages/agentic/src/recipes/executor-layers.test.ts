@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { memoryD1 } from "../local/d1.test-support.ts";
 import { artifactPrefixSink } from "../staged-write/build.ts";
 import { STAGED_WRITE_MANIFEST } from "../staged-write/manifest.ts";
-import { ExecutionsRead, reportPath } from "./ci-triage-pr.ts";
+import { CI_TRIAGE_WINDOW_MS, ExecutionsRead, reportPath } from "./ci-triage-pr.ts";
 import {
   artifactsLayer,
   checkoutLayer,
@@ -19,7 +19,7 @@ import {
   shellLayer,
   type CloudAgenticConfig,
 } from "./executor-layers.ts";
-import { executionsReadLayer, type LogObjects } from "./executions-read.ts";
+import { executionsApiReadLayer, executionsReadLayer, type LogObjects } from "./executions-read.ts";
 import { payload } from "./fakes.test-support.ts";
 import { ciTriageRun, prReviewRun } from "./runs.ts";
 import { Artifacts, Checkout, EditLoop, ModelClient, Shell } from "./services.ts";
@@ -122,7 +122,8 @@ const STEP_B = "b".repeat(24);
 
 const LEASE_TOKEN = "fd-lease-token-0123456789abcdef";
 const PROVIDER_KEY = "sk-ant-provider-key-0123456789";
-const GATEWAY = "https://cp.example.com/v1/model/completions";
+const CONTROL_PLANE = "https://cp.example.com";
+const GATEWAY = `${CONTROL_PLANE}/v1/model/completions`;
 
 interface Sent {
   readonly url: string;
@@ -130,19 +131,37 @@ interface Sent {
   readonly body: { call_site: string; tier: string; messages: { content: string }[] };
 }
 
-/** The config a cloud executor builds, with the model gateway answering `answer` per call site. */
+interface ApiRequest {
+  readonly url: URL;
+  readonly headers: Headers;
+}
+
+const notFound = () => new Response(null, { status: 404 });
+
+/**
+ * The config a cloud executor builds, with the model gateway answering per call site and `controlPlane` answering the
+ * executions and log routes.
+ */
 const cloudConfig = (
   over: Partial<CloudAgenticConfig> & { checkout: string; baseCommit: string },
+  controlPlane: (url: URL) => Response = notFound,
 ) => {
   const sent: Sent[] = [];
+  const api: ApiRequest[] = [];
   const stored = new Map<string, { bytes: Uint8Array; sha256: string }>();
   const config: CloudAgenticConfig = {
     stagingDir: join(tmpdir(), `fd-cloud-staging-${Math.random().toString(16).slice(2)}`),
     editLoop: ["sh", "-c", "true"],
     modelGatewayUrl: GATEWAY,
-    fetch: (async (url: string, init: RequestInit) => {
+    controlPlaneUrl: CONTROL_PLANE,
+    fetch: (async (input: string, init: RequestInit = {}) => {
+      const url = new URL(input);
+      if (url.pathname.startsWith("/v1/executions")) {
+        api.push({ url, headers: new Headers(init.headers) });
+        return controlPlane(url);
+      }
       const body = JSON.parse(String(init.body)) as Sent["body"];
-      sent.push({ url, headers: new Headers(init.headers), body });
+      sent.push({ url: input, headers: new Headers(init.headers), body });
       const text =
         body.call_site === "classify"
           ? "flaky"
@@ -157,7 +176,6 @@ const cloudConfig = (
         stored.set(key, { bytes: new Uint8Array(bytes), sha256 });
       },
     ),
-    executions: { db: memoryD1(), logs: memoryLogs({}) },
     env: {
       PATH: process.env["PATH"],
       HOME: tmpdir(),
@@ -167,7 +185,7 @@ const cloudConfig = (
     credentials: [LEASE_TOKEN],
     ...over,
   };
-  return { config, sent, stored };
+  return { config, sent, api, stored };
 };
 
 /** The cloud Layers as the runner provides them: on its `Intents`, with an in-memory workflow engine. */
@@ -277,8 +295,113 @@ describe("the cloud executor's agentic layers", () => {
     expect((await put(down, "pr-review.diff"))._tag).toBe("Failure");
   });
 
-  it("[FD-AGT-071] ci-triage-pr reads the repository's failures of the last 24 h and their failing epoch's logs from the stores", async () => {
+  it("[FD-AGT-071] ci-triage-pr reads the repository's failures of the last 24 h and their logs through the control plane's routes, with no credential", async () => {
     const { dir, base } = await repository();
+    const now = Date.now();
+    const view = (id: string, verdict: string, reason: string | null, finishedAt: number) => ({
+      execution_id: id,
+      run: "check",
+      repository: "o/r",
+      status: "done",
+      verdict,
+      reason,
+      finished_at: finishedAt,
+    });
+    const logs: Record<string, string> = {
+      "x-recent": "FAIL a.test.ts\nsecond step",
+      "x-older": "ECONNRESET",
+    };
+    const controlPlane = (url: URL) => {
+      if (url.pathname === "/v1/executions")
+        return Response.json(
+          url.searchParams.get("before") === null
+            ? {
+                executions: [
+                  view("x-green", "success", null, now - 60_000),
+                  view("x-recent", "failure", "finding: test", now - 3_600_000),
+                ],
+                next_before: "x-recent",
+              }
+            : { executions: [view("x-older", "failure", "infra: checkout", now - 20 * 3_600_000)] },
+        );
+      const id = /^\/v1\/executions\/([^/]+)\/logs$/.exec(url.pathname)?.[1];
+      return id !== undefined && url.searchParams.get("format") === "text" && id in logs
+        ? new Response(logs[id], { headers: { "content-type": "text/plain; charset=utf-8" } })
+        : notFound();
+    };
+    const { config, sent, api, stored } = cloudConfig(
+      { checkout: dir, baseCommit: base },
+      controlPlane,
+    );
+    const { layer } = cloud(config);
+    const result = await Effect.runPromise(
+      ciTriageRun.workflow
+        .execute(payload("ci-triage-pr", { repo: { owner: "o", name: "r" }, baseBranch: "main" }))
+        .pipe(Effect.provide(Layer.provideMerge(ciTriageRun.layer, layer))),
+    );
+    expect(result).toEqual({ _tag: "success" });
+    const lists = api.filter((r) => r.url.pathname === "/v1/executions");
+    expect(lists.map((r) => r.url.searchParams.get("before"))).toEqual([null, "x-recent"]);
+    for (const r of lists) {
+      expect(r.url.searchParams.get("repository")).toBe("o/r");
+      expect(r.url.searchParams.get("status")).toBe("done");
+      expect(Number(r.url.searchParams.get("finished_since"))).toBeGreaterThanOrEqual(
+        now - CI_TRIAGE_WINDOW_MS,
+      );
+    }
+    expect(api.map((r) => r.url.pathname)).not.toContain("/v1/executions/x-green/logs");
+    for (const r of api) expect(r.headers.get("authorization")).toBeNull();
+    expect(sent.map((s) => [s.body.call_site, s.body.tier])).toEqual([
+      ["classify", "transform"],
+      ["classify", "transform"],
+      ["write-up", "judgment"],
+    ]);
+    const recent = sent[0]?.body.messages[1]?.content ?? "";
+    expect(recent).toContain("reason finding: test");
+    expect(recent).toContain("FAIL a.test.ts\nsecond step");
+    expect(sent[1]?.body.messages[1]?.content).toContain("ECONNRESET");
+    const table = sent[2]?.body.messages[1]?.content ?? "";
+    expect(table).toContain("x-recent check: flaky");
+    expect(table).toContain("x-older check: flaky");
+    expect(table).not.toContain("x-green");
+    expect([...stored.keys()]).toContain(
+      `artifacts/01HEXEC0000000000000000000/1/${STAGED_WRITE_MANIFEST}`,
+    );
+    expect(await readFile(join(dir, reportPath(now)), "utf8")).toContain("Two flaky tests.");
+  });
+
+  it("[FD-AGT-071] [FD-AGT-042] fails the route read on an answer other than 200, a page outside the shape and a log not served as text", async () => {
+    let answer: () => Response = notFound;
+    const fetch = (async () => answer()) as unknown as typeof globalThis.fetch;
+    const read = <A, E>(f: (r: ExecutionsRead["Service"]) => Effect.Effect<A, E>) =>
+      Effect.runPromise(
+        Effect.result(Effect.flatMap(ExecutionsRead, f)).pipe(
+          Effect.provide(executionsApiReadLayer({ baseUrl: CONTROL_PLANE, fetch })),
+        ),
+      );
+    answer = () => new Response(null, { status: 401 });
+    expect(await read((r) => r.failedSince("o/r", 5))).toMatchObject({
+      _tag: "Failure",
+      failure: { source: "executions" },
+    });
+    answer = () => Response.json({ executions: [{ execution_id: "x-1" }] });
+    expect(await read((r) => r.failedSince("o/r", 5))).toMatchObject({
+      _tag: "Failure",
+      failure: { source: "executions" },
+    });
+    answer = () => new Response("<p>", { headers: { "content-type": "text/html" } });
+    expect(await read((r) => r.failedJobLog("x-1"))).toMatchObject({
+      _tag: "Failure",
+      failure: { source: "logs" },
+    });
+    answer = () => new Response("", { headers: { "content-type": "text/plain; charset=utf-8" } });
+    expect(await read((r) => r.failedJobLog("x-1"))).toMatchObject({
+      _tag: "Success",
+      success: "",
+    });
+  });
+
+  it("[FD-AGT-071] the store read answers the repository's failures of the window and the failing epoch's log in step order", async () => {
     const now = Date.now();
     const db = memoryD1();
     const insert = (
@@ -305,44 +428,20 @@ describe("the cloud executor's agentic layers", () => {
         [`logs/x-recent/1/${STEP_A}/stdout-0-10.ndjson`]: `{"line":"epoch one noise"}\n`,
         [`logs/x-recent/2/${STEP_B}/stdout-0-10.ndjson`]: `{"line":"second step"}\n`,
         [`logs/x-recent/2/${STEP_A}/stdout-0-10.ndjson`]: `{"line":"\\u001b[31mFAIL\\u001b[0m a.test.ts"}\n`,
-        [`logs/x-older/1/${STEP_A}/stderr-0-10.ndjson`]: `{"text":"ECONNRESET"}\n`,
+        [`logs/x-recent/2/${STEP_A}/stdout-10-5.ndjson`]: `{"line":"outside the grammar"}\n`,
       },
       {
         [`logs/x-recent/2/${STEP_A}/stdout-0-10.ndjson`]: 1,
         [`logs/x-recent/2/${STEP_B}/stdout-0-10.ndjson`]: 2,
       },
     );
-    const { config, sent, stored } = cloudConfig({
-      checkout: dir,
-      baseCommit: base,
-      executions: { db, logs },
-    });
-    const { layer } = cloud(config);
-    const result = await Effect.runPromise(
-      ciTriageRun.workflow
-        .execute(payload("ci-triage-pr", { repo: { owner: "o", name: "r" }, baseBranch: "main" }))
-        .pipe(Effect.provide(Layer.provideMerge(ciTriageRun.layer, layer))),
-    );
-    expect(result).toEqual({ _tag: "success" });
-    expect(sent.map((s) => [s.body.call_site, s.body.tier])).toEqual([
-      ["classify", "transform"],
-      ["classify", "transform"],
-      ["write-up", "judgment"],
-    ]);
-    const recent = sent[0]?.body.messages[1]?.content ?? "";
-    expect(recent).toContain("reason finding: test");
-    expect(recent).toContain("FAIL a.test.ts\nsecond step");
-    expect(recent).not.toContain("epoch one noise");
-    expect(recent).not.toContain("\u001b");
-    expect(sent[1]?.body.messages[1]?.content).toContain("ECONNRESET");
-    const table = sent[2]?.body.messages[1]?.content ?? "";
-    expect(table).toContain("x-recent check: flaky");
-    expect(table).toContain("x-older check: flaky");
-    expect(table).not.toMatch(/x-stale|x-green|x-other/);
-    expect([...stored.keys()]).toContain(
-      `artifacts/01HEXEC0000000000000000000/1/${STAGED_WRITE_MANIFEST}`,
-    );
-    expect(await readFile(join(dir, reportPath(now)), "utf8")).toContain("Two flaky tests.");
+    const read = <A, E>(f: (r: ExecutionsRead["Service"]) => Effect.Effect<A, E>) =>
+      Effect.runPromise(
+        Effect.flatMap(ExecutionsRead, f).pipe(Effect.provide(executionsReadLayer({ db, logs }))),
+      );
+    const failures = await read((r) => r.failedSince("o/r", now - CI_TRIAGE_WINDOW_MS));
+    expect(failures.map((f) => f.executionId)).toEqual(["x-recent", "x-older"]);
+    expect(await read((r) => r.failedJobLog("x-recent"))).toBe("FAIL a.test.ts\nsecond step");
   });
 
   it("[FD-AGT-071] [FD-AGT-042] fails the read when the executions table, a listing or a listed log object fails", async () => {

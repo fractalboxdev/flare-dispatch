@@ -14,7 +14,7 @@ import {
   type ArtifactSink,
 } from "../staged-write/build.ts";
 import { ExecutionsRead } from "./ci-triage-pr.ts";
-import { executionsReadLayer, type ExecutionsReadConfig } from "./executions-read.ts";
+import { executionsApiReadLayer } from "./executions-read.ts";
 import {
   ArtifactFailed,
   Artifacts,
@@ -241,11 +241,12 @@ export interface CloudAgenticConfig {
   readonly editLoop: readonly [string, ...string[]];
   /** The model route's URL; the egress proxy attaches the per-lease token to a request to it (FD-AGT-010). */
   readonly modelGatewayUrl: string;
+  /** The control plane's origin, whose executions and log routes `ExecutionsRead` reads through the egress proxy. */
+  readonly controlPlaneUrl: string;
+  /** The job's `fetch`, whose requests leave through the egress proxy. */
   readonly fetch: typeof globalThis.fetch;
   /** The execution's artifact store under the lease's artifact prefix. */
   readonly artifacts: ArtifactSink;
-  /** The executions table and log store, as the host of the cloud executor binds them. */
-  readonly executions: ExecutionsReadConfig;
   /** The runner's environment; a sandboxed command inherits only its allowlisted variables. */
   readonly env: NodeJS.ProcessEnv;
   /** Credentials the runner holds, such as a clone token; a model request carrying one is refused (FD-AGT-011). */
@@ -266,7 +267,8 @@ export type CloudAgenticServices =
  * The agentic recipes' services on the cloud executor. The model client sends no credential and reaches the model
  * route through the egress proxy, which alone holds the per-lease token; the shell and the edit loop start with the
  * sandbox environment, so no runner variable reaches them (FD-AGT-010). Artifacts go to the execution's artifact store
- * (FD-AGT-059), and `ExecutionsRead` reads the executions table and the log store (FD-AGT-071).
+ * (FD-AGT-059). `ExecutionsRead` reads the control plane's executions and log routes, so the job holds no binding of the
+ * executions table or the log store (FD-AGT-071).
  */
 export const cloudAgenticLayers = (
   config: CloudAgenticConfig,
@@ -284,6 +286,6 @@ export const cloudAgenticLayers = (
     stagedWritesLayer(config.checkout, config.baseCommit, config.stagingDir, config.artifacts),
     artifactsLayer(config.artifacts),
     runnerIntentsLayer,
-    executionsReadLayer(config.executions),
+    executionsApiReadLayer({ baseUrl: config.controlPlaneUrl, fetch: config.fetch }),
   );
 };

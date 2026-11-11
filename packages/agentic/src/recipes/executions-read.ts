@@ -1,22 +1,118 @@
-// `ExecutionsRead` over the control plane's executions table and its log store (specs/runs/agentic.md
-// § `ci-triage-pr`): the failed executions of one repository since a time, and the log of an execution's failing epoch
-// as plain text. A failed read is `ReadFailed`, never an empty window or an empty log (FD-AGT-042).
-import { Effect, Layer } from "effect";
+// `ExecutionsRead` (specs/runs/agentic.md § `ci-triage-pr`): the failed executions of one repository since a time, and
+// the log of an execution's failing epoch as plain text. A failed read is `ReadFailed`, never an empty window or an
+// empty log (FD-AGT-042). The cloud executor reads through the control plane's executions and log routes; a host that
+// holds the executions table and the log bucket reads them directly.
+import {
+  inStepOrder,
+  listLogObjects,
+  ndjsonToText,
+  type LogListing,
+} from "@fractalboxdev/flare-dispatch-cache/log-names";
+import { Effect, Layer, Schema } from "effect";
 import type { D1Binding } from "../local/store.ts";
 import { ExecutionsRead, type FailedExecution } from "./ci-triage-pr.ts";
 import { ReadFailed } from "./spec-drift-pr.ts";
 
+const failed = (source: string) => (cause: unknown) =>
+  new ReadFailed({ source, detail: String(cause).slice(0, 200) });
+
+// ---- Over the control plane's routes ------------------------------------------------------------------------------
+
+export interface ExecutionsApiConfig {
+  /** The control plane's origin. */
+  readonly baseUrl: string;
+  readonly fetch: typeof globalThis.fetch;
+}
+
+/** The fields of `GET /v1/executions` the read uses (specs/interfaces.md FD-IFC-037, FD-IFC-038). */
+const ExecutionsPage = Schema.Struct({
+  executions: Schema.Array(
+    Schema.Struct({
+      execution_id: Schema.String,
+      run: Schema.String,
+      verdict: Schema.NullOr(Schema.String),
+      reason: Schema.NullOr(Schema.String),
+      finished_at: Schema.NullOr(Schema.Number),
+    }),
+  ),
+  next_before: Schema.optionalKey(Schema.String),
+});
+const decodePage = Schema.decodeUnknownSync(ExecutionsPage);
+
+const PAGE = 200;
+
+/**
+ * `ExecutionsRead` over the control plane's routes: `failedSince` pages `GET /v1/executions` for the repository's
+ * executions done at or after `since` and keeps those whose verdict is `failure`, newest first; `failedJobLog` answers
+ * `GET /v1/executions/<id>/logs?format=text`, every step log of the execution in step order (FD-CACHE-083). The Layer
+ * sends no credential of its own: a request carries only what the egress proxy attaches to it. A request that fails,
+ * an answer other than 200, a page outside the shape and a log not served as plain text each fail the read.
+ */
+export const executionsApiReadLayer = (
+  config: ExecutionsApiConfig,
+): Layer.Layer<ExecutionsRead> => {
+  const get = async (path: string, query: Record<string, string>) => {
+    const url = new URL(path, config.baseUrl);
+    for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+    const response = await config.fetch(url.toString());
+    if (response.status !== 200) throw new Error(`GET ${url.pathname} answered ${response.status}`);
+    return response;
+  };
+  return Layer.succeed(ExecutionsRead, {
+    failedSince: (repository, since) =>
+      Effect.tryPromise({
+        try: async () => {
+          const found: FailedExecution[] = [];
+          let before: string | undefined;
+          for (;;) {
+            const response = await get("/v1/executions", {
+              repository,
+              status: "done",
+              finished_since: String(since),
+              limit: String(PAGE),
+              ...(before === undefined ? {} : { before }),
+            });
+            const page = decodePage(await response.json());
+            for (const e of page.executions) {
+              const finishedAt = e.finished_at;
+              if (e.verdict !== "failure" || finishedAt === null || finishedAt < since) continue;
+              found.push({
+                executionId: e.execution_id,
+                run: e.run,
+                reason: e.reason ?? "",
+                finishedAt,
+              });
+            }
+            if (page.next_before === undefined) break;
+            before = page.next_before;
+          }
+          return found.sort(
+            (a, b) =>
+              b.finishedAt - a.finishedAt ||
+              (a.executionId < b.executionId ? -1 : a.executionId > b.executionId ? 1 : 0),
+          );
+        },
+        catch: failed("executions"),
+      }),
+    failedJobLog: (executionId) =>
+      Effect.tryPromise({
+        try: async () => {
+          const response = await get(`/v1/executions/${encodeURIComponent(executionId)}/logs`, {
+            format: "text",
+          });
+          if (!(response.headers.get("content-type") ?? "").startsWith("text/plain"))
+            throw new Error(`the log of ${executionId} is not served as plain text`);
+          return await response.text();
+        },
+        catch: failed("logs"),
+      }),
+  });
+};
+
+// ---- Over the stores ----------------------------------------------------------------------------------------------
+
 /** The log store's listing and reads, as an R2 bucket answers them. */
-export interface LogObjects {
-  list(options: {
-    readonly prefix: string;
-    readonly limit?: number;
-    readonly cursor?: string;
-  }): Promise<{
-    readonly objects: readonly { readonly key: string; readonly uploaded: Date }[];
-    readonly truncated: boolean;
-    readonly cursor?: string;
-  }>;
+export interface LogObjects extends LogListing {
   get(key: string): Promise<{ text(): Promise<string> } | null>;
 }
 
@@ -27,96 +123,12 @@ export interface ExecutionsReadConfig {
   readonly logs: LogObjects;
 }
 
-/** `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.ndjson` (specs/cache-artifacts.md § Logs). */
-const LOG_NAME =
-  /^logs\/([A-Za-z0-9:_-]{3,128})\/([1-9][0-9]{0,8})\/([0-9a-f]{24})\/([a-z][a-z0-9]{0,15})-(0|[1-9][0-9]{0,15})-(0|[1-9][0-9]{0,15})\.ndjson$/;
-
-interface LogSegment {
-  readonly key: string;
-  readonly uploaded: number;
-  readonly epoch: number;
-  readonly step: string;
-  readonly stream: string;
-  readonly start: number;
-}
-
-const listSegments = async (logs: LogObjects, executionId: string): Promise<LogSegment[]> => {
-  const found: LogSegment[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const page = await logs.list({
-      prefix: `logs/${executionId}/`,
-      limit: 1000,
-      ...(cursor === undefined ? {} : { cursor }),
-    });
-    for (const o of page.objects) {
-      const m = LOG_NAME.exec(o.key);
-      if (m === null || m[1] !== executionId) continue;
-      found.push({
-        key: o.key,
-        uploaded: o.uploaded.getTime(),
-        epoch: Number(m[2]),
-        step: m[3]!,
-        stream: m[4]!,
-        start: Number(m[5]),
-      });
-    }
-    if (!page.truncated) return found;
-    cursor = page.cursor;
-  }
-};
-
 /**
- * The failing epoch's segments in step order: steps by the upload time of their first segment, then by stream and
- * offset. The failing epoch is the latest, the one whose result concluded the execution.
- */
-const failingEpochInStepOrder = (segments: readonly LogSegment[]): LogSegment[] => {
-  const epoch = Math.max(...segments.map((s) => s.epoch));
-  const latest = segments.filter((s) => s.epoch === epoch);
-  const firstSeen = new Map<string, number>();
-  for (const s of latest)
-    firstSeen.set(s.step, Math.min(firstSeen.get(s.step) ?? Infinity, s.uploaded));
-  return latest.sort(
-    (a, b) =>
-      firstSeen.get(a.step)! - firstSeen.get(b.step)! ||
-      a.step.localeCompare(b.step) ||
-      a.stream.localeCompare(b.stream) ||
-      a.start - b.start,
-  );
-};
-
-const ANSI =
-  // oxlint-disable-next-line no-control-regex
-  /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
-
-/** One NDJSON line as plain text: its `line`, `text` or `message` field, else the raw line, with ANSI escapes removed. */
-const lineText = (line: string): string => {
-  let text = line;
-  try {
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    const field = ["line", "text", "message"].find((f) => typeof parsed[f] === "string");
-    if (field !== undefined) text = parsed[field] as string;
-  } catch {
-    // A line that is not JSON is read as it is.
-  }
-  return text.replace(ANSI, "");
-};
-
-const ndjsonToText = (ndjson: string) =>
-  ndjson
-    .split("\n")
-    .filter((l) => l !== "")
-    .map(lineText)
-    .join("\n");
-
-const failed = (source: string) => (cause: unknown) =>
-  new ReadFailed({ source, detail: String(cause).slice(0, 200) });
-
-/**
- * `ExecutionsRead` over the executions table and the log store. `failedSince` answers the repository's executions that
- * concluded `failure` at or after `since`, newest first; `failedJobLog` the text of the failing epoch's log, empty for
- * an execution that wrote none. A database, listing or object read that throws, or a listed object that is gone, fails
- * the read.
+ * `ExecutionsRead` over the executions table and the log store, for a host that holds both bindings. `failedSince`
+ * answers the repository's executions that concluded `failure` at or after `since`, newest first; `failedJobLog` the
+ * text of the failing epoch's log in step order, empty for an execution that wrote none. The failing epoch is the
+ * latest, the one whose result concluded the execution. A database, listing or object read that throws, or a listed
+ * object that is gone, fails the read.
  */
 export const executionsReadLayer = (config: ExecutionsReadConfig): Layer.Layer<ExecutionsRead> =>
   Layer.succeed(ExecutionsRead, {
@@ -150,12 +162,13 @@ export const executionsReadLayer = (config: ExecutionsReadConfig): Layer.Layer<E
     failedJobLog: (executionId) =>
       Effect.tryPromise({
         try: async () => {
-          const segments = await listSegments(config.logs, executionId);
-          if (segments.length === 0) return "";
+          const objects = await listLogObjects(config.logs, executionId);
+          if (objects.length === 0) return "";
+          const epoch = Math.max(...objects.map((o) => o.log.epoch));
           const texts: string[] = [];
-          for (const s of failingEpochInStepOrder(segments)) {
-            const body = await config.logs.get(s.key);
-            if (body === null) throw new Error(`log object ${s.key} is listed but missing`);
+          for (const o of inStepOrder(objects.filter((o) => o.log.epoch === epoch))) {
+            const body = await config.logs.get(o.key);
+            if (body === null) throw new Error(`log object ${o.key} is listed but missing`);
             texts.push(ndjsonToText(await body.text()));
           }
           return texts.join("\n");

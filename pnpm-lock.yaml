@@ -231,6 +231,9 @@ importers:
 
   packages/agentic:
     dependencies:
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../cache
       '@fractalboxdev/flare-dispatch-profile':
         specifier: workspace:*
         version: link:../profile
