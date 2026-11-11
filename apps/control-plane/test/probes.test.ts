@@ -12,6 +12,7 @@ import {
   PROBE_INTERVAL_MS,
   probeDeliveries,
   probeResults,
+  recordProbe,
   pushCanary,
   registerInstallation,
   runOpsMigrations,
@@ -32,7 +33,7 @@ const KEY = generateKeyPairSync("rsa", { modulusLength: 2048 })
   .toString();
 const FIXTURE = "acme/canary";
 
-type Route = (path: string) => { status: number; body: unknown };
+type Route = (path: string) => { status: number; body: unknown; headers?: Record<string, string> };
 
 /** A GitHub that answers the App's reads from `routes`, keyed `<method> <path without query>`, and records each call. */
 const github = (routes: Record<string, Route>) => {
@@ -42,11 +43,11 @@ const github = (routes: Record<string, Route>) => {
     const method = init?.method ?? "GET";
     calls.push(`${method} ${url.pathname}${url.search}`);
     const route = routes[`${method} ${url.pathname}`];
-    const { status, body } =
+    const { status, body, headers } =
       route === undefined
         ? { status: 404, body: { message: "Not Found" } }
         : route(url.pathname + url.search);
-    return Response.json(body, { status });
+    return Response.json(body, { status, headers });
   }) as typeof globalThis.fetch;
   return { calls, fetch };
 };
@@ -124,6 +125,46 @@ describe("the control plane's GitHub probes", () => {
       ["installation", true],
     ]);
   });
+
+  it.each(["installation", "delivery"] as const)(
+    "[FD-OPS-041] [FD-OPS-044] a capped %s listing cannot replace a failed probe with a healthy partial answer",
+    async (probe) => {
+      const path = probe === "installation" ? "/app/installations" : "/app/hook/deliveries";
+      const gh = github({
+        ...APP_ROUTES,
+        [`GET ${path}`]: () => ({
+          status: 200,
+          body:
+            probe === "installation"
+              ? [{ id: 42, account: { login: "acme" }, suspended_at: null }]
+              : [
+                  {
+                    id: 70001,
+                    guid: "g1",
+                    delivered_at: new Date(T0 - 1_000).toISOString(),
+                    redelivery: false,
+                    status_code: 200,
+                  },
+                ],
+          headers: { link: `<https://api.github.com${path}?cursor=next>; rel="next"` },
+        }),
+      });
+      vi.stubGlobal("fetch", gh.fetch);
+      const env = await envOf({ GITHUB_FIXTURE_REPO: "" });
+      await runOpsMigrations(env.DB);
+      await recordProbe(env.DB, probe, false, { prior_failure: true }, T0 - PROBE_INTERVAL_MS);
+      const report = await Effect.runPromise(minuteTick(env, probesOnly(tickDeps(env)), T0));
+      expect(report.steps.find((s) => s.step === `${probe}-probe`)).toMatchObject({
+        status: "failed",
+        cause: expect.stringContaining("listing incomplete"),
+      });
+      expect((await probeResults(env.DB)).find((p) => p.name === probe)).toMatchObject({
+        ok: false,
+        detail: { prior_failure: true },
+        at: T0 - PROBE_INTERVAL_MS,
+      });
+    },
+  );
 
   it("[FD-OPS-042] an installation the App reads as suspended raises installation-lost through the composed probe", async () => {
     vi.stubGlobal(

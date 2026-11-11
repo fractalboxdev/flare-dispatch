@@ -70,7 +70,7 @@ export {
   type ReservationFacts,
 } from "./conclude-facts.ts";
 export { drainOutbox, githubApplicationLayer, githubLiveLayer } from "./layer.ts";
-export { credentialMinterLayer, leaseReadToken, type LeaseCredential } from "./lease-token.ts";
+export { leaseReadToken, type LeaseCredential } from "./lease-token.ts";
 export {
   ActuatorRateLimitLive,
   decidePermit,

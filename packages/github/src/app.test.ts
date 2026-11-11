@@ -2,7 +2,7 @@
 // eviction, the per-lease token and the reads.
 import { generateKeyPairSync, createPublicKey, verify } from "node:crypto";
 import { AlarmPort, CredentialMinter } from "@fractalboxdev/mameko-ports";
-import { Effect, Exit, Layer, Logger } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 import {
@@ -213,7 +213,7 @@ const alarms = Layer.mergeAll(
 );
 
 const live = <A, E>(
-  effect: Effect.Effect<A, E, GithubApp | GithubRead | CredentialMinter>,
+  effect: Effect.Effect<A, E, GithubApp | GithubRead>,
   routes: Parameters<typeof fakeApi>[0],
   calls: Call[] = [],
 ) =>
@@ -237,7 +237,7 @@ const covered = {
 };
 
 describe("the per-lease token", () => {
-  it("[FD-GH-002] scopes the token to the one repository and to read permissions, expiring by the deadline", async () => {
+  it("[FD-GH-002] scopes the source token to one repository and read permissions, with usable-until metadata bounded by the deadline", async () => {
     const calls: Call[] = [];
     const credential = await live(
       leaseReadToken({
@@ -255,178 +255,9 @@ describe("the per-lease token", () => {
     expect(credential.expiresAt).toBe(NOW + 600_000);
   });
 
-  const lease = (executionId: string, deadlineAt = NOW + 600_000) => ({
-    executionId,
-    epoch: 2,
-    scopeId: "acme/app",
-    deadlineAt,
-  });
-
-  it("[FD-GH-002] the credential minter port mints the per-lease read token for the lease's one repository", async () => {
-    const calls: Call[] = [];
-    const credential = await live(
-      CredentialMinter.use((m) => m.mint("source-read", lease("e1", NOW + 7_200_000))),
-      covered,
-      calls,
-    );
-    const mints = calls.filter((c) => c.method === "POST");
-    expect(mints.map((c) => c.path)).toEqual(["/app/installations/7/access_tokens"]);
-    expect(mints[0]!.body).toEqual({
-      repositories: ["app"],
-      permissions: {
-        metadata: "read",
-        contents: "read",
-        pull_requests: "read",
-        issues: "read",
-        checks: "read",
-        actions: "read",
-      },
-    });
-    expect(credential.credential).toMatch(/^ghs_/);
-    // GitHub's own expiry comes first here: the token lives an hour, the lease two.
-    expect(credential.expiresAt).toBe(NOW + 3_600_000);
-  });
-
-  it("revokes every token the port minted for the lease, and no other lease's (MAMEKO-HOST-050)", async () => {
-    const calls: Call[] = [];
-    const [first, second, other] = await live(
-      Effect.gen(function* () {
-        const minter = yield* CredentialMinter;
-        const first = yield* minter.mint("source-read", lease("e1"));
-        const second = yield* minter.mint("source-read", lease("e1"));
-        const other = yield* minter.mint("source-read", lease("e2"));
-        yield* minter.revoke(lease("e1"));
-        // A second revoke has nothing left to revoke.
-        yield* minter.revoke(lease("e1"));
-        return [first, second, other];
-      }),
-      { ...covered, "DELETE /installation/token": () => ({ status: 204, body: null }) },
-      calls,
-    );
-    const revoked = calls.filter((c) => c.method === "DELETE");
-    expect(revoked.map((c) => c.path)).toEqual(["/installation/token", "/installation/token"]);
-    expect(revoked.map((c) => c.authorization)).toEqual([
-      `Bearer ${first.credential}`,
-      `Bearer ${second.credential}`,
-    ]);
-    expect(revoked.map((c) => c.authorization)).not.toContain(`Bearer ${other.credential}`);
-  });
-
-  it("a mint for a grant other than the source grant fails and asks GitHub for no token", async () => {
-    const calls: Call[] = [];
-    const exit = await live(
-      CredentialMinter.use((m) => m.mint("model-gateway", lease("e1"))).pipe(Effect.exit),
-      covered,
-      calls,
-    );
-    expect(Exit.isFailure(exit)).toBe(true);
-    expect(String(Exit.isFailure(exit) && exit.cause)).toContain("model-gateway");
-    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
-  });
-
-  it("the profile's git-remote grant is the source grant and gets the per-lease read token", async () => {
-    const calls: Call[] = [];
-    const credential = await live(
-      CredentialMinter.use((m) => m.mint("git-remote", lease("e1"))),
-      covered,
-      calls,
-    );
-    expect(credential.credential).toMatch(/^ghs_/);
-    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
-  });
-
-  /** Runs `effect` with every log entry's message parts recorded in `logs`. */
-  const logged = <A, E, R>(effect: Effect.Effect<A, E, R>, logs: unknown[][]) =>
-    effect.pipe(
-      Effect.provide(
-        Layer.succeed(
-          Logger.CurrentLoggers,
-          new Set([
-            Logger.make((o) => void logs.push(Array.isArray(o.message) ? o.message : [o.message])),
-          ]),
-        ),
-      ),
-    );
-
-  it("a revoke GitHub refuses is logged with its status and does not fail", async () => {
-    const calls: Call[] = [];
-    const logs: unknown[][] = [];
-    await live(
-      logged(
-        Effect.gen(function* () {
-          const minter = yield* CredentialMinter;
-          yield* minter.mint("source-read", lease("e1"));
-          yield* minter.revoke(lease("e1"));
-        }),
-        logs,
-      ),
-      {
-        ...covered,
-        "DELETE /installation/token": () => ({ status: 502, body: { message: "Bad Gateway" } }),
-      },
-      calls,
-    );
-    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
-    expect(logs).toContainEqual([
-      "per-lease token not revoked",
-      { executionId: "e1", status: 502 },
-    ]);
-  });
-
-  it("a revoke for a lease this isolate holds no token for is logged, since the token outlives it", async () => {
-    const calls: Call[] = [];
-    const logs: unknown[][] = [];
-    await live(
-      logged(
-        CredentialMinter.use((m) => m.revoke(lease("e9"))),
-        logs,
-      ),
-      covered,
-      calls,
-    );
-    expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
-    expect(logs).toContainEqual([
-      "per-lease token not held by this isolate; valid until GitHub expires_at",
-      { executionId: "e9", epoch: 2 },
-    ]);
-  });
-
-  it("a mint drops the held tokens of leases past their deadline", async () => {
-    const calls: Call[] = [];
-    const logs: unknown[][] = [];
-    await live(
-      logged(
-        Effect.gen(function* () {
-          const minter = yield* CredentialMinter;
-          // e1's deadline is already past when e2 mints, so e2's mint drops e1's token.
-          yield* minter.mint("source-read", lease("e1", NOW - 1));
-          yield* minter.mint("source-read", lease("e2"));
-          yield* minter.revoke(lease("e1"));
-        }),
-        logs,
-      ),
-      { ...covered, "DELETE /installation/token": () => ({ status: 204, body: null }) },
-      calls,
-    );
-    expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
-    expect(logs.map((l) => l[0])).toContain(
-      "per-lease token not held by this isolate; valid until GitHub expires_at",
-    );
-  });
-
-  it("a mint for a repository no installation covers fails the grant rather than answer no credential", async () => {
-    const calls: Call[] = [];
-    const exit = await live(
-      CredentialMinter.use((m) =>
-        m.mint("source-read", { ...lease("e1"), scopeId: "acme/none" }),
-      ).pipe(Effect.exit),
-      covered,
-      calls,
-    );
-    expect(Exit.isFailure(exit)).toBe(true);
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
-      "GET /repos/acme/none/installation",
-    ]);
+  it("[FD-ARCH-039] the App-configured layer leaves the unused incomplete credential minter absent", async () => {
+    const minter = await live(Effect.serviceOption(CredentialMinter), covered);
+    expect(Option.isNone(minter)).toBe(true);
   });
 });
 
@@ -771,7 +602,7 @@ describe("the probes' App-JWT reads", () => {
     ]);
   });
 
-  it("[FD-OPS-044] a listing reads at most its page bound", async () => {
+  it("[FD-OPS-044] a delivery listing that reaches its page bound fails instead of reporting a partial list as complete", async () => {
     const calls: Call[] = [];
     let n = 0;
     const fetch = fakeApi(
@@ -786,10 +617,42 @@ describe("the probes' App-JWT reads", () => {
       },
       calls,
     );
-    await run(
-      GithubApp.use((app) => listAppDeliveries(app, NOW - 900_000)),
+    const result = await run(
+      GithubApp.use((app) => listAppDeliveries(app, NOW - 900_000)).pipe(Effect.result),
       fetch,
     );
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "GithubNetworkError",
+        message: expect.stringContaining("listing incomplete"),
+      },
+    });
+    expect(calls).toHaveLength(APP_LIST_MAX_PAGES);
+  });
+
+  it("[FD-OPS-041] an installation listing that reaches its page bound fails instead of hiding omitted installations", async () => {
+    const calls: Call[] = [];
+    const result = await run(
+      GithubApp.use((app) => listAppInstallations(app)).pipe(Effect.result),
+      fakeApi(
+        {
+          "GET /app/installations": () => ({
+            status: 200,
+            body: [{ id: 1, account: { login: "acme" } }],
+            headers: { link: '<https://api.github.com/app/installations?page=next>; rel="next"' },
+          }),
+        },
+        calls,
+      ),
+    );
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "GithubNetworkError",
+        message: expect.stringContaining("listing incomplete"),
+      },
+    });
     expect(calls).toHaveLength(APP_LIST_MAX_PAGES);
   });
 

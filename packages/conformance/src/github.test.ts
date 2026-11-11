@@ -11,9 +11,9 @@
 // (specs/github-output.md § Appliers). A `pr.propose` row carries the `prProposePayload` binding's payload and goes to
 // the writeback applier's lookup, which reads the branch head, its commit's execution trailer and the open pull request.
 //
-// The credential minter port the control plane composes under the App (`appServices`), against a GitHub stand-in over
-// HTTP: a mint for an execution lease asks GitHub for a token scoped to the lease's one repository and to the six read
-// permissions, and answers it with an expiry no later than the lease's `deadline_at` (specs/github-output.md FD-GH-002).
+// The source-read helper using the App services against an HTTP GitHub stand-in: the token request names one
+// repository and the six read permissions (specs/github-output.md FD-GH-002). The broad mameko CredentialMinter
+// port stays absent until its full contract has an implementation and a caller.
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -29,7 +29,6 @@ import { profile } from "@fractalboxdev/flare-dispatch-profile";
 import {
   Actuators,
   AlarmPort,
-  CredentialMinter,
   type IntentRow,
   type LookupAnswer,
 } from "@fractalboxdev/mameko-ports";
@@ -37,6 +36,7 @@ import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { writebackApplier } from "../../../apps/control-plane/src/agentic.ts";
 import type { ControlPlaneEnv } from "../../../apps/control-plane/src/config.ts";
+import { leaseReadToken } from "../../github/src/lease-token.ts";
 import { appServices } from "../../../apps/control-plane/src/github.ts";
 import type { GithubState } from "../../../apps/control-plane/test/e2e-local/fixtures/github-server.ts";
 import {
@@ -641,7 +641,7 @@ describe("the side-output applier's lookup", () => {
   }
 });
 
-describe("the credential minter port", () => {
+describe("the source-read token helper", () => {
   interface MintCall {
     readonly method: string;
     readonly path: string;
@@ -684,7 +684,7 @@ describe("the credential minter port", () => {
 
   afterAll(() => new Promise<void>((resolve) => mintServer.close(() => resolve())));
 
-  it("[FD-GH-002] a mint for an execution lease scopes the token to the lease's one repository and to read permissions only", async () => {
+  it("[FD-GH-002] a source-read token request scopes the token to the lease's one repository and to read permissions only", async () => {
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const env = { DB: {}, PLANE_ID: "conformance" } as unknown as ControlPlaneEnv;
     const services = appServices(
@@ -697,16 +697,14 @@ describe("the credential minter port", () => {
       },
       Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
     );
-    const deadlineAt = Date.now() + 600_000;
+    const deadlineAt = Date.now() + 7_200_000;
     const credential = await Effect.runPromise(
-      CredentialMinter.use((m) =>
-        m.mint("source-read", {
-          executionId: "e-31",
-          epoch: 1,
-          scopeId: "acme/widgets",
-          deadlineAt,
-        }),
-      ).pipe(Effect.provide(services)),
+      leaseReadToken({
+        executionId: "e-31",
+        epoch: 1,
+        scopeId: "acme/widgets",
+        deadlineAt,
+      }).pipe(Effect.provide(services)),
     );
 
     const mints = mintCalls.filter((c) => c.method === "POST");

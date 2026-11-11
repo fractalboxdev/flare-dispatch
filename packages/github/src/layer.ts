@@ -19,7 +19,6 @@ import {
   type InstallationQuota,
   installationQuotaLayer,
 } from "./rate-limit.ts";
-import { credentialMinterLayer } from "./lease-token.ts";
 import { githubReadLayer } from "./read.ts";
 import { GithubApplierLive } from "./github-applier.ts";
 import { githubWritesLayer } from "./writes.ts";
@@ -39,8 +38,7 @@ export const githubApplicationLayer = (
 
 /**
  * Every GitHub service of one isolate under the App's own authority: `GithubApp`, `InstallationDirectory`, `GithubClient`,
- * `GithubWrites`, `GithubRead`, `InstallationQuota`, the actuator of every GitHub binding, the actuator rate limit and the
- * credential minter of per-lease read tokens (FD-GH-002). The
+ * `GithubWrites`, `GithubRead`, `InstallationQuota`, the actuator of every GitHub binding and the actuator rate limit. The
  * application supplies `AlarmPort`, `SideOutputConfig` and `ConcludeFacts`, and, for the kinds it serves, `StagedWriteGate`,
  * `BlobStore`, `FollowOnSubmitter`, `EmailSender` and `NoticeChannel`; a kind whose port is absent is refused.
  * Build it once per isolate, so the token cache and the repository mapping outlive one request; `quota` serves every
@@ -57,14 +55,13 @@ export const githubLiveLayer = (
         token: tokenFromApp(yield* GithubApp),
         ...(app.baseUrl === undefined ? {} : { baseUrl: app.baseUrl }),
       };
-      const read = githubReadLayer(options);
       return Layer.mergeAll(
         GithubApplierLive.pipe(
           Layer.provideMerge(
             Layer.mergeAll(githubClientLayer(options), githubWritesLayer(options)),
           ),
         ),
-        credentialMinterLayer(app).pipe(Layer.provideMerge(read)),
+        githubReadLayer(options),
         ActuatorRateLimitLive,
       );
     }),

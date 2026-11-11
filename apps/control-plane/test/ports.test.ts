@@ -14,8 +14,8 @@ describe("the composition's application ports", () => {
     expect(missingPorts(buildProfile("development"), suppliedPorts(withApp))).toEqual([]);
   });
 
-  it("[FD-ARCH-039] a deploy with the GitHub App supplies the credential minter, and one without it supplies none", () => {
-    expect(suppliedPorts(env({ GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" }))).toContain(
+  it("[FD-ARCH-039] the unused credential minter is not advertised by an App-configured deploy", () => {
+    expect(suppliedPorts(env({ GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" }))).not.toContain(
       "credential-minter",
     );
     expect(suppliedPorts(env({}))).not.toContain("credential-minter");

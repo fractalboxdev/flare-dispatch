@@ -183,7 +183,7 @@ interface AppState {
 const repoKey = (repo: string) => repo.toLowerCase();
 
 /** One call to the GitHub API under `authorization`, through the App's injected `fetch`. */
-export const appCall = (
+const appCall = (
   options: Pick<AppOptions, "fetch" | "baseUrl">,
   authorization: string,
   method: string,
@@ -457,12 +457,11 @@ const appPages = <A>(
       out.push(...items);
       next = items.length > 0 && more(items) ? nextPagePath(link) : null;
     }
-    // A listing cut at the page bound is partial: the items past it are not read, and the caller sees only the first.
+    // A partial list cannot prove absence, so no probe may treat the truncated prefix as a complete observation.
     if (next !== null)
-      yield* Effect.logWarning("App listing truncated at the page bound", {
-        path,
-        pages: APP_LIST_MAX_PAGES,
-        items: out.length,
+      return yield* new GithubNetworkError({
+        sent: false,
+        message: `${path}: listing incomplete after ${APP_LIST_MAX_PAGES} pages`,
       });
     return out;
   });
