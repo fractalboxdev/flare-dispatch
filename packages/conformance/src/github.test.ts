@@ -4,15 +4,23 @@
 // installation that serves its repository, and the minute tick's drain takes the row's permit under that key and opens
 // the check run (specs/github-output.md § Installation quota).
 //
-// The side-output applier's lookup on the GitHub services the control plane builds under the App (`appServices`),
-// against a GitHub stand-in over HTTP: for each adoptable side kind the lookup searches by the kind's marker in the
-// profile's intents table and answers `found` with the one object's id, `absent` when none carries the marker, and
-// `undetermined` when the read fails (specs/github-output.md § Appliers).
+// The side-output applier's lookup on the actuators the control plane composes under the App: the GitHub services
+// (`appServices`) inside the agentic writeback applier (`writebackApplier`), against a GitHub stand-in over HTTP. For
+// each adoptable side kind the lookup searches by the kind's marker in the profile's intents table and answers `found`
+// with the one object's id, `absent` when none carries the marker, and `undetermined` when the read fails
+// (specs/github-output.md § Appliers). A `pr.propose` row carries the `prProposePayload` binding's payload and goes to
+// the writeback applier's lookup, which reads the branch head, its commit's execution trailer and the open pull request.
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import {
+  executionTrailer,
+  gitDataLayer,
+  prProposePayload,
+  WritebackRecords,
+} from "@fractalboxdev/flare-dispatch-agentic";
 import { profile } from "@fractalboxdev/flare-dispatch-profile";
 import {
   Actuators,
@@ -22,6 +30,7 @@ import {
 } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { writebackApplier } from "../../../apps/control-plane/src/agentic.ts";
 import type { ControlPlaneEnv } from "../../../apps/control-plane/src/config.ts";
 import { appServices } from "../../../apps/control-plane/src/github.ts";
 import type { GithubState } from "../../../apps/control-plane/test/e2e-local/fixtures/github-server.ts";
@@ -125,7 +134,9 @@ interface Remote {
     head: { ref: string };
   }[];
   releases: readonly { id: number; tag_name: string; draft: boolean }[];
+  /** Branch name to head sha, as both the branches API and the git refs API answer it. */
   branches: Record<string, string>;
+  /** As both the git commits API and the commits API answer them. */
   commits: Record<string, { sha: string; message: string }>;
   deliveries: readonly { id: number; guid: string; redelivery: boolean }[];
 }
@@ -133,6 +144,7 @@ interface Remote {
 const SIDE_REPO = "acme/app";
 const INSTALLATION = 7;
 const INSTALLATION_TOKEN = "ghs-installation-7";
+const APP_LOGIN = "flare-dispatch[bot]";
 const MARKER = "<!-- flare-dispatch:intent exec-1/run:step:0 -->";
 const OTHER_MARKER = "<!-- flare-dispatch:intent exec-1/run:step:1 -->";
 
@@ -179,9 +191,9 @@ const answer = (path: string, query: URLSearchParams, authorization: string): [n
   if (rest === "/pulls")
     return [
       200,
-      remote.pulls.filter(
-        (p) => p.state === query.get("state") && `acme:${p.head.ref}` === query.get("head"),
-      ),
+      remote.pulls
+        .filter((p) => p.state === query.get("state") && `acme:${p.head.ref}` === query.get("head"))
+        .map((p) => ({ ...p, html_url: pullUrl(p.number) })),
     ];
   if (rest === "/releases") return [200, remote.releases.map((r) => ({ ...r, assets: [] }))];
   if ((m = /^\/branches\/(.+)$/.exec(rest)) !== null) {
@@ -190,11 +202,30 @@ const answer = (path: string, query: URLSearchParams, authorization: string): [n
       ? [404, { message: "Branch not found" }]
       : [200, { commit: { sha }, protected: false }];
   }
+  if ((m = /^\/git\/ref\/heads\/(.+)$/.exec(rest)) !== null) {
+    const sha = remote.branches[decodeURIComponent(m[1]!)];
+    return sha === undefined
+      ? [404, { message: "Not Found" }]
+      : [200, { ref: `refs/heads/${m[1]}`, object: { sha, type: "commit" } }];
+  }
   if ((m = /^\/git\/commits\/(\w+)$/.exec(rest)) !== null) {
     const commit = remote.commits[m[1]!];
     return commit === undefined
       ? [404, { message: "Not Found" }]
       : [200, { ...commit, tree: { sha: `tree-${commit.sha}` } }];
+  }
+  if ((m = /^\/commits\/(\w+)$/.exec(rest)) !== null) {
+    const commit = remote.commits[m[1]!];
+    return commit === undefined
+      ? [404, { message: "Not Found" }]
+      : [
+          200,
+          {
+            sha: commit.sha,
+            commit: { message: commit.message, tree: { sha: `tree-${commit.sha}` } },
+            author: { login: APP_LOGIN },
+          },
+        ];
   }
   if (path === "/app/hook/deliveries") return [200, remote.deliveries];
   if ((m = /^\/app\/hook\/deliveries\/(\d+)$/.exec(path)) !== null) {
@@ -203,6 +234,8 @@ const answer = (path: string, query: URLSearchParams, authorization: string): [n
   }
   return [404, { message: "Not Found" }];
 };
+
+const pullUrl = (number: number) => `https://github.com/${SIDE_REPO}/pull/${number}`;
 
 /** The control plane's GitHub services under an App whose API base is the stand-in. */
 const sideServices = () => {
@@ -218,6 +251,29 @@ const sideServices = () => {
   return appServices(env, app, Layer.succeed(AlarmPort, { deliver: () => Effect.void }));
 };
 
+/** A lookup reads no staged-write record; the `pr.propose` apply is the only reader. */
+const unreadRecords = Layer.succeed(WritebackRecords, {
+  blobs: () => Effect.die("a lookup reads no staged blob"),
+  modelCalls: () => Effect.die("a lookup reads no model call"),
+  issuedCredentials: () => Effect.die("a lookup reads no issued credential"),
+});
+
+/**
+ * The actuators as the control plane composes them under the App: the GitHub services inside the writeback applier,
+ * whose git data carries the installation token to the stand-in.
+ */
+const sideActuators = () => {
+  const support = Layer.mergeAll(
+    gitDataLayer({
+      apiBase: sideBase,
+      fetch: (input, init) => fetch(input, init),
+      token: () => Effect.succeed(INSTALLATION_TOKEN),
+    }),
+    unreadRecords,
+  ).pipe(Layer.provideMerge(sideServices()));
+  return writebackApplier(APP_LOGIN).pipe(Layer.provideMerge(support));
+};
+
 /** `lookup` on the actuator the profile's intents table binds the row's kind to. */
 const sideLookup = (row: IntentRow): Promise<LookupAnswer> =>
   Effect.runPromise(
@@ -226,7 +282,7 @@ const sideLookup = (row: IntentRow): Promise<LookupAnswer> =>
       const actuator = binding === undefined ? undefined : (yield* Actuators).get(binding);
       if (actuator?.lookup === undefined) return yield* Effect.die(`no lookup for ${row.kind}`);
       return yield* actuator.lookup(row);
-    }).pipe(Effect.provide(sideServices())),
+    }).pipe(Effect.provide(sideActuators())),
   );
 
 interface SideCase {
@@ -238,8 +294,13 @@ interface SideCase {
   readonly found: (r: Remote) => string;
   /** No object carries the marker. */
   readonly absent: (r: Remote) => void;
-  /** The read the lookup takes, which fails in the undetermined scenarios. */
-  readonly read: RegExp;
+  /** Further remotes the lookup answers absent for, by what makes them absent. */
+  readonly absentAlso?: Readonly<Record<string, (r: Remote) => void>>;
+  /**
+   * The reads the lookup takes, in order. Each fails in turn in the undetermined scenarios over the `found` remote,
+   * so the lookup reaches every one.
+   */
+  readonly reads: readonly RegExp[];
   /** More than one object carries the marker. */
   readonly twice?: (r: Remote) => void;
 }
@@ -251,6 +312,36 @@ const noiseIssues = (count: number) =>
     body: i === 3 ? `a pull request with the marker\n\n${MARKER}` : `noise\n\n${OTHER_MARKER}`,
     ...(i === 3 ? { pull_request: {} } : {}),
   }));
+
+const PROPOSE_BRANCH = "flare-dispatch/fix-lint";
+const HEAD_SHA = "a".repeat(40);
+
+/** The row's payload as the profile's `prProposePayload` binding builds it from an accepted success. */
+const PROPOSE = (() => {
+  const bound = prProposePayload({
+    executionId: "exec-1",
+    run: "fix-lint",
+    repo: { owner: "acme", name: "app" },
+    outcome: "success",
+    stagedWrite: {
+      branch: PROPOSE_BRANCH,
+      baseBranch: "main",
+      baseCommit: "b".repeat(40),
+      message: "fix lint",
+      pr: { title: "Fix lint", body: "", draft: false, labels: [] },
+      entries: [],
+    },
+  });
+  if (bound._tag !== "payload")
+    throw new Error("an accepted success with a staged write binds a payload");
+  return bound.payload;
+})();
+
+/** The proposal's branch, whose head is the applier's commit for exec-1. */
+const proposed = (r: Remote) => {
+  r.branches[PROPOSE_BRANCH] = HEAD_SHA;
+  r.commits[HEAD_SHA] = { sha: HEAD_SHA, message: `fix lint\n\n${executionTrailer("exec-1")}` };
+};
 
 const CASES: readonly SideCase[] = [
   {
@@ -270,7 +361,7 @@ const CASES: readonly SideCase[] = [
         { id: 102, body: `another step\n\n${OTHER_MARKER}` },
       ];
     },
-    read: /\/issues\/5\/comments/,
+    reads: [/\/issues\/5\/comments/],
     twice: (r) => {
       r.comments[5] = [
         { id: 101, body: `one\n\n${MARKER}` },
@@ -294,7 +385,7 @@ const CASES: readonly SideCase[] = [
         { id: 202, body: `Findings\n\n${OTHER_MARKER}` },
       ];
     },
-    read: /\/pulls\/9\/reviews/,
+    reads: [/\/pulls\/9\/reviews/],
     twice: (r) => {
       r.reviews[9] = [
         { id: 201, body: `one\n\n${MARKER}` },
@@ -313,7 +404,7 @@ const CASES: readonly SideCase[] = [
     absent: (r) => {
       r.issues = noiseIssues(130);
     },
-    read: /\/issues\?.*&page=2$/,
+    reads: [/\/issues\?.*&page=2$/],
     twice: (r) => {
       r.issues = [
         { id: 4998, number: 2, body: `one\n\n${MARKER}` },
@@ -323,31 +414,34 @@ const CASES: readonly SideCase[] = [
   },
   {
     kind: "pr.propose",
-    payload: {
-      branch: "flare-dispatch/fix-lint",
-      base: "main",
-      title: "Fix lint",
-      body: "",
-      message: "fix lint",
-      entries: [],
-    },
+    payload: PROPOSE,
     found: (r) => {
+      proposed(r);
       r.pulls = [
         { number: 40, state: "open", head: { ref: "flare-dispatch/other" } },
-        { number: 41, state: "open", head: { ref: "flare-dispatch/fix-lint" } },
+        { number: 41, state: "open", head: { ref: PROPOSE_BRANCH } },
       ];
-      return "41";
+      return pullUrl(41);
     },
     absent: (r) => {
-      r.pulls = [{ number: 40, state: "open", head: { ref: "flare-dispatch/other" } }];
+      r.branches["flare-dispatch/other"] = HEAD_SHA;
+      r.commits[HEAD_SHA] = { sha: HEAD_SHA, message: `other\n\n${executionTrailer("exec-1")}` };
     },
-    read: /\/pulls\?/,
-    twice: (r) => {
-      r.pulls = [
-        { number: 41, state: "open", head: { ref: "flare-dispatch/fix-lint" } },
-        { number: 42, state: "open", head: { ref: "flare-dispatch/fix-lint" } },
-      ];
+    absentAlso: {
+      "a branch head that is another execution's commit": (r) => {
+        r.branches[PROPOSE_BRANCH] = HEAD_SHA;
+        r.commits[HEAD_SHA] = {
+          sha: HEAD_SHA,
+          message: `fix lint\n\n${executionTrailer("exec-2")}`,
+        };
+        r.pulls = [{ number: 41, state: "open", head: { ref: PROPOSE_BRANCH } }];
+      },
+      "the execution's branch head with no open pull request": (r) => {
+        proposed(r);
+        r.pulls = [{ number: 41, state: "closed", head: { ref: PROPOSE_BRANCH } }];
+      },
     },
+    reads: [/\/git\/ref\/heads\//, new RegExp(`/repos/${SIDE_REPO}/commits/`), /\/pulls\?/],
   },
   {
     kind: "release.draft",
@@ -362,7 +456,7 @@ const CASES: readonly SideCase[] = [
     absent: (r) => {
       r.releases = [{ id: 300, tag_name: "v1.1.0", draft: false }];
     },
-    read: /\/releases/,
+    reads: [/\/releases/],
   },
   {
     kind: "release.publish",
@@ -378,7 +472,7 @@ const CASES: readonly SideCase[] = [
     absent: (r) => {
       r.releases = [{ id: 301, tag_name: "v1.2.0", draft: true }];
     },
-    read: /\/releases/,
+    reads: [/\/releases/],
   },
   {
     kind: "canary.push",
@@ -402,7 +496,7 @@ const CASES: readonly SideCase[] = [
         message: "flare-dispatch canary 2026-11-11T09:59:00Z",
       };
     },
-    read: /\/git\/commits\//,
+    reads: [/\/git\/commits\//],
   },
   {
     kind: "delivery.redeliver",
@@ -422,7 +516,7 @@ const CASES: readonly SideCase[] = [
         { id: 12, guid: "g-2", redelivery: true },
       ];
     },
-    read: /\/app\/hook\/deliveries\?/,
+    reads: [/\/app\/hook\/deliveries\?/],
     twice: (r) => {
       r.deliveries = [
         { id: 10, guid: "g-1", redelivery: false },
@@ -508,17 +602,25 @@ describe("the side-output applier's lookup", () => {
       wroteNothing();
     });
 
-    it(`[FD-GH-092] ${c.kind}: a read that fails is undetermined, never absent`, async () => {
-      for (const how of ["error", "drop"] as const) {
-        scenario(c.absent, { path: c.read, how });
-        const answer = await sideLookup(sideRow(c));
-        expect(answer).toMatchObject({ _tag: "undetermined" });
-        expect(sideCalls.some((call) => c.read.test(call))).toBe(true);
-        if (how === "error")
-          expect(answer).toMatchObject({
-            reason: expect.stringMatching(/502/),
-          });
-      }
+    for (const [what, seed] of Object.entries(c.absentAlso ?? {}))
+      it(`[FD-GH-092] ${c.kind}: ${what} is absent`, async () => {
+        scenario(seed);
+        expect(await sideLookup(sideRow(c))).toEqual({ _tag: "absent" });
+        wroteNothing();
+      });
+
+    it(`[FD-GH-092] ${c.kind}: a read that fails is undetermined, never absent or found`, async () => {
+      for (const read of c.reads)
+        for (const how of ["error", "drop"] as const) {
+          scenario(c.found, { path: read, how });
+          const answer = await sideLookup(sideRow(c));
+          expect(answer).toMatchObject({ _tag: "undetermined" });
+          expect(sideCalls.some((call) => read.test(call))).toBe(true);
+          if (how === "error")
+            expect(answer).toMatchObject({
+              reason: expect.stringMatching(/502/),
+            });
+        }
       wroteNothing();
     });
 
