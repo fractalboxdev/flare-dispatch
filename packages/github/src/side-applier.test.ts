@@ -2,7 +2,7 @@
 // and its lookup.
 import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { Actuators, AlarmPort, type Alarm, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
@@ -633,7 +633,7 @@ describe("answers", () => {
   });
 });
 
-/** Every non-test source file of the workspace packages this repository's control plane runs. */
+/** Every non-test `.ts` file under `dir`. */
 const sources = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
@@ -649,13 +649,25 @@ const sources = (dir: string): string[] =>
 describe("write authority", () => {
   const root = join(import.meta.dirname, "../..");
   const files = [...sources(join(root, "github/src")), ...sources(join(root, "intake/src"))];
-  const rel = (f: string) => f.slice(root.length + 1);
+  const rel = (f: string) => relative(root, f);
+  // The control plane's own sources, plus every workspace package it depends on at runtime.
+  const controlPlane = join(root, "../apps/control-plane");
+  const { dependencies } = JSON.parse(
+    readFileSync(join(controlPlane, "package.json"), "utf8"),
+  ) as { dependencies: Record<string, string> };
+  const prefix = "@fractalboxdev/flare-dispatch-";
+  const controlPlaneFiles = [
+    ...sources(join(controlPlane, "src")),
+    ...Object.keys(dependencies)
+      .filter((name) => name.startsWith(prefix))
+      .flatMap((name) => sources(join(root, name.slice(prefix.length), "src"))),
+  ];
 
   it("[FD-GH-001] only the appliers call a GitHub write for an execution", () => {
     const writeCall =
       /\.(createCheckRun|updateCheckRun|createComment|createReview|createIssue|updateIssue|addLabels|removeLabel|createBlob|createTree|createCommit|setBranch|createPull|closePull|createDraftRelease|publishRelease|uploadAsset)\(/;
-    // The agentic package's `pr.propose` and `pr.close` appliers write too, so its sources are scanned as well.
-    const callers = [...files, ...sources(join(root, "agentic/src"))]
+    expect(controlPlaneFiles.map(rel)).toContain("../apps/control-plane/src/tick.ts");
+    const callers = controlPlaneFiles
       .filter((f) => writeCall.test(readFileSync(f, "utf8")))
       .map(rel);
     // `intake/src/ports.ts` posts the `flare-dispatch/manifest` check run, which belongs to no execution.

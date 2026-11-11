@@ -15,8 +15,6 @@ const RECORDED = JSON.parse(
 const WIDGETS = "acme/widgets";
 /** The check the `ci` entry owns; the base branch requires it. */
 const REQUIRED = "flare-dispatch/check:ci";
-/** The check the `release` entry owns; no rule requires it. */
-const NOT_REQUIRED = "flare-dispatch/check:release";
 
 interface Entry {
   readonly label: string;
@@ -147,6 +145,8 @@ describe("a merge group's checks_requested", () => {
 
     await tick();
     const opened = checkRunWrites();
+    // Exactly one check run: none for the `release` entry, which no rule requires, and none on the group's
+    // base commit, which GitHub tests nothing on.
     expect(opened.map((w) => w.body)).toEqual([
       {
         name: REQUIRED,
@@ -155,13 +155,6 @@ describe("a merge group's checks_requested", () => {
         status: "queued",
       },
     ]);
-    expect(opened.some((w) => (w.body as { name: string }).name === NOT_REQUIRED)).toBe(false);
-    // The group's base commit, which GitHub tests nothing on, gets no check run.
-    expect(
-      opened.some(
-        (w) => (w.body as { head_sha: string }).head_sha === RECORDING.merge_group.base_sha,
-      ),
-    ).toBe(false);
   });
 });
 
