@@ -3,14 +3,19 @@ import {
   GitData,
   GitDataError,
   LOCAL_STORE_MIGRATIONS,
+  ReuseInputs,
   StagedWriteReadFailed,
   WritebackRecords,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
+import { GithubHttpError, GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import {
   d1IntakeStore,
+  IntakeConfig,
   IntakeStore,
+  manifestSourceLayer,
   type IntakeRecord,
+  type ManifestRead,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import {
@@ -25,6 +30,8 @@ import { describe, expect, it } from "vitest";
 import {
   guardLease,
   issuedCredentials,
+  repoReusePolicy,
+  reuseInputsLayer,
   writebackApplier,
   writeCredentialIn,
 } from "../src/agentic.ts";
@@ -360,5 +367,115 @@ describe("the mounted local registration port", () => {
     });
     expect(db.sqlite.prepare("select * from intake_records").all()).toEqual([]);
     expect(db.sqlite.prepare("select * from fd_local_registrations").all()).toEqual([]);
+  });
+});
+
+describe("the reuse policy's repository read", () => {
+  const BASE_COMMIT = "b".repeat(40);
+  const OTHER_COMMIT = "c".repeat(40);
+
+  /** GitHub serving one manifest per commit; every other read is outside these tests. */
+  const reuseReads = (manifests: Readonly<Record<string, unknown>>, fail = false) => {
+    const files: string[] = [];
+    const github = Layer.succeed(
+      GithubRead,
+      new Proxy({} as GithubRead["Service"], {
+        get: (_target, call) =>
+          call === "file"
+            ? (repo: string, path: string, ref: string) =>
+                Effect.suspend(() => {
+                  files.push(`${repo} ${path}@${ref}`);
+                  if (fail)
+                    return Effect.fail(
+                      new GithubHttpError({
+                        status: 502,
+                        message: "bad gateway",
+                        rateLimited: false,
+                      }),
+                    );
+                  const m = manifests[ref];
+                  const text = m === undefined ? null : JSON.stringify(m);
+                  return Effect.succeed(text === null ? null : { text, size: text.length });
+                })
+            : call === "requiredChecks"
+              ? () => Effect.succeed([])
+              : () => Effect.die(`GithubRead.${String(call)} is outside these tests`),
+      }),
+    );
+    const config = Layer.succeed(IntakeConfig, { catalog: () => undefined } as never);
+    const layer = reuseInputsLayer.pipe(
+      Layer.provide(manifestSourceLayer.pipe(Layer.provideMerge(Layer.merge(github, config)))),
+    );
+    const policy = (baseCommit: string) =>
+      Effect.runPromise(
+        Effect.flatMap(ReuseInputs, (inputs) => inputs.repoPolicy("acme/widgets", baseCommit)).pipe(
+          Effect.match({ onFailure: (e) => `failed: ${e.source}`, onSuccess: (p) => p }),
+          Effect.provide(layer),
+        ),
+      );
+    return { policy, files };
+  };
+
+  const OFF = { reuse: false, equivalentPlatforms: [] };
+
+  it("[FD-LOCAL-077] turns reuse on only where the manifest at the run's base commit has an enabled reuse block", async () => {
+    const h = reuseReads({
+      [BASE_COMMIT]: { version: 1, runs: [], reuse: { enabled: true } },
+      [OTHER_COMMIT]: { version: 1, runs: [] },
+    });
+    expect(await h.policy(BASE_COMMIT)).toEqual({ reuse: true, equivalentPlatforms: [] });
+    expect(await h.policy(OTHER_COMMIT)).toEqual(OFF);
+    expect(h.files).toEqual([
+      `acme/widgets .github/flare-dispatch.json@${BASE_COMMIT}`,
+      `acme/widgets .github/flare-dispatch.json@${OTHER_COMMIT}`,
+    ]);
+  });
+
+  it("[FD-LOCAL-077] leaves reuse off for a disabled block and a repository with no manifest", async () => {
+    const h = reuseReads({
+      [BASE_COMMIT]: {
+        version: 1,
+        runs: [],
+        reuse: { enabled: false, equivalentPlatforms: [["darwin-arm64", "linux-arm64"]] },
+      },
+    });
+    expect(await h.policy(BASE_COMMIT)).toEqual(OFF);
+    expect(await h.policy(OTHER_COMMIT)).toEqual(OFF);
+  });
+
+  it("[FD-LOCAL-084] answers the platform groups the manifest's reuse block names as equivalent", async () => {
+    const groups = [["darwin-arm64", "linux-arm64"], ["linux-x64"]];
+    const h = reuseReads({
+      [BASE_COMMIT]: {
+        version: 1,
+        runs: [],
+        reuse: { enabled: true, equivalentPlatforms: groups },
+      },
+    });
+    expect(await h.policy(BASE_COMMIT)).toEqual({ reuse: true, equivalentPlatforms: groups });
+  });
+
+  it("[FD-LOCAL-077] fails the read, never answers a policy, for an invalid or unreadable manifest", async () => {
+    const invalid = reuseReads({
+      [BASE_COMMIT]: { version: 1, runs: [], reuse: { enabled: "yes" } },
+    });
+    expect(await invalid.policy(BASE_COMMIT)).toBe("failed: manifest");
+    expect(await reuseReads({}, true).policy(BASE_COMMIT)).toBe("failed: manifest");
+  });
+
+  it("maps each manifest read to a policy or a failed read", async () => {
+    const run = (read: ManifestRead) =>
+      Effect.runPromise(
+        repoReusePolicy("acme/widgets", read).pipe(
+          Effect.match({ onFailure: (e) => e.detail, onSuccess: (p) => p }),
+        ),
+      );
+    expect(await run({ _tag: "Absent" })).toEqual(OFF);
+    expect(await run({ _tag: "Unreadable", reason: "timeout after 10 s" })).toBe(
+      "acme/widgets: timeout after 10 s",
+    );
+    expect(await run({ _tag: "Invalid", errors: ["runs[0].recipe: no recipe named x"] })).toBe(
+      "acme/widgets: invalid manifest: runs[0].recipe: no recipe named x",
+    );
   });
 });

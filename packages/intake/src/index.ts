@@ -72,6 +72,7 @@ export {
   ManifestSource,
   manifestSourceLayer,
   RepoManifest,
+  ReuseBlock,
   validateManifest,
   type ManifestRead,
 } from "./manifest.ts";

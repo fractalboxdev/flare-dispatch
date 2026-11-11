@@ -43,11 +43,24 @@ export const ManifestEntry = Schema.Struct({
 });
 export type ManifestEntry = typeof ManifestEntry.Type;
 
+/**
+ * The repository's rehearsal-reuse policy (specs/local-scheduler.md § Rehearsal reuse): reuse is on only where
+ * `enabled` is true (FD-LOCAL-077), and each group of `equivalentPlatforms` names platforms a rehearsal may differ on
+ * from the pull-request run (FD-LOCAL-084).
+ */
+export const ReuseBlock = Schema.Struct({
+  enabled: Schema.Boolean,
+  equivalentPlatforms: Schema.optionalKey(Schema.Array(Schema.Array(Schema.NonEmptyString))),
+});
+export type ReuseBlock = typeof ReuseBlock.Type;
+
 export const RepoManifest = Schema.Struct({
   version: Schema.Literal(1),
   runs: Schema.Array(ManifestEntry),
   /** The pull-request authors the gate recipes skip; `dependabot[bot]` when absent (FD-GATE-017). */
   skipAuthors: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** Rehearsal reuse; off when absent (FD-LOCAL-077). */
+  reuse: Schema.optionalKey(ReuseBlock),
 });
 export type RepoManifest = typeof RepoManifest.Type;
 
