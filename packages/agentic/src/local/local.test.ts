@@ -294,4 +294,20 @@ describe("local registration port", () => {
     const again = await go(registerVia("check", registration));
     expect(again).toEqual(first);
   });
+
+  it("[FD-LOCAL-072] a deduplicated repeat that differs from the stored record is rejected and leaves the record unchanged", async () => {
+    const { go } = harness();
+    const first = await go(registerVia("check", registration));
+    const { executionId } = first as { executionId: string };
+    const read = () =>
+      go(
+        Effect.gen(function* () {
+          return yield* (yield* LocalStore).byExecution(executionId);
+        }),
+      );
+    const stored = await read();
+    const again = await go(registerVia("check", { ...registration, imageDigest: "sha256:other" }));
+    expect(again).toEqual({ _tag: "rejected" });
+    expect(await read()).toEqual(stored);
+  });
 });

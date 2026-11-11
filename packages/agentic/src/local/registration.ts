@@ -3,7 +3,7 @@
 // MAMEKO-PROTO-082, MAMEKO-LOCAL-069, FD-INT-061).
 import { LocalRegistration } from "@fractalboxdev/mameko-ports";
 import { Clock, Context, Effect, Exit, Layer, Schema } from "effect";
-import { LocalStore, Provenance } from "./store.ts";
+import { LocalStore, Provenance, type RegistrationRecord } from "./store.ts";
 
 /** What the local scheduler asks of a registration: reuse, writeback, or both. */
 export interface RegistrationWants {
@@ -68,11 +68,35 @@ const hex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart
 const decodeRegistration = Schema.decodeUnknownExit(RegistrationPayload);
 
 /**
+ * Whether a stored record holds exactly what this registration describes. Intake's local dedup key covers only the
+ * lease, run, tree hash and inputs digest, so a repeat under that key may still differ on the rest of its provenance.
+ */
+const recordMatches = (prior: RegistrationRecord, r: RegistrationPayload): boolean => {
+  const names = [...r.environmentNames].sort();
+  return (
+    prior.baseCommit === r.baseCommit &&
+    prior.runDigest === r.runDigest &&
+    prior.imageDigest === r.imageDigest &&
+    prior.platform === r.platform &&
+    prior.reuseKey === r.reuseKey &&
+    prior.scopeId === r.scopeId &&
+    prior.executorId === r.executorId &&
+    prior.repository === r.repository &&
+    prior.environmentNames.length === names.length &&
+    prior.environmentNames.every((name, i) => name === names[i]) &&
+    prior.wantsReuse === r.wants.reuse &&
+    prior.wantsWriteback === r.wants.writeback
+  );
+};
+
+/**
  * Registers one rehearsal: submits it through intake, records its environment names beside the tree hash, base
  * commit, run-definition digest, image digest, platform and inputs digest under the admitted execution id
  * (FD-LOCAL-072), and issues a 256-bit nonce. A registration that requests neither reuse nor writeback, fails to
  * decode or that intake refuses is rejected, so the execution runs unregistered (MAMEKO-LOCAL-070). A repeated
- * registration that intake deduplicates to an execution this lease already registered receives that record's nonce.
+ * registration that intake deduplicates to an already registered execution receives that record's nonce only when the
+ * record holds exactly its provenance, scope, reuse key, environment names and wants; any other repeat is rejected, so
+ * the record keeps describing what the first rehearsal tested.
  */
 export const registerRehearsal = (
   lease: { readonly leaseId: string; readonly epoch: number },
@@ -97,7 +121,7 @@ export const registerRehearsal = (
     const store = yield* LocalStore;
     const prior = yield* store.byExecution(executionId);
     if (prior !== null)
-      return prior.leaseId === lease.leaseId
+      return recordMatches(prior, r)
         ? ({ _tag: "accepted", executionId, nonce: prior.nonce } as const)
         : ({ _tag: "rejected" } as const);
     const now = yield* Clock.currentTimeMillis;
