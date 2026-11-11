@@ -13,7 +13,7 @@ import {
   type LookupAnswer,
   type ReconcileAnswer,
 } from "@fractalboxdev/mameko-ports";
-import { Context, Effect, Layer, Match, Schema } from "effect";
+import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import {
   GithubClient,
   type Annotation,
@@ -21,13 +21,17 @@ import {
   type GithubError,
   type RepoCall,
 } from "./client.ts";
+import { ConcludeFacts, type ConcludeFactsUnavailable } from "./conclude-facts.ts";
 import {
   checkConclusion,
+  checkNeutralInvariant,
   ConcludeDetails,
   concludeSummary,
+  OutcomePayload,
   quarantineAnnotations,
   truncate,
   Verdict,
+  verdictOf,
 } from "./conclusion.ts";
 
 /** Which GitHub App installation serves a tenant scope; null when none does. */
@@ -107,6 +111,8 @@ const chunks = <A>(xs: readonly A[], size: number): A[][] =>
 interface Ctx extends RepoCall {
   readonly executionId: string;
   readonly row: IntentRow;
+  /** The outcome the execution row records, for a conclusion built from mameko's outcome row. */
+  readonly recorded: Verdict | null;
 }
 
 interface Handler<K extends CheckKind> {
@@ -114,7 +120,7 @@ interface Handler<K extends CheckKind> {
     ctx: Ctx,
     payload: PayloadOf<K>,
     run: CheckRun | null,
-  ) => Effect.Effect<ApplyAnswer, GithubError, GithubClient>;
+  ) => Effect.Effect<ApplyAnswer, GithubError, GithubClient | AlarmPort>;
   /** Whether the row's effect is visible on the check run an earlier attempt reached. */
   readonly adopted: (
     ctx: Ctx,
@@ -155,10 +161,17 @@ const concludeOutput = (p: PayloadOf<"check.conclude">) => ({
   summary: truncate(concludeSummary(p.verdict, p.details), p.details_url),
 });
 
-/** The conclusion with the first batch of quarantined-failure annotations (FD-GH-077). */
+const detailsUrl = (p: { readonly details_url?: string }) =>
+  p.details_url === undefined ? {} : { details_url: p.details_url };
+
+/**
+ * The conclusion with the log link and the first batch of quarantined-failure annotations (FD-GH-013, FD-GH-077). The
+ * link is sent again, so the check run carries the token minted at its conclusion.
+ */
 const concludeBody = (p: PayloadOf<"check.conclude">) => {
   const first = quarantineAnnotations(p.details).slice(0, ANNOTATION_BATCH);
   return {
+    ...detailsUrl(p),
     status: "completed" as const,
     conclusion: checkConclusion(p.verdict).conclusion,
     output: { ...concludeOutput(p), ...(first.length === 0 ? {} : { annotations: first }) },
@@ -203,7 +216,7 @@ const handlers: { readonly [K in CheckKind]: Handler<K> } = {
                 head_sha: p.head_sha,
                 external_id: ctx.executionId,
                 status: "queued",
-                ...(p.details_url === undefined ? {} : { details_url: p.details_url }),
+                ...detailsUrl(p),
               },
             });
             return applied(created);
@@ -228,7 +241,8 @@ const handlers: { readonly [K in CheckKind]: Handler<K> } = {
     adopted: (_, p, run) => Effect.succeed(run.output.title === progressOutput(p).title),
   },
   "check.conclude": {
-    // Without an applied `check.open`, the conclusion creates the check run completed (FD-GH-052).
+    // Without an applied `check.open`, the conclusion creates the check run completed (FD-GH-052). The conclusion
+    // GitHub answers is held against the execution's recorded outcome (FD-GH-031).
     apply: (ctx, p, run) =>
       Effect.gen(function* () {
         const github = yield* GithubClient;
@@ -241,10 +255,15 @@ const handlers: { readonly [K in CheckKind]: Handler<K> } = {
                   name: p.name,
                   head_sha: p.head_sha,
                   external_id: ctx.executionId,
-                  ...(p.details_url === undefined ? {} : { details_url: p.details_url }),
                   ...concludeBody(p),
                 },
               });
+        yield* checkNeutralInvariant(
+          ctx.executionId,
+          ctx.row.scopeId,
+          concluded.conclusion,
+          ctx.recorded ?? p.verdict,
+        );
         return yield* restOfQuarantine(ctx, p, concluded);
       }),
     adopted: (_, p, run) =>
@@ -321,7 +340,7 @@ class AmbiguousCheckRun extends Schema.TaggedError<AmbiguousCheckRun>()("Ambiguo
   count: Schema.Number,
 }) {}
 
-type ReadFailure = GithubError | AmbiguousCheckRun | Unservable;
+type ReadFailure = GithubError | AmbiguousCheckRun | Unservable | ConcludeFactsUnavailable;
 
 const found = (run: CheckRun | null): LookupAnswer =>
   run === null ? { _tag: "absent" } : { _tag: "found", externalRef: String(run.id) };
@@ -331,6 +350,7 @@ export const makeCheckRunApplier = Effect.gen(function* () {
   const github = yield* GithubClient;
   const directory = yield* InstallationDirectory;
   const alarms = yield* AlarmPort;
+  const facts = yield* ConcludeFacts;
 
   const raiseInstallationLost = (row: IntentRow, reason: string) =>
     alarms
@@ -359,6 +379,42 @@ export const makeCheckRunApplier = Effect.gen(function* () {
       Effect.provideService(GithubClient, github),
     );
 
+  /**
+   * The `check.conclude` payload. The outcome row mameko's terminal write inserts carries `{ outcome }`; its verdict is
+   * `verdictOf(outcome)`, and its name, head SHA, attempt, summary facts and log link come from the execution's records
+   * (FD-GH-008, FD-GH-013, FD-GH-014, FD-GH-015). A row that carries the verdict itself, as a fan-out parent's child
+   * conclusion does, is taken as it is.
+   */
+  const concludePayload = (executionId: string, payload: unknown) =>
+    Effect.gen(function* () {
+      const given = Schema.decodeUnknownOption(Payloads["check.conclude"])(payload);
+      if (Option.isSome(given)) return { payload: given.value, recorded: null };
+      const { outcome } = yield* Schema.decodeUnknownEffect(OutcomePayload)(payload).pipe(
+        Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
+      );
+      const known = yield* facts.of(executionId);
+      if (known === null) return yield* unservable("conclude: no record of the execution");
+      const built: PayloadOf<"check.conclude"> = {
+        name: known.name,
+        head_sha: known.headSha,
+        ...(known.detailsUrl === undefined ? {} : { details_url: known.detailsUrl }),
+        verdict: verdictOf(outcome),
+        attempt: known.attempt,
+        details: known.details,
+      };
+      return { payload: built, recorded: known.recorded };
+    });
+
+  const decode = (kind: CheckKind, executionId: string, payload: unknown) =>
+    kind === "check.conclude"
+      ? concludePayload(executionId, payload)
+      : Effect.map(
+          Schema.decodeUnknownEffect(Payloads[kind])(payload).pipe(
+            Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
+          ),
+          (decoded) => ({ payload: decoded, recorded: null }),
+        );
+
   const resolve = (row: IntentRow) =>
     Effect.gen(function* () {
       const executionId = row.executionId;
@@ -366,15 +422,13 @@ export const makeCheckRunApplier = Effect.gen(function* () {
         return yield* unservable("a check-run kind belongs to an execution");
       const kind = row.kind;
       if (!isCheckKind(kind)) return yield* unservable(`applier: ${kind} is not a check-run kind`);
-      const payload = yield* Schema.decodeUnknownEffect(Payloads[kind])(row.payload).pipe(
-        Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
-      );
+      const { payload, recorded } = yield* decode(kind, executionId, row.payload);
       const installation = yield* directory.installationFor(row.scopeId);
       if (installation === null) {
         yield* raiseInstallationLost(row, "installation: not found");
         return yield* unservable("installation: not found");
       }
-      const ctx: Ctx = { installation, repo: row.scopeId, executionId, row };
+      const ctx: Ctx = { installation, repo: row.scopeId, executionId, row, recorded };
       // The handler table is keyed by kind, and the payload decoded under that kind's schema.
       const handler = handlers[kind] as unknown as Handler<CheckKind>;
       // Every check run of the execution, oldest first; more than one means an earlier create was doubled.
@@ -394,10 +448,15 @@ export const makeCheckRunApplier = Effect.gen(function* () {
       // Every attempt searches by `external_id` before it writes and works on the oldest check run it finds
       // (FD-GH-010). `row.attempts` holds the value from insertion, so it does not mark a repeat.
       const run = (yield* matching)[0] ?? null;
-      return yield* call(ctx.installation, handler.apply(ctx, payload, run));
+      return yield* call(
+        ctx.installation,
+        handler.apply(ctx, payload, run).pipe(Effect.provideService(AlarmPort, alarms)),
+      );
     }).pipe(
       Effect.catchTags({
         Unservable: ({ reason }) => Effect.succeed<ApplyAnswer>({ _tag: "refused", reason }),
+        ConcludeFactsUnavailable: ({ message }) =>
+          Effect.succeed<ApplyAnswer>({ _tag: "retryable", reason: `records: ${message}` }),
         GithubHttpError: (e) =>
           e.status === 401
             ? Effect.as(raiseInstallationLost(row, "installation: unauthorized"), classify(e))
@@ -427,6 +486,7 @@ export const makeCheckRunApplier = Effect.gen(function* () {
     Match.value(e).pipe(
       Match.tag("AmbiguousCheckRun", ({ count }) => `check run: ${count} carry the execution id`),
       Match.tag("Unservable", ({ reason }) => reason),
+      Match.tag("ConcludeFactsUnavailable", ({ message }) => `records: ${message}`),
       Match.orElse(reasonOf),
     );
 

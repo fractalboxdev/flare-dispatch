@@ -14,7 +14,13 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { CheckRunApplierLive, InstallationDirectory, Payloads } from "./applier.ts";
 import { GithubHttpError, GithubNetworkError } from "./client.ts";
-import { fakeGithub, fakeLayers, row, type FakeGithub } from "./fake.test-support.ts";
+import {
+  fakeConcludeFacts,
+  fakeGithub,
+  fakeLayers,
+  row,
+  type FakeGithub,
+} from "./fake.test-support.ts";
 import { githubApplicationLayer } from "./layer.ts";
 import { ActuatorRateLimitLive, installationQuotaLayer } from "./rate-limit.ts";
 
@@ -115,6 +121,43 @@ describe("the applier under the drainer", () => {
   });
 });
 
+describe("mameko's outcome row under the drainer", () => {
+  it("[FD-GH-014] the outcome row keyed `outcome` with payload { outcome } concludes the check run and is applied", async () => {
+    const gh = fakeGithub();
+    gh.facts.set("exec-1", {
+      name: ref.name,
+      headSha: ref.head_sha,
+      attempt: 1,
+      detailsUrl: undefined,
+      details,
+      recorded: { _tag: "failure", category: "finding", reason: "lint: 3 errors" },
+    });
+    const outbox = memoryOutboxStore();
+    await outbox.seed([
+      stored("1", row("check.open", ref)),
+      stored(
+        "2",
+        row(
+          "check.conclude",
+          { outcome: { _tag: "Failure", reason: "lint: 3 errors", epoch: 1 } },
+          { intentKey: "outcome" },
+        ),
+        "outcome",
+      ),
+    ]);
+    await pass(fakeApplication(gh), outbox, NOW);
+    expect(state(outbox, "2")).toMatchObject({ state: "applied", externalRef: "1000" });
+    expect(state(outbox, "1")?.state).toBe("applied");
+    expect(gh.runs).toMatchObject([
+      {
+        status: "completed",
+        conclusion: "failure",
+        output: { title: "lint: 3 errors" },
+      },
+    ]);
+  });
+});
+
 describe("githubApplicationLayer", () => {
   const response = (body: unknown, headers: Record<string, string> = {}) =>
     new Response(JSON.stringify(body), { status: 200, headers });
@@ -146,6 +189,7 @@ describe("githubApplicationLayer", () => {
         Layer.mergeAll(
           Layer.succeed(InstallationDirectory, { installationFor: () => Effect.succeed(7) }),
           Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+          fakeConcludeFacts(fakeGithub()),
         ),
       ),
     );

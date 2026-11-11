@@ -23,7 +23,6 @@ import {
   routerGroup,
   toFetchHandler,
   wellKnownGroup,
-  type ApiEnv,
 } from "@fractalboxdev/flare-dispatch-api";
 import {
   AccessIdentity,
@@ -35,7 +34,7 @@ import { livenessReport, runOpsMigrations } from "@fractalboxdev/flare-dispatch-
 import { Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { isolateServices } from "./composition.ts";
-import { profileOf, type ControlPlaneEnv } from "./config.ts";
+import { apiEnvOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 
 /** The Access identity the API's gate verified, as intake's dispatch route asks for it. */
 const accessIdentity = Effect.gen(function* () {
@@ -124,19 +123,6 @@ const operations = (env: ControlPlaneEnv) =>
       >;
     }),
   });
-
-/** A rendered var holding an array arrives as the array; the API reads each identity list as JSON text. */
-const textVar = (value: unknown): string | undefined =>
-  value === undefined || typeof value === "string" ? value : JSON.stringify(value);
-
-export const apiEnvOf = (env: ControlPlaneEnv): ApiEnv => {
-  const raw = env as unknown as Readonly<Record<string, unknown>>;
-  return {
-    ...(raw as ApiEnv),
-    OPERATORS: textVar(raw["OPERATORS"]),
-    DISPATCHERS: textVar(raw["DISPATCHERS"]),
-  } as ApiEnv;
-};
 
 const requestServices = (env: ControlPlaneEnv) =>
   Layer.mergeAll(
