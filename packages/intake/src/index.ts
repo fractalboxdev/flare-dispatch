@@ -26,11 +26,15 @@ export {
 } from "./dedup.ts";
 export {
   AccessIdentity,
+  admitDispatch,
   checkSignals,
   DISPATCH_MAX_BYTES,
   DispatchBody,
   handleDispatch,
+  lowerOnlyClass,
   SIGNAL_CAPS,
+  type AuthenticatedDispatch,
+  type DispatchAdmitted,
 } from "./dispatch.ts";
 export {
   CacheTriggerRecord,

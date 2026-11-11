@@ -1,5 +1,6 @@
 // `POST /v1/dispatch/:run` through the route group: the identity gate before any lookup, the Actions OIDC token,
 // the body and input schemas, idempotency keys, the installation and the commit.
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   actionsToken,
@@ -13,6 +14,8 @@ import {
   REPO,
   type Harness,
 } from "./harness.test-support.ts";
+import { IntakeError } from "./config.ts";
+import { admitDispatch, type AuthenticatedDispatch } from "./dispatch.ts";
 import { handleIntake } from "./routes.ts";
 
 const dispatch = (h: Harness, request: Request) =>
@@ -225,26 +228,27 @@ describe("dispatch to admission", () => {
     expect(none.executions()).toEqual([]);
   });
 
-  it("an Actions token naming one commit cannot dispatch another commit that is not a branch head of its repository", async () => {
+  it("[FD-IFC-009] an Actions token naming one commit cannot dispatch another commit that is not a branch head of its repository; the refusal is 403 forbidden", async () => {
     const h = await harness();
     const token = { authorization: `Bearer ${actionsToken({ sha: BASE })}` };
     const foreign = "e".repeat(40);
     const r = await dispatch(h, dispatchRequest("check", { ...ok, sha: foreign }, token));
     expect(r!.status).toBe(403);
-    expect((await bodyOf(r)).error).toBe("sha_mismatch");
+    expect(await bodyOf(r)).toEqual({
+      error: "forbidden",
+      message: expect.stringContaining(foreign),
+      request_id: expect.any(String),
+    });
     expect(h.executions()).toEqual([]);
     const same = await dispatch(h, dispatchRequest("check", { ...ok, sha: BASE }, token));
     expect(same!.status).toBe(202);
   });
 
-  it("a body installation_id other than the App's installation for the repository answers 403", async () => {
+  it("[FD-INT-042] a body installation_id does not choose the installation; the App's installation for the repository does", async () => {
     const h = await harness();
     const r = await dispatch(h, dispatchRequest("check", { ...ok, installation_id: 99 }));
-    expect(r!.status).toBe(403);
-    expect((await bodyOf(r)).error).toBe("installation_mismatch");
-    expect(h.executions()).toEqual([]);
-    const matching = await dispatch(h, dispatchRequest("check", { ...ok, installation_id: 7 }));
-    expect(matching!.status).toBe(202);
+    expect(r!.status).toBe(202);
+    expect(h.records()[0]!.installation).toBe(7);
   });
 
   it("[FD-IFC-028] [FD-INT-015] a run the manifest does not list for dispatch answers 404 run_not_found", async () => {
@@ -298,5 +302,87 @@ describe("the route group", () => {
       message: "internal error",
       request_id: expect.any(String),
     });
+  });
+});
+
+describe("an authenticated dispatch", () => {
+  const authenticated = (
+    overrides: Partial<AuthenticatedDispatch> = {},
+  ): AuthenticatedDispatch => ({
+    trigger: "dispatch",
+    run: "check",
+    repository: REPO,
+    ref: "refs/heads/main",
+    sha: undefined,
+    label: "ci",
+    inputs: { sha: HEAD },
+    signals: undefined,
+    classInput: null,
+    caller: { kind: "actions-oidc", id: `actions:${REPO}:ci.yml`, ref: "refs/heads/main" },
+    vouchedSha: BASE,
+    idempotency: null,
+    ...overrides,
+  });
+  const refusal = (h: Harness, d: AuthenticatedDispatch) =>
+    h.run(
+      admitDispatch(d).pipe(
+        Effect.flip,
+        Effect.map((e) =>
+          e instanceof IntakeError
+            ? { status: e.status, code: e.code }
+            : { status: 503, code: "store_unavailable" },
+        ),
+      ),
+    );
+
+  it("[FD-INT-041] with no ref and no commit, admits the default branch head under the App's installation", async () => {
+    const h = await harness();
+    const admitted = await h.run(admitDispatch(authenticated({ ref: undefined })));
+    expect(admitted).toEqual({
+      executionId: expect.any(String),
+      className: "interactive",
+      duplicate: false,
+    });
+    expect(h.records()[0]).toMatchObject({
+      sha: BASE,
+      ref: "refs/heads/main",
+      installation: 7,
+      caller: `actions:${REPO}:ci.yml`,
+    });
+  });
+
+  it("[FD-IFC-009] refuses with codes of the error-model table only", async () => {
+    const h = await harness();
+    const foreign = await refusal(h, authenticated({ sha: "e".repeat(40) }));
+    const unknown = await refusal(h, authenticated({ run: "no-such-run" }));
+    const inputs = await refusal(h, authenticated({ inputs: { steps: 1 } }));
+    const unlisted = await refusal(h, authenticated({ label: "nightly" }));
+    const none = await harness({ installations: {} });
+    const uninstalled = await refusal(none, authenticated());
+    expect([foreign, unknown, inputs, unlisted, uninstalled]).toEqual([
+      { status: 403, code: "forbidden" },
+      { status: 404, code: "run_not_found" },
+      { status: 400, code: "invalid_inputs" },
+      { status: 404, code: "run_not_found" },
+      { status: 422, code: "installation_not_found" },
+    ]);
+    expect(h.executions()).toEqual([]);
+  });
+
+  it("[FD-INT-063] an MCP call's class above the assigned one is dropped to the assigned class", async () => {
+    const h = await harness({
+      resolve: (r) => ({ _tag: "Class", class: r.classInput ?? "batch", labels: [], alarm: null }),
+    });
+    const admitted = await h.run(
+      admitDispatch(
+        authenticated({
+          trigger: "mcp",
+          caller: { kind: "access", id: "dev@example.com" },
+          vouchedSha: undefined,
+          classInput: "interactive",
+        }),
+      ),
+    );
+    expect(admitted.className).toBe("batch");
   });
 });

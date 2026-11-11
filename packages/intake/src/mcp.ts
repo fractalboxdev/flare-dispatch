@@ -2,13 +2,11 @@
 // the call is submitted through intake as trigger kind `mcp` with the caller's
 // identity on the request (FD-INT-062). A `class` above the one `resolveClass`
 // assigns is clamped to the assigned class and the clamp is logged (FD-INT-063).
-import { classNamed } from "@fractalboxdev/flare-dispatch-profile";
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
-import { Effect, Match, Option, Schema } from "effect";
-import { ClassResolver, IntakeConfig, intakeError } from "./config.ts";
-import { AccessIdentity } from "./dispatch.ts";
+import { Effect, Option, Schema } from "effect";
+import { IntakeConfig, intakeError } from "./config.ts";
+import { AccessIdentity, lowerOnlyClass } from "./dispatch.ts";
 import type { Caller } from "./event.ts";
-import { checkName } from "./runs.ts";
 import { submission, submit } from "./submit.ts";
 import { readManifest } from "./triggers.ts";
 
@@ -22,13 +20,6 @@ export const McpDispatchArgs = Schema.Struct({
   class: Schema.optionalKey(Schema.NonEmptyString),
 });
 export type McpDispatchArgs = typeof McpDispatchArgs.Type;
-
-/** Whether `a` ranks above `b`: a lower rank number is a higher class. */
-const ranksAbove = (ranks: (name: string) => number | undefined, a: string, b: string) => {
-  const ra = ranks(a);
-  const rb = ranks(b);
-  return ra !== undefined && rb !== undefined && ra < rb;
-};
 
 const branchOf = (ref: string) =>
   ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
@@ -75,39 +66,16 @@ export const mcpDispatch = (request: Request, rawArgs: unknown) =>
     const ref = args.ref ?? `refs/heads/${defaultBranch}`;
     const sha = args.sha ?? (yield* github.branchHead(args.repo, branchOf(ref)));
 
-    // The class resolveClass assigns without the caller's class; a higher request is clamped to it.
-    const assigned = yield* (yield* ClassResolver).resolve({
+    const classInput = yield* lowerOnlyClass({
       run,
-      trigger: "mcp",
-      event: null,
       repo: args.repo,
       ref,
       sha,
       defaultBranch,
-      targetBranch: null,
-      refProtection: null,
-      checkName: checkName(run.name, label),
-      classInput: null,
+      label,
       caller,
+      requested: args.class ?? null,
     });
-    const ranks = (name: string) => classNamed(config.profile, name)?.rank;
-    const requested = args.class ?? null;
-    const classInput = yield* Match.value(assigned).pipe(
-      Match.tag("Fail", () => Effect.succeed(requested)),
-      Match.tag("Class", ({ class: given }) =>
-        requested !== null && ranksAbove(ranks, requested, given)
-          ? Effect.as(
-              Effect.logInfo("mcp dispatch class clamped", {
-                requested,
-                assigned: given,
-                caller: identity,
-              }),
-              null,
-            )
-          : Effect.succeed(requested),
-      ),
-      Match.exhaustive,
-    );
     const admitted = yield* submit(
       submission({
         run,

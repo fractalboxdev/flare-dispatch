@@ -46,6 +46,10 @@ type Codes = typeof CODES;
 export type Status = keyof Codes;
 export type ErrorCode = Codes[Status][number];
 
+/** Whether a code is in the error-model table. */
+export const isErrorCode = (code: string): code is ErrorCode =>
+  Object.values(CODES).some((codes) => (codes as readonly string[]).includes(code));
+
 /** The status the table assigns to a code. */
 export const statusOf = (code: ErrorCode): Status =>
   Number(
