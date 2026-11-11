@@ -1,6 +1,7 @@
 // The operability routes as one handler the Worker mounts before its own: the dashboard, the execution page and the
-// executions JSON route behind the Access gate, `/v1/ops/*` and the install routes behind the operator gate, and `GET /v1/spend`. A route
-// whose port the composition does not supply is not served, so it answers as an unknown route.
+// executions JSON route behind the Access gate, `/v1/ops/*` (the phase gate's records among them) and the install
+// routes behind the operator gate, and `GET /v1/spend`. A route whose port the composition does not supply is not
+// served, so it answers as an unknown route.
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Cause, Effect, Layer } from "effect";
 import {
@@ -28,6 +29,7 @@ import { dashboardLink } from "./link-token.ts";
 import { livenessReport, runOpsMigrations } from "./liveness.ts";
 import { matchOperatorRoute, operatorRoute, OperatorOperations } from "./operator-routes.ts";
 import { spendRoute, SpendView } from "./spend.ts";
+import { phaseGateRoute } from "./verification/records.ts";
 
 /** What the routes compose beside the Worker's env. */
 export interface OpsRouteDeps {
@@ -116,6 +118,10 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
     if (pathname === "/v1/ops/health") {
       yield* requireOperator(request, access, operators);
       return Response.json(yield* Effect.promise(() => livenessReport(env.DB, now)));
+    }
+    if (pathname === "/v1/ops/phase-gate") {
+      yield* requireOperator(request, access, operators);
+      return yield* phaseGateRoute(request, url, env.DB, now, requestId);
     }
     if (pathname === "/v1/ops/fleet") {
       yield* requireOperator(request, access, operators);
