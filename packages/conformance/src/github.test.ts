@@ -10,6 +10,10 @@
 // with the one object's id, `absent` when none carries the marker, and `undetermined` when the read fails
 // (specs/github-output.md § Appliers). A `pr.propose` row carries the `prProposePayload` binding's payload and goes to
 // the writeback applier's lookup, which reads the branch head, its commit's execution trailer and the open pull request.
+//
+// The credential minter port the control plane composes under the App (`appServices`), against a GitHub stand-in over
+// HTTP: a mint for an execution lease asks GitHub for a token scoped to the lease's one repository and to the six read
+// permissions, and answers it with an expiry no later than the lease's `deadline_at` (specs/github-output.md FD-GH-002).
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -25,6 +29,7 @@ import { profile } from "@fractalboxdev/flare-dispatch-profile";
 import {
   Actuators,
   AlarmPort,
+  CredentialMinter,
   type IntentRow,
   type LookupAnswer,
 } from "@fractalboxdev/mameko-ports";
@@ -634,4 +639,92 @@ describe("the side-output applier's lookup", () => {
         });
       });
   }
+});
+
+describe("the credential minter port", () => {
+  interface MintCall {
+    readonly method: string;
+    readonly path: string;
+    readonly body: unknown;
+  }
+  const mintCalls: MintCall[] = [];
+  let mintServer: Server;
+  let mintBase = "";
+
+  beforeAll(async () => {
+    mintServer = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk: Buffer) => (raw += chunk.toString()));
+      req.on("end", () => {
+        const path = new URL(req.url ?? "/", "http://stand-in").pathname;
+        mintCalls.push({
+          method: req.method ?? "",
+          path,
+          body: raw === "" ? undefined : (JSON.parse(raw) as unknown),
+        });
+        const [status, body]: [number, unknown] =
+          path === "/repos/acme/widgets/installation"
+            ? [200, { id: 31 }]
+            : path === "/app/installations/31/access_tokens"
+              ? [
+                  201,
+                  {
+                    token: "ghs-lease-31",
+                    expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+                  },
+                ]
+              : [404, { message: "Not Found" }];
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      });
+    });
+    await new Promise<void>((resolve) => mintServer.listen(0, "127.0.0.1", resolve));
+    mintBase = `http://127.0.0.1:${(mintServer.address() as AddressInfo).port}`;
+  });
+
+  afterAll(() => new Promise<void>((resolve) => mintServer.close(() => resolve())));
+
+  it("[FD-GH-002] a mint for an execution lease scopes the token to the lease's one repository and to read permissions only", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const env = { DB: {}, PLANE_ID: "conformance" } as unknown as ControlPlaneEnv;
+    const services = appServices(
+      env,
+      {
+        appId: "4242",
+        privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+        fetch: (input, init) => fetch(input, init),
+        baseUrl: mintBase,
+      },
+      Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+    );
+    const deadlineAt = Date.now() + 600_000;
+    const credential = await Effect.runPromise(
+      CredentialMinter.use((m) =>
+        m.mint("source-read", {
+          executionId: "e-31",
+          epoch: 1,
+          scopeId: "acme/widgets",
+          deadlineAt,
+        }),
+      ).pipe(Effect.provide(services)),
+    );
+
+    const mints = mintCalls.filter((c) => c.method === "POST");
+    expect(mints.map((c) => c.path)).toEqual(["/app/installations/31/access_tokens"]);
+    expect(mints[0]!.body).toEqual({
+      repositories: ["widgets"],
+      permissions: {
+        metadata: "read",
+        contents: "read",
+        pull_requests: "read",
+        issues: "read",
+        checks: "read",
+        actions: "read",
+      },
+    });
+    expect(credential.credential).toBe("ghs-lease-31");
+    expect(credential.expiresAt).toBeLessThanOrEqual(deadlineAt);
+    // A mint only reads and mints: it writes nothing to the repository.
+    expect(mintCalls.filter((c) => c.method !== "GET" && c.method !== "POST")).toEqual([]);
+  });
 });

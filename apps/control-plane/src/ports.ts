@@ -14,8 +14,9 @@ export const suppliedPorts = (env: ControlPlaneEnv): readonly string[] => [
   "gate-decision-source",
   // `alarmPortFromEnv` from the operability package.
   "alarm-port",
-  // `githubLiveLayer`'s applier of every GitHub kind, its rate limit over the `InstallationQuota` objects.
-  ...(hasApp(env) ? ["actuator", "actuator-rate-limit"] : []),
+  // `githubLiveLayer`'s applier of every GitHub kind, its rate limit over the `InstallationQuota` objects, and its
+  // credential minter of per-lease read tokens (FD-GH-002).
+  ...(hasApp(env) ? ["actuator", "actuator-rate-limit", "credential-minter"] : []),
   // `PostureSource` and the agentic package's `localPortsLayer` (`agentic.ts`).
   "posture-source",
   "local-registration",
