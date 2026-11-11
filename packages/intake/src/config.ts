@@ -284,7 +284,17 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
           schedule: null,
           defaults: { queueAgeSec: 3_600, bounds },
           estimatedCostMicroUsd: 0,
-          outcomeIntent: null,
+          // Admission can conclude an execution itself, or supersede/coalesce an older one. Keep the outcome
+          // binding beside every checked execution so those transactions also conclude its GitHub check.
+          outcomeIntent:
+            checkOpenPayload({ check: input.check ?? null, labels: input.labels }) === null
+              ? null
+              : {
+                  kind: profile.outcome_mapping.surface_kind,
+                  effectClass:
+                    profile.intent_kinds[profile.outcome_mapping.surface_kind]?.effect_class ??
+                    "adoptable",
+                },
           // mameko's start port is infallible: a failed start ends admission after its commit and before it records the
           // engine start, and comes back out below as the typed failure.
           startExecution:
