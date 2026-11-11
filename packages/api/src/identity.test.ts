@@ -1,5 +1,5 @@
-import { Effect } from "effect";
-import { beforeAll, describe, expect, it } from "vitest";
+import { Context } from "effect";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   accessClaims,
   actionsClaims,
@@ -10,14 +10,18 @@ import {
   MEMBER,
   now,
   OPERATOR,
+  ORIGIN,
+  portsContext,
   type Harness,
 } from "./api.test-support.ts";
-import { apiConfigFromEnv, ConfigInvalid, distinctLinkKey } from "./config.ts";
+import { ApiConfig, apiConfigFromEnv, ConfigInvalid, distinctLinkKey } from "./config.ts";
 import { constantTimeEqual } from "./crypto.ts";
-import { ACTIONS_JWKS } from "./identity.ts";
-import { JwksSource, JwksSourceLive } from "./jwt.ts";
+import { declaredGroups } from "./groups.ts";
 import { signBody, verifyBody } from "./hmac.ts";
+import { ACTIONS_JWKS } from "./identity.ts";
+import { JWKS_TTL_MS, JwksSourceLive } from "./jwt.ts";
 import { checkLinkToken, LINK_LABELS, mintLinkToken } from "./link-token.ts";
+import { mount, toFetchHandler } from "./router.ts";
 
 let h: Harness;
 beforeAll(async () => {
@@ -207,32 +211,6 @@ describe("dispatch identity", () => {
     expect(accepted.status).toBe(202);
   });
 
-  it("[FD-INT-035]: the live JWKS source caches GitHub's keys for at most one hour", async () => {
-    const seen: { url: string; cacheTtl: unknown }[] = [];
-    const original = globalThis.fetch;
-    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      const cf = (init as { cf?: { cacheTtl?: unknown } } | undefined)?.cf;
-      seen.push({ url: String(input), cacheTtl: cf?.cacheTtl });
-      return Response.json({ keys: [h.actions.jwk] });
-    }) as typeof fetch;
-    try {
-      const keys = await Effect.runPromise(
-        Effect.gen(function* () {
-          const source = yield* JwksSource;
-          return yield* source.keys(ACTIONS_JWKS, { fresh: false });
-        }).pipe(Effect.provide(JwksSourceLive)),
-      );
-      expect(keys).toEqual([h.actions.jwk]);
-    } finally {
-      globalThis.fetch = original;
-    }
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.url).toBe("https://token.actions.githubusercontent.com/.well-known/jwks");
-    expect(seen[0]!.cacheTtl).toBeTypeOf("number");
-    expect(seen[0]!.cacheTtl as number).toBeGreaterThan(0);
-    expect(seen[0]!.cacheTtl as number).toBeLessThanOrEqual(3_600);
-  });
-
   it("[FD-IFC-025]: an Actions dispatch takes its repository, ref and workflow ref from the token", async () => {
     const jwt = await h.actions.sign(actionsClaims("Acme/Widgets", { ref: "refs/heads/feature" }));
     await h.fetch(
@@ -256,6 +234,41 @@ describe("dispatch identity", () => {
     );
     expect(response.status).toBe(403);
     expect((await body(response))["error"]).toBe("repository_mismatch");
+  });
+
+  it("[FD-INT-035]: the live JWKS source fetches GitHub's keys once per hour, and again once the hour has passed", async () => {
+    const started = Date.parse("2026-01-01T00:00:00Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(started);
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (input: Request | string | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      fetched.push(url);
+      return Response.json({ keys: [h.actions.jwk] });
+    });
+    try {
+      const handler = toFetchHandler(mount(...declaredGroups), { shared: JwksSourceLive });
+      const dispatch = async () => {
+        const jwt = await h.actions.sign(actionsClaims("acme/widgets"));
+        const services = portsContext(h.doubles).pipe(Context.add(ApiConfig, baseConfig()));
+        const request = new Request(
+          `${ORIGIN}/v1/dispatch/check`,
+          dispatchInit({ authorization: `Bearer ${jwt}` }),
+        );
+        return (await handler.fetch(request, services as never)).status;
+      };
+      expect(await dispatch()).toBe(202);
+      vi.setSystemTime(started + JWKS_TTL_MS - 1_000);
+      expect(await dispatch()).toBe(202);
+      expect(fetched).toEqual([ACTIONS_JWKS]);
+      vi.setSystemTime(started + JWKS_TTL_MS + 1_000);
+      expect(await dispatch()).toBe(202);
+      expect(fetched).toEqual([ACTIONS_JWKS, ACTIONS_JWKS]);
+      await handler.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 
   it("[FD-IFC-024]: with no OIDC audience configured an Actions dispatch answers 503 not_configured", async () => {
