@@ -478,6 +478,8 @@ export const AwsActionPolicy = Schema.Struct({
   id: Schema.String,
   /** The IAM roles, users and groups; or the SCP's target ids: accounts, organizational units and the root. */
   targets: Schema.Array(Schema.String),
+  /** IAM role names, kept separate so a same-named user or group cannot stand in for the launcher. */
+  roles: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The statements of the policy's document: the IAM policy's default version, or the SCP's content. */
   statements: Schema.Array(AwsPolicyStatement),
 });
@@ -506,6 +508,14 @@ export const AwsBudgets = Schema.Struct({
   account: Schema.String,
   budgets: Schema.Array(AwsBudget),
   actions: Schema.Array(AwsBudgetAction),
+  /** Authoritative Organizations membership, read when an action applies an SCP. */
+  organization: Schema.optionalKey(
+    Schema.Struct({
+      managementAccount: Schema.String,
+      /** The account's parents, up to and including its organization root. */
+      ancestors: Schema.Array(Schema.String),
+    }),
+  ),
 });
 export type AwsBudgets = typeof AwsBudgets.Type;
 
@@ -547,6 +557,10 @@ const budgetGap = (budget: AwsBudget): string | null => {
     return `belongs to budget ${budget.name}, which is not a USD cost budget`;
   if (budget.timeUnit === "DAILY")
     return `belongs to budget ${budget.name}, which resets daily and lets a month's spend run past its limit`;
+  if (!["MONTHLY", "QUARTERLY", "ANNUALLY", "CUSTOM"].includes(budget.timeUnit))
+    return `belongs to budget ${budget.name}, whose spend period is unknown`;
+  if (!Number.isFinite(budget.limitAmount) || budget.limitAmount < 0)
+    return `belongs to budget ${budget.name}, whose limit is not a finite nonnegative amount`;
   for (const [dimension, values] of Object.entries(budget.costFilters)) {
     if (values.length === 0) continue;
     if (dimension !== "Service")
@@ -558,18 +572,34 @@ const budgetGap = (budget: AwsBudget): string | null => {
 };
 
 /** Why an action's policy does not deny the account's launches; null when it does. */
-const policyGap = (action: AwsBudgetAction, account: string): string | null => {
+const policyGap = (
+  action: AwsBudgetAction,
+  read: AwsBudgets,
+  launcherRoleArn: string | undefined,
+): string | null => {
+  const { account } = read;
   const policy = action.policy;
   if (policy === null) return "names no policy to apply";
   if (!deniesLaunches(policy.statements))
     return `applies policy ${policy.id}, which does not deny ${LAUNCH_CALLS.join(" and ")} on every resource under no condition`;
-  if (action.actionType === "APPLY_SCP_POLICY")
-    return policy.targets.some((t) => t === account || t.startsWith("r-"))
+  if (action.actionType === "APPLY_SCP_POLICY") {
+    if (read.organization === undefined)
+      return "cannot prove the SCP affects the account: organization membership was not read";
+    if (read.organization.managementAccount === account)
+      return `cannot deny launches in organization management account ${account}: SCPs do not affect it`;
+    return policy.targets.some((t) => t === account || read.organization!.ancestors.includes(t))
       ? null
-      : `attaches policy ${policy.id} to neither account ${account} nor the organization root`;
-  return policy.targets.length === 0
-    ? `attaches policy ${policy.id} to no role, user or group`
-    : null;
+      : `attaches policy ${policy.id} to neither account ${account} nor one of its organization ancestors`;
+  }
+  if (launcherRoleArn === undefined)
+    return "cannot prove the IAM policy affects the launcher: aws.launcherRoleArn is not set";
+  const role = /^arn:aws:iam::(\d{12}):role\/((?:[^/]+\/)*([\w+=,.@-]+))$/.exec(launcherRoleArn);
+  if (role === null || role[1] !== account)
+    return `cannot prove the IAM policy affects the launcher: aws.launcherRoleArn must name a role in account ${account}`;
+  // Budgets accepts role paths as well as bare names; IAM role names are unique within the account.
+  return policy.roles?.some((target) => target === role[2] || target === role[3]) === true
+    ? null
+    : `attaches policy ${policy.id} to no launcher role ${launcherRoleArn}`;
 };
 
 /** Why one Budgets action does not deny new task launches when actual spend reaches `limitUsd`; null when it does. */
@@ -577,11 +607,18 @@ const budgetActionGap = (
   action: AwsBudgetAction,
   read: AwsBudgets,
   limitUsd: number,
+  launcherRoleArn: string | undefined,
 ): string | null => {
   if (action.notificationType !== "ACTUAL") return "runs on forecast spend, not actual spend";
   if (!POLICY_ACTION_TYPES.has(action.actionType))
     return `is ${action.actionType}, which applies no deny policy`;
   if (action.approvalModel !== "AUTOMATIC") return "waits for manual approval";
+  if (
+    !["PERCENTAGE", "ABSOLUTE_VALUE"].includes(action.thresholdType) ||
+    !Number.isFinite(action.thresholdValue) ||
+    action.thresholdValue < 0
+  )
+    return "has no known finite nonnegative spend threshold";
   const budget = read.budgets.find((b) => b.name === action.budgetName);
   if (budget === undefined) return `names budget ${action.budgetName}, which the account lacks`;
   const measured = budgetGap(budget);
@@ -591,8 +628,9 @@ const budgetActionGap = (
       ? (budget.limitAmount * action.thresholdValue) / 100
       : action.thresholdValue;
   // A cent of tolerance absorbs the decimal strings AWS reports amounts in.
-  if (atUsd > limitUsd + 0.005) return `runs at ${atUsd} USD, above aws.budgetUsd ${limitUsd} USD`;
-  return policyGap(action, read.account);
+  if (!Number.isFinite(atUsd) || atUsd > limitUsd + 0.005)
+    return `runs at ${atUsd} USD, above aws.budgetUsd ${limitUsd} USD`;
+  return policyGap(action, read, launcherRoleArn);
 };
 
 /** The failure of a deploy that carries the `aws` kind and sets no `aws.budgetUsd`; the check reads nothing from AWS. */
@@ -607,13 +645,21 @@ export const awsBudgetUnset: Finding = fail(
  * must carry an action that, with no approval step, applies a policy denying `ecs:RunTask` and `ecs:StartTask` on
  * every resource once actual spend reaches the overlay's `aws.budgetUsd`. The action's budget must be a USD cost budget
  * that resets no more often than monthly and measures the ECS spend: unfiltered, or filtered by a Service filter that
- * includes ECS. An SCP must target the account or the organization root; an IAM policy must name at least one role,
- * user or group, since the overlay names no launcher principal to match. An action that runs below the limit
+ * includes ECS. An SCP must target a member account or a proven ancestor; SCPs do not constrain an organization's
+ * management account. An IAM policy must target the role named by
+ * `aws.launcherRoleArn` in the authenticated account. An action that runs below the limit
  * qualifies: launches are denied by the time spend reaches it. One failure when no action qualifies, listing why each
  * action read falls short.
  */
-export const awsBudgetCheck = (limitUsd: number, read: AwsBudgets): readonly Finding[] => {
-  const gaps = read.actions.map((a) => ({ a, gap: budgetActionGap(a, read, limitUsd) }));
+export const awsBudgetCheck = (
+  limitUsd: number,
+  read: AwsBudgets,
+  launcherRoleArn?: string,
+): readonly Finding[] => {
+  const gaps = read.actions.map((a) => ({
+    a,
+    gap: budgetActionGap(a, read, limitUsd, launcherRoleArn),
+  }));
   if (gaps.some((g) => g.gap === null)) return [];
   const why =
     gaps.length === 0

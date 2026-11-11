@@ -12,7 +12,8 @@ name: v2-deploy
 # variable, set where the overlay carries the `aws` kind: the AWS role the deploy and doctor jobs assume through GitHub's
 # OIDC provider, for the drift check's read of the AWS account's Budgets actions (FD-EXEC-083); it needs
 # sts:GetCallerIdentity, budgets:ViewBudget, budgets:DescribeBudgetActionsForAccount, iam:GetPolicy,
-# iam:GetPolicyVersion and, for an SCP action, organizations:DescribePolicy.
+# iam:GetPolicyVersion and, for an SCP action, organizations:DescribePolicy, organizations:DescribeOrganization
+# and organizations:ListParents. This read role is separate from `aws.launcherRoleArn`, the role that launches ECS tasks.
 on:
   push:
     branches: [main]

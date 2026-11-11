@@ -289,7 +289,10 @@ export const driftFindings = (
     if (overlay.aws !== undefined) {
       const limitUsd = overlay.aws.budgetUsd;
       if (limitUsd === undefined) findings.push(awsBudgetUnset);
-      else findings.push(...awsBudgetCheck(limitUsd, yield* target.awsBudgets));
+      else
+        findings.push(
+          ...awsBudgetCheck(limitUsd, yield* target.awsBudgets, overlay.aws.launcherRoleArn),
+        );
     }
     if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));
     return yield* withProfileStep(findings, more(overlay));

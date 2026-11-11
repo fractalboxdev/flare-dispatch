@@ -5,8 +5,8 @@
 // applications between runs, so a suite deploys, changes the account out of band and deploys again. Access sits in
 // front of the dispatcher's hostname as the account's applications configure it. AWS STS, AWS Budgets, IAM and AWS
 // Organizations answer for one AWS account, and only requests whose SigV4 signature verifies.
-import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
-import { generateKeyPairSync } from "node:crypto";
+import type { AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
+import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
@@ -123,6 +123,9 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     awsActions: Record<string, unknown>[];
     /** The documents of the account's IAM managed policies, by ARN, and of its SCPs, by policy id. */
     awsPolicies: Record<string, unknown>;
+    awsManagementAccount: string;
+    /** ListParents answers, keyed by child; tests can inject incomplete or cyclic ancestry. */
+    awsParents: Record<string, Record<string, unknown>>;
   } = {
     health: 200,
     deploys: 0,
@@ -135,6 +138,8 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     awsBudgets: [],
     awsActions: [],
     awsPolicies: {},
+    awsManagementAccount: "999900001111",
+    awsParents: { [AWS_ACCOUNT]: { Parents: [{ Id: "r-abcd", Type: "ROOT" }] } },
   };
 
   /**
@@ -357,23 +362,48 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     return new Response(null, { status: 404 });
   };
 
-  /** Whether a request to an AWS endpoint carries the SigV4 signature of `AWS_CREDENTIALS` over its body. */
+  /** Independent Node-crypto SigV4 verification, including every sent x-amz-* header and content type. */
   const awsSigned = async (host: string, service: string, headers: Headers, body: string) => {
     const date = headers.get("x-amz-date");
     if (date === null) return false;
-    const now = new Date(
-      date.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, "$1-$2-$3T$4:$5:$6Z"),
+    if (
+      headers.get("host") !== host ||
+      headers.get("x-amz-security-token") !== AWS_CREDENTIALS.sessionToken
+    )
+      return false;
+    const payloadHash = createHash("sha256").update(body).digest("hex");
+    if (headers.get("x-amz-content-sha256") !== payloadHash) return false;
+    const signed = [...headers.keys()]
+      .filter((k) => k === "host" || k === "content-type" || k.startsWith("x-amz-"))
+      .sort();
+    const canonical = [
+      "POST",
+      "/",
+      "",
+      ...signed.map((k) => `${k}:${headers.get(k)!.trim().replace(/\s+/g, " ")}`),
+      "",
+      signed.join(";"),
+      payloadHash,
+    ].join("\n");
+    const day = date.slice(0, 8);
+    const scope = `${day}/us-east-1/${service}/aws4_request`;
+    const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      date,
+      scope,
+      createHash("sha256").update(canonical).digest("hex"),
+    ].join("\n");
+    const h = (key: Buffer | string, value: string) =>
+      createHmac("sha256", key).update(value).digest();
+    const key = h(
+      h(h(h(`AWS4${AWS_CREDENTIALS.secretAccessKey}`, day), "us-east-1"), service),
+      "aws4_request",
     );
-    const expected = await signRequest({
-      credentials: AWS_CREDENTIALS,
-      region: "us-east-1",
-      service,
-      host,
-      canonicalPath: "/",
-      body,
-      now,
-    });
-    return headers.get("authorization") === expected["authorization"];
+    const signature = createHmac("sha256", key).update(stringToSign).digest("hex");
+    return (
+      headers.get("authorization") ===
+      `AWS4-HMAC-SHA256 Credential=${AWS_CREDENTIALS.accessKeyId}/${scope}, SignedHeaders=${signed.join(";")}, Signature=${signature}`
+    );
   };
 
   /** AWS Budgets' JSON 1.1 operations, paged one item at a time so a reader must follow `NextToken`. */
@@ -434,9 +464,18 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
 
   /** AWS Organizations' `DescribePolicy`: an SCP's content as a JSON string. */
   const organizationsApi = (headers: Headers, body: string): Response => {
+    const target = headers.get("x-amz-target");
+    if (target === "AWSOrganizationsV20161128.DescribeOrganization")
+      return Response.json({
+        Organization: { MasterAccountId: state.awsManagementAccount, FeatureSet: "ALL" },
+      });
+    if (target === "AWSOrganizationsV20161128.ListParents") {
+      const { ChildId = "" } = JSON.parse(body) as { ChildId?: string };
+      return Response.json(state.awsParents[ChildId] ?? { Parents: [] });
+    }
     const { PolicyId: id = "" } = JSON.parse(body) as { PolicyId?: string };
     const document = state.awsPolicies[id];
-    if (headers.get("x-amz-target") !== "AWSOrganizationsV20161128.DescribePolicy")
+    if (target !== "AWSOrganizationsV20161128.DescribePolicy")
       return Response.json({ __type: "InvalidInputException" }, { status: 400 });
     if (document === undefined)
       return Response.json({ __type: "PolicyNotFoundException" }, { status: 400 });

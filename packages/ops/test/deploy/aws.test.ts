@@ -6,9 +6,10 @@ import { placeholderOverlay, type OverlayValues } from "../../src/index.ts";
 import { AWS_ACCOUNT, deploy, fd, isWrite, SCRIPT, world, type World } from "./support.ts";
 
 const LIMIT_USD = 500;
+const LAUNCHER = `arn:aws:iam::${AWS_ACCOUNT}:role/fd-launcher`;
 
 const overlayWith = (aws: OverlayValues["aws"]) => JSON.stringify({ ...placeholderOverlay, aws });
-const AWS_OVERLAY = overlayWith({ budgetUsd: LIMIT_USD, launchCap: 4 });
+const AWS_OVERLAY = overlayWith({ budgetUsd: LIMIT_USD, launchCap: 4, launcherRoleArn: LAUNCHER });
 
 /** The USD cost budget the AWS kind's launches spend against, at the overlay's limit. */
 const BUDGET = {
@@ -92,6 +93,9 @@ describe("the AWS budget check of the drift check", () => {
       "POST budgets.amazonaws.com/",
       "POST budgets.amazonaws.com/",
       "POST budgets.amazonaws.com/",
+      // Prove the deploying account is affected by this SCP, then read its policy document.
+      "POST organizations.us-east-1.amazonaws.com/",
+      "POST organizations.us-east-1.amazonaws.com/",
       // The SCP's content; the SSM action applies no policy, so nothing reads one for it.
       "POST organizations.us-east-1.amazonaws.com/",
     ]);
@@ -217,11 +221,119 @@ describe("the AWS budget check of the drift check", () => {
           "action act-s3 belongs to budget s3-only, whose Service cost filter leaves out Amazon Elastic Container Service",
           "action act-tagged belongs to budget tagged, whose TagKeyValue cost filter measures only part of the account's spend",
           `action act-s3-deny applies policy arn:aws:iam::${AWS_ACCOUNT}:policy/deny-s3-write, which does not deny ecs:RunTask and ecs:StartTask on every resource under no condition`,
-          `action act-no-role attaches policy arn:aws:iam::${AWS_ACCOUNT}:policy/fd-deny-launch to no role, user or group`,
-          `action act-other-account attaches policy p-denyrunt to neither account ${AWS_ACCOUNT} nor the organization root`,
+          `action act-no-role attaches policy arn:aws:iam::${AWS_ACCOUNT}:policy/fd-deny-launch to no launcher role ${LAUNCHER}`,
+          `action act-other-account attaches policy p-denyrunt to neither account ${AWS_ACCOUNT} nor one of its organization ancestors`,
         ].join("; "),
       )}`,
     });
+  });
+
+  it("[FD-EXEC-083] never treats a policy on an unrelated or same-named user/group as a launcher safeguard", async () => {
+    for (const definition of [
+      iamDefinition("fd-deny-launch", ["someone-else"]),
+      {
+        IamActionDefinition: {
+          ...iamDefinition("fd-deny-launch").IamActionDefinition,
+          Roles: [],
+          Users: ["fd-launcher"],
+          Groups: ["fd-launcher"],
+        },
+      },
+    ]) {
+      const w = awsWorld();
+      w.state.awsActions = [
+        action("act-iam", { ActionType: "APPLY_IAM_POLICY", Definition: definition }),
+      ];
+      expect((await doctor(w)).ok).toBe(false);
+      expect(w.calls.filter(isWrite)).toEqual([]);
+    }
+    for (const launcherRoleArn of [undefined, "arn:aws:iam::444455556666:role/fd-launcher"]) {
+      const w = awsWorld();
+      w.state.awsActions = [
+        action("act-iam", {
+          ActionType: "APPLY_IAM_POLICY",
+          Definition: iamDefinition("fd-deny-launch"),
+        }),
+      ];
+      const report = await doctor(w, overlayWith({ budgetUsd: LIMIT_USD, launcherRoleArn }));
+      expect(report.ok).toBe(false);
+      expect(driftStage(report)?.detail).toContain(
+        "cannot prove the IAM policy affects the launcher",
+      );
+    }
+  });
+
+  it("[FD-EXEC-083] proves SCP membership and refuses management accounts, unrelated roots and incomplete ancestry", async () => {
+    const management = awsWorld();
+    management.state.awsManagementAccount = AWS_ACCOUNT;
+    management.state.awsActions = [action("act-deny")];
+    expect(driftStage(await doctor(management))?.detail).toContain("SCPs do not affect it");
+
+    const unrelated = awsWorld();
+    unrelated.state.awsActions = [
+      action("act-deny", {
+        Definition: { ScpActionDefinition: { PolicyId: "p-denyrunt", TargetIds: ["r-other"] } },
+      }),
+    ];
+    expect((await doctor(unrelated)).ok).toBe(false);
+
+    const nested = awsWorld();
+    nested.state.awsParents = {
+      [AWS_ACCOUNT]: { Parents: [{ Id: "ou-abcd-11111111", Type: "ORGANIZATIONAL_UNIT" }] },
+      "ou-abcd-11111111": { Parents: [{ Id: "r-abcd", Type: "ROOT" }] },
+    };
+    nested.state.awsActions = [
+      action("act-deny", {
+        Definition: {
+          ScpActionDefinition: { PolicyId: "p-denyrunt", TargetIds: ["ou-abcd-11111111"] },
+        },
+      }),
+    ];
+    expect((await doctor(nested)).ok).toBe(true);
+
+    for (const parents of [
+      {},
+      { [AWS_ACCOUNT]: { Parents: [], NextToken: "more" } },
+      {
+        [AWS_ACCOUNT]: { Parents: [{ Id: "ou-abcd-11111111", Type: "ORGANIZATIONAL_UNIT" }] },
+        "ou-abcd-11111111": { Parents: [{ Id: "ou-abcd-11111111", Type: "ORGANIZATIONAL_UNIT" }] },
+      },
+      Object.fromEntries(
+        Array.from({ length: 33 }, (_, n) => [
+          n === 0 ? AWS_ACCOUNT : `ou-abcd-${n}`,
+          { Parents: [{ Id: `ou-abcd-${n + 1}`, Type: "ORGANIZATIONAL_UNIT" }] },
+        ]),
+      ),
+    ]) {
+      const w = awsWorld();
+      w.state.awsParents = parents;
+      w.state.awsActions = [action("act-deny")];
+      const report = await deploy(w, AWS_OVERLAY);
+      expect(report.ok).toBe(false);
+      expect(driftStage(report)?.detail).toContain("aws-organizations membership");
+      expect(w.calls.filter(isWrite)).toEqual([]);
+      expect(awsCalls(w).length).toBeLessThan(40);
+    }
+  });
+
+  it("[FD-EXEC-083] refuses missing thresholds and unknown budget periods instead of treating them as zero spend", async () => {
+    for (const change of [
+      { ActionThreshold: {} },
+      { ActionThreshold: { ActionThresholdType: "UNKNOWN", ActionThresholdValue: 0 } },
+    ]) {
+      const w = awsWorld();
+      w.state.awsActions = [action("act-deny", change)];
+      expect((await doctor(w)).ok).toBe(false);
+    }
+    for (const budget of [
+      { ...BUDGET, TimeUnit: "" },
+      { ...BUDGET, BudgetLimit: { Amount: "invalid", Unit: "USD" } },
+    ]) {
+      const w = awsWorld();
+      w.state.awsBudgets = [budget];
+      w.state.awsActions = [action("act-deny")];
+      expect((await doctor(w)).ok).toBe(false);
+    }
   });
 
   it("[FD-EXEC-083] fails the drift stage when the deploy job carries no AWS credentials, or the overlay sets no aws.budgetUsd", async () => {

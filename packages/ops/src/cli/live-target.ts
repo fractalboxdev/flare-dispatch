@@ -244,12 +244,12 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
             canonicalPath: "/",
             body,
             now: new Date(now()),
+            headers,
           }),
         catch: failed,
       });
       const res = yield* Effect.tryPromise({
-        try: () =>
-          fetcher(`https://${host}/`, { method: "POST", headers: { ...signed, ...headers }, body }),
+        try: () => fetcher(`https://${host}/`, { method: "POST", headers: signed, body }),
         catch: failed,
       });
       const text = yield* Effect.tryPromise({ try: () => res.text(), catch: failed });
@@ -408,6 +408,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
             ...arr<string>(iam.Users),
             ...arr<string>(iam.Groups),
           ],
+          roles: arr<string>(iam.Roles),
           statements: yield* iamPolicyStatements(iam.PolicyArn),
         } satisfies AwsActionPolicy;
       const scp = definition?.ScpActionDefinition;
@@ -450,8 +451,61 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       ActionThreshold?: { ActionThresholdValue?: number; ActionThresholdType?: string };
       Definition?: ActionDefinition;
     }>("DescribeBudgetActionsForAccount", "Actions", account);
+    const organization = yield* Effect.gen(function* () {
+      if (!actions.some((a) => a.ActionType === "APPLY_SCP_POLICY")) return undefined;
+      const failed = (message: string) =>
+        new TargetFailed({ operation: "aws-organizations membership", message });
+      const call = (name: string, request: Record<string, unknown>) =>
+        jsonCall(
+          `aws-organizations ${name}`,
+          ORGANIZATIONS_HOST,
+          "organizations",
+          `AWSOrganizationsV20161128.${name}`,
+          request,
+        );
+      const described = yield* call("DescribeOrganization", {});
+      const org = described["Organization"] as
+        | { MasterAccountId?: unknown; ManagementAccountId?: unknown; FeatureSet?: unknown }
+        | undefined;
+      const managementAccount = org?.ManagementAccountId ?? org?.MasterAccountId;
+      if (
+        typeof managementAccount !== "string" ||
+        !/^\d{12}$/.test(managementAccount) ||
+        org?.FeatureSet !== "ALL"
+      )
+        return yield* failed(
+          "the response does not prove an all-features organization's management account",
+        );
+      const ancestors: string[] = [];
+      let child = account;
+      // Organizations has a shallow tree; bound requests and refuse a cycle or an incomplete/paged answer.
+      for (let depth = 0; depth < 32; depth++) {
+        const page = yield* call("ListParents", { ChildId: child });
+        const parents = arr<{ Id?: unknown; Type?: unknown }>(page["Parents"]);
+        const parent = parents[0];
+        if (
+          parents.length !== 1 ||
+          (page["NextToken"] !== undefined && page["NextToken"] !== "") ||
+          typeof parent?.Id !== "string" ||
+          ancestors.includes(parent.Id)
+        )
+          return yield* failed("the account's organization ancestry is incomplete or cyclic");
+        if (parent.Type === "ROOT" && /^r-[a-z0-9]+$/.test(parent.Id)) {
+          ancestors.push(parent.Id);
+          return { managementAccount, ancestors };
+        }
+        if (parent.Type !== "ORGANIZATIONAL_UNIT" || !/^ou-[a-z0-9]+-[a-z0-9]+$/.test(parent.Id))
+          return yield* failed(
+            "the account's parent is neither a known root nor organizational unit",
+          );
+        ancestors.push(parent.Id);
+        child = parent.Id;
+      }
+      return yield* failed("the account's organization ancestry exceeds the 32-parent read bound");
+    });
     return {
       account,
+      ...(organization === undefined ? {} : { organization }),
       budgets: budgets.map((b): AwsBudget => ({
         name: b.BudgetName ?? "",
         type: b.BudgetType ?? "",

@@ -190,6 +190,7 @@ const denyAction = (over: Partial<AwsBudgetAction> = {}): AwsBudgetAction => ({
   policy: {
     id: `arn:aws:iam::${ACCOUNT}:policy/fd-deny-launch`,
     targets: ["fd-launcher"],
+    roles: ["fd-launcher"],
     statements: [DENY_LAUNCH],
   },
   ...over,
@@ -199,7 +200,19 @@ const scpAction = (targets: string[], statements: AwsPolicyStatement[] = [DENY_L
 const withStatements = (...statements: AwsPolicyStatement[]) =>
   denyAction({ policy: { ...denyAction().policy!, statements } });
 const check = (limitUsd: number, actions: AwsBudgetAction[], read = budgets) =>
-  awsBudgetCheck(limitUsd, { account: ACCOUNT, budgets: read, actions });
+  awsBudgetCheck(
+    limitUsd,
+    {
+      account: ACCOUNT,
+      budgets: read,
+      actions,
+      organization: {
+        managementAccount: "999900001111",
+        ancestors: ["ou-abcd-11111111", "r-abcd"],
+      },
+    },
+    `arn:aws:iam::${ACCOUNT}:role/fd-launcher`,
+  );
 /** The reason the one action read falls short, from the check's failure line. */
 const gapOf = (actions: AwsBudgetAction[], read = budgets) =>
   check(400, actions, read)[0]?.detail.split(": ").slice(1).join(": ");
@@ -280,14 +293,71 @@ describe("AWS budget check", () => {
       expect(gapOf([action])).toBe(line);
   });
 
-  it("[FD-EXEC-083] fails on an action whose policy targets no principal, or an SCP that targets neither the account nor the root", () => {
-    expect(gapOf([denyAction({ policy: { ...denyAction().policy!, targets: [] } })])).toBe(
-      `action act-1 attaches policy arn:aws:iam::${ACCOUNT}:policy/fd-deny-launch to no role, user or group`,
+  it("[FD-EXEC-083] fails on an action whose policy misses the launcher role, or an SCP outside the account's ancestry", () => {
+    expect(
+      gapOf([denyAction({ policy: { ...denyAction().policy!, targets: [], roles: [] } })]),
+    ).toBe(
+      `action act-1 attaches policy arn:aws:iam::${ACCOUNT}:policy/fd-deny-launch to no launcher role arn:aws:iam::${ACCOUNT}:role/fd-launcher`,
     );
-    for (const targets of [[], ["444455556666"], ["ou-abcd-11111111"]])
+    for (const targets of [[], ["444455556666"], ["ou-abcd-22222222"], ["r-other"]])
       expect(gapOf([scpAction(targets)])).toBe(
-        `action act-1 attaches policy p-deny to neither account ${ACCOUNT} nor the organization root`,
+        `action act-1 attaches policy p-deny to neither account ${ACCOUNT} nor one of its organization ancestors`,
       );
+    expect(check(400, [scpAction(["ou-abcd-11111111"])])).toEqual([]);
+  });
+
+  it("[FD-EXEC-083] requires an authenticated-account launcher role and never substitutes same-named users or groups", () => {
+    const read = { account: ACCOUNT, budgets, actions: [denyAction()] };
+    for (const role of [undefined, "not-an-arn", "arn:aws:iam::444455556666:role/fd-launcher"])
+      expect(failed(awsBudgetCheck(400, read, role))).toBe(true);
+    expect(awsBudgetCheck(400, read, `arn:aws:iam::${ACCOUNT}:role/path/fd-launcher`)).toEqual([]);
+    expect(
+      awsBudgetCheck(
+        400,
+        {
+          ...read,
+          actions: [
+            denyAction({ policy: { ...denyAction().policy!, roles: ["path/fd-launcher"] } }),
+          ],
+        },
+        `arn:aws:iam::${ACCOUNT}:role/path/fd-launcher`,
+      ),
+    ).toEqual([]);
+    for (const roles of [[], ["unrelated-role"], undefined])
+      expect(
+        failed(
+          check(400, [
+            denyAction({
+              policy: {
+                ...denyAction().policy!,
+                targets: ["fd-launcher"],
+                roles,
+              },
+            }),
+          ]),
+        ),
+      ).toBe(true);
+  });
+
+  it("[FD-EXEC-083] never claims an SCP constrains the management account or an account whose membership was not read", () => {
+    const read = { account: ACCOUNT, budgets, actions: [scpAction(["r-abcd"])] };
+    expect(failed(awsBudgetCheck(400, read))).toBe(true);
+    expect(
+      failed(
+        awsBudgetCheck(400, {
+          ...read,
+          organization: { managementAccount: ACCOUNT, ancestors: ["r-abcd"] },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("[FD-EXEC-083] fails closed on malformed spend thresholds, amounts and periods", () => {
+    for (const thresholdValue of [Number.NaN, Number.POSITIVE_INFINITY, -1])
+      expect(failed(check(400, [denyAction({ thresholdValue })]))).toBe(true);
+    expect(failed(check(400, [denyAction({ thresholdType: "" })]))).toBe(true);
+    for (const bad of [{ limitAmount: Number.NaN }, { limitAmount: -1 }, { timeUnit: "" }])
+      expect(failed(check(400, [denyAction()], [{ ...budget, ...bad }]))).toBe(true);
   });
 
   it("[FD-EXEC-083] fails on an action whose budget resets daily, or whose cost filters measure less than the ECS spend", () => {
