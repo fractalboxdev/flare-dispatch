@@ -5,8 +5,8 @@
   // (the SSR fallback in dashboard.ts serves the routes).
   //
   // Account-specific values below are placeholders marked `operator overlay`.
-  // A deploying org replaces this whole file with its own copy carrying the
-  // real ones (actions/deploy-dispatcher-action). Locally, keep that copy as
+  // A deploy from this file replaces it with an operator copy carrying the
+  // real ones. Locally, keep that copy as
   // the gitignored wrangler.overlay.local.jsonc and pass it with
   // `pnpm exec wrangler deploy -c wrangler.overlay.local.jsonc`.
   "$schema": "node_modules/wrangler/config-schema.json",

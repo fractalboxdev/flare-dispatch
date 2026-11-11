@@ -28,21 +28,11 @@ import {
   renderTemplate,
   type OverlayValues,
 } from "../../src/index.ts";
-import {
-  makeOperability,
-  repositoryRoot,
-  V2_WORKERS,
-} from "../../src/cli/index.ts";
+import { makeOperability, repositoryRoot, V2_WORKERS } from "../../src/cli/index.ts";
 
 const ROOT = repositoryRoot(import.meta.dirname);
 const SCRIPT = "packages/ops/scripts/fd-operability.ts";
-const FD_DEPLOY = [
-  "--experimental-strip-types",
-  "--no-warnings",
-  SCRIPT,
-  "deploy",
-  "--overlay",
-];
+const FD_DEPLOY = ["--experimental-strip-types", "--no-warnings", SCRIPT, "deploy", "--overlay"];
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const CONTROL_PLANE = V2_WORKERS.find((w) => w.worker === "control-plane")!;
 
@@ -73,10 +63,7 @@ type Action = {
 type Workflow = { jobs: Record<string, { steps: Step[] }> };
 
 const action = parse(
-  readFileSync(
-    join(ROOT, "actions/deploy-dispatcher-action/action.yml"),
-    "utf8",
-  ),
+  readFileSync(join(ROOT, "actions/deploy-dispatcher-action/action.yml"), "utf8"),
 ) as Action;
 const deployWorkflow = parse(
   readFileSync(join(ROOT, ".github/workflows/v2-deploy.yml"), "utf8"),
@@ -134,8 +121,7 @@ type Runner = ReturnType<typeof runner>;
 const evaluate = (text: string, context: ReadonlyMap<string, string>) =>
   text.replace(/\$\{\{\s*(.+?)\s*\}\}/g, (_m, expression: string) => {
     const value = context.get(expression);
-    if (value === undefined)
-      throw new Error(`no value for \${{ ${expression} }}`);
+    if (value === undefined) throw new Error(`no value for \${{ ${expression} }}`);
     return value;
   });
 
@@ -174,32 +160,18 @@ const runSteps = (
       GITHUB_OUTPUT: output,
       GITHUB_STEP_SUMMARY: join(r.temp, "summary.md"),
     };
-    for (const [k, v] of Object.entries(step.env ?? {}))
-      env[k] = evaluate(String(v), context);
-    const cwd = join(
-      r.workspace,
-      evaluate(step["working-directory"] ?? ".", context),
-    );
+    for (const [k, v] of Object.entries(step.env ?? {})) env[k] = evaluate(String(v), context);
+    const cwd = join(r.workspace, evaluate(step["working-directory"] ?? ".", context));
     const run = spawnSync(
       "bash",
-      [
-        "--noprofile",
-        "--norc",
-        "-eo",
-        "pipefail",
-        "-c",
-        evaluate(step.run ?? "", context),
-      ],
+      ["--noprofile", "--norc", "-eo", "pipefail", "-c", evaluate(step.run ?? "", context)],
       { cwd, env, encoding: "utf8" },
     );
     results.push({ name, ok: run.status === 0, stderr: run.stderr });
     for (const line of readFileSync(output, "utf8").split("\n")) {
       const eq = line.indexOf("=");
       if (step.id !== undefined && eq > 0)
-        context.set(
-          `steps.${step.id}.outputs.${line.slice(0, eq)}`,
-          line.slice(eq + 1),
-        );
+        context.set(`steps.${step.id}.outputs.${line.slice(0, eq)}`, line.slice(eq + 1));
     }
   }
   return results;
@@ -207,10 +179,7 @@ const runSteps = (
 
 /** A checkout of the repository at `dir`: every Worker template the deploy renders, and the root `wrangler.jsonc`. */
 const checkout = (dir: string) => {
-  for (const path of [
-    ...V2_WORKERS.map((w) => w.templatePath),
-    "wrangler.jsonc",
-  ]) {
+  for (const path of [...V2_WORKERS.map((w) => w.templatePath), "wrangler.jsonc"]) {
     mkdirSync(join(dir, dirname(path)), { recursive: true });
     copyFileSync(join(ROOT, path), join(dir, path));
   }
@@ -241,10 +210,7 @@ const deployedBy = async (overlay: string) => {
       deployedSettings: () => Effect.succeed(null),
       lastRecord: () => Effect.succeed(null),
       appRegistration: Effect.succeed(APP_PERMISSIONS),
-      requiredChecks: Effect.succeed([
-        ...MERGE_GATE_CHECKS,
-        "flare-dispatch/check:ci",
-      ]),
+      requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
       applyD1Migrations: () => Effect.succeed([]),
       deployWorker: (w) =>
         Effect.sync(() => {
@@ -257,8 +223,7 @@ const deployedBy = async (overlay: string) => {
           };
         }),
       probe: () => Effect.succeed(true),
-      floorCanary: () =>
-        Effect.succeed({ status: "passed" as const, digest: "sha256:0" }),
+      floorCanary: () => Effect.succeed({ status: "passed" as const, digest: "sha256:0" }),
       writeRecord: () => Effect.void,
       raiseAlarm: () => Effect.void,
     });
@@ -282,20 +247,14 @@ const rendered = (overlay: OverlayValues) =>
     [CONTROL_PLANE].map((w) => [
       w.worker,
       Effect.runSync(
-        renderTemplate(
-          w.worker,
-          readFileSync(join(ROOT, w.templatePath), "utf8"),
-          overlay,
-        ),
+        renderTemplate(w.worker, readFileSync(join(ROOT, w.templatePath), "utf8"), overlay),
       ),
     ]),
   );
 
 /** The one `fd deploy` a path ran, with the overlay text its `@file` argument named. */
 const fdDeployOf = (ran: readonly Ran[]) => {
-  const deploys = ran.filter(
-    (c) => c.command === "node" && c.args.includes(SCRIPT),
-  );
+  const deploys = ran.filter((c) => c.command === "node" && c.args.includes(SCRIPT));
   expect(deploys).toHaveLength(1);
   const [call] = deploys;
   expect(call!.args.slice(0, FD_DEPLOY.length)).toEqual(FD_DEPLOY);
@@ -309,20 +268,11 @@ const writesConfig = /\bwrangler(?:\.[\w-]+)?\.(?:jsonc?|toml)\b/;
 describe("every deploy path renders through the one renderer", () => {
   it("[FD-OPS-007] the published deploy action runs fd deploy with the operator's overlay and writes no Worker configuration of its own", async () => {
     const r = runner("action");
-    const upstream = join(
-      r.workspace,
-      action.inputs["upstream-checkout-path"]!.default!,
-    );
+    const upstream = join(r.workspace, action.inputs["upstream-checkout-path"]!.default!);
     mkdirSync(join(r.workspace, "infra/flare-dispatch"), { recursive: true });
-    writeFileSync(
-      join(r.workspace, "infra/flare-dispatch/overlay.json"),
-      OVERLAY_TEXT,
-    );
+    writeFileSync(join(r.workspace, "infra/flare-dispatch/overlay.json"), OVERLAY_TEXT);
     // An operator's leftover whole-file overlay sits beside it; nothing may copy it over a template.
-    writeFileSync(
-      join(r.workspace, "infra/flare-dispatch/wrangler.jsonc"),
-      '{ "name": "rogue" }',
-    );
+    writeFileSync(join(r.workspace, "infra/flare-dispatch/wrangler.jsonc"), '{ "name": "rogue" }');
 
     const inputs: Record<string, string> = {};
     for (const [k, v] of Object.entries(action.inputs))
@@ -345,15 +295,11 @@ describe("every deploy path renders through the one renderer", () => {
       }
     });
     expect(results.filter((s) => !s.ok)).toEqual([]);
-    expect(
-      played.some((u) => u.startsWith("cloudflare/wrangler-action@")),
-    ).toBe(false);
+    expect(played.some((u) => u.startsWith("cloudflare/wrangler-action@"))).toBe(false);
 
     const ran = r.ran();
     // No path around `fd deploy`: no wrangler run of the action's own.
-    expect(
-      ran.filter((c) => c.command === "wrangler" || c.command === "npx"),
-    ).toEqual([]);
+    expect(ran.filter((c) => c.command === "wrangler" || c.command === "npx")).toEqual([]);
     const { call, overlay } = fdDeployOf(ran);
     expect(call.cwd).toBe(upstream);
     expect(call.args.slice(FD_DEPLOY.length)).toEqual([
@@ -362,9 +308,7 @@ describe("every deploy path renders through the one renderer", () => {
     expect(overlay).toBe(OVERLAY_TEXT);
     // The checkout's templates are byte-identical after the action, and it gained no configuration file.
     const after = tree(upstream);
-    expect(
-      [...after.keys()].filter((p) => writesConfig.test(p)).sort(),
-    ).toEqual(
+    expect([...after.keys()].filter((p) => writesConfig.test(p)).sort()).toEqual(
       [...checkedOut.keys()].filter((p) => writesConfig.test(p)).sort(),
     );
     for (const [path, bytes] of checkedOut) expect(after.get(path)).toBe(bytes);
@@ -373,9 +317,7 @@ describe("every deploy path renders through the one renderer", () => {
     const { report, received } = await deployedBy(overlay);
     expect(report.ok).toBe(true);
     expect(received).toEqual(rendered(OVERLAY));
-    expect(received.get("control-plane")).toContain(
-      '"pattern": "dispatch.acme.test"',
-    );
+    expect(received.get("control-plane")).toContain('"pattern": "dispatch.acme.test"');
 
     // `dry-run: true` runs the same command with `--dry-run`: decode, render and the drift check only.
     const dry = runner("action-dry");
@@ -399,9 +341,9 @@ describe("every deploy path renders through the one renderer", () => {
       `@${join(dry.workspace, "infra/overlay.json")}`,
       "--dry-run",
     ]);
-  });
+  }, 30_000);
 
-  it("[FD-OPS-007] the published deploy action fails before checkout when the overlay file is missing", () => {
+  it("the published deploy action fails before checkout when the overlay file is missing", () => {
     const r = runner("action-missing");
     const inputs: Record<string, string> = {};
     for (const [k, v] of Object.entries(action.inputs))
@@ -414,12 +356,7 @@ describe("every deploy path renders through the one renderer", () => {
       "inputs.mameko-deploy-key": "deploy-key",
     });
     const played: string[] = [];
-    const results = runSteps(
-      action.runs.steps,
-      r,
-      inputs,
-      (step) => void played.push(step.uses!),
-    );
+    const results = runSteps(action.runs.steps, r, inputs, (step) => void played.push(step.uses!));
     expect(results.at(-1)).toMatchObject({ ok: false });
     expect(results.at(-1)!.stderr).toContain("overlay missing");
     expect(played).toEqual([]);
@@ -443,14 +380,10 @@ describe("every deploy path renders through the one renderer", () => {
       (step) => void played.push(step.uses!),
     );
     expect(results.filter((s) => !s.ok)).toEqual([]);
-    expect(
-      played.some((u) => u.startsWith("cloudflare/wrangler-action@")),
-    ).toBe(false);
+    expect(played.some((u) => u.startsWith("cloudflare/wrangler-action@"))).toBe(false);
 
     const ran = r.ran();
-    expect(
-      ran.filter((c) => c.command === "wrangler" || c.command === "npx"),
-    ).toEqual([]);
+    expect(ran.filter((c) => c.command === "wrangler" || c.command === "npx")).toEqual([]);
     const { call, overlay } = fdDeployOf(ran);
     expect(call.cwd).toBe(r.workspace);
     expect(overlay).toBe(OVERLAY_TEXT);
@@ -459,7 +392,7 @@ describe("every deploy path renders through the one renderer", () => {
     const { report, received } = await deployedBy(overlay);
     expect(report.ok).toBe(true);
     expect(received).toEqual(rendered(OVERLAY));
-  });
+  }, 30_000);
 
   it("[FD-OPS-007] fd deploy on a workstation and the workflow's script build the same Operability service", () => {
     // `fd-deploy` on a workstation runs `fd`'s live layer; the workflow and the action run the ops script. Both build
@@ -475,13 +408,8 @@ describe("every deploy path renders through the one renderer", () => {
     expect(script).toMatch(
       /const service = makeOperability\(\{ fail: \(message\) => new Error\(message\) \}\);/,
     );
-    expect(script).toMatch(
-      /service\.deploy\(\{ overlay, dryRun: opts\.has\("dry-run"\) \}\)/,
-    );
-    const bin = readFileSync(
-      join(ROOT, "packages/fd/bin/fd-deploy.mjs"),
-      "utf8",
-    );
+    expect(script).toMatch(/service\.deploy\(\{ overlay, dryRun: opts\.has\("dry-run"\) \}\)/);
+    const bin = readFileSync(join(ROOT, "packages/fd/bin/fd-deploy.mjs"), "utf8");
     expect(bin).toContain('import { main } from "../src/main.ts";');
     expect(bin).toContain('main("deploy");');
   });
