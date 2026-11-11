@@ -5,14 +5,13 @@
 import { FlareDispatchApi } from "@fractalboxdev/flare-dispatch-api/declaration";
 import { apiError } from "@fractalboxdev/flare-dispatch-api/errors";
 import { CurrentIdentity } from "@fractalboxdev/flare-dispatch-api/identity";
-import { RequestId } from "@fractalboxdev/flare-dispatch-api/request-id";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Context, Effect, Match, Option } from "effect";
 import { HttpServerResponse } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 import type { AccessIdentity } from "./access.ts";
 import { fleet } from "./dashboard.ts";
-import { installCallback, ManifestConversion, startInstall } from "./install.ts";
+import { acceptState, credentialsPage, ManifestConversion, startInstall } from "./install.ts";
 import { runOpsMigrations } from "./liveness.ts";
 import { SpendView, utcMonth } from "./spend.ts";
 import { phaseGateRecords } from "./verification/records.ts";
@@ -75,7 +74,7 @@ export const OperabilityHandlers = HttpApiBuilder.group(
       )
       .handle("spend", () =>
         Effect.gen(function* () {
-          const { now } = yield* store;
+          const now = (yield* OpsStore).now();
           const spend = yield* SpendView;
           return yield* spend
             .view(utcMonth(now))
@@ -95,24 +94,24 @@ export const OperabilityHandlers = HttpApiBuilder.group(
           return HttpServerResponse.fromWeb(page);
         }),
       )
-      .handle("installCallback", ({ request }) =>
+      .handle("installCallback", ({ query }) =>
         Effect.gen(function* () {
+          const { db, now } = yield* store;
+          const operator = yield* operatorOf;
+          // A refused state answers 403 and exchanges no code, whether or not this deploy can convert one (FD-OPS-074).
+          const refused = apiError("forbidden", "unknown, used or expired install state");
+          const { state, code } = query;
+          if (state === undefined || code === undefined) return yield* refused;
+          const refusal = yield* Effect.promise(() => acceptState(db, state, operator, now));
+          if (refusal !== null) return yield* refused;
           const conversion = yield* Effect.serviceOption(ManifestConversion);
           if (Option.isNone(conversion))
             return yield* apiError(
-              "unavailable",
-              "this deploy supplies no GitHub manifest conversion",
+              "not_configured",
+              "this deploy supplies no GitHub manifest conversion, so the install code cannot be exchanged",
             );
-          const { db, now } = yield* store;
-          const operator = yield* operatorOf;
-          const page = yield* installCallback(
-            db,
-            new URL(sourceOf(request).url),
-            operator,
-            now,
-            yield* RequestId,
-          ).pipe(Effect.provideService(ManifestConversion, conversion.value));
-          return HttpServerResponse.fromWeb(page);
+          const credentials = yield* conversion.value.convert(code);
+          return HttpServerResponse.fromWeb(credentialsPage(credentials));
         }),
       ),
 );

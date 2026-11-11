@@ -2,7 +2,7 @@
 // session, and the callback accepts that state once within 600 s before it exchanges the code (FD-OPS-072 to
 // FD-OPS-075). The exchange goes through `ManifestConversion`, which the GitHub App package supplies.
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { Context, Effect } from "effect";
+import { Context, type Effect } from "effect";
 import type { AccessIdentity } from "./access.ts";
 import { appManifest } from "./app-manifest.ts";
 import { esc } from "./dashboard.ts";
@@ -90,35 +90,12 @@ export const acceptState = async (
   return marked.length === 1 ? null : "used";
 };
 
-const forbidden = (requestId: string) =>
-  Response.json(
-    {
-      error: "forbidden",
-      message: "unknown, used or expired install state",
-      request_id: requestId,
-    },
-    { status: 403 },
-  );
-
 /**
- * The install callback: a refused state answers 403 and exchanges no code; an accepted one shows the new App's
- * credentials with `Cache-Control: no-store` to the operator who started the flow (FD-OPS-074, FD-OPS-075).
+ * The page that shows a new App's credentials, `Cache-Control: no-store`, to the operator whose state the callback
+ * accepted (FD-OPS-075).
  */
-export const installCallback = (
-  db: D1Like,
-  url: URL,
-  operator: AccessIdentity,
-  now: number,
-  requestId: string,
-) =>
-  Effect.gen(function* () {
-    const state = url.searchParams.get("state");
-    const code = url.searchParams.get("code");
-    if (state === null || code === null) return forbidden(requestId);
-    const refusal = yield* Effect.promise(() => acceptState(db, state, operator, now));
-    if (refusal !== null) return forbidden(requestId);
-    const credentials = yield* (yield* ManifestConversion).convert(code);
-    const page = `<!doctype html><html><body>
+export const credentialsPage = (credentials: AppCredentials): Response => {
+  const page = `<!doctype html><html><body>
 <h1>GitHub App ${esc(credentials.slug)} created</h1>
 <p>Set each value with <code>wrangler secret put</code>, then run <code>fd doctor</code>.</p>
 <dl>
@@ -128,7 +105,7 @@ export const installCallback = (
 <dt>Client id</dt><dd><code>${esc(credentials.clientId)}</code></dd>
 <dt>Client secret</dt><dd><code>${esc(credentials.clientSecret)}</code></dd>
 </dl></body></html>`;
-    return new Response(page, {
-      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-    });
+  return new Response(page, {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
   });
+};

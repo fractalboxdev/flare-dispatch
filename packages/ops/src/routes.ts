@@ -1,7 +1,7 @@
-// The operability routes as one handler the Worker mounts before its own: the dashboard, the execution page and the
-// executions JSON route behind the Access gate, `/v1/ops/*` (the phase gate's records among them) and the install
-// routes behind the operator gate, and `GET /v1/spend`. A route whose port the composition does not supply is not
-// served, so it answers as an unknown route.
+// The dashboard's pages as one handler the Worker mounts before its router: the overview at `/` and one execution's
+// page at `/executions/:id`, behind the Access gate. The router serves the `/v1/` routes, the operability ones through
+// `OperabilityHandlers`. The operator routes of `operator-routes.ts` answer here when the composition supplies
+// `OperatorOperations`; a composition without it leaves them to the router.
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Cause, Effect, Layer } from "effect";
 import {
@@ -24,25 +24,20 @@ import {
   renderOverview,
   renderPage,
 } from "./dashboard.ts";
-import { installCallback, ManifestConversion, startInstall } from "./install.ts";
 import { dashboardLogLink, linkConfigFrom } from "./link-token.ts";
-import { livenessReport, runOpsMigrations } from "./liveness.ts";
+import { runOpsMigrations } from "./liveness.ts";
 import { matchOperatorRoute, operatorRoute, OperatorOperations } from "./operator-routes.ts";
-import { spendRoute, SpendView } from "./spend.ts";
-import { phaseGateRoute } from "./verification/records.ts";
 
-/** What the routes compose beside the Worker's env. */
+/** What the pages compose beside the Worker's env. */
 export interface OpsRouteDeps {
   /** The classes the overview lists, in rank order. */
   readonly classes: readonly string[];
   readonly operations?: Layer.Layer<OperatorOperations>;
-  readonly spend?: Layer.Layer<SpendView>;
-  readonly manifestConversion?: Layer.Layer<ManifestConversion>;
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
 }
 
-/** The bindings the routes read: the D1 database and the runtime configuration's vars and secrets. */
+/** The bindings the pages read: the D1 database and the runtime configuration's vars and secrets. */
 export type OpsRouteEnv = { readonly DB: D1Like } & Readonly<Record<string, unknown>>;
 
 /** One JWKS cache per fetch function and issuer for the isolate's lifetime, so requests share fetched keys. */
@@ -91,58 +86,18 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
     const url = new URL(request.url);
     const { pathname } = url;
     const now = (deps.now ?? Date.now)();
-    const served =
-      pathname === "/" ||
-      pathname === "/v1/executions" ||
-      EXECUTION_PAGE.test(pathname) ||
-      pathname === "/v1/spend" ||
-      pathname.startsWith("/v1/ops/") ||
-      pathname.startsWith("/v1/github/install/") ||
-      /^\/v1\/executions\/[^/]+\/cancel$/.test(pathname);
-    if (!served) return null;
+    const operatorMatch = deps.operations === undefined ? null : matchOperatorRoute(pathname);
+    if (operatorMatch === null && pathname !== "/" && !EXECUTION_PAGE.test(pathname)) return null;
     const config = yield* opsConfigFrom(env);
     const access = accessConfig(config, deps);
-    const operators = config.OPERATORS ?? [];
-    yield* Effect.promise(() => runOpsMigrations(env.DB));
-
-    const operatorMatch = matchOperatorRoute(pathname);
-    if (operatorMatch !== null) {
-      if (deps.operations === undefined) return null;
-      const operator = yield* requireOperator(request, access, operators);
+    if (operatorMatch !== null && deps.operations !== undefined) {
+      const operator = yield* requireOperator(request, access, config.OPERATORS ?? []);
       return yield* operatorRoute(request, operatorMatch, operator.name, requestId, now).pipe(
         Effect.provide(deps.operations),
       );
     }
-    if (pathname === "/v1/ops/health") {
-      yield* requireOperator(request, access, operators);
-      return Response.json(yield* Effect.promise(() => livenessReport(env.DB, now)));
-    }
-    if (pathname === "/v1/ops/phase-gate") {
-      yield* requireOperator(request, access, operators);
-      return yield* phaseGateRoute(request, url, env.DB, now, requestId);
-    }
-    if (pathname === "/v1/ops/fleet") {
-      yield* requireOperator(request, access, operators);
-      return Response.json(yield* Effect.promise(() => fleet(env.DB, now)));
-    }
-    if (pathname === "/v1/github/install/new") {
-      const operator = yield* requireOperator(request, access, operators);
-      return yield* Effect.promise(() => startInstall(env.DB, operator, url.origin, now));
-    }
-    if (pathname === "/v1/github/install/callback") {
-      if (deps.manifestConversion === undefined) return null;
-      const operator = yield* requireOperator(request, access, operators);
-      return yield* installCallback(env.DB, url, operator, now, requestId).pipe(
-        Effect.provide(deps.manifestConversion),
-      );
-    }
-    if (pathname === "/v1/spend") {
-      if (deps.spend === undefined) return null;
-      yield* requireAccess(request, access);
-      return yield* spendRoute(now, requestId).pipe(Effect.provide(deps.spend));
-    }
-    if (pathname.startsWith("/v1/ops/")) return null;
     yield* requireAccess(request, access);
+    yield* Effect.promise(() => runOpsMigrations(env.DB));
     const linkConfig = yield* linkConfigFrom(env, url.origin);
     const linkFor = (id: string) => dashboardLogLink(linkConfig, id, Math.floor(now / 1000));
     const executionPage = EXECUTION_PAGE.exec(pathname);
@@ -155,7 +110,6 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
     }
     const { filters, limit, cursor } = parseExecutionQuery(url);
     const page = yield* Effect.promise(() => listExecutions(env.DB, filters, limit, cursor));
-    if (pathname === "/v1/executions") return Response.json(page);
     const links: Record<string, string> = {};
     for (const r of page.rows) {
       const link = yield* linkFor(r.id);
@@ -170,9 +124,8 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
   });
 
 /**
- * Serves an operability route, or answers null for a path it does not serve:
- * `const ops = await opsFetch(request, env, deps); if (ops !== null) return ops;`. The control plane Worker mounts it
- * for the dashboard's pages; its router serves the `/v1/` routes, the operability ones through `OperabilityHandlers`.
+ * Serves a dashboard page, or an operator route when the composition supplies its operations, or answers null:
+ * `const ops = await opsFetch(request, env, deps); if (ops !== null) return ops;`.
  */
 export const opsFetch = (
   request: Request,

@@ -205,6 +205,21 @@ describe("the minute tick", () => {
       headers: await headersFor(OPERATOR),
     });
     expect(r.status).toBe(200);
+    expect(Object.keys((await r.json()) as Record<string, unknown>).sort()).toEqual(
+      [
+        "control_state",
+        "executors",
+        "installations",
+        "oldest_open_execution_age_ms",
+        "outbox_depth",
+        "probes",
+        "tick_age_ms",
+      ].sort(),
+    );
+    const member = await development.dispatchFetch("http://x/v1/ops/health", {
+      headers: await headersFor("member@example.com"),
+    });
+    expect(member.status).toBe(403);
   });
 });
 
@@ -256,15 +271,22 @@ describe("the operability routes", () => {
     const start = await as(OPERATOR, "/v1/github/install/new");
     expect(start.status).toBe(200);
     expect(start.headers.get("cache-control")).toBe("no-store");
-    expect(await start.text()).toContain("https://github.com/settings/apps/new?state=");
+    const form = await start.text();
+    expect(form).toContain("https://github.com/settings/apps/new?state=");
     expect((await as("member@example.com", "/v1/github/install/new")).status).toBe(403);
 
-    // This deploy supplies no manifest conversion, so the callback answers the error model's `unavailable`.
-    const callback = await as(OPERATOR, "/v1/github/install/callback?state=s&code=c");
-    expect(callback.status).toBe(503);
-    const callbackBody = await bodyOf(callback);
-    expect(callbackBody).toMatchObject({ error: "unavailable" });
-    expect(typeof callbackBody["request_id"]).toBe("string");
+    // A state the deploy never issued is refused before anything else (FD-OPS-074).
+    const unknown = await as(OPERATOR, "/v1/github/install/callback?state=s&code=c");
+    expect(unknown.status).toBe(403);
+    const unknownBody = await bodyOf(unknown);
+    expect(unknownBody).toMatchObject({ error: "forbidden" });
+    expect(typeof unknownBody["request_id"]).toBe("string");
+
+    // An issued state is accepted, and this deploy supplies no manifest conversion to exchange the code.
+    const state = /state=([^"&]+)/.exec(form)![1]!;
+    const issued = await as(OPERATOR, `/v1/github/install/callback?state=${state}&code=c`);
+    expect(issued.status).toBe(503);
+    expect(await bodyOf(issued)).toMatchObject({ error: "not_configured" });
   });
 
   it("[FD-IFC-005] [FD-IFC-003] answers another method on each operability route with 405 method_not_allowed, after the identity gate", async () => {
