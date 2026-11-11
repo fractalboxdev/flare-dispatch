@@ -247,6 +247,12 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
@@ -617,6 +623,9 @@ importers:
 
   packages/ops:
     dependencies:
+      '@fractalboxdev/flare-dispatch-agentic':
+        specifier: workspace:*
+        version: link:../agentic
       '@fractalboxdev/flare-dispatch-profile':
         specifier: workspace:*
         version: link:../profile

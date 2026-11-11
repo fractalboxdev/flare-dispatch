@@ -1,3 +1,6 @@
+import { refusalReason } from "@fractalboxdev/flare-dispatch-agentic";
+import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { newRow } from "@fractalboxdev/mameko-kernel";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
@@ -5,6 +8,8 @@ import {
   classFigures,
   DASHBOARD_LINK_TTL_S,
   dashboardLink,
+  executionDetail,
+  executionPath,
   fleet,
   listExecutions,
   mintLinkToken,
@@ -12,6 +17,7 @@ import {
   parseExecutionQuery,
   percentile,
   raiseOnce,
+  renderExecutionDetail,
   renderExecutions,
   renderFleet,
   renderOverview,
@@ -149,6 +155,103 @@ describe("executions view", () => {
     const text = JSON.stringify(page) + renderExecutions(page, {}, {});
     expect(text).not.toContain("ghs_secret");
     expect(Object.keys(page.rows[0]!)).not.toContain("inputs");
+  });
+});
+
+/** One outbox row of an execution, in the state and with the answer a drain left it in. */
+const outboxRow = async (
+  executionId: string,
+  id: string,
+  kind: string,
+  state: string,
+  lastError: string | null,
+) => {
+  await insertOutboxRows(t.db, [
+    {
+      id,
+      limitKey: "7",
+      tier: "effect",
+      priority: 0,
+      classRank: 1,
+      drawsReserve: false,
+      intent: {
+        executionId,
+        scopeId: "acme/app",
+        intentKey: `cp:${kind}:${id}`,
+        kind,
+        payload: { executionId },
+        payloadDigest: "d",
+        effectClass: "adoptable",
+        attempts: 0,
+      },
+      row: newRow({ effectClass: "adoptable", insertedAt: NOW + Number(id) }),
+    },
+  ]);
+  await t.db
+    .prepare("update outbox set state = ?, last_error = ?, attempts = 1 where id = ?")
+    .bind(state, lastError, id)
+    .run();
+};
+
+/** The text of each list item in the page's reason lists. */
+const listedReasons = (html: string) =>
+  [...html.matchAll(/<li class="mono">([^<]*)<\/li>/g)].map((m) => m[1]);
+
+describe("execution page", () => {
+  it("[FD-AGT-018] lists every reason of a refused pr.propose row under its first reason kind", async () => {
+    await execution("e1", { status: "success", run: "spec-drift-pr" });
+    const reason = refusalReason([
+      { kind: "branch-invalid" },
+      { kind: "protected-path", path: "runs/x.ts" },
+      { kind: "secret-detected", path: "specs/a.md", line: 3, detail: "aws-access-key-id" },
+    ]);
+    await outboxRow("e1", "1", "check.conclude", "applied", null);
+    await outboxRow("e1", "2", "pr.propose", "refused", reason);
+    const detail = await executionDetail(t.db, "e1");
+    expect(detail?.outbox.map((o) => [o.kind, o.state, o.lastError])).toEqual([
+      ["check.conclude", "applied", null],
+      ["pr.propose", "refused", reason],
+    ]);
+    const html = renderExecutionDetail(detail!, null);
+    expect(html).toContain("writeback: branch-invalid<ul");
+    expect(listedReasons(html)).toEqual([
+      "branch-invalid",
+      "protected-path runs/x.ts",
+      "secret-detected specs/a.md:3 (aws-access-key-id)",
+    ]);
+    expect(await executionDetail(t.db, "missing")).toBeNull();
+    const page = await listExecutions(t.db, {}, 50, null);
+    expect(renderExecutions(page, {}, {})).toContain(`href="${executionPath("e1")}"`);
+  });
+
+  it("[FD-AGT-038] shows the reason of a refused or expired pr.propose row beside the execution's unchanged verdict", async () => {
+    await execution("e1", { status: "success", run: "spec-drift-pr" });
+    await outboxRow("e1", "1", "pr.propose", "expired", "writeback: read artifacts");
+    let html = renderExecutionDetail((await executionDetail(t.db, "e1"))!, null);
+    expect(html).toContain("<tr><th>Verdict</th><td>success</td></tr>");
+    expect(html).toMatch(/<td class="notify">expired<\/td>/);
+    expect(html).toContain('<span class="mono">writeback: read artifacts</span>');
+    expect(listedReasons(html)).toEqual([]);
+
+    await execution("e2", { status: "success", run: "spec-drift-pr" });
+    await outboxRow("e2", "2", "pr.propose", "expired", "github createTree: 502");
+    html = renderExecutionDetail((await executionDetail(t.db, "e2"))!, null);
+    expect(html).toContain("<tr><th>Verdict</th><td>success</td></tr>");
+    expect(html).toContain('<span class="mono">github createTree: 502</span>');
+
+    await execution("e3", { status: "success", run: "spec-drift-pr" });
+    await outboxRow("e3", "3", "pr.propose", "expired", null);
+    html = renderExecutionDetail((await executionDetail(t.db, "e3"))!, null);
+    expect(html).toContain("expired with no recorded reason");
+
+    await execution("e4", { status: "success", run: "spec-drift-pr" });
+    await outboxRow("e4", "4", "pr.propose", "refused", "writeback: human-commits-present");
+    html = renderExecutionDetail((await executionDetail(t.db, "e4"))!, null);
+    expect(html).toContain("<tr><th>Verdict</th><td>success</td></tr>");
+    expect(listedReasons(html)).toEqual(["human-commits-present"]);
+
+    const { results } = await t.db.prepare("select id, status from executions order by id").all();
+    expect(results).toEqual(["e1", "e2", "e3", "e4"].map((id) => ({ id, status: "success" })));
   });
 });
 
