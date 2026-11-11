@@ -21,7 +21,9 @@
     "effect": "4.0.6"
   },
   "devDependencies": {
+    "@fractalboxdev/mameko-kernel": "workspace:*",
     "@types/node": "^22.19.0",
+    "fast-check": "^3.23.2",
     "vitest": "^3.2.0"
   }
 }
