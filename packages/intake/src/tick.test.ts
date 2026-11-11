@@ -364,7 +364,8 @@ describe("unit budgets and the unit queue", () => {
     // A cron execution is one per (run, repository, minute); the sweep submits all 40 entries for each of 3 heads.
     expect(count("cron")).toEqual(Object.fromEntries(names.map((r) => [r, 1])));
     expect(count("webhook")).toEqual(Object.fromEntries(names.map((r) => [r, 120])));
-  });
+    // About a second alone; the suite's simulation runs beside it.
+  }, 30_000);
 
   it("[FD-INT-067] a unit that fails moves to the back of the queue and leaves it after three attempts", async () => {
     const h = await harness({ repos: { [REPO]: repoWithManifest(nightly) } });
@@ -400,5 +401,29 @@ describe("unit budgets and the unit queue", () => {
       { _tag: "Failed", unit, attempts: 3, dropped: true },
     ]);
     expect(await h.run(runQueuedUnit(storage, at(3, 0)))).toBeNull();
+  });
+
+  it("[FD-INT-067] a unit enqueued while an alarm's unit runs stays queued", async () => {
+    const h = await harness({ repos: { [REPO]: repoWithManifest(nightly) } });
+    // The running unit's default-branch read waits until the clock moves, so the next minute's enqueue runs meanwhile.
+    h.reads.delays.set(`defaultBranch ${REPO}`, 1_000);
+    const storage = memoryStorage();
+    const first: TickUnit = {
+      _tag: "schedules",
+      installation: 7,
+      scheduledAt: at(3, 0),
+      repoIndex: 0,
+    };
+    const second: TickUnit = { ...first, scheduledAt: at(3, 1) };
+    await h.run(enqueueUnits(storage, [first], at(3, 0)));
+    storage.fire();
+    const running = h.run(runQueuedUnit(storage, at(3, 0)));
+    while (!h.reads.calls.includes(`defaultBranch ${REPO}`))
+      await new Promise((r) => setImmediate(r));
+    expect(await h.run(enqueueUnits(storage, [second], at(3, 1)))).toBe(1);
+    await h.adjust(1_000);
+    expect(await running).toMatchObject({ _tag: "Ran", unit: first });
+    expect(await storage.get("units")).toEqual([{ unit: second, attempts: 0 }]);
+    expect(storage.alarm()).toBe(at(3, 0));
   });
 });

@@ -409,22 +409,40 @@ export type QueuedRun =
     };
 
 /**
+ * Removes the unit an alarm ran from the queue as it stands now and appends `after` (its continuation or its retry,
+ * unless already queued). The queue is read again after the unit ran: the unit's GitHub reads and D1 queries let an
+ * `enqueue` from a later tick run meanwhile, and a write of the queue read before the unit would drop what it added.
+ */
+const settleQueue = (storage: UnitQueueStorage, ran: TickUnit, after: QueuedUnit | null) =>
+  Effect.gen(function* () {
+    const queue = [...(yield* readQueue(storage))];
+    const ranKey = keyOf(ran);
+    const at = queue.findIndex((q) => keyOf(q.unit) === ranKey);
+    if (at !== -1) queue.splice(at, 1);
+    const others = queue.length;
+    if (after !== null && !queue.some((q) => keyOf(q.unit) === keyOf(after.unit)))
+      queue.push(after);
+    return { queue, others };
+  });
+
+/**
  * One alarm of the queue: runs its first unit, queues the unit that continues it, and re-arms while units remain. A
- * unit that fails goes to the back of the queue, and after `UNIT_ATTEMPTS` failures leaves it. Answers null when the
- * queue is empty.
+ * unit that fails goes to the back of the queue, and after `UNIT_ATTEMPTS` failures leaves it. Units enqueued while
+ * the unit runs stay queued. Answers null when the queue is empty.
  */
 export const runQueuedUnit = (
   storage: UnitQueueStorage,
   now: number,
 ): Effect.Effect<QueuedRun | null, never, Effect.Services<ReturnType<typeof runTickUnit>>> =>
   Effect.gen(function* () {
-    const [head, ...rest] = yield* readQueue(storage);
+    const [head] = yield* readQueue(storage);
     if (head === undefined) return null;
     const exit = yield* Effect.exit(runTickUnit(head.unit));
     if (Exit.isSuccess(exit)) {
       const result = exit.value;
-      const next = result.next === null ? [] : [{ unit: result.next, attempts: 0 }];
-      yield* writeQueue(storage, [...rest, ...next], now, true);
+      const next = result.next === null ? null : { unit: result.next, attempts: 0 };
+      const { queue } = yield* settleQueue(storage, head.unit, next);
+      yield* writeQueue(storage, queue, now, true);
       return { _tag: "Ran", unit: head.unit, result } as const;
     }
     const attempts = head.attempts + 1;
@@ -435,7 +453,11 @@ export const runQueuedUnit = (
       dropped,
       cause: Cause.pretty(exit.cause),
     });
-    const queue = dropped ? rest : [...rest, { unit: head.unit, attempts }];
-    yield* writeQueue(storage, queue, rest.length > 0 ? now : now + UNIT_RETRY_MS, true);
+    const { queue, others } = yield* settleQueue(
+      storage,
+      head.unit,
+      dropped ? null : { unit: head.unit, attempts },
+    );
+    yield* writeQueue(storage, queue, others > 0 ? now : now + UNIT_RETRY_MS, true);
     return { _tag: "Failed", unit: head.unit, attempts, dropped } as const;
   });

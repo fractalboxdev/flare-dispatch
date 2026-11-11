@@ -12,25 +12,51 @@ import {
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import type { ActuatorRateLimit, Actuators } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer } from "effect";
+import { Cause, Effect, Exit, Layer, Schema } from "effect";
 import { isolateServices } from "./composition.ts";
 import { channelConfig, concludeKindOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { appOptionsOf } from "./github.ts";
 
+/** Installations whose `IntakeUnits` object refused the minute's enqueue; every other installation's units are queued. */
+export class IntakeEnqueueFailed extends Schema.TaggedError<IntakeEnqueueFailed>()(
+  "IntakeEnqueueFailed",
+  {
+    failed: Schema.Array(Schema.Struct({ installation: Schema.Number, cause: Schema.String })),
+    enqueued: Schema.Array(Schema.Number),
+  },
+) {}
+
 /**
  * The tick's intake step only enqueues (FD-INT-067): each installation's planned units go to its `IntakeUnits` object,
- * whose alarms run them one at a time, each continuation in an alarm of its own.
+ * whose alarms run them one at a time, each continuation in an alarm of its own. Every installation's enqueue is
+ * attempted; the step fails after them all, naming the installations whose object refused.
  */
 export const intakeUnits = (env: Pick<ControlPlaneEnv, "INTAKE_UNITS">, now: number) =>
   Effect.gen(function* () {
     const installations = yield* (yield* GithubApp).installations;
-    const report = [];
-    for (const installation of installations) {
-      const units = planTick(now, [installation]);
-      const queue = env.INTAKE_UNITS.get(env.INTAKE_UNITS.idFromName(String(installation)));
-      const added = yield* Effect.tryPromise(() => queue.enqueue(units));
-      report.push({ installation, units: units.map((u) => u._tag), added });
-    }
+    const results = yield* Effect.forEach(
+      installations,
+      (installation) => {
+        const units = planTick(now, [installation]);
+        const queue = env.INTAKE_UNITS.get(env.INTAKE_UNITS.idFromName(String(installation)));
+        return Effect.tryPromise(() => queue.enqueue(units)).pipe(
+          Effect.exit,
+          Effect.map((exit) => ({ installation, units: units.map((u) => u._tag), exit })),
+        );
+      },
+      { concurrency: "unbounded" },
+    );
+    const failed = results.flatMap(({ installation, exit }) =>
+      Exit.isFailure(exit) ? [{ installation, cause: Cause.pretty(exit.cause) }] : [],
+    );
+    const report = results.flatMap(({ installation, units, exit }) =>
+      Exit.isSuccess(exit) ? [{ installation, units, added: exit.value }] : [],
+    );
+    if (failed.length > 0)
+      return yield* new IntakeEnqueueFailed({
+        failed,
+        enqueued: report.map((r) => r.installation),
+      });
     return report;
   });
 

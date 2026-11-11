@@ -2,7 +2,7 @@
 // whose alarms run them (specs/intake.md FD-INT-067).
 import { GithubApp } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
-import { Effect, Exit } from "effect";
+import { Cause, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { intakeUnits } from "../src/tick.ts";
 
@@ -75,18 +75,23 @@ describe("the tick's intake step", () => {
     expect(env.enqueued.map((e) => e.units.map((u) => u._tag))).toEqual([["schedules"]]);
   });
 
-  it("[FD-INT-067] an object that refuses the enqueue fails the step", async () => {
-    const env = {
-      INTAKE_UNITS: {
-        idFromName: (name: string) => name,
-        get: () => ({
-          enqueue: () => Promise.reject(new Error("object unavailable")),
-        }),
-      },
-    };
+  it("[FD-INT-067] an object that refuses the enqueue fails the step after every other installation is enqueued", async () => {
+    const env = namespace();
+    const get = env.INTAKE_UNITS.get;
+    env.INTAKE_UNITS.get = (id: unknown) =>
+      String(id) === "7"
+        ? { enqueue: () => Promise.reject(new Error("object unavailable")) }
+        : get(id);
     const exit = await Effect.runPromiseExit(
-      intakeUnits(env, Date.UTC(2026, 10, 4, 12, 1)).pipe(app([7])),
+      intakeUnits(env, Date.UTC(2026, 10, 4, 12, 1)).pipe(app([7, 8])),
     );
+    expect(env.enqueued.map((e) => e.object)).toEqual(["8"]);
     expect(Exit.isFailure(exit)).toBe(true);
+    const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : null;
+    expect(error).toMatchObject({
+      _tag: "IntakeEnqueueFailed",
+      failed: [{ installation: 7 }],
+      enqueued: [8],
+    });
   });
 });
