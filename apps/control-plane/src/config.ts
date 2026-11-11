@@ -99,6 +99,17 @@ export interface ControlPlaneEnv extends CacheEnv {
 
 const set = (value: string | undefined): value is string => value !== undefined && value !== "";
 
+/** The values the presigner signs with that this deploy leaves unset, by binding name. */
+export const presignerMissingOf = (env: ControlPlaneEnv): ReadonlyArray<string> =>
+  (
+    [
+      ["R2_ACCOUNT_ID", env.R2_ACCOUNT_ID],
+      ["CACHE_BUCKET_NAME", env.CACHE_BUCKET_NAME],
+      ["R2_PRESIGN_ACCESS_KEY_ID", env.R2_PRESIGN_ACCESS_KEY_ID],
+      ["R2_PRESIGN_SECRET_ACCESS_KEY", env.R2_PRESIGN_SECRET_ACCESS_KEY],
+    ] as const
+  ).flatMap(([name, value]) => (set(value) ? [] : [name]));
+
 /**
  * The presigner's signing configuration, or `undefined` on a deploy missing the token, the account id or the bucket
  * name: it signs with the presign token and nothing else, on the account's S3 endpoint (FD-CACHE-091).

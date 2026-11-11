@@ -41,7 +41,7 @@ import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { d1Sql } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { cancelledLease } from "@fractalboxdev/mameko-store-sqlite";
 import { Context, Effect, Layer, Scope } from "effect";
-import { deployment, presignerConfigOf, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { deployment, presignerConfigOf, presignerMissingOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { devRepositoryOf } from "./dev-repository.ts";
 import {
   gitData,
@@ -230,19 +230,18 @@ export const withDeliveryTimes = (env: Pick<ControlPlaneEnv, "DB">) =>
   );
 
 /**
- * A deploy without the presign token, the account id or the bucket name signs no URL: the configuration check already
- * names `object-store-presigner` as missing (`ports.ts`), so a presign that reaches this Layer dies.
+ * The presigner on a deploy missing the presign token, the account id or the bucket name: it signs no URL. `suppliedPorts`
+ * leaves `object-store-presigner` out for such a deploy, and nothing in phase 0 presigns yet, so a presign that reaches
+ * this Layer dies naming the values the deploy leaves unset.
  */
-const presignerWithoutToken = (() => {
+const presignerUnconfigured = (missing: ReadonlyArray<string>) => {
   const refuse = () =>
-    Effect.die(
-      "object-store presigner: this deploy holds no R2 presign token (R2_PRESIGN_ACCESS_KEY_ID, R2_PRESIGN_SECRET_ACCESS_KEY)",
-    );
+    Effect.die(`object-store presigner: this deploy leaves ${missing.join(", ")} unset, so it signs no URL`);
   return Layer.mergeAll(
     Layer.succeed(R2Presigner, { presign: refuse }),
     Layer.succeed(ObjectStorePresigner, { presign: refuse }),
   );
-})();
+};
 
 /**
  * The object-store presigner (MAMEKO-HOST-051): the cache package's signer over the presign token, on the bucket's S3
@@ -250,7 +249,7 @@ const presignerWithoutToken = (() => {
  */
 export const presignerLayer = (env: ControlPlaneEnv) => {
   const config = presignerConfigOf(env);
-  if (config === undefined) return presignerWithoutToken;
+  if (config === undefined) return presignerUnconfigured(presignerMissingOf(env));
   return ObjectStorePresignerLive.pipe(
     Layer.provideMerge(R2PresignerLive(config)),
     Layer.provide(Layer.succeed(CacheClock, { now: () => Date.now() })),

@@ -93,7 +93,7 @@ describe("the object-store presigner", () => {
       ),
     );
     expect(Exit.isFailure(exit)).toBe(true);
-    expect(JSON.stringify(exit)).toContain("no R2 presign token");
+    expect(JSON.stringify(exit)).toContain("leaves R2_PRESIGN_SECRET_ACCESS_KEY unset");
   });
 
   it("[FD-CACHE-091] the committed template renders the account id and the cache bucket's name, and holds no presign token", async () => {
