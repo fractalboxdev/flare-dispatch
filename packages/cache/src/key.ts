@@ -88,6 +88,47 @@ export const cacheKey = (fields: Partial<KeyFields>): Effect.Effect<string, KeyI
     );
   });
 
+// ---- native libraries ----------------------------------------------------------
+
+/** The architectures the sandbox image pins every prebuilt native library for (FD-CACHE-036). */
+export const NATIVE_LIBRARY_ARCHES = ["amd64", "arm64"] as const;
+export type NativeLibraryArch = (typeof NATIVE_LIBRARY_ARCHES)[number];
+
+/** A prebuilt native library the sandbox image carries: its release version and each architecture's SHA-256. */
+export interface NativeLibrary {
+  readonly name: string;
+  readonly version: string;
+  readonly sha256: Readonly<Record<NativeLibraryArch, string>>;
+}
+
+/**
+ * The prebuilt native libraries of the Rust sandbox image (`infra/Dockerfile.sandbox-demo` with `WITH_RUST=true`),
+ * each the release archive the image downloads for its build architecture and checks against the digest here.
+ */
+export const SANDBOX_NATIVE_LIBRARIES: readonly NativeLibrary[] = [
+  {
+    name: "libduckdb",
+    version: "v1.5.5",
+    sha256: {
+      amd64: "1fb8ce388157d84a25abe685a8a2520bf00c00321821968e4bb398fd766e7abb",
+      arm64: "abe4f6f005ee0b448a058322f4263584b4bd1b6faf7ab4637b79eeaf978f8e9c",
+    },
+  },
+];
+
+/**
+ * The image's toolchain versions for a cache key (FD-CACHE-036): `toolchains` with each native library's version under
+ * the library's name, so an entry built against one library release never answers a read under another. The image's
+ * pinned version replaces a caller's value of the same name.
+ */
+export const imageToolchains = (
+  toolchains: Readonly<Record<string, string>>,
+  libraries: readonly NativeLibrary[],
+): Record<string, string> => ({
+  ...toolchains,
+  ...Object.fromEntries(libraries.map((l) => [l.name, l.version])),
+});
+
 /** The producer digest: SHA-256 of the canonical JSON of the primitive's name, version and parameters. */
 export const producerDigest = (name: string, version: string, params: unknown = {}) =>
   sha256Hex(canonicalJson({ name, version, params }));

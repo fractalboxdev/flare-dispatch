@@ -154,8 +154,12 @@ RUN if [ "$WITH_RUST" = "true" ]; then \
 #   `duckdb_library_version()` against the pinned crate's DuckDB version),
 #   because a linked library of the wrong version compiles cleanly and
 #   misbehaves at runtime;
-# - move DUCKDB_VERSION and the digest below together with its crate pin:
+# - move DUCKDB_VERSION and both digests below together with its crate pin:
 #   libduckdb-sys 1.10505.x pairs with DuckDB v1.5.5.
+#
+# The version and both digests match `SANDBOX_NATIVE_LIBRARIES` in
+# packages/cache/src/key.ts, which carries the version into every cache key's
+# toolchains (FD-CACHE-036); move all three together.
 #
 # In a linked Linux build DUCKDB_LIB_DIR wins over every other source,
 # `DUCKDB_DOWNLOAD_LIB=1` included: a consumer whose crate pin differs from
@@ -163,9 +167,9 @@ RUN if [ "$WITH_RUST" = "true" ]; then \
 # unless its run command unsets DUCKDB_LIB_DIR first.
 #
 # The ENV paths are set in every variant; with WITH_RUST=false the directory
-# is absent and nothing in the image reads them. The release asset is
-# linux-amd64 only, matching the container platform; any other build
-# architecture fails the image build.
+# is absent and nothing in the image reads them. The release archive for the
+# build architecture, linux-amd64 or linux-arm64, is pinned by SHA-256; any
+# other build architecture fails the image build.
 ARG DUCKDB_VERSION=v1.5.5
 ENV DUCKDB_LIB_DIR=/opt/duckdb/lib \
     DUCKDB_INCLUDE_DIR=/opt/duckdb/include
@@ -173,12 +177,13 @@ RUN if [ "$WITH_RUST" = "true" ]; then \
       set -eux; \
       arch="$(uname -m)"; \
       case "$arch" in \
-        x86_64) sha256=1fb8ce388157d84a25abe685a8a2520bf00c00321821968e4bb398fd766e7abb ;; \
+        x86_64)  asset=linux-amd64; sha256=1fb8ce388157d84a25abe685a8a2520bf00c00321821968e4bb398fd766e7abb ;; \
+        aarch64) asset=linux-arm64; sha256=abe4f6f005ee0b448a058322f4263584b4bd1b6faf7ab4637b79eeaf978f8e9c ;; \
         *) echo "libduckdb: unsupported architecture $arch" >&2; exit 1 ;; \
       esac; \
-      archive="/tmp/libduckdb-${DUCKDB_VERSION}-linux-amd64.zip"; \
+      archive="/tmp/libduckdb-${DUCKDB_VERSION}-${asset}.zip"; \
       curl -fsSL -o "$archive" \
-        "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/libduckdb-linux-amd64.zip"; \
+        "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/libduckdb-${asset}.zip"; \
       echo "${sha256}  ${archive}" | sha256sum -c -; \
       mkdir -p "$DUCKDB_LIB_DIR" "$DUCKDB_INCLUDE_DIR"; \
       unzip -q -j "$archive" libduckdb.so -d "$DUCKDB_LIB_DIR"; \
