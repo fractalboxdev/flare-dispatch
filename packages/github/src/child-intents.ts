@@ -8,11 +8,24 @@
 import { insertOutboxRows, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow } from "@fractalboxdev/mameko-kernel";
 import { Effect, Schema } from "effect";
-import { childConclusions, type ChildCheck } from "./bindings.ts";
+import { CHILD_CONCLUDE_KEY, childConclusions, type ChildCheck } from "./bindings.ts";
 import { PARENT_ENDED, recordedVerdict } from "./conclusion.ts";
 
-/** The intent key of a child's conclusion. */
-export const CHILD_CONCLUDE_KEY = "cp:check:conclude";
+export { CHILD_CONCLUDE_KEY };
+
+/**
+ * The indexes the pass reads through: ended parents by `finished_at`, and every child of a parent, terminal or not, by
+ * `parent_id` (mameko's `executions_live_children` holds only live children). A rebuild of `executions` drops them, so
+ * they are created on every start, after mameko's migrations.
+ */
+export const CHILD_CONCLUSIONS_INDEXES: readonly string[] = [
+  `create index if not exists executions_finished on executions (finished_at)`,
+  `create index if not exists executions_parent on executions (parent_id)`,
+];
+
+/** Creates `CHILD_CONCLUSIONS_INDEXES` on a store mameko's migrations have run on. */
+export const migrateChildConclusions = (db: D1Like) =>
+  attempt("indexes", () => db.batch(CHILD_CONCLUSIONS_INDEXES.map((s) => db.prepare(s)))).pipe(Effect.asVoid);
 
 /** The control plane's store could not be read or written; the next pass tries again. */
 export class ChildConclusionsUnavailable extends Schema.TaggedError<ChildConclusionsUnavailable>()(
@@ -44,13 +57,16 @@ export const CHILD_CONCLUSIONS_LOOKBACK_MS = 3_600_000;
 /**
  * Every child of a parent that ended in the lookback and owns a check run (admission inserted its `cp:check:open`)
  * and has no `cp:check:conclude` row yet, with whether a `check.conclude` row of it is already applied. The parent
- * counts as ended under the cascade's own test: a status other than `pending` and `running` (MAMEKO-RUN-084).
+ * counts as ended under the cascade's own test: a status other than `pending` and `running` (MAMEKO-RUN-084). The
+ * read starts from the parents in the lookback through `executions_finished` and reaches their children through
+ * `executions_parent`, so it reads no execution outside the lookback; `cross join` holds that order, since SQLite's
+ * planner would otherwise walk every child in `id` order to serve the `order by`.
  */
-const CHILDREN = `select c.id, c.scope_id, c.class, c.status, c.reason,
+export const CHILDREN = `select c.id, c.scope_id, c.class, c.status, c.reason,
     exists (select 1 from outbox o where o.execution_id = c.id and o.kind = 'check.conclude' and o.state = 'applied')
       as concluded
-  from executions c join executions p on p.id = c.parent_id
-  where p.status not in ('pending', 'running') and p.finished_at >= ?
+  from executions p cross join executions c on c.parent_id = p.id
+  where p.finished_at >= ? and p.status not in ('pending', 'running')
     and exists (select 1 from outbox o where o.execution_id = c.id and o.intent_key = 'cp:check:open')
     and not exists (select 1 from outbox o where o.execution_id = c.id and o.intent_key = '${CHILD_CONCLUDE_KEY}')
   order by c.id`;

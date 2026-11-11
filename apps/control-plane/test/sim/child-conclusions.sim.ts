@@ -12,6 +12,7 @@ import {
   checkConclusion,
   installationQuotaLayer,
   insertChildConclusions,
+  migrateChildConclusions,
   PARENT_CLOSED,
   verdictOf,
   type Verdict,
@@ -151,6 +152,7 @@ export const simulateChildConclusions = async (
     noCheck: 0,
   };
   const db = await migratedD1();
+  await Effect.runPromise(migrateChildConclusions(db));
   const gh = fakeGithub();
   // The terminal writes stamp rows with the store's clock, so every drain and pass runs after them.
   let clock = Date.now() + 1_000;

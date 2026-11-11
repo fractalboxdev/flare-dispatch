@@ -101,6 +101,9 @@ export const insertOpsIntent = (db: D1Like, intent: OpsIntent) =>
 // ---------------------------------------------------------------------------
 // Fan-out children and the neutral invariant
 
+/** The intent key of a child's conclusion. */
+export const CHILD_CONCLUDE_KEY = "cp:check:conclude";
+
 export interface ChildCheck {
   readonly executionId: string;
   /** The child's recorded outcome, or null when it has none. */
@@ -117,7 +120,7 @@ export const childConclusions = (children: readonly ChildCheck[]) =>
     .filter((c) => !c.concluded)
     .map((c) => ({
       executionId: c.executionId,
-      intentKey: "cp:check:conclude",
+      intentKey: CHILD_CONCLUDE_KEY,
       verdict: c.verdict ?? PARENT_CLOSED,
     }));
 

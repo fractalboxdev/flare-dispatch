@@ -100,9 +100,12 @@ export {
 export { QuarantinedFailure, quarantineAnnotations } from "./conclusion.ts";
 export {
   CHILD_CONCLUDE_KEY,
+  CHILD_CONCLUSIONS_INDEXES,
   CHILD_CONCLUSIONS_LOOKBACK_MS,
   ChildConclusionsUnavailable,
+  CHILDREN,
   insertChildConclusions,
+  migrateChildConclusions,
   type ConcludeKind,
 } from "./child-intents.ts";
 export { GithubApplierLive, makeGithubActuators, SIDE_OUTPUT_BINDINGS } from "./github-applier.ts";
