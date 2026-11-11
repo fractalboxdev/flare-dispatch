@@ -7,8 +7,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "test": "vitest run",
-    "deploy": "astro build && wrangler deploy"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",

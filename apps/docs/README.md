@@ -59,6 +59,17 @@ pnpm --filter @fractalboxdev/flare-dispatch-docs run build   # what CI runs
 pnpm --filter @fractalboxdev/flare-dispatch-docs run test    # routes, links, sidebar, redirects
 ```
 
-`.github/workflows/docs.yml` tests and builds the site on every pull request and deploys it on
-`main`, to a static-assets Worker (`wrangler.jsonc`). The dispatcher Worker (API, webhooks,
-dashboard, log viewer) serves the custom domain the root `wrangler.jsonc` routes.
+`.github/workflows/docs.yml` tests and builds the site on every pull request. The site is a
+static-assets Worker whose template is `wrangler.jsonc`: its custom domain is the operator
+overlay's `hostnames.docs`, and `fd deploy` (`.github/workflows/v2-deploy.yml`) deploys it on
+`main` from the rendered configuration, after the site build. The Worker serves `dist`, so
+run the build before `fd deploy` on a workstation too:
+
+```sh
+pnpm --filter @fractalboxdev/flare-dispatch-docs run build
+node --experimental-strip-types --no-warnings packages/ops/scripts/fd-operability.ts deploy --overlay @<overlay.json>
+```
+
+`fd deploy` stops at its drift stage, before any change, when `dist` does not exist; it does
+not check that `dist` matches the current source. The dispatcher Worker (API, webhooks,
+dashboard, log viewer) serves the custom domain `apps/control-plane/wrangler.jsonc` routes.

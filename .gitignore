@@ -22,8 +22,9 @@ build/
 # copy wherever your deployment is managed and copy it to the repo root as
 # wrangler.<env>.local.jsonc (paths inside resolve relative to the repo root).
 wrangler.*.local.jsonc
-# The drift check's rendered control-plane configuration, written beside its template.
+# The drift check's rendered configurations, each written beside its template.
 apps/control-plane/control-plane.jsonc
+apps/docs/docs.jsonc
 # The configuration `pnpm dogfood` renders for one run, beside its template.
 apps/control-plane/.dogfood-*.wrangler.jsonc
 

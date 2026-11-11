@@ -60,10 +60,11 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: $STRIP_TYPES packages/ops/scripts/spec-tags.ts --report ${BASE:+--base "$BASE"}
 
-  # FD-OPS-019 to FD-OPS-021, FD-OPS-026, FD-INT-050, FD-AGT-002, FD-AGT-004: each v2 template rendered from the
-  # placeholder overlay through the one renderer, the drift check's static checks with the registry validator over the
-  # agentic recipes' declarations, then `wrangler deploy --dry-run` on the rendered configuration. The
-  # deploy suites (`test/deploy/`) run `fd deploy` and `fd doctor` over the committed templates against fakes.
+  # FD-OPS-001, FD-OPS-012, FD-OPS-019 to FD-OPS-021, FD-OPS-026, FD-INT-050, FD-AGT-002, FD-AGT-004: each v2
+  # template rendered from the placeholder overlay through the one renderer, the drift check's static checks with the
+  # registry validator over the agentic recipes' declarations, then `wrangler deploy --dry-run` on each Worker's rendered
+  # configuration. The deploy suites (`test/deploy/`) run `fd deploy` and `fd doctor` over the committed templates
+  # against fakes.
   deploy-dry-run:
     runs-on: ubuntu-latest
     steps:
@@ -71,9 +72,12 @@ jobs:
       - uses: ./.github/actions/v2-setup
         with:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
-      # The rendered file sits beside its template, so the paths inside it (`main`, each container image) resolve.
-      - run: $STRIP_TYPES packages/ops/scripts/drift-check.ts --out apps/control-plane
+      # Each rendered file sits beside its template, so the paths inside it (`main`, each container image, the assets
+      # directory) resolve.
+      - run: $STRIP_TYPES packages/ops/scripts/drift-check.ts --write
       - run: pnpm exec wrangler deploy --dry-run -c apps/control-plane/control-plane.jsonc
+      # The dry-run checks the docs Worker's configuration; the docs job builds the site the assets directory holds.
+      - run: mkdir -p apps/docs/dist && pnpm exec wrangler deploy --dry-run -c apps/docs/docs.jsonc
       - run: pnpm --filter @fractalboxdev/flare-dispatch-ops exec vitest run test/deploy
 
   # FD-VER-033, FD-PROF-002.

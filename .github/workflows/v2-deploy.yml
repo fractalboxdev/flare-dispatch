@@ -45,6 +45,8 @@ jobs:
       - uses: ./.github/actions/v2-setup
         with:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      # The docs Worker serves the site build from its assets directory.
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run build
       - name: fd deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
