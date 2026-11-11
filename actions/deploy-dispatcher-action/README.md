@@ -1,58 +1,92 @@
 # `deploy-dispatcher-action`
 
-Composite GitHub Action that deploys the FlareDispatch dispatcher Worker into
-your Cloudflare account using an **operator overlay**: you carry one file
-(`wrangler.jsonc`) with your Worker name + R2/D1/KV ids + vars, and a 40-char
-SHA that pins which upstream commit to deploy.
+Composite GitHub Action that deploys the FlareDispatch Workers into your
+Cloudflare account with `fd deploy`. Your repository carries two files: the
+**operator overlay**, a values-only JSON file, and `UPSTREAM_SHA`, the 40-char
+commit SHA of the upstream tree to deploy.
 
 The action:
 
-1. Checks out `fractalboxdev/flare-dispatch` at `inputs.upstream-ref`.
-2. **Overwrites** that checkout's `wrangler.jsonc` with your `inputs.wrangler-config`.
-3. `pnpm install --frozen-lockfile` in the upstream tree.
-4. `wrangler d1 migrations apply <binding> --remote`.
-5. `wrangler deploy`.
-6. (Optional) Polls `inputs.health-check-url` exactly as given (include the `/health` path) with backoff.
+1. Checks out the upstream repository at `inputs.upstream-ref`.
+2. Fetches the `vendor/mameko` submodule with `inputs.mameko-deploy-key` and
+   runs `pnpm install --frozen-lockfile` in the upstream tree.
+3. Runs `fd deploy --overlay @<your overlay>` from the upstream tree
+   (`fd deploy --dry-run` when `inputs.dry-run` is `true`).
+
+`fd deploy` is the same deploy the upstream deploy workflow and a workstation
+run ([operability.md § Deploy pipeline](../../specs/operability.md)): it
+decodes the overlay against the value schema, renders each committed Worker
+template through the one renderer, runs the drift check, applies the D1
+migrations, deploys each Worker after every Worker it binds as a service,
+probes each deployed Worker and stores the rendered configuration as the record
+of the deploy. The action writes no Worker configuration of its own: every
+topology setting comes from the upstream templates, and the overlay sets only
+the values their placeholders name ([ADR-0012](../../specs/adr/0012-values-only-overlay.md)).
 
 ```mermaid
 flowchart TB
-    accTitle: Operator overlay deploy pipeline
+    accTitle: Deploy action pipeline
     subgraph repo["Your repo"]
         pin["UPSTREAM_SHA"]
-        overlay["wrangler.jsonc overlay"]
+        overlay["overlay.json<br/>values only"]
     end
     pin -->|"upstream-ref"| checkout["**Checkout upstream**<br/>at the pinned SHA"]
-    checkout --> apply["**Apply overlay**<br/>replaces upstream wrangler.jsonc"]
-    overlay -->|"wrangler-config"| apply
-    apply --> install["pnpm install --frozen-lockfile"]
-    install --> migrate["wrangler d1 migrations apply --remote"]
-    migrate --> deploy["wrangler deploy"]
-    deploy --> hasurl{"health-check-url set?"}
-    hasurl -->|no| skip["**Done**<br/>worker-url empty"]
-    hasurl -->|yes| poll{"200 within<br/>health-check-attempts?"}
-    poll -->|yes| healthy["**Done**<br/>worker-url set"]
-    poll -->|no| fail["**Step fails**"]
-    class healthy ok
-    class fail danger
+    checkout --> install["fetch vendor/mameko<br/>pnpm install --frozen-lockfile"]
+    install --> fd["**fd deploy --overlay @overlay.json**"]
+    overlay -->|"overlay"| fd
+    subgraph pipeline["fd deploy"]
+        render["render templates"] --> drift{"drift check"}
+        drift -->|clean| deploy["D1 migrations<br/>wrangler deploy<br/>probes, record"]
+        drift -->|difference| stop["**Step fails**<br/>no Cloudflare change"]
+    end
+    fd --> render
+    class render accent
+    class drift warn
+    class overlay store
+    class deploy ok
+    class stop danger
 ```
 
-Sibling to [`flare-dispatch-action`](../flare-dispatch-action/) — that one
-**dispatches a run** from a consumer repo into a Worker; this one **ships the
-Worker itself**.
+Sibling to [`flare-dispatch-action`](../flare-dispatch-action/): that action
+**dispatches a run** from a consumer repo into the control plane; this one
+**ships the Workers**.
 
 ---
 
-## Why an overlay (not a fork)
+## The operator overlay
 
-Every BYOC deploy diverges from upstream by exactly the same fields — Worker
-name, the Cloudflare-account-scoped R2 bucket / D1 / KV ids,
-`CLOUDFLARE_ACCOUNT_ID` var, and (for the bedrock route) `AI_GATEWAY_ID`. A fork
-to carry that is overhead: the only "diff" lives in `wrangler.jsonc`, and
-bumping upstream becomes a rebase chore.
+The overlay holds values only. The value schema in
+[`packages/ops/src/overlay.ts`](../../packages/ops/src/overlay.ts) declares
+every path; a key it does not declare, or a missing required value, fails
+`fd deploy` at the decode stage, before any Cloudflare call. An overlay that
+renders the committed templates sets at least these values:
 
-With the overlay you keep one file in your repo plus a single-line `UPSTREAM_SHA`
-pin. Bumping upstream is a one-line PR with a `compare/<old>...<new>` URL in the
-body — you read the upstream diff, merge, then run your deploy workflow.
+```json
+{
+  "accountId": "<32-hex account id>",
+  "d1": { "DB": "<D1 database id>" },
+  "kv": { "CONFIG": "<KV namespace id>" },
+  "r2": {
+    "CACHE": "<cache bucket name>",
+    "ARTIFACTS": "<artifacts bucket name>"
+  },
+  "hostnames": {
+    "dispatcher": "<control-plane hostname>",
+    "docs": "<docs hostname>"
+  },
+  "access": {
+    "teamDomain": "<team>.cloudflareaccess.com",
+    "aud": "<Access application AUD>"
+  },
+  "operators": ["<operator email>"],
+  "github": { "appId": "<GitHub App id>", "fixtureRepo": "<owner>/<repo>" },
+  "alerts": { "sink": "https://<alert webhook>" }
+}
+```
+
+Bindings, Durable Object classes, migrations, cron schedules, container classes,
+compatibility settings, limits and rollout settings live in the committed
+templates; the overlay cannot set them.
 
 ---
 
@@ -62,19 +96,9 @@ In your repo:
 
 ```
 infra/flare-dispatch/
-├── UPSTREAM_SHA       # 40-char hex commit SHA on fractalboxdev/flare-dispatch
-└── wrangler.jsonc     # your operator overlay
+├── UPSTREAM_SHA       # 40-char hex commit SHA on the upstream repository
+└── overlay.json       # your operator overlay
 ```
-
-`infra/flare-dispatch/wrangler.jsonc` (operator-owned) — start by copying
-`wrangler.jsonc` from upstream at your pinned SHA and changing:
-
-- `name` → your Worker name (e.g. `flare-dispatch-acme`)
-- `vars.CLOUDFLARE_ACCOUNT_ID` → your account id
-- `vars.AI_GATEWAY_ID` → your AI Gateway slug (only needed for the bedrock route)
-- `r2_buckets[].bucket_name`
-- `d1_databases[].database_id` and `database_name`
-- `kv_namespaces[].id`
 
 Workflow:
 
@@ -84,9 +108,13 @@ name: Deploy FlareDispatch
 on:
   workflow_dispatch:
 
+# One deploy per account at a time; a started deploy is never cancelled.
+concurrency:
+  group: flare-dispatch-deploy
+  cancel-in-progress: false
+
 permissions:
   contents: read
-  id-token: write # only if you pull CF creds via OIDC / Pulumi ESC
 
 jobs:
   deploy:
@@ -100,53 +128,54 @@ jobs:
       - uses: fractalboxdev/flare-dispatch/actions/deploy-dispatcher-action@<sha>
         with:
           upstream-ref: ${{ steps.pin.outputs.sha }}
-          wrangler-config: infra/flare-dispatch/wrangler.jsonc
+          overlay: infra/flare-dispatch/overlay.json
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          health-check-url: https://dispatcher.example.com/health
+          github-app-private-key: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
 ```
 
-Pin the action itself by SHA (not `@main`) — same reason as the upstream pin.
+Pin the action itself by SHA (not `@main`), for the same reason as the upstream
+pin. To keep the overlay out of the repository, write it from a secret to a file
+in an earlier step and pass that file's path as `overlay`.
+
+The drift check reads the default branch's ruleset of the repository the
+workflow runs in, through the GitHub App's installation on it, so run the deploy
+workflow in a repository where the App is installed.
 
 ---
 
-## Worker secrets — out of band
+## Worker secrets: out of band
 
-The action does NOT touch Worker secrets. Set them once via `wrangler secret put`
-(or rotate via your secret-rotation workflow):
-
-| Secret                                             | Purpose                                                                                                                                  |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `HMAC_SECRET`                                      | Action-mode dispatch HMAC (matches `secrets.FLAREDISPATCH_HMAC` in consumer repos)                                                       |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`          | App auth — check-run callback + manifest install flow                                                                                    |
-| `GITHUB_WEBHOOK_SECRET`                            | `POST /v1/webhooks/github` HMAC verify                                                                                                   |
-| `ADMIN_TOKEN`                                      | `POST /v1/admin/events/:wf_id` bearer                                                                                                    |
-| `LOG_LINK_SECRET`                                  | Signs the tokened log-viewer URLs (falls back to `HMAC_SECRET` when unset)                                                               |
-| `OIDC_SIGNING_JWK`, `OIDC_ISSUER_URL`              | OIDC issuer (AWS STS federation, bedrock backend)                                                                                        |
-| `BROWSER_CDP_CONNECT_URL`, `BROWSER_CDP_API_TOKEN` | Browser Rendering connect (`cdp-acceptance` only)                                                                                        |
-| `AI_GATEWAY_AUTH_TOKEN`                            | Forwarded as `cf-aig-authorization: Bearer` on the bedrock route — required only when the AI Gateway has Authenticated Gateway turned on |
+The action does not set Worker secrets. Set each once with `wrangler secret put`
+and rotate it the same way, then run `fd doctor`. The drift check reports a
+secret by name only, never its value.
 
 ---
 
 ## Inputs
 
-See [`action.yml`](./action.yml). The required ones:
+See [`action.yml`](./action.yml).
 
-| Input                   | What                                                                                     |
-| ----------------------- | ---------------------------------------------------------------------------------------- |
-| `upstream-ref`          | A commit SHA on upstream main. Almost always `$(cat infra/flare-dispatch/UPSTREAM_SHA)`. |
-| `wrangler-config`       | Path to your overlay (relative to the consumer repo root).                               |
-| `cloudflare-api-token`  | CF API token with the scopes `wrangler deploy` needs.                                    |
-| `cloudflare-account-id` | 32-hex account id.                                                                       |
+| Input                    | Required | What                                                                                                                  |
+| ------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `upstream-ref`           | yes      | A commit SHA on the upstream repository, usually the contents of `infra/flare-dispatch/UPSTREAM_SHA`.                 |
+| `overlay`                | yes      | Path to your operator overlay JSON, relative to the repository root. A missing file fails the action before checkout. |
+| `cloudflare-api-token`   | yes      | Account-scoped token: Workers Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit, Account Settings:Read. |
+| `github-app-private-key` | yes      | The GitHub App's private key, for the drift check's App registration and ruleset reads.                               |
+| `mameko-deploy-key`      | yes      | Read-only deploy key of the private mameko repository the upstream tree vendors as `vendor/mameko`.                   |
+| `dry-run`                | no       | `true` runs decode, render and the drift check only, and changes no Cloudflare state. Default `false`.                |
+| `node-version`           | no       | Default `22`.                                                                                                         |
+| `upstream-repo`          | no       | Repository to check out. Default `fractalboxdev/flare-dispatch`; a mirror or fork overrides it.                       |
+| `upstream-checkout-path` | no       | Directory the upstream tree is checked out into. Default `flare-dispatch-upstream`.                                   |
 
 ### Deploying from a private mirror
 
 Run the deploy workflow **inside the mirror**, and point the action at the
 mirror's own commit. A workflow's `GITHUB_TOKEN` always reads its own
 repository, private or not, so no extra token is needed and nothing depends on
-the upstream repo staying reachable. Commit the overlay into the mirror; the
-upstream has no `infra/flare-dispatch/`, so syncing the mirror never conflicts
-with it.
+the upstream repository staying reachable. Commit the overlay into the mirror;
+the upstream has no `infra/flare-dispatch/`, so syncing the mirror never
+conflicts with it.
 
 ```yaml
 steps:
@@ -155,23 +184,28 @@ steps:
     with:
       upstream-repo: ${{ github.repository }}
       upstream-ref: ${{ github.sha }}
-      wrangler-config: infra/flare-dispatch/wrangler.jsonc
+      overlay: infra/flare-dispatch/overlay.json
       cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      github-app-private-key: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+      mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
 ```
 
 Bumping upstream is then a mirror sync; the deployed SHA is the mirror commit
-the workflow ran on. A deploy workflow in a *different* repo cannot read a
+the workflow ran on. A deploy workflow in a _different_ repository cannot read a
 private mirror, because `GITHUB_TOKEN` is scoped to the calling repository.
 
 ---
 
 ## Outputs
 
-| Output         | What                                                                                                     |
-| -------------- | -------------------------------------------------------------------------------------------------------- |
-| `upstream-sha` | The SHA the upstream was checked out at (echo it into your step summary if `upstream-ref` was a branch). |
-| `worker-url`   | The URL from `health-check-url` after a successful 200 (empty when the check was skipped).               |
+| Output         | What                                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| `upstream-sha` | The ref the upstream was checked out at (echo it into your step summary when `upstream-ref` was a branch). |
+
+`fd deploy` prints each stage with its result. After a failed post-deploy probe
+it prints each Worker's `wrangler rollback` command, or
+`fix forward: rollback blocked by migration <tag>`, and never rolls a Worker
+back itself.
 
 ---
 
@@ -184,6 +218,9 @@ git checkout -b chore/bump-flare-dispatch-$(cut -c1-7 infra/flare-dispatch/UPSTR
 git commit infra/flare-dispatch/UPSTREAM_SHA -m "chore: bump flare-dispatch to $(cut -c1-7 infra/flare-dispatch/UPSTREAM_SHA)"
 gh pr create --draft --title "..." \
   --body "Compare: https://github.com/fractalboxdev/flare-dispatch/compare/<old>...<new>"
-# After review + merge:
+# After review and merge:
 gh workflow run deploy-flare-dispatch.yml
 ```
+
+A bump whose templates name a value your overlay does not set fails the next
+deploy before any Cloudflare change, naming the missing path.
