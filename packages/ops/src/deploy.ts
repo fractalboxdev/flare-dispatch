@@ -10,6 +10,7 @@ import {
   settingsDrift,
   templateInvariants,
   unrenderedCheck,
+  withProfileStep,
   type AppPermissions,
   type DeployedSettings,
   type Finding,
@@ -212,7 +213,8 @@ export const renderAll = (overlayText: string, workers: readonly WorkerTemplate[
 
 /**
  * Every drift finding: the templates' invariants, the rendered configuration, the deployed Workers against the record
- * of the last deploy, the GitHub App's registration and the default branch's ruleset.
+ * of the last deploy, the GitHub App's registration and the default branch's ruleset, then the profile step's findings
+ * from `more` (`withProfileStep`, the composition the pull-request drift check shares).
  */
 export const driftFindings = (
   workers: readonly WorkerTemplate[],
@@ -223,7 +225,7 @@ export const driftFindings = (
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
-    const findings: Finding[] = [...(yield* more)];
+    const findings: Finding[] = [];
     for (const w of workers) findings.push(...templateInvariants(w.worker, parseJsonc(w.template)));
     for (const r of rendered) {
       findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config));
@@ -234,7 +236,7 @@ export const driftFindings = (
     }
     findings.push(...appRegistrationCheck(manifest, yield* target.appRegistration));
     findings.push(...rulesetCheck(yield* target.requiredChecks));
-    return findings;
+    return yield* withProfileStep(findings, more);
   }).pipe(Effect.mapError(stageFailed("drift")));
 
 /** `fd doctor`: every drift check, no Cloudflare or GitHub write (FD-OPS-024). */

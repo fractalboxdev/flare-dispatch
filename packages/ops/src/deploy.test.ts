@@ -183,4 +183,19 @@ describe("fd deploy", () => {
     expect(findings.map((f) => f.path)).toEqual(["dispatcher.vars.X", "substrate.vars.X"]);
     expect(writes(t.calls)).toEqual([]);
   });
+
+  it("[FD-OPS-021] fd doctor lists the profile step's findings after the configuration checks'", () => {
+    const t = target({ drifted: true });
+    const profile = Effect.succeed([
+      { check: "profile", severity: "failure", path: "pools.default", detail: "rejected" } as const,
+    ]);
+    const findings = Effect.runSync(
+      fdDoctor(overlay, WORKERS, APP_PERMISSIONS, undefined, profile).pipe(Effect.provide(t.layer)),
+    );
+    expect(findings.map((f) => f.path)).toEqual([
+      "dispatcher.vars.X",
+      "substrate.vars.X",
+      "pools.default",
+    ]);
+  });
 });

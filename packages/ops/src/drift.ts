@@ -173,6 +173,22 @@ export const profileCheck = (document: ProfileDocument, context: ValidationConte
     ),
   );
 
+/**
+ * The drift check's composition: the configuration checks' findings, then the profile step's (FD-OPS-021,
+ * `FdFormal.Drift.driftFindings`). The pull-request drift check, `fd deploy` and `fd doctor` all compose through it.
+ */
+export const withProfileStep = <E, R>(
+  configFindings: readonly Finding[],
+  profile: Effect.Effect<readonly Finding[], E, R>,
+) => profile.pipe(Effect.map((p): readonly Finding[] => [...configFindings, ...p]));
+
+/** The drift check's findings over one deploy, the profile step over the document the deploy carries (FD-OPS-021). */
+export const driftCheckFindings = (
+  configFindings: readonly Finding[],
+  document: ProfileDocument,
+  context: ValidationContext,
+) => withProfileStep(configFindings, profileCheck(document, context));
+
 /** The deployed settings of one Worker the drift check compares; secrets by name only. */
 export const DeployedSettings = Schema.Struct({
   bindings: Schema.Array(

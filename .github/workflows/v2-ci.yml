@@ -167,8 +167,8 @@ jobs:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
       - run: $STRIP_TYPES packages/ops/scripts/harness.ts replay
 
-  # FD-VER-019, FD-VER-022: every kept regression, then 10,000 traces of stagedWriteGate and of placement against the
-  # oracle built from the same commit.
+  # FD-VER-019, FD-VER-022: every kept regression, then 10,000 traces of stagedWriteGate, of placement and of the drift
+  # check's profile step against the oracle built from the same commit.
   diff:
     runs-on: ubuntu-latest
     steps:

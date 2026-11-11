@@ -87,6 +87,8 @@ export interface OperabilityOptions<E> {
   readonly runner?: CommandRunner;
   /** Replaces the live target, for tests. */
   readonly target?: (overlay: OverlayValues) => Layer.Layer<DeployTarget>;
+  /** The profile document the deploy carries; the production document at the current phase by default (FD-OPS-021). */
+  readonly profile?: ProfileDocument;
 }
 
 /** The repository root: the nearest directory above `from` that holds `pnpm-workspace.yaml`. */
@@ -128,8 +130,6 @@ export const profileDriftFindings = (
   document: ProfileDocument = profileDocumentFor("production"),
 ) => profileCheck(document, validationContext);
 
-const profileFindings = profileDriftFindings();
-
 /**
  * The pull-request part of the drift check (FD-OPS-019 to FD-OPS-021, FD-OPS-026): one Worker's template rendered
  * from `overlay`, against the template's invariants and `renderedChecks`. Answers the rendered text with the findings.
@@ -154,6 +154,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
   const root = options.root ?? repositoryRoot();
   const env = options.env ?? process.env;
   const specs = options.workers ?? V2_WORKERS;
+  const profileFindings = profileDriftFindings(options.profile);
   const workers = (): WorkerTemplate[] =>
     specs.map((s) => ({
       worker: s.worker,
