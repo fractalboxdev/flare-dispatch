@@ -71,8 +71,8 @@ export const startSweeps = (env: ControlPlaneEnv, now: number): readonly TickSte
 
 /**
  * Every child check run an ended fan-out parent left open gets its `check.conclude` intent, which the next tick's drain
- * applies (FD-GH-020). A pass reads each parent for an hour after its end; a child already given its row is
- * skipped, so a repeat inserts nothing.
+ * applies (FD-GH-020). Each pass stages a bounded batch of the oldest unreported children, without an age cutoff;
+ * a child already given its durable row is skipped, so an outage cannot discard the backlog.
  */
 export const childConclusionsStep = (env: ControlPlaneEnv, now: number): TickStep => ({
   step: "child-conclusions",

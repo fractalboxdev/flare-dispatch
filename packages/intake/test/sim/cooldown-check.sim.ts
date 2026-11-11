@@ -101,6 +101,7 @@ export const simulateCooldownChecks = async (seed: number): Promise<CooldownChec
       delivery: `d-${++deliveries}`,
     });
     await h.run(handleIntake(request, "webhooks/github"));
+    await drain();
     trace.push(`deliver ${head.slice(0, 1)} lint=${lint().length}`);
   };
 
@@ -126,6 +127,7 @@ export const simulateCooldownChecks = async (seed: number): Promise<CooldownChec
       trace.push(`advance ${ms}`);
     } else if (r < 0.8) {
       const report = await h.run(releaseHeld());
+      await drain();
       trace.push(`release ${JSON.stringify(report)}`);
     } else if (r < 0.95) await drain();
     else {

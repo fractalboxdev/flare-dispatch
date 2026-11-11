@@ -1,5 +1,5 @@
 {
-  // The v2 control plane. `DEPLOYMENT` is `production` here, and only the local dogfood command overrides it, so a
+  // The v2 control plane. `DEPLOYMENT` is `production` here, and only the local CI command overrides it, so a
   // deploy of this file refuses host execution and the software key. Every account-specific value is a `{{path}}`
   // placeholder the renderer fills from the operator overlay; secrets (the App key, webhook secret, link key, cache
   // token secrets) are Worker secrets.
