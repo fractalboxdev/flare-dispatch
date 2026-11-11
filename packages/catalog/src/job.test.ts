@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { runCheck } from "./check.ts";
 import { CommandExit } from "./command.ts";
 import { ctx, fakeArtifacts, fakeExec, SHA } from "./gate.test-support.ts";
-import { checkName, type GateJobInput } from "./inputs.ts";
+import type { GateJobInput } from "./inputs.ts";
 import { runGateJob, writebackBranch } from "./job.ts";
 import { isKey, KEY_PATTERN } from "./manifest.ts";
 import { checkDecoder } from "./triggers.ts";
@@ -235,7 +235,7 @@ describe("a gate job", () => {
 });
 
 describe("check", () => {
-  it("[FD-GATE-020] reports a labelled entry under flare-dispatch/check:<label>, the label matching the key pattern", async () => {
+  it("[FD-GATE-020] runs a labelled entry whose label matches the key pattern, and refuses one that does not", async () => {
     const entry = { label: "lint", command: "pnpm lint" };
     const decoded = Option.getOrThrow(
       checkDecoder(entry)({
@@ -258,8 +258,6 @@ describe("check", () => {
       }),
     );
     expect(decoded.label).toBe("lint");
-    expect(checkName(decoded.label)).toBe("flare-dispatch/check:lint");
-    expect(checkName()).toBe("flare-dispatch/check");
 
     expect(KEY_PATTERN.source).toBe("^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$");
     for (const label of ["a", "Z9", "unit.e2e_v2-x", "x".repeat(32)]) expect(isKey(label)).toBe(true);

@@ -119,6 +119,24 @@ describe("webhook to admission", () => {
     expect(h.rows("select count(*) as n from placements")[0]!.n).toBe(2);
   });
 
+  it("[FD-GATE-020] a labelled check entry reports under flare-dispatch/check:<label>, an unlabelled entry under flare-dispatch/<run>", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(
+          manifest([
+            { recipe: "check", label: "ci", triggers: ["pull_request"] },
+            { recipe: "lint", triggers: ["pull_request"] },
+          ]),
+        ),
+      },
+    });
+    await deliver(h, "pull_request", pullRequestPayload());
+    expect(h.recorded.resolved.map((r) => [r.run.name, r.checkName])).toEqual([
+      ["check", "flare-dispatch/check:ci"],
+      ["lint", "flare-dispatch/lint"],
+    ]);
+  });
+
   it("[FD-INT-003] a redelivery answers 202 with the same executions and duplicate: true", async () => {
     const h = await harness();
     const first = await bodyOf(await deliver(h, "pull_request", pullRequestPayload(), "d-1"));
