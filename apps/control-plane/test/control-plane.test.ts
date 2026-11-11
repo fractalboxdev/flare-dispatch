@@ -1,5 +1,5 @@
 // The control plane Worker on workerd through Miniflare: the bindings of `wrangler.jsonc`, the router, admission, the
-// lease path and the record. The executor here is the test's own signed WebSocket; `pnpm dogfood` proves the real
+// lease path and the record. The executor here is the test's own signed WebSocket; `pnpm ci:local` proves the real
 // device executor.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

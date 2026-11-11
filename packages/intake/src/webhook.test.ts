@@ -383,6 +383,33 @@ describe("check re-runs", () => {
     expect(h.recorded.resolved).toHaveLength(1);
   });
 
+  it("FD-INT-054 a re-run keeps the labels and the placement constraint of the attempt it re-runs", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(manifest([{ recipe: "check", label: "ci", triggers: ["pull_request"] }])),
+      },
+      resolve: () => ({ _tag: "Class", class: "batch", labels: ["gpu"], alarm: null }),
+    });
+    const opened = await bodyOf(await deliver(h, "pull_request", pullRequestPayload()));
+    const id = (opened.executions as string[])[0]!;
+    settle(h, "failure");
+    h.db.sqlite.exec(`update intake_records set placement_constraint = 'pinned-pool'`);
+    await deliver(h, "check_run", checkRunRerequested(id), "d-2");
+    const [first, second] = h.records();
+    expect(JSON.parse(first!.labels_json as string)).toContain("gpu");
+    expect(second!.labels_json).toBe(first!.labels_json);
+    expect(second!.placement_constraint).toBe("pinned-pool");
+  });
+
+  it("[FD-INT-056] a rerequested check suite skips a local family, which posted no check run", async () => {
+    const { h, id } = await firstRun();
+    settle(h, "failure");
+    h.db.sqlite.exec(`update intake_records set trigger = 'local', placement_constraint = 'local-only'`);
+    const r = await bodyOf(await deliver(h, "check_suite", checkSuiteRerequested(), "d-2"));
+    expect(r.executions).toEqual([]);
+    expect(h.records().map((x) => x.family_root)).toEqual([id]);
+  });
+
   it.each([
     ["foreign_app", (id: string) => checkRunRerequested(id, 1)],
     ["unknown_check_run", () => checkRunRerequested("no-such-execution")],

@@ -220,9 +220,9 @@ The dispatch action (`actions/flare-dispatch-action`) is specified in [interface
 
 ### Check re-runs
 
-- **FD-INT-054** · phase 0 · `V-UNIT` — When a `check_run` or `check_suite` `rerequested` event names a FlareDispatch check run, the dispatcher Worker must submit attempt *n* + 1 with the dedup key suffix `:attempt-<n+1>`, the same check name and the same class, and without applying a cooldown.
+- **FD-INT-054** · phase 0 · `V-UNIT` — When a `check_run` or `check_suite` `rerequested` event names a FlareDispatch check run, the dispatcher Worker must submit attempt *n* + 1 with the dedup key suffix `:attempt-<n+1>`, the same check name, the same class, the same labels and the same placement constraint, and without applying a cooldown.
 - **FD-INT-055** · phase 0 · `V-UNIT` — If a re-run names another App's check run, an unknown check run, a family with a non-terminal attempt, a family with 5 attempts, an unregistered run or inputs that no longer decode, the dispatcher Worker must submit no request and record a `shed` row through `recordShed` with reason `foreign_app`, `unknown_check_run`, `in_progress`, `attempts_exhausted`, `run_not_registered` or `inputs_unreplayable`.
-- **FD-INT-056** · phase 0 · `V-UNIT` — When a `check_suite` `rerequested` event arrives, the dispatcher Worker must re-run every family in the suite whose latest attempt's outcome is not `success`.
+- **FD-INT-056** · phase 0 · `V-UNIT` — When a `check_suite` `rerequested` event arrives, the dispatcher Worker must re-run every family in the suite whose latest attempt's outcome is not `success`, except a family whose trigger is `local`, which posts no check run.
 
 ### Release approval
 

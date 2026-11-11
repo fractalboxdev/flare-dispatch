@@ -128,6 +128,17 @@ flowchart LR
 
 *Area dependencies · an arrow points from the area that defines a mechanism or value to the area that builds on it; every area builds on mameko through the profile and the composed control plane.*
 
+### mameko dependency order
+
+The control plane pins mameko at f4b48b0, which holds the composed `admit`, the admission sweep and the amended outbox `retryable` rule ([MAMEKO-OUT-018](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/outbox.md)). Production intake admits every request through mameko's `admit`, so admission applies the placeability check and the class refusal conclusion ([intake.md](intake.md)).
+
+Two changes depend on further mameko work and are delivered in this order. Each step waits on the step before it and on the mameko work that step names.
+
+1. `Operations.apply` calls mameko's operator operations for halt, drain, quarantine, release, cancel, force-admit, top-up and revoke, each with a reason and an audit row ([MAMEKO-OPS-030](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/operability.md) to MAMEKO-OPS-034), and admission reads repository quarantine through `AdmissionPorts.quarantined`. The step retires `packages/ops/src/operator-routes.ts`, a second operator surface that production never reaches. Waits on: mameko's operator operations.
+2. The `pause-key` and `resume-key` operations. Waits on: step 1, and mameko's `pause` and `resume` of a delivery key ([MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/operability.md), [MAMEKO-OUT-068](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/outbox.md)).
+
+Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and admission quarantines no repository. Until step 2, no delivery key can be paused.
+
 ## Phase 0: measure the bet
 
 **Goal.** Close every capacity path that concludes `neutral` and make the cloud path correct and metered before any owned device takes guaranteed work: FlareDispatch's profile on mameko's admission, spend and outbox, the check-run appliers and the installation rate limit, the cache trust tiers, the operator routes, the runbook and the staged-write proofs. Each Container class is locked down from this phase: `enableInternet` false with HTTPS interception, deny-all egress except the grants, and the containers' CA bundle in each image's trust store ([MAMEKO-ISO-018](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/isolation-egress.md), [MAMEKO-ISO-021](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/isolation-egress.md), [MAMEKO-ISO-022](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/isolation-egress.md)). Alongside, required suites run warm on an owned device by hand against the best cloud setup (the cold container cache plus prebuilt dependencies), with executor and cache columns on every execution.
