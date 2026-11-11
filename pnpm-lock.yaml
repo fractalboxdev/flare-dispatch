@@ -91,6 +91,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
         version: 5.20261012.1
+      '@fractalboxdev/flare-dispatch-dogfood':
+        specifier: workspace:*
+        version: link:../../packages/dogfood
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1

@@ -1,5 +1,6 @@
-// The e2e-local job's cloud path (specs/verification.md § V-E2E-LOCAL): every suite under `test/e2e-local/`, each file
-// with its own stack, one file at a time so the stacks do not compete for the machine.
+// The e2e-local job's cloud path (specs/verification.md § V-E2E-LOCAL): every suite under `test/e2e-local/` but the
+// device path's (`vitest.e2e-device.config.ts`), each file with its own stack, one file at a time so the stacks do not
+// compete for the machine.
 import { join } from "node:path";
 import { defineConfig } from "vitest/config";
 
@@ -15,6 +16,7 @@ export default defineConfig({
   test: {
     name: "control-plane-e2e-local",
     include: ["test/e2e-local/**/*.test.ts"],
+    exclude: ["test/e2e-local/device/**", "**/node_modules/**"],
     environment: "node",
     fileParallelism: false,
     testTimeout: 120_000,
