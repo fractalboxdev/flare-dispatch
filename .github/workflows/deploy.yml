@@ -53,9 +53,16 @@ on:
         description: "What to deploy"
         type: choice
         default: all
+        # `dispatcher` ships the dispatcher's Worker code alone: no substrate
+        # deploy, no container image build, and no container rollout
+        # (`--containers-rollout none`), so the running sandbox images stay as
+        # they are. It is the path for a Worker-side fix when an image build
+        # cannot complete, such as when the runner cannot reach an apt mirror.
+        # A change that touches a container image needs `all`.
         options:
           - all
           - substrate
+          - dispatcher
 
 # Never let two deploys race onto the same Worker.
 concurrency:
@@ -79,6 +86,7 @@ jobs:
   # the correct blast radius: half a topology is worse than none of it.
   substrate:
     needs: ci
+    if: github.event.inputs.target != 'dispatcher'
     runs-on: ubuntu-latest
     outputs:
       url: ${{ steps.deploy.outputs.url }}
@@ -175,9 +183,18 @@ jobs:
         env:
           SUBSTRATE_URL: ${{ needs.substrate.outputs.url }}
 
+  # `!cancelled()` lets a `dispatcher` deploy run with the substrate jobs
+  # skipped, and still stops this job when the run is cancelled.
+  # Every other target still requires the substrate and its canary to have
+  # passed, so a failed substrate deploy stops this one as before.
   deploy:
-    needs: [substrate, canary]
-    if: github.event.inputs.target != 'substrate'
+    needs: [ci, substrate, canary]
+    if: >-
+      !cancelled() &&
+      needs.ci.result == 'success' &&
+      github.event.inputs.target != 'substrate' &&
+      (github.event.inputs.target == 'dispatcher' ||
+        (needs.substrate.result == 'success' && needs.canary.result == 'success'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -221,7 +238,9 @@ jobs:
 
       # Deploy from the repo root, which wrangler.jsonc points at
       # (main: apps/dispatcher/src/index.ts). Uses the pnpm-pinned wrangler.
-      - run: pnpm exec wrangler deploy
+      # The `dispatcher` target adds `--containers-rollout none`: wrangler then
+      # builds no image and leaves every container application unchanged.
+      - run: pnpm exec wrangler deploy ${{ github.event.inputs.target == 'dispatcher' && '--containers-rollout none' || '' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
