@@ -1,21 +1,29 @@
 // The cache, artifact and log area on the Worker: a lease's cache fields, the compile-cache route, the log and artifact
 // reads the router serves behind the link surface (FD-IFC-017), and the minute tick's steps (cache-retention.ts). The
-// compile-cache route checks its own token (FD-CACHE-057).
+// compile-cache route checks its own token (FD-CACHE-057). A private repository's artifact is read only by its link
+// token's holder, an operator or the identity that dispatched its execution (FD-CACHE-076), and the listing writes
+// each artifact it shows with a link token for that artifact (FD-CACHE-077).
 import {
+  ApiConfig,
   apiError,
+  artifactUrl,
+  CurrentIdentity,
   errorBody,
   FlareDispatchApi,
+  inGroup,
   type ApiError,
-  type ArtifactsPage,
+  type Identity,
 } from "@fractalboxdev/flare-dispatch-api";
 import {
   ARTIFACT_PAGE_SIZE,
   artifactPage,
+  artifactVisible,
   findArtifact,
   handleCompileCache,
   ledgersOf,
   serveArtifact,
   serveLogs,
+  type ArtifactReader,
 } from "@fractalboxdev/flare-dispatch-cache";
 import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
@@ -109,6 +117,43 @@ export const cacheFetch = async (
 
 // --- Log and artifact reads behind the router -------------------------------------------------------------------------
 
+/** The caller of an artifact read, as the router's gate identified it, and whether it is an operator. */
+export interface ArtifactViewer {
+  readonly identity: Identity;
+  readonly operator: boolean;
+}
+
+/** One page of an execution's artifacts, as the cache area lists them. */
+type ArtifactListing = Awaited<ReturnType<typeof artifactPage>>;
+
+/** The identity that dispatched an execution, as intake recorded its caller; null for a webhook or cron execution. */
+const dispatcherOf = async (db: D1Like, executionId: string) =>
+  (
+    await first<{ caller: string | null }>(
+      db,
+      "select caller from intake_records where execution_id = ?",
+      executionId,
+    )
+  )?.caller ?? null;
+
+/**
+ * Who reads a private repository's artifact (FD-CACHE-076): the holder of a link token bound to that artifact, an
+ * operator, or the Access identity that dispatched the execution that produced it.
+ */
+export const artifactReader =
+  (db: D1Like, viewer: ArtifactViewer): ArtifactReader =>
+  async (row) =>
+    Match.value(viewer.identity).pipe(
+      Match.tagsExhaustive({
+        Link: ({ purpose, objectId }) => purpose === "artifact" && objectId === row.artifact_id,
+        Access: async ({ id }) =>
+          viewer.operator ||
+          (await dispatcherOf(db, row.execution_id))?.toLowerCase() === id.toLowerCase(),
+        Actions: () => false,
+        Unidentified: () => false,
+      }),
+    );
+
 /**
  * The log and artifact reads the router's handlers call once the gate has identified the caller: an Access identity
  * or a link token bound to the execution or artifact (FD-IFC-017). Each answers an error from the error model.
@@ -125,11 +170,13 @@ export class CacheReads extends Context.Service<
       request: Request,
       artifactId: string,
       browsePath: string | undefined,
+      viewer: ArtifactViewer,
     ) => Effect.Effect<Response, ApiError>;
     readonly artifacts: (
       executionId: string,
       page: { readonly limit: number; readonly cursor: string },
-    ) => Effect.Effect<typeof ArtifactsPage.Type, ApiError>;
+      viewer: ArtifactViewer,
+    ) => Effect.Effect<ArtifactListing, ApiError>;
   }
 >()("@fractalboxdev/flare-dispatch-control-plane/CacheReads") {}
 
@@ -181,11 +228,15 @@ export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheRe
           }),
         );
       }),
-    artifact: (request, artifactId, browsePath) =>
+    artifact: (request, artifactId, browsePath, viewer) =>
       Effect.gen(function* () {
         yield* migratedDb;
         const row = yield* Effect.promise(() => findArtifact(artifactDeps, artifactId));
-        if (row === null) return yield* apiError("not_found", `no artifact ${artifactId}`);
+        const visible =
+          row !== null &&
+          (yield* Effect.promise(() => artifactVisible(row, artifactReader(env.DB, viewer))));
+        if (row === null || !visible)
+          return yield* apiError("not_found", `no artifact ${artifactId}`);
         const read = yield* Effect.promise(() =>
           serveArtifact(request, row, browsePath, artifactDeps),
         );
@@ -200,21 +251,31 @@ export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheRe
           }),
         );
       }),
-    artifacts: (executionId, page) =>
+    artifacts: (executionId, page, viewer) =>
       Effect.gen(function* () {
         yield* migratedDb;
-        // The listing route admits only an Access identity of the team, which reads every repository's artifacts.
         return yield* Effect.promise(() =>
-          artifactPage(artifactDeps, executionId, page, async () => true),
+          artifactPage(artifactDeps, executionId, page, artifactReader(env.DB, viewer)),
         );
       }),
   });
 };
 
-const response = (effect: Effect.Effect<Response, ApiError, CacheReads>) =>
+const response = <R>(effect: Effect.Effect<Response, ApiError, R>) =>
   Effect.map(effect, (r) => HttpServerResponse.fromWeb(r));
 
 const sourceOf = (request: HttpServerRequest.HttpServerRequest) => request.source as Request;
+
+/** The caller the router's gate identified, and whether the overlay lists it in `operators`. */
+const currentViewer = Effect.gen(function* () {
+  const identity = yield* CurrentIdentity;
+  const config = yield* ApiConfig;
+  const operator = Match.value(identity).pipe(
+    Match.tag("Access", ({ id }) => inGroup(config, "operators", id)),
+    Match.orElse(() => false),
+  );
+  return { identity, operator } satisfies ArtifactViewer;
+});
 
 /** The logs group's handlers (FD-CACHE-083). */
 export const LogsHandlers = HttpApiBuilder.group(FlareDispatchApi, "logs", (handlers) =>
@@ -227,26 +288,41 @@ export const LogsHandlers = HttpApiBuilder.group(FlareDispatchApi, "logs", (hand
     ),
 );
 
-/** The artifacts group's handlers (FD-CACHE-075, FD-CACHE-078). */
+/**
+ * The artifacts group's handlers (FD-CACHE-075, FD-CACHE-076, FD-CACHE-078). The listing writes each artifact's URL
+ * with a link token bound to that artifact, for the configured link lifetime (FD-CACHE-077).
+ */
 export const ArtifactsHandlers = HttpApiBuilder.group(FlareDispatchApi, "artifacts", (handlers) =>
   handlers
     .handle("get", ({ params, request }) =>
       response(
-        CacheReads.use((reads) =>
-          reads.artifact(
-            sourceOf(request),
-            params.artifact_id,
-            params["*"] === undefined || params["*"] === "" ? undefined : params["*"],
-          ),
-        ),
+        Effect.gen(function* () {
+          const viewer = yield* currentViewer;
+          return yield* CacheReads.use((reads) =>
+            reads.artifact(
+              sourceOf(request),
+              params.artifact_id,
+              params["*"] === undefined || params["*"] === "" ? undefined : params["*"],
+              viewer,
+            ),
+          );
+        }),
       ),
     )
     .handle("list", ({ params, query }) =>
-      CacheReads.use((reads) =>
-        reads.artifacts(params.id, {
-          limit: query.limit ?? ARTIFACT_PAGE_SIZE,
-          cursor: query.cursor ?? "",
-        }),
-      ),
+      Effect.gen(function* () {
+        const viewer = yield* currentViewer;
+        const page = yield* CacheReads.use((reads) =>
+          reads.artifacts(
+            params.id,
+            { limit: query.limit ?? ARTIFACT_PAGE_SIZE, cursor: query.cursor ?? "" },
+            viewer,
+          ),
+        );
+        const artifacts = yield* Effect.forEach(page.artifacts, (entry) =>
+          Effect.map(artifactUrl(entry.artifact_id, "listing"), (url) => ({ ...entry, url })),
+        );
+        return { artifacts, cursor: page.cursor };
+      }),
     ),
 );

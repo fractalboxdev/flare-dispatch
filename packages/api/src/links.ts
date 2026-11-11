@@ -1,6 +1,6 @@
-// The links the dispatcher writes for an execution: its details page and its logs, each carrying a link token for that
-// one execution (FD-IFC-018, FD-IFC-019). Without a link key a link carries no token, and only an Access identity opens
-// it.
+// The links the dispatcher writes: an execution's details page and its logs, each carrying a link token for that one
+// execution, and an artifact's, carrying a link token for that one artifact (FD-IFC-018, FD-IFC-019). Without a link
+// key a link carries no token, and only an Access identity opens it.
 import { Effect } from "effect";
 import { ApiConfig, DASHBOARD_LINK_LIFETIME_S } from "./config.ts";
 import { mintLinkToken, type LinkPurpose } from "./link-token.ts";
@@ -11,10 +11,10 @@ export interface ExecutionLinks {
 }
 
 /**
- * Where a link is shown decides its lifetime: a check run's for the configured lifetime (FD-IFC-019), the dashboard's
- * for at most 1 h (FD-OPS-067).
+ * Where a link is shown decides its lifetime: a check run's and an artifact listing's for the configured lifetime, at
+ * most 7 days (FD-IFC-019, FD-CACHE-077), the dashboard's for at most 1 h (FD-OPS-067).
  */
-export type LinkAudience = "check-run" | "dashboard";
+export type LinkAudience = "check-run" | "listing" | "dashboard";
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
@@ -55,4 +55,16 @@ export const executionLinks = (
       details_url: withToken(`${publicOrigin}/executions/${id}`, token),
       logs_url: withToken(`${publicOrigin}/v1/executions/${id}/logs`, token),
     };
+  });
+
+/** An artifact's URL, carrying a link token bound to that one artifact (FD-CACHE-077). */
+export const artifactUrl = (
+  artifactId: string,
+  audience: LinkAudience,
+  nowS: number = nowSeconds(),
+): Effect.Effect<string, never, ApiConfig> =>
+  Effect.gen(function* () {
+    const { publicOrigin } = yield* ApiConfig;
+    const token = yield* linkToken("artifact", artifactId, audience, nowS);
+    return withToken(`${publicOrigin}/v1/artifacts/${encodeURIComponent(artifactId)}`, token);
   });

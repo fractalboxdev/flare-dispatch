@@ -2,21 +2,17 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "./crypto.ts";
 import {
   logObjectName,
-  LOG_TOKEN_LABEL,
   parseLogObjectName,
   serveLogs,
-  signLogToken,
   stepKey,
   stripAnsi,
   sweepLogs,
-  verifyCapability,
   type LogExecution,
   type LogRead,
 } from "./logs.ts";
 import type { Bucket } from "./manifest.ts";
 import { emptyBucket, startMiniflare } from "./support.test-support.ts";
 
-const SECRET = "log-secret";
 const EXEC = "exec-logs";
 let mf: Awaited<ReturnType<typeof startMiniflare>>;
 let bucket: Bucket;
@@ -112,14 +108,6 @@ describe("logs", () => {
     await write(name, ["x"]);
     expect(served(await logs(undefined, "", { terminal: true })).headers.get("cache-control")).toContain("immutable");
     expect(served(await logs(undefined, "", { terminal: false })).headers.get("cache-control")).toBe("no-store");
-  });
-
-  it("a log token binds one execution, lasts at most 7 days and uses the log label", async () => {
-    const token = await signLogToken(SECRET, EXEC, NOW + 30 * 24 * 3600 * 1000, NOW);
-    expect(await verifyCapability(SECRET, LOG_TOKEN_LABEL, EXEC, token, NOW + 6 * 24 * 3600 * 1000)).toBe(true);
-    expect(await verifyCapability(SECRET, LOG_TOKEN_LABEL, EXEC, token, NOW + 7 * 24 * 3600 * 1000 + 1)).toBe(false);
-    expect(await verifyCapability(SECRET, LOG_TOKEN_LABEL, "exec-other", token, NOW)).toBe(false);
-    expect(await verifyCapability(SECRET, "flare-dispatch/artifact/v1", EXEC, token, NOW)).toBe(false);
   });
 
   it("[FD-CACHE-088] a confidential-compute execution's viewer shows a pointer and fetches no log content", async () => {

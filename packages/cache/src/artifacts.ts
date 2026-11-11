@@ -5,7 +5,6 @@ import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
 import { Context, Effect, Schema } from "effect";
 import { random128 } from "./crypto.ts";
 import { CacheClock, CacheLeases, DEFAULT_BYTE_BOUNDS, type ByteBounds } from "./lease.ts";
-import { signCapability } from "./logs.ts";
 import { CacheBucket } from "./manifest.ts";
 import { MAX_URL_LIFETIME_MS, R2Presigner } from "./presign.ts";
 import { MiB } from "./ledger.ts";
@@ -340,12 +339,6 @@ export const recordDeviceArtifact = (
 
 // ---- Serving -----------------------------------------------------------------------
 
-export const ARTIFACT_TOKEN_LABEL = "flare-dispatch/artifact/v1";
-
-/** An artifact capability token: bound to one `artifact_id`, at most 7 days (FD-CACHE-077). */
-export const signArtifactToken = (secret: string, artifactId: string, expiresAt: number, nowMs: number) =>
-  signCapability(secret, ARTIFACT_TOKEN_LABEL, artifactId, expiresAt, nowMs);
-
 export interface ArtifactRow {
   readonly artifact_id: string;
   readonly execution_id: string;
@@ -425,6 +418,20 @@ export const serveArtifact = async (
   };
 };
 
+/** Whether the caller may read a private repository's artifact (FD-CACHE-076). */
+export type ArtifactReader = (
+  row: Pick<ArtifactRow, "artifact_id" | "execution_id" | "repo">,
+) => Promise<boolean>;
+
+/**
+ * A public repository's artifact is visible to every caller its route admits; a private repository's only to a caller
+ * `mayRead` admits, and to every other caller it is an artifact that does not exist (FD-CACHE-076).
+ */
+export const artifactVisible = async (
+  row: Pick<ArtifactRow, "artifact_id" | "execution_id" | "repo" | "private">,
+  mayRead: ArtifactReader,
+): Promise<boolean> => row.private !== 1 || mayRead(row);
+
 /** One artifact as a listing shows it. */
 export interface ArtifactEntry {
   readonly artifact_id: string;
@@ -439,27 +446,27 @@ export interface ArtifactEntry {
 
 /**
  * One page of an execution's unexpired artifacts, at most 100 rows, with the cursor of the next page (FD-CACHE-078).
- * A private repository's artifact is listed only where `mayRead` admits its repository.
+ * A private repository's artifact is listed only where `mayRead` admits it (FD-CACHE-076).
  */
 export const artifactPage = async (
   deps: Pick<ArtifactServeDeps, "db" | "now">,
   executionId: string,
   page: { readonly limit: number; readonly cursor: string },
-  mayRead: (repo: string) => Promise<boolean>,
+  mayRead: ArtifactReader,
 ): Promise<{ readonly artifacts: readonly ArtifactEntry[]; readonly cursor: string | null }> => {
   const limit = Math.min(ARTIFACT_PAGE_SIZE, Math.max(1, Math.floor(page.limit) || ARTIFACT_PAGE_SIZE));
   const cursor = page.cursor;
   const { results } = await deps.db
     .prepare(
-      `select artifact_id, name, size, sha256, content_type, epoch, producer_executor_id, producer_executor_kind,
-         repo, private, expires_at from artifacts where execution_id = ? and artifact_id > ? and expires_at > ?
+      `select artifact_id, execution_id, name, size, sha256, content_type, epoch, producer_executor_id,
+         producer_executor_kind, repo, private, expires_at from artifacts where execution_id = ? and artifact_id > ? and expires_at > ?
        order by artifact_id limit ?`,
     )
     .bind(executionId, cursor, deps.now(), limit + 1)
     .all<ArtifactRow>();
   const visible: ArtifactEntry[] = [];
   for (const row of results.slice(0, limit)) {
-    if (row.private === 1 && !(await mayRead(row.repo))) continue;
+    if (!(await artifactVisible(row, mayRead))) continue;
     visible.push({
       artifact_id: row.artifact_id,
       name: row.name,

@@ -3,7 +3,6 @@
 import { Effect, Exit } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  ARTIFACT_TOKEN_LABEL,
   artifactPage,
   artifactPath,
   beginArtifactUpload,
@@ -13,14 +12,12 @@ import {
   newArtifactId,
   recordDeviceArtifact,
   serveArtifact,
-  signArtifactToken,
   sweepArtifacts,
   validArtifactName,
   type ArtifactRead,
   type BeginArtifact,
 } from "./artifacts.ts";
 import { GiB, MiB } from "./ledger.ts";
-import { verifyCapability } from "./logs.ts";
 import type { Bucket } from "./manifest.ts";
 import {
   EXEC,
@@ -53,7 +50,6 @@ beforeEach(async () => {
 });
 
 const SHA = "a".repeat(64);
-const SECRET = "artifact-secret";
 const run = <A, E>(w: World, effect: Effect.Effect<A, E, never>) => Effect.runPromiseExit(effect);
 const provide = (w: World) => Effect.provide(layers(w, bucket, signerFor(keys.pair.privateKey), db));
 const begin = (w: World, frame: Partial<BeginArtifact> = {}) =>
@@ -170,16 +166,6 @@ describe("artifacts", () => {
     expect(await done.text()).toBe("<p/>!");
     expect(done.headers.get("cache-control")).toContain("immutable");
     expect(served(await read(w, id, false)).headers.get("cache-control")).toBe("no-store");
-  });
-
-  it("an artifact token binds one artifact id, lasts at most 7 days and uses the artifact label", async () => {
-    const w = world();
-    const id = "1".repeat(32);
-    const token = await signArtifactToken(SECRET, id, w.now + 30 * 24 * 3600 * 1000, w.now);
-    expect(await verifyCapability(SECRET, ARTIFACT_TOKEN_LABEL, id, token, w.now)).toBe(true);
-    expect(await verifyCapability(SECRET, ARTIFACT_TOKEN_LABEL, "0".repeat(32), token, w.now)).toBe(false);
-    expect(await verifyCapability(SECRET, ARTIFACT_TOKEN_LABEL, id, token, w.now + 8 * 24 * 3600 * 1000)).toBe(false);
-    expect(await verifyCapability(SECRET, "flare-dispatch/log/v1", id, token, w.now)).toBe(false);
   });
 
   it("[FD-CACHE-078] the listing pages at most 100 rows with a cursor and lists rows only", async () => {
