@@ -68,6 +68,8 @@ export const record = (
   placementConstraint: null,
   cacheTrigger: { _tag: "Other" },
   eligibleKinds: ["device"],
+  repositoryPublic: null,
+  inputAssociations: [],
   createdAt: NOW,
   ...overrides,
 });
