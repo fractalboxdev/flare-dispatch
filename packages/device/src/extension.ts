@@ -1,13 +1,17 @@
 // FlareDispatch's device extension: the plane's process beside mameko's device executor, answering the extension
-// interface on file descriptor 3 (MAMEKO-EXEC-140). It holds L1 per cache namespace and `LocalContent` per tenant
-// scope, and restores a cache entry only for a namespace a lease it was handed may read (FD-EXEC-007).
+// interface on file descriptor 3 (MAMEKO-EXEC-140). It holds L1 per cache namespace — the cache package's L1, which
+// reads through to L2 on a miss and uploads to L2 after a put — and `LocalContent` per tenant scope, and restores a
+// cache entry only for a namespace a lease it was handed may read (FD-EXEC-007).
 import { createHash } from "node:crypto";
+import type { L1Cache, L2Client } from "@fractalboxdev/flare-dispatch-cache/device";
 import { decodeExtensionLine, type ExtensionMessage } from "@fractalboxdev/mameko-protocol";
-import { Exit, Schema } from "effect";
-import { namespaceWellFormed, type L1 } from "./l1.ts";
+import { Cause, Effect, Exit, Schema } from "effect";
 
 /** The extension's protocol version. */
 export const EXTENSION_VERSION = 1;
+
+/** The default share of the free disk measured at start that L1 may hold (FD-CACHE-009). */
+export const DEFAULT_L1_SHARE = 0.2;
 
 /** The operations this extension serves; `statement` needs a signing operation the device extension lacks. */
 export const OPERATIONS = [
@@ -18,6 +22,26 @@ export const OPERATIONS = [
   "content.get",
   "proxies",
 ] as const;
+
+/** The cache namespace forms of the profile's `cache_namespaces` binding (specs/README.md § Glossary). */
+const REPO = String.raw`[\w.-]+/[\w.-]+`;
+const NAMESPACE = new RegExp(
+  String.raw`^(protected/${REPO}/(cloud|device)|pr/${REPO}/[1-9]\d*|exec/${REPO}/[0-9A-HJKMNP-TV-Z]{26}|cas/[0-9a-f]{64})$`,
+);
+
+export const namespaceWellFormed = (namespace: string): boolean => NAMESPACE.test(namespace);
+
+/** A cache key: the SHA-256 of the key fields, lowercase hex (specs/cache-artifacts.md § Cache keys). */
+const KEY = /^[0-9a-f]{64}$/;
+
+/**
+ * L2 on a deploy whose device extension has no presigned-URL transport: every read is a miss and every upload is
+ * skipped, so L1 alone serves the device executor.
+ */
+export const absentL2: L2Client = {
+  fetch: async () => null,
+  upload: async () => {},
+};
 
 /** The cache namespaces of one lease, as the lease names them. */
 const LeaseNamespaces = Schema.Struct({
@@ -31,7 +55,7 @@ const decodeLease = Schema.decodeUnknownExit(LeaseNamespaces);
 
 export interface ExtensionState {
   readonly planeId: string;
-  readonly l1: L1;
+  readonly l1: L1Cache;
   /** `LocalContent` per tenant scope, held in memory for the extension's lifetime. */
   readonly content: Map<string, Uint8Array>;
   /** The namespaces the leases handed to the extension may read and write. */
@@ -69,7 +93,7 @@ const error = (
 });
 
 /**
- * Whether a workspace may restore from a namespace: only an L1 entry of a well-formed namespace that a lease handed to
+ * Whether a workspace may restore from a namespace: only an entry of a well-formed namespace that a lease handed to
  * this extension names as readable (FD-EXEC-007).
  */
 export const restoreAdmitted = (
@@ -77,15 +101,19 @@ export const restoreAdmitted = (
   namespace: string,
 ): boolean => namespaceWellFormed(namespace) && state.readable.has(namespace);
 
-/** One request answered; `null` for a message that takes no answer. */
-export const answer = (state: ExtensionState, m: ExtensionMessage): Reply | null => {
+/**
+ * One request answered; `null` for a message that takes no answer. A `cache.get` that L1 lacks reads through to L2
+ * and returns the entry only once every object digest verifies against its manifest (FD-CACHE-006); a `cache.put`
+ * writes L1 and then uploads to L2 (FD-CACHE-007).
+ */
+export const answer = (state: ExtensionState, m: ExtensionMessage): Effect.Effect<Reply | null> => {
   const ok = (type: string, fields: Record<string, unknown>): Reply => ({
     type,
     id: `${type}-${m.id}`,
     ref: m.id,
     ...fields,
   });
-  try {
+  return Effect.gen(function* () {
     switch (m.type) {
       case "proxies": {
         const lease = decodeLease(m.lease);
@@ -96,21 +124,20 @@ export const answer = (state: ExtensionState, m: ExtensionMessage): Reply | null
         }
         return ok("proxies.ok", { proxies: [] });
       }
-      case "cache.get":
-        return ok("cache.get.ok", {
-          bytes: restoreAdmitted(state, m.namespace)
-            ? (() => {
-                const bytes = state.l1.get(m.namespace, m.key);
-                return bytes === null ? null : b64(bytes);
-              })()
-            : null,
-        });
+      case "cache.get": {
+        if (!restoreAdmitted(state, m.namespace)) return ok("cache.get.ok", { bytes: null });
+        const bytes = yield* state.l1.get(m.namespace, m.key);
+        return ok("cache.get.ok", { bytes: bytes === null ? null : b64(bytes) });
+      }
       case "cache.put":
         if (!namespaceWellFormed(m.namespace) || !state.writable.has(m.namespace))
           return error(m.id, "invalid", `namespace ${m.namespace} is not writable by any lease`);
-        return ok("cache.put.ok", { digest: state.l1.put(m.namespace, m.key, unb64(m.bytes)) });
+        if (!KEY.test(m.key)) return error(m.id, "invalid", `key ${m.key} is not a cache key`);
+        return ok("cache.put.ok", {
+          digest: `sha256:${yield* state.l1.put(m.namespace, m.key, unb64(m.bytes))}`,
+        });
       case "cache.evict":
-        return ok("cache.evict.ok", { freed_bytes: state.l1.evict(m.target_bytes) });
+        return ok("cache.evict.ok", { freed_bytes: yield* state.l1.evict(m.target_bytes) });
       case "content.put": {
         const bytes = unb64(m.bytes);
         const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -127,20 +154,27 @@ export const answer = (state: ExtensionState, m: ExtensionMessage): Reply | null
       default:
         return error(m.id, "unsupported", `${m.type} is not an operation of this extension`);
     }
-  } catch (cause) {
-    return error(m.id, "unavailable", cause instanceof Error ? cause.message : String(cause));
-  }
+  }).pipe(
+    Effect.catchCause((cause) => {
+      const failure = Cause.squash(cause);
+      return Effect.succeed(
+        error(m.id, "unavailable", failure instanceof Error ? failure.message : String(failure)),
+      );
+    }),
+  );
 };
 
 /** One line of the socket answered, or an `extension.error` for a malformed or oversized line. */
-export const answerLine = (state: ExtensionState, line: string): Reply | null => {
+export const answerLine = (state: ExtensionState, line: string): Effect.Effect<Reply | null> => {
   const decoded = decodeExtensionLine(line);
   switch (decoded._tag) {
     case "Message":
       return answer(state, decoded.message);
     case "Malformed":
-      return error("malformed", "invalid", "the line is not a message of the extension schema");
+      return Effect.succeed(
+        error("malformed", "invalid", "the line is not a message of the extension schema"),
+      );
     case "TooLarge":
-      return error("too-large", "invalid", "the line exceeds 1 MiB");
+      return Effect.succeed(error("too-large", "invalid", "the line exceeds 1 MiB"));
   }
 };
