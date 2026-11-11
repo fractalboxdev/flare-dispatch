@@ -1,9 +1,11 @@
 // The child-conclusions pass reads through indexes on the migrated store: the minute tick reads the parents in the
-// lookback and their children, never every execution (FD-GH-020).
+// lookback and their children, never every execution (FD-GH-020). Each row it inserts carries the profile's check.conclude fields.
 import { CHILDREN, migrateChildConclusions } from "@fractalboxdev/flare-dispatch-github";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
+import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import { concludeKindOf } from "../src/config.ts";
 
 describe("the child-conclusions read", () => {
   it("[FD-GH-020] reads executions through executions_finished and executions_parent, with no scan", async () => {
@@ -20,5 +22,13 @@ describe("the child-conclusions read", () => {
     const db = await migratedD1();
     await Effect.runPromise(migrateChildConclusions(db));
     await Effect.runPromise(migrateChildConclusions(db));
+  });
+
+  it("[FD-GH-058] a child's cp:check:conclude row draws the rate limit's reserve, as the check.conclude kind does", () => {
+    for (const deployment of ["development", "production"] as const)
+      expect(concludeKindOf(buildProfile(deployment))).toMatchObject({
+        tier: "outcome",
+        drawsReserve: true,
+      });
   });
 });

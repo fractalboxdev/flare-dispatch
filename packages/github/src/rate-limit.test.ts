@@ -205,6 +205,63 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["granted", "granted", "granted", "granted", "granted", "wait"]);
   });
 
+  it("[FD-GH-062] counts apply permits over any 60 s, not a window that restarts", async () => {
+    const answers = await withQuota(
+      Effect.gen(function* () {
+        const out: unknown[] = [(yield* acquire(permit()))._tag];
+        yield* TestClock.adjust("59 seconds");
+        out.push((yield* acquire(permit()))._tag, yield* acquire(permit()));
+        // 60 s on, the first grant leaves the span: one more fits, and the next waits until the 59 s grant leaves it.
+        yield* TestClock.adjust("1 second");
+        out.push((yield* acquire(permit()))._tag, yield* acquire(permit()));
+        return out;
+      }),
+      { ...quotaOptionsDefault, perMinute: 2 },
+    );
+    expect(answers).toEqual([
+      "granted",
+      "granted",
+      { _tag: "wait", retryAt: NOW + 60_000 },
+      "granted",
+      { _tag: "wait", retryAt: NOW + 119_000 },
+    ]);
+  });
+
+  it("[FD-GH-062] caps apply permits per hour at the default 500", async () => {
+    const answers = await withQuota(
+      Effect.gen(function* () {
+        let granted = 0;
+        // 81 calls a minute for 7 minutes: 80 each minute fit the minute cap until the hour's 500 are out.
+        for (let minute = 0; minute < 7; minute++) {
+          for (let i = 0; i < 81; i++) {
+            const answer = yield* acquire(permit());
+            if (answer._tag === "granted") {
+              granted++;
+              yield* ActuatorRateLimit.use((l) => l.release(answer.permitId));
+            }
+          }
+          yield* TestClock.adjust("1 minute");
+        }
+        return { granted, next: yield* acquire(permit()) };
+      }),
+    );
+    expect(quotaOptionsDefault).toMatchObject({ perMinute: 80, perHour: 500 });
+    expect(answers).toEqual({ granted: 500, next: { _tag: "wait", retryAt: NOW + 3_600_000 } });
+  });
+
+  it("[FD-GH-058] a row of the outcome tier draws the reserve though mameko writes it unflagged", async () => {
+    const answers = await withQuota(
+      Effect.gen(function* () {
+        yield* observe("7", { limit: 100, remaining: 10, resetAt: NOW + 5000 });
+        return [
+          (yield* acquire(permit({ kind: "check.conclude", tier: "outcome" })))._tag,
+          (yield* acquire(permit({ kind: "comment", tier: "effect" })))._tag,
+        ];
+      }),
+    );
+    expect(answers).toEqual(["granted", "wait"]);
+  });
+
   it("[FD-GH-063] MAMEKO-OUT-039 a 9th concurrent call waits until a permit is released", async () => {
     const result = await withQuota(
       Effect.gen(function* () {
