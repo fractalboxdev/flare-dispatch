@@ -1,10 +1,10 @@
-# `pnpm dogfood`
+# `pnpm ci:local`
 
-`pnpm dogfood [<git ref>]` runs FlareDispatch's own CI on this machine as a real execution through mameko's control plane and device executor. The ref defaults to `HEAD`, and any commit in this repository works, pushed or not.
+`pnpm ci:local [<git ref>]` runs FlareDispatch's own CI on this machine as a real execution through mameko's control plane and device executor. The ref defaults to `HEAD`, and any commit in this repository works, pushed or not.
 
 ## Isolation
 
-MAMEKO-ISO-001 forbids job code on the device OS, and no conformant macOS runtime exists yet. The dogfood run therefore executes on the host, under your own user, and the command says so when it starts. It is reachable only under the `development` deployment:
+MAMEKO-ISO-001 forbids job code on the device OS, and no conformant macOS runtime exists yet. The local CI run therefore executes on the host, under your own user, and the command says so when it starts. It is reachable only under the `development` deployment:
 
 - the Worker's committed `DEPLOYMENT` is `production`, whose catalogue leaves out a host execution, so its dispatch answers `404 run_not_found`, and only this command overrides it locally;
 - the runner entry takes `development` only from `FD_DEPLOYMENT=development`; any other value empties its catalogue, so a lease answers `RunNotInCatalog`;
@@ -25,13 +25,13 @@ MAMEKO-ISO-001 forbids job code on the device OS, and no conformant macOS runtim
 
 Each step runs in its own process group with a timeout, with only `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TMPDIR` and `PNPM_HOME` from the environment, plus `CI` and the `FD_*` fields.
 
-The first run builds the device programs into `.tmp/target`. Each run keeps its logs and control-plane state under `.tmp/dogfood/<timestamp>`: `control-plane.log`, `key-helper.log`, and `device.log`, which holds the output of every step.
+The first run builds the device programs into `.tmp/target`. Each run keeps its logs and control-plane state under `.tmp/local-ci/<timestamp>`: `control-plane.log`, `key-helper.log`, and `device.log`, which holds the output of every step.
 
 ## Result
 
 ```text
 verdict: failure (finding: lint: exit 1)
-record: execution 01K..., run check, class batch, executor dogfood-mac, epoch 2, accepted epoch 2
+record: execution 01K..., run check, class batch, executor local-ci-mac, epoch 2, accepted epoch 2
 github: output skipped, the control plane has no GitHub App; the failure conclusion stays in the outbox
 ```
 

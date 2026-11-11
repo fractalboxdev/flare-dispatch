@@ -1,4 +1,4 @@
-// The child processes of one dogfood run. Each service leads its own process group, and its scope's finalizer stops the
+// The child processes of one local CI run. Each service leads its own process group, and its scope's finalizer stops the
 // whole group, so no exit path leaves a process behind.
 import { execFile, spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";

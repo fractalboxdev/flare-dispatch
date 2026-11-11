@@ -1,4 +1,4 @@
-// The dogfood command's client of the control plane's HTTP routes.
+// The local CI command's client of the control plane's HTTP routes.
 import type { CheckInput } from "@fractalboxdev/flare-dispatch-catalog";
 import { Effect, Schema } from "effect";
 
