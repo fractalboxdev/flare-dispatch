@@ -10,6 +10,7 @@ import {
   type PermitRequest,
 } from "@fractalboxdev/mameko-ports";
 import { Clock, Context, Effect, Layer, Ref } from "effect";
+import { InstallationDirectory } from "./directory.ts";
 
 /** What one GitHub response says about its installation's budget. */
 export interface QuotaObservation {
@@ -232,11 +233,45 @@ export const installationQuotaLayer = (options: QuotaOptions = quotaOptionsDefau
     }),
   );
 
-/** mameko's actuator rate limit, served by the installation quota; the limit key is the installation id. */
+/** A repository scope, `<owner>/<repo>`, as a row keyed by its scope carries it. */
+const isRepository = (limitKey: string) => limitKey.includes("/");
+
+/**
+ * mameko's actuator rate limit, served by the installation quota under the installation id, the key the client observes
+ * each response under (FD-GH-056). A row keyed by its repository, as mameko keys a row when the binding is not applied
+ * (MAMEKO-OUT-057), takes its permit from the quota of the installation that serves the repository. Any other key, an
+ * installation id or the App's own key, is the quota key as it stands. A repository no installation serves keeps its
+ * own key, since the applier refuses its row without a call; a directory read that fails answers `wait`, so no call
+ * goes out under a quota it was not counted against.
+ */
 export const ActuatorRateLimitLive = Layer.effect(
   ActuatorRateLimit,
   Effect.gen(function* () {
     const quota = yield* InstallationQuota;
-    return { acquire: quota.acquire, release: quota.release };
+    const directory = yield* InstallationDirectory;
+    const retryMs = quotaOptionsDefault.concurrentRetryMs;
+    return {
+      acquire: (request) =>
+        isRepository(request.limitKey)
+          ? directory.installationFor(request.limitKey).pipe(
+              Effect.flatMap((installation) =>
+                quota.acquire(
+                  installation === null ? request : { ...request, limitKey: String(installation) },
+                ),
+              ),
+              Effect.catch((e) =>
+                Effect.gen(function* () {
+                  const now = yield* Clock.currentTimeMillis;
+                  yield* Effect.logWarning("installation read failed; permit deferred", {
+                    limitKey: request.limitKey,
+                    reason: e.message,
+                  });
+                  return { _tag: "wait", retryAt: now + retryMs } as const;
+                }),
+              ),
+            )
+          : quota.acquire(request),
+      release: quota.release,
+    };
   }),
 );

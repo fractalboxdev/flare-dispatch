@@ -15,6 +15,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import { resolveRequestClass } from "@fractalboxdev/mameko-coordinator";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { InstallationDirectory, installationOf } from "@fractalboxdev/flare-dispatch-github";
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import {
@@ -46,18 +47,48 @@ export interface IntakeLayerOptions {
   readonly alarms?: AdmissionPorts["alarms"];
 }
 
+/**
+ * The profile's `delivery.limit_key` binding over the deployment's installation directory: the id of the installation
+ * that serves the repository (FD-GH-056). A repository no installation serves, or one the directory cannot read, keeps
+ * its scope as the key; the actuator rate limit resolves that key to the same installation's quota when it is due.
+ */
+export const installationLimitKey = Effect.gen(function* () {
+  const directory = yield* InstallationDirectory;
+  return (scopeId: string) =>
+    installationOf(scopeId).pipe(
+      Effect.provideService(InstallationDirectory, directory),
+      Effect.catchTag("NoInstallation", () => Effect.succeed(scopeId)),
+      Effect.catch((e) =>
+        Effect.as(
+          Effect.logWarning("installation read failed; limit key left at the repository", {
+            scopeId,
+            reason: e.message,
+          }),
+          scopeId,
+        ),
+      ),
+    );
+});
+
 /** Every intake service except `ClassResolver` and `AccessIdentity`; needs the GitHub services. */
 export const intakeLayer = (options: IntakeLayerOptions) =>
   Layer.mergeAll(
     Layer.succeed(IntakeConfig, options.settings),
-    d1Admission(options.db, options.settings.profile, {
-      ...(options.queued === undefined ? {} : { queued: options.queued }),
-      ...(options.startExecution === undefined ? {} : { startExecution: options.startExecution }),
-      ...(options.cancelExecution === undefined
-        ? {}
-        : { cancelExecution: options.cancelExecution }),
-      ...(options.alarms === undefined ? {} : { alarms: options.alarms }),
-    }),
+    Layer.unwrap(
+      Effect.map(installationLimitKey, (limitKey) =>
+        d1Admission(options.db, options.settings.profile, {
+          ...(options.queued === undefined ? {} : { queued: options.queued }),
+          ...(options.startExecution === undefined
+            ? {}
+            : { startExecution: options.startExecution }),
+          ...(options.cancelExecution === undefined
+            ? {}
+            : { cancelExecution: options.cancelExecution }),
+          ...(options.alarms === undefined ? {} : { alarms: options.alarms }),
+          ...(options.settings.profile.delivery.limit_key === "installationOf" ? { limitKey } : {}),
+        }),
+      ),
+    ),
     d1IntakeStore(options.db),
     d1ShedRecorder(options.db),
     manifestSourceLayer,

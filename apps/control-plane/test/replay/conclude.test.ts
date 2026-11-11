@@ -51,7 +51,9 @@ const drain = (db: TestD1, gh: ReturnType<typeof fakeGithub>, now: number) =>
           CheckRunApplierLive.pipe(
             Layer.provide(Layer.merge(fakeGithubLayers(gh), concludeFactsLayer(envOf(db)))),
           ),
-          ActuatorRateLimitLive.pipe(Layer.provide(installationQuotaLayer())),
+          ActuatorRateLimitLive.pipe(
+            Layer.provide(Layer.merge(installationQuotaLayer(), fakeGithubLayers(gh))),
+          ),
         ),
       ),
     ),

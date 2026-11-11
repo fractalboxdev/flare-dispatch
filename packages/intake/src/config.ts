@@ -178,6 +178,11 @@ export interface AdmissionPorts {
    * so no repository is quarantined while this is absent.
    */
   readonly quarantined?: (scopeId: string) => Effect.Effect<boolean>;
+  /**
+   * The profile's `delivery.limit_key` binding for the request's repository, the installation that serves it
+   * (FD-GH-056); every row admission inserts carries it. Absent, a row's limit key is its scope (MAMEKO-OUT-057).
+   */
+  readonly limitKey?: (scopeId: string) => Effect.Effect<string>;
 }
 
 /** Without an alarm sink an admission alarm is logged and delivered nowhere; admission does not decide on delivery. */
@@ -257,6 +262,8 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
                   "per_scope" in cls.bounds ? cls.bounds.per_scope : cls.bounds.per_run_scope,
               };
         const runLabels = input.placement.facts.runLabels;
+        const limitKey =
+          ports.limitKey === undefined ? undefined : yield* ports.limitKey(input.scopeId);
         return yield* admit<IntakeAdmitInput>({
           request: input,
           executionId: input.executionId,
@@ -304,7 +311,10 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
               ? () => Effect.void
               : (payload) => Effect.orDie(ports.startExecution!(payload)),
           grants: input.grants,
-          intents: admittedIntents(profile, input),
+          intents: {
+            ...admittedIntents(profile, input),
+            ...(limitKey === undefined ? {} : { limitKey: () => limitKey }),
+          },
           supersessionKey: input.supersessionKey ?? null,
           serialKey: input.serialKey ?? null,
           ...(ports.cancelExecution === undefined
