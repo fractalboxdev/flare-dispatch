@@ -46,6 +46,7 @@ on:
       - "wrangler.jsonc"
       - "pnpm-lock.yaml"
       - ".github/workflows/deploy.yml"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
     inputs:
       target:
@@ -62,32 +63,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Lint, typecheck, the bundle dry runs and the suite — the same workflow
+  # every pull request into main runs (ci.yml).
   ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      # wrangler.jsonc names code that no TypeScript gate checks: entrypoints,
-      # and Durable Object classes the entrypoint must export. Rename a class
-      # without its binding and lint, typecheck and test all stay green — the
-      # first failure is the deploy below, after migrations have been applied.
-      # `--containers-rollout none` keeps this to the bundle: without it a dry
-      # run still builds every container image, which the deploy jobs then
-      # build again. BEFORE `pnpm test`, deliberately: these cost seconds and
-      # the suite costs minutes, so on the main-push run a config that names
-      # missing code reds this job without waiting out the suite. After
-      # `typecheck`, also deliberately: a real code error should fail with the
-      # typechecker's message, not esbuild's.
-      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none
-      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none -c apps/substrate/wrangler.jsonc
-      - run: pnpm test
+    uses: ./.github/workflows/ci.yml
 
   # The substrate deploys BEFORE the dispatcher, and its own job rather than a
   # step in `deploy`, because the ordering is a real constraint and not a
