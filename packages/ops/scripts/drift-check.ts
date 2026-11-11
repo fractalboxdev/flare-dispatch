@@ -1,7 +1,8 @@
 // The pull-request part of the drift check (specs/operability.md FD-OPS-019 to FD-OPS-021, FD-OPS-026, FD-ARCH-001,
-// FD-INT-050, specs/profile.md FD-PROF-033, FD-PROF-064, specs/model-gateway.md FD-MDL-020, FD-MDL-022): the
-// placeholder overlay's provider registry, and the dispatcher's template rendered from that overlay, against the
-// template's invariants, the environment schema, the pool caps, the components of specs/architecture.md and mameko's
+// FD-INT-050, specs/profile.md FD-PROF-033, FD-PROF-064, specs/model-gateway.md FD-MDL-020, FD-MDL-022,
+// specs/runs/agentic.md FD-AGT-002, FD-AGT-004): the placeholder overlay's provider registry, and the dispatcher's
+// template rendered from that overlay, against the template's invariants, the environment schema, the pool caps, the
+// components of specs/architecture.md, the registry validator over the agentic recipes' declarations and mameko's
 // profile validator over the production profile. The profile step's findings follow the configuration checks'
 // (`driftCheckFindings`); `fd deploy` and `fd doctor` compose their drift stage the same way (`withProfileStep`).
 //
