@@ -459,10 +459,10 @@ describe("improve-pr", () => {
 
   it("[FD-AGT-060] each manifest dimension's execution measures that dimension and prompts with only its output", async () => {
     const lint = { ...dimension, name: "lint-warnings", measure: "pnpm lint --count" };
-    const entries = [{ dimension }, { dimension: lint, baseBranch: "develop" }].map((p) =>
+    const entries = [{ dimension }, { dimension: lint }].map((p) =>
       Schema.decodeUnknownSync(ImprovePrParams)(p),
     );
-    const inputs = entries.map((p) => improvePrRequest(p, "main"));
+    const inputs = entries.map((p, i) => improvePrRequest(p, i === 0 ? "main" : "develop"));
     expect(inputs).toEqual([
       { baseBranch: "main", dimension },
       { baseBranch: "develop", dimension: lint },

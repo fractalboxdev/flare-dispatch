@@ -239,6 +239,30 @@ describe("webhook to admission", () => {
     expect(errors).toContain("runs[2].recipe: no recipe named missing");
   });
 
+  it("[FD-INT-018] [FD-AGT-060] two improve-pr entries without a label make the whole manifest invalid", async () => {
+    const dimension = (name: string) => ({
+      name,
+      measure: `node scripts/${name}.js`,
+      better: "lower",
+      materialityFloor: 10,
+      verify: "pnpm test",
+    });
+    const text = manifest([
+      { recipe: "improve-pr", triggers: ["cron"], params: { dimension: dimension("size") } },
+      { recipe: "improve-pr", triggers: ["cron"], params: { dimension: dimension("lint") } },
+    ]);
+    const h = await harness({
+      settings: { catalog: catalogRuns("development") },
+      repos: { [REPO]: repoWithManifest(text) },
+    });
+    await deliver(h, "pull_request", pullRequestPayload());
+    expect(h.executions()).toEqual([]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: invalid" }]);
+    expect(h.recorded.reported[0]!.errors).toEqual([
+      "runs[1].label: duplicate label none for recipe improve-pr",
+    ]);
+  });
+
   it("[FD-INT-019] a manifest read that fails with a 5xx submits nothing and sheds manifest: unreadable", async () => {
     const h = await harness();
     h.reads.failures.set(

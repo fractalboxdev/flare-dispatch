@@ -286,6 +286,7 @@ const schedules = (unit: TickUnit & { readonly _tag: "schedules" }) =>
             scheduledAt: unit.scheduledAt,
             repo,
             schedule: s.cron,
+            branch,
           };
           const inputs = run.trigger(event, viewOf(entry, manifest.value), { defaultBranch });
           if (Option.isNone(inputs)) continue;

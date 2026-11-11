@@ -82,12 +82,15 @@ const prReviewDecoder =
       Match.orElse(() => Option.none()),
     );
 
-/** `improve-pr` on its schedule: one execution for the entry's dimension (FD-AGT-060). */
+/**
+ * `improve-pr` on its schedule: one execution for the entry's dimension, whose pull request targets the branch the
+ * tick pinned the execution to (FD-AGT-060, FD-INT-052).
+ */
 const improvePrDecoder =
   (params: ImprovePrParams): RequestDecoder =>
-  (event, context) =>
+  (event) =>
     Match.value(event).pipe(
-      Match.tag("cron", () => Option.some(improvePrRequest(params, context.defaultBranch))),
+      Match.tag("cron", (c) => Option.some(improvePrRequest(params, c.branch))),
       Match.orElse(() => Option.none()),
     );
 

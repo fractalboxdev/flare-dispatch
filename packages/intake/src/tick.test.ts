@@ -76,7 +76,7 @@ describe("scheduled runs", () => {
     expect(quiet.outcome.executions).toEqual([]);
   });
 
-  it("[FD-INT-053] a tick fired twice for one minute creates at most one execution per run and repository", async () => {
+  it("[FD-INT-053] a tick fired twice for one minute creates at most one execution per run, label and repository", async () => {
     const h = await harness({ repos: { [REPO]: repoWithManifest(nightly) } });
     const unit: TickUnit = {
       _tag: "schedules",
@@ -129,15 +129,15 @@ describe("improve-pr schedules", () => {
       recipe: "improve-pr",
       label: "lint",
       triggers: ["cron"],
-      params: { dimension: dimension("lint", "pnpm lint --count"), baseBranch: "develop" },
-      schedules: [{ cron: "0 3 * * *" }],
+      params: { dimension: dimension("lint", "pnpm lint --count") },
+      schedules: [{ cron: "0 3 * * *", branch: "develop" }],
     },
   ]);
 
-  it("[FD-AGT-060] each manifest dimension's schedule starts one improve-pr execution for that dimension", async () => {
+  it("[FD-AGT-060] [FD-INT-052] each manifest dimension's schedule starts one improve-pr execution for that dimension, targeting the branch it pins", async () => {
     const h = await harness({
       settings: { catalog: catalogRuns("development") },
-      repos: { [REPO]: repoWithManifest(improve) },
+      repos: { [REPO]: repoWithManifest(improve, { branches: { main: BASE, develop: HEAD } }) },
     });
     const unit: TickUnit = {
       _tag: "schedules",
@@ -159,7 +159,7 @@ describe("improve-pr schedules", () => {
       [
         "improve-pr",
         "lint",
-        BASE,
+        HEAD,
         { baseBranch: "develop", dimension: dimension("lint", "pnpm lint --count") },
       ],
     ]);
