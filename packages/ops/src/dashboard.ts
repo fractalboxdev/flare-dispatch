@@ -1,6 +1,8 @@
-// The dashboard: the executions view and its JSON route (FD-OPS-068, FD-OPS-069), the per-class overview with active
-// alarms (FD-OPS-070) and the fleet view (FD-OPS-071), read from the control plane's D1 tables. The queries name
-// their columns; no route reads an execution's input payload or a secret. The renderers are pure.
+// The dashboard: the executions view and its JSON route (FD-OPS-068, FD-OPS-069), the execution page with its outbox
+// rows and every refusal reason (FD-AGT-018, FD-AGT-038), the per-class overview with active alarms (FD-OPS-070) and
+// the fleet view (FD-OPS-071), read from the control plane's D1 tables. The queries name their columns; no route reads
+// an execution's input payload or a secret. The renderers are pure.
+import { refusalView } from "@fractalboxdev/flare-dispatch-agentic";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { activeAlarms, type ActiveAlarm } from "./alarms.ts";
 
@@ -67,6 +69,31 @@ const decodeCursor = (c: string): { at: number; id: string } | null => {
   return i > 0 && Number.isInteger(at) ? { at, id: c.slice(i + 1) } : null;
 };
 
+/** The columns of one execution as the views show it, with its placement, executor and reservation. */
+const EXECUTION_SELECT = `select e.id, e.run, e.scope_id, e.class, e.status, e.reason, e.enqueued_at,
+              p.state as placement, p.epoch, p.executor_id, x.kind as executor_kind,
+              r.hold_micro_usd, r.metered_micro_usd
+       from executions e
+       left join placements p on p.execution_id = e.id
+       left join executors x on x.executor_id = p.executor_id
+       left join reservations r on r.execution_id = e.id`;
+
+const executionRowOf = (r: Record<string, unknown>): ExecutionRow => ({
+  id: r["id"] as string,
+  run: r["run"] as string,
+  repository: r["scope_id"] as string,
+  class: r["class"] as string,
+  status: r["status"] as string,
+  reason: (r["reason"] as string | null) ?? null,
+  enqueuedAt: r["enqueued_at"] as number,
+  placement: (r["placement"] as string | null) ?? null,
+  epoch: (r["epoch"] as number | null) ?? null,
+  executorId: (r["executor_id"] as string | null) ?? null,
+  executorKind: (r["executor_kind"] as string | null) ?? null,
+  holdMicroUsd: (r["hold_micro_usd"] as number | null) ?? null,
+  settledMicroUsd: (r["metered_micro_usd"] as number | null) ?? null,
+});
+
 /** One page of executions, newest first, keyset-paged on (`enqueued_at`, `id`). */
 export const listExecutions = async (
   db: D1Like,
@@ -94,36 +121,61 @@ export const listExecutions = async (
   const size = Math.min(Math.max(1, limit), MAX_PAGE);
   const { results } = await db
     .prepare(
-      `select e.id, e.run, e.scope_id, e.class, e.status, e.reason, e.enqueued_at,
-              p.state as placement, p.epoch, p.executor_id, x.kind as executor_kind,
-              r.hold_micro_usd, r.metered_micro_usd
-       from executions e
-       left join placements p on p.execution_id = e.id
-       left join executors x on x.executor_id = p.executor_id
-       left join reservations r on r.execution_id = e.id
+      `${EXECUTION_SELECT}
        ${where.length === 0 ? "" : `where ${where.join(" and ")}`}
        order by e.enqueued_at desc, e.id desc
        limit ?`,
     )
     .bind(...args, size + 1)
     .all();
-  const rows = (results as Record<string, unknown>[]).map((r): ExecutionRow => ({
-    id: r["id"] as string,
-    run: r["run"] as string,
-    repository: r["scope_id"] as string,
-    class: r["class"] as string,
-    status: r["status"] as string,
-    reason: (r["reason"] as string | null) ?? null,
-    enqueuedAt: r["enqueued_at"] as number,
-    placement: (r["placement"] as string | null) ?? null,
-    epoch: (r["epoch"] as number | null) ?? null,
-    executorId: (r["executor_id"] as string | null) ?? null,
-    executorKind: (r["executor_kind"] as string | null) ?? null,
-    holdMicroUsd: (r["hold_micro_usd"] as number | null) ?? null,
-    settledMicroUsd: (r["metered_micro_usd"] as number | null) ?? null,
-  }));
+  const rows = (results as Record<string, unknown>[]).map(executionRowOf);
   const page = rows.slice(0, size);
   return { rows: page, limit: size, next: rows.length > size ? encodeCursor(page.at(-1)!) : null };
+};
+
+/** One outbox row of an execution as its page shows it: the row's state and answer, never its payload. */
+export interface OutboxEntry {
+  readonly id: string;
+  readonly kind: string;
+  readonly state: string;
+  readonly attempts: number;
+  readonly externalRef: string | null;
+  readonly lastError: string | null;
+  readonly insertedAt: number;
+  readonly appliedAt: number | null;
+}
+
+/** The execution page: the execution's own row, whose status is its verdict, and its outbox rows. */
+export interface ExecutionDetail {
+  readonly execution: ExecutionRow;
+  readonly outbox: readonly OutboxEntry[];
+}
+
+/** One execution with its outbox rows in insertion order, or null when no execution has the id. */
+export const executionDetail = async (db: D1Like, id: string): Promise<ExecutionDetail | null> => {
+  const { results } = await db.prepare(`${EXECUTION_SELECT} where e.id = ?`).bind(id).all();
+  const found = (results as Record<string, unknown>[])[0];
+  if (found === undefined) return null;
+  const { results: rows } = await db
+    .prepare(
+      `select id, kind, state, attempts, external_ref, last_error, inserted_at, applied_at
+       from outbox where execution_id = ? order by inserted_at, id`,
+    )
+    .bind(id)
+    .all();
+  return {
+    execution: executionRowOf(found),
+    outbox: (rows as Record<string, unknown>[]).map((r) => ({
+      id: r["id"] as string,
+      kind: r["kind"] as string,
+      state: r["state"] as string,
+      attempts: r["attempts"] as number,
+      externalRef: (r["external_ref"] as string | null) ?? null,
+      lastError: (r["last_error"] as string | null) ?? null,
+      insertedAt: r["inserted_at"] as number,
+      appliedAt: (r["applied_at"] as number | null) ?? null,
+    })),
+  };
 };
 
 /** The per-class figures of the overview (FD-OPS-070). */
@@ -276,12 +328,61 @@ const STYLE = `
   td { padding: .5rem; border-bottom: 1px solid #171b27; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: #8a93a5; }
   .page { color: #ff9a9a; } .notify { color: #e4c779; }
+  ul.reasons { margin: .25rem 0 0; padding-left: 1.1rem; }
   form.filters { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
   form.filters input, form.filters button { font: inherit; color: #e7e9ee; background: #11151f; border: 1px solid #2b313f; border-radius: .35rem; padding: .3rem .5rem; }
 `;
 
 const usd = (micro: number | null) => (micro === null ? "—" : `$${(micro / 1e6).toFixed(4)}`);
 const seconds = (ms: number | null) => (ms === null ? "—" : `${Math.round(ms / 1000)} s`);
+
+/** The path of an execution's page. */
+export const executionPath = (id: string): string => `/executions/${encodeURIComponent(id)}`;
+
+/** The reasons a row's answer gives: every staged-write gate reason of a refused or expired `pr.propose` row. */
+const reasonCell = (row: OutboxEntry): string => {
+  if (row.lastError === null)
+    return row.state === "expired" ? "expired with no recorded reason" : "—";
+  const view = row.kind === "pr.propose" ? refusalView(row.lastError) : null;
+  if (view === null) return `<span class="mono">${esc(row.lastError)}</span>`;
+  return `writeback: ${esc(view.firstKind)}<ul class="reasons">${view.reasons
+    .map((r) => `<li class="mono">${esc(r)}</li>`)
+    .join("")}</ul>`;
+};
+
+/**
+ * The execution page: the verdict, read from the execution's own row, and each outbox row with its answer. A
+ * refused or expired `pr.propose` row lists every reason of its refusal (FD-AGT-018, FD-AGT-038); a row's answer
+ * never stands in for the verdict.
+ */
+export const renderExecutionDetail = (detail: ExecutionDetail, logLink: string | null): string => {
+  const e = detail.execution;
+  const rows = detail.outbox
+    .map(
+      (o) => `<tr>
+    <td>${esc(o.kind)}</td><td class="${o.state === "refused" || o.state === "expired" ? "notify" : ""}">${esc(o.state)}</td>
+    <td>${o.attempts}</td><td class="mono">${esc(o.externalRef ?? "—")}</td><td>${reasonCell(o)}</td>
+  </tr>`,
+    )
+    .join("\n");
+  return `<h2>Execution <span class="mono">${esc(e.id)}</span></h2>
+<table><tbody>
+<tr><th>Verdict</th><td>${esc(e.status)}</td></tr>
+<tr><th>Reason</th><td>${esc(e.reason ?? "—")}</td></tr>
+<tr><th>Run</th><td>${logLink === null ? esc(e.run) : `<a href="${esc(logLink)}">${esc(e.run)}</a>`}</td></tr>
+<tr><th>Repository</th><td>${esc(e.repository)}</td></tr>
+<tr><th>Class</th><td>${esc(e.class)}</td></tr>
+<tr><th>Executor</th><td class="mono">${esc(e.executorId ?? "—")} ${esc(e.executorKind ?? "")}</td></tr>
+</tbody></table>
+<h2>Outbox</h2>
+${
+  detail.outbox.length === 0
+    ? "<p>No outbox row.</p>"
+    : `<table><thead><tr><th>Intent</th><th>State</th><th>Attempts</th><th>External reference</th><th>Reason</th></tr></thead><tbody>
+${rows}
+</tbody></table>`
+}`;
+};
 
 /** The executions view: filters, rows and the next-page link; each log link carries its own link token. */
 export const renderExecutions = (
@@ -305,7 +406,7 @@ export const renderExecutions = (
   const rows = page.rows
     .map(
       (r) => `<tr>
-    <td>${esc(r.status)}</td><td>${logLinks[r.id] === undefined ? esc(r.run) : `<a href="${esc(logLinks[r.id]!)}">${esc(r.run)}</a>`}</td>
+    <td><a href="${executionPath(r.id)}">${esc(r.status)}</a></td><td>${logLinks[r.id] === undefined ? esc(r.run) : `<a href="${esc(logLinks[r.id]!)}">${esc(r.run)}</a>`}</td>
     <td>${esc(r.repository)}</td><td>${esc(r.class)}</td><td>${esc(r.placement ?? "—")}</td>
     <td class="mono">${esc(r.executorId ?? "—")}</td><td>${esc(r.executorKind ?? "—")}</td>
     <td>${r.epoch ?? "—"}</td><td>${usd(r.holdMicroUsd)}</td><td>${usd(r.settledMicroUsd)}</td>

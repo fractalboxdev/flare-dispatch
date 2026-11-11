@@ -1,5 +1,5 @@
-// The operability routes as one handler the Worker mounts before its own: the dashboard and the executions JSON route
-// behind the Access gate, `/v1/ops/*` and the install routes behind the operator gate, and `GET /v1/spend`. A route
+// The operability routes as one handler the Worker mounts before its own: the dashboard, the execution page and the
+// executions JSON route behind the Access gate, `/v1/ops/*` and the install routes behind the operator gate, and `GET /v1/spend`. A route
 // whose port the composition does not supply is not served, so it answers as an unknown route.
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Cause, Effect, Layer } from "effect";
@@ -12,10 +12,12 @@ import {
 } from "./access.ts";
 import { opsConfigFrom, type OpsConfig } from "./config.ts";
 import {
+  executionDetail,
   fleet,
   listExecutions,
   overview,
   parseExecutionQuery,
+  renderExecutionDetail,
   renderExecutions,
   renderFleet,
   renderOverview,
@@ -67,10 +69,22 @@ const accessConfig = (c: OpsConfig, deps: OpsRouteDeps): AccessConfig => ({
   ...(deps.now === undefined ? {} : { now: deps.now }),
 });
 
-const html = (body: string) =>
+const html = (body: string, status = 200) =>
   new Response(body, {
+    status,
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
   });
+
+const EXECUTION_PAGE = /^\/executions\/([^/]+)$/;
+
+/** A path segment decoded, or null when its percent-encoding is malformed. */
+const decodeSegment = (segment: string): string | null => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+};
 
 const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId: string) =>
   Effect.gen(function* () {
@@ -80,6 +94,7 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
     const served =
       pathname === "/" ||
       pathname === "/v1/executions" ||
+      EXECUTION_PAGE.test(pathname) ||
       pathname === "/v1/spend" ||
       pathname.startsWith("/v1/ops/") ||
       pathname.startsWith("/v1/github/install/") ||
@@ -124,23 +139,36 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
     }
     if (pathname.startsWith("/v1/ops/")) return null;
     yield* requireAccess(request, access);
+    const linkKey = config.LINK_KEY;
+    const linkFor = (id: string) =>
+      linkKey === undefined
+        ? Effect.succeed(null)
+        : Effect.promise(() =>
+            dashboardLink({
+              linkKey,
+              purpose: "log",
+              id,
+              path: `/v1/executions/${encodeURIComponent(id)}/logs/run.log`,
+              nowSeconds: Math.floor(now / 1000),
+              epoch: deps.linkEpoch ?? 0,
+            }),
+          );
+    const executionPage = EXECUTION_PAGE.exec(pathname);
+    if (executionPage !== null) {
+      const id = decodeSegment(executionPage[1] as string);
+      const detail = id === null ? null : yield* Effect.promise(() => executionDetail(env.DB, id));
+      if (detail === null)
+        return html(renderPage(["<h2>Execution</h2><p>No execution has this id.</p>"]), 404);
+      return html(renderPage([renderExecutionDetail(detail, yield* linkFor(detail.execution.id))]));
+    }
     const { filters, limit, cursor } = parseExecutionQuery(url);
     const page = yield* Effect.promise(() => listExecutions(env.DB, filters, limit, cursor));
     if (pathname === "/v1/executions") return Response.json(page);
-    const linkKey = config.LINK_KEY;
     const links: Record<string, string> = {};
-    if (linkKey !== undefined)
-      for (const r of page.rows)
-        links[r.id] = yield* Effect.promise(() =>
-          dashboardLink({
-            linkKey,
-            purpose: "log",
-            id: r.id,
-            path: `/v1/executions/${encodeURIComponent(r.id)}/logs/run.log`,
-            nowSeconds: Math.floor(now / 1000),
-            epoch: deps.linkEpoch ?? 0,
-          }),
-        );
+    for (const r of page.rows) {
+      const link = yield* linkFor(r.id);
+      if (link !== null) links[r.id] = link;
+    }
     const [o, f] = yield* Effect.promise(() =>
       Promise.all([overview(env.DB, deps.classes, now), fleet(env.DB, now)]),
     );
