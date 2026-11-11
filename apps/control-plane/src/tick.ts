@@ -1,8 +1,8 @@
 // The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, the
-// admission of held requests, intake's sweep and schedule units for every installation of the App, and the conclusions
-// of ended fan-out parents' children.
+// admission of held requests, the enqueue of intake's sweep and schedule units for every installation of the App, and
+// the conclusions of ended fan-out parents' children.
 import { GithubApp, insertChildConclusions } from "@fractalboxdev/flare-dispatch-github";
-import { planTick, releaseHeld, runTickUnit } from "@fractalboxdev/flare-dispatch-intake";
+import { planTick, releaseHeld } from "@fractalboxdev/flare-dispatch-intake";
 import { tickDepsFromEnv, type TickDeps, type TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import {
   startStaleExecutions,
@@ -18,22 +18,18 @@ import { channelConfig, concludeKindOf, profileOf, type ControlPlaneEnv } from "
 import { appOptionsOf } from "./github.ts";
 
 /**
- * One pass of every installation's units for the minute. A unit that stops at its subrequest budget reports that it
- * continues; its continuation waits for the next pass, since no Queue carries it.
+ * The tick's intake step only enqueues (FD-INT-067): each installation's planned units go to its `IntakeUnits` object,
+ * whose alarms run them one at a time, each continuation in an alarm of its own.
  */
-export const intakeUnits = (now: number) =>
+export const intakeUnits = (env: Pick<ControlPlaneEnv, "INTAKE_UNITS">, now: number) =>
   Effect.gen(function* () {
     const installations = yield* (yield* GithubApp).installations;
     const report = [];
-    for (const unit of planTick(now, installations)) {
-      const result = yield* runTickUnit(unit);
-      report.push({
-        unit: unit._tag,
-        installation: unit.installation,
-        executions: result.outcome.executions.length,
-        continues: result.next !== null,
-        skipped: result.skipped,
-      });
+    for (const installation of installations) {
+      const units = planTick(now, [installation]);
+      const queue = env.INTAKE_UNITS.get(env.INTAKE_UNITS.idFromName(String(installation)));
+      const added = yield* Effect.tryPromise(() => queue.enqueue(units));
+      report.push({ installation, units: units.map((u) => u._tag), added });
     }
     return report;
   });
@@ -103,10 +99,9 @@ export const tickDeps = (
         ? [
             {
               step: "intake-units",
-              effect: intakeUnits(now).pipe(Effect.provide(services as never)) as Effect.Effect<
-                unknown,
-                unknown
-              >,
+              effect: intakeUnits(env, now).pipe(
+                Effect.provide(services as never),
+              ) as Effect.Effect<unknown, unknown>,
             },
           ]
         : []),

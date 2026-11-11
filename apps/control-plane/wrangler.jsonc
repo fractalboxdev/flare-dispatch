@@ -23,7 +23,7 @@
     "GITHUB_APP_ID": "{{github.appId}}",
     "GITHUB_FIXTURE_REPO": "{{github.fixtureRepo}}",
   },
-  // The minute tick (FD-INT-050): outbox drain, liveness, intake's units and the retention sweeps.
+  // The minute tick (FD-INT-050): outbox drain, liveness, the enqueue of intake's units and the retention sweeps.
   "triggers": { "crons": ["* * * * *"] },
   "d1_databases": [
     {
@@ -53,6 +53,8 @@
       { "name": "BROWSER_POOL", "class_name": "BrowserPool" },
       { "name": "RELEASE_POOL", "class_name": "ReleasePool" },
       { "name": "CONTROL_POOL", "class_name": "ControlPool" },
+      // One per GitHub App installation: its tick units, one per alarm (FD-INT-067).
+      { "name": "INTAKE_UNITS", "class_name": "IntakeUnits" },
     ],
   },
   // One Container class per cloud pool, each running the gate image; `max_instances` sits above the pool's admission
@@ -112,5 +114,6 @@
         "ControlPool",
       ],
     },
+    { "tag": "v3", "new_sqlite_classes": ["IntakeUnits"] },
   ],
 }

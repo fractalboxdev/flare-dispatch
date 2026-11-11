@@ -26,6 +26,7 @@ export const durableObjectClasses = (phase: Phase): readonly string[] => [
   "PoolController",
   "LivenessMonitor",
   "InstallationQuota",
+  "IntakeUnits",
   "CacheLedger",
   ...(phase >= 4 ? ["TransparencyLog"] : []),
 ];

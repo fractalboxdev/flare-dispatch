@@ -11,7 +11,7 @@ import {
   repoWithManifest,
   REPO,
 } from "./harness.test-support.ts";
-import { planTick, runTickUnit, type TickUnit } from "./tick.ts";
+import { enqueueUnits, planTick, runQueuedUnit, runTickUnit, type TickUnit } from "./tick.ts";
 
 const at = (h: number, m: number) => Date.UTC(2026, 10, 4, h, m, 0);
 
@@ -210,5 +210,195 @@ describe("the missed-webhook sweep", () => {
     const result = await h.run(runTickUnit(sweepUnit));
     expect(result.next).toMatchObject({ _tag: "sweep", installation: 7, repoIndex: 0 });
     expect(Effect.isEffect(runTickUnit(sweepUnit))).toBe(true);
+  });
+});
+
+/** A Durable Object's storage in memory; `fire` clears the alarm as the platform does before it runs `alarm()`. */
+const memoryStorage = () => {
+  const data = new Map<string, unknown>();
+  let alarm: number | null = null;
+  return {
+    get: async (key: string) => structuredClone(data.get(key)),
+    put: async (key: string, value: unknown) => void data.set(key, structuredClone(value)),
+    getAlarm: async () => alarm,
+    setAlarm: async (at: number) => void (alarm = at),
+    alarm: () => alarm,
+    fire: () => {
+      const at = alarm;
+      alarm = null;
+      return at;
+    },
+  };
+};
+
+/** Forty labelled `nightly` entries, each answering `pull_request` and every minute's cron. */
+const wide = manifest(
+  Array.from({ length: 40 }, (_, i) => ({
+    recipe: "nightly",
+    label: `n${i}`,
+    triggers: ["pull_request", "cron"],
+    schedules: [{ cron: "* * * * *" }],
+  })),
+);
+
+describe("unit budgets and the unit queue", () => {
+  const sweepUnit: TickUnit = {
+    _tag: "sweep",
+    installation: 7,
+    scheduledAt: at(12, 0),
+    repoIndex: 0,
+    pullsSeen: 0,
+  };
+
+  it("[FD-INT-067] a sweep stops within 500 D1 queries and its continuations submit every head", async () => {
+    const pulls = Array.from({ length: 60 }, (_, i) =>
+      pull(i, i.toString(16).padStart(40, "0"), 0),
+    );
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(undefined, {
+          required: { main: ["flare-dispatch/check:ci"] },
+          pulls,
+        }),
+      },
+    });
+    const units: TickUnit[] = [sweepUnit];
+    const spent: number[] = [];
+    const stops: (string | null)[] = [];
+    for (let unit = units.shift(); unit !== undefined; unit = units.shift()) {
+      const before = h.db.queries();
+      const result = await h.run(runTickUnit(unit));
+      spent.push(h.db.queries() - before);
+      stops.push(result.stoppedAt);
+      if (result.next !== null) units.push(result.next);
+    }
+    expect(stops[0]).toBe("d1-queries");
+    expect(spent.length).toBeGreaterThan(1);
+    expect(Math.max(...spent)).toBeLessThanOrEqual(500);
+    expect(
+      new Set(
+        h
+          .records()
+          .filter((r) => r.run === "check")
+          .map((r) => r.sha),
+      ),
+    ).toEqual(new Set(pulls.map((p) => p.head.sha)));
+  });
+
+  it("[FD-INT-067] a pull request whose submissions pass the budget is continued at its next submission", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(wide, {
+          required: { main: ["flare-dispatch/nightly:n0"] },
+          pulls: [pull(1, HEAD, 0)],
+        }),
+      },
+    });
+    const first = await h.run(runTickUnit(sweepUnit));
+    expect(first.stoppedAt).toBe("d1-queries");
+    expect(first.next).toMatchObject({
+      repoIndex: 0,
+      pullIndex: 0,
+      pullsSeen: 0,
+    });
+    const made = h.records().length;
+    expect(first.next).toMatchObject({ submitted: made });
+    let units = 1;
+    for (let next = first.next; next !== null; units++) {
+      const before = h.db.queries();
+      next = (await h.run(runTickUnit(next))).next;
+      expect(h.db.queries() - before).toBeLessThanOrEqual(500);
+    }
+    expect(units).toBeGreaterThan(2);
+    expect(new Set(h.records().map((r) => r.label)).size).toBe(40);
+    expect(h.executions()).toHaveLength(40);
+  });
+
+  it("[FD-INT-067] the queue runs one unit per alarm, queues its continuation and reaches every repository", async () => {
+    const names = ["acme/a", "acme/b", "acme/c", "acme/d"];
+    const repos = Object.fromEntries(
+      names.map((r) => [
+        r,
+        repoWithManifest(wide, {
+          required: { main: ["flare-dispatch/nightly:n0"] },
+          pulls: [1, 2, 3].map((n) => ({
+            ...pull(n, `${r.slice(-1)}${n}`.padEnd(40, "0"), 0),
+            head: {
+              sha: `${r.slice(-1)}${n}`.padEnd(40, "0"),
+              ref: `f${n}`,
+              repo: { full_name: r },
+            },
+            base: { ref: "main", repo: { full_name: r } },
+          })),
+        }),
+      ]),
+    );
+    const h = await harness({
+      repos,
+      installations: Object.fromEntries(names.map((r) => [r, 7])),
+    });
+    const storage = memoryStorage();
+    const planned = planTick(at(12, 0), [7]);
+    expect(planned.map((u) => u._tag)).toEqual(["schedules", "sweep"]);
+    expect(await h.run(enqueueUnits(storage, planned, at(12, 0)))).toBe(2);
+    // The same minute's tick fired again adds nothing.
+    expect(await h.run(enqueueUnits(storage, planned, at(12, 0)))).toBe(0);
+    expect(storage.alarm()).toBe(at(12, 0));
+    let alarms = 0;
+    while (storage.fire() !== null) {
+      const before = h.db.queries();
+      const ran = await h.run(runQueuedUnit(storage, at(12, 0)));
+      expect(h.db.queries() - before).toBeLessThanOrEqual(500);
+      expect(ran).toMatchObject({ _tag: "Ran" });
+      alarms++;
+    }
+    expect(alarms).toBeGreaterThan(8);
+    expect(await h.run(runQueuedUnit(storage, at(12, 0)))).toBeNull();
+    const count = (trigger: string) =>
+      Object.fromEntries(
+        names.map((r) => [
+          r,
+          h.records().filter((x) => x.repo === r && x.trigger === trigger).length,
+        ]),
+      );
+    // A cron execution is one per (run, repository, minute); the sweep submits all 40 entries for each of 3 heads.
+    expect(count("cron")).toEqual(Object.fromEntries(names.map((r) => [r, 1])));
+    expect(count("webhook")).toEqual(Object.fromEntries(names.map((r) => [r, 120])));
+  });
+
+  it("[FD-INT-067] a unit that fails moves to the back of the queue and leaves it after three attempts", async () => {
+    const h = await harness({ repos: { [REPO]: repoWithManifest(nightly) } });
+    // The installation's repository listing throws, so every run of the unit dies.
+    Object.assign(h.reads, {
+      installations: new Proxy(
+        {},
+        {
+          ownKeys: () => {
+            throw new Error("listing failed");
+          },
+        },
+      ),
+    });
+    const storage = memoryStorage();
+    const unit: TickUnit = {
+      _tag: "schedules",
+      installation: 7,
+      scheduledAt: at(3, 0),
+      repoIndex: 0,
+    };
+    await h.run(enqueueUnits(storage, [unit], at(3, 0)));
+    const runs = [];
+    for (let i = 0; i < 3; i++) {
+      storage.fire();
+      runs.push(await h.run(runQueuedUnit(storage, at(3, 0))));
+      // A failed unit alone in its queue retries 30 s later; the last attempt leaves no alarm.
+      expect(storage.alarm()).toBe(i < 2 ? at(3, 0) + 30_000 : null);
+    }
+    expect(runs).toEqual([
+      { _tag: "Failed", unit, attempts: 1, dropped: false },
+      { _tag: "Failed", unit, attempts: 2, dropped: false },
+      { _tag: "Failed", unit, attempts: 3, dropped: true },
+    ]);
+    expect(await h.run(runQueuedUnit(storage, at(3, 0)))).toBeNull();
   });
 });
