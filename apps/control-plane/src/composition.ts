@@ -1,6 +1,7 @@
 // The services one isolate builds once and every request and tick reads: the GitHub services, intake's Layers and the
 // application ports mameko's validation counts (MAMEKO-HOST-046). A cache or token held here outlives one request.
-import { catalogRuns } from "@fractalboxdev/flare-dispatch-intake";
+import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
+import { catalogRuns, followOnSubmitterLayer } from "@fractalboxdev/flare-dispatch-intake";
 import {
   d1Admission,
   d1IntakeStore,
@@ -18,6 +19,7 @@ import {
   type IntakeSettings,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
+import { type Actuator, Actuators, actuatorRegistry } from "@fractalboxdev/mameko-ports";
 import {
   ConfigurationSourceLive,
   GateDecisionSourceLive,
@@ -163,6 +165,28 @@ const evictionWithoutApp = Layer.succeed(InstallationEviction, {
   repositories: () => Effect.void,
 });
 
+/**
+ * The drainer's actuators with intake's follow-on submitter in reach: a `dispatch.followOn` row's applier submits its
+ * request to admission, keyed `<execution_id>/<intent_key>`, so a repeated apply starts no second execution
+ * (FD-GH-088). The submitter reads intake's services, which the GitHub services underneath build first.
+ */
+export const followOnActuators = Layer.effect(
+  Actuators,
+  Effect.gen(function* () {
+    const base = yield* Actuators;
+    const submitter = yield* FollowOnSubmitter;
+    const provide = Effect.provideService(FollowOnSubmitter, submitter);
+    const wrap = ({ apply, lookup, reconcile }: Actuator): Actuator => ({
+      apply: (row) => provide(apply(row)),
+      ...(lookup === undefined ? {} : { lookup: (row) => provide(lookup(row)) }),
+      ...(reconcile === undefined ? {} : { reconcile: (row) => provide(reconcile(row)) }),
+    });
+    return actuatorRegistry(
+      Object.fromEntries(base.names().map((name) => [name, wrap(base.get(name)!)])),
+    );
+  }),
+).pipe(Layer.provide(followOnSubmitterLayer));
+
 const isolateLayer = (env: ControlPlaneEnv) => {
   const settings = intakeSettings(env);
   const alarms = alarmPortFromEnv(env);
@@ -173,12 +197,14 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.
     const support = Layer.mergeAll(gitData, writebackRecords(env)).pipe(Layer.provideMerge(github));
     const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
-    return Layer.mergeAll(
+    const services = Layer.mergeAll(
       profileClassResolver.pipe(
         Layer.provideMerge(intakeLayer({ db: env.DB, settings, ...admissionPorts(env, alarms) })),
       ),
       localPorts(env),
     ).pipe(Layer.provideMerge(applier), Layer.provideMerge(common));
+    // The follow-on wrapper wins the `Actuators` tag over the agentic appliers underneath.
+    return followOnActuators.pipe(Layer.provideMerge(services));
   }
   return Layer.mergeAll(
     Layer.succeed(IntakeConfig, settings),
