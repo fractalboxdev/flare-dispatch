@@ -6,11 +6,13 @@
 -- `evidence`, with the base commit's texts as a `base` list of `{ path, text }`, answered with the gate's verdict.
 --
 -- `oracle placement` answers placement events: a `run` (`worker-deploy` or `sandbox-image`), its `publish` input, the
--- request's `class`, `labels`, `trigger`, `declaresClass`, `confidentiality`, `deviceLocalInput` and
--- `needsLocalModel`, the `profile`'s classes, `cloudOnly` and `localOnly` predicates, `launcherKinds` and declared
--- `constraints`, and the labels each executor kind advertises. The answer holds the placement's class for a
--- `sandbox-image` request, the declared constraints and the request's labels, whether `cloud-pinned` holds, the
--- eligible kinds and the eligible kinds that place the request (FdFormal.Placement).
+-- `trigger` class resolution reads (`kind`, with `protectedTag` for a tag push and `branch` and `protectedBranch` for a
+-- push), the `deployBranch`, a re-run's `rerun` class and the `classInput`, the request's `labels`, `declaresClass`,
+-- `confidentiality`, `deviceLocalInput` and `needsLocalModel`, the `profile`'s classes, `cloudOnly` and `localOnly`
+-- predicates, `launcherKinds` and declared `constraints`, and the labels each executor kind advertises. The answer
+-- holds the class `resolveClass` gives the request, the declared constraints and the request's labels, whether
+-- `cloud-pinned` holds at that class, the eligible kinds at that class and the eligible kinds that place the request
+-- (FdFormal.Placement).
 import Lean.Data.Json
 import FdFormal.StagedWrite
 import FdFormal.Placement
@@ -130,12 +132,16 @@ open FdFormal.Placement in
 def placementAnswer (j : Json) : Except String Json := do
   let run ← str j "run"
   let publish ← getBool j "publish"
-  let cls ← str j "class"
+  let t ← field j "trigger"
+  let kind ← str t "kind"
+  let releaseTrigger := isReleaseTrigger kind ((← optBool t "protectedTag").getD false)
+    ((← optStr t "branch").getD "") ((← optBool t "protectedBranch").getD false) (← optStr j "deployBranch")
+  let cls := resolveClass run (← optStr j "rerun") releaseTrigger (laterClass run (← optStr j "classInput"))
   let (constraints, declaredLabels) := requestPlacement run publish
   let r : Request := {
     cls
     labels := ((← strs j "labels") ++ declaredLabels).eraseDups
-    trigger := ← optStr j "trigger"
+    trigger := if kind == "tag-push" then some "tag-push" else none
     declaresClass := ← optBool j "declaresClass" }
   let p ← decodeProfilePlacement (← field j "profile")
   let advertised ← (← (← field j "advertised").getArr?).toList.mapM fun a => do
@@ -145,7 +151,7 @@ def placementAnswer (j : Json) : Except String Json := do
     (← getBool j "needsLocalModel")
   let eligibleKinds := eligible (p.classKinds cls) cls r.labels constraints f p.kinds (p.held r)
   pure <| Json.mkObj [
-    ("className", if run == "sandbox-image" then Json.str (sandboxImagePlacement publish).className else Json.null),
+    ("class", Json.str cls),
     ("constraints", strArr constraints),
     ("labels", strArr r.labels),
     ("cloudPinned", Json.bool (cloudPinnedHolds cls r.labels constraints)),

@@ -1,5 +1,6 @@
 // The placement differential subject: every sampled `worker-deploy` and publishing `sandbox-image` placement stays
-// off devices, the generator reaches placements that do reach a device, and, where `lake build oracle` has run, the
+// off devices at the class `resolveClass` gives it, a publish on a push to the protected deploy branch resolves to
+// `release`, the generator reaches placements that do reach a device, and, where `lake build oracle` has run, the
 // compiled Lean model answers every sampled event as the TypeScript path intake takes. The `diff` job runs the subject
 // on the regressions file and 10,000 traces per pull request.
 import { existsSync, readFileSync } from "node:fs";
@@ -22,9 +23,9 @@ import {
 const SAMPLE = fc.sample(placementEvent, { numRuns: 4000, seed: 20261111 });
 const answers = SAMPLE.map((event) => ({ event, answer: runPlacement(event) }));
 
-/** Whether the request's class lists `device` among its kinds in the event's profile. */
-const classAdmitsDevice = (e: PlacementEvent) => {
-  const cls = e.profile.classes.find((c) => c.name === e.class);
+/** Whether the request's resolved class lists `device` among its kinds in the event's profile. */
+const classAdmitsDevice = (e: PlacementEvent, className: string) => {
+  const cls = e.profile.classes.find((c) => c.name === className);
   return cls !== undefined && cls.deviceEligible !== false;
 };
 
@@ -33,6 +34,12 @@ const advertisedBy = (e: PlacementEvent, kind: string) =>
 
 const workerDeploys = answers.filter(({ event }) => event.run === "worker-deploy");
 const publishes = answers.filter(({ event }) => event.run === "sandbox-image" && event.publish);
+/** A first attempt on a push to the protected deploy branch, the trigger `sandboxImageDecoder` publishes on. */
+const onReleasePush = ({ event }: { readonly event: PlacementEvent }) =>
+  event.rerun === null &&
+  event.trigger.kind === "push" &&
+  event.trigger.protectedBranch &&
+  event.trigger.branch === event.deployBranch;
 const pullRequestImages = answers.filter(
   ({ event }) => event.run === "sandbox-image" && !event.publish,
 );
@@ -51,16 +58,29 @@ describe("placement differential subject", () => {
     // Requests whose class admits a device, at a class other than `release`, still place on cloudflare only.
     const deviceClass = workerDeploys.filter(
       ({ event, answer }) =>
-        classAdmitsDevice(event) && event.class !== "release" && answer.eligible.length > 0,
+        classAdmitsDevice(event, answer.class) &&
+        answer.class !== "release" &&
+        answer.eligible.length > 0,
     );
     expect(deviceClass.length).toBeGreaterThan(0);
     for (const { answer } of deviceClass) expect(answer.eligible).toEqual(["cloudflare"]);
   });
 
-  it("[FD-GATE-080] every sampled publishing sandbox-image placement is release, cloud-pinned and placed only on cloudflare advertising container-artifact", () => {
+  it("[FD-GATE-080] every sampled publishing sandbox-image placement on a push to the protected deploy branch resolves to release, and every publishing placement is cloud-pinned and placed only on cloudflare advertising container-artifact", () => {
     expect(publishes.length).toBeGreaterThan(500);
+    const releasePushes = publishes.filter(onReleasePush);
+    expect(releasePushes.length).toBeGreaterThan(20);
+    for (const { answer } of releasePushes) expect(answer.class).toBe("release");
+    // Off the release path the class is the later steps', never `release`, and the placement stays cloud-pinned.
+    const laterPath = publishes.filter(
+      ({ event }) =>
+        event.rerun === null &&
+        !onReleasePush({ event }) &&
+        !(event.trigger.kind === "tag-push" && event.trigger.protectedTag),
+    );
+    expect(laterPath.length).toBeGreaterThan(0);
+    for (const { answer } of laterPath) expect(answer.class).not.toBe("release");
     for (const { event, answer } of publishes) {
-      expect(answer.className).toBe("release");
       expect(answer.constraints).toContain("cloud-pinned");
       expect(answer.labels).toContain("container-artifact");
       expect(answer.cloudPinned).toBe(true);
@@ -81,9 +101,10 @@ describe("placement differential subject", () => {
     for (const { answer } of unlabelled) expect(answer.placeable).toEqual([]);
   });
 
-  it("[FD-GATE-080] a pull-request sandbox-image placement runs required, declares no constraint, and the generator reaches it on a device", () => {
-    for (const { answer } of pullRequestImages) {
-      expect(answer.className).toBe("required");
+  it("[FD-GATE-080] a first-attempt pull-request sandbox-image placement runs at most required, declares no constraint, and the generator reaches it on a device", () => {
+    for (const { event, answer } of pullRequestImages) {
+      if (event.rerun === null && event.trigger.kind === "pull_request")
+        expect(["required", "interactive", "batch"]).toContain(answer.class);
       expect(answer.constraints).toEqual([]);
     }
     expect(pullRequestImages.some(({ answer }) => answer.placeable.includes("device"))).toBe(true);

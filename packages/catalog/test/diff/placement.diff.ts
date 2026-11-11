@@ -1,16 +1,20 @@
 // The placement subject of the `diff` job (specs/verification.md § V-DIFF): each event is one placement of a
-// `worker-deploy` or `sandbox-image` request, answered by the TypeScript path intake takes (the catalogue's
-// `requestPlacement`, the profile's `eligibleKinds` and mameko's `unplaceable`) and by `oracle placement`, compiled
-// from `formal/FdFormal/Placement.lean`. The generator draws the profile from FlareDispatch's own profile at every
+// `worker-deploy` or `sandbox-image` request, answered by the TypeScript path intake takes (the profile's
+// `resolveClass`, the catalogue's `requestPlacement`, the profile's `eligibleKinds` and mameko's `unplaceable`) and by
+// `oracle placement`, compiled from `formal/FdFormal/Placement.lean`. Both sides resolve the request's class from its
+// trigger and compute eligibility at that class. The generator draws the profile from FlareDispatch's own profile at every
 // phase and from mutations of its classes, predicates, launcher kinds and declared constraints, keeping
 // `cloud_pinned` and `cloud_pinned_kinds` the profile's, which the Lean model fixes.
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   buildProfile,
+  CLASS_ORDER,
   eligibleKinds,
   placementInputs,
+  resolveClass,
   type ClassEntry,
+  type ClassName,
   type ConfidentialityMode,
   type Phase,
   type PlacementRequest,
@@ -21,7 +25,7 @@ import { unplaceable } from "@fractalboxdev/mameko-kernel";
 import fc from "fast-check";
 import type { DiffSubject } from "../../../ops/src/verification/diff.ts";
 import { pipeOracle, type PipeOracle } from "../../../ops/src/verification/pipe-oracle.ts";
-import { lookupRun, requestPlacement, sandboxImagePlacement } from "../../src/spec.ts";
+import { lookupRun, requestPlacement } from "../../src/spec.ts";
 
 export type PlacementRun = "worker-deploy" | "sandbox-image";
 
@@ -42,14 +46,29 @@ export interface ProfilePlacement {
   }[];
 }
 
-/** One placement: the run and its `publish` input, the request class resolution gave, the profile and the executors. */
+/** The triggers class resolution reads that the events draw. */
+export type PlacementTrigger =
+  | { readonly kind: "tag-push"; readonly protectedTag: boolean }
+  | { readonly kind: "push"; readonly branch: string; readonly protectedBranch: boolean }
+  | { readonly kind: "pull_request" }
+  | { readonly kind: "cron" };
+
+/**
+ * One placement: the run and its `publish` input, what class resolution reads (the trigger, the deploy branch, a
+ * re-run's class and the class input), the profile and the executors.
+ */
 export interface PlacementEvent {
   readonly run: PlacementRun;
   readonly publish: boolean;
-  readonly class: string;
-  /** The labels class resolution returned and any recorded placement constraint. */
+  readonly trigger: PlacementTrigger;
+  /** The workflow's deploy branch, `workerDeploy.branch`. */
+  readonly deployBranch: string | null;
+  /** A check re-run: the class of its family's first attempt. */
+  readonly rerun: ClassName | null;
+  /** A dispatch's `class` input. */
+  readonly classInput: ClassName | null;
+  /** Any recorded placement constraint, besides the labels class resolution returns. */
   readonly labels: readonly string[];
-  readonly trigger: string | null;
   readonly declaresClass: boolean | null;
   readonly confidentiality: ConfidentialityMode | null;
   readonly deviceLocalInput: boolean;
@@ -60,11 +79,11 @@ export interface PlacementEvent {
 }
 
 export interface PlacementAnswer {
-  /** `sandboxImagePlacement(publish).className` for a `sandbox-image` request, null for `worker-deploy`. */
-  readonly className: string | null;
+  /** The class `resolveClass` gives the request. */
+  readonly class: string;
   /** The constraints the run declares for these inputs. */
   readonly constraints: readonly string[];
-  /** The request's labels: class resolution's, then the run's capability labels. */
+  /** The request's labels: class resolution's and the event's, then the run's capability labels. */
   readonly labels: readonly string[];
   readonly cloudPinned: boolean;
   readonly eligible: readonly string[];
@@ -103,17 +122,43 @@ const specOf = (run: PlacementRun) => {
 };
 
 /**
- * The placement intake gives the request (packages/intake/src/submit.ts `placementRequest`): the run's declared
- * constraints and capability labels for these inputs, the profile's eligible kinds, and of those the kinds that
- * advertise every label of the request (mameko's `unplaceable`).
+ * The class intake gives the request (packages/intake/src/layer.ts `profileRequestOf`): the profile's `resolveClass` on
+ * the event's trigger, with the run's `limits.qosClass` and `limits.qosCeiling`, no policy rule and no caller.
+ */
+const resolvedClass = (e: PlacementEvent) => {
+  const { limits } = specOf(e.run);
+  return resolveClass(
+    {
+      run: e.run,
+      repository: "o/r",
+      sha: "0".repeat(40),
+      trigger:
+        e.trigger.kind === "push"
+          ? { ...e.trigger, defaultBranch: e.trigger.branch === "main" }
+          : e.trigger,
+      qosClass: limits.qosClass as ClassName,
+      qosCeiling: limits.qosCeiling as ClassName,
+      ...(e.deployBranch === null ? {} : { deployBranch: e.deployBranch }),
+      ...(e.rerun === null ? {} : { rerun: { firstAttemptClass: e.rerun } }),
+      ...(e.classInput === null ? {} : { classInput: e.classInput }),
+    },
+    {},
+  );
+};
+
+/**
+ * The placement intake gives the request (packages/intake/src/submit.ts `placementRequest`): the class `resolveClass`
+ * gives it, the run's declared constraints and capability labels for these inputs, the profile's eligible kinds at that
+ * class, and of those the kinds that advertise every label of the request (mameko's `unplaceable`).
  */
 export const runPlacement = (e: PlacementEvent): PlacementAnswer => {
+  const resolved = resolvedClass(e);
   const declared = requestPlacement(specOf(e.run), { publish: e.publish });
   const request: PlacementRequest = {
-    class: e.class,
-    labels: [...new Set([...e.labels, ...declared.labels])],
+    class: resolved.class,
+    labels: [...new Set([...resolved.labels, ...e.labels, ...declared.labels])],
     constraints: declared.constraints,
-    ...(e.trigger === null ? {} : { trigger: e.trigger }),
+    ...(e.trigger.kind === "tag-push" ? { trigger: "tag-push" } : {}),
     ...(e.declaresClass === null ? {} : { declaresClass: e.declaresClass }),
     ...(e.confidentiality === null ? {} : { confidentiality: e.confidentiality }),
     deviceLocalInput: e.deviceLocalInput,
@@ -123,7 +168,7 @@ export const runPlacement = (e: PlacementEvent): PlacementAnswer => {
   const eligible = eligibleKinds(profile, request).kinds;
   const advertised = Object.fromEntries(e.advertised.map((a) => [a.kind, a.labels]));
   return {
-    className: e.run === "sandbox-image" ? sandboxImagePlacement(e.publish).className : null,
+    class: resolved.class,
     constraints: declared.constraints,
     labels: request.labels,
     cloudPinned: placementInputs(profile, request).facts.cloudPinned,
@@ -132,7 +177,6 @@ export const runPlacement = (e: PlacementEvent): PlacementAnswer => {
   };
 };
 
-const CLASSES = ["release", "required", "interactive", "batch"];
 const KINDS = ["cloudflare", "aws", "gha", "device"];
 const LABELS = [
   "untrusted-input",
@@ -148,7 +192,7 @@ const LABELS = [
 const TRIGGERS = ["tag-push", "push", "pull_request"];
 
 const leaf: fc.Arbitrary<Predicate> = fc.oneof(
-  fc.constantFrom(...CLASSES, "nightly").map((c): Predicate => ({ class: c })),
+  fc.constantFrom(...CLASS_ORDER, "nightly").map((c): Predicate => ({ class: c })),
   fc.constantFrom(...LABELS).map((l): Predicate => ({ label: l })),
   fc.constantFrom(...TRIGGERS).map((t): Predicate => ({ trigger: t })),
   fc.constant<Predicate>({ undeclared_class: true }),
@@ -193,7 +237,7 @@ const phaseProfile = (phase: Phase): ProfilePlacement => {
 const mutatedProfile: fc.Arbitrary<ProfilePlacement> = fc.record({
   classes: fc.uniqueArray(
     fc.record({
-      name: fc.constantFrom(...CLASSES),
+      name: fc.constantFrom(...CLASS_ORDER),
       cloudKinds: fc.subarray(["cloudflare", "aws", "gha"]),
       deviceEligible: fc.constantFrom(null, true, false),
     }),
@@ -217,6 +261,27 @@ const profilePlacement: fc.Arbitrary<ProfilePlacement> = fc.oneof(
   mutatedProfile,
 );
 
+/**
+ * A trigger, weighted toward a push to `main` or `release`, protected or not, so step 1's release path and the later
+ * steps are both reached.
+ */
+const placementTrigger: fc.Arbitrary<PlacementTrigger> = fc.oneof(
+  {
+    weight: 4,
+    arbitrary: fc.record({
+      kind: fc.constant("push" as const),
+      branch: fc.constantFrom("main", "release", "feature"),
+      protectedBranch: fc.boolean(),
+    }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({ kind: fc.constant("tag-push" as const), protectedTag: fc.boolean() }),
+  },
+  { weight: 1, arbitrary: fc.constant<PlacementTrigger>({ kind: "pull_request" }) },
+  { weight: 1, arbitrary: fc.constant<PlacementTrigger>({ kind: "cron" }) },
+);
+
 /** What one kind advertises: every label of the request, every label but `container-artifact`, or a draw. */
 const advertisedFor = (requestLabels: readonly string[]) =>
   fc.oneof(
@@ -229,9 +294,21 @@ export const placementEvent: fc.Arbitrary<PlacementEvent> = fc
   .record({
     run: fc.constantFrom<PlacementRun>("worker-deploy", "sandbox-image"),
     publish: fc.boolean(),
-    class: fc.constantFrom(...CLASSES, "release", "unknown"),
+    trigger: placementTrigger,
+    deployBranch: fc.constantFrom(null, "main", "main", "release"),
+    rerun: fc.constantFrom<ClassName | null>(
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      ...CLASS_ORDER,
+    ),
+    classInput: fc.constantFrom<ClassName | null>(null, null, null, null, ...CLASS_ORDER),
     labels: fc.subarray(LABELS, { maxLength: 3 }),
-    trigger: fc.constantFrom(null, null, ...TRIGGERS),
     declaresClass: fc.constantFrom(null, null, true, false),
     confidentiality: fc.constantFrom<ConfidentialityMode | null>(
       null,

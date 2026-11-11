@@ -25,6 +25,34 @@ def resolveClass (run : String) (rerun : Option String) (releaseTrigger : Bool) 
   | some c => c
   | none => if releaseAllowlist.contains run && releaseTrigger then "release" else later
 
+/-- Step 1's release triggers among those the placement events carry: a protected tag push, or a push to the
+protected deploy branch (`isReleasePush`); a pull request and a cron trigger never are. -/
+def isReleaseTrigger (kind : String) (protectedTag : Bool) (branch : String) (protectedBranch : Bool)
+    (deployBranch : Option String) : Bool :=
+  if kind == "tag-push" then protectedTag
+  else if kind == "push" then isReleasePush branch protectedBranch deployBranch
+  else false
+
+/-- `CLASS_ORDER`, highest first; a class's rank is its index. -/
+def classOrder : List String := ["release", "required", "interactive", "batch"]
+
+/-- `lower`: the lower-ranked (less urgent) of two classes. -/
+def lowerClass (a b : String) : String := if classOrder.idxOf a ≥ classOrder.idxOf b then a else b
+
+/-- `limits.qosClass` and `limits.qosCeiling` of `workerDeploySpec` and `sandboxImageSpec`. -/
+def runLimits (run : String) : String × String :=
+  if run == "worker-deploy" then ("release", "release") else ("required", "release")
+
+/-- Steps 2 to 6 for a run outside `GATING_RUNS` with no policy rule, no parent and no caller: the run's default,
+`qosClass` capped at `qosCeiling` and at `required`, capped at the ceiling, then lowered by a class input, which
+cannot raise it without a policy rule. Never `release`. -/
+def laterClass (run : String) (classInput : Option String) : String :=
+  let (qos, ceiling) := runLimits run
+  let out := lowerClass (lowerClass (lowerClass qos ceiling) "required") ceiling
+  match classInput with
+  | some c => lowerClass out c
+  | none => out
+
 /-- The reference profile's `cloud_pinned` predicate, class `release` except a request labelled `release-matrix`, or a
 `cloud-pinned` constraint the run declares (`PlacementRequest.constraints`). -/
 def cloudPinnedHolds (cls : String) (labels constraints : List String) : Bool :=
