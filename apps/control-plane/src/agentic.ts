@@ -2,7 +2,9 @@
 // control plane, the staged write's records, and the `pr.propose` and `pr.close` appliers inside every registered
 // actuator. A read this deploy cannot make fails, so no caller decides on an answer that was never read.
 import {
+  assertNoWriteCredential,
   CapacityUsage,
+  type CredentialInPayload,
   GitData,
   GitDataError,
   gitDataLayer,
@@ -14,6 +16,7 @@ import {
   WritebackRecords,
   writebackAppliers,
   writebackRecordsLayer,
+  type WriteCredentials,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { artifactPath } from "@fractalboxdev/flare-dispatch-cache";
 import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
@@ -43,6 +46,28 @@ export const migrateLocalStore = (db: D1Like) =>
     migrated = undefined;
     throw e;
   }));
+
+/**
+ * The write credentials this deploy holds: the GitHub App private key. An installation token lives only for the call
+ * that minted it, so the guard's installation-token shape covers every one of them.
+ */
+export const heldWriteCredentials = (env: ControlPlaneEnv): WriteCredentials => ({
+  appPrivateKey: env.GITHUB_APP_PRIVATE_KEY ?? "",
+  installationTokens: [],
+});
+
+/**
+ * The lease payload, checked before `exec.lease` leaves the control plane: a payload with the App private key, a PEM
+ * private key or an installation token in any field fails the grant, so no executor, device executor or job sandbox
+ * receives a write credential (FD-AGT-008).
+ */
+export const guardLease = <L>(
+  env: ControlPlaneEnv,
+  lease: L,
+): Effect.Effect<L, CredentialInPayload> => {
+  const hit = assertNoWriteCredential(lease, heldWriteCredentials(env));
+  return hit === null ? Effect.succeed(lease) : Effect.fail(hit);
+};
 
 /** The posture the registry records for a device enrolled with no posture source. */
 export const postureLayer = Layer.succeed(PostureSource, {

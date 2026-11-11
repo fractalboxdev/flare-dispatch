@@ -8,6 +8,7 @@ import {
   type ClaimedLease,
 } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect, Match } from "effect";
+import { guardLease } from "./agentic.ts";
 import { leaseCache } from "./cache.ts";
 import { gateInputs, imageDigestOf } from "./lease.ts";
 import {
@@ -41,7 +42,8 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
 
   /**
    * The inputs intake recorded for a won claim, and the `deadline_at` admission wrote on the execution row
-   * (MAMEKO-EXEC-002), which a gate run's input carries as its `deadlineAt` (FD-GATE-007).
+   * (MAMEKO-EXEC-002), which a gate run's input carries as its `deadlineAt` (FD-GATE-007). A payload that carries a
+   * write credential fails the grant (FD-AGT-008).
    */
   protected override leaseFields(executionId: string): Promise<ClaimedLease> {
     const env = this.env;
@@ -69,7 +71,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           Match.orElse(() => null),
         );
         const run = entry?.spec ?? null;
-        return {
+        return yield* guardLease(env, {
           run: row.run,
           run_digest: yield* Effect.promise(() => sha256(`${row.run}@${run?.version ?? ""}`)),
           run_version: run?.version ?? "",
@@ -84,7 +86,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           credentials: {},
           ...(yield* Effect.promise(() => leaseCache(env, record, row.deadline_at))),
           nonce: crypto.randomUUID(),
-        } satisfies ClaimedLease;
+        } satisfies ClaimedLease);
       }).pipe(Effect.provide(d1IntakeStore(env.DB))),
     );
   }
