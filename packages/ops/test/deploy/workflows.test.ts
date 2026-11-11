@@ -29,6 +29,7 @@ import {
   type OverlayValues,
 } from "../../src/index.ts";
 import { makeOperability, repositoryRoot, V2_WORKERS } from "../../src/cli/index.ts";
+import { accessStore } from "../../src/access-application.test-support.ts";
 
 const ROOT = repositoryRoot(import.meta.dirname);
 const SCRIPT = "packages/ops/scripts/fd-operability.ts";
@@ -204,6 +205,7 @@ const tree = (dir: string): Map<string, string> => {
  * the control plane alone: the committed documentation template still fails the template invariants of the drift check.
  */
 const deployedBy = async (overlay: string) => {
+  const values = JSON.parse(overlay) as OverlayValues;
   const received = new Map<string, string>();
   const target = () =>
     Layer.succeed(DeployTarget, {
@@ -226,6 +228,10 @@ const deployedBy = async (overlay: string) => {
       floorCanary: () => Effect.succeed({ status: "passed" as const, digest: "sha256:0" }),
       writeRecord: () => Effect.void,
       raiseAlarm: () => Effect.void,
+      // The hostname application exists with the overlay's AUD tag, as on an account set up before its first deploy.
+      ...accessStore([
+        { id: "hostname", domain: values.hostnames["dispatcher"]!, aud: values.access.aud },
+      ]),
     });
   const report = await Effect.runPromise(
     makeOperability({

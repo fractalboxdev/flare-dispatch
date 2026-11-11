@@ -10,6 +10,12 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Schema } from "effect";
+import {
+  accessChanges,
+  accessShape,
+  type CommittedAccess,
+  type DeployedAccessApplication,
+} from "./access-application.ts";
 import { placeholdersOf, type WorkerConfig } from "./render.ts";
 
 /** One finding of the drift check. A `warning` is reported and does not fail the check (FD-OPS-023). */
@@ -334,6 +340,59 @@ export const rulesetCheck = (required: readonly string[]): readonly Finding[] =>
     .map((c) =>
       fail("ruleset", `required_status_checks.${c}`, `the ruleset does not require ${c}`),
     );
+
+/**
+ * The hostname application's AUD tag against the overlay's `access.aud` (FD-OPS-064, FD-OPS-088). The dispatcher checks
+ * every Access JWT against `access.aud`, so on a mismatch it rejects each request Access lets through. No finding when
+ * the account holds no application on the hostname.
+ */
+export const accessAudCheck = (
+  committed: CommittedAccess,
+  deployed: readonly DeployedAccessApplication[],
+): readonly Finding[] => {
+  const app = deployed.find((d) => d.domain === committed.hostname);
+  if (app === undefined || app.aud === committed.aud) return [];
+  return [
+    fail(
+      "access",
+      `access.${committed.hostname}.aud`,
+      `the hostname's Access application has AUD ${show(app.aud)}, the overlay's access.aud is ${JSON.stringify(committed.aud)}: set access.aud to the application's AUD and deploy again`,
+    ),
+  ];
+};
+
+/**
+ * Each difference between the Access applications on the dispatcher's hostname and the committed ones (FD-OPS-088): a
+ * committed application absent, one whose name, domain, session or policies differ, one the commit does not hold, and
+ * a hostname application whose AUD tag is not the overlay's `access.aud`.
+ */
+export const accessDrift = (
+  committed: CommittedAccess,
+  deployed: readonly DeployedAccessApplication[],
+): readonly Finding[] => {
+  const changes = accessChanges(committed, deployed);
+  const live = new Map(deployed.map((d) => [d.id, d]));
+  return [
+    ...changes.create.map((a) =>
+      fail("access", `access.${a.domain}`, "a committed Access application is absent"),
+    ),
+    ...changes.update.map((u) =>
+      fail(
+        "access",
+        `access.${u.application.domain}`,
+        `deployed ${JSON.stringify(accessShape(live.get(u.id)!))}, committed ${JSON.stringify(accessShape(u.application))}`,
+      ),
+    ),
+    ...changes.remove.map((r) =>
+      fail(
+        "access",
+        `access.${r.domain}`,
+        "an Access application on the dispatcher's hostname the committed configuration does not hold",
+      ),
+    ),
+    ...accessAudCheck(committed, deployed),
+  ];
+};
 
 /** Whether any finding fails the check; warnings alone pass. */
 export const failed = (findings: readonly Finding[]): boolean =>
