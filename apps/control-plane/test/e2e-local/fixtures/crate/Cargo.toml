@@ -1,0 +1,16 @@
+# The crate the compile-cache suite builds twice through sccache: a library, which sccache caches, and the binary that
+# links it, which sccache compiles without caching. It has no dependencies, so it builds offline.
+[package]
+name = "fd-compile-cache-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "fd-compile-cache-fixture"
+path = "src/main.rs"
