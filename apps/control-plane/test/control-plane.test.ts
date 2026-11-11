@@ -1419,7 +1419,10 @@ describe("the MCP server at /mcp", () => {
     expect(await count()).toBe(before + 1);
 
     // Class: the class admission assigned is the one the route assigns the same run.
-    expect(first.value["class"]).toBe("batch");
+    const routed = await post(mcp, "/v1/dispatch/check", dispatchBody("5".repeat(40)));
+    expect(routed.status).toBe(202);
+    const { class: routeClass } = (await routed.json()) as { class: string };
+    expect(first.value["class"]).toBe(routeClass);
   });
 
   it("[FD-INT-063] keeps the assigned class when a dispatch call requests a higher one, and logs the clamp", async () => {

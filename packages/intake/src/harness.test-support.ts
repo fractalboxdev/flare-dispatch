@@ -26,7 +26,6 @@ import {
   type IntakeSettings,
 } from "./config.ts";
 import { admitDispatch, type AuthenticatedDispatch } from "./dispatch.ts";
-import { AccessIdentity } from "./mcp.ts";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
 import { manifestSourceLayer } from "./manifest.ts";
 import { profileClassResolver } from "./layer.ts";
@@ -195,9 +194,6 @@ export const harness = async (options: HarnessOptions = {}) => {
       installation: (id) => Effect.sync(() => void recorded.evicted.push(`installation ${id}`)),
       repositories: (repos) =>
         Effect.sync(() => void recorded.evicted.push(...repos.map((r) => `repo ${r}`))),
-    }),
-    Layer.succeed(AccessIdentity, {
-      identity: (r) => Effect.succeed(r.headers.get("x-test-identity")),
     }),
   ).pipe(Layer.provideMerge(readLayer), Layer.provideMerge(TestClock.layer()));
   const runtime = ManagedRuntime.make(layer);
