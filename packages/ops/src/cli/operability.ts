@@ -6,6 +6,7 @@ import {
   CURRENT_PHASE,
   profileDocumentFor,
   validationContext,
+  type SpendConfig,
 } from "@fractalboxdev/flare-dispatch-profile";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -34,7 +35,7 @@ import {
   type AgenticRegistry,
   type Finding,
 } from "../drift.ts";
-import { decodeOverlay, type OverlayValues } from "../overlay.ts";
+import { decodeOverlay, spendConfigOf, type OverlayValues } from "../overlay.ts";
 import { parseJsonc, renderTemplate, type WorkerConfig } from "../render.ts";
 import { cloudflareClient, githubClient, nodeRunner, type CommandRunner } from "./clients.ts";
 import { liveDeployTarget } from "./live-target.ts";
@@ -149,12 +150,12 @@ export const renderedChecks =
   };
 
 /**
- * mameko's profile validator over a profile document at the current phase; the deploy carries the production document
- * (FD-OPS-021, FD-PROF-064).
+ * mameko's profile validator over a profile document at the current phase, with its spend lines at the spend
+ * configuration the overlay delivers; the deploy carries the production document (FD-OPS-021, FD-PROF-054,
+ * FD-PROF-064).
  */
-export const profileDriftFindings = (
-  document: ProfileDocument = profileDocumentFor("production"),
-) => profileCheck(document, validationContext);
+export const profileDriftFindings = (document: ProfileDocument, spend: SpendConfig) =>
+  profileCheck(document, { ...validationContext, spend });
 
 /**
  * The pull-request part of the drift check (FD-OPS-019 to FD-OPS-021, FD-OPS-026): one Worker's template rendered
@@ -186,7 +187,9 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
   const env = options.env ?? process.env;
   const specs = options.workers ?? V2_WORKERS;
   const checks = renderedChecks(specs, options.agenticRegistry ?? AGENTIC_CATALOG);
-  const profileFindings = profileDriftFindings(options.profile);
+  const profileDocument = options.profile ?? profileDocumentFor("production");
+  const profileFindings = (overlay: OverlayValues) =>
+    profileDriftFindings(profileDocument, spendConfigOf(overlay));
   const workers = (): WorkerTemplate[] =>
     specs.map((s) => ({
       worker: s.worker,
@@ -279,14 +282,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
       request.dryRun
         ? doctor(request.overlay)
         : report(
-            fdDeploy(
-              request.overlay,
-              workers(),
-              APP_PERMISSIONS,
-              checks,
-              profileFindings,
-              access,
-            ),
+            fdDeploy(request.overlay, workers(), APP_PERMISSIONS, checks, profileFindings, access),
             (r) => ({
               ok: true,
               stages: stageReport({

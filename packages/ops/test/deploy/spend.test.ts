@@ -69,6 +69,19 @@ describe("fd deploy delivers the overlay's spend configuration to the control pl
     });
   });
 
+  it("[FD-PROF-054] fails an overlay whose spend configuration puts a profile line above the next higher rank's in the drift stage, before any write", async () => {
+    // budgetUsd 20 leaves G = 20 - 0 - 10 - 20 = -10 USD: interactive -10 USD sits below batch's 0.45 x G = -4.5 USD.
+    const w = world();
+    const report = await deploy(w, withSpend({ budgetUsd: 20 }));
+    expect(report.ok).toBe(false);
+    expect(report.stages.at(-1)).toMatchObject({ stage: "drift", ok: false });
+    expect(w.calls.filter(isWrite)).toEqual([]);
+    expect(report.stages.at(-1)?.detail).toContain(
+      "classes.batch.line: line above the next higher rank's",
+    );
+    expect(deployedSpend(w)).toBeUndefined();
+  });
+
   it("[FD-PROF-054] fails a control-plane template that carries no SPEND var in the drift stage, before any write", async () => {
     const w = world();
     const report = await deploy(w, withSpend({ budgetUsd: 120 }), { workers: [WITHOUT_SPEND] });

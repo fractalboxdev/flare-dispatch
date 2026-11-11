@@ -4,7 +4,6 @@
 import { SpendUnreadable, SpendView, type SpendViewBody } from "@fractalboxdev/flare-dispatch-ops";
 import {
   reservesOf,
-  spendDefaults,
   spendSettings,
   type Profile,
   type SpendConfig,
@@ -59,11 +58,11 @@ export const spendBodyOf = (view: CoordinatorSpendView): SpendViewBody => ({
 /** The window the other operator views count final rows in; the spend view reads none. */
 const VIEW_WINDOW_MS = 3_600_000;
 
-/** `SpendView` over one D1 database and one profile, at FlareDispatch's spend configuration by default. */
+/** `SpendView` over one D1 database, one profile and the spend configuration the operator overlay delivers. */
 export const spendViewLayer = (
   db: D1Like,
   profile: Profile,
-  spend: SpendConfig = spendDefaults,
+  spend: SpendConfig,
 ): Layer.Layer<SpendView> => {
   const source = Layer.succeed(OperatorViewSource)({
     profile: Effect.succeed(profile),
