@@ -313,6 +313,7 @@ export const pullRequestPayload = (
     headRepo?: string | null;
     number?: number;
     closedAt?: string | null;
+    updatedAt?: string;
   } = {},
 ) => ({
   action: overrides.action ?? "synchronize",
@@ -321,6 +322,7 @@ export const pullRequestPayload = (
   pull_request: {
     number: overrides.number ?? 12,
     ...(overrides.closedAt === undefined ? {} : { closed_at: overrides.closedAt }),
+    ...(overrides.updatedAt === undefined ? {} : { updated_at: overrides.updatedAt }),
     head: {
       sha: overrides.head ?? HEAD,
       ref: "feature",

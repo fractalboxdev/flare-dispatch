@@ -747,7 +747,12 @@ describe("pull request close times", () => {
       "pull_request",
       pullRequestPayload({ action: "closed", closedAt: "2026-11-01T00:00:00Z" }),
     );
-    await deliver(h, "pull_request", pullRequestPayload({ action: "reopened" }), "d-2");
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "reopened", updatedAt: "2026-11-04T10:00:00Z" }),
+      "d-2",
+    );
     expect(await closedAt(h)).toBeNull();
     await deliver(
       h,
@@ -756,6 +761,82 @@ describe("pull request close times", () => {
       "d-3",
     );
     expect(await closedAt(h)).toBe(Date.parse("2026-11-04T11:00:00Z"));
+  });
+
+  it("[FD-CACHE-064] a replayed or older close cannot restore a close time after a reopen", async () => {
+    const h = await harness();
+    const closed = pullRequestPayload({
+      action: "closed",
+      closedAt: "2026-11-01T00:00:00Z",
+      updatedAt: "2026-11-01T00:00:00Z",
+    });
+    await deliver(h, "pull_request", closed, "close-1");
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "reopened", updatedAt: "2026-11-04T10:00:00Z" }),
+      "reopen-1",
+    );
+    await deliver(h, "pull_request", closed, "close-1");
+    expect(await closedAt(h)).toBeNull();
+    // An older close first seen after the reopen also cannot overwrite it.
+    await deliver(h, "pull_request", closed, "late-close");
+    expect(await closedAt(h)).toBeNull();
+    // updated_at, rather than the original closed_at, orders a new lifecycle event.
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({
+        action: "closed",
+        closedAt: "2026-11-04T11:00:00Z",
+        updatedAt: "2026-11-04T11:30:00Z",
+      }),
+      "close-2",
+    );
+    expect(await closedAt(h)).toBe(Date.parse("2026-11-04T11:00:00Z"));
+    // Replaying an old reopen, even under a different delivery id, cannot resurrect the closed namespace.
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "reopened", updatedAt: "2026-11-04T11:20:00Z" }),
+      "late-reopen",
+    );
+    expect(await closedAt(h)).toBe(Date.parse("2026-11-04T11:00:00Z"));
+  });
+
+  it("[FD-CACHE-064] distinct lifecycle deliveries in one second apply, while replays cannot undo them", async () => {
+    const h = await harness();
+    const at = "2026-11-04T10:00:00Z";
+    const closed = pullRequestPayload({ action: "closed", closedAt: at, updatedAt: at });
+    const reopened = pullRequestPayload({ action: "reopened", updatedAt: at });
+    await deliver(h, "pull_request", closed, "close-1");
+    await deliver(h, "pull_request", reopened, "reopen-1");
+    expect(await closedAt(h)).toBeNull();
+    await deliver(h, "pull_request", closed, "close-1");
+    expect(await closedAt(h)).toBeNull();
+    // A genuine subsequent close in the same second still takes effect.
+    await deliver(h, "pull_request", closed, "close-2");
+    expect(await closedAt(h)).toBe(Date.parse(at));
+    await deliver(h, "pull_request", reopened, "reopen-1");
+    expect(await closedAt(h)).toBe(Date.parse(at));
+  });
+
+  it("[FD-CACHE-064] timestamp-free replays keep their original state despite a later delivery time", async () => {
+    const h = await harness();
+    const closed = pullRequestPayload({ action: "closed", closedAt: null });
+    await deliver(h, "pull_request", closed, "close-1");
+    expect(await closedAt(h)).toBe(NOW);
+    await h.adjust(1_000);
+    const reopened = pullRequestPayload({ action: "reopened" });
+    await deliver(h, "pull_request", reopened, "reopen-1");
+    await h.adjust(1_000);
+    await deliver(h, "pull_request", closed, "close-1");
+    expect(await closedAt(h)).toBeNull();
+    await deliver(h, "pull_request", closed, "close-2");
+    expect(await closedAt(h)).toBe(NOW + 2_000);
+    await h.adjust(1_000);
+    await deliver(h, "pull_request", reopened, "reopen-1");
+    expect(await closedAt(h)).toBe(NOW + 2_000);
   });
 });
 
