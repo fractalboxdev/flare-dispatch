@@ -134,8 +134,8 @@ The control plane pins mameko at f4b48b0, which holds the composed `admit`, the 
 
 Two changes depend on further mameko work and are delivered in this order. Each step waits on the step before it and on the mameko work that step names.
 
-1. `Operations.apply` calls mameko's operator transaction for halt, drain, quarantine, release, cancel, force-admit, top-up and revoke, each with a reason and an audit row ([MAMEKO-OPS-030](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/operability.md) to MAMEKO-OPS-034). Waits on: mameko's operator transaction.
-2. The `pause-key` and `resume-key` operations and the `containment` list. Waits on: step 1, and mameko's `pauseKey` and `resumeKey` ([MAMEKO-OUT-068](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/outbox.md)).
+1. `Operations.apply` calls mameko's operator operations for halt, drain, quarantine, release, cancel, force-admit, top-up and revoke, each with a reason and an audit row ([MAMEKO-OPS-030](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/operability.md) to MAMEKO-OPS-034), and admission reads repository quarantine through `AdmissionPorts.quarantined`. The step retires `packages/ops/src/operator-routes.ts`, a second operator surface that production never reaches. Waits on: mameko's operator operations.
+2. The `pause-key` and `resume-key` operations. Waits on: step 1, and mameko's `pause` and `resume` of a delivery key ([MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/operability.md), [MAMEKO-OUT-068](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/outbox.md)).
 
 Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and admission quarantines no repository. Until step 2, no delivery key can be paused.
 
@@ -275,6 +275,5 @@ Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and adm
 
 ## Open items
 
-- TODO(maintainer): [interfaces.md](interfaces.md) lists `pause-key` and `resume-key` at phase 0, and mameko specifies `pauseKey` at its phase 1 (MAMEKO-OUT-068). Move the two operations to phase 1, or ask mameko to move MAMEKO-OUT-068 to phase 0.
 - TODO(operator): confirm the 14-day windows of gates 0, 2 and 3 and the 30% threshold of gate 0 before phase 0 closes.
 - TODO(operator): name the record that counts manual interventions on a device for the operator-toil kill line.
