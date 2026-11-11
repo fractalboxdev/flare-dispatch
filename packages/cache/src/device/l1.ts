@@ -111,6 +111,11 @@ export const openL1 = async (options: L1Options): Promise<L1Cache> => {
     return freed;
   };
   const store = async (namespace: string, key: string, bytes: Uint8Array) => {
+    // The entry this write replaces leaves first, so its bytes never count against the cap (FD-CACHE-009).
+    if (index.has(pathOf(namespace, key))) {
+      await options.disk.remove(pathOf(namespace, key));
+      index.delete(pathOf(namespace, key));
+    }
     if (bytes.byteLength > cap) return false;
     const over = total() + bytes.byteLength - cap;
     if (over > 0) await evictLru(over);
