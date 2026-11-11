@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { memoryD1 } from "../local/d1.test-support.ts";
 import { artifactPrefixSink } from "../staged-write/build.ts";
 import { STAGED_WRITE_MANIFEST } from "../staged-write/manifest.ts";
+import { suppressionLedgerD1 } from "../suppression/ledger.ts";
 import { CI_TRIAGE_WINDOW_MS, ExecutionsRead, reportPath } from "./ci-triage-pr.ts";
 import {
   artifactsLayer,
@@ -183,6 +184,7 @@ const cloudConfig = (
       ANTHROPIC_API_KEY: PROVIDER_KEY,
     },
     credentials: [LEASE_TOKEN],
+    suppressionLedger: suppressionLedgerD1(memoryD1()),
     ...over,
   };
   return { config, sent, api, stored };
