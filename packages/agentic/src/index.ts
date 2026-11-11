@@ -18,5 +18,6 @@ export * from "./recipes/pr-review.ts";
 export * from "./recipes/improve-pr.ts";
 export * from "./recipes/spec-drift-pr.ts";
 export * from "./recipes/ci-triage-pr.ts";
+export * from "./recipes/executions-read.ts";
 export * from "./recipes/catalog.ts";
 export * from "./integration.ts";

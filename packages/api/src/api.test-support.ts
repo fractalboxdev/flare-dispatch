@@ -134,6 +134,7 @@ export const record = (overrides: Partial<ExecutionRecord> = {}): ExecutionRecor
   reserved_micro_usd: 100,
   settled_micro_usd: 80,
   enqueued_at: 1,
+  finished_at: 2,
   dispatchedBy: DISPATCHER,
   ...overrides,
 });
@@ -193,6 +194,11 @@ export const portsContext = (doubles: Doubles) =>
             .filter((r) => filter.run === undefined || r.run === filter.run)
             .filter((r) => filter.status === undefined || r.status === filter.status)
             .filter((r) => filter.before === undefined || r.execution_id < filter.before)
+            .filter(
+              (r) =>
+                filter.finishedSince === undefined ||
+                (r.finished_at !== null && r.finished_at >= filter.finishedSince),
+            )
             .sort((a, b) => (a.execution_id < b.execution_id ? 1 : -1));
           return { rows: rows.slice(0, filter.limit), more: rows.length > filter.limit };
         }),
