@@ -15,6 +15,7 @@ import {
   harness,
   HEAD,
   manifest,
+  NOW,
   mergeGroupPayload,
   pullRequestPayload,
   pushPayload,
@@ -26,7 +27,7 @@ import {
 } from "./harness.test-support.ts";
 import { cacheTriggerOf } from "./event.ts";
 import { handleIntake } from "./routes.ts";
-import { HELD_STATUS, IntakeStore } from "./store.ts";
+import { HELD_STATUS, IntakeStore, pullRequestClosedAt } from "./store.ts";
 import { releaseHeld } from "./submit.ts";
 
 const post = (h: Harness, request: Request) => h.run(handleIntake(request, "webhooks/github"));
@@ -707,6 +708,54 @@ describe("other webhook events", () => {
     expect(h.reads.calls.filter((c) => c.startsWith("file"))).toHaveLength(1);
     expect(h.executions().map((e) => e.run)).toEqual(["check"]);
     expect(APP_ID).toBeGreaterThan(0);
+  });
+});
+
+describe("pull request close times", () => {
+  const closedAt = (h: Harness, number = 12) => pullRequestClosedAt(h.db)(REPO, number);
+
+  it("[FD-CACHE-064] a closed pull request records when it closed, which the cache sweep reads for its namespace", async () => {
+    const h = await harness();
+    expect(await closedAt(h)).toBeNull();
+    const at = "2026-11-04T09:30:00Z";
+    const r = await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "closed", closedAt: at }),
+    );
+    expect(r?.status).toBe(202);
+    expect(await closedAt(h)).toBe(Date.parse(at));
+    // The sweep names the repository lower-cased, as the cache namespace does.
+    expect(await pullRequestClosedAt(h.db)(REPO.toUpperCase(), 12)).toBe(Date.parse(at));
+    // A close without `closed_at` counts from the delivery's arrival.
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "closed", number: 13, closedAt: null }),
+      "d-2",
+    );
+    expect(await closedAt(h, 13)).toBe(NOW);
+    // An open pull request has no close time.
+    await deliver(h, "pull_request", pullRequestPayload({ number: 14 }), "d-3");
+    expect(await closedAt(h, 14)).toBeNull();
+  });
+
+  it("[FD-CACHE-064] a reopened pull request forgets its close, and a later close counts from the new time", async () => {
+    const h = await harness();
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "closed", closedAt: "2026-11-01T00:00:00Z" }),
+    );
+    await deliver(h, "pull_request", pullRequestPayload({ action: "reopened" }), "d-2");
+    expect(await closedAt(h)).toBeNull();
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "closed", closedAt: "2026-11-04T11:00:00Z" }),
+      "d-3",
+    );
+    expect(await closedAt(h)).toBe(Date.parse("2026-11-04T11:00:00Z"));
   });
 });
 

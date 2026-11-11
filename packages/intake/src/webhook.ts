@@ -94,13 +94,19 @@ const mergeGroup = (event: WebhookEvent, fields: WebhookFields, repo: string, sh
   });
 
 /**
- * `pull_request` `closed`: every supersession group of the pull request, `<owner>/<repo>:<number>:*`, is cancelled with
- * cause `pr-closed` through mameko's group cancel (FD-PROF-030, MAMEKO-ADM-064). A closed pull request submits no run.
+ * `pull_request` `closed`: intake records when the pull request closed, from its `closed_at` or else the delivery's
+ * arrival, which the cache sweep counts its namespace's deletion delay from (FD-CACHE-064). Every supersession group of
+ * the pull request, `<owner>/<repo>:<number>:*`, is cancelled with cause `pr-closed` through mameko's group cancel
+ * (FD-PROF-030, MAMEKO-ADM-064). A closed pull request submits no run.
  */
-const pullRequestClosed = (repo: string, number: number) =>
+const pullRequestClosed = (repo: string, number: number, closedAt: string | null | undefined) =>
   Effect.gen(function* () {
     const admission = yield* Admission;
-    const groups = yield* (yield* IntakeStore).liveSupersessionGroups(repo, `${repo}:${number}:`);
+    const store = yield* IntakeStore;
+    const stated = closedAt === null || closedAt === undefined ? NaN : Date.parse(closedAt);
+    const at = Number.isFinite(stated) ? stated : yield* Clock.currentTimeMillis;
+    yield* store.pullRequestClosed(repo, number, at);
+    const groups = yield* store.liveSupersessionGroups(repo, `${repo}:${number}:`);
     const cancelled = yield* Effect.forEach(groups, (key) =>
       admission.cancelGroup(key, "pr-closed").pipe(cancelUnavailable("group cancel")),
     );
@@ -147,7 +153,18 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
       event.action === "closed" &&
       fields.pull_request !== undefined
     )
-      return yield* pullRequestClosed(repo, fields.pull_request.number);
+      return yield* pullRequestClosed(
+        repo,
+        fields.pull_request.number,
+        fields.pull_request.closed_at,
+      );
+    // A reopened pull request keeps its cache namespace again (FD-CACHE-064).
+    if (
+      event.event === "pull_request" &&
+      event.action === "reopened" &&
+      fields.pull_request !== undefined
+    )
+      yield* (yield* IntakeStore).pullRequestReopened(repo, fields.pull_request.number);
     const sha = commitOf(fields);
     if (Option.isNone(sha)) {
       yield* shed(repo, null, "intake: no commit");
