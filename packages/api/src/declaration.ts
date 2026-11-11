@@ -434,6 +434,8 @@ export const ArtifactEntry = Schema.Struct({
   epoch: Schema.Number,
   producer: Schema.Struct({ executor_id: Schema.String, executor_kind: Schema.String }),
   expires_at: Schema.Number,
+  /** The artifact's URL, with a link token bound to that artifact while the deployment holds a link key (FD-CACHE-077). */
+  url: Schema.String,
 });
 
 export const ArtifactsPage = Schema.Struct({

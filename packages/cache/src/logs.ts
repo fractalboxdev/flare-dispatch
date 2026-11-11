@@ -2,7 +2,7 @@
 // `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.ndjson`: the name depends only on the step's journal
 // name, the epoch and byte offsets, so a replay writes the same names and a reclaimed epoch never overwrites the
 // previous one. Each object carries `executor_id` and `executor_kind` in its custom metadata.
-import { base64url, derivedHmacKey, fromBase64url, hmacSign, hmacVerify, sha256Hex } from "./crypto.ts";
+import { base64url, sha256Hex } from "./crypto.ts";
 import type { Bucket } from "./manifest.ts";
 
 const EXECUTION_ID = /^[A-Za-z0-9:_-]{3,128}$/;
@@ -43,55 +43,6 @@ export const parseLogObjectName = (name: string): LogObject | undefined => {
   if (end < start) return undefined;
   return { executionId: m[1]!, epoch: Number(m[2]), stepKey: m[3]!, stream: m[4]!, start, end };
 };
-
-// ---- Capability token -----------------------------------------------------------------
-
-export const LOG_TOKEN_LABEL = "flare-dispatch/log/v1";
-export const MAX_CAPABILITY_TTL_MS = 7 * 24 * 3600 * 1000;
-
-/**
- * A capability token bound to one subject (an execution id for logs, an artifact id for artifacts), with an expiry of
- * at most 7 days and a key derived under a domain-separation label, compared in constant time.
- */
-export const signCapability = async (
-  secret: string,
-  label: string,
-  subject: string,
-  expiresAt: number,
-  nowMs: number,
-): Promise<string> => {
-  const exp = Math.min(expiresAt, nowMs + MAX_CAPABILITY_TTL_MS);
-  const body = `${exp}.${base64url(new TextEncoder().encode(subject))}`;
-  const mac = await hmacSign(await derivedHmacKey(secret, label), `${label}\n${body}`);
-  return `${body}.${base64url(mac)}`;
-};
-
-export const verifyCapability = async (
-  secret: string,
-  label: string,
-  subject: string,
-  token: string | null,
-  nowMs: number,
-): Promise<boolean> => {
-  if (token === null) return false;
-  const parts = token.split(".");
-  if (parts.length !== 3 || !/^[1-9][0-9]{0,15}$/.test(parts[0]!)) return false;
-  const exp = Number(parts[0]);
-  const mac = fromBase64url(parts[2]!);
-  const bound = fromBase64url(parts[1]!);
-  if (mac === undefined || bound === undefined || mac.length !== 32) return false;
-  if (new TextDecoder().decode(bound) !== subject) return false;
-  const valid = await hmacVerify(
-    await derivedHmacKey(secret, label),
-    mac,
-    `${label}\n${parts[0]}.${parts[1]}`,
-  );
-  return valid && nowMs < exp && exp - nowMs <= MAX_CAPABILITY_TTL_MS;
-};
-
-/** A log capability token bound to one execution id (FD-CACHE-087). */
-export const signLogToken = (secret: string, executionId: string, expiresAt: number, nowMs: number) =>
-  signCapability(secret, LOG_TOKEN_LABEL, executionId, expiresAt, nowMs);
 
 // ---- Reading ----------------------------------------------------------------------------
 
