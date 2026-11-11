@@ -1,0 +1,257 @@
+// The e2e-local stack's cloud path on one machine (specs/verification.md § V-E2E-LOCAL): the control plane Worker on
+// workerd through Miniflare, configured by its own `wrangler.jsonc` rendered from an operator overlay through the one
+// renderer; the test's Access team; and the recorded GitHub fixture server, which answers every request the Worker
+// addresses to GitHub. Clients reach the Worker over HTTP through a front that records each request it forwards.
+//
+// The deployment is `development` with the development repository binding, as `pnpm dogfood` runs it: the stack holds
+// no GitHub App key, so the Worker reads its repository from that binding and applies nothing to GitHub. Executors are
+// the test's own signed WebSockets (`../support.ts`); no container runs.
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { decodeOverlay, type OverlayValues } from "@fractalboxdev/flare-dispatch-ops/overlay";
+import { renderTemplate, stripJsonc } from "@fractalboxdev/flare-dispatch-ops/render";
+import { Effect } from "effect";
+import { build } from "esbuild";
+import {
+  fetch as mfFetch,
+  Miniflare,
+  type Request as MfRequest,
+  Response as MfResponse,
+} from "miniflare";
+import { AUD, OPERATOR, startAccessTeam, type AccessTeam } from "../support.ts";
+import { startGithubFixtureServer, type GithubFixtureServer } from "./fixtures/github-server.ts";
+
+const APP = join(import.meta.dirname, "../..");
+
+/** The repository the stack's GitHub holds: its manifest lists `check` for dispatch and pull requests. */
+export const REPOSITORY = "acme/widgets";
+/** Its default branch head, which is the head of the recorded pull request too. */
+export const HEAD = "1".repeat(40);
+export const WEBHOOK_SECRET = "e2e-webhook-secret";
+export const OIDC_AUDIENCE = "e2e-control-plane";
+export const PLANE_ID = "e2e-plane";
+
+const MANIFEST = {
+  version: 1,
+  runs: [
+    {
+      recipe: "check",
+      triggers: ["dispatch", "pull_request"],
+      params: { steps: [{ label: "test", command: "pnpm test", timeoutSec: 600 }] },
+    },
+  ],
+};
+
+const DEV_REPOSITORY = {
+  repository: REPOSITORY,
+  installation: 41000001,
+  default_branch: "main",
+  head: HEAD,
+  confidentiality: "non-confidential",
+  files: {
+    ".github/flare-dispatch.json": Buffer.from(JSON.stringify(MANIFEST)).toString("base64"),
+  },
+};
+
+/** The overlay the stack deploys with: the placeholder values, with the stack's own Access team and plane. */
+const overlayFor = (team: AccessTeam) =>
+  Effect.runSync(
+    decodeOverlay(
+      JSON.stringify({
+        accountId: "00000000000000000000000000000000",
+        d1: { DB: "00000000-0000-0000-0000-000000000000" },
+        kv: { CONFIG: "00000000000000000000000000000000" },
+        r2: { CACHE: "e2e-cache", ARTIFACTS: "e2e-artifacts" },
+        hostnames: { dispatcher: "dispatch.example.com", docs: "docs.example.com" },
+        access: { teamDomain: team.teamDomain, aud: AUD },
+        operators: [OPERATOR],
+        dispatchers: [OPERATOR],
+        github: { appId: "0", fixtureRepo: REPOSITORY },
+        dispatch: { oidcAudience: OIDC_AUDIENCE },
+        executors: { planeId: PLANE_ID },
+        alerts: { sink: "https://alerts.example.com/hook" },
+      }),
+    ),
+  );
+
+/** The parts of the rendered `wrangler.jsonc` Miniflare reads. */
+export interface RenderedConfig {
+  readonly vars: Readonly<Record<string, unknown>>;
+  readonly d1_databases: readonly { readonly binding: string }[];
+  readonly kv_namespaces?: readonly { readonly binding: string }[];
+  readonly r2_buckets?: readonly { readonly binding: string }[];
+  readonly durable_objects: {
+    readonly bindings: readonly { readonly name: string; readonly class_name: string }[];
+  };
+  readonly containers?: readonly { readonly class_name: string }[];
+  readonly compatibility_date: string;
+}
+
+const render = (overlay: OverlayValues): RenderedConfig => {
+  const template = readFileSync(join(APP, "wrangler.jsonc"), "utf8");
+  const rendered = Effect.runSync(renderTemplate("control-plane", template, overlay));
+  return JSON.parse(stripJsonc(rendered)) as RenderedConfig;
+};
+
+let bundle: Promise<string> | undefined;
+
+/** The Worker as `wrangler deploy` bundles it: one ES module from `src/worker.ts`. */
+const workerScript = () =>
+  (bundle ??= build({
+    entryPoints: [join(APP, "src/worker.ts")],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    write: false,
+    external: ["cloudflare:*"],
+  }).then((out) => out.outputFiles[0]!.text));
+
+/** One request a client sent the Worker. */
+export interface StackRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+export interface Stack {
+  /** The Worker's origin as clients reach it: the recording front. */
+  readonly url: string;
+  readonly mf: Miniflare;
+  readonly overlay: OverlayValues;
+  readonly config: RenderedConfig;
+  readonly team: AccessTeam;
+  readonly github: GithubFixtureServer;
+  /** Every request the front forwarded, in order. */
+  readonly requests: readonly StackRequest[];
+  /** Headers carrying an Access JWT for `identity`; none for `null`. */
+  readonly access: (identity: string | null) => Promise<Record<string, string>>;
+  readonly close: () => Promise<void>;
+}
+
+const HOP_HEADERS: ReadonlySet<string> = new Set([
+  "content-encoding",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+]);
+
+/** The front: forwards each client request to the Worker unchanged, recording it. */
+const startFront = async (target: URL, requests: StackRequest[]) => {
+  const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const headers: Record<string, string> = {};
+      for (const [name, value] of Object.entries(req.headers))
+        if (typeof value === "string" && name !== "host") headers[name] = value;
+      requests.push({ method: req.method ?? "GET", path: req.url ?? "/", headers });
+      const response = await fetch(new URL(req.url ?? "/", target), {
+        method: req.method ?? "GET",
+        headers,
+        redirect: "manual",
+        ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }),
+      });
+      // `fetch` has already decoded the body, so its encoding and length headers no longer describe it.
+      const out = Object.fromEntries(
+        [...response.headers].filter(([name]) => !HOP_HEADERS.has(name)),
+      );
+      res.writeHead(response.status, out);
+      res.end(Buffer.from(await response.arrayBuffer()));
+    })().catch((e: unknown) => res.writeHead(502).end(String(e)));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  return {
+    url: `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+};
+
+const GITHUB_HOSTS: ReadonlySet<string> = new Set([
+  "api.github.com",
+  "github.com",
+  "token.actions.githubusercontent.com",
+]);
+
+export const startStack = async (): Promise<Stack> => {
+  const team = await startAccessTeam();
+  const github = await startGithubFixtureServer();
+  const overlay = overlayFor(team);
+  const config = render(overlay);
+  const containerClasses = new Set((config.containers ?? []).map((c) => c.class_name));
+  const vars = Object.fromEntries(
+    Object.entries(config.vars).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
+  );
+  const mf = new Miniflare({
+    modules: [{ type: "ESModule", path: "worker.js", contents: await workerScript() }],
+    compatibilityDate: config.compatibility_date,
+    host: "127.0.0.1",
+    port: 0,
+    d1Databases: config.d1_databases.map((d) => d.binding),
+    kvNamespaces: (config.kv_namespaces ?? []).map((k) => k.binding),
+    r2Buckets: (config.r2_buckets ?? []).map((r) => r.binding),
+    // A container-backed pool needs a container engine; `wrangler dev` builds none (`dev.enable_containers`).
+    durableObjects: Object.fromEntries(
+      config.durable_objects.bindings
+        .filter((b) => !containerClasses.has(b.class_name))
+        .map((b) => [b.name, { className: b.class_name, useSQLite: true }]),
+    ),
+    bindings: {
+      ...vars,
+      // What `wrangler dev` for local work overrides, and the Worker secrets `fd deploy` would set.
+      DEPLOYMENT: "development",
+      FD_DEV_REPOSITORY: JSON.stringify(DEV_REPOSITORY),
+      WEBHOOK_SECRET,
+      CACHE_TOKEN_SECRET: "e2e-cache-token-secret",
+      // The template renders neither; the overlay holds both (`dispatchers`, `dispatch.oidcAudience`).
+      DISPATCHERS: JSON.stringify(overlay.dispatchers ?? []),
+      DISPATCH_OIDC_AUDIENCE: overlay.dispatch?.oidcAudience ?? "",
+    },
+    // Every request the Worker addresses to GitHub reaches the fixture server; anything else (the Access team's keys)
+    // goes out as addressed.
+    outboundService: async (request: MfRequest) => {
+      const host = new URL(request.url).host;
+      if (!GITHUB_HOSTS.has(host)) return mfFetch(request);
+      const body =
+        request.method === "GET" || request.method === "HEAD"
+          ? undefined
+          : await request.arrayBuffer();
+      const answer = await github.handle(
+        new Request(request.url, {
+          method: request.method,
+          headers: Object.fromEntries(request.headers),
+          ...(body === undefined ? {} : { body }),
+        }),
+      );
+      return new MfResponse(await answer.arrayBuffer(), {
+        status: answer.status,
+        headers: Object.fromEntries(answer.headers),
+      });
+    },
+  });
+  const origin = await mf.ready;
+  const requests: StackRequest[] = [];
+  const front = await startFront(origin, requests);
+  return {
+    url: front.url,
+    mf,
+    overlay,
+    config,
+    team,
+    github,
+    requests,
+    access: async (identity): Promise<Record<string, string>> =>
+      identity === null ? {} : { "cf-access-jwt-assertion": await team.jwt(identity) },
+    close: async () => {
+      await front.close();
+      await mf.dispose();
+      await github.close();
+      await team.close();
+    },
+  };
+};

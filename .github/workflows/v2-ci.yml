@@ -170,6 +170,24 @@ jobs:
       - run: (cd formal && lake build)
       - run: $STRIP_TYPES packages/ops/scripts/harness.ts diff --traces 10000
 
+  # The V-E2E-LOCAL cloud path: the control plane Worker under workerd with the recorded GitHub fixture server, the
+  # dispatch action and the `fd-<subcommand>` executables against it, and `fd login` against the Secret Service, which
+  # runs in the job's own D-Bus session.
+  e2e-local:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - name: Install the Secret Service
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnome-keyring libsecret-tools dbus-x11
+      - name: e2e-local
+        run: >-
+          dbus-run-session -- sh -c
+          'printf e2e | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+          && pnpm --filter @fractalboxdev/flare-dispatch-control-plane run test:e2e-local'
+
   # FD-OPS-031: every spec diagram renders, and the site build fails on a broken local link.
   docs:
     runs-on: ubuntu-latest
@@ -182,7 +200,7 @@ jobs:
       - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run build
 
   fallback-ci:
-    needs: [lint, typecheck, unit, spec-tags, deploy-dry-run, profile-reference, formal, conf, sim, replay, diff, docs]
+    needs: [lint, typecheck, unit, spec-tags, deploy-dry-run, profile-reference, formal, conf, sim, replay, diff, e2e-local, docs]
     runs-on: ubuntu-latest
     steps:
       - run: echo "every CI command of FD-OPS-026 passed"
