@@ -9,7 +9,7 @@ import type { Admission, ClassResolver, IntakeConfig } from "./config.ts";
 import { intakeError, type IntakeError } from "./config.ts";
 import { errorResponse, json } from "./http.ts";
 import type { ManifestSource } from "./manifest.ts";
-import type { InstallationEviction, ManifestReporter } from "./ports.ts";
+import type { HeldCheckReporter, InstallationEviction, ManifestReporter } from "./ports.ts";
 import type { ProtectionSnapshots } from "./protection.ts";
 import type { IntakeStore, ShedRecorder, StoreUnavailable } from "./store.ts";
 import { handleWebhook } from "./webhook.ts";
@@ -23,6 +23,7 @@ export type IntakeEnv =
   | ShedRecorder
   | ManifestSource
   | ManifestReporter
+  | HeldCheckReporter
   | GithubRead
   | InstallationEviction
   | ProtectionSnapshots;

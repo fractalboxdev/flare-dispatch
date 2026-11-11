@@ -6,6 +6,7 @@ import {
   d1IntakeStore,
   d1ShedRecorder,
   ExecutionStartFailed,
+  HeldCheckReporter,
   InstallationEviction,
   IntakeConfig,
   intakeLayer,
@@ -144,6 +145,18 @@ const manifestReporterWithoutApp = Layer.succeed(ManifestReporter, {
     }),
 });
 
+/**
+ * Without the App no check run can be written; the held request's record and hold already show it waits for its
+ * cooldown window (FD-INT-057).
+ */
+const heldCheckReporterWithoutApp = Layer.succeed(HeldCheckReporter, {
+  queued: (check) =>
+    Effect.logWarning("held check run not posted: no GitHub App", {
+      executionId: check.executionId,
+    }),
+  dropped: () => Effect.void,
+});
+
 /** Without the App no installation state is cached, so there is nothing to evict. */
 const evictionWithoutApp = Layer.succeed(InstallationEviction, {
   installation: () => Effect.void,
@@ -174,6 +187,7 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     d1ShedRecorder(env.DB),
     manifestSourceLayer,
     manifestReporterWithoutApp,
+    heldCheckReporterWithoutApp,
     evictionWithoutApp,
     profileClassResolver.pipe(
       Layer.provideMerge(protectionSnapshotsLayer),

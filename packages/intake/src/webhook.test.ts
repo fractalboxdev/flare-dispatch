@@ -21,6 +21,7 @@ import {
   REPO,
   repoWithManifest,
   signedWebhook,
+  testRun,
   type Harness,
 } from "./harness.test-support.ts";
 import { cacheTriggerOf } from "./event.ts";
@@ -576,6 +577,83 @@ describe("cooldown", () => {
     expect((placed.e_deadline as number) - (placed.enqueued_at as number)).toBe(
       (firstRow.deadline_at as number) - (firstRow.enqueued_at as number),
     );
+  });
+
+  it("[FD-INT-057] a held request's check run is queued for the window under the id the execution is admitted with", async () => {
+    const h = await harness();
+    await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await h.adjust(10_000);
+    await deliver(h, "pull_request", pullRequestPayload({ head: "2".repeat(40) }), "d-2");
+    const [, held] = h.records().filter((r) => r.run === "lint");
+    const id = held!.execution_id as string;
+    // Only the held request posts: an admitted execution's check run is its `check.open` row's to create.
+    expect(h.github.runs).toEqual([
+      expect.objectContaining({ name: "flare-dispatch/lint", external_id: id, status: "queued" }),
+    ]);
+
+    await h.adjust(20_000);
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0 });
+    expect(h.github.runs).toEqual([expect.objectContaining({ external_id: id, status: "queued" })]);
+
+    await h.adjust(30_000);
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 1 });
+    // Admission opens the check run under the same id, so the `check.open` applier finds this one and adopts it.
+    expect(h.executions().find((e) => e.id === id)?.status).toBe("pending");
+    expect(
+      h.rows("select kind, payload_json from outbox where execution_id = ?", id).map((r) => ({
+        kind: r.kind,
+        payload: JSON.parse(r.payload_json as string),
+      })),
+    ).toEqual([
+      { kind: "check.open", payload: { name: "flare-dispatch/lint", head_sha: "2".repeat(40) } },
+    ]);
+    expect(h.github.runs).toHaveLength(1);
+  });
+
+  it("[FD-INT-057] a redelivered held request posts no second check run, and a run that owns no check posts none", async () => {
+    const h = await harness();
+    await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await h.adjust(10_000);
+    const payload = pullRequestPayload({ head: "2".repeat(40) });
+    await deliver(h, "pull_request", payload, "d-2");
+    await deliver(h, "pull_request", payload, "d-3");
+    expect(h.github.runs).toHaveLength(1);
+
+    const silent = await harness({
+      settings: {
+        catalog: (name) =>
+          name === "lint"
+            ? testRun("lint", { ownsCheck: false, cooldown: { seconds: 30, scope: () => "all" } })
+            : undefined,
+      },
+      repos: {
+        [REPO]: repoWithManifest(manifest([{ recipe: "lint", triggers: ["pull_request"] }])),
+      },
+    });
+    await deliver(silent, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await silent.adjust(10_000);
+    await deliver(silent, "pull_request", pullRequestPayload({ head: "2".repeat(40) }), "d-2");
+    expect(silent.records().map((r) => r.not_before !== null)).toEqual([false, true]);
+    expect(silent.github.runs).toEqual([]);
+  });
+
+  it("[FD-INT-057] a held request that release answers with another execution concludes its queued check run cancelled", async () => {
+    const h = await harness();
+    await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await h.adjust(10_000);
+    const payload = pullRequestPayload({ head: "2".repeat(40) });
+    await deliver(h, "pull_request", payload, "d-2");
+    const held = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
+    // The window ends before the tick, so the same request arriving again is admitted at once under a new id.
+    await h.adjust(55_000);
+    await deliver(h, "pull_request", payload, "d-3");
+    const other = h.records().filter((r) => r.run === "lint")[2]!.execution_id as string;
+    expect(h.executions().map((e) => e.id)).toContain(other);
+
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0, duplicate: 1 });
+    expect(h.github.runs).toEqual([
+      expect.objectContaining({ external_id: held, status: "completed", conclusion: "cancelled" }),
+    ]);
   });
 
   it("[FD-INT-057] MAMEKO-ADM-041 a held batch request released while the run's earlier execution still queues takes its place, and the earlier one is recorded deferred", async () => {

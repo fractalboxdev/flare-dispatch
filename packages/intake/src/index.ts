@@ -70,6 +70,10 @@ export {
 } from "./manifest.ts";
 export { AccessIdentity, mcpDispatch, McpDispatchArgs } from "./mcp.ts";
 export {
+  heldCheckOf,
+  HeldCheckReporter,
+  heldCheckReporterLayer,
+  type HeldCheck,
   InstallationEviction,
   installationEvictionLayer,
   MANIFEST_CHECK,

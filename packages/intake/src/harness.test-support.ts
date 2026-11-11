@@ -3,9 +3,12 @@
 // calls, and webhook fixtures.
 import { InstallationQuota, installationQuotaLayer } from "@fractalboxdev/flare-dispatch-github";
 import {
+  fakeGithub,
+  fakeGithubLayers,
   fakeReadLayer,
   fakeReads,
   fakeRepo,
+  type FakeGithub,
   type FakeReads,
   type FakeRepo,
 } from "@fractalboxdev/flare-dispatch-github/testing";
@@ -27,7 +30,7 @@ import { AccessIdentity } from "./mcp.ts";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
 import { manifestSourceLayer } from "./manifest.ts";
 import { profileClassResolver } from "./layer.ts";
-import { InstallationEviction, ManifestReporter } from "./ports.ts";
+import { heldCheckReporterLayer, InstallationEviction, ManifestReporter } from "./ports.ts";
 import { protectionSnapshotsLayer } from "./protection.ts";
 import type { IntakeRun } from "./runs.ts";
 import { signBody } from "./signature.ts";
@@ -152,6 +155,8 @@ export const harness = async (options: HarnessOptions = {}) => {
     ...options.settings,
   };
   const readLayer = fakeReadLayer(reads);
+  // The check runs GitHub holds; a held request's queued check run is written here (FD-INT-057).
+  const github: FakeGithub = fakeGithub();
   const config = Layer.succeed(IntakeConfig, settings);
   const protection = protectionSnapshotsLayer.pipe(Layer.provide(readLayer));
   const alarms = Layer.succeed(AlarmPort, {
@@ -181,6 +186,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     protection,
     alarms,
     installationQuotaLayer(),
+    heldCheckReporterLayer.pipe(Layer.provide(Layer.merge(fakeGithubLayers(github), readLayer))),
     Layer.succeed(ManifestReporter, {
       invalid: (repo, sha, errors) =>
         Effect.sync(() => void recorded.reported.push({ repo, sha, errors })),
@@ -203,6 +209,7 @@ export const harness = async (options: HarnessOptions = {}) => {
   return {
     db,
     reads,
+    github,
     recorded,
     settings,
     run,

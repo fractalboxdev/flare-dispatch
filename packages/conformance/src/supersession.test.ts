@@ -6,6 +6,7 @@ import {
   d1Admission,
   d1IntakeStore,
   d1ShedRecorder,
+  HeldCheckReporter,
   IntakeConfig,
   migrateIntake,
   submission,
@@ -58,6 +59,8 @@ const plane = async () => {
       d1Admission(db, profile),
       d1IntakeStore(db),
       d1ShedRecorder(db),
+      // No run this fixture admits declares a cooldown, so no request is held.
+      Layer.succeed(HeldCheckReporter, { queued: () => Effect.void, dropped: () => Effect.void }),
       // Every request resolves to `interactive`, whose terminal outcome is not `deferred`, so no coalescing of a
       // (run, scope) queue (MAMEKO-ADM-041) acts beside supersession.
       recordingResolver([], () => ({
