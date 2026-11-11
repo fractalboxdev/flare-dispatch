@@ -94,6 +94,45 @@ describe("renderer", () => {
     expect(a).toBe(b);
   });
 
+  it("[FD-PROF-054] renders the spend placeholders from the overlay, each spend value it leaves out at its default", () => {
+    const template = `{"vars": {"SPEND": "{{spend}}", "B": "{{spend.budgetUsd}}", "D": "{{spend.measuredReserveDays}}"}}`;
+    const unset = parseJsonc(Effect.runSync(renderTemplate("cp", template, placeholderOverlay)));
+    expect(unset["vars"]).toEqual({
+      SPEND: {
+        budgetUsd: 50,
+        fixedUsd: 0,
+        releaseReserveUsd: 10,
+        opsReserveUsd: 5,
+        measuredReserveMinUsd: 20,
+        measuredReserveDays: 10,
+        overheadFactor: 1.1,
+      },
+      B: 50,
+      D: 10,
+    });
+    const set = parseJsonc(
+      Effect.runSync(
+        renderTemplate("cp", template, {
+          ...placeholderOverlay,
+          spend: { budgetUsd: 120, fixedUsd: 4.5, measuredReserveDays: 14, overheadFactor: 1.25 },
+        }),
+      ),
+    );
+    expect(set["vars"]).toEqual({
+      SPEND: {
+        budgetUsd: 120,
+        fixedUsd: 4.5,
+        releaseReserveUsd: 10,
+        opsReserveUsd: 5,
+        measuredReserveMinUsd: 20,
+        measuredReserveDays: 14,
+        overheadFactor: 1.25,
+      },
+      B: 120,
+      D: 14,
+    });
+  });
+
   it("[FD-OPS-004] a placeholder whose value the overlay lacks fails the render, naming it", () => {
     const err = Effect.runSync(
       Effect.flip(renderTemplate("cp", `{"x": "{{kv.SESSIONS}}"}`, placeholderOverlay)),

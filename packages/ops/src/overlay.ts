@@ -38,6 +38,21 @@ export const ModelEntryValues = Schema.Struct({
   quantization: opt(NonEmpty),
 });
 
+/**
+ * The overlay's `spend` values in USD: `B`, `F`, the release reserve, `R_ops`, `R_m,min`, `D` and the overhead factor
+ * (specs/profile.md § Spend configuration). The control plane's `SPEND` var holds the same struct with every value set.
+ */
+export const SpendValues = Schema.Struct({
+  budgetUsd: opt(Usd),
+  fixedUsd: opt(Usd),
+  releaseReserveUsd: opt(Usd),
+  opsReserveUsd: opt(Usd),
+  measuredReserveMinUsd: opt(Usd),
+  measuredReserveDays: opt(Count),
+  overheadFactor: opt(Schema.Number.check(Schema.isGreaterThanOrEqualTo(1))),
+});
+export type SpendValues = typeof SpendValues.Type;
+
 /** Every value path the overlay may hold; nothing else (FD-OPS-002). */
 export const OverlayValues = Schema.Struct({
   accountId: NonEmpty,
@@ -53,17 +68,7 @@ export const OverlayValues = Schema.Struct({
   dispatch: opt(Schema.Struct({ oidcAudience: NonEmpty })),
   executors: Schema.Struct({ planeId: NonEmpty }),
   alerts: Schema.Struct({ sink: AlertSink, webhookSilentHours: opt(Count) }),
-  spend: opt(
-    Schema.Struct({
-      budgetUsd: opt(Usd),
-      fixedUsd: opt(Usd),
-      releaseReserveUsd: opt(Usd),
-      opsReserveUsd: opt(Usd),
-      measuredReserveMinUsd: opt(Usd),
-      measuredReserveDays: opt(Count),
-      overheadFactor: opt(Schema.Number.check(Schema.isGreaterThanOrEqualTo(1))),
-    }),
-  ),
+  spend: opt(SpendValues),
   pools: opt(Schema.Record(Schema.String, Schema.Struct({ maxInstances: Count }))),
   aws: opt(
     Schema.Struct({
@@ -121,9 +126,8 @@ export const decodeOverlay = (text: string) =>
 
 const micro = (usd: number | undefined) => (usd === undefined ? undefined : Math.round(usd * 1e6));
 
-/** The spend configuration the overlay delivers, each unset value at its default (FD-PROF-054, FD-OPS-083). */
-export const spendConfigOf = (overlay: OverlayValues): SpendConfig => {
-  const s = overlay.spend ?? {};
+/** The spend configuration a set of spend values delivers, each unset value at its default (FD-PROF-054). */
+export const spendConfigFrom = (s: SpendValues = {}): SpendConfig => {
   const release = micro(s.releaseReserveUsd);
   return spendConfigWith({
     ...(s.budgetUsd === undefined ? {} : { budget: micro(s.budgetUsd)! }),
@@ -139,6 +143,33 @@ export const spendConfigOf = (overlay: OverlayValues): SpendConfig => {
     ...(release === undefined ? {} : { reserves: { "release-reserve": release } }),
   });
 };
+
+/** The spend configuration the overlay delivers, each unset value at its default (FD-PROF-054, FD-OPS-083). */
+export const spendConfigOf = (overlay: OverlayValues): SpendConfig =>
+  spendConfigFrom(overlay.spend);
+
+/**
+ * The overlay's spend values with every one the overlay leaves out at its default, in USD: what a template's
+ * `{{spend}}` and `{{spend.<key>}}` placeholders render (FD-PROF-054).
+ */
+export const spendValuesOf = (overlay: OverlayValues): Required<SpendValues> => {
+  const c = spendConfigOf(overlay);
+  return {
+    budgetUsd: c.budget / 1e6,
+    fixedUsd: c.fixed / 1e6,
+    releaseReserveUsd: (c.reserves["release-reserve"] ?? 0) / 1e6,
+    opsReserveUsd: c.ops_reserve / 1e6,
+    measuredReserveMinUsd: c.measured_reserve_min / 1e6,
+    measuredReserveDays: c.measured_reserve_days,
+    overheadFactor: c.overhead_factor,
+  };
+};
+
+/** The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults. */
+export const renderValuesOf = (overlay: OverlayValues): OverlayValues => ({
+  ...overlay,
+  spend: spendValuesOf(overlay),
+});
 
 /** The overlay's provider registry as the deploy check reads it, each entry under its key as its id. */
 export const modelRegistryOf = (overlay: OverlayValues): readonly RegistryEntry[] =>

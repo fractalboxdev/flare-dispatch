@@ -4,7 +4,12 @@ import type { ApiEnv } from "@fractalboxdev/flare-dispatch-api";
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
 import type { ConcludeKind } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
-import type { MonitorNamespace } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  spendConfigOfVar,
+  type MonitorNamespace,
+  type SpendUnreadable,
+} from "@fractalboxdev/flare-dispatch-ops";
+import type { Effect } from "effect";
 import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
@@ -12,6 +17,7 @@ import {
   drawsReserve,
   type Deployment,
   type Profile,
+  type SpendConfig,
 } from "@fractalboxdev/flare-dispatch-profile";
 import type {
   D1Like,
@@ -48,6 +54,8 @@ export interface ControlPlaneEnv extends CacheEnv {
   };
   /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
   readonly ALERT_SINK?: string;
+  /** The rendered `{{spend}}`: the overlay's spend values in USD, each it leaves out at its default (FD-PROF-054). */
+  readonly SPEND?: unknown;
   readonly DEPLOYMENT?: string;
   readonly PLANE_ID: string;
   /** The GitHub App's id and private key (a Worker secret); without both, nothing is applied to GitHub. */
@@ -85,6 +93,13 @@ export const apiEnvOf = (env: ControlPlaneEnv): ApiEnv => {
 };
 
 export const profileOf = (env: ControlPlaneEnv): Profile => buildProfile(deployment(env));
+
+/**
+ * The spend configuration the operator overlay delivers through the `SPEND` var, which the coordinator's spend view
+ * reads; every value the overlay sets none for is at its default (FD-PROF-054).
+ */
+export const spendConfigOf = (env: ControlPlaneEnv): Effect.Effect<SpendConfig, SpendUnreadable> =>
+  spendConfigOfVar(env.SPEND);
 
 /**
  * One channel per device executor. No catalogue run requires `LocalContent` yet. A class whose terminal outcome is
