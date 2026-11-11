@@ -163,8 +163,12 @@ describe("native check command supervisor", () => {
   it("a Darwin probe that reads an exiting process as ?E waits for it and publishes", async () => {
     const handle = { id: `native-${crypto.randomUUID()}`, container: { id: "explicit" }, fingerprint: "native",
       startedAt: Date.now(), deadline: Date.now() + 5000 };
-    // `ps` answers `?E` for every process while the group exists and nothing once it is gone.
-    const override = `Object.defineProperty(process,'platform',{value:'darwin'});const cp=require('node:child_process'),realSpawn=cp.spawn;let ownedPid;cp.spawn=(...args)=>{const child=realSpawn(...args);ownedPid=child.pid;return child};cp.spawnSync=()=>{try{process.kill(-ownedPid,0)}catch{return {status:1,stdout:''}}return {status:0,stdout:ownedPid+' ?E'}};`;
+    // `ps` answers `?E` for every live process while the group exists, `Z` for a zombie, and
+    // nothing once the group is gone. The zombie row matters where PID 1 does not reap orphans
+    // (a container whose entrypoint is not an init): the killed `sleep` stays a zombie in the
+    // group, and a probe that called it `?E` would never see the group stop. Where `/proc`
+    // exists the fake reads each member's real state; elsewhere every member is `?E`.
+    const override = `Object.defineProperty(process,'platform',{value:'darwin'});const cp=require('node:child_process'),realSpawn=cp.spawn;let ownedPid;cp.spawn=(...args)=>{const child=realSpawn(...args);ownedPid=child.pid;return child};cp.spawnSync=()=>{try{process.kill(-ownedPid,0)}catch{return {status:1,stdout:''}}const fs=require('node:fs');if(!fs.existsSync('/proc'))return {status:0,stdout:ownedPid+' ?E'};const rows=[];for(const pid of fs.readdirSync('/proc')){if(!/^[0-9]+$/.test(pid))continue;let stat;try{stat=fs.readFileSync('/proc/'+pid+'/stat','utf8')}catch{continue}const fields=stat.slice(stat.lastIndexOf(')')+2).split(' ');if(Number(fields[2])===ownedPid)rows.push(ownedPid+' '+(fields[0]==='Z'?'Z':'?E'))}return {status:0,stdout:rows.join(String.fromCharCode(10))}};`;
     const child = spawn(process.execPath, ["-e", override + commandSupervisor(handle, "sleep 30 >/dev/null 2>&1 & echo $!; sleep 0.05; exit 0")]);
     let descendant = 0;
     try {
