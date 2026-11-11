@@ -366,6 +366,8 @@ export const submit = (
       cacheTrigger: s.cacheTrigger,
       // Admission decides the kinds; `placed` copies them from its placement row once it answers.
       eligibleKinds: null,
+      repositoryPublic: s.repositoryPublic,
+      inputAssociations: s.inputAssociations,
       createdAt: now,
     };
     // mameko's `admit` writes the execution, dedup key and placement rows under this id in one transaction, with the

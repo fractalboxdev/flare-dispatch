@@ -148,6 +148,8 @@ const intakeRecord: IntakeRecord = {
   placementConstraint: null,
   cacheTrigger: { _tag: "PullRequest", number: 7 },
   eligibleKinds: null,
+  repositoryPublic: null,
+  inputAssociations: [],
   createdAt: 0,
 };
 

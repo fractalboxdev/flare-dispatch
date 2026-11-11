@@ -1,10 +1,14 @@
 // The trifecta rule at admission: intake computes an execution's three data classes from the trigger's facts, and an
 // execution whose classes are all true concludes `failure` with `policy: trifecta` before placement. Signed webhooks
 // through the route group, the fake GitHub reads and mameko's real admission transaction on SQLite.
+import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import { followOnSubmitterLayer } from "./follow-on.ts";
 import {
   CATALOG,
+  checkSuiteRerequested,
   HEAD,
   harness,
   manifest,
@@ -63,10 +67,24 @@ const pullRequest = (
   };
 };
 
-const deliver = async (h: Harness, payload: unknown, delivery = "d-1") =>
-  h.run(
-    handleIntake(await signedWebhook("pull_request", payload, { delivery }), "webhooks/github"),
-  );
+const deliver = async (h: Harness, payload: unknown, delivery = "d-1", event = "pull_request") =>
+  h.run(handleIntake(await signedWebhook(event, payload, { delivery }), "webhooks/github"));
+
+/** Each execution of one run, by attempt: its status and reason, and whether it has a placement row. */
+const attempts = (h: Harness, run: string) =>
+  h
+    .rows(
+      `select r.attempt, e.status, e.reason,
+         (select count(*) from placements p where p.execution_id = e.id) as placed
+       from intake_records r join executions e on e.id = r.execution_id where r.run = ? order by r.attempt`,
+      run,
+    )
+    .map((r) => ({
+      attempt: r.attempt,
+      status: r.status,
+      reason: r.reason,
+      placed: Number(r.placed) > 0,
+    }));
 
 /** Each run's execution: its status and reason, whether it has a placement row, and its record's hold. */
 const outcomes = (h: Harness, sha = HEAD) =>
@@ -147,6 +165,46 @@ describe("the trifecta rule at admission", () => {
     const next = "e".repeat(40);
     await deliver(h, pullRequest({ association: "NONE", head: next }), "d-2");
     expect(outcomes(h, next).triage).toEqual(refused);
+  });
+
+  it("[FD-AGT-005] a rerequested check suite on a refused same-repository pull request concludes the next attempt failure with policy: trifecta again", async () => {
+    const h = await trifectaHarness();
+    await deliver(h, pullRequest({ association: "NONE" }));
+    await deliver(h, checkSuiteRerequested(), "d-2", "check_suite");
+    expect(attempts(h, "triage")).toEqual([
+      { attempt: 1, status: "failure", reason: "policy: trifecta", placed: false },
+      { attempt: 2, status: "failure", reason: "policy: trifecta", placed: false },
+    ]);
+    expect(h.recorded.started).toEqual([]);
+  });
+
+  it("[FD-AGT-005] a follow-on of an execution started by untrusted input keeps its parent's data classes", async () => {
+    const h = await trifectaHarness();
+    await deliver(h, pullRequest({ association: "NONE" }));
+    const parent = h.rows("select execution_id from intake_records where run = 'lint'")[0]!
+      .execution_id as string;
+    const child = await h.run(
+      FollowOnSubmitter.use((s) =>
+        s.submit({
+          executionId: parent,
+          intentKey: "run:triage:0",
+          run: "triage",
+          label: null,
+          inputs: { sha: HEAD },
+        }),
+      ).pipe(Effect.provide(followOnSubmitterLayer)),
+    );
+    expect(child).toMatchObject({ _tag: "admitted" });
+    const id = (child as { executionId: string }).executionId;
+    expect(
+      h.rows(
+        `select r.input_associations_json, e.status, e.reason from intake_records r
+         join executions e on e.id = r.execution_id where r.execution_id = ?`,
+        id,
+      ),
+    ).toEqual([
+      { input_associations_json: '["NONE"]', status: "failure", reason: "policy: trifecta" },
+    ]);
   });
 
   it("[FD-AGT-005] computes the classes from the submission: fork head, base and run agent grants, and the confidentiality mode", () => {
