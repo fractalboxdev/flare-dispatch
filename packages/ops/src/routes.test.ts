@@ -135,7 +135,7 @@ describe("operability routes", () => {
     expect(page).toContain(
       '<li class="mono">outside-allowlist src/a.ts</li><li class="mono">too-many-files</li>',
     );
-    expect(page).toContain("/v1/executions/e%201/logs/run.log?t=");
+    expect(page).toContain("/v1/executions/e%201/logs?t=");
     expect((await s.call(s.viewer, "/executions/nope")).status).toBe(404);
     expect((await s.call(s.viewer, "/executions/%E0")).status).toBe(404);
   });

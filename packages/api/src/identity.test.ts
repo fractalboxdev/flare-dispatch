@@ -1,4 +1,4 @@
-import { Context } from "effect";
+import { Context, Effect } from "effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   accessClaims,
@@ -21,6 +21,7 @@ import { signBody, verifyBody } from "./hmac.ts";
 import { ACTIONS_JWKS } from "./identity.ts";
 import { JWKS_TTL_MS, JwksSourceLive } from "./jwt.ts";
 import { checkLinkToken, LINK_LABELS, mintLinkToken } from "./link-token.ts";
+import { executionLinks, type LinkAudience } from "./links.ts";
 import { mount, toFetchHandler } from "./router.ts";
 
 let h: Harness;
@@ -328,6 +329,26 @@ describe("link tokens", () => {
     ).toBe(604_800);
   });
 
+  it("[FD-IFC-019]: a check-run details token expires after the configured lifetime, a dashboard token within 3600 s", async () => {
+    const nowS = 1_800_000_000;
+    const expiryOf = async (audience: LinkAudience, linkLifetimeS: number) => {
+      const links = await Effect.runPromise(
+        executionLinks("exec-1", audience, nowS).pipe(
+          Effect.provideService(ApiConfig, baseConfig({ linkLifetimeS })),
+        ),
+      );
+      const token = new URL(links.details_url).searchParams.get("t")!;
+      expect(new URL(links.logs_url).searchParams.get("t")).toBe(token);
+      expect((await check(token, { nowS, currentEpoch: 0 }))._tag).toBe("Granted");
+      return Number(token.split(".")[0]) - nowS;
+    };
+    expect(await expiryOf("check-run", 86_400)).toBe(86_400);
+    expect(await expiryOf("check-run", 7_200)).toBe(7_200);
+    expect(await expiryOf("check-run", 604_800)).toBe(604_800);
+    expect(await expiryOf("dashboard", 86_400)).toBe(3_600);
+    expect(await expiryOf("dashboard", 600)).toBe(600);
+  });
+
   it("[FD-IFC-022]: token and MAC comparisons run through the constant-time compare", async () => {
     expect(await constantTimeEqual("abc", "abc")).toBe(true);
     expect(await constantTimeEqual("abc", "abd")).toBe(false);
@@ -344,5 +365,17 @@ describe("link tokens", () => {
     expect(distinctLinkKey({ LINK_KEY: "k", OIDC_SIGNING_JWK: "k" })).toBeInstanceOf(ConfigInvalid);
     expect(distinctLinkKey({ LINK_KEY: "k", PROVENANCE_KEY: "k" })).toBeInstanceOf(ConfigInvalid);
     expect(distinctLinkKey({ LINK_KEY: "k", WEBHOOK_SECRET: "w" })).toBeUndefined();
+  });
+
+  it("[FD-IFC-023]: a link key equal to the compile-cache secret or the install-state key is refused at configuration", () => {
+    for (const name of ["COMPILE_CACHE_SECRET", "INSTALL_STATE_KEY"] as const) {
+      const refused = apiConfigFromEnv({ LINK_KEY: "k", [name]: "k" }, ORIGIN);
+      expect(refused, name).toBeInstanceOf(ConfigInvalid);
+      expect((refused as ConfigInvalid).message).toBe(`the link key equals ${name}`);
+      expect(
+        (apiConfigFromEnv({ LINK_KEY: "k", [name]: "other" }, ORIGIN) as { linkKey: string })
+          .linkKey,
+      ).toBe("k");
+    }
   });
 });
