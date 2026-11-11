@@ -1,6 +1,7 @@
 // Test doubles for the router: real RS256 tokens from throwaway key pairs, a JWKS source that serves them, and
 // in-memory ports. The router runs through `toFetchHandler`, the way the Worker calls it.
 import type { webcrypto } from "node:crypto";
+import type { OidcKeys } from "@fractalboxdev/flare-dispatch-cache/oidc";
 import { Context, Effect, Layer } from "effect";
 import { ApiConfig, type ApiConfigShape } from "./config.ts";
 import { base64urlEncode, utf8 } from "./crypto.ts";
@@ -157,7 +158,7 @@ export interface Doubles {
     },
     ReturnType<typeof apiError>
   >;
-  oidcJwk: Record<string, unknown> | undefined;
+  oidcKeys: OidcKeys | undefined;
   /** The error the next operator operation fails with, as the coordinator would answer. */
   opsFailure: ReturnType<typeof apiError> | undefined;
 }
@@ -172,7 +173,7 @@ export const makeDoubles = (): Doubles => {
         executionId: "01JNEW0000000000000000000",
         class: s.class ?? "batch",
       }),
-    oidcJwk: undefined,
+    oidcKeys: undefined,
     opsFailure: undefined,
   };
   return doubles;
@@ -243,7 +244,7 @@ export const portsContext = (doubles: Doubles) =>
       register: (body) =>
         Effect.succeed({ executorId: body.executor_id, postureTier: "unmanaged" }),
     }),
-    Context.add(OidcKey, { publicJwk: Effect.sync(() => doubles.oidcJwk) }),
+    Context.add(OidcKey, { keys: Effect.sync(() => doubles.oidcKeys) }),
   );
 
 export interface Harness {
