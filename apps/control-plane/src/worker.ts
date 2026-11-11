@@ -11,6 +11,7 @@ import { migrateLocalStore } from "./agentic.ts";
 import { cacheFetch, cacheSweeps } from "./cache.ts";
 import { boundFetch } from "./github.ts";
 import { apiFetch } from "./http.ts";
+import { spendViewOf } from "./spend.ts";
 import { tickDeps } from "./tick.ts";
 
 export {
@@ -72,6 +73,7 @@ export default {
       const ops = await opsFetch(request, env as unknown as Parameters<typeof opsFetch>[1], {
         classes: CLASS_ORDER,
         fetch: boundFetch,
+        spend: spendViewOf(env),
       });
       if (ops !== null) return ops;
     }

@@ -1,0 +1,26 @@
+{
+  "action": "edited",
+  "rule": {
+    "id": 2,
+    "repository_id": 700000001,
+    "name": "main",
+    "required_status_checks_enforcement_level": "non_admins",
+    "required_status_checks": []
+  },
+  "changes": {
+    "required_status_checks": { "from": ["flare-dispatch/check:ci"] }
+  },
+  "repository": {
+    "id": 700000001,
+    "name": "widgets",
+    "full_name": "acme/widgets",
+    "private": false,
+    "owner": { "login": "acme", "id": 9919, "type": "Organization" },
+    "html_url": "https://github.com/acme/widgets",
+    "clone_url": "https://github.com/acme/widgets.git",
+    "default_branch": "main"
+  },
+  "organization": { "login": "acme", "id": 9919 },
+  "sender": { "login": "octocat", "id": 583231, "type": "User" },
+  "installation": { "id": 41000001, "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNDEwMDAwMDE=" }
+}
