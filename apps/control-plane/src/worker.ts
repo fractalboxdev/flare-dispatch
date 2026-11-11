@@ -26,11 +26,11 @@ export {
   AgentPool,
   BrowserPool,
   ControlPool,
-  InstallationQuota,
   LeanPool,
   PoolController,
   ReleasePool,
 } from "./deferred-objects.ts";
+export { InstallationQuota } from "./installation-quota.ts";
 
 let migrated: Promise<unknown> | undefined;
 
