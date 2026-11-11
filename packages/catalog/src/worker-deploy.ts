@@ -92,7 +92,8 @@ export const runWorkerDeploy = (input: WorkerDeployInput) =>
       const intents = yield* Intents;
       yield* intents.emit("deploy-smoke", {
         kind: "dispatch.followOn",
-        payload: { run: "deploy-smoke", repository: input.scope, sha: input.sha, ref: input.ref },
+        // Intake takes the commit and smoke targets from the parent's trusted record and manifest.
+        payload: { run: "deploy-smoke", inputs: {} },
       });
     }
     return outcome;

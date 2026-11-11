@@ -3,8 +3,11 @@ import { FollowOnSubmitter, insertOpsIntent } from "@fractalboxdev/flare-dispatc
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { followOnSubmitterLayer } from "./follow-on.ts";
+import { catalogRuns } from "./catalog.ts";
 import {
   bodyOf,
+  CATALOG,
+  manifest,
   harness,
   HEAD,
   pullRequestPayload,
@@ -53,6 +56,56 @@ describe("dispatch.followOn", () => {
         `${parent}/%`,
       ),
     ).toEqual([{ canonical: `${parent}/run:review:0` }]);
+  });
+
+  it("[FD-GATE-069] [FD-GATE-071] worker-deploy follow-ons take the smoke targets from the parent's committed manifest", async () => {
+    const h = await harness({
+      settings: {
+        catalog: (name) =>
+          name === "deploy-smoke" ? catalogRuns("production")(name) : CATALOG[name],
+      },
+    });
+    const opened = await bodyOf(
+      await h.run(
+        handleIntake(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github"),
+      ),
+    );
+    const parent = (opened.executions as string[])[0]!;
+    h.db.sqlite
+      .prepare("update intake_records set run = 'worker-deploy' where execution_id = ?")
+      .run(parent);
+    h.reads.repos[REPO]!.files[`${HEAD}:.github/flare-dispatch.json`] = manifest([
+      {
+        recipe: "deploy-smoke",
+        triggers: ["deployment_status"],
+        params: { hosts: ["worker.example.com"], paths: ["/ready"] },
+      },
+    ]);
+    const followOn = () =>
+      h.run(
+        FollowOnSubmitter.use((s) =>
+          s.submit({
+            executionId: parent,
+            intentKey: "run:deploy-smoke:0",
+            run: "deploy-smoke",
+            label: null,
+            inputs: { scope: "evil/repo", sha: "f".repeat(40), hosts: ["metadata.invalid"] },
+          }),
+        ).pipe(Effect.provide(followOnSubmitterLayer)),
+      );
+    const first = await followOn();
+    expect(first).toMatchObject({ _tag: "admitted" });
+    expect(await followOn()).toEqual(first);
+    const child = h
+      .records()
+      .find((r) => r.execution_id === (first as { executionId: string }).executionId)!;
+    expect(child).toMatchObject({ run: "deploy-smoke", repo: REPO, sha: HEAD });
+    expect(JSON.parse(child.inputs_json as string)).toEqual({
+      scope: REPO,
+      sha: HEAD,
+      hosts: ["worker.example.com"],
+      paths: ["/ready"],
+    });
   });
 
   it("[FD-GH-088] a follow-on of an unknown execution is refused and admits nothing", async () => {

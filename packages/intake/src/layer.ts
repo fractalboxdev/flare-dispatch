@@ -62,7 +62,7 @@ export const intakeLayer = (options: IntakeLayerOptions) =>
     d1ShedRecorder(options.db),
     manifestSourceLayer,
     manifestReporterLayer,
-    heldCheckReporterLayer,
+    heldCheckReporterLayer(options.db, options.settings.profile),
     installationEvictionLayer,
     protectionSnapshotsLayer,
   );
