@@ -10,6 +10,7 @@ import {
   type SpendUnreadable,
 } from "@fractalboxdev/flare-dispatch-ops";
 import type { Effect } from "effect";
+import type { R2PresignerConfig } from "@fractalboxdev/flare-dispatch-cache";
 import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
@@ -84,7 +85,47 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly GATE_IMAGE_DIGEST?: string;
   /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */
   readonly FD_DEV_REPOSITORY?: string;
+  /** `accountId`: every presigned URL is on the bucket's S3 endpoint `<account_id>.r2.cloudflarestorage.com`. */
+  readonly R2_ACCOUNT_ID?: string;
+  /** `r2.CACHE`: the name of the bucket `CACHE` binds, which every presigned URL's path starts with. */
+  readonly CACHE_BUCKET_NAME?: string;
+  /**
+   * The object-store presigner's R2 API token (Worker secrets): scoped to the cache and artifact buckets with Object
+   * Read & Write, and read by nothing but the presigner (FD-CACHE-091).
+   */
+  readonly R2_PRESIGN_ACCESS_KEY_ID?: string;
+  readonly R2_PRESIGN_SECRET_ACCESS_KEY?: string;
 }
+
+const set = (value: string | undefined): value is string => value !== undefined && value !== "";
+
+/** The values the presigner signs with that this deploy leaves unset, by binding name. */
+export const presignerMissingOf = (env: ControlPlaneEnv): ReadonlyArray<string> =>
+  (
+    [
+      ["R2_ACCOUNT_ID", env.R2_ACCOUNT_ID],
+      ["CACHE_BUCKET_NAME", env.CACHE_BUCKET_NAME],
+      ["R2_PRESIGN_ACCESS_KEY_ID", env.R2_PRESIGN_ACCESS_KEY_ID],
+      ["R2_PRESIGN_SECRET_ACCESS_KEY", env.R2_PRESIGN_SECRET_ACCESS_KEY],
+    ] as const
+  ).flatMap(([name, value]) => (set(value) ? [] : [name]));
+
+/**
+ * The presigner's signing configuration, or `undefined` on a deploy missing the token, the account id or the bucket
+ * name: it signs with the presign token and nothing else, on the account's S3 endpoint (FD-CACHE-091).
+ */
+export const presignerConfigOf = (env: ControlPlaneEnv): R2PresignerConfig | undefined =>
+  set(env.R2_ACCOUNT_ID) &&
+  set(env.CACHE_BUCKET_NAME) &&
+  set(env.R2_PRESIGN_ACCESS_KEY_ID) &&
+  set(env.R2_PRESIGN_SECRET_ACCESS_KEY)
+    ? {
+        accountId: env.R2_ACCOUNT_ID,
+        bucket: env.CACHE_BUCKET_NAME,
+        accessKeyId: env.R2_PRESIGN_ACCESS_KEY_ID,
+        secretAccessKey: env.R2_PRESIGN_SECRET_ACCESS_KEY,
+      }
+    : undefined;
 
 export const deployment = (env: ControlPlaneEnv): Deployment => deploymentOf(env.DEPLOYMENT);
 
