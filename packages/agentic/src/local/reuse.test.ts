@@ -173,11 +173,12 @@ describe("reuse policy", () => {
     expect(await reuse([record()], { required: "fail" })).toBeNull();
   });
 
-  it("[FD-LOCAL-081] reads the required set again once the cached set is older than 10 min", async () => {
-    const h = await reuseHarness([record()]);
+  it("[FD-LOCAL-081] reads the required set again once the cached set is older than 10 min, and names none when that read fails", async () => {
+    const knobs: Knobs = {};
+    const h = await reuseHarness([record()], knobs);
     await Effect.runPromise(
       Effect.gen(function* () {
-        yield* h.ask();
+        expect(yield* h.ask()).toBe("01HREHEARSAL00000000000000");
         yield* h.ask();
         expect(h.reads.required).toBe(1);
         yield* TestClock.adjust("599 seconds");
@@ -186,6 +187,12 @@ describe("reuse policy", () => {
         yield* TestClock.adjust("2 seconds");
         yield* h.ask();
         expect(h.reads.required).toBe(2);
+        // Past the TTL a failed read names none: the stale cached set does not stand in for it.
+        knobs.required = "fail";
+        expect(yield* h.ask()).toBe("01HREHEARSAL00000000000000");
+        yield* TestClock.adjust("601 seconds");
+        expect(yield* h.ask()).toBeNull();
+        expect(h.reads.required).toBe(3);
       }).pipe(Effect.provide(h.layer), Effect.provide(TestClock.layer())),
     );
   });
