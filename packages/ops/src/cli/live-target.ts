@@ -7,7 +7,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Effect, Layer } from "effect";
 import type { DeployedAccessApplication } from "../access-application.ts";
-import { alarmMessage } from "../alarms.ts";
+import { alarmMessage, RUNBOOK } from "../alarms.ts";
 import {
   DeployTarget,
   scriptName,
@@ -339,11 +339,11 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
           } satisfies DeployRecord),
         );
       }),
-    raiseAlarm: (name, detail) =>
+    raiseAlarm: (name, detail, severity) =>
       Effect.gen(function* () {
         const alarm = {
           name,
-          severity: "page" as const,
+          severity,
           dedupeKey: name,
           state: "raised" as const,
           detail,
@@ -361,10 +361,10 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               alarm: name,
-              severity: "page",
+              severity,
               state: "raised",
               dedupe_key: name,
-              runbook: "R4",
+              runbook: severity === "page" ? (RUNBOOK[name] ?? null) : null,
               detail,
               message: alarmMessage(alarm),
             }),

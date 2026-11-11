@@ -95,6 +95,8 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     accessReadFails: boolean;
     /** The GitHub App's registration as `GET /app` answers it; the committed manifest by default. */
     app: AppPermissions;
+    /** The status checks the default branch's ruleset requires; the merge gate and `check:ci` by default. */
+    required: string[];
   } = {
     health: 200,
     deploys: 0,
@@ -102,6 +104,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     accessFails: false,
     accessReadFails: false,
     app: APP_PERMISSIONS,
+    required: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"],
   };
 
   /**
@@ -317,9 +320,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
         {
           type: "required_status_checks",
           parameters: {
-            required_status_checks: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"].map(
-              (context) => ({ context }),
-            ),
+            required_status_checks: state.required.map((context) => ({ context })),
           },
         },
       ]);
