@@ -1,15 +1,19 @@
 // The fakes the deploy suites of `V-DEPLOY` run on (specs/verification.md § Harness catalog): `fd deploy` and `fd doctor`
 // through the Operability service over the committed Worker templates and the placeholder overlay, with the live
 // `DeployTarget` on fakes of the Cloudflare API, the GitHub API, `wrangler` and the Workers' hostnames. The fake
-// Cloudflare account keeps each deployed Worker's settings, versions and Container applications between runs, so a
-// suite deploys, changes the account out of band and deploys again.
+// Cloudflare account keeps each deployed Worker's settings, versions and Container applications and its Access
+// applications between runs, so a suite deploys, changes the account out of band and deploys again. Access sits in
+// front of the dispatcher's hostname as the account's applications configure it.
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import {
   APP_PERMISSIONS,
+  committedAccess,
   DeployTarget,
+  onHostname,
+  pathMatches,
   MERGE_GATE_CHECKS,
   parseJsonc,
   placeholderOverlay,
@@ -64,8 +68,12 @@ export interface Script {
   versions: string[];
 }
 
-/** A Cloudflare account, a GitHub App installation, `wrangler` and the Workers' hostnames, behind one call log. */
-export const world = () => {
+/**
+ * A Cloudflare account, a GitHub App installation, `wrangler` and the Workers' hostnames, behind one call log. The
+ * account holds the committed Access applications for the placeholder overlay unless `access` is `"none"`, as the App
+ * registration matches the committed manifest.
+ */
+export const world = (opts: { readonly access?: "committed" | "none" } = {}) => {
   const calls: string[] = [];
   const scripts = new Map<string, Script>();
   const secrets = new Map<string, Map<string, string>>();
@@ -73,13 +81,90 @@ export const world = () => {
   const files = new Map<string, string>();
   const runs: (readonly string[])[] = [];
   const alarms: Record<string, unknown>[] = [];
+  /** The account's Access applications by id, each as the API lists it. */
+  const access = new Map<string, Record<string, unknown>>();
+  let accessIds = 0;
   const state: {
     health: number;
     deploys: number;
     wranglerFails: boolean;
+    /** Every Access write answers 403, as for a token that may read Access applications and not edit them. */
+    accessFails: boolean;
     /** The GitHub App's registration as `GET /app` answers it; the committed manifest by default. */
     app: AppPermissions;
-  } = { health: 200, deploys: 0, wranglerFails: false, app: APP_PERMISSIONS };
+  } = { health: 200, deploys: 0, wranglerFails: false, accessFails: false, app: APP_PERMISSIONS };
+
+  /** An application as the API stores it: an id, and policies with the ids, precedence and rule lists it adds. */
+  const stored = (id: string, body: Record<string, unknown>) => ({
+    ...body,
+    id,
+    aud: `aud-${id}`,
+    created_at: "2026-11-01T00:00:00Z",
+    policies: arr(body["policies"]).map((p, i) => ({
+      id: `${id}-policy-${i}`,
+      precedence: i + 1,
+      exclude: [],
+      require: [],
+      ...p,
+    })),
+  });
+
+  /** The Access API: list in pages, create, replace and delete. */
+  const accessApi = (method: string, url: URL, path: string, body: string): Response | null => {
+    const m = /^\/access\/apps(?:\/([^/]+))?$/.exec(path);
+    if (m === null) return null;
+    if (state.accessFails && method !== "GET")
+      return Response.json(
+        {
+          success: false,
+          result: null,
+          errors: [{ code: 10000, message: "Authentication error" }],
+        },
+        { status: 403 },
+      );
+    const id = m[1];
+    if (id === undefined && method === "GET") {
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const per = Number(url.searchParams.get("per_page") ?? "25");
+      return ok([...access.values()].slice((page - 1) * per, page * per));
+    }
+    if (id === undefined && method === "POST") {
+      const app = stored(`app-${++accessIds}`, JSON.parse(body) as Record<string, unknown>);
+      access.set(app.id, app);
+      return ok(app);
+    }
+    if (id === undefined || !access.has(id)) return new Response(null, { status: 404 });
+    if (method === "PUT") {
+      const app = stored(id, JSON.parse(body) as Record<string, unknown>);
+      access.set(id, app);
+      return ok(app);
+    }
+    if (method === "DELETE") {
+      access.delete(id);
+      return ok({ id });
+    }
+    return new Response(null, { status: 405 });
+  };
+
+  /**
+   * Access in front of the dispatcher's hostname: once an application covers the hostname, a request with no Access
+   * session is sent to the team's login unless a bypass application covers its path.
+   */
+  const behindAccess = (host: string, path: string): boolean => {
+    const apps = [...access.values()].filter((a) => onHostname(host, a["domain"] as string));
+    if (!apps.some((a) => a["domain"] === host)) return false;
+    return !apps.some(
+      (a) =>
+        a["domain"] !== host &&
+        pathMatches((a["domain"] as string).slice(host.length), path) &&
+        arr(a["policies"]).some((p) => p["decision"] === "bypass"),
+    );
+  };
+  if (opts.access !== "none")
+    for (const app of committedAccess(placeholderOverlay)!.applications) {
+      const id = `app-${++accessIds}`;
+      access.set(id, stored(id, JSON.parse(JSON.stringify(app)) as Record<string, unknown>));
+    }
 
   const secretBindings = (script: string) =>
     [...(secrets.get(script) ?? new Map<string, string>())].map(([name, text]) => ({
@@ -179,6 +264,8 @@ export const world = () => {
       const stored = objects.get(objectKey);
       return stored === undefined ? new Response(null, { status: 404 }) : new Response(stored);
     }
+    const accessAnswer = accessApi(method, url, path, body);
+    if (accessAnswer !== null) return accessAnswer;
     if (method !== "GET") return new Response(null, { status: 405 });
     if (path === "/containers/applications")
       return ok([...scripts.values()].flatMap((s) => s.containers));
@@ -233,7 +320,13 @@ export const world = () => {
       alarms.push(JSON.parse(body) as Record<string, unknown>);
       return new Response(null, { status: 204 });
     }
-    if (url.host === "dispatch.example.com") return new Response("ok", { status: state.health });
+    if (url.host === "dispatch.example.com")
+      return behindAccess(url.host, url.pathname)
+        ? new Response(null, {
+            status: 302,
+            headers: { location: "https://example.cloudflareaccess.com/cdn-cgi/access/login" },
+          })
+        : new Response("ok", { status: state.health });
     if (url.host === "docs.example.com") return new Response("ok");
     return new Response(null, { status: 599 });
   }) as unknown as typeof fetch;
@@ -244,12 +337,14 @@ export const world = () => {
       scripts: [...scripts],
       secrets: [...secrets].map(([k, v]) => [k, [...v]]),
       objects: [...objects],
+      access: [...access],
     });
 
   return {
     calls,
     scripts,
     objects,
+    access,
     files,
     runs,
     alarms,

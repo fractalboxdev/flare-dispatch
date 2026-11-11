@@ -29,6 +29,7 @@ import {
   type OverlayValues,
 } from "../../src/index.ts";
 import { makeOperability, repositoryRoot, V2_WORKERS } from "../../src/cli/index.ts";
+import { accessStore } from "../../src/access-application.test-support.ts";
 
 const ROOT = repositoryRoot(import.meta.dirname);
 const SCRIPT = "packages/ops/scripts/fd-operability.ts";
@@ -226,6 +227,7 @@ const deployedBy = async (overlay: string) => {
       floorCanary: () => Effect.succeed({ status: "passed" as const, digest: "sha256:0" }),
       writeRecord: () => Effect.void,
       raiseAlarm: () => Effect.void,
+      ...accessStore(),
     });
   const report = await Effect.runPromise(
     makeOperability({

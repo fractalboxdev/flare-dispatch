@@ -31,6 +31,10 @@ export const HEAD = "1".repeat(40);
 export const WEBHOOK_SECRET = "e2e-webhook-secret";
 export const OIDC_AUDIENCE = "e2e-control-plane";
 export const PLANE_ID = "e2e-plane";
+/** The link key log and artifact link tokens are signed under (FD-IFC-018). */
+export const LINK_KEY = "e2e-link-key";
+/** The secret compile-cache tokens derive from (FD-CACHE-057). */
+export const COMPILE_CACHE_SECRET = "e2e-compile-cache-secret";
 
 const MANIFEST = {
   version: 1,
@@ -208,6 +212,8 @@ export const startStack = async (): Promise<Stack> => {
       FD_DEV_REPOSITORY: JSON.stringify(DEV_REPOSITORY),
       WEBHOOK_SECRET,
       CACHE_TOKEN_SECRET: "e2e-cache-token-secret",
+      COMPILE_CACHE_SECRET,
+      LINK_KEY,
       // The template renders neither; the overlay holds both (`dispatchers`, `dispatch.oidcAudience`).
       DISPATCHERS: JSON.stringify(overlay.dispatchers ?? []),
       DISPATCH_OIDC_AUDIENCE: overlay.dispatch?.oidcAudience ?? "",

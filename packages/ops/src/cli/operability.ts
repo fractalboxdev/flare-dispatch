@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Layer } from "effect";
+import { committedAccess, type AccessChanges } from "../access-application.ts";
 import { APP_PERMISSIONS } from "../app-manifest.ts";
 import { architectureFindings } from "../architecture.ts";
 import {
@@ -75,6 +76,16 @@ export const V2_WORKERS: readonly WorkerSpec[] = [
   },
   { worker: "docs", templatePath: "apps/docs/wrangler.jsonc", hostKey: "docs", probePath: "/" },
 ];
+
+/** One line per Access application a deploy created, replaced or removed. */
+const accessLines = (changes: AccessChanges | null): readonly string[] =>
+  changes === null
+    ? []
+    : [
+        ...changes.create.map((a) => `access created ${a.domain}`),
+        ...changes.update.map((u) => `access replaced ${u.application.domain}`),
+        ...changes.remove.map((r) => `access removed ${r.domain}`),
+      ];
 
 /** What the service runs with; every field has the live default. */
 export interface OperabilityOptions<E> {
@@ -186,6 +197,8 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
       // An overlay that does not decode reaches the pipeline's own decode stage, which reports it.
       Effect.orElseSucceed(() => Layer.succeed(DeployTarget, {} as never)),
     );
+  // The Access applications sit on the dispatcher's hostname: only a deploy that carries the dispatcher applies them.
+  const access = specs.some((s) => s.dispatcher === true) ? committedAccess : undefined;
   const report =
     <A>(run: Effect.Effect<A, DeployFailed, DeployTarget>, done: (a: A) => OperabilityReport) =>
     (overlayText: string) =>
@@ -205,7 +218,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
 
   const doctor = (overlay: string) =>
     report(
-      fdDoctor(overlay, workers(), APP_PERMISSIONS, renderedChecks(specs), profileFindings),
+      fdDoctor(overlay, workers(), APP_PERMISSIONS, renderedChecks(specs), profileFindings, access),
       (findings) => {
         const problems = findings.map((f) => `${f.severity} ${f.path}: ${f.detail}`).join("\n");
         const ok = !failed(findings);
@@ -231,6 +244,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
               APP_PERMISSIONS,
               renderedChecks(specs),
               profileFindings,
+              access,
             ),
             (r) => ({
               ok: true,
@@ -240,7 +254,10 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
                 details: {
                   drift: r.warnings.map((w) => `warning ${w.path}: ${w.detail}`).join("\n"),
                   migrations: r.migrations.join(", "),
-                  deploy: r.deployed.map((d) => `${d.worker} ${d.version}`).join("\n"),
+                  deploy: [
+                    ...r.deployed.map((d) => `${d.worker} ${d.version}`),
+                    ...accessLines(r.access),
+                  ].join("\n"),
                   probes: r.canary === null ? "" : `floor canary ${r.canary.status}`,
                 },
               }),
