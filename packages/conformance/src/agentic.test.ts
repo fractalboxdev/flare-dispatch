@@ -6,7 +6,8 @@
 // The fake executor reports each intent a run appends, and the `prProposePayload` binding's row for a `success` result
 // with a staged write, as a staged intent at the lease's epoch. mameko at the pinned commit records neither from an
 // `exec.result`, so the executor writes them to `staged_intents` directly; from there `applyOutbox` and the drainer
-// are mameko's.
+// are mameko's. The outbox scenario stands in for that staging, so it covers only the half after it — the epoch filter
+// and the agentic routing — and cites no requirement id.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
@@ -428,7 +429,7 @@ const outboxRows = (db: D1Like) =>
   }>(db, "select execution_id, intent_key, kind, state, payload_json from outbox order by id");
 
 describe("an agentic recipe's repository writes on the composed control plane", () => {
-  it("[FD-AGT-009] reach GitHub only as outbox rows of the accepted epoch, pr.propose and pr.close through the agentic appliers", async () => {
+  it("reach GitHub only as outbox rows of the accepted epoch, pr.propose and pr.close through the agentic appliers", async () => {
     const plane = await freshPlane();
     const drifted = await checkout();
     const inSync = await checkout();
