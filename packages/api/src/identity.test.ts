@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { Context } from "effect";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   accessClaims,
   actionsClaims,
@@ -9,12 +10,18 @@ import {
   MEMBER,
   now,
   OPERATOR,
+  ORIGIN,
+  portsContext,
   type Harness,
 } from "./api.test-support.ts";
-import { apiConfigFromEnv, ConfigInvalid, distinctLinkKey } from "./config.ts";
+import { ApiConfig, apiConfigFromEnv, ConfigInvalid, distinctLinkKey } from "./config.ts";
 import { constantTimeEqual } from "./crypto.ts";
+import { declaredGroups } from "./groups.ts";
 import { signBody, verifyBody } from "./hmac.ts";
+import { ACTIONS_JWKS } from "./identity.ts";
+import { JWKS_TTL_MS, JwksSourceLive } from "./jwt.ts";
 import { checkLinkToken, LINK_LABELS, mintLinkToken } from "./link-token.ts";
+import { mount, toFetchHandler } from "./router.ts";
 
 let h: Harness;
 beforeAll(async () => {
@@ -197,6 +204,62 @@ describe("dispatch identity", () => {
     );
     expect(response.status).toBe(403);
     expect((await body(response))["error"]).toBe("repository_mismatch");
+  });
+
+  it("[FD-INT-035]: a bearer from another issuer, for another audience, past its expiry or with a forged signature answers 401", async () => {
+    const forger = await makeSigner("actions-kid");
+    const cases = [
+      await h.actions.sign(actionsClaims("acme/widgets", { iss: "https://token.example.com" })),
+      await h.actions.sign(actionsClaims("acme/widgets", { aud: "https://other.example.com" })),
+      await h.actions.sign(actionsClaims("acme/widgets", { exp: now() - 61 })),
+      await h.actions.sign(actionsClaims("acme/widgets", { exp: undefined })),
+      await forger.sign(actionsClaims("acme/widgets")),
+    ];
+    const before = h.doubles.calls.submissions.length;
+    for (const jwt of cases) {
+      const response = await h.fetch(
+        "/v1/dispatch/check",
+        dispatchInit({ authorization: `Bearer ${jwt}` }),
+      );
+      expect(response.status).toBe(401);
+      expect((await body(response))["error"]).toBe("unauthenticated");
+    }
+    expect(h.doubles.calls.submissions.length).toBe(before);
+  });
+
+  it("[FD-INT-035]: the live JWKS source fetches GitHub's keys once per hour, and again once the hour has passed", async () => {
+    const started = Date.parse("2026-01-01T00:00:00Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(started);
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (input: Request | string | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      fetched.push(url);
+      return Response.json({ keys: [h.actions.jwk] });
+    });
+    try {
+      const handler = toFetchHandler(mount(...declaredGroups), { shared: JwksSourceLive });
+      const dispatch = async () => {
+        const jwt = await h.actions.sign(actionsClaims("acme/widgets"));
+        const services = portsContext(h.doubles).pipe(Context.add(ApiConfig, baseConfig()));
+        const request = new Request(
+          `${ORIGIN}/v1/dispatch/check`,
+          dispatchInit({ authorization: `Bearer ${jwt}` }),
+        );
+        return (await handler.fetch(request, services as never)).status;
+      };
+      expect(await dispatch()).toBe(202);
+      vi.setSystemTime(started + JWKS_TTL_MS - 1_000);
+      expect(await dispatch()).toBe(202);
+      expect(fetched).toEqual([ACTIONS_JWKS]);
+      vi.setSystemTime(started + JWKS_TTL_MS + 1_000);
+      expect(await dispatch()).toBe(202);
+      expect(fetched).toEqual([ACTIONS_JWKS, ACTIONS_JWKS]);
+      await handler.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 
   it("[FD-IFC-024]: with no OIDC audience configured an Actions dispatch answers 503 not_configured", async () => {

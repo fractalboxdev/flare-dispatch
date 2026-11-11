@@ -1,6 +1,6 @@
 // RS256 JWT verification against a JWKS, shared by the Access gate and the Actions OIDC check. Verification is pure:
 // the keys and the time come from the caller, so a test signs real tokens with a throwaway key pair.
-import { Context, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { base64urlDecode, utf8 } from "./crypto.ts";
 
 /** One RSA verifying key of a JWKS. */
@@ -120,27 +120,41 @@ export class JwksSource extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-api/JwksSource") {}
 
-const JWKS_TTL_S = 3_600;
+/** How long a fetched JWKS answers before the next read fetches it again (FD-INT-035). */
+export const JWKS_TTL_MS = 3_600_000;
 const REVALIDATE_COOLDOWN_MS = 30_000;
 
-/** Fetches each JWKS through the edge cache with a one-hour TTL; a fresh read happens at most once per 30 s. */
+const fetchJwks = (url: string): Effect.Effect<readonly Jwk[], JwksUnavailable> =>
+  Effect.tryPromise({
+    try: async () => {
+      // `cache` is in the Workers runtime from compatibility date 2024-11-11; older workers-types omit it.
+      const response = await fetch(url, { cache: "no-store" } as RequestInit);
+      if (!response.ok) throw new Error(`${response.status}`);
+      const body = (await response.json()) as { readonly keys?: readonly Jwk[] };
+      return Array.isArray(body.keys) ? body.keys : [];
+    },
+    catch: () => new JwksUnavailable({ url }),
+  });
+
+/**
+ * Keeps each URL's JWKS in memory for at most one hour from its fetch, and fetches with `no-store` so no second cache
+ * ages the keys further. A fresh read bypasses the memory at most once per 30 s and replaces the entry.
+ */
 export const JwksSourceLive = Layer.sync(JwksSource, () => {
-  let lastFreshMs = 0;
+  const cache = new Map<string, { readonly keys: readonly Jwk[]; readonly fetchedAtMs: number }>();
+  let lastFreshMs = Number.NEGATIVE_INFINITY;
   return JwksSource.of({
     keys: (url, { fresh }) =>
-      Effect.tryPromise({
-        try: async () => {
-          const now = Date.now();
-          const bypass = fresh && now - lastFreshMs > REVALIDATE_COOLDOWN_MS;
-          if (bypass) lastFreshMs = now;
-          const response = await fetch(url, {
-            cf: { cacheTtl: bypass ? 0 : JWKS_TTL_S, cacheEverything: true },
-          } as RequestInit);
-          if (!response.ok) throw new Error(`${response.status}`);
-          const body = (await response.json()) as { readonly keys?: readonly Jwk[] };
-          return Array.isArray(body.keys) ? body.keys : [];
-        },
-        catch: () => new JwksUnavailable({ url }),
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const bypass = fresh && now - lastFreshMs > REVALIDATE_COOLDOWN_MS;
+        if (bypass) lastFreshMs = now;
+        const entry = cache.get(url);
+        if (!bypass && entry !== undefined && now - entry.fetchedAtMs < JWKS_TTL_MS)
+          return entry.keys;
+        const keys = yield* fetchJwks(url);
+        cache.set(url, { keys, fetchedAtMs: now });
+        return keys;
       }),
   });
 });
