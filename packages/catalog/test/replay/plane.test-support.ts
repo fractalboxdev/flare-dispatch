@@ -16,8 +16,8 @@ import {
   type D1Statement,
 } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { d1ExecutionSteps } from "@fractalboxdev/mameko-host-cloudflare/d1-execution";
-import type { KeyedIntent } from "@fractalboxdev/mameko-run";
-import { Effect } from "effect";
+import type { KeyedIntent, RunResult } from "@fractalboxdev/mameko-run";
+import { Effect, Match } from "effect";
 
 const statement = (
   db: DatabaseSync,
@@ -120,13 +120,13 @@ export const leasedPlane = async (executionId: string, run: string, scope: strin
 };
 
 /** The engine's outcome for a run result at the plane's epoch. */
-export const outcomeOf = (result: {
-  readonly _tag: string;
-  readonly reason?: string;
-}): ExecutionOutcome =>
-  result._tag === "success"
-    ? { _tag: "Success", epoch: EPOCH }
-    : { _tag: "Failure", reason: result.reason ?? "", epoch: EPOCH };
+export const outcomeOf = (result: RunResult): ExecutionOutcome =>
+  Match.valueTags(result, {
+    success: (): ExecutionOutcome => ({ _tag: "Success", epoch: EPOCH }),
+    failure: ({ reason }): ExecutionOutcome => ({ _tag: "Failure", reason, epoch: EPOCH }),
+    cancelled: ({ cause }): ExecutionOutcome => ({ _tag: "Cancelled", cause }),
+    skipped: ({ detail }): ExecutionOutcome => ({ _tag: "Skipped", detail, epoch: EPOCH }),
+  });
 
 /** The lease's run payload for a catalogue run's workflow. */
 export const runPayload = <I>(executionId: string, run: string, scope: string, input: I) => ({
