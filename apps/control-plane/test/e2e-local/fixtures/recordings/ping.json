@@ -1,0 +1,17 @@
+{
+  "zen": "Keep it logically awesome.",
+  "hook_id": 500000001,
+  "hook": {
+    "type": "App",
+    "id": 500000001,
+    "name": "web",
+    "active": true,
+    "events": ["pull_request", "push", "merge_group", "check_run", "check_suite"],
+    "config": {
+      "content_type": "json",
+      "insecure_ssl": "0",
+      "url": "https://dispatch.example.com/v1/webhooks/github"
+    },
+    "app_id": 1000001
+  }
+}
