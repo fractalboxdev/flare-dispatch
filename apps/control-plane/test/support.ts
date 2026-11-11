@@ -113,9 +113,15 @@ export const connect = async (
   const ws = response.webSocket;
   if (ws === null || ws === undefined) throw new Error(`no socket: ${response.status}`);
   const frames: Record<string, unknown>[] = [];
+  /** Every frame the control plane sent this socket, as received, including those `next` has taken. */
+  const received: string[] = [];
   ws.accept();
-  ws.addEventListener("message", (e) => void frames.push(JSON.parse(String(e.data))));
+  ws.addEventListener("message", (e) => {
+    received.push(String(e.data));
+    frames.push(JSON.parse(String(e.data)));
+  });
   return {
+    received: received as readonly string[],
     send: (m: unknown) => ws.send(JSON.stringify(m)),
     next: async (type: string) => {
       for (let i = 0; i < 1000; i++) {
