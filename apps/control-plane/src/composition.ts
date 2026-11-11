@@ -272,16 +272,20 @@ const servicesLayer = (env: ControlPlaneEnv) => {
     // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.
     const support = Layer.mergeAll(gitData, writebackRecords(env)).pipe(Layer.provideMerge(github));
     const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
-    const services = Layer.mergeAll(
-      profileClassResolver.pipe(
-        Layer.provideMerge(intakeLayer({ db: env.DB, settings, ...admissionPorts(env, alarms) })),
+    // The local registration port submits through intake, so it sits over intake's services.
+    const services = localPorts(env).pipe(
+      Layer.provideMerge(
+        profileClassResolver.pipe(
+          Layer.provideMerge(intakeLayer({ db: env.DB, settings, ...admissionPorts(env, alarms) })),
+        ),
       ),
-      localPorts(env),
-    ).pipe(Layer.provideMerge(applier), Layer.provideMerge(common));
+      Layer.provideMerge(applier),
+      Layer.provideMerge(common),
+    );
     // The follow-on wrapper wins the `Actuators` tag over the agentic appliers underneath.
     return followOnActuators.pipe(Layer.provideMerge(services));
   }
-  return Layer.mergeAll(
+  const intake = Layer.mergeAll(
     Layer.succeed(IntakeConfig, settings),
     d1Admission(env.DB, settings.profile, admissionPorts(env, alarms)),
     d1IntakeStore(env.DB),
@@ -294,8 +298,9 @@ const servicesLayer = (env: ControlPlaneEnv) => {
       Layer.provideMerge(protectionSnapshotsLayer),
       Layer.provide(Layer.succeed(IntakeConfig, settings)),
     ),
-    localPorts(env),
-  ).pipe(
+  );
+  return localPorts(env).pipe(
+    Layer.provideMerge(intake),
     Layer.provideMerge(Layer.merge(readsWithoutApp(env), gitDataWithoutApp)),
     Layer.provideMerge(common),
   );

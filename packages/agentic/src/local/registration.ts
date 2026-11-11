@@ -1,7 +1,8 @@
-// FlareDispatch's local registration port: what a rehearsal registers, and the execution id and nonce it receives
-// (specs/local-scheduler.md § Rehearsal and registration, MAMEKO-PROTO-082, MAMEKO-LOCAL-069).
+// FlareDispatch's local registration port: what a rehearsal registers, the local submit through intake that admits
+// it, and the execution id and nonce it receives (specs/local-scheduler.md § Rehearsal and registration,
+// MAMEKO-PROTO-082, MAMEKO-LOCAL-069, FD-INT-061).
 import { LocalRegistration } from "@fractalboxdev/mameko-ports";
-import { Clock, Effect, Exit, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Exit, Layer, Schema } from "effect";
 import { LocalStore, Provenance } from "./store.ts";
 
 /** What the local scheduler asks of a registration: reuse, writeback, or both. */
@@ -14,70 +15,92 @@ export interface RegistrationWants {
 export const needsRegistration = (wants: RegistrationWants): boolean =>
   wants.reuse || wants.writeback;
 
-/** The registration payload `local.register` carries beside its provenance fields. */
+/**
+ * The registration payload `local.register` carries beside its provenance fields: the ref the rehearsal tested and
+ * the run inputs whose digest is `inputsDigest`, which intake decodes against the run.
+ */
 export const RegistrationPayload = Schema.Struct({
   ...Provenance.fields,
   reuseKey: Schema.NonEmptyString,
   scopeId: Schema.NonEmptyString,
   executorId: Schema.NonEmptyString,
   repository: Schema.String.check(Schema.isPattern(/^[\w.-]+\/[\w.-]+$/)),
+  ref: Schema.NonEmptyString,
+  inputs: Schema.Unknown,
   environmentNames: Schema.Array(Schema.String),
   wants: Schema.Struct({ reuse: Schema.Boolean, writeback: Schema.Boolean }),
 });
 export type RegistrationPayload = typeof RegistrationPayload.Type;
 
-const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/** What a registration submits through intake as one admission request of trigger kind `local`. */
+export interface LocalSubmission {
+  readonly repository: string;
+  readonly baseCommit: string;
+  readonly ref: string;
+  readonly treeHash: string;
+  readonly inputsDigest: string;
+  readonly inputs: unknown;
+}
 
-/** A ULID of 26 Crockford base32 characters: 48 bits of milliseconds, then 80 random bits (MAMEKO-ADM-032). */
-export const ulid = (
-  now: number,
-  random: Uint8Array = crypto.getRandomValues(new Uint8Array(10)),
-): string => {
-  let time = "";
-  let t = now;
-  for (let i = 0; i < 10; i++) {
-    time = (CROCKFORD[t % 32] as string) + time;
-    t = Math.floor(t / 32);
+/** Intake's answer to a local submit: the admitted execution, or a refusal that admitted nothing. */
+export type LocalSubmitAnswer =
+  | { readonly _tag: "admitted"; readonly executionId: string }
+  | { readonly _tag: "rejected" };
+
+/**
+ * The local submit through intake: trigger kind `local`, class `batch` and the `local-only` placement constraint, so
+ * the control plane posts no GitHub check and admits no cloud spend for it (FD-INT-061). A run outside the catalogue,
+ * inputs the run rejects and a refusal by admission answer `rejected`.
+ */
+export class LocalSubmit extends Context.Service<
+  LocalSubmit,
+  {
+    readonly submit: (
+      lease: { readonly leaseId: string; readonly epoch: number },
+      run: string,
+      submission: LocalSubmission,
+    ) => Effect.Effect<LocalSubmitAnswer>;
   }
-  let bits = 0n;
-  for (const b of random) bits = (bits << 8n) | BigInt(b);
-  let rand = "";
-  for (let i = 0; i < 16; i++) {
-    rand = (CROCKFORD[Number(bits & 31n)] as string) + rand;
-    bits >>= 5n;
-  }
-  return time + rand;
-};
+>()("@fractalboxdev/flare-dispatch-agentic/LocalSubmit") {}
 
 const hex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-
-export interface RegistrationConfig {
-  /** Whether the run is in the catalogue the control plane serves. */
-  readonly runKnown: (run: string) => boolean;
-}
 
 const decodeRegistration = Schema.decodeUnknownExit(RegistrationPayload);
 
 /**
- * Registers one rehearsal: records its environment names beside the tree hash, base commit, run-definition digest,
- * image digest, platform and inputs digest (FD-LOCAL-072), and issues a ULID execution id and a 256-bit nonce. A
- * registration that requests neither reuse nor writeback, names a run outside the catalogue or fails to decode is
- * rejected, so the execution runs unregistered (MAMEKO-LOCAL-070).
+ * Registers one rehearsal: submits it through intake, records its environment names beside the tree hash, base
+ * commit, run-definition digest, image digest, platform and inputs digest under the admitted execution id
+ * (FD-LOCAL-072), and issues a 256-bit nonce. A registration that requests neither reuse nor writeback, fails to
+ * decode or that intake refuses is rejected, so the execution runs unregistered (MAMEKO-LOCAL-070). A repeated
+ * registration that intake deduplicates to an execution this lease already registered receives that record's nonce.
  */
 export const registerRehearsal = (
-  config: RegistrationConfig,
   lease: { readonly leaseId: string; readonly epoch: number },
   run: string,
   registration: unknown,
 ) =>
   Effect.gen(function* () {
     const decoded = decodeRegistration(registration);
-    if (Exit.isFailure(decoded) || !needsRegistration(decoded.value.wants) || !config.runKnown(run))
+    if (Exit.isFailure(decoded) || !needsRegistration(decoded.value.wants))
       return { _tag: "rejected" } as const;
     const r = decoded.value;
+    const submitted = yield* (yield* LocalSubmit).submit(lease, run, {
+      repository: r.repository,
+      baseCommit: r.baseCommit,
+      ref: r.ref,
+      treeHash: r.treeHash,
+      inputsDigest: r.inputsDigest,
+      inputs: r.inputs,
+    });
+    if (submitted._tag === "rejected") return { _tag: "rejected" } as const;
+    const { executionId } = submitted;
     const store = yield* LocalStore;
+    const prior = yield* store.byExecution(executionId);
+    if (prior !== null)
+      return prior.leaseId === lease.leaseId
+        ? ({ _tag: "accepted", executionId, nonce: prior.nonce } as const)
+        : ({ _tag: "rejected" } as const);
     const now = yield* Clock.currentTimeMillis;
-    const executionId = ulid(now);
     const nonce = hex(crypto.getRandomValues(new Uint8Array(32)));
     yield* store.insert({
       executionId,
@@ -108,24 +131,23 @@ export const registerRehearsal = (
   });
 
 /**
- * The `LocalRegistration` port Layer. A store failure rejects the registration, so the rehearsal runs unregistered
- * and advisory rather than being reused on a record that was never written.
+ * The `LocalRegistration` port Layer, the one the control plane mounts. A store failure rejects the registration, so
+ * the rehearsal runs unregistered and advisory rather than being reused on a record that was never written.
  */
-export const localRegistrationLayer = (
-  config: RegistrationConfig,
-): Layer.Layer<LocalRegistration, never, LocalStore> =>
-  Layer.effect(
-    LocalRegistration,
-    Effect.gen(function* () {
-      const store = yield* LocalStore;
-      return {
-        register: (lease, run, registration) =>
-          registerRehearsal(config, lease, run, registration).pipe(
-            Effect.provideService(LocalStore, store),
-            Effect.catchTag("LocalStoreFailed", () =>
-              Effect.succeed({ _tag: "rejected" } as const),
-            ),
-          ),
-      };
-    }),
-  );
+export const localRegistrationLayer: Layer.Layer<
+  LocalRegistration,
+  never,
+  LocalStore | LocalSubmit
+> = Layer.effect(
+  LocalRegistration,
+  Effect.gen(function* () {
+    const context = yield* Effect.context<LocalStore | LocalSubmit>();
+    return {
+      register: (lease, run, registration) =>
+        registerRehearsal(lease, run, registration).pipe(
+          Effect.provide(context),
+          Effect.catchTag("LocalStoreFailed", () => Effect.succeed({ _tag: "rejected" } as const)),
+        ),
+    };
+  }),
+);

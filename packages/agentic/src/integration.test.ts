@@ -8,6 +8,7 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { localPortsLayer } from "./integration.ts";
 import { memoryD1 } from "./local/d1.test-support.ts";
+import { LocalSubmit } from "./local/registration.ts";
 import { ReuseInputs } from "./local/reuse.ts";
 import { localStoreD1, LocalStore } from "./local/store.ts";
 import { CapacityUsage } from "./local/writeback-gate.ts";
@@ -33,10 +34,16 @@ describe("local ports as the control plane mounts them", () => {
         issuedCredentials: () => Effect.succeed([]),
       }),
       Layer.succeed(CapacityUsage, { modelCalls: () => Effect.succeed(false) }),
+      Layer.succeed(LocalSubmit, {
+        submit: (_lease, run) =>
+          Effect.succeed(
+            run === "pr-review"
+              ? ({ _tag: "admitted", executionId: "01EXECLOCAL" } as const)
+              : ({ _tag: "rejected" } as const),
+          ),
+      }),
     );
-    const ports = localPortsLayer({ db, runKnown: (r) => r === "pr-review" }).pipe(
-      Layer.provide(inputs),
-    );
+    const ports = localPortsLayer({ db }).pipe(Layer.provide(inputs));
     const provenance = {
       treeHash: "t",
       baseCommit: "b".repeat(40),
@@ -54,6 +61,8 @@ describe("local ports as the control plane mounts them", () => {
           scopeId: "scope",
           executorId: "dev-1",
           repository: "o/r",
+          ref: "refs/heads/feature",
+          inputs: {},
           environmentNames: [],
           wants: { reuse: true, writeback: true },
         });
