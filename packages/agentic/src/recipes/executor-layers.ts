@@ -250,8 +250,6 @@ export interface CloudAgenticConfig {
   readonly modelGatewayUrl: string;
   /** The control plane's origin, whose executions and log routes `ExecutionsRead` reads through the egress proxy. */
   readonly controlPlaneUrl: string;
-  /** The GitHub REST API origin `IssuesRead` reads through the egress proxy; `https://api.github.com` when absent. */
-  readonly githubApiBase?: string;
   /** The job's `fetch`, whose requests leave through the egress proxy. */
   readonly fetch: typeof globalThis.fetch;
   /** The execution's artifact store under the lease's artifact prefix. */
@@ -302,7 +300,7 @@ export const cloudAgenticLayers = (
     runnerIntentsLayer,
     executionsApiReadLayer({ baseUrl: config.controlPlaneUrl, fetch: config.fetch }),
     githubIssuesReadLayer({
-      apiBase: config.githubApiBase ?? "https://api.github.com",
+      apiBase: "https://api.github.com",
       fetch: config.fetch,
     }),
     config.suppressionLedger,

@@ -32,8 +32,12 @@ export type TriageVerdict = (typeof TRIAGE_VERDICTS)[number];
 
 /** The other open issues one classification may name as the original (FD-AGT-074). */
 export const DUPLICATE_CANDIDATE_LIMIT = 40;
-/** Open issues read per execution: at most two intents each stay inside mameko's 256 (MAMEKO-RUN-071). */
+/** Issues classified per execution: at most two intents each stay inside mameko's 256 (MAMEKO-RUN-071). */
 export const MAX_OPEN_ISSUES = 100;
+/** Issues per page of the open-issue read. */
+export const ISSUES_PAGE_SIZE = 100;
+/** Pages the open-issue read takes at most, so one execution reads at most 1000 open issues. */
+export const MAX_ISSUE_PAGES = 10;
 /** Issue body characters a classification reads. */
 export const BODY_MAX_CHARS = 4000;
 /** Repro characters an intent carries. */
@@ -56,7 +60,15 @@ export interface OpenIssue {
   readonly author: string;
   /** GitHub's `author_association` of the reporter. */
   readonly authorAssociation: string;
+  /** The names of the labels the issue carries. */
+  readonly labels: readonly string[];
+  /** GitHub's `state_reason`: `reopened` once a maintainer reopens the issue, otherwise null. */
+  readonly stateReason: string | null;
 }
+
+/** Whether the issue carries a label this recipe writes, which marks it as triaged on an earlier execution. */
+export const isTriaged = (issue: OpenIssue) =>
+  issue.labels.some((l) => (Object.values(TRIAGE_LABELS) as readonly string[]).includes(l));
 
 /** The repository's open issues, pull requests excluded. A failed read fails the run; it is never an empty list. */
 export class IssuesRead extends Context.Service<
@@ -71,52 +83,65 @@ const IssuesPage = Schema.Array(
     body: Schema.NullOr(Schema.String),
     user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
     author_association: Schema.String,
+    labels: Schema.Array(Schema.Union([Schema.String, Schema.Struct({ name: Schema.String })])),
+    state_reason: Schema.optionalKey(Schema.NullOr(Schema.String)),
     pull_request: Schema.optionalKey(Schema.Unknown),
   }),
 );
 const decodeIssuesPage = Schema.decodeUnknownSync(IssuesPage);
 
 export interface GithubIssuesReadConfig {
-  /** `https://api.github.com` unless the deployment names an Enterprise host. */
+  /** The REST API root, `https://api.github.com` or an Enterprise host's `https://HOST/api/v3`. */
   readonly apiBase: string;
   /** The job's `fetch`; the egress proxy attaches any credential, so the Layer sends none of its own. */
   readonly fetch: typeof globalThis.fetch;
 }
 
 /**
- * `IssuesRead` over GitHub's REST API: the 100 most recently updated open issues of the repository. A request that
- * fails, an answer other than 200 and a page outside the shape each fail the read.
+ * `IssuesRead` over GitHub's REST API: the repository's open issues, newest first, read page by page until a short page
+ * or `MAX_ISSUE_PAGES` pages. A request that fails, an answer other than 200 and a page outside the shape each fail the
+ * read.
  */
 export const githubIssuesReadLayer = (config: GithubIssuesReadConfig): Layer.Layer<IssuesRead> =>
   Layer.succeed(IssuesRead, {
     openIssues: (repository) =>
       Effect.tryPromise({
         try: async () => {
-          const url = new URL(`/repos/${repository}/issues`, config.apiBase);
-          for (const [k, v] of Object.entries({
-            state: "open",
-            sort: "updated",
-            direction: "desc",
-            per_page: String(MAX_OPEN_ISSUES),
-          }))
-            url.searchParams.set(k, v);
-          const response = await config.fetch(url.toString(), {
-            headers: {
-              accept: "application/vnd.github+json",
-              "x-github-api-version": "2022-11-28",
-            },
-          });
-          if (response.status !== 200)
-            throw new Error(`GET ${url.pathname} answered ${response.status}`);
-          return decodeIssuesPage(await response.json())
-            .filter((i) => i.pull_request === undefined)
-            .map((i): OpenIssue => ({
-              number: i.number,
-              title: i.title,
-              body: i.body ?? "",
-              author: i.user?.login ?? "ghost",
-              authorAssociation: i.author_association,
-            }));
+          const path = `/repos/${repository}/issues`;
+          const issues: OpenIssue[] = [];
+          for (let page = 1; page <= MAX_ISSUE_PAGES; page++) {
+            const query = new URLSearchParams({
+              state: "open",
+              sort: "created",
+              direction: "desc",
+              per_page: String(ISSUES_PAGE_SIZE),
+              page: String(page),
+            });
+            const response = await config.fetch(
+              `${config.apiBase.replace(/\/+$/, "")}${path}?${query}`,
+              {
+                headers: {
+                  accept: "application/vnd.github+json",
+                  "x-github-api-version": "2022-11-28",
+                },
+              },
+            );
+            if (response.status !== 200) throw new Error(`GET ${path} answered ${response.status}`);
+            const items = decodeIssuesPage(await response.json());
+            for (const i of items)
+              if (i.pull_request === undefined)
+                issues.push({
+                  number: i.number,
+                  title: i.title,
+                  body: i.body ?? "",
+                  author: i.user?.login ?? "ghost",
+                  authorAssociation: i.author_association,
+                  labels: i.labels.map((l) => (typeof l === "string" ? l : l.name)),
+                  stateReason: i.state_reason ?? null,
+                });
+            if (items.length < ISSUES_PAGE_SIZE) break;
+          }
+          return issues;
         },
         catch: (cause) => new ReadFailed({ source: "issues", detail: String(cause).slice(0, 200) }),
       }),
@@ -153,14 +178,23 @@ export const parseClassification = (
     : { verdict: "unclassified" };
 };
 
-/** A shell-tagged or untagged fenced block, the first one only. */
-const COMMAND_FENCE = /```(?:sh|bash|zsh|shell|console)?[ \t]*\n([\s\S]*?)```/;
+/** A fenced block whose fences each open a line: its info string's first word, then its content. */
+const FENCED_BLOCK = /^```([\w-]*)[^\n]*\n([\s\S]*?)^```/gm;
+/** The info strings of a command-shaped block; the empty string is an untagged block. */
+const COMMAND_INFO = new Set(["", "sh", "bash", "zsh", "shell", "console"]);
 
-/** The first command-shaped fenced block of the issue body, quoted verbatim and never run; null when there is none. */
+/**
+ * The first command-shaped fenced block of the issue body, untagged or shell-tagged, quoted verbatim and never run;
+ * null when there is none. Blocks are walked in order, so the closing fence of another language's block never opens one.
+ */
 export const commandRepro = (body: string): string | null => {
-  const command = COMMAND_FENCE.exec(body)?.[1]?.trim();
-  if (command === undefined || command === "") return null;
-  return command.length > REPRO_MAX_CHARS ? `${command.slice(0, REPRO_MAX_CHARS)}…` : command;
+  for (const [, info, content] of body.matchAll(FENCED_BLOCK)) {
+    if (!COMMAND_INFO.has(info ?? "")) continue;
+    const command = content?.trim() ?? "";
+    if (command === "") return null;
+    return command.length > REPRO_MAX_CHARS ? `${command.slice(0, REPRO_MAX_CHARS)}…` : command;
+  }
+  return null;
 };
 
 /** The comment posted on an issue closed as a duplicate. Its one value is the original's number. */
@@ -195,8 +229,9 @@ export interface TriageIntent {
 
 /**
  * The intents one classification earns (FD-AGT-075). Every comment is a template (FD-AGT-076), and the close is built
- * only on the `duplicate` branch (FD-AGT-077). A `bug-with-repro` whose body holds no command repro is labelled as a
- * bug without one, because the repro the label carries comes from the issue body, never from the model.
+ * only on the `duplicate` branch (FD-AGT-077); `resolveDuplicates` decides beforehand which duplicates keep that verdict.
+ * A `bug-with-repro` whose body holds no command repro is labelled as a bug without one, because the repro the label
+ * carries comes from the issue body, never from the model.
  */
 export const triageIntents = (
   repo: TriageIssuesInput["repo"],
@@ -292,20 +327,52 @@ const classify = (issue: OpenIssue, open: readonly OpenIssue[]) =>
     return parseClassification(text, new Set(candidates.map((c) => c.number)));
   });
 
+export interface Classified {
+  readonly issue: OpenIssue;
+  readonly c: Classification;
+}
+
 /**
- * The `triage-issues` body: one classification per open issue, then the intents of every classification. An issue
- * whose call fails is `unclassified`; when every call fails, the run concludes with that model failure.
+ * The classifications with each duplicate close the run may apply (FD-AGT-077); every other duplicate becomes
+ * `unclassified`, so it earns no comment and no close. A maintainer's reopen stands: an issue whose `state_reason` is
+ * `reopened` keeps no duplicate verdict. Within the run, duplicates are taken newest first, and one stands only when its
+ * original stays open and no standing close names the issue itself as its original, so no two closes point at each
+ * other and every closed duplicate names an issue that stays open.
+ */
+export const resolveDuplicates = (classified: readonly Classified[]): readonly Classified[] => {
+  const closed = new Set<number>();
+  const originals = new Set<number>();
+  const standing = new Set<number>();
+  const duplicates = classified
+    .filter((x) => x.c.verdict === "duplicate" && x.issue.stateReason !== "reopened")
+    .sort((a, b) => b.issue.number - a.issue.number);
+  for (const { issue, c } of duplicates) {
+    if (c.verdict !== "duplicate") continue;
+    if (closed.has(c.original) || originals.has(issue.number)) continue;
+    closed.add(issue.number);
+    originals.add(c.original);
+    standing.add(issue.number);
+  }
+  return classified.map((x) =>
+    x.c.verdict === "duplicate" && !standing.has(x.issue.number)
+      ? { issue: x.issue, c: { verdict: "unclassified" } }
+      : x,
+  );
+};
+
+/**
+ * The `triage-issues` body: one classification per open issue that carries no triage label, newest first and at most
+ * `MAX_OPEN_ISSUES` of them, then the intents of every classification. Labelled issues stay duplicate candidates. An
+ * issue whose call fails is `unclassified`; when every call fails, the run concludes with that model failure.
  */
 export const runTriageIssues = (input: TriageIssuesInput) =>
   Effect.gen(function* () {
     const read = yield* IssuesRead;
-    const open = (yield* read.openIssues(`${input.repo.owner}/${input.repo.name}`)).slice(
-      0,
-      MAX_OPEN_ISSUES,
-    );
+    const open = yield* read.openIssues(`${input.repo.owner}/${input.repo.name}`);
+    const untriaged = open.filter((i) => !isTriaged(i)).slice(0, MAX_OPEN_ISSUES);
     const failures: ModelCallError[] = [];
-    const classified: { issue: OpenIssue; c: Classification }[] = [];
-    for (const issue of open) {
+    const classified: Classified[] = [];
+    for (const issue of untriaged) {
       const c = yield* classify(issue, open).pipe(
         Effect.catchTag("ModelCallError", (e) => {
           failures.push(e);
@@ -315,10 +382,10 @@ export const runTriageIssues = (input: TriageIssuesInput) =>
       classified.push({ issue, c });
     }
     const last = failures.at(-1);
-    if (last !== undefined && failures.length === open.length)
+    if (last !== undefined && failures.length === untriaged.length)
       return modelFailureVerdict(last) satisfies RunResult;
     const intents = yield* RecipeIntents;
-    for (const { issue, c } of classified)
+    for (const { issue, c } of resolveDuplicates(classified))
       for (const i of triageIntents(input.repo, issue, c))
         yield* intents.append(i.step, i.kind, i.payload);
     return { _tag: "success" } satisfies RunResult;
