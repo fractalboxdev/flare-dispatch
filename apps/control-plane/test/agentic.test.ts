@@ -15,7 +15,12 @@ import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Actuators, actuatorRegistry, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { issuedCredentials, writebackApplier } from "../src/agentic.ts";
+import {
+  guardLease,
+  issuedCredentials,
+  writebackApplier,
+  writeCredentialIn,
+} from "../src/agentic.ts";
 import { leaseCacheAt } from "../src/cache-execution.ts";
 import type { ControlPlaneEnv } from "../src/config.ts";
 
@@ -170,7 +175,8 @@ describe("the issued-credential read", () => {
         { epoch: 2, kind: "cloudflare" },
       ].map(
         async (lease) =>
-          (await leaseCacheAt(env, intakeRecord, lease, 1_900_000_000_000)).upload_grant.compile_cache?.token,
+          (await leaseCacheAt(env, intakeRecord, lease, 1_900_000_000_000)).upload_grant
+            .compile_cache?.token,
       ),
     );
     expect(expected.every((t) => typeof t === "string" && t.startsWith("cc3."))).toBe(true);
@@ -184,5 +190,67 @@ describe("the issued-credential read", () => {
     } as unknown as ControlPlaneEnv;
     const failure = await Effect.runPromise(Effect.flip(issuedCredentials(env)("x2")));
     expect(failure).toMatchObject({ _tag: "StagedWriteReadFailed", source: "credentials" });
+  });
+});
+
+describe("the lease credential guard", () => {
+  const APP_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIIEapp\n-----END RSA PRIVATE KEY-----";
+  const env = { GITHUB_APP_PRIVATE_KEY: APP_KEY } as unknown as ControlPlaneEnv;
+  const lease = (inputs: unknown) => ({
+    run: "pr-review",
+    scope_id: "acme/widgets",
+    inputs,
+    credentials: {},
+    upload_grant: { compile_cache: { token: "cc3.abc.def" } },
+  });
+
+  it("[FD-AGT-008] passes a lease payload that carries no write credential unchanged", async () => {
+    const clean = lease({
+      sha: "a".repeat(40),
+      steps: [{ label: "test", command: "pnpm test" }],
+    });
+    expect(await Effect.runPromise(guardLease(env, clean))).toBe(clean);
+  });
+
+  it("[FD-AGT-008] fails the grant of a lease payload that carries the App private key or an installation token", async () => {
+    const withKey = lease({
+      steps: [
+        {
+          label: "x",
+          command: `echo '${APP_KEY.split("\n")[0]}...'`,
+          env: { K: APP_KEY },
+        },
+      ],
+    });
+    expect(await Effect.runPromise(Effect.flip(guardLease(env, withKey)))).toMatchObject({
+      _tag: "CredentialInPayload",
+      field: "inputs.steps[0].command",
+    });
+    const withToken = {
+      ...lease({}),
+      credentials: { github: `ghs_${"t".repeat(36)}` },
+    };
+    expect(await Effect.runPromise(Effect.flip(guardLease(env, withToken)))).toMatchObject({
+      _tag: "CredentialInPayload",
+      field: "credentials.github",
+    });
+  });
+
+  it("[FD-AGT-008] fails a lease payload that carries the deploy's App key even without its PEM armour", async () => {
+    const bare = {
+      GITHUB_APP_PRIVATE_KEY: "app-key-material-0123456789",
+    } as unknown as ControlPlaneEnv;
+    expect(
+      await Effect.runPromise(
+        Effect.flip(guardLease(bare, lease({ key: "app-key-material-0123456789" }))),
+      ),
+    ).toMatchObject({ _tag: "CredentialInPayload", field: "inputs.key" });
+  });
+
+  it("[FD-AGT-008] names the field of a request's inputs that carries a write credential, for intake to refuse", () => {
+    const inputsGuard = writeCredentialIn(env);
+    expect(inputsGuard({ steps: [{ label: "test", command: "pnpm test" }] })).toBeNull();
+    expect(inputsGuard({ steps: [{ label: "k", command: APP_KEY }] })).toBe("steps[0].command");
+    expect(inputsGuard({ token: `ghs_${"t".repeat(36)}` })).toBe("token");
   });
 });

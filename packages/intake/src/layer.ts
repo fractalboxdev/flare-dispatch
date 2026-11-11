@@ -26,7 +26,6 @@ import {
   type IntakeSettings,
 } from "./config.ts";
 import { manifestSourceLayer } from "./manifest.ts";
-import { oidcVerifierLayer } from "./oidc.ts";
 import { installationEvictionLayer, manifestReporterLayer } from "./ports.ts";
 import { isUnavailable, ProtectionSnapshots, protectionSnapshotsLayer } from "./protection.ts";
 import { d1IntakeStore, d1ShedRecorder } from "./store.ts";
@@ -34,12 +33,12 @@ import { d1IntakeStore, d1ShedRecorder } from "./store.ts";
 export interface IntakeLayerOptions {
   readonly db: D1Like;
   readonly settings: IntakeSettings;
-  /** The `fetch` the OIDC verifier reads the issuer's keys with. */
-  readonly fetch: typeof globalThis.fetch;
   /** Runs after each queued admission, for the Worker to wake standing claims. */
   readonly queued?: (className: string) => Effect.Effect<void>;
-  /** Starts an admitted execution's `Execution` workflow (MAMEKO-ADM-030). */
+  /** Starts an admitted execution's `Execution` workflow (MAMEKO-ADM-029). */
   readonly startExecution?: AdmissionPorts["startExecution"];
+  /** Cancels a superseded or group-cancelled member's workflow and lease (MAMEKO-ADM-062, MAMEKO-ADM-065). */
+  readonly cancelExecution?: AdmissionPorts["cancelExecution"];
   readonly alarms?: AdmissionPorts["alarms"];
 }
 
@@ -50,6 +49,9 @@ export const intakeLayer = (options: IntakeLayerOptions) =>
     d1Admission(options.db, options.settings.profile, {
       ...(options.queued === undefined ? {} : { queued: options.queued }),
       ...(options.startExecution === undefined ? {} : { startExecution: options.startExecution }),
+      ...(options.cancelExecution === undefined
+        ? {}
+        : { cancelExecution: options.cancelExecution }),
       ...(options.alarms === undefined ? {} : { alarms: options.alarms }),
     }),
     d1IntakeStore(options.db),
@@ -57,7 +59,6 @@ export const intakeLayer = (options: IntakeLayerOptions) =>
     manifestSourceLayer,
     manifestReporterLayer,
     installationEvictionLayer,
-    oidcVerifierLayer(options.fetch),
     protectionSnapshotsLayer,
   );
 
@@ -158,7 +159,7 @@ export const profileRequestOf = (r: ClassRequest, callerProtected: boolean): Pro
  * `resolveRequestClass` (MAMEKO-ADM-005). A gating run on a pull-request trigger reads its target branch's required
  * set, the `protection-snapshot` input, through the 10 min cache; an unreadable set arrives as `Unavailable` with the
  * reason FD-PROF-015 and FD-PROF-016 act on. The alarm the binding returns is raised with the run and repository
- * (MAMEKO-ADM-088), and a clamped class input is logged (FD-PROF-020).
+ * (MAMEKO-ADM-092), and a clamped class input is logged (FD-PROF-020).
  */
 export const profileClassResolver = Layer.effect(
   ClassResolver,

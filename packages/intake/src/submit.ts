@@ -3,6 +3,8 @@
 // dedup-key and `placements` row is admission's.
 import {
   placementInputs,
+  supersessionKey,
+  type ClassName,
   type ConfidentialityMode,
   type PlacementRequest,
   type Profile,
@@ -15,6 +17,7 @@ import {
   ClassResolver,
   IntakeConfig,
   intakeError,
+  type ClassRequest,
   type ExecutionStartFailed,
   type IntakeAdmitInput,
   type IntakeError,
@@ -26,6 +29,7 @@ import {
   type Caller,
   type RecordedTrigger,
 } from "./event.ts";
+import { profileRequestOf } from "./layer.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
 import { IntakeStore, ShedRecorder, type IntakeRecord, type StoreUnavailable } from "./store.ts";
 
@@ -97,8 +101,9 @@ export interface Admitted {
   readonly className: string;
   readonly duplicate: boolean;
   /**
-   * Admission concluded the execution at once: its reason, or `expired` for a class whose terminal outcome is `expired`,
-   * which concludes with no reason (MAMEKO-ADM-041). Null when admission did not conclude it.
+   * Admission concluded the execution at once: its reason (`capacity: queue full`, MAMEKO-ADM-040), `expired` or
+   * `deferred` for a class whose terminal outcome is that and which concludes with no reason (MAMEKO-ADM-040,
+   * MAMEKO-ADM-042), or the reason of a `cancelled` conclusion (MAMEKO-ADM-063). Null when admission did not conclude it.
    */
   readonly concluded: string | null;
   readonly notBefore: number | null;
@@ -110,7 +115,7 @@ type Concluded = Extract<AdmitAnswer, { readonly _tag: "Concluded" }>;
 type Answer = AdmitAnswer | { readonly _tag: "Queued"; readonly executionId: string };
 
 /**
- * The execution committed queued and its workflow start failed; the admission sweep starts it (MAMEKO-ADM-031), so
+ * The execution committed queued and its workflow start failed; the admission sweep starts it (MAMEKO-ADM-030), so
  * intake answers it as queued.
  */
 const queuedUnstarted = (e: ExecutionStartFailed) =>
@@ -129,10 +134,12 @@ const concludedReason = (c: Concluded): string =>
   Match.value(c.outcome).pipe(
     Match.when("failure", () => c.reason ?? "failure"),
     Match.when("expired", () => "expired"),
+    Match.when("deferred", () => "deferred"),
+    Match.when("cancelled", () => c.reason ?? "cancelled"),
     Match.exhaustive,
   );
 
-/** Records a request rejected before admission (MAMEKO-ADM-086). */
+/** Records a request rejected before admission (MAMEKO-ADM-090). */
 export const shed = (repo: string, run: string | null, reason: string) =>
   ShedRecorder.use((s) => s.record({ scopeId: repo, run, reason, estimatedCost: null }));
 
@@ -180,7 +187,7 @@ const placementRequest = (
   };
 };
 
-/** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-084). */
+/** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-088). */
 const admissionPlacement = (
   profile: Profile,
   s: Submission,
@@ -205,6 +212,26 @@ const admissionPlacement = (
   };
 };
 
+/**
+ * The supersession group a request joins, through the profile's `supersessionKey` binding: a pull-request request of a
+ * run that declares `supersede` joins `<owner>/<repo>:<pull request number>:<run>[:<label>]`, and every other request,
+ * a check re-run included, joins none (FD-PROF-027, FD-PROF-029).
+ */
+const supersessionKeyOf = (
+  s: Submission,
+  request: ClassRequest,
+  className: string,
+): string | null =>
+  supersessionKey({
+    ...profileRequestOf(request, false),
+    ...Match.value(s.cacheTrigger).pipe(
+      Match.tag("PullRequest", (t) => ({ pullRequest: t.number })),
+      Match.orElse(() => ({})),
+    ),
+    ...(s.label === null ? {} : { label: s.label }),
+    ...(s.familyRoot === null ? {} : { rerun: { firstAttemptClass: className as ClassName } }),
+  });
+
 export const submit = (
   s: Submission,
 ): Effect.Effect<
@@ -219,22 +246,41 @@ export const submit = (
     const now = yield* Clock.currentTimeMillis;
     const name = checkName(s.run.name, s.label);
 
+    // The lease carries the recorded inputs to an executor, so inputs holding a write credential are refused here,
+    // before any record, execution or placement row exists (FD-AGT-008).
+    const credentialField = config.writeCredentialIn(s.inputs);
+    if (credentialField !== null) {
+      const field =
+        credentialField === "" || credentialField.startsWith("[")
+          ? `inputs${credentialField}`
+          : `inputs.${credentialField}`;
+      yield* shed(s.repo, s.run.name, `credential in payload: ${field}`);
+      return yield* Effect.fail(
+        intakeError(
+          400,
+          "invalid_inputs",
+          `CredentialInPayload: ${field} holds a write credential`,
+        ),
+      );
+    }
+
+    const classRequest: ClassRequest = {
+      run: s.run,
+      trigger: s.trigger,
+      event: s.event,
+      repo: s.repo,
+      ref: s.ref,
+      sha: s.sha,
+      defaultBranch: s.defaultBranch,
+      targetBranch: s.targetBranch,
+      refProtection: s.refProtection,
+      checkName: name,
+      classInput: s.classInput,
+      caller: s.caller,
+    };
     const resolution =
       s.forcedClass === null
-        ? yield* (yield* ClassResolver).resolve({
-            run: s.run,
-            trigger: s.trigger,
-            event: s.event,
-            repo: s.repo,
-            ref: s.ref,
-            sha: s.sha,
-            defaultBranch: s.defaultBranch,
-            targetBranch: s.targetBranch,
-            refProtection: s.refProtection,
-            checkName: name,
-            classInput: s.classInput,
-            caller: s.caller,
-          })
+        ? yield* (yield* ClassResolver).resolve(classRequest)
         : ({ _tag: "Class", class: s.forcedClass, labels: [], alarm: null } as const);
     const resolved = yield* Match.value(resolution).pipe(
       Match.tag("Class", (r) => Effect.succeed(r)),
@@ -282,7 +328,7 @@ export const submit = (
     };
     // mameko's `admit` writes the execution, dedup key and placement rows under this id in one transaction, with the
     // eligible kinds, the constraints, the isolation and the deadline it derives from the class and these facts
-    // (MAMEKO-ADM-024, MAMEKO-ADM-100, MAMEKO-LEASE-083).
+    // (MAMEKO-ADM-023, MAMEKO-ADM-104, MAMEKO-LEASE-083).
     const admitInput: IntakeAdmitInput = {
       executionId: id,
       scopeId: s.repo,
@@ -300,6 +346,10 @@ export const submit = (
       placement: admissionPlacement(config.profile, s, className, labels, confidentiality),
       maxDurationSec: s.run.maxDurationSec,
       grants: s.run.grants ?? { setup: [], agent: [] },
+      supersessionKey: supersessionKeyOf(s, classRequest, className),
+      // A run that declares `serialize` names its serial group from its inputs, e.g. one `worker-deploy` target
+      // (FD-GATE-063).
+      serialKey: s.run.serialKey?.(s.inputs) ?? null,
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the

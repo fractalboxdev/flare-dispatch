@@ -3,10 +3,12 @@
 // a lease, a check re-run and a cancel all need them, so intake keeps one row
 // per execution beside mameko's. Cooldown windows, held requests and webhook
 // delivery times live here too; shed rows are mameko's `shed` table.
+import type { ExecutionRecordFacts } from "@fractalboxdev/flare-dispatch-github";
 import { recordShed, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import type { IntakeAdmitInput } from "./config.ts";
 import { CacheTriggerRecord, OTHER_CACHE_TRIGGER, type RecordedTrigger } from "./event.ts";
+import { checkName } from "./runs.ts";
 
 export const INTAKE_MIGRATIONS: readonly string[] = [
   `create table if not exists intake_records (
@@ -167,11 +169,26 @@ export class IntakeStore extends Context.Service<
     /** Removes the row of an id admission did not keep. */
     readonly drop: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
     readonly get: (executionId: string) => Effect.Effect<RecordWithStatus | null, StoreUnavailable>;
+    /**
+     * The record of an admitted execution beside mameko's execution, placement and reservation rows, which its check
+     * run's conclusion states; null when either the record or the execution row is missing.
+     */
+    readonly conclusionFacts: (
+      executionId: string,
+    ) => Effect.Effect<ExecutionRecordFacts | null, StoreUnavailable>;
     readonly family: (root: string) => Effect.Effect<readonly RecordWithStatus[], StoreUnavailable>;
     readonly atCommit: (
       repo: string,
       sha: string,
     ) => Effect.Effect<readonly RecordWithStatus[], StoreUnavailable>;
+    /**
+     * The keys of the repository's supersession groups that start with `prefix` and still have a live member, e.g.
+     * every group of one pull request (FD-PROF-030).
+     */
+    readonly liveSupersessionGroups: (
+      repo: string,
+      prefix: string,
+    ) => Effect.Effect<readonly string[], StoreUnavailable>;
     readonly familySpend: (root: string) => Effect.Effect<FamilySpend, StoreUnavailable>;
     readonly cooldown: (
       bucket: string,
@@ -194,7 +211,7 @@ export class IntakeStore extends Context.Service<
 >()("@fractalboxdev/flare-dispatch-intake/IntakeStore") {}
 
 /**
- * `recordShed(scope_id, run, reason, estimated cost)` (MAMEKO-ADM-086): a request rejected before admission, written to
+ * `recordShed(scope_id, run, reason, estimated cost)` (MAMEKO-ADM-090): a request rejected before admission, written to
  * mameko's `shed` table with a null class.
  */
 export class ShedRecorder extends Context.Service<
@@ -228,6 +245,66 @@ interface Row {
   readonly created_at: number;
   readonly status: string | null;
 }
+
+interface FactsRow {
+  readonly run: string;
+  readonly label: string | null;
+  readonly sha: string;
+  readonly attempt: number;
+  readonly class: string;
+  readonly status: string;
+  readonly reason: string | null;
+  readonly enqueued_at: number;
+  readonly finished_at: number | null;
+  readonly placed: number | null;
+  readonly admitted_at: number | null;
+  readonly claim_latency_ms: number | null;
+  readonly leased_kind: string | null;
+  readonly accepted_kind: string | null;
+  readonly cloud_won: number | null;
+  readonly reserved: number | null;
+  readonly hold_micro_usd: number | null;
+  readonly reservation_state: string | null;
+  readonly metered_micro_usd: number | null;
+}
+
+const FACTS = `select r.run, r.label, r.sha, r.attempt, r.class, e.status, e.reason, e.enqueued_at, e.finished_at,
+    p.execution_id is not null as placed, p.admitted_at, p.claim_latency_ms, p.leased_kind, p.accepted_kind, p.cloud_won,
+    s.execution_id is not null as reserved, s.hold_micro_usd, s.state as reservation_state, s.metered_micro_usd
+  from intake_records r
+  join executions e on e.id = r.execution_id
+  left join placements p on p.execution_id = r.execution_id
+  left join reservations s on s.execution_id = r.execution_id
+  where r.execution_id = ?`;
+
+const factsOfRow = (f: FactsRow): ExecutionRecordFacts => ({
+  name: checkName(f.run, f.label),
+  headSha: f.sha,
+  attempt: f.attempt,
+  className: f.class,
+  status: f.status,
+  reason: f.reason,
+  enqueuedAt: f.enqueued_at,
+  finishedAt: f.finished_at,
+  placement:
+    f.placed === 1
+      ? {
+          admittedAt: f.admitted_at,
+          claimLatencyMs: f.claim_latency_ms,
+          leasedKind: f.leased_kind,
+          acceptedKind: f.accepted_kind,
+          cloudWon: f.cloud_won === null ? null : f.cloud_won === 1,
+        }
+      : null,
+  reservation:
+    f.reserved === 1
+      ? {
+          holdMicroUsd: f.hold_micro_usd ?? 0,
+          state: f.reservation_state ?? "held",
+          meteredMicroUsd: f.metered_micro_usd,
+        }
+      : null,
+});
 
 const decodeCacheTrigger = Schema.decodeUnknownOption(CacheTriggerRecord);
 
@@ -408,6 +485,13 @@ export const d1IntakeStore = (db: D1Like) =>
           return row === undefined ? null : fromRow(row);
         }),
       ),
+    conclusionFacts: (id) =>
+      query(() => db.prepare(FACTS).bind(id).all()).pipe(
+        Effect.map(({ results }) => {
+          const row = results[0] as FactsRow | undefined;
+          return row === undefined ? null : factsOfRow(row);
+        }),
+      ),
     family: (root) =>
       query(() =>
         db.prepare(`${SELECT} where r.family_root = ? order by r.attempt`).bind(root).all(),
@@ -419,6 +503,18 @@ export const d1IntakeStore = (db: D1Like) =>
           .bind(repo, sha)
           .all(),
       ).pipe(Effect.map(({ results }) => (results as Row[]).map(fromRow))),
+    liveSupersessionGroups: (repo, prefix) =>
+      query(() =>
+        db
+          .prepare(
+            `select distinct supersession_key as key from executions
+             where scope_id = ? and status in ('pending', 'running')
+               and substr(supersession_key, 1, length(?)) = ?
+             order by supersession_key`,
+          )
+          .bind(repo, prefix, prefix)
+          .all(),
+      ).pipe(Effect.map(({ results }) => (results as { key: string }[]).map((r) => r.key))),
     familySpend: (root) =>
       query(() =>
         db
@@ -486,7 +582,7 @@ export const d1IntakeStore = (db: D1Like) =>
   });
 
 /**
- * A refusal that ends intake for a whole trigger, before any run is known, records a null run (MAMEKO-ADM-044); an
+ * A refusal that ends intake for a whole trigger, before any run is known, records a null run (MAMEKO-ADM-043); an
  * unestimated request records a cost of 0.
  */
 export const d1ShedRecorder = (db: D1Like) =>

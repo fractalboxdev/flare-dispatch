@@ -12,7 +12,6 @@ import {
   intakeLayer,
   ManifestReporter,
   manifestSourceLayer,
-  oidcVerifierLayer,
   profileClassResolver,
   protectionSnapshotsLayer,
   type AdmissionPorts,
@@ -25,6 +24,8 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import type { ExecutionPayload } from "@fractalboxdev/mameko-coordinator";
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
+import { d1Sql } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { cancelledLease } from "@fractalboxdev/mameko-store-sqlite";
 import { Context, Effect, Layer, Scope } from "effect";
 import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { devRepositoryOf } from "./dev-repository.ts";
@@ -34,8 +35,9 @@ import {
   localPorts,
   writebackApplier,
   writebackRecords,
+  writeCredentialIn,
 } from "./agentic.ts";
-import { appLoginOf, appOptionsOf, appServices, boundFetch, readsWithoutApp } from "./github.ts";
+import { appLoginOf, appOptionsOf, appServices, readsWithoutApp } from "./github.ts";
 
 const listOf = (value: unknown): readonly string[] => {
   if (Array.isArray(value)) return value.map(String);
@@ -59,24 +61,32 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     appId: Number(env.GITHUB_APP_ID ?? 0),
     webhookSecret: env.WEBHOOK_SECRET === "" ? undefined : env.WEBHOOK_SECRET,
     webhookEvents: events.length === 0 ? undefined : events,
-    oidcAudience: env.DISPATCH_OIDC_AUDIENCE === "" ? undefined : env.DISPATCH_OIDC_AUDIENCE,
-    dispatchers: listOf(raw["DISPATCHERS"]).map((d) => d.trim().toLowerCase()),
     allows: () => true,
     // No policy rule classifies a repository yet; a development deployment's captured repository carries its own mode.
     confidentiality: (repo) =>
       (dev !== undefined && dev.repository === repo ? dev.confidentiality : undefined) ??
       "unclassified",
+    writeCredentialIn: writeCredentialIn(env),
   };
 };
 
-/** A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037). */
+/**
+ * A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037). The execution is
+ * already admitted, so a wake that fails, such as a grant the channel refuses, is logged and the request still answers
+ * with the execution it admitted.
+ */
 const wake = (env: ControlPlaneEnv) => (className: string) =>
-  Effect.promise(() =>
+  Effect.tryPromise(() =>
     wakeStandingClaims(env.DB, env.CHANNEL, { className, eligibleKinds: ["device"] }),
+  ).pipe(
+    Effect.asVoid,
+    Effect.catchCause((cause) =>
+      Effect.logWarning("standing claim wake failed after admission", { className, cause }),
+    ),
   );
 
 /**
- * The `ExecutionEngine` start of an admitted execution whose class does not defer its workflow (MAMEKO-ADM-030). A
+ * The `ExecutionEngine` start of an admitted execution whose class does not defer its workflow (MAMEKO-ADM-029). A
  * rejected start is `ExecutionStartFailed`: the execution stays queued, and the admission sweep starts it.
  */
 export const startExecutionOf =
@@ -92,10 +102,36 @@ export const startExecutionOf =
         }),
     }).pipe(Effect.asVoid);
 
-/** What admission needs of the Worker: the wake-up after a queued admission, the workflow start and the alarm sink. */
+/**
+ * The cancel of a member a supersession or a group cancel recorded `cancelled`: its `ExecutionEngine` records the cancel,
+ * which ends its wait for a lease or a result (MAMEKO-ADM-062), and a leased member's executor gets `exec.cancel` over
+ * its channel (MAMEKO-ADM-065).
+ */
+export const cancelExecutionOf =
+  (env: Pick<ControlPlaneEnv, "DB" | "EXECUTION" | "CHANNEL">) =>
+  (executionId: string, cause: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        env.EXECUTION.get(env.EXECUTION.idFromName(executionId)).cancel(executionId, cause),
+      );
+      const lease = yield* cancelledLease(executionId, cause).pipe(
+        Effect.provide(d1Sql(env.DB)),
+        Effect.orDie,
+      );
+      if (lease !== null)
+        yield* Effect.promise(() =>
+          env.CHANNEL.get(env.CHANNEL.idFromName(lease.executorId)).cancelLease(lease.frame),
+        );
+    });
+
+/**
+ * What admission needs of the Worker: the wake-up after a queued admission, the workflow start, the cancel of a
+ * superseded member and the alarm sink.
+ */
 const admissionPorts = (env: ControlPlaneEnv, alarms: AdmissionPorts["alarms"]) => ({
   queued: wake(env),
   startExecution: startExecutionOf(env),
+  cancelExecution: cancelExecutionOf(env),
   alarms,
 });
 
@@ -144,9 +180,7 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
     return Layer.mergeAll(
       profileClassResolver.pipe(
-        Layer.provideMerge(
-          intakeLayer({ db: env.DB, settings, fetch: boundFetch, ...admissionPorts(env, alarms) }),
-        ),
+        Layer.provideMerge(intakeLayer({ db: env.DB, settings, ...admissionPorts(env, alarms) })),
       ),
       localPorts(env),
     ).pipe(Layer.provideMerge(applier), Layer.provideMerge(common));
@@ -159,7 +193,6 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     manifestSourceLayer,
     manifestReporterWithoutApp,
     evictionWithoutApp,
-    oidcVerifierLayer(boundFetch),
     profileClassResolver.pipe(
       Layer.provideMerge(protectionSnapshotsLayer),
       Layer.provide(Layer.succeed(IntakeConfig, settings)),

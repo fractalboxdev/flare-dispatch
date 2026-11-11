@@ -7,7 +7,7 @@ repositories. Both are self-contained composite actions — no bundled runtime, 
 | Action                                                    | What it does                                                                                                                                                                                      |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`flare-dispatch-action`](./flare-dispatch-action/)       | **Dispatch a run.** HMAC-signs a dispatch body and POSTs it to your Dispatcher Worker from a CI workflow. The run executes on Cloudflare and reports back via a `flare-dispatch/<run>` check-run. |
-| [`deploy-dispatcher-action`](./deploy-dispatcher-action/) | **Ship the Worker.** Deploys the dispatcher into your Cloudflare account via an operator-overlay `wrangler.jsonc` + a pinned upstream SHA.                                                        |
+| [`deploy-dispatcher-action`](./deploy-dispatcher-action/) | **Ship the Workers.** Runs `fd deploy` into your Cloudflare account from a values-only operator overlay and a pinned upstream SHA.                                                                |
 
 The two are complementary: `deploy-dispatcher-action` stands up the Dispatcher in
 your account once; `flare-dispatch-action` runs in each consumer repo's CI to
@@ -16,7 +16,7 @@ offload heavy jobs onto it.
 ```mermaid
 flowchart LR
     accTitle: Where each action sits
-    ops["**Operator repo**<br/>deploy-dispatcher-action"] -->|"wrangler deploy"| worker["**Dispatcher Worker**<br/>your Cloudflare account"]
+    ops["**Operator repo**<br/>deploy-dispatcher-action"] -->|"fd deploy"| worker["**Dispatcher Worker**<br/>your Cloudflare account"]
     ci["**Consumer repo CI**<br/>flare-dispatch-action"] -->|"signed POST, 202"| worker
     worker -->|"check-run verdict"| pr["**Pull request**<br/>flare-dispatch/‹run›"]
     class worker accent

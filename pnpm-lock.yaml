@@ -81,6 +81,9 @@ importers:
       '@fractalboxdev/mameko-ports':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/ports
+      '@fractalboxdev/mameko-store-sqlite':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/store-sqlite
       effect:
         specifier: 4.0.6
         version: 4.0.6
@@ -367,9 +370,18 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
       '@fractalboxdev/mameko-kernel':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
@@ -388,6 +400,9 @@ importers:
       '@fractalboxdev/flare-dispatch-cache':
         specifier: workspace:*
         version: link:../cache
+      '@fractalboxdev/flare-dispatch-intake':
+        specifier: workspace:*
+        version: link:../intake
       '@fractalboxdev/flare-dispatch-ops':
         specifier: workspace:*
         version: link:../ops

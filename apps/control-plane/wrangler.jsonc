@@ -14,7 +14,8 @@
   "routes": [{ "pattern": "{{hostnames.dispatcher}}", "custom_domain": true }],
   "vars": {
     "DEPLOYMENT": "production",
-    "PLANE_ID": "flare-dispatch",
+    // The plane id every device's `connect` signature binds (FD-IFC-085).
+    "PLANE_ID": "{{executors.planeId}}",
     "ALERT_SINK": "{{alerts.sink}}",
     "ACCESS_TEAM_DOMAIN": "{{access.teamDomain}}",
     "ACCESS_AUD": "{{access.aud}}",

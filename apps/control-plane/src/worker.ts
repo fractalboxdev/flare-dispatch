@@ -64,7 +64,7 @@ export default {
         channel: env.CHANNEL,
         planeId: env.PLANE_ID,
       });
-    // The compile-cache, artifact and log routes, each checking its own token (FD-CACHE-051, FD-CACHE-076).
+    // The compile-cache route checks its own token (FD-CACHE-051); the log and artifact reads are the router's.
     const cached = await cacheFetch(request, env, (p) => ctx.waitUntil(p));
     if (cached !== null) return cached;
     // The dashboard, `/v1/ops/health`, `/v1/ops/fleet`, the install routes and `/v1/spend`, each behind its own gate.

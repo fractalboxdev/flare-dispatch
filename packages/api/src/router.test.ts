@@ -9,7 +9,7 @@ import {
   type Harness,
 } from "./api.test-support.ts";
 import { FlareDispatchApi } from "./declaration.ts";
-import { declaredGroups, logsGroup } from "./groups.ts";
+import { artifactsGroup, declaredGroups, logsGroup } from "./groups.ts";
 import { DuplicateRoute, matchPath, mount, routerGroup } from "./router.ts";
 import { Effect, Layer } from "effect";
 
@@ -34,7 +34,16 @@ describe("declaration and router", () => {
           .handle("file", () => Effect.succeed("")),
       ),
     );
-    const mounted = mount(...declaredGroups, logs).routes.map((r) => `${r.method} ${r.path}`);
+    const artifacts = artifactsGroup(
+      HttpApiBuilder.group(FlareDispatchApi, "artifacts", (handlers) =>
+        handlers
+          .handle("get", () => Effect.succeed(new Uint8Array()))
+          .handle("list", () => Effect.succeed({ artifacts: [], cursor: null })),
+      ),
+    );
+    const mounted = mount(...declaredGroups, logs, artifacts).routes.map(
+      (r) => `${r.method} ${r.path}`,
+    );
     expect(mounted.sort()).toEqual(declared.sort());
   });
 

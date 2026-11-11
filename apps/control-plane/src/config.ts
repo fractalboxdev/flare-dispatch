@@ -1,5 +1,6 @@
 // The Worker's bindings, and the two `json` configurations host-cloudflare reads, derived from the profile so one
 // document decides both.
+import type { ApiEnv } from "@fractalboxdev/flare-dispatch-api";
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
 import type { MonitorNamespace } from "@fractalboxdev/flare-dispatch-ops";
 import type { CacheEnv } from "./cache.ts";
@@ -20,9 +21,20 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly DB: D1Like;
   readonly CHANNEL: {
     idFromName(name: string): unknown;
-    get(id: unknown): { fetch(request: Request): Promise<Response>; wake(): Promise<void> };
+    get(
+      id: unknown,
+    ): { fetch(request: Request): Promise<Response> } & ReturnType<
+      NonNullable<ExecutionEngineEnv["CHANNEL"]>["get"]
+    >;
   };
-  readonly EXECUTION: ExecutorChannelEnv["EXECUTION"];
+  /** Both mameko classes call the engine: the channel to grant leases, the engine to cancel a parent's children. */
+  readonly EXECUTION: {
+    idFromName(name: string): unknown;
+    get(
+      id: unknown,
+    ): ReturnType<ExecutorChannelEnv["EXECUTION"]["get"]> &
+      ReturnType<NonNullable<ExecutionEngineEnv["EXECUTION"]>["get"]>;
+  };
   readonly EPOCH_ANCHOR: ExecutorChannelEnv["EPOCH_ANCHOR"];
   /** The one `LivenessMonitor` object the minute tick starts. */
   readonly MONITOR: MonitorNamespace;
@@ -49,6 +61,20 @@ export interface ControlPlaneEnv extends CacheEnv {
 }
 
 export const deployment = (env: ControlPlaneEnv): Deployment => deploymentOf(env.DEPLOYMENT);
+
+/** A rendered var holding an array arrives as the array; the API reads each identity list as JSON text. */
+const textVar = (value: unknown): string | undefined =>
+  value === undefined || typeof value === "string" ? value : JSON.stringify(value);
+
+/** The API's bindings, as `apiConfigFromEnv` reads them. */
+export const apiEnvOf = (env: ControlPlaneEnv): ApiEnv => {
+  const raw = env as unknown as Readonly<Record<string, unknown>>;
+  return {
+    ...(raw as ApiEnv),
+    OPERATORS: textVar(raw["OPERATORS"]),
+    DISPATCHERS: textVar(raw["DISPATCHERS"]),
+  } as ApiEnv;
+};
 
 export const profileOf = (env: ControlPlaneEnv): Profile => buildProfile(deployment(env));
 

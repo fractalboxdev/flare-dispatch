@@ -32,7 +32,7 @@ export const OverlayValues = Schema.Struct({
   github: Schema.Struct({ appId: NonEmpty, fixtureRepo: NonEmpty }),
   intake: opt(Schema.Struct({ webhookEvents: opt(Schema.Array(NonEmpty)) })),
   dispatch: opt(Schema.Struct({ oidcAudience: NonEmpty })),
-  executors: opt(Schema.Struct({ planeId: NonEmpty })),
+  executors: Schema.Struct({ planeId: NonEmpty }),
   alerts: Schema.Struct({ sink: AlertSink, webhookSilentHours: opt(Count) }),
   spend: opt(
     Schema.Struct({
@@ -131,5 +131,6 @@ export const placeholderOverlay: OverlayValues = {
   access: { teamDomain: "example.cloudflareaccess.com", aud: "placeholder-aud" },
   operators: ["operator@example.com"],
   github: { appId: "0", fixtureRepo: "example/canary" },
+  executors: { planeId: "flare-dispatch" },
   alerts: { sink: "https://alerts.example.com/hook" },
 };

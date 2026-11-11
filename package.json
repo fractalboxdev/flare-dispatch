@@ -11,6 +11,7 @@
     "docs:reference": "typedoc --options apps/docs/typedoc.json",
     "lint": "oxlint",
     "test": "vitest run --passWithNoTests",
+    "mameko:pin": "node --experimental-strip-types --no-warnings packages/ops/scripts/mameko-pin.ts",
     "format": "oxfmt --write"
   },
   "devDependencies": {

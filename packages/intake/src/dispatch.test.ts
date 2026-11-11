@@ -1,149 +1,71 @@
-// `POST /v1/dispatch/:run` through the route group: the identity gate before any lookup, the Actions OIDC token,
-// the body and input schemas, idempotency keys, the installation and the commit.
+// The admission of an authenticated dispatch: the run and input schemas, the signals caps, idempotency keys, the
+// installation, the manifest and the commit. The HTTP API's declared dispatch route authenticates the caller and
+// decodes the body before it (apps/control-plane/test/control-plane.test.ts, packages/api).
 import { describe, expect, it } from "vitest";
 import {
-  actionsToken,
-  AUDIENCE,
+  admit,
+  authenticated,
   BASE,
   bodyOf,
-  dispatchRequest,
   harness,
   HEAD,
-  otherKey,
+  pullRequestPayload,
   REPO,
-  type Harness,
+  refusal,
+  signedWebhook,
 } from "./harness.test-support.ts";
 import { handleIntake } from "./routes.ts";
 
-const dispatch = (h: Harness, request: Request) =>
-  h.run(handleIntake(request, `dispatch/${new URL(request.url).pathname.split("/").pop()}`));
-
-const ok = { inputs: { sha: HEAD }, label: "ci" };
-
-describe("the dispatch identity gate", () => {
-  it("[FD-INT-034] an unauthenticated dispatch answers 401 whatever the run name", async () => {
+describe("dispatch validation", () => {
+  it("[FD-INT-039] a dispatch of an unknown run answers 404 run_not_found", async () => {
     const h = await harness();
-    const known = await dispatch(h, dispatchRequest("check", ok, {}));
-    const unknown = await dispatch(h, dispatchRequest("no-such-run", ok, {}));
-    expect([known!.status, unknown!.status]).toEqual([401, 401]);
-    expect((await bodyOf(unknown)).error).toBe("unauthenticated");
+    expect(await refusal(h, authenticated({ run: "no-such-run" }))).toEqual({
+      status: 404,
+      code: "run_not_found",
+    });
     expect(h.reads.calls).toEqual([]);
   });
 
-  it("[FD-INT-035] a token from another issuer, audience, an expired token or a bad signature answers 401", async () => {
-    const h = await harness();
-    const tokens = [
-      actionsToken({ aud: "https://other.example.com" }),
-      actionsToken({ exp: Date.UTC(2026, 10, 4, 11, 59, 0) / 1000 }),
-      actionsToken({}, "k1", otherKey),
-      actionsToken({}, "unknown-kid"),
-    ];
-    for (const t of tokens) {
-      const r = await dispatch(h, dispatchRequest("check", ok, { authorization: `Bearer ${t}` }));
-      expect(r!.status).toBe(401);
-    }
-    expect(h.executions()).toEqual([]);
-  });
-
-  it("[FD-INT-035] the issuer's keys are cached for at most 1 h", async () => {
-    const h = await harness();
-    await dispatch(h, dispatchRequest("check", ok));
-    await dispatch(h, dispatchRequest("check", ok));
-    expect(h.recorded.jwksFetches).toBe(1);
-    await h.adjust(3_600_000);
-    await dispatch(
-      h,
-      dispatchRequest("check", ok, {
-        authorization: `Bearer ${actionsToken({ exp: Date.UTC(2026, 10, 4, 14) / 1000 })}`,
-      }),
-    );
-    expect(h.recorded.jwksFetches).toBe(2);
-  });
-
-  it("[FD-INT-036] a body naming another repository than the token's claim answers 403 repository_mismatch", async () => {
-    const h = await harness();
-    const r = await dispatch(h, dispatchRequest("check", { ...ok, repository: "acme/other" }));
-    expect(r!.status).toBe(403);
-    expect((await bodyOf(r)).error).toBe("repository_mismatch");
-  });
-
-  it("[FD-IFC-027] an Access identity in dispatchers may dispatch; another is 401", async () => {
-    const h = await harness();
-    const member = await dispatch(
-      h,
-      dispatchRequest(
-        "check",
-        { ...ok, repository: REPO },
-        { "x-test-identity": "dev@example.com" },
-      ),
-    );
-    const stranger = await dispatch(
-      h,
-      dispatchRequest(
-        "check",
-        { ...ok, repository: REPO },
-        { "x-test-identity": "mallory@example.com" },
-      ),
-    );
-    expect([member!.status, stranger!.status]).toEqual([202, 401]);
-    expect(h.records()[0]).toMatchObject({ trigger: "dispatch", caller: "dev@example.com" });
-  });
-});
-
-describe("dispatch validation", () => {
-  it("[FD-INT-039] an authenticated dispatch of an unknown run answers 404 run_not_found", async () => {
-    const h = await harness();
-    const r = await dispatch(h, dispatchRequest("no-such-run", ok));
-    expect(r!.status).toBe(404);
-    expect((await bodyOf(r)).error).toBe("run_not_found");
-  });
-
-  it("[FD-INT-040] a body over 1 MiB is 413, a schema failure invalid_body and an input failure invalid_inputs", async () => {
-    const h = await harness();
-    const large = await dispatch(
-      h,
-      dispatchRequest("check", JSON.stringify({ pad: "x".repeat(1024 * 1024) })),
-    );
-    const notJson = await dispatch(h, dispatchRequest("check", "{"));
-    const badBody = await dispatch(h, dispatchRequest("check", { ...ok, sha: "not-a-sha" }));
-    const badInputs = await dispatch(h, dispatchRequest("check", { inputs: { steps: 1 } }));
-    expect([large!.status, notJson!.status, badBody!.status, badInputs!.status]).toEqual([
-      413, 400, 400, 400,
-    ]);
-    expect([(await bodyOf(badBody)).error, (await bodyOf(badInputs)).error]).toEqual([
-      "invalid_body",
-      "invalid_inputs",
-    ]);
-  });
-
-  it("[FD-INT-010] [FD-INT-011] an Idempotency-Key outside 1 to 128 characters of [A-Za-z0-9._:-] answers 400 invalid_idempotency_key", async () => {
-    const h = await harness();
-    const bearer = { authorization: `Bearer ${actionsToken({})}` };
-    for (const key of ["", "x".repeat(129), "has space", "slash/no"]) {
-      const r = await dispatch(
+  it("[FD-AGT-008] inputs holding a write credential answer 400 before admission writes any row", async () => {
+    const h = await harness({
+      settings: {
+        writeCredentialIn: (inputs) =>
+          JSON.stringify(inputs).includes("ghs_") ? "steps[0]" : null,
+      },
+    });
+    expect(
+      await refusal(
         h,
-        dispatchRequest("check", ok, { ...bearer, "idempotency-key": key }),
-      );
-      expect(r!.status).toBe(400);
-      expect((await bodyOf(r)).error).toBe("invalid_idempotency_key");
-    }
+        authenticated({ inputs: { sha: HEAD, steps: [`echo ghs_${"t".repeat(36)}`] } }),
+      ),
+    ).toEqual({ status: 400, code: "invalid_inputs" });
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+    expect(h.rows("select * from placements")).toEqual([]);
+    expect(h.sheds()).toEqual([
+      { scope_id: REPO, run: "check", reason: "credential in payload: inputs.steps[0]" },
+    ]);
+  });
+
+  it("[FD-INT-040] inputs that fail the run's input schema answer 400 invalid_inputs", async () => {
+    const h = await harness();
+    expect(await refusal(h, authenticated({ inputs: { steps: 1 } }))).toEqual({
+      status: 400,
+      code: "invalid_inputs",
+    });
+    expect(h.executions()).toEqual([]);
   });
 
   it("[FD-INT-010] [FD-INT-003] a reused Idempotency-Key with the same body is a duplicate, with another body 409 conflict", async () => {
     const h = await harness();
-    const headers = { authorization: `Bearer ${actionsToken({})}`, "idempotency-key": "build-7" };
-    const first = await bodyOf(await dispatch(h, dispatchRequest("check", ok, headers)));
-    const same = await bodyOf(await dispatch(h, dispatchRequest("check", ok, headers)));
-    const other = await dispatch(
-      h,
-      dispatchRequest("check", { ...ok, inputs: { sha: BASE } }, headers),
-    );
-    expect(same).toMatchObject({ execution_id: first.execution_id, duplicate: true });
-    expect(other!.status).toBe(409);
-    expect(await bodyOf(other)).toMatchObject({
-      error: "conflict",
-      execution_id: first.execution_id,
-    });
+    const body = { inputs: { sha: HEAD }, label: "ci" };
+    const keyed = (inputs: { sha: string }) =>
+      authenticated({ inputs, idempotency: { key: "build-7", body: { ...body, inputs } } });
+    const first = await admit(h, keyed({ sha: HEAD }));
+    const same = await admit(h, keyed({ sha: HEAD }));
+    const other = await refusal(h, keyed({ sha: BASE }));
+    expect(same).toEqual({ ...first, duplicate: true });
+    expect(other).toEqual({ status: 409, code: "conflict", executionId: first.executionId });
     expect(h.rows("select canonical, request_digest from dedup_keys")).toEqual([
       {
         canonical: `idem:${REPO}:build-7`,
@@ -155,36 +77,37 @@ describe("dispatch validation", () => {
   it("[FD-INT-049] more than 50 merged signals or an over-long field answers 400 invalid_signals", async () => {
     const h = await harness();
     const signal = { source: "lint", title: "t" };
-    const many = await dispatch(
+    const many = await refusal(
       h,
-      dispatchRequest("check", {
-        ...ok,
+      authenticated({
         inputs: { sha: HEAD, signals: Array(30).fill(signal) },
         signals: Array(21).fill(signal),
       }),
     );
-    const long = await dispatch(
+    const long = await refusal(
       h,
-      dispatchRequest("check", { ...ok, signals: [{ source: "s".repeat(121), title: "t" }] }),
+      authenticated({ signals: [{ source: "s".repeat(121), title: "t" }] }),
     );
-    expect([many!.status, long!.status]).toEqual([400, 400]);
-    expect((await bodyOf(many)).error).toBe("invalid_signals");
+    expect([many, long]).toEqual([
+      { status: 400, code: "invalid_signals" },
+      { status: 400, code: "invalid_signals" },
+    ]);
+    expect(h.executions()).toEqual([]);
   });
 });
 
 describe("dispatch to admission", () => {
-  it("[FD-INT-001] [FD-IFC-035] an admitted dispatch answers 202 with execution_id, class, details_url and logs_url", async () => {
+  it("[FD-INT-001] an admitted dispatch answers its execution id and class", async () => {
     const h = await harness();
-    const r = await dispatch(h, dispatchRequest("check", ok));
-    expect(r!.status).toBe(202);
-    const body = await bodyOf(r);
-    expect(body).toMatchObject({ class: "interactive", execution_id: expect.any(String) });
-    expect(body.details_url).toBe(
-      `https://control-plane.example.com/v1/executions/${body.execution_id}`,
-    );
+    const admitted = await admit(h, authenticated());
+    expect(admitted).toEqual({
+      executionId: expect.any(String),
+      className: "interactive",
+      duplicate: false,
+    });
     expect(h.executions()).toEqual([
       {
-        id: body.execution_id,
+        id: admitted.executionId,
         scope_id: REPO,
         run: "check",
         class: "interactive",
@@ -193,73 +116,82 @@ describe("dispatch to admission", () => {
     ]);
   });
 
-  it("[FD-INT-009] a dispatch after a webhook for the same run and commit is a duplicate of it", async () => {
+  it("[FD-INT-009] a second dispatch of the same run and commit is a duplicate of the first", async () => {
     const h = await harness();
-    const first = await bodyOf(await dispatch(h, dispatchRequest("check", { ...ok, sha: HEAD })));
-    const second = await bodyOf(await dispatch(h, dispatchRequest("check", { ...ok, sha: HEAD })));
-    expect(second).toMatchObject({ execution_id: first.execution_id, duplicate: true });
+    const first = await admit(h, authenticated({ sha: HEAD }));
+    const second = await admit(h, authenticated({ sha: HEAD }));
+    expect(second).toEqual({ ...first, duplicate: true });
   });
 
-  it("[FD-INT-041] a dispatch with no ref pins the default branch head", async () => {
+  it("[FD-INT-041] a dispatch with no ref and no commit pins the default branch head", async () => {
     const h = await harness();
-    await dispatch(
+    await admit(
       h,
-      dispatchRequest(
-        "check",
-        { ...ok, repository: REPO },
-        { "x-test-identity": "dev@example.com" },
-      ),
+      authenticated({ ref: undefined, caller: { kind: "access", id: "dev@example.com" } }),
     );
-    expect(h.records()[0]).toMatchObject({ sha: BASE, ref: "refs/heads/main" });
+    expect(h.records()[0]).toMatchObject({
+      sha: BASE,
+      ref: "refs/heads/main",
+      caller: "dev@example.com",
+    });
   });
 
   it("[FD-INT-042] [FD-INT-043] the installation resolves from the repository; a repository no installation covers answers 422", async () => {
     const h = await harness();
-    await dispatch(h, dispatchRequest("check", ok));
+    await admit(h, authenticated());
     expect(h.records()[0]!.installation).toBe(7);
     expect(h.reads.calls).toContain(`installation ${REPO}`);
     const none = await harness({ installations: {} });
-    const r = await dispatch(none, dispatchRequest("check", ok));
-    expect(r!.status).toBe(422);
-    expect((await bodyOf(r)).error).toBe("installation_not_found");
+    expect(await refusal(none, authenticated())).toEqual({
+      status: 422,
+      code: "installation_not_found",
+    });
     expect(none.executions()).toEqual([]);
   });
 
-  it("an Actions token naming one commit cannot dispatch another commit that is not a branch head of its repository", async () => {
+  it("[FD-IFC-009] an Actions token naming one commit cannot dispatch another commit that is not a branch head of its repository; the refusal is 403 forbidden", async () => {
     const h = await harness();
-    const token = { authorization: `Bearer ${actionsToken({ sha: BASE })}` };
     const foreign = "e".repeat(40);
-    const r = await dispatch(h, dispatchRequest("check", { ...ok, sha: foreign }, token));
-    expect(r!.status).toBe(403);
-    expect((await bodyOf(r)).error).toBe("sha_mismatch");
+    expect(await refusal(h, authenticated({ sha: foreign, vouchedSha: BASE }))).toEqual({
+      status: 403,
+      code: "forbidden",
+    });
     expect(h.executions()).toEqual([]);
-    const same = await dispatch(h, dispatchRequest("check", { ...ok, sha: BASE }, token));
-    expect(same!.status).toBe(202);
-  });
-
-  it("a body installation_id other than the App's installation for the repository answers 403", async () => {
-    const h = await harness();
-    const r = await dispatch(h, dispatchRequest("check", { ...ok, installation_id: 99 }));
-    expect(r!.status).toBe(403);
-    expect((await bodyOf(r)).error).toBe("installation_mismatch");
-    expect(h.executions()).toEqual([]);
-    const matching = await dispatch(h, dispatchRequest("check", { ...ok, installation_id: 7 }));
-    expect(matching!.status).toBe(202);
+    const same = await admit(h, authenticated({ sha: BASE, vouchedSha: BASE }));
+    expect(same.duplicate).toBe(false);
   });
 
   it("[FD-IFC-028] [FD-INT-015] a run the manifest does not list for dispatch answers 404 run_not_found", async () => {
     const h = await harness();
-    const r = await dispatch(h, dispatchRequest("nightly", { inputs: { sha: HEAD } }));
-    expect(r!.status).toBe(404);
+    const unlisted = await refusal(h, authenticated({ run: "nightly", label: null }));
+    const label = await refusal(h, authenticated({ label: "nightly" }));
+    expect([unlisted, label]).toEqual([
+      { status: 404, code: "run_not_found" },
+      { status: 404, code: "run_not_found" },
+    ]);
     expect(h.executions()).toEqual([]);
   });
 
   it("[FD-IFC-033] a class input reaches class resolution", async () => {
     const h = await harness();
-    await dispatch(h, dispatchRequest("check", { ...ok, class: "batch" }));
+    await admit(h, authenticated({ classInput: "batch" }));
     expect(h.recorded.resolved[0]).toMatchObject({ classInput: "batch", trigger: "dispatch" });
     expect(h.recorded.resolved[0]!.caller).toMatchObject({ kind: "actions-oidc" });
-    expect(AUDIENCE).toContain("https://");
+  });
+
+  it("[FD-INT-063] an MCP call's class above the assigned one is dropped to the assigned class", async () => {
+    const h = await harness({
+      resolve: (r) => ({ _tag: "Class", class: r.classInput ?? "batch", labels: [], alarm: null }),
+    });
+    const admitted = await admit(
+      h,
+      authenticated({
+        trigger: "mcp",
+        caller: { kind: "access", id: "dev@example.com" },
+        classInput: "interactive",
+      }),
+    );
+    expect(admitted.className).toBe("batch");
   });
 });
 
@@ -277,9 +209,12 @@ describe("the route group", () => {
       error: "method_not_allowed",
       request_id: expect.any(String),
     });
-    expect(
-      await h.run(handleIntake(new Request("https://cp.example.com/v1/other"), "other")),
-    ).toBeNull();
+    for (const path of ["other", "dispatch/check"])
+      expect(
+        await h.run(
+          handleIntake(new Request(`https://cp.example.com/v1/${path}`, { method: "POST" }), path),
+        ),
+      ).toBeNull();
   });
 
   it("[FD-INT-065] a defect answers 500 internal with a request id and no exception text", async () => {
@@ -290,10 +225,11 @@ describe("the route group", () => {
         },
       },
     });
-    const r = await dispatch(h, dispatchRequest("check", ok));
+    const r = await h.run(
+      handleIntake(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github"),
+    );
     expect(r!.status).toBe(500);
-    const body = await bodyOf(r);
-    expect(body).toEqual({
+    expect(await bodyOf(r)).toEqual({
       error: "internal",
       message: "internal error",
       request_id: expect.any(String),

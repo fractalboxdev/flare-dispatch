@@ -39,10 +39,6 @@ export const CheckInput = Schema.Struct({
 });
 export type CheckInput = typeof CheckInput.Type;
 
-/** The check name a labelled `check` execution reports under (FD-GATE-020). */
-export const checkName = (label?: string): string =>
-  label === undefined ? "flare-dispatch/check" : `flare-dispatch/check:${label}`;
-
 export const OxlintInput = Schema.Struct({
   ...GateContextFields,
   version: Schema.optionalKey(Schema.String),

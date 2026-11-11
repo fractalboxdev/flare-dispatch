@@ -1,12 +1,15 @@
 // The route group as the Worker mounts it: `intakeLayer` over `githubLiveLayer`, a GitHub reached through `fetch`,
 // and mameko's admission on a SQLite D1.
 import { generateKeyPairSync } from "node:crypto";
-import { githubLiveLayer, SideOutputConfig } from "@fractalboxdev/flare-dispatch-github";
+import {
+  ConcludeFacts,
+  githubLiveLayer,
+  SideOutputConfig,
+} from "@fractalboxdev/flare-dispatch-github";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { describe, expect, it } from "vitest";
-import { AccessIdentity } from "./dispatch.ts";
 import {
   APP_ID,
   BASE,
@@ -87,6 +90,7 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
     Layer.provide(
       Layer.mergeAll(
         alarms,
+        Layer.succeed(ConcludeFacts, { of: () => Effect.succeed(null) }),
         Layer.succeed(SideOutputConfig, {
           appBot: { login: "app[bot]", name: "app[bot]", email: "app@example.com" },
           slack: undefined,
@@ -97,22 +101,19 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
   );
   const intake = intakeLayer({
     db,
-    fetch,
     settings: {
       catalog: (name) => CATALOG[name],
       profile: buildProfile("production"),
       appId: APP_ID,
       webhookSecret: SECRET,
       webhookEvents: undefined,
-      oidcAudience: undefined,
-      dispatchers: [],
       allows: () => true,
       confidentiality: () => "unclassified",
+      writeCredentialIn: () => null,
     },
   });
   const layer = Layer.mergeAll(
     intake,
-    Layer.succeed(AccessIdentity, { identity: () => Effect.succeed(null) }),
     Layer.succeed(ExecutionCanceller, { cancel: () => Effect.void }),
   ).pipe(
     Layer.provideMerge(profileClassResolver.pipe(Layer.provide(alarms))),
@@ -165,14 +166,5 @@ describe("the intake routes on the live Layers", () => {
     expect(w.db.sqlite.prepare("select reason from shed order by id").all()).toEqual([
       { reason: "manifest: invalid" },
     ]);
-  });
-
-  it("[FD-INT-034] [FD-IFC-027] a dispatch with no OIDC audience configured and no Access identity answers 401", async () => {
-    const w = await worker();
-    const r = await w.handle(
-      new Request("https://cp.example.com/v1/dispatch/check", { method: "POST", body: "{}" }),
-      "dispatch/check",
-    );
-    expect(r!.status).toBe(401);
   });
 });

@@ -139,7 +139,7 @@ describe("dispatch identity", () => {
     body: JSON.stringify({ repository, inputs: {} }),
   });
 
-  it("[FD-IFC-027]: no token, or an Access identity outside dispatchers, answers 401 before the run is looked up", async () => {
+  it("[FD-IFC-027], [FD-INT-034]: no token, or an Access identity outside dispatchers, answers 401 before the run is looked up", async () => {
     const before = h.doubles.calls.submissions.length;
     expect((await h.fetch("/v1/dispatch/no-such-run", dispatchInit({}))).status).toBe(401);
     const member = await h.fetch("/v1/dispatch/check", await h.asAccess(MEMBER, dispatchInit({})));
@@ -189,7 +189,7 @@ describe("dispatch identity", () => {
     );
   });
 
-  it("[FD-IFC-026]: a body naming another repository than the token answers 403 repository_mismatch", async () => {
+  it("[FD-IFC-026], [FD-INT-036]: a body naming another repository than the token answers 403 repository_mismatch", async () => {
     const jwt = await h.actions.sign(actionsClaims("acme/widgets"));
     const response = await h.fetch(
       "/v1/dispatch/check",

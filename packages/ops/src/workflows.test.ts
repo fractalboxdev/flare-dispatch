@@ -126,9 +126,7 @@ describe("deploy workflow", () => {
 
 describe("merge gate and nightly", () => {
   it("[FD-OPS-026] [FD-OPS-027] [FD-VER-023] CI runs a job per merge-gate check and a not-required fallback over all of them", () => {
-    // The e2e-local cloud path needs the workerd stack and a fixture server, which no package ships yet.
-    for (const check of MERGE_GATE_CHECKS.filter((c) => c !== "e2e-local"))
-      expect(Object.keys(ci.jobs)).toContain(check);
+    for (const check of MERGE_GATE_CHECKS) expect(Object.keys(ci.jobs)).toContain(check);
     expect(ci.on).toHaveProperty("pull_request");
     const fallback = ci.jobs["fallback-ci"]!;
     expect(new Set(fallback.needs)).toEqual(
@@ -156,6 +154,29 @@ describe("merge gate and nightly", () => {
     expect(ci.jobs["diff"]!.steps!.at(-1)!.run).toContain("harness.ts diff --traces 10000");
     expect(ci.jobs["sim"]!.steps!.at(-1)!.run).toContain("harness.ts sim");
     expect(ci.jobs["replay"]!.steps!.at(-1)!.run).toContain("harness.ts replay");
+  });
+
+  it("the e2e-local job runs every suite under the control plane's test/e2e-local on every pull request", async () => {
+    const job = ci.jobs["e2e-local"]!;
+    expect(job.if).toBeUndefined();
+    expect(job.steps!.at(-1)!.run).toContain(
+      "pnpm --filter @fractalboxdev/flare-dispatch-control-plane run test:e2e-local",
+    );
+    const app = readJson("apps/control-plane/package.json");
+    expect(app.scripts?.["test:e2e-local"]).toBe("vitest run --config vitest.e2e.config.ts");
+    const e2e = (
+      (await import(join(ROOT, "apps/control-plane/vitest.e2e.config.ts"))) as {
+        default: { test: { include: string[] } };
+      }
+    ).default.test.include;
+    expect(matchesAny(e2e, "test/e2e-local/api.test.ts")).toBe(true);
+    // `pnpm test` leaves the stack to this job.
+    const unit = (
+      (await import(join(ROOT, "apps/control-plane/vitest.config.ts"))) as {
+        default: { test: { exclude: string[] } };
+      }
+    ).default.test.exclude;
+    expect(matchesAny(unit, "test/e2e-local/api.test.ts")).toBe(true);
   });
 
   it("[FD-VER-032] the conf job runs mameko's suite on the composed control plane", () => {
@@ -243,6 +264,7 @@ describe("Access configuration", () => {
       "executor connect",
       "health",
       "well-known",
+      "log aggregate",
       "log",
       "artifact",
       "compile-cache",
@@ -255,6 +277,7 @@ describe("Access configuration", () => {
       "/v1/executors/connect",
       "/health",
       "/.well-known/openid-configuration",
+      "/v1/executions/e1/logs",
       "/v1/executions/e1/logs/run.log",
       "/v1/artifacts/a1",
       "/v1/compile-cache/obj/abc",

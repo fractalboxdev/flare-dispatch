@@ -1,14 +1,15 @@
 // checkConclusion: the one mapping from verdict to check-run conclusion
 // (specs/github-output.md § Conclusion mapping), verdictOf: the mapping from
-// mameko's execution outcome to the verdict, and the check-run text the conclude
-// update carries.
+// mameko's execution outcome to the verdict, the `neutral` invariant, and the
+// check-run text the conclude update carries.
 import {
   BUILT_IN_REASON_KINDS,
   CATEGORIES,
   type Category,
   type ExecutionOutcome,
 } from "@fractalboxdev/mameko-coordinator";
-import { Match, Schema } from "effect";
+import { AlarmPort } from "@fractalboxdev/mameko-ports";
+import { Effect, Match, Schema } from "effect";
 
 /**
  * mameko's closed failure categories. An acceptance-check rejection carries the reason kind the check returns,
@@ -72,11 +73,28 @@ const categoryOf = (reason: string, declared: Readonly<Record<string, Category>>
 };
 
 /**
+ * mameko's execution outcome as its terminal write records it: the outcome row's payload is `{ outcome }`, and a
+ * stored outcome may omit the epoch (mameko `store-sqlite` `applyOutbox`). Only the fields a verdict reads are kept.
+ */
+export const RecordedOutcome = Schema.Union([
+  Schema.TaggedStruct("Success", {}),
+  Schema.TaggedStruct("Failure", { reason: Schema.String }),
+  Schema.TaggedStruct("Cancelled", { cause: Schema.String }),
+  Schema.TaggedStruct("Skipped", { detail: Schema.String }),
+  Schema.TaggedStruct("Deferred", {}),
+  Schema.TaggedStruct("Expired", {}),
+]);
+export type RecordedOutcome = typeof RecordedOutcome.Type;
+
+/** The payload of the outcome row mameko inserts with an execution's terminal write. */
+export const OutcomePayload = Schema.Struct({ outcome: RecordedOutcome });
+
+/**
  * The verdict of mameko's execution outcome, one case per tag (MAMEKO-RUN-047). A run's `skipped` carries only the
  * detail, so its reason is `not-applicable`.
  */
 export const verdictOf = (
-  outcome: ExecutionOutcome,
+  outcome: ExecutionOutcome | RecordedOutcome,
   declared: Readonly<Record<string, Category>> = {},
 ): Verdict =>
   Match.value(outcome).pipe(
@@ -96,6 +114,79 @@ export const verdictOf = (
     Match.tag("Expired", (): Verdict => ({ _tag: "expired" })),
     Match.exhaustive,
   );
+
+/**
+ * The verdict an execution row records in its `status` and `reason` columns, which mameko's terminal write sets with the
+ * outcome row; null while the execution is not terminal. A skip's reason reads `<reason>: <detail>`.
+ */
+export const recordedVerdict = (status: string, reason: string | null): Verdict | null =>
+  Match.value(status).pipe(
+    Match.when("success", (): Verdict => ({ _tag: "success" })),
+    Match.when("failure", (): Verdict => ({
+      _tag: "failure",
+      category: categoryOf(reason ?? "", {}),
+      reason: reason ?? "",
+    })),
+    Match.when("cancelled", (): Verdict => ({ _tag: "cancelled", cause: reason ?? "cancelled" })),
+    Match.when("skipped", (): Verdict => {
+      const text = reason ?? "";
+      const colon = text.indexOf(":");
+      return colon === -1
+        ? { _tag: "skipped", reason: text, detail: "" }
+        : {
+            _tag: "skipped",
+            reason: text.slice(0, colon).trim(),
+            detail: text.slice(colon + 1).trim(),
+          };
+    }),
+    Match.when("deferred", (): Verdict => ({ _tag: "deferred" })),
+    Match.when("expired", (): Verdict => ({ _tag: "expired" })),
+    Match.orElse(() => null),
+  );
+
+/** Whether a conclusion agrees with the recorded outcome: `neutral` only on a listed `not-applicable` skip. */
+export const neutralHolds = (conclusion: string | null, recorded: Verdict) =>
+  conclusion !== "neutral" ||
+  Match.value(recorded).pipe(
+    Match.tag(
+      "skipped",
+      ({ reason, detail }) =>
+        reason === "not-applicable" && NOT_APPLICABLE_DETAILS.includes(detail),
+    ),
+    Match.orElse(() => false),
+  );
+
+/** Raises the `neutral-invariant` page alarm when a check run concluded `neutral` on any other outcome (FD-GH-031). */
+export const checkNeutralInvariant = (
+  executionId: string,
+  scopeId: string,
+  conclusion: string | null,
+  recorded: Verdict,
+) =>
+  neutralHolds(conclusion, recorded)
+    ? Effect.void
+    : Effect.flatMap(
+        AlarmPort.use((a) => Effect.succeed(a)),
+        (alarms) =>
+          alarms
+            .deliver({
+              name: "neutral-invariant",
+              severity: "page",
+              dedupeKey: `neutral-invariant:${executionId}`,
+              state: "raised",
+              detail: {
+                executionId,
+                scopeId,
+                recorded,
+                mapped: checkConclusion(recorded).conclusion,
+              },
+            })
+            .pipe(
+              Effect.catchTag("AlarmDeliveryFailed", (e) =>
+                Effect.logWarning("alarm not delivered", e.reason),
+              ),
+            ),
+      );
 
 /** GitHub's limit on a check run's summary and text. */
 export const OUTPUT_LIMIT = 65_535;

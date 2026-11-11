@@ -8,6 +8,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Layer } from "effect";
 import { APP_PERMISSIONS } from "../app-manifest.ts";
 import { architectureFindings } from "../architecture.ts";
@@ -20,9 +21,17 @@ import {
   type StageReport,
   type WorkerTemplate,
 } from "../deploy.ts";
-import { admissionCapCheck, bindingCheck, failed, profileCheck, type Finding } from "../drift.ts";
+import {
+  admissionCapCheck,
+  bindingCheck,
+  failed,
+  profileCheck,
+  templateInvariants,
+  unrenderedCheck,
+  type Finding,
+} from "../drift.ts";
 import { decodeOverlay, type OverlayValues } from "../overlay.ts";
-import type { WorkerConfig } from "../render.ts";
+import { parseJsonc, renderTemplate, type WorkerConfig } from "../render.ts";
 import { cloudflareClient, githubClient, nodeRunner, type CommandRunner } from "./clients.ts";
 import { liveDeployTarget } from "./live-target.ts";
 
@@ -43,13 +52,25 @@ export interface WorkerSpec {
   readonly dispatcher?: boolean;
 }
 
-/** The Workers of specs/architecture.md: the dispatcher (the v2 control plane) and the documentation Worker. */
+/**
+ * The Workers of specs/architecture.md: the dispatcher (the v2 control plane) and the documentation Worker. The
+ * dispatcher declares `ALERT_SINK`, the sink its alarm port sends to, so no deploy goes out without one (FD-OPS-053).
+ */
 export const V2_WORKERS: readonly WorkerSpec[] = [
   {
     worker: "control-plane",
     templatePath: "apps/control-plane/wrangler.jsonc",
     hostKey: "dispatcher",
-    bindings: ["DB", "CHANNEL", "EXECUTION", "EPOCH_ANCHOR", "MONITOR", "PLANE_ID", "DEPLOYMENT"],
+    bindings: [
+      "DB",
+      "CHANNEL",
+      "EXECUTION",
+      "EPOCH_ANCHOR",
+      "MONITOR",
+      "PLANE_ID",
+      "DEPLOYMENT",
+      "ALERT_SINK",
+    ],
     dispatcher: true,
   },
   { worker: "docs", templatePath: "apps/docs/wrangler.jsonc", hostKey: "docs", probePath: "/" },
@@ -79,7 +100,11 @@ export const repositoryRoot = (from: string = process.cwd()): string => {
   return dir;
 };
 
-const extraChecks =
+/**
+ * The checks over one rendered configuration: the bindings its env declares (FD-OPS-019) and, on the dispatcher, the
+ * pool caps (FD-OPS-020, FD-PROF-033) and the components (FD-ARCH-001).
+ */
+export const renderedChecks =
   (specs: readonly WorkerSpec[]) =>
   (worker: string, config: WorkerConfig): readonly Finding[] => {
     const spec = specs.find((s) => s.worker === worker);
@@ -95,8 +120,31 @@ const extraChecks =
     ];
   };
 
-/** mameko's profile validator over the document the deploy carries (FD-OPS-021). */
-const profileFindings = profileCheck(profileDocumentFor("production"), validationContext);
+/**
+ * mameko's profile validator over a profile document at the current phase; the deploy carries the production document
+ * (FD-OPS-021, FD-PROF-064).
+ */
+export const profileDriftFindings = (
+  document: ProfileDocument = profileDocumentFor("production"),
+) => profileCheck(document, validationContext);
+
+const profileFindings = profileDriftFindings();
+
+/**
+ * The pull-request part of the drift check (FD-OPS-019 to FD-OPS-021, FD-OPS-026): one Worker's template rendered
+ * from `overlay`, against the template's invariants and `renderedChecks`. Answers the rendered text with the findings.
+ */
+export const staticDrift = (spec: WorkerSpec, template: string, overlay: OverlayValues) =>
+  renderTemplate(spec.worker, template, overlay).pipe(
+    Effect.map((rendered) => ({
+      rendered,
+      findings: [
+        ...templateInvariants(spec.worker, parseJsonc(template)),
+        ...unrenderedCheck(spec.worker, rendered),
+        ...renderedChecks([spec])(spec.worker, parseJsonc(rendered)),
+      ],
+    })),
+  );
 
 /**
  * The `Operability` service's two operations. `fd`'s Layer is
@@ -157,7 +205,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
 
   const doctor = (overlay: string) =>
     report(
-      fdDoctor(overlay, workers(), APP_PERMISSIONS, extraChecks(specs), profileFindings),
+      fdDoctor(overlay, workers(), APP_PERMISSIONS, renderedChecks(specs), profileFindings),
       (findings) => {
         const problems = findings.map((f) => `${f.severity} ${f.path}: ${f.detail}`).join("\n");
         const ok = !failed(findings);
@@ -181,7 +229,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
               request.overlay,
               workers(),
               APP_PERMISSIONS,
-              extraChecks(specs),
+              renderedChecks(specs),
               profileFindings,
             ),
             (r) => ({

@@ -1,10 +1,12 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCheck } from "./check.ts";
 import { CommandExit } from "./command.ts";
 import { ctx, fakeArtifacts, fakeExec, SHA } from "./gate.test-support.ts";
 import type { GateJobInput } from "./inputs.ts";
 import { runGateJob, writebackBranch } from "./job.ts";
+import { isKey, KEY_PATTERN } from "./manifest.ts";
+import { checkDecoder } from "./triggers.ts";
 import { runOxlint, OXLINT_PINNED_VERSION } from "./oxlint.ts";
 import { GateCache, localContentArtifacts, type CacheEntry } from "./ports.ts";
 import { LocalContent, StoreUnavailable } from "@fractalboxdev/mameko-run";
@@ -233,6 +235,47 @@ describe("a gate job", () => {
 });
 
 describe("check", () => {
+  it("[FD-GATE-020] runs a labelled entry whose label matches the key pattern, and refuses one that does not", async () => {
+    const entry = { label: "lint", command: "pnpm lint" };
+    const decoded = Option.getOrThrow(
+      checkDecoder(entry)({
+        _tag: "webhook",
+        deliveryId: "d1",
+        delivery: {
+          event: "pull_request",
+          action: "synchronize",
+          repository: { fullName: "o/r", cloneUrl: ctx.repo, defaultBranch: "main" },
+          pullRequest: {
+            number: 3,
+            draft: false,
+            author: "dev",
+            headSha: SHA,
+            headRef: "f",
+            baseRef: "main",
+            baseSha: "c".repeat(40),
+          },
+        },
+      }),
+    );
+    expect(decoded.label).toBe("lint");
+
+    expect(KEY_PATTERN.source).toBe("^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$");
+    for (const label of ["a", "Z9", "unit.e2e_v2-x", "x".repeat(32)]) expect(isKey(label)).toBe(true);
+    for (const label of ["", ".a", "_a", "-a", "a b", "a:b", "a/b", "x".repeat(33)])
+      expect(isKey(label)).toBe(false);
+
+    const accepted = fakeExec();
+    await run(runCheck(decoded).pipe(Effect.provide(withFakes(accepted))));
+    expect(accepted.ran.map((r) => r.command)).toContain("pnpm lint");
+
+    const refused = fakeExec();
+    const outcome = await run(
+      runCheck({ ...decoded, label: "x".repeat(33) }).pipe(Effect.provide(withFakes(refused))),
+    );
+    expect(outcome).toEqual({ _tag: "failure", reason: "config: label" });
+    expect(refused.ran).toEqual([]);
+  });
+
   it("[FD-GATE-021] refuses a bad label and runs no command", async () => {
     for (const label of ["-lead", "has space", "x".repeat(33)]) {
       const exec = fakeExec();

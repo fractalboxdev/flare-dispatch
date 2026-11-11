@@ -3,7 +3,12 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ANNOTATION_BATCH, CheckRunApplierLive } from "./applier.ts";
 import { GithubHttpError, GithubNetworkError } from "./client.ts";
-import { OUTPUT_LIMIT } from "./conclusion.ts";
+import {
+  conclusionFactsOf,
+  type ConclusionFacts,
+  type ExecutionRecordFacts,
+} from "./conclude-facts.ts";
+import { checkConclusion, OUTPUT_LIMIT, verdictOf } from "./conclusion.ts";
 import { fakeGithub, fakeLayers, row, type FakeGithub } from "./fake.test-support.ts";
 
 const ref = {
@@ -237,6 +242,192 @@ describe("check.conclude", () => {
       _tag: "found",
       externalRef: "1000",
     });
+  });
+});
+
+describe("check.conclude from mameko's outcome row", () => {
+  const LOG = "https://fd.example.com/v1/executions/exec-1/logs?t=token";
+  const facts = (overrides: Partial<ConclusionFacts> = {}): ConclusionFacts => ({
+    name: ref.name,
+    headSha: ref.head_sha,
+    attempt: 1,
+    detailsUrl: LOG,
+    details,
+    recorded: null,
+    ...overrides,
+  });
+  const withFacts = (overrides: Partial<ConclusionFacts> = {}, id = "exec-1") => {
+    const gh = fakeGithub();
+    gh.facts.set(id, facts(overrides));
+    return gh;
+  };
+  /** The row mameko's terminal write inserts: intent key `outcome`, payload `{ outcome }`. */
+  const outcomeRow = (outcome: unknown, overrides: Partial<IntentRow> = {}) =>
+    row("check.conclude", { outcome }, { intentKey: "outcome", ...overrides });
+
+  it("[FD-GH-014] concludes each outcome with the conclusion checkConclusion returns for verdictOf(outcome)", async () => {
+    const outcomes = [
+      { _tag: "Success", epoch: 1 },
+      { _tag: "Failure", reason: "lint: 3 errors", epoch: 1 },
+      { _tag: "Failure", reason: "capacity: no executor", epoch: null },
+      { _tag: "Cancelled", cause: "superseded" },
+      { _tag: "Skipped", detail: "draft-pr", epoch: 1 },
+      { _tag: "Deferred" },
+      { _tag: "Expired" },
+    ] as const;
+    for (const outcome of outcomes) {
+      const gh = withFacts({ recorded: verdictOf(outcome) });
+      expect(await apply(gh, outcomeRow(outcome))).toEqual({
+        _tag: "applied",
+        externalRef: "1000",
+      });
+      const expected = checkConclusion(verdictOf(outcome));
+      expect(gh.runs).toMatchObject([
+        {
+          name: ref.name,
+          external_id: "exec-1",
+          status: "completed",
+          conclusion: expected.conclusion,
+          output: { title: expected.title },
+        },
+      ]);
+    }
+  });
+
+  it("[FD-GH-014] a lookup of the outcome row finds the conclusion already on the check run", async () => {
+    const gh = withFacts();
+    const r = outcomeRow({ _tag: "Failure", reason: "lint: 3 errors" });
+    expect(await lookup(gh, r)).toEqual({ _tag: "absent" });
+    await apply(gh, r);
+    expect(await lookup(gh, r)).toEqual({ _tag: "found", externalRef: "1000" });
+  });
+
+  it("[FD-GH-014] an outcome row of an execution with no record is refused; an unreadable record is retried", async () => {
+    const r = outcomeRow({ _tag: "Success" });
+    expect(await apply(fakeGithub(), r)).toEqual({
+      _tag: "refused",
+      reason: "conclude: no record of the execution",
+    });
+    const down = withFacts();
+    down.factsDown = true;
+    expect(await apply(down, r)).toEqual({ _tag: "retryable", reason: "records: D1 unavailable" });
+    expect(await lookup(down, r)).toEqual({
+      _tag: "undetermined",
+      reason: "records: D1 unavailable",
+    });
+    expect(down.calls).toEqual([]);
+  });
+
+  it("[FD-GH-008] every attempt concludes under the family's one name; only a later attempt's title names it", async () => {
+    const gh = fakeGithub();
+    gh.facts.set("exec-1", facts({ attempt: 1 }));
+    gh.facts.set("exec-2", facts({ attempt: 2 }));
+    await apply(gh, outcomeRow({ _tag: "Failure", reason: "lint: 3 errors" }));
+    await apply(gh, outcomeRow({ _tag: "Success" }, { executionId: "exec-2" }));
+    expect(gh.runs.map((r) => [r.name, r.external_id, r.output.title])).toEqual([
+      [ref.name, "exec-1", "lint: 3 errors"],
+      [ref.name, "exec-2", "success (attempt 2)"],
+    ]);
+  });
+
+  it("[FD-GH-013] sets the details URL to the execution's tokened log link when it creates or concludes the check run", async () => {
+    const created = withFacts();
+    await apply(created, outcomeRow({ _tag: "Success" }));
+    expect(created.detailsUrls.get(1000)).toBe(LOG);
+
+    const updated = withFacts();
+    await apply(updated, row("check.open", { name: ref.name, head_sha: ref.head_sha }));
+    expect(updated.detailsUrls.get(1000)).toBeUndefined();
+    await apply(updated, outcomeRow({ _tag: "Success" }));
+    expect(updated.detailsUrls.get(1000)).toBe(LOG);
+  });
+
+  it("[FD-GH-015] the summary states the execution's class, executor, placement, queue age, costs and reason", async () => {
+    const record: ExecutionRecordFacts = {
+      name: ref.name,
+      headSha: ref.head_sha,
+      attempt: 1,
+      className: "required",
+      status: "failure",
+      reason: "lint: 3 errors",
+      enqueuedAt: 1_000,
+      finishedAt: 90_000,
+      placement: {
+        admittedAt: 1_000,
+        claimLatencyMs: 4_000,
+        leasedKind: "cloudflare",
+        acceptedKind: "cloudflare",
+        cloudWon: true,
+      },
+      reservation: { holdMicroUsd: 20_000, state: "settled", meteredMicroUsd: 12_000 },
+    };
+    const gh = fakeGithub();
+    gh.facts.set("exec-1", conclusionFactsOf(record, LOG));
+    await apply(gh, outcomeRow({ _tag: "Failure", reason: "lint: 3 errors" }));
+    const lines = gh.runs[0]?.output.summary?.split("\n") ?? [];
+    expect(lines).toEqual([
+      "- Class: required",
+      "- Executor: cloudflare (cloud entry won)",
+      "- Queue age: 4 s",
+      "- Cost: reserved 0.020000 USD, settled 0.012000 USD",
+      "- Reason: lint: 3 errors",
+    ]);
+  });
+
+  it("[FD-GH-015] an execution concluded before any lease states no executor and its whole wait", async () => {
+    const base: ExecutionRecordFacts = {
+      name: ref.name,
+      headSha: ref.head_sha,
+      attempt: 1,
+      className: "batch",
+      status: "deferred",
+      reason: null,
+      enqueuedAt: 1_000,
+      finishedAt: 61_000,
+      placement: null,
+      reservation: null,
+    };
+    expect(conclusionFactsOf(base, undefined).details).toMatchObject({
+      executor_kind: null,
+      placement_reason: "not placed",
+      queue_age_ms: 60_000,
+      reserved_micro_usd: 0,
+      settled_micro_usd: 0,
+    });
+    const queued = {
+      ...base,
+      placement: {
+        admittedAt: 11_000,
+        claimLatencyMs: null,
+        leasedKind: null,
+        acceptedKind: null,
+        cloudWon: null,
+      },
+      reservation: { holdMicroUsd: 5_000, state: "held", meteredMicroUsd: null },
+    };
+    expect(conclusionFactsOf(queued, undefined).details).toMatchObject({
+      placement_reason: "no lease granted",
+      queue_age_ms: 50_000,
+      reserved_micro_usd: 5_000,
+      settled_micro_usd: 0,
+    });
+  });
+
+  it("[FD-GH-031] a neutral conclusion over an execution that records another outcome pages neutral-invariant", async () => {
+    const skip = { _tag: "Skipped", detail: "draft-pr", epoch: 1 } as const;
+    const holds = withFacts({ recorded: verdictOf(skip) });
+    await apply(holds, outcomeRow(skip));
+    expect(holds.runs[0]?.conclusion).toBe("neutral");
+    expect(holds.alarms).toEqual([]);
+
+    const broken = withFacts({
+      recorded: { _tag: "failure", category: "capacity", reason: "capacity: model unavailable" },
+    });
+    await apply(broken, outcomeRow(skip));
+    expect(broken.runs[0]?.conclusion).toBe("neutral");
+    expect(broken.alarms.map((a) => [a.name, a.severity, a.dedupeKey])).toEqual([
+      ["neutral-invariant", "page", "neutral-invariant:exec-1"],
+    ]);
   });
 });
 

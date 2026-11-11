@@ -347,6 +347,15 @@ export const pinChecks = (
   return out;
 };
 
+/**
+ * The text with specs/README.md's `depends on mameko at commit` pin and every `blob` or `tree` link into mameko's
+ * repository naming `commit`, so `pinnedCommit` and `pinChecks` agree with the vendored submodule.
+ */
+export const repinMameko = (text: string, commit: string): string =>
+  text
+    .replace(/(depends on mameko at commit `)[0-9a-f]{40}(`)/g, `$1${commit}$2`)
+    .replace(/(github\.com\/fractalboxdev\/mameko\/(?:blob|tree)\/)[0-9a-f]+\//g, `$1${commit}/`);
+
 /** The requirement count per area, phase and tag. */
 export interface Counts {
   readonly byPhase: ReadonlyMap<number, { total: number; tags: Record<string, number> }>;

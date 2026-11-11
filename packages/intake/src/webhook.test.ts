@@ -5,13 +5,13 @@ import { fakeRepo } from "@fractalboxdev/flare-dispatch-github/testing";
 import { describe, expect, it } from "vitest";
 import { catalogRuns } from "./catalog.ts";
 import {
-  actionsToken,
+  admit,
   APP_ID,
+  authenticated,
   BASE,
   bodyOf,
   checkRunRerequested,
   checkSuiteRerequested,
-  dispatchRequest,
   harness,
   HEAD,
   manifest,
@@ -117,6 +117,24 @@ describe("webhook to admission", () => {
       h.rows("select canonical from dedup_keys order by canonical").map((r) => r.canonical),
     ).toEqual([`check:ci:${REPO}:${HEAD}`, `lint:${REPO}:${HEAD}`]);
     expect(h.rows("select count(*) as n from placements")[0]!.n).toBe(2);
+  });
+
+  it("[FD-GATE-020] a labelled check entry reports under flare-dispatch/check:<label>, an unlabelled entry under flare-dispatch/<run>", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(
+          manifest([
+            { recipe: "check", label: "ci", triggers: ["pull_request"] },
+            { recipe: "lint", triggers: ["pull_request"] },
+          ]),
+        ),
+      },
+    });
+    await deliver(h, "pull_request", pullRequestPayload());
+    expect(h.recorded.resolved.map((r) => [r.run.name, r.checkName])).toEqual([
+      ["check", "flare-dispatch/check:ci"],
+      ["lint", "flare-dispatch/lint"],
+    ]);
   });
 
   it("[FD-INT-003] a redelivery answers 202 with the same executions and duplicate: true", async () => {
@@ -559,15 +577,19 @@ describe("cooldown", () => {
     );
   });
 
-  it("[FD-INT-057] MAMEKO-ADM-041 a held request released into a full queue concludes capacity: queue full and leaves the hold", async () => {
+  it("[FD-INT-057] MAMEKO-ADM-041 a held batch request released while the run's earlier execution still queues takes its place, and the earlier one is recorded deferred", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
     await h.adjust(10_000);
     await deliver(h, "pull_request", pullRequestPayload({ head: "2".repeat(40) }), "d-2");
-    const id = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
+    const [earlier, id] = h
+      .records()
+      .filter((r) => r.run === "lint")
+      .map((r) => r.execution_id as string);
     await h.adjust(50_000);
-    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0, concluded: 1 });
-    expect(h.executions().find((e) => e.id === id)?.status).toBe("failure");
+    expect(await h.run(releaseHeld())).toMatchObject({ admitted: 1, concluded: 0 });
+    expect(h.executions().find((e) => e.id === earlier)?.status).toBe("deferred");
+    expect(h.executions().find((e) => e.id === id)?.status).toBe("pending");
     expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
   });
 
@@ -691,30 +713,26 @@ describe("the catalogue's request decoders through the webhook route", () => {
         expect.objectContaining({ sha: HEAD, branch: "main", entry: { command: "pnpm deploy" } }),
       ],
     ]);
-    const dispatched = await bodyOf(
-      await h.run(
-        handleIntake(
-          dispatchRequest(
-            "worker-deploy",
-            {
-              sha: HEAD,
-              inputs: {
-                repo: `https://github.com/${REPO}.git`,
-                sha: HEAD,
-                ref: "refs/heads/main",
-                scope: REPO,
-                branch: "main",
-                entry: { command: "pnpm deploy" },
-              },
-            },
-            { authorization: `Bearer ${actionsToken({})}`, "idempotency-key": "deploy-1" },
-          ),
-          "dispatch/worker-deploy",
-        ),
-      ),
+    const inputs = {
+      repo: `https://github.com/${REPO}.git`,
+      sha: HEAD,
+      ref: "refs/heads/main",
+      scope: REPO,
+      branch: "main",
+      entry: { command: "pnpm deploy" },
+    };
+    const dispatched = await admit(
+      h,
+      authenticated({
+        run: "worker-deploy",
+        sha: HEAD,
+        label: null,
+        inputs,
+        idempotency: { key: "deploy-1", body: { sha: HEAD, inputs } },
+      }),
     );
     expect(dispatched).toMatchObject({
-      execution_id: (pushed.executions as string[])[0],
+      executionId: (pushed.executions as string[])[0],
       duplicate: true,
     });
     expect(h.rows("select canonical from dedup_keys")).toEqual([

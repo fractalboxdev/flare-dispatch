@@ -7,6 +7,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
+    "test:e2e-local": "vitest run --config vitest.e2e.config.ts",
     "dev": "wrangler dev"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
     "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
     "@fractalboxdev/mameko-kernel": "workspace:*",
     "@fractalboxdev/mameko-ports": "workspace:*",
+    "@fractalboxdev/mameko-store-sqlite": "workspace:*",
     "effect": "4.0.6"
   },
   "devDependencies": {

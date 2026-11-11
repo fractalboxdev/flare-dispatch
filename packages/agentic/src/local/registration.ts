@@ -28,7 +28,7 @@ export type RegistrationPayload = typeof RegistrationPayload.Type;
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-/** A ULID of 26 Crockford base32 characters: 48 bits of milliseconds, then 80 random bits (MAMEKO-ADM-033). */
+/** A ULID of 26 Crockford base32 characters: 48 bits of milliseconds, then 80 random bits (MAMEKO-ADM-032). */
 export const ulid = (
   now: number,
   random: Uint8Array = crypto.getRandomValues(new Uint8Array(10)),

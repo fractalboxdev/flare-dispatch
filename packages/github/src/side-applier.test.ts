@@ -16,6 +16,7 @@ import {
   fakeWritesLayer,
   type FakeSide,
 } from "./fake-writes.test-support.ts";
+import { fakeConcludeFacts, fakeGithub } from "./fake.test-support.ts";
 import { GithubApplierLive } from "./github-applier.ts";
 import { intentMarker, ISSUE_PAGES } from "./side-applier.ts";
 import {
@@ -67,6 +68,7 @@ const layers = (w: World, installations: Record<string, number> = { [REPO]: 7 },
       installationFor: (scope) => Effect.succeed(installations[scope] ?? null),
     }),
     Layer.succeed(AlarmPort, { deliver: (a) => Effect.sync(() => void w.alarms.push(a)) }),
+    fakeConcludeFacts(fakeGithub()),
     Layer.succeed(SideOutputConfig, {
       appBot: BOT,
       slack: { url: "https://hooks.example.com/verdicts", secret: "slack-secret" },
