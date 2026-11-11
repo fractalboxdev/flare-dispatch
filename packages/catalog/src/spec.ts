@@ -125,6 +125,11 @@ export interface CatalogEntry {
    * macOS runtime exists, so such a run stays reachable only under the `development` deployment.
    */
   readonly hostExecution: boolean;
+  /**
+   * The workflow version of the run's registered body: a lease's run payload names it, and the body dispatches on it
+   * (MAMEKO-ENG-071). Each run registers one body, at version 1.
+   */
+  readonly workflowVersion: number;
 }
 
 const JOB: readonly Capability[] = ["Workspace", "Exec", "Artifact"];
@@ -194,6 +199,7 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     containerRateUsdPerHour: null,
     appCapabilities: [],
     hostExecution: true,
+    workflowVersion: 1,
   },
   oxlint: {
     spec: oxlintSpec,
@@ -204,6 +210,7 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     containerRateUsdPerHour: null,
     appCapabilities: [],
     hostExecution: true,
+    workflowVersion: 1,
   },
   "gate-job": {
     spec: gateJobSpec,
@@ -214,6 +221,7 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     containerRateUsdPerHour: null,
     appCapabilities: [],
     hostExecution: true,
+    workflowVersion: 1,
   },
   "offload-test": {
     spec: offloadTestSpec,
@@ -224,6 +232,7 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     containerRateUsdPerHour: 0,
     appCapabilities: ["GithubRead"],
     hostExecution: false,
+    workflowVersion: 1,
   },
   "worker-deploy": {
     spec: workerDeploySpec,
@@ -234,6 +243,7 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     containerRateUsdPerHour: null,
     appCapabilities: ["GithubRead"],
     hostExecution: false,
+    workflowVersion: 1,
   },
   "deploy-smoke": {
     spec: deploySmokeSpec,
@@ -244,6 +254,7 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     containerRateUsdPerHour: 0,
     appCapabilities: [],
     hostExecution: false,
+    workflowVersion: 1,
   },
   "sandbox-image": {
     spec: sandboxImageSpec,
@@ -254,6 +265,7 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     containerRateUsdPerHour: null,
     appCapabilities: [],
     hostExecution: false,
+    workflowVersion: 1,
   },
 };
 
@@ -286,6 +298,7 @@ const agenticEntries: Readonly<Record<string, CatalogEntry>> = Object.fromEntrie
               containerRateUsdPerHour: null,
               appCapabilities: [],
               hostExecution: false,
+              workflowVersion: 1,
               agentic: { declaration: entry.declaration, triggers: entry.triggers },
             } satisfies CatalogEntry,
           ],
