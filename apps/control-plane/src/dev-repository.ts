@@ -1,5 +1,5 @@
 // The repository a `development` deployment with no GitHub App reads: one commit of one repository, as the local
-// command that starts the deployment captured it (`pnpm dogfood` writes it from the checkout). Only the facts it holds
+// command that starts the deployment captured it (`pnpm ci:local` writes it from the checkout). Only the facts it holds
 // answer; every other read fails, so no caller decides on a read that never happened.
 import { Schema } from "effect";
 import { deployment, type ControlPlaneEnv } from "./config.ts";

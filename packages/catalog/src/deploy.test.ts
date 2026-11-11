@@ -177,7 +177,7 @@ describe("worker-deploy", () => {
       {
         kind: "dispatch.followOn",
         key: "deploy-smoke:0",
-        payload: { run: "deploy-smoke", repository: "o/r", sha: SHA, ref: ctx.ref },
+        payload: { run: "deploy-smoke", inputs: {} },
       },
     ]);
     const failed = await deploy(deployInput(), {

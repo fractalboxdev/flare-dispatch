@@ -2,6 +2,7 @@
 // admission transaction on SQLite.
 import { GithubHttpError } from "@fractalboxdev/flare-dispatch-github";
 import { fakeRepo } from "@fractalboxdev/flare-dispatch-github/testing";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { catalogRuns } from "./catalog.ts";
 import {
@@ -10,6 +11,7 @@ import {
   authenticated,
   BASE,
   bodyOf,
+  drainHeldChecks,
   checkRunRerequested,
   checkSuiteRerequested,
   harness,
@@ -430,6 +432,33 @@ describe("check re-runs", () => {
     expect(h.recorded.resolved).toHaveLength(1);
   });
 
+  it("FD-INT-054 a re-run keeps the labels and the placement constraint of the attempt it re-runs", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(manifest([{ recipe: "check", label: "ci", triggers: ["pull_request"] }])),
+      },
+      resolve: () => ({ _tag: "Class", class: "batch", labels: ["gpu"], alarm: null }),
+    });
+    const opened = await bodyOf(await deliver(h, "pull_request", pullRequestPayload()));
+    const id = (opened.executions as string[])[0]!;
+    settle(h, "failure");
+    h.db.sqlite.exec(`update intake_records set placement_constraint = 'pinned-pool'`);
+    await deliver(h, "check_run", checkRunRerequested(id), "d-2");
+    const [first, second] = h.records();
+    expect(JSON.parse(first!.labels_json as string)).toContain("gpu");
+    expect(second!.labels_json).toBe(first!.labels_json);
+    expect(second!.placement_constraint).toBe("pinned-pool");
+  });
+
+  it("[FD-INT-056] a rerequested check suite skips a local family, which posted no check run", async () => {
+    const { h, id } = await firstRun();
+    settle(h, "failure");
+    h.db.sqlite.exec(`update intake_records set trigger = 'local', placement_constraint = 'local-only'`);
+    const r = await bodyOf(await deliver(h, "check_suite", checkSuiteRerequested(), "d-2"));
+    expect(r.executions).toEqual([]);
+    expect(h.records().map((x) => x.family_root)).toEqual([id]);
+  });
+
   it.each([
     ["foreign_app", (id: string) => checkRunRerequested(id, 1)],
     ["unknown_check_run", () => checkRunRerequested("no-such-execution")],
@@ -586,14 +615,20 @@ describe("cooldown", () => {
     await deliver(h, "pull_request", pullRequestPayload({ head: "2".repeat(40) }), "d-2");
     const [, held] = h.records().filter((r) => r.run === "lint");
     const id = held!.execution_id as string;
-    // Only the held request posts: an admitted execution's check run is its `check.open` row's to create.
-    expect(h.github.runs).toEqual([
+    // Holding stages a row and sends no GitHub write; the drainer opens it under its permit.
+    expect(h.github.calls).toEqual([]);
+    expect(h.rows("select kind, state, sends from outbox where execution_id = ?", id)).toEqual([
+      { kind: "check.open", state: "pending", sends: 0 },
+    ]);
+    await drainHeldChecks(h);
+    const heldRuns = () => h.github.runs.filter((r) => r.external_id === id);
+    expect(heldRuns()).toEqual([
       expect.objectContaining({ name: "flare-dispatch/lint", external_id: id, status: "queued" }),
     ]);
 
     await h.adjust(20_000);
     expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0 });
-    expect(h.github.runs).toEqual([expect.objectContaining({ external_id: id, status: "queued" })]);
+    expect(heldRuns()).toEqual([expect.objectContaining({ external_id: id, status: "queued" })]);
 
     await h.adjust(30_000);
     expect(await h.run(releaseHeld())).toMatchObject({ admitted: 1 });
@@ -607,7 +642,7 @@ describe("cooldown", () => {
     ).toEqual([
       { kind: "check.open", payload: { name: "flare-dispatch/lint", head_sha: "2".repeat(40) } },
     ]);
-    expect(h.github.runs).toHaveLength(1);
+    expect(heldRuns()).toHaveLength(1);
   });
 
   it("[FD-INT-057] a redelivered held request posts no second check run, and a run that owns no check posts none", async () => {
@@ -617,7 +652,12 @@ describe("cooldown", () => {
     const payload = pullRequestPayload({ head: "2".repeat(40) });
     await deliver(h, "pull_request", payload, "d-2");
     await deliver(h, "pull_request", payload, "d-3");
-    expect(h.github.runs).toHaveLength(1);
+    const heldId = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
+    expect(h.rows("select kind from outbox where execution_id = ?", heldId)).toEqual([
+      { kind: "check.open" },
+    ]);
+    await drainHeldChecks(h);
+    expect(h.github.runs.filter((r) => r.external_id === heldId)).toHaveLength(1);
 
     const silent = await harness({
       settings: {
@@ -637,6 +677,62 @@ describe("cooldown", () => {
     expect(silent.github.runs).toEqual([]);
   });
 
+  it("[FD-INT-057] [FD-GH-001] [FD-GH-010] a failed held-check insert preserves the hold and redelivery repairs the same outbox row", async () => {
+    const h = await harness();
+    await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await h.adjust(10_000);
+    h.db.sqlite.exec(`create trigger fail_held_open before insert on outbox
+      when new.kind = 'check.open' and exists (select 1 from intake_held where execution_id = new.execution_id)
+      begin select raise(abort, 'injected held-open store failure'); end`);
+    const payload = pullRequestPayload({ head: "2".repeat(40) });
+    expect((await deliver(h, "pull_request", payload, "d-2"))!.status).toBe(503);
+    const held = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
+    expect(h.rows("select execution_id from intake_held")).toEqual([{ execution_id: held }]);
+    expect(h.rows("select kind from outbox where execution_id = ?", held)).toEqual([]);
+    expect(h.github.calls).toEqual([]);
+    h.db.sqlite.exec("drop trigger fail_held_open");
+    const again = await bodyOf(await deliver(h, "pull_request", payload, "d-3"));
+    expect(again.duplicate).toBe(true);
+    expect(h.records().filter((r) => r.run === "lint")).toHaveLength(2);
+    await drainHeldChecks(h);
+    expect(h.github.runs.filter((r) => r.external_id === held)).toHaveLength(1);
+    await h.adjust(50_000);
+    await h.run(releaseHeld());
+    await drainHeldChecks(h);
+    expect(h.rows("select kind, sends from outbox where execution_id = ?", held)).toEqual([
+      { kind: "check.open", sends: 1 },
+    ]);
+    expect(h.github.runs.filter((r) => r.external_id === held)).toHaveLength(1);
+  });
+
+  it("[FD-INT-057] a failed dropped-check insert leaves the held request available for the next release", async () => {
+    const h = await harness();
+    await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
+    await h.adjust(10_000);
+    const payload = pullRequestPayload({ head: "2".repeat(40) });
+    await deliver(h, "pull_request", payload, "d-2");
+    const held = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
+    await drainHeldChecks(h);
+    await h.adjust(55_000);
+    await deliver(h, "pull_request", payload, "d-3");
+    h.db.sqlite.exec(`create trigger fail_held_drop before insert on outbox
+      when new.kind = 'check.conclude' and exists (select 1 from intake_held where execution_id = new.execution_id)
+      begin select raise(abort, 'injected held-drop store failure'); end`);
+    expect(await h.run(Effect.result(releaseHeld()))).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "StoreUnavailable" },
+    });
+    expect(h.rows("select execution_id from intake_held")).toEqual([{ execution_id: held }]);
+    expect(h.records().some((r) => r.execution_id === held)).toBe(true);
+    h.db.sqlite.exec("drop trigger fail_held_drop");
+    expect(await h.run(releaseHeld())).toMatchObject({ duplicate: 1 });
+    await drainHeldChecks(h);
+    expect(h.github.runs.filter((r) => r.external_id === held)).toEqual([
+      expect.objectContaining({ status: "completed", conclusion: "cancelled" }),
+    ]);
+    expect(h.rows("select execution_id from intake_held")).toEqual([]);
+  });
+
   it("[FD-INT-057] a held request that release answers with another execution concludes its queued check run cancelled", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
@@ -651,7 +747,8 @@ describe("cooldown", () => {
     expect(h.executions().map((e) => e.id)).toContain(other);
 
     expect(await h.run(releaseHeld())).toMatchObject({ admitted: 0, duplicate: 1 });
-    expect(h.github.runs).toEqual([
+    await drainHeldChecks(h);
+    expect(h.github.runs.filter((r) => r.external_id === held)).toEqual([
       expect.objectContaining({ external_id: held, status: "completed", conclusion: "cancelled" }),
     ]);
   });
