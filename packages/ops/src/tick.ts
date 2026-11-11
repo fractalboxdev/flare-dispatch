@@ -154,7 +154,8 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
 
     for (const unit of deps.units?.(now) ?? []) steps.push(yield* run(unit.step, unit.effect));
 
-    // The daily kill-line read; a failed read records no time, so the next tick reads again.
+    // The daily kill-line read. A failed read, or a `kill-line` notification whose delivery failed, records no time, so
+    // the next tick reads again and resends it (MAMEKO-OPS-026).
     const killLinesRead = yield* readKey(db, "kill-lines-read");
     if (killLinesRead === null || now - killLinesRead >= KILL_LINE_INTERVAL_MS)
       steps.push(
@@ -162,7 +163,8 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
           "kill-lines",
           Effect.gen(function* () {
             const report = yield* killLineMonitor(db, now);
-            yield* writeKey(db, "kill-lines-read", now);
+            if (!report.raised.some((r) => r.result === "failed"))
+              yield* writeKey(db, "kill-lines-read", now);
             return report;
           }),
         ),

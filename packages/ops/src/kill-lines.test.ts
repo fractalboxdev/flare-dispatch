@@ -148,9 +148,13 @@ describe("kill-line monitor", () => {
   });
 
   it("[FD-VER-030] more than one verdict audit disagreement in 7 days raises kill-line; one does not", async () => {
-    await audit("success", "failure");
-    await audit("success", "success");
     await audit("failure", "success", NOW - 8 * DAY);
+    expect(await line(KILL_LINE_RISKS.flaky)).toEqual({
+      risk: KILL_LINE_RISKS.flaky,
+      reason:
+        "no verdict audit disagreement recorded in the last 7 days (the table records disagreements only)",
+    });
+    await audit("success", "failure");
     expect(await line(KILL_LINE_RISKS.flaky)).toMatchObject({ value: 1, crossed: false });
     await audit("failure", "success");
     const { alarms, run } = monitor();

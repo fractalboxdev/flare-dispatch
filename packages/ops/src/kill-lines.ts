@@ -31,6 +31,7 @@ export const KILL_LINE_WINDOWS = {
   warmState: { windowMs: 14 * DAY_MS, threshold: 30 },
   availability: { windowMs: 30 * DAY_MS, threshold: 50 },
   flaky: { windowMs: 7 * DAY_MS, threshold: 1 },
+  /** Equal to the warm-state window; `readKillLines` reads both lines from one query over it. */
   requiredSlowdown: { windowMs: 14 * DAY_MS, threshold: 60 },
 } as const;
 
@@ -144,18 +145,21 @@ export const availabilityLine = (count: EligibleCount): LineResult => {
   };
 };
 
-/** The verdict audits of the flaky-test window. */
+/** The verdict audit disagreements of the flaky-test window; `verdict_audits` records disagreements only. */
 export interface AuditCount {
-  readonly audits: number;
   readonly disagreements: number;
 }
 
 /** The flaky-test line: verdict audit disagreements over 7 days; crossed above one. */
 export const flakyLine = (count: AuditCount): LineResult => {
   const { threshold } = KILL_LINE_WINDOWS.flaky;
-  if (Number(count.audits) === 0)
-    return { risk: KILL_LINE_RISKS.flaky, reason: "no verdict audit recorded in the last 7 days" };
   const value = Number(count.disagreements);
+  if (value === 0)
+    return {
+      risk: KILL_LINE_RISKS.flaky,
+      reason:
+        "no verdict audit disagreement recorded in the last 7 days (the table records disagreements only)",
+    };
   return {
     risk: KILL_LINE_RISKS.flaky,
     metric: "verdict audit disagreements over 7 days",
@@ -218,10 +222,17 @@ const unreadable = (risk: string) => (e: KillLineUnreadable) =>
 /** Every kill line of specs/roadmap.md at `now`: a reading over its window, or why it was not measured. */
 export const readKillLines = (db: D1Like, now: number) =>
   Effect.gen(function* () {
-    const warm = yield* verdicts(db, KILL_LINE_WINDOWS.warmState.windowMs, now).pipe(
-      Effect.map(warmStateLine),
-      Effect.catchTag("KillLineUnreadable", unreadable(KILL_LINE_RISKS.warmState)),
+    // The warm-state and required-slowdown lines share one 14-day window, so one read serves both.
+    const required = yield* verdicts(db, KILL_LINE_WINDOWS.warmState.windowMs, now).pipe(
+      Effect.map((samples) => [warmStateLine(samples), requiredSlowdownLine(samples)] as const),
+      Effect.catchTag("KillLineUnreadable", (e) =>
+        Effect.all([
+          unreadable(KILL_LINE_RISKS.warmState)(e),
+          unreadable(KILL_LINE_RISKS.requiredSlowdown)(e),
+        ]),
+      ),
     );
+    const [warm, slowdown] = required;
     const availability = yield* query<EligibleCount>(
       db,
       `select count(*) as eligible, coalesce(sum(p.accepted_kind = ?), 0) as on_device
@@ -240,17 +251,12 @@ export const readKillLines = (db: D1Like, now: number) =>
     );
     const flaky = yield* query<AuditCount>(
       db,
-      `select count(*) as audits, coalesce(sum(device_verdict <> audit_verdict), 0) as disagreements
-       from verdict_audits where recorded_at > ? and recorded_at <= ?`,
+      `select count(*) as disagreements from verdict_audits where recorded_at > ? and recorded_at <= ?`,
       now - KILL_LINE_WINDOWS.flaky.windowMs,
       now,
     ).pipe(
-      Effect.map((rows) => flakyLine(rows[0] ?? { audits: 0, disagreements: 0 })),
+      Effect.map((rows) => flakyLine(rows[0] ?? { disagreements: 0 })),
       Effect.catchTag("KillLineUnreadable", unreadable(KILL_LINE_RISKS.flaky)),
-    );
-    const slowdown = yield* verdicts(db, KILL_LINE_WINDOWS.requiredSlowdown.windowMs, now).pipe(
-      Effect.map(requiredSlowdownLine),
-      Effect.catchTag("KillLineUnreadable", unreadable(KILL_LINE_RISKS.requiredSlowdown)),
     );
     return [warm, availability, TOIL, flaky, slowdown, PRODUCT_FIT];
   });

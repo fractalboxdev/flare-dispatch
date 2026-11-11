@@ -4,6 +4,9 @@ import {
   ActuatorRateLimit,
   Actuators,
   actuatorRegistry,
+  type Alarm,
+  AlarmDeliveryFailed,
+  AlarmPort,
   type IntentRow,
   type PermitRequest,
 } from "@fractalboxdev/mameko-ports";
@@ -400,6 +403,51 @@ describe("minute tick", () => {
     expect(await ran(T0 + 86_400_000 - 60_000)).toBeUndefined();
     expect(await ran(T0 + 86_400_000)).toMatchObject({ status: "ran" });
     expect(alarms.delivered.filter((a) => a.name === "kill-line")).toHaveLength(2);
+  });
+
+  it("[FD-VER-030] a kill-line notification whose delivery failed is sent again on the next tick", async () => {
+    for (const [id, kind, ms] of [
+      ["d1", "device", 90_000],
+      ["c1", "cloudflare-sandbox", 100_000],
+    ] as const) {
+      await t.db
+        .prepare(
+          "insert into executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', 'check', 'required', 'success', ?, ?)",
+        )
+        .bind(id, T0 - 60_000 - ms, T0 - 60_000)
+        .run();
+      await t.db
+        .prepare(
+          "insert into placements (execution_id, state, epoch, accepted_kind, eligible_kinds) values (?, 'accepted', 1, ?, ?)",
+        )
+        .bind(id, kind, JSON.stringify([kind]))
+        .run();
+    }
+    // The port fails every kill-line delivery until `failing` is cleared.
+    let failing = true;
+    const delivered: Alarm[] = [];
+    const alarmPort = Layer.succeed(AlarmPort, {
+      deliver: (alarm) =>
+        failing && alarm.name === "kill-line"
+          ? Effect.fail(new AlarmDeliveryFailed({ reason: "sink down" }))
+          : Effect.sync(() => void delivered.push(alarm)),
+    });
+    const { deps: d } = deps({ probes: undefined, alarmPort });
+    const killLines = async (now: number) =>
+      (await tick({ DB: t.db, MONITOR: monitor().ns }, d, now)).steps.find(
+        (s) => s.step === "kill-lines",
+      );
+    expect(await killLines(T0)).toMatchObject({
+      status: "ran",
+      detail: { raised: [{ risk: "Warm state saves less than assumed", result: "failed" }] },
+    });
+    failing = false;
+    expect(await killLines(T0 + 60_000)).toMatchObject({
+      status: "ran",
+      detail: { raised: [{ risk: "Warm state saves less than assumed", result: "sent" }] },
+    });
+    expect(delivered.filter((a) => a.name === "kill-line")).toHaveLength(1);
+    expect(await killLines(T0 + 120_000)).toBeUndefined();
   });
 
   it("the monitor's wake raises cron-silent once the tick is older than 2 min, and the next tick resolves it", async () => {
