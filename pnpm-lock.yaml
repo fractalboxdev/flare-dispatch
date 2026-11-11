@@ -373,6 +373,9 @@ importers:
       '@fractalboxdev/flare-dispatch-agentic':
         specifier: workspace:*
         version: link:../agentic
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../cache
       '@fractalboxdev/flare-dispatch-ops':
         specifier: workspace:*
         version: link:../ops
@@ -401,6 +404,9 @@ importers:
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       miniflare:
         specifier: 4.20260515.0
         version: 4.20260515.0
