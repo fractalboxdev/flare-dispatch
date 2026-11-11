@@ -389,11 +389,21 @@ describe("check re-runs", () => {
     const opened = await bodyOf(await deliver(h, "pull_request", pullRequestPayload()));
     const id = (opened.executions as string[])[0]!;
     settle(h, "failure");
+    h.db.sqlite.exec(`update intake_records set placement_constraint = 'pinned-pool'`);
     await deliver(h, "check_run", checkRunRerequested(id), "d-2");
     const [first, second] = h.records();
     expect(JSON.parse(first!.labels_json as string)).toContain("gpu");
     expect(second!.labels_json).toBe(first!.labels_json);
-    expect(second!.placement_constraint).toBe(first!.placement_constraint);
+    expect(second!.placement_constraint).toBe("pinned-pool");
+  });
+
+  it("[FD-INT-056] a rerequested check suite skips a local family, which posted no check run", async () => {
+    const { h, id } = await firstRun();
+    settle(h, "failure");
+    h.db.sqlite.exec(`update intake_records set trigger = 'local', placement_constraint = 'local-only'`);
+    const r = await bodyOf(await deliver(h, "check_suite", checkSuiteRerequested(), "d-2"));
+    expect(r.executions).toEqual([]);
+    expect(h.records().map((x) => x.family_root)).toEqual([id]);
   });
 
   it.each([
