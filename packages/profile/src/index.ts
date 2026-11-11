@@ -20,6 +20,7 @@ export {
   type SpendConfig,
 } from "./document.ts";
 export {
+  checkOpenPayload,
   CLASS_ORDER,
   commitRecipe,
   dedupRecipes,
@@ -36,6 +37,8 @@ export {
   SUPERSEDING_RUNS,
   supersessionKey,
   type Caller,
+  type CheckOpenPayload,
+  type CheckOpenRequest,
   type ClassName,
   type ClassRequest,
   type Resolved,
