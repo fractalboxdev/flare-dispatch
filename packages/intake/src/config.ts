@@ -1,6 +1,7 @@
 // What intake is configured with and the ports it calls: mameko's admission
 // function, class resolution and the error every refusal becomes.
 import {
+  checkOpenPayload,
   classNamed,
   type ConfidentialityMode,
   type Profile,
@@ -102,6 +103,11 @@ export interface IntakeAdmitInput {
   readonly supersessionKey?: string | null;
   /** The serial group the request joins, for a run that declares `serialize`; null or absent joins none (MAMEKO-ADM-067). */
   readonly serialKey?: string | null;
+  /**
+   * The check run the execution owns, as the `checkOpenPayload` binding reads it: `flare-dispatch/<run>[:<checkLabel>]`
+   * on the request's head SHA (FD-GH-005, FD-GH-006). Null or absent for a run that owns no check.
+   */
+  readonly check?: { readonly name: string; readonly headSha: string } | null;
 }
 
 /** Admission did not answer: the store transaction failed, and nothing was written. */
@@ -169,6 +175,30 @@ export interface AdmissionPorts {
 /** Without an alarm sink an admission alarm is logged and delivered nowhere; admission does not decide on delivery. */
 const loggedAlarms = Layer.succeed(AlarmPort, {
   deliver: (alarm) => Effect.logWarning("admission alarm with no alarm sink", alarm),
+});
+
+/** The payload bindings of the kinds admission generates, by the binding name the profile's intent kind declares. */
+const admittedPayloads: Readonly<Record<string, (input: IntakeAdmitInput) => unknown>> = {
+  checkOpenPayload: (input) =>
+    checkOpenPayload({ check: input.check ?? null, labels: input.labels }),
+};
+
+/**
+ * The rows admission inserts with the execution: each kind whose `on` is `admitted` gets the payload its `payload`
+ * binding returns for this request, and a kind whose binding returns none, or names no binding served here, gets no row
+ * (MAMEKO-OUT-050). `check.open` is the one such kind, so admission opens the check run of exactly the executions that
+ * own one (FD-GH-005, FD-PROF-043).
+ */
+const admittedIntents = (profile: Profile, input: IntakeAdmitInput) => ({
+  kinds: profile.intent_kinds,
+  payload: (kind: string) => {
+    const binding = profile.intent_kinds[kind]?.payload;
+    const build =
+      binding !== undefined && Object.hasOwn(admittedPayloads, binding)
+        ? admittedPayloads[binding]
+        : undefined;
+    return build === undefined ? null : build(input);
+  },
 });
 
 /**
@@ -262,6 +292,7 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
               ? () => Effect.void
               : (payload) => Effect.orDie(ports.startExecution!(payload)),
           grants: input.grants,
+          intents: admittedIntents(profile, input),
           supersessionKey: input.supersessionKey ?? null,
           serialKey: input.serialKey ?? null,
           ...(ports.cancelExecution === undefined

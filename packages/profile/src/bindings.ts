@@ -317,6 +317,36 @@ export const supersessionKey = (r: ClassRequest): string | null =>
     ? `${r.repository}:${r.pullRequest}:${r.run}${r.label === undefined ? "" : `:${r.label}`}`
     : null;
 
+/** The label of work under a capacity lease, which posts no check run (FD-PROF-043, FD-INT-061). */
+export const LOCAL_ONLY = "local-only";
+
+/** What the `checkOpenPayload` binding reads of one admitted execution. */
+export interface CheckOpenRequest {
+  /**
+   * The check run the execution owns: its name, `flare-dispatch/<run>[:<checkLabel>]`, and the commit it reports on;
+   * null for an execution of a run that owns no check.
+   */
+  readonly check: { readonly name: string; readonly headSha: string } | null;
+  /** The labels class resolution returned for the execution. */
+  readonly labels: readonly string[];
+}
+
+/** The `check.open` payload the check-run applier creates the check run from. */
+export interface CheckOpenPayload {
+  readonly name: string;
+  readonly head_sha: string;
+}
+
+/**
+ * The `check.open` payload of an execution that owns a check, and none (null) for every other execution, one that
+ * carries `local-only` included, so admission inserts `cp:check:open` for exactly the executions that own a check
+ * (FD-GH-005, FD-PROF-043, MAMEKO-OUT-050).
+ */
+export const checkOpenPayload = (r: CheckOpenRequest): CheckOpenPayload | null =>
+  r.check === null || r.labels.includes(LOCAL_ONLY)
+    ? null
+    : { name: r.check.name, head_sha: r.check.headSha };
+
 /** How long a branch's required set stays cached (FD-PROF-014). */
 export const PROTECTION_TTL_MS = 600_000;
 

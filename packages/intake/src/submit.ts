@@ -350,6 +350,8 @@ export const submit = (
       // A run that declares `serialize` names its serial group from its inputs, e.g. one `worker-deploy` target
       // (FD-GATE-063).
       serialKey: s.run.serialKey?.(s.inputs) ?? null,
+      // A merge group's runs report on the group's head, which is the request's commit (FD-GH-075).
+      check: s.run.ownsCheck ? { name, headSha: s.sha } : null,
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the

@@ -343,6 +343,26 @@ describe("merge queue", () => {
     expect(h.records().map((x) => [x.run, x.label, x.sha])).toEqual([["check", "ci", HEAD]]);
   });
 
+  it("[FD-GH-075] admission inserts the check.open row of each required gating run on merge_group.head_sha", async () => {
+    const group = "f".repeat(40);
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(undefined, { required: { main: ["flare-dispatch/check:ci"] } }),
+      },
+    });
+    const r = await bodyOf(
+      await deliver(h, "merge_group", mergeGroupPayload("checks_requested", group)),
+    );
+    const [executionId] = r.executions as string[];
+    expect(
+      h
+        .rows("select kind, payload_json from outbox where execution_id = ?", executionId)
+        .map((row) => ({ kind: row["kind"], payload: JSON.parse(row["payload_json"] as string) })),
+    ).toEqual([
+      { kind: "check.open", payload: { name: "flare-dispatch/check:ci", head_sha: group } },
+    ]);
+  });
+
   it("[FD-GH-075] a gating run whose check is not required opens nothing", async () => {
     const h = await harness();
     await deliver(h, "merge_group", mergeGroupPayload("checks_requested"));
