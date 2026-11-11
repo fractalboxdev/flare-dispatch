@@ -19,6 +19,7 @@ import { LocalStore, localStoreD1, type RegistrationRecord } from "./store.ts";
 import {
   CapacityUsage,
   decideWriteback,
+  receiveWriteback,
   writebackAck,
   writebackGateLayer,
 } from "./writeback-gate.ts";
@@ -285,6 +286,17 @@ const gateHarness = async (
   return {
     decide: (intents: unknown, executionId = record().executionId) =>
       Effect.runPromise(decideWriteback(config, executionId, intents).pipe(Effect.provide(deps))),
+    receive: (
+      intents: readonly { intent_key: string; kind: string; payload: unknown }[],
+      held: string[],
+    ) =>
+      Effect.runPromise(
+        receiveWriteback(
+          config,
+          { execution_id: record().executionId, intents },
+          new Set(held),
+        ).pipe(Effect.provide(deps)),
+      ),
     port: (intents: unknown) =>
       Effect.runPromise(
         Effect.gen(function* () {
@@ -330,6 +342,29 @@ describe("writeback gate", () => {
     expect(await failed.decide(review)).toEqual({
       _tag: "rejected",
       reason: "verdict-not-success",
+    });
+  });
+
+  it("[FD-LOCAL-055] absorbs an intent whose execution id and run:<step>:<index> the control plane holds, and gates only the fresh ones", async () => {
+    const h = await gateHarness();
+    const second = { intent_key: "run:review:1", kind: "review", payload: { body: "b" } };
+    expect(await h.receive(review, ["run:review:0"])).toEqual({
+      ack: { type: "local.writeback.ack", status: "duplicate" },
+      insert: [],
+    });
+    expect(await h.receive([...review, second], ["run:review:0"])).toEqual({
+      ack: { type: "local.writeback.ack", status: "accepted" },
+      insert: [second],
+    });
+    expect(await h.receive(review, [])).toEqual({
+      ack: { type: "local.writeback.ack", status: "accepted" },
+      insert: review,
+    });
+    // A held key absorbs only its own intent: a fresh intent the gate rejects inserts nothing.
+    const issue = { intent_key: "run:issue:0", kind: "issue", payload: {} };
+    expect(await h.receive([...review, issue], ["run:review:0"])).toEqual({
+      ack: { type: "local.writeback.ack", status: "rejected" },
+      insert: [],
     });
   });
 

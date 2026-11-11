@@ -10,6 +10,7 @@ import {
 } from "../staged-write/manifest.ts";
 import { gateStagedWrite, StagedWriteReadFailed, WritebackRecords } from "../writeback/applier.ts";
 import { GitData } from "../writeback/git-data.ts";
+import type { WritebackIntent, WritebackRequest } from "./run-context.ts";
 import { LocalStore } from "./store.ts";
 
 /** The default `local_writeback_rate`: requests per capacity lease per hour (FD-LOCAL-089). */
@@ -152,3 +153,37 @@ export const writebackAck = (decision: WritebackDecision) =>
         retry_after_ms: decision.retryAfterMs,
       }
     : { type: "local.writeback.ack" as const, status: decision._tag };
+
+/** What the control plane does with one `local.writeback`: the ack it answers and the intents it inserts. */
+export interface WritebackReceipt {
+  readonly ack:
+    | ReturnType<typeof writebackAck>
+    | { readonly type: "local.writeback.ack"; readonly status: "duplicate" };
+  /** The intents to insert as outbox rows of the request's execution; empty unless the gate accepted them. */
+  readonly insert: readonly WritebackIntent[];
+}
+
+/**
+ * Receives one `local.writeback` (MAMEKO-PROTO-083). `held` is the set of intent keys the control plane already holds
+ * as outbox rows of the request's execution. An intent whose (execution id, `run:<step>:<index>`) is held is absorbed
+ * before the gate decides, so a rerun step's request answers `duplicate` with no read, no rate-window entry and no
+ * insert (FD-LOCAL-055); the gate decides only the fresh intents, and an accepted request inserts exactly those.
+ */
+export const receiveWriteback = (
+  config: WritebackGateConfig,
+  request: WritebackRequest,
+  held: ReadonlySet<string>,
+) =>
+  Effect.gen(function* () {
+    const fresh = request.intents.filter((i) => !held.has(i.intent_key));
+    if (request.intents.length > 0 && fresh.length === 0)
+      return {
+        ack: { type: "local.writeback.ack", status: "duplicate" },
+        insert: [],
+      } satisfies WritebackReceipt;
+    const decision = yield* decideWriteback(config, request.execution_id, fresh);
+    return {
+      ack: writebackAck(decision),
+      insert: decision._tag === "accepted" ? fresh : [],
+    } satisfies WritebackReceipt;
+  });
