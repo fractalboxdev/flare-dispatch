@@ -206,14 +206,14 @@ export const simulateTickUnits = async (seed: number): Promise<SimOutcome> => {
       );
   const queues = new Map([7, 8].map((i) => [i, memoryStorage()]));
 
-  /** The cron dedup keys a minute's tick must create: one per (recipe, readable repository) a schedule matches. */
+  /** The cron dedup keys a minute's tick must create: one per (recipe, label, readable repository) a schedule matches. */
   const cronKeys = (at: number) =>
     seeded
       .filter((r) => r.readable)
       .flatMap((r) =>
-        RECIPES.filter((recipe) =>
-          r.entries.some((e) => e.recipe === recipe && cronMatches(parseCron(e.cron)!, at)),
-        ).map((recipe) => `${recipe}:${r.name}:cron:${new Date(at).toISOString()}`),
+        r.entries
+          .filter((e) => cronMatches(parseCron(e.cron)!, at))
+          .map((e) => `${e.recipe}:${e.label}:${r.name}:cron:${new Date(at).toISOString()}`),
       );
   /** The (repository, head, label) triples a sweep at `now` must submit. */
   const sweepTriples = (now: number) => {

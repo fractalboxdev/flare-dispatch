@@ -56,7 +56,9 @@ const INTERACTIVE = buildProfile("production").classes.find((c) => c.name === "i
 const QUEUE_AGE_MS =
   typeof INTERACTIVE.queue_age === "object" ? INTERACTIVE.queue_age.seconds * SECOND : 0;
 
-const MANIFEST = manifest([{ recipe: "pr-review", triggers: ["dispatch"] }]);
+const MANIFEST = manifest([
+  { recipe: "pr-review", triggers: ["dispatch"], params: { maxDiffChars: 100_000 } },
+]);
 
 /** How one reviewer call ends: findings at a level, `rate-limited` at its wait bound, or `unavailable`. */
 export type CallEnd =

@@ -1,5 +1,5 @@
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 import { Payloads as CheckPayloads } from "../../../github/src/applier.ts";
@@ -19,13 +19,15 @@ import {
   coordinate,
   PR_REVIEW_CHECK_NAME,
   PR_REVIEW_MARKER,
+  prReviewRequest,
   prReviewSkip,
   prReviewTrigger,
   reviewersFor,
   stripDiffNoise,
   type Finding,
-  type PrReviewInput,
+  PrReviewInput,
 } from "./pr-review.ts";
+import { ImprovePrParams, improvePrRequest } from "./improve-pr.ts";
 import { ciTriageRun, improvePrRun, prReviewRun, specDriftRun } from "./runs.ts";
 import { ModelCallError, ModelClient, modelGatewayClientLayer } from "./services.ts";
 import { ReadFailed, SPEC_DRIFT_BRANCH } from "./spec-drift-pr.ts";
@@ -135,6 +137,57 @@ describe("pr-review", () => {
       "start",
     );
     expect(prReviewTrigger({ _tag: "dispatch", run: "check", headSha: "h" })._tag).toBe("ignore");
+  });
+
+  it("[FD-AGT-045] builds the head commit's input from a starting pull_request payload and the manifest entry", () => {
+    const pr = (action: string, headRepo: { full_name: string } | null, association?: string) => ({
+      action,
+      repository: { full_name: "acme/app" },
+      pull_request: {
+        number: 9,
+        draft: true,
+        labels: [{ name: "request-ai-review" }],
+        user: { login: "octocat" },
+        ...(association === undefined ? {} : { author_association: association }),
+        head: { sha: "h".repeat(40), repo: headRepo },
+        base: { sha: "b".repeat(40) },
+      },
+    });
+    const params = { maxDiffChars: 40_000 };
+    const opened = prReviewRequest(
+      "opened",
+      pr("opened", { full_name: "acme/app" }, "MEMBER"),
+      params,
+    );
+    expect(Option.getOrThrow(opened)).toEqual({
+      repo: { owner: "acme", name: "app" },
+      number: 9,
+      baseSha: "b".repeat(40),
+      headSha: "h".repeat(40),
+      draft: true,
+      labels: ["request-ai-review"],
+      authorLogin: "octocat",
+      authorAssociation: "MEMBER",
+      forkHead: false,
+      maxDiffChars: 40_000,
+    });
+    expect(Schema.decodeUnknownSync(PrReviewInput)(Option.getOrThrow(opened))).toBeTruthy();
+    const fork = prReviewRequest("synchronize", pr("synchronize", { full_name: "fork/app" }), {
+      ...params,
+      mode: "gating",
+    });
+    expect(Option.getOrThrow(fork)).toMatchObject({
+      forkHead: true,
+      authorAssociation: "NONE",
+      mode: "gating",
+    });
+    expect(
+      Option.getOrThrow(prReviewRequest("ready_for_review", pr("ready_for_review", null), params))
+        .forkHead,
+    ).toBe(true);
+    for (const action of ["closed", "labeled", "reopened"])
+      expect(Option.isNone(prReviewRequest(action, pr(action, null), params))).toBe(true);
+    expect(Option.isNone(prReviewRequest("opened", { action: "opened" }, params))).toBe(true);
   });
 
   it("[FD-AGT-046] skips a draft without request-ai-review, skip-ai-review, or a [bot] author", async () => {
@@ -402,6 +455,44 @@ describe("improve-pr", () => {
     expect(rec.prompts).toHaveLength(1);
     expect(rec.prompts[0]).toContain("size: 120 KiB");
     expect(rec.modelCalls).toEqual([]);
+  });
+
+  it("[FD-AGT-060] each manifest dimension's execution measures that dimension and prompts with only its output", async () => {
+    const lint = { ...dimension, name: "lint-warnings", measure: "pnpm lint --count" };
+    const entries = [{ dimension }, { dimension: lint, baseBranch: "develop" }].map((p) =>
+      Schema.decodeUnknownSync(ImprovePrParams)(p),
+    );
+    const inputs = entries.map((p) => improvePrRequest(p, "main"));
+    expect(inputs).toEqual([
+      { baseBranch: "main", dimension },
+      { baseBranch: "develop", dimension: lint },
+    ]);
+    const outputs: Record<string, string> = {
+      [dimension.measure]: "size: 120 KiB",
+      [lint.measure]: "warnings: 40",
+    };
+    for (const input of inputs) {
+      const rec = recorder();
+      await Effect.runPromise(
+        improvePrRun.workflow.execute(payload("improve-pr", input)).pipe(
+          Effect.provide(
+            Layer.provideMerge(
+              improvePrRun.layer,
+              fakeServices(rec, {
+                shell: (c) => ({ exitCode: 0, stdout: outputs[c] ?? "", stderr: "" }),
+              }),
+            ),
+          ),
+        ),
+      );
+      const other = input.dimension.name === dimension.name ? lint : dimension;
+      expect(rec.commands[0]).toBe(input.dimension.measure);
+      expect(rec.commands).not.toContain(other.measure);
+      expect(rec.prompts).toHaveLength(1);
+      expect(rec.prompts[0]).toContain(outputs[input.dimension.measure]);
+      expect(rec.prompts[0]).not.toContain(outputs[other.measure]);
+      expect(rec.modelCalls).toEqual([]);
+    }
   });
 
   it("[FD-AGT-061] opens no pull request below the materiality floor and concludes success", async () => {

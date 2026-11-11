@@ -22,6 +22,26 @@ export const ImprovePrInput = Schema.Struct({
 });
 export type ImprovePrInput = typeof ImprovePrInput.Type;
 
+/**
+ * An `improve-pr` manifest entry's parameters: the one dimension it measures, and the branch its pull request
+ * targets, the default branch when absent. The repo manifest lists one `improve-pr` entry per dimension, each under
+ * its own label, so each dimension starts its own execution (FD-AGT-060).
+ */
+export const ImprovePrParams = Schema.Struct({
+  dimension: Dimension,
+  baseBranch: Schema.optionalKey(Schema.NonEmptyString),
+});
+export type ImprovePrParams = typeof ImprovePrParams.Type;
+
+/** The input of the `improve-pr` execution a manifest entry's schedule starts. */
+export const improvePrRequest = (
+  params: ImprovePrParams,
+  defaultBranch: string,
+): ImprovePrInput => ({
+  baseBranch: params.baseBranch ?? defaultBranch,
+  dimension: params.dimension,
+});
+
 export class MeasureFailed extends Schema.TaggedError<MeasureFailed>()("MeasureFailed", {
   dimension: Schema.String,
   detail: Schema.String,
