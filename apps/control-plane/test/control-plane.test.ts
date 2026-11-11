@@ -430,6 +430,8 @@ describe("the cache, artifact and log routes", () => {
 describe("the failure summary", () => {
   const FAILED = "01FAILEDWITHLOGS";
   const SILENT = "01FAILEDNOLOGS";
+  const ACCEPTED = "01FAILEDACCEPTEDEPOCH";
+  const RECLAIMED = "01FAILEDRECLAIMED";
   const LONG_RUN = `check-${"r".repeat(3000)}`;
   const REASON = `exit 1: ${"why ".repeat(1000)}`;
 
@@ -441,10 +443,16 @@ describe("the failure summary", () => {
   };
 
   /** One NDJSON segment of a step, written after the previous one so step order follows upload order. */
-  const segment = async (epoch: number, step: string, start: number, lines: readonly string[]) => {
+  const segment = async (
+    epoch: number,
+    step: string,
+    start: number,
+    lines: readonly string[],
+    executionId: string = FAILED,
+  ) => {
     const body = lines.map((line) => JSON.stringify({ line })).join("\n");
     const name = await logObjectName({
-      executionId: FAILED,
+      executionId,
       epoch,
       journalName: step,
       stream: "stdout",
@@ -463,6 +471,8 @@ describe("the failure summary", () => {
     for (const [id, run] of [
       [FAILED, "check"],
       [SILENT, LONG_RUN],
+      [ACCEPTED, "check"],
+      [RECLAIMED, "check"],
     ] as const)
       await db
         .prepare(
@@ -483,6 +493,21 @@ describe("the failure summary", () => {
       ...Array.from({ length: 300 }, () => "b".repeat(80)),
       "LAST-LINE",
     ]);
+    // ACCEPTED's record names epoch 2 and accepts epoch 1; RECLAIMED's names epoch 2, which wrote no log.
+    for (const [id, epoch, accepted] of [
+      [ACCEPTED, 2, 1],
+      [RECLAIMED, 2, null],
+    ] as const)
+      await db
+        .prepare(
+          `insert into placements (execution_id, state, epoch, accepted_epoch) values (?, 'failed', ?, ?)`,
+        )
+        .bind(id, epoch, accepted)
+        .run();
+    await segment(1, "step:test", 0, ["epoch-one attempt"], ACCEPTED);
+    await segment(2, "step:test", 0, ["epoch-two test"], ACCEPTED);
+    await segment(2, "step:lint", 0, ["epoch-two lint"], ACCEPTED);
+    await segment(1, "step:test", 0, ["reclaimed attempt"], RECLAIMED);
   });
 
   it("[FD-IFC-042] serves the failing step's log tail and the reason, bounded to the incident/v1 caps and 16 KiB", async () => {
@@ -514,6 +539,24 @@ describe("the failure summary", () => {
     expect(pack.ciFailures).toHaveLength(1);
     expect(pack.ciFailures[0]!["name"]).toBe(LONG_RUN.slice(0, 2000));
     expect(pack.ciFailures[0]!["conclusion"]).toBe(REASON.slice(0, 200));
+    expect(pack.ciFailures[0]).not.toHaveProperty("logTail");
+  });
+
+  it("[FD-IFC-042] takes the failing step at the record's accepted epoch over its placement epoch and higher epochs with logs", async () => {
+    const { status, text } = await summaryOf(ACCEPTED);
+    expect(status, text).toBe(200);
+    const pack = JSON.parse(text) as { ciFailures: Record<string, unknown>[] };
+    expect(pack.ciFailures[0]).toMatchObject({
+      name: `check/${await stepKey("step:test")}`,
+      logTail: "epoch-one attempt",
+    });
+  });
+
+  it("[FD-IFC-042] names the run alone when the epoch the record names wrote no log, over a reclaimed epoch's logs", async () => {
+    const { status, text } = await summaryOf(RECLAIMED);
+    expect(status, text).toBe(200);
+    const pack = JSON.parse(text) as { ciFailures: Record<string, unknown>[] };
+    expect(pack.ciFailures[0]!["name"]).toBe("check");
     expect(pack.ciFailures[0]).not.toHaveProperty("logTail");
   });
 });

@@ -23,9 +23,11 @@ export interface FailingStep {
 }
 
 /**
- * The step that ran last at the epoch the record names, else at the highest epoch with logs; a failed execution stops
- * at its failing step, so the last step that wrote a log is the one that failed. Its segments are read from the
- * newest back, only until the tail reaches the `incident/v1` log-tail cap.
+ * The step that ran last at the epoch the record names (its accepted epoch, else its placement's epoch); a record that
+ * names no epoch takes the highest epoch with logs. A failed execution stops at its failing step, so the last step that
+ * wrote a log is the one that failed. An epoch that wrote no log has no failing step: the logs of an earlier, reclaimed
+ * epoch belong to an attempt that did not fail. The step's segments are read from the newest back, until the tail reaches
+ * the `incident/v1` log-tail cap.
  */
 export const failingStep = async (
   bucket: Bucket,
@@ -33,14 +35,13 @@ export const failingStep = async (
 ): Promise<FailingStep | undefined> => {
   const objects = await listLogObjects(bucket, execution.execution_id);
   if (objects.length === 0) return undefined;
-  const named = execution.accepted_epoch ?? execution.epoch;
-  const epoch = objects.some((o) => o.log.epoch === named)
-    ? named
-    : Math.max(...objects.map((o) => o.log.epoch));
-  const last = inStepOrder(objects.filter((o) => o.log.epoch === epoch)).at(-1);
+  const epoch =
+    execution.accepted_epoch ?? execution.epoch ?? Math.max(...objects.map((o) => o.log.epoch));
+  const atEpoch = objects.filter((o) => o.log.epoch === epoch);
+  const last = inStepOrder(atEpoch).at(-1);
   if (last === undefined) return undefined;
-  const segments = objects
-    .filter((o) => o.log.epoch === epoch && o.log.stepKey === last.log.stepKey)
+  const segments = atEpoch
+    .filter((o) => o.log.stepKey === last.log.stepKey)
     .sort(
       (a, b) =>
         a.uploaded - b.uploaded ||
