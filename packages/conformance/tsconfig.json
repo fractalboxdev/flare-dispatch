@@ -1,10 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // mameko exports its TypeScript sources with `.ts` import specifiers.
+    // mameko exports its TypeScript sources with `.ts` import specifiers. The cache package's R2, D1 and Durable
+    // Object types come from the Workers types; mameko's suites type Web Crypto from the DOM library.
     "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM"],
-    "types": ["node"]
+    "types": ["@cloudflare/workers-types", "node"]
   },
   "include": ["src/**/*.ts", "scripts/**/*.ts"]
 }
