@@ -169,6 +169,32 @@ describe("the missed-webhook sweep", () => {
     expect(h.executions()).toHaveLength(2);
   });
 
+  it("[FD-INT-032] the unit that continues a sweep resumes at the next pull request, so all 100 heads are submitted", async () => {
+    const pulls = Array.from({ length: 120 }, (_, i) =>
+      pull(i, i.toString(16).padStart(40, "0"), 0),
+    );
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(undefined, {
+          required: { main: ["flare-dispatch/check:ci"] },
+          pulls,
+        }),
+      },
+    });
+    const units: TickUnit[] = [sweepUnit];
+    for (let unit = units.shift(); unit !== undefined; unit = units.shift()) {
+      const result = await h.run(runTickUnit(unit));
+      if (result.next !== null) units.push(result.next);
+    }
+    const checked = new Set(
+      h
+        .records()
+        .filter((r) => r.run === "check")
+        .map((r) => r.sha),
+    );
+    expect(checked).toEqual(new Set(pulls.slice(0, 100).map((p) => p.head.sha)));
+  });
+
   it("[FD-INT-067] a unit that reaches its budget returns the cursor of the unit that continues it", async () => {
     const pulls = Array.from({ length: 100 }, (_, i) =>
       pull(i, i.toString(16).padStart(40, "0"), 0),

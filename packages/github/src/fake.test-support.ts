@@ -170,24 +170,30 @@ export interface FakeReads {
   readonly calls: string[];
   /** A failure each named read takes, keyed `<read> <repo>`, until removed. */
   readonly failures: Map<string, GithubReadError>;
+  /** How long, in milliseconds of the clock, each named read waits before it answers, keyed as `failures`. */
+  readonly delays: Map<string, number>;
 }
 
 export const fakeReads = (
   repos: Record<string, FakeRepo> = {},
   installations: Record<string, number> = {},
-): FakeReads => ({ repos, installations, calls: [], failures: new Map() });
+): FakeReads => ({ repos, installations, calls: [], failures: new Map(), delays: new Map() });
 
 /** `GithubRead` over the fake's tables; a repository without an installation fails `GithubUncredentialed`. */
 export const fakeReadLayer = (state: FakeReads) => {
   const read = <A>(name: string, repo: string, f: (r: FakeRepo) => A) =>
     Effect.suspend((): Effect.Effect<A, GithubReadError> => {
       state.calls.push(`${name} ${repo}`);
-      const failure = state.failures.get(`${name} ${repo}`);
-      if (failure !== undefined) return Effect.fail(failure);
-      const r = state.repos[repo];
-      if (state.installations[repo] === undefined || r === undefined)
-        return Effect.fail(new GithubUncredentialed({ repo }));
-      return Effect.succeed(f(r));
+      const answer = Effect.suspend((): Effect.Effect<A, GithubReadError> => {
+        const failure = state.failures.get(`${name} ${repo}`);
+        if (failure !== undefined) return Effect.fail(failure);
+        const r = state.repos[repo];
+        if (state.installations[repo] === undefined || r === undefined)
+          return Effect.fail(new GithubUncredentialed({ repo }));
+        return Effect.succeed(f(r));
+      });
+      const delay = state.delays.get(`${name} ${repo}`);
+      return delay === undefined ? answer : Effect.andThen(Effect.sleep(delay), answer);
     });
   return Layer.succeed(GithubRead, {
     installation: (repo) => read("installation", repo, () => state.installations[repo]!),
