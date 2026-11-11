@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   accessClaims,
@@ -13,6 +14,8 @@ import {
 } from "./api.test-support.ts";
 import { apiConfigFromEnv, ConfigInvalid, distinctLinkKey } from "./config.ts";
 import { constantTimeEqual } from "./crypto.ts";
+import { ACTIONS_JWKS } from "./identity.ts";
+import { JwksSource, JwksSourceLive } from "./jwt.ts";
 import { signBody, verifyBody } from "./hmac.ts";
 import { checkLinkToken, LINK_LABELS, mintLinkToken } from "./link-token.ts";
 
@@ -172,6 +175,62 @@ describe("dispatch identity", () => {
       );
       expect(response.status).toBe(401);
     }
+  });
+
+  it("[FD-INT-035]: an Actions token passes only with GitHub's issuer, the audience, an unexpired exp and an RS256 signature from the issuer's JWKS", async () => {
+    const before = h.doubles.calls.submissions.length;
+    const forger = await makeSigner(h.actions.kid);
+    for (const jwt of [
+      await h.actions.sign(actionsClaims("acme/widgets", { iss: "https://example.com" })),
+      await h.actions.sign(actionsClaims("acme/widgets", { aud: "https://other.example.com" })),
+      // Expired beyond the 60 s skew, or carrying no `exp` at all.
+      await h.actions.sign(actionsClaims("acme/widgets", { exp: now() - 120 })),
+      await h.actions.sign(actionsClaims("acme/widgets", { exp: undefined })),
+      // A header naming another algorithm over the same RS256 signature.
+      await h.actions.sign(actionsClaims("acme/widgets"), { alg: "RS512" }),
+      // The issuer's kid, signed by a key outside its JWKS.
+      await forger.sign(actionsClaims("acme/widgets")),
+    ]) {
+      const response = await h.fetch(
+        "/v1/dispatch/check",
+        dispatchInit({ authorization: `Bearer ${jwt}` }),
+      );
+      expect(response.status).toBe(401);
+      expect((await body(response))["error"]).toBe("unauthenticated");
+    }
+    expect(h.doubles.calls.submissions.length).toBe(before);
+    const valid = await h.actions.sign(actionsClaims("acme/widgets"));
+    const accepted = await h.fetch(
+      "/v1/dispatch/check",
+      dispatchInit({ authorization: `Bearer ${valid}` }),
+    );
+    expect(accepted.status).toBe(202);
+  });
+
+  it("[FD-INT-035]: the live JWKS source caches GitHub's keys for at most one hour", async () => {
+    const seen: { url: string; cacheTtl: unknown }[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const cf = (init as { cf?: { cacheTtl?: unknown } } | undefined)?.cf;
+      seen.push({ url: String(input), cacheTtl: cf?.cacheTtl });
+      return Response.json({ keys: [h.actions.jwk] });
+    }) as typeof fetch;
+    try {
+      const keys = await Effect.runPromise(
+        Effect.gen(function* () {
+          const source = yield* JwksSource;
+          return yield* source.keys(ACTIONS_JWKS, { fresh: false });
+        }).pipe(Effect.provide(JwksSourceLive)),
+      );
+      expect(keys).toEqual([h.actions.jwk]);
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe("https://token.actions.githubusercontent.com/.well-known/jwks");
+    expect(seen[0]!.cacheTtl).toBeTypeOf("number");
+    expect(seen[0]!.cacheTtl as number).toBeGreaterThan(0);
+    expect(seen[0]!.cacheTtl as number).toBeLessThanOrEqual(3_600);
   });
 
   it("[FD-IFC-025]: an Actions dispatch takes its repository, ref and workflow ref from the token", async () => {
