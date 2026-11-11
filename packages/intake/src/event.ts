@@ -82,6 +82,7 @@ export const WebhookFields = Schema.Struct({
   pull_request: Schema.optionalKey(
     Schema.Struct({
       number: Schema.Number,
+      closed_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
       head: Schema.Struct({
         sha: Schema.optionalKey(Schema.String),
         ref: Schema.optionalKey(Schema.String),

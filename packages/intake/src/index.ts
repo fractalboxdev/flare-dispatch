@@ -113,6 +113,7 @@ export {
   INTAKE_MIGRATIONS,
   IntakeStore,
   migrateIntake,
+  pullRequestClosedAt,
   requestContextOf,
   ShedRecorder,
   StoreUnavailable,

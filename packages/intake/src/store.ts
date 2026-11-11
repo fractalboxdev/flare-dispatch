@@ -54,6 +54,14 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     cooldown_bucket text not null,
     not_before integer not null)`,
   `create index if not exists intake_held_due on intake_held (not_before)`,
+  // When each closed pull request closed, keyed by the lower-cased repository as the cache namespaces name it; a
+  // reopen deletes the row. The cache sweep deletes the pull request's namespace a delay after `closed_at`
+  // (FD-CACHE-064).
+  `create table if not exists intake_pull_request_closes (
+    repo text not null,
+    number integer not null,
+    closed_at integer not null,
+    primary key (repo, number))`,
 ];
 
 export const migrateIntake = (db: D1Like): Effect.Effect<void> =>
@@ -226,6 +234,17 @@ export class IntakeStore extends Context.Service<
       at: number,
     ) => Effect.Effect<void, StoreUnavailable>;
     readonly lastDelivery: (installation: number) => Effect.Effect<number | null, StoreUnavailable>;
+    /** Records that the pull request closed at `at`; a later close of the same pull request replaces it. */
+    readonly pullRequestClosed: (
+      repo: string,
+      number: number,
+      at: number,
+    ) => Effect.Effect<void, StoreUnavailable>;
+    /** Forgets the close of a reopened pull request, so its namespace is kept again. */
+    readonly pullRequestReopened: (
+      repo: string,
+      number: number,
+    ) => Effect.Effect<void, StoreUnavailable>;
   }
 >()("@fractalboxdev/flare-dispatch-intake/IntakeStore") {}
 
@@ -598,7 +617,40 @@ export const d1IntakeStore = (db: D1Like) =>
           ({ results }) => (results[0] as { verified_at: number } | undefined)?.verified_at ?? null,
         ),
       ),
+    pullRequestClosed: (repo, number, at) =>
+      query(() =>
+        db
+          .prepare(
+            `insert into intake_pull_request_closes (repo, number, closed_at) values (?, ?, ?)
+             on conflict (repo, number) do update set closed_at = excluded.closed_at`,
+          )
+          .bind(repo.toLowerCase(), number, at)
+          .run(),
+      ).pipe(Effect.asVoid),
+    pullRequestReopened: (repo, number) =>
+      query(() =>
+        db
+          .prepare("delete from intake_pull_request_closes where repo = ? and number = ?")
+          .bind(repo.toLowerCase(), number)
+          .run(),
+      ).pipe(Effect.asVoid),
   });
+
+/**
+ * When pull request `number` of `repo` closed, epoch ms, as intake recorded the `pull_request` `closed` delivery; null
+ * while it is open or intake saw no close. The cache sweep reads it for `pr/<repo>/<number>` (FD-CACHE-064).
+ */
+export const pullRequestClosedAt =
+  (db: D1Like) =>
+  async (repo: string, number: number): Promise<number | null> =>
+    (
+      (
+        await db
+          .prepare("select closed_at from intake_pull_request_closes where repo = ? and number = ?")
+          .bind(repo.toLowerCase(), number)
+          .all()
+      ).results[0] as { readonly closed_at: number } | undefined
+    )?.closed_at ?? null;
 
 /**
  * A refusal that ends intake for a whole trigger, before any run is known, records a null run (MAMEKO-ADM-043); an

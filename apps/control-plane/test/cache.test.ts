@@ -1,12 +1,19 @@
 import {
   cacheNamespaces,
+  compileObjectKey,
   executionNamespace,
+  manifestPath,
   memoryLedgers,
+  objectPrefix,
   protectedCloud,
   pullRequestNamespace,
   type CacheLedgerApi,
 } from "@fractalboxdev/flare-dispatch-cache";
-import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
+import {
+  d1IntakeStore,
+  IntakeStore,
+  type IntakeRecord,
+} from "@fractalboxdev/flare-dispatch-intake";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -65,16 +72,35 @@ describe("the cache execution of an intake record", () => {
 const NOW = 1_800_000_000_000;
 const DAY = 24 * 3600 * 1000;
 
-/** A bucket over a map: the `list` and `delete` the log sweep calls, and `put` to seed it. */
+/**
+ * A bucket over a map: the `list` and `delete` the log sweep calls, the `head`, `get` and key-ordered `list` the cache
+ * sweep calls, and `put` to seed it. Every object is uploaded at `NOW`.
+ */
 const memoryBucket = () => {
-  const objects = new Map<string, string>();
+  const objects = new Map<string, { body: string; customMetadata: Record<string, string> }>();
+  const head = (key: string) => {
+    const o = objects.get(key);
+    return o === undefined
+      ? null
+      : { key, size: o.body.length, uploaded: new Date(NOW), customMetadata: o.customMetadata };
+  };
   return {
     objects,
-    put: async (key: string, body: string) => void objects.set(key, body),
-    list: async ({ prefix }: { prefix?: string }) => ({
+    put: async (
+      key: string,
+      body: string,
+      options: { customMetadata?: Record<string, string> } = {},
+    ) => void objects.set(key, { body, customMetadata: options.customMetadata ?? {} }),
+    head: async (key: string) => head(key),
+    get: async (key: string) => {
+      const o = head(key);
+      return o === null ? null : { ...o, text: async () => objects.get(key)!.body };
+    },
+    list: async ({ prefix, startAfter }: { prefix?: string; startAfter?: string }) => ({
       objects: [...objects.keys()]
-        .filter((k) => k.startsWith(prefix ?? ""))
-        .map((key) => ({ key })),
+        .filter((k) => k.startsWith(prefix ?? "") && (startAfter === undefined || k > startAfter))
+        .sort()
+        .map((key) => head(key)!),
       truncated: false,
     }),
     delete: async (keys: string | string[]) => {
@@ -220,6 +246,42 @@ describe("the cache's minute-tick steps", () => {
     ).map((row) => row.detail);
     expect(plan).toContain("SEARCH e USING INDEX cache_ledger_end_finished (finished_at>?)");
     expect(plan.filter((detail) => detail.startsWith("SCAN"))).toEqual([]);
+  });
+
+  it("[FD-CACHE-064] the cache sweep deletes a pull request's namespace 24 h after intake recorded its close", async () => {
+    const p = await plane();
+    const key = "0".repeat(64);
+    /** A committed entry in pull request `number`'s namespace, read just now. */
+    const entry = async (number: number) => {
+      const namespace = pullRequestNamespace("acme/app", number);
+      const path = `${objectPrefix(namespace, key, "e-1", 1)}obj`;
+      await p.bucket.put(path, "x");
+      await p.bucket.put(
+        manifestPath(namespace, key),
+        JSON.stringify({ key, namespace, objects: [{ path, size: 1, sha256: key }] }),
+        { customMetadata: { last_read_at: String(NOW) } },
+      );
+      return path;
+    };
+    const [open, recent, closed] = [await entry(41), await entry(42), await entry(43)];
+    const compile = compileObjectKey(pullRequestNamespace("acme/app", 43), "cc");
+    await p.bucket.put(compile, "y");
+    const close = (number: number, at: number) =>
+      Effect.runPromise(
+        IntakeStore.use((s) => s.pullRequestClosed("Acme/App", number, at)).pipe(
+          Effect.provide(d1IntakeStore(p.db)),
+        ),
+      );
+    await close(42, NOW - 23 * 3600 * 1000);
+    await close(43, NOW - 25 * 3600 * 1000);
+
+    expect(await p.step("cache-sweep")).toMatchObject({ closedPullRequests: 2 });
+    const left = [...p.bucket.objects.keys()];
+    expect(left).toContain(open);
+    expect(left).toContain(recent);
+    expect(left).not.toContain(closed);
+    expect(left).not.toContain(manifestPath(pullRequestNamespace("acme/app", 43), key));
+    expect(left).not.toContain(compile);
   });
 
   it("[FD-CACHE-089] the log sweep deletes an execution's logs 30 days after its finished_at, with no reservation", async () => {

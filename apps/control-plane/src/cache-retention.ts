@@ -8,6 +8,7 @@ import {
   sweepLogs,
   type CacheLedgers,
 } from "@fractalboxdev/flare-dispatch-cache";
+import { pullRequestClosedAt } from "@fractalboxdev/flare-dispatch-intake";
 import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Schema } from "effect";
@@ -161,8 +162,7 @@ export const executionEndedAt =
 
 /**
  * The ledger-end step and the retention sweeps (FD-CACHE-055, FD-CACHE-062 to FD-CACHE-066, FD-CACHE-079,
- * FD-CACHE-089). No GitHub read answers when a pull request closed, so a pull-request namespace ages out by its TTL
- * alone.
+ * FD-CACHE-089). A pull request's close time is the one intake recorded from its `pull_request` `closed` delivery.
  */
 export const cacheSweeps =
   (env: ControlPlaneEnv & CacheEnv) =>
@@ -181,7 +181,7 @@ export const cacheSweeps =
         effect: Effect.promise(() =>
           sweepCache(bucket, now, {
             ledgers,
-            pullRequestClosedAt: async () => null,
+            pullRequestClosedAt: pullRequestClosedAt(env.DB),
           }),
         ),
       },
