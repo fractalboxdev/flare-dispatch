@@ -1,5 +1,11 @@
 // The services one isolate builds once and every request and tick reads: the GitHub services, intake's Layers and the
 // application ports mameko's validation counts (MAMEKO-HOST-046). A cache or token held here outlives one request.
+import {
+  CacheClock,
+  ObjectStorePresignerLive,
+  R2Presigner,
+  R2PresignerLive,
+} from "@fractalboxdev/flare-dispatch-cache";
 import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
 import { catalogRuns, followOnSubmitterLayer } from "@fractalboxdev/flare-dispatch-intake";
 import {
@@ -20,7 +26,12 @@ import {
   type IntakeSettings,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { alarmPortFromEnv, recordDeliveryTime } from "@fractalboxdev/flare-dispatch-ops";
-import { type Actuator, Actuators, actuatorRegistry } from "@fractalboxdev/mameko-ports";
+import {
+  type Actuator,
+  Actuators,
+  actuatorRegistry,
+  ObjectStorePresigner,
+} from "@fractalboxdev/mameko-ports";
 import {
   ConfigurationSourceLive,
   GateDecisionSourceLive,
@@ -30,7 +41,7 @@ import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { d1Sql } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { cancelledLease } from "@fractalboxdev/mameko-store-sqlite";
 import { Context, Effect, Layer, Scope } from "effect";
-import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { deployment, presignerConfigOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { devRepositoryOf } from "./dev-repository.ts";
 import {
   gitData,
@@ -218,8 +229,39 @@ export const withDeliveryTimes = (env: Pick<ControlPlaneEnv, "DB">) =>
     }),
   );
 
+/**
+ * A deploy without the presign token, the account id or the bucket name signs no URL: the configuration check already
+ * names `object-store-presigner` as missing (`ports.ts`), so a presign that reaches this Layer dies.
+ */
+const presignerWithoutToken = (() => {
+  const refuse = () =>
+    Effect.die(
+      "object-store presigner: this deploy holds no R2 presign token (R2_PRESIGN_ACCESS_KEY_ID, R2_PRESIGN_SECRET_ACCESS_KEY)",
+    );
+  return Layer.mergeAll(
+    Layer.succeed(R2Presigner, { presign: refuse }),
+    Layer.succeed(ObjectStorePresigner, { presign: refuse }),
+  );
+})();
+
+/**
+ * The object-store presigner (MAMEKO-HOST-051): the cache package's signer over the presign token, on the bucket's S3
+ * endpoint `<account_id>.r2.cloudflarestorage.com` and never a custom domain (FD-CACHE-091).
+ */
+export const presignerLayer = (env: ControlPlaneEnv) => {
+  const config = presignerConfigOf(env);
+  if (config === undefined) return presignerWithoutToken;
+  return ObjectStorePresignerLive.pipe(
+    Layer.provideMerge(R2PresignerLive(config)),
+    Layer.provide(Layer.succeed(CacheClock, { now: () => Date.now() })),
+  );
+};
+
 const isolateLayer = (env: ControlPlaneEnv) =>
-  withDeliveryTimes(env).pipe(Layer.provideMerge(servicesLayer(env)));
+  Layer.merge(
+    withDeliveryTimes(env).pipe(Layer.provideMerge(servicesLayer(env))),
+    presignerLayer(env),
+  );
 
 const servicesLayer = (env: ControlPlaneEnv) => {
   const settings = intakeSettings(env);
