@@ -232,6 +232,68 @@ export const OpenIdConfiguration = Schema.Struct({
 
 export const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
+// --- Operability -----------------------------------------------------------------------------------------------------
+
+/** One executor of the fleet view: kind, heartbeat age, drain and quarantine flags, slots per class (FD-OPS-071). */
+export const FleetEntry = Schema.Struct({
+  executorId: Schema.String,
+  kind: Schema.String,
+  heartbeatAgeMs: Schema.NullOr(Schema.Number),
+  drain: Schema.Boolean,
+  quarantine: Schema.Boolean,
+  slots: Schema.Record(
+    Schema.String,
+    Schema.Struct({ inUse: Schema.Number, total: Schema.Number }),
+  ),
+});
+
+/** The spend view of MAMEKO-SPD-058, in micro-USD, as `GET /v1/spend` answers it (FD-SPD-057). */
+export const SpendViewBody = Schema.Struct({
+  month: Schema.String,
+  budget: Schema.Number,
+  settled: Schema.Number,
+  reserved: Schema.Number,
+  committed: Schema.Number,
+  classes: Schema.Array(
+    Schema.Struct({
+      class: Schema.String,
+      line: Schema.Number,
+      /** List micro-USD per hour; null for a class with no burn lane. */
+      lane: Schema.NullOr(Schema.Number),
+      admitted_list_rate: Schema.Number,
+      /** Null for the lowest-rank class, whose share is the floor `φ` rather than a reserve. */
+      reserve: Schema.NullOr(Schema.Number),
+    }),
+  ),
+  floor: Schema.Number,
+  measured_reserve_runway_days: Schema.NullOr(Schema.Number),
+  control_state: Schema.Literals(["run", "halt-cloud", "halt-all"]),
+  resets_at: Schema.Number,
+});
+export type SpendViewBody = typeof SpendViewBody.Type;
+
+/** One page-alarm episode of the window: raised at `raisedAt` (no earlier than the window start), resolved or not. */
+export const PageAlarmEpisode = Schema.Struct({
+  name: Schema.String,
+  dedupeKey: Schema.String,
+  raisedAt: Schema.Number,
+  resolvedAt: Schema.NullOr(Schema.Number),
+});
+export type PageAlarmEpisode = typeof PageAlarmEpisode.Type;
+
+/** What `GET /v1/ops/phase-gate?gate=<n>` answers and the `phase-gate` job's records file holds (FD-VER-028). */
+export const PhaseGateRecords = Schema.Struct({
+  gate: Schema.Number,
+  windowStart: Schema.Number,
+  windowEnd: Schema.Number,
+  measures: Schema.Array(
+    Schema.Struct({ name: Schema.String, holds: Schema.Boolean, detail: Schema.String }),
+  ),
+  pageAlarms: Schema.Array(PageAlarmEpisode),
+  killLines: Schema.Array(Schema.String),
+});
+export type PhaseGateRecords = typeof PhaseGateRecords.Type;
+
 // --- Groups ----------------------------------------------------------------------------------------------------------
 
 const errors = { error: ApiErrors };
@@ -404,11 +466,43 @@ export class ArtifactsGroup extends HttpApiGroup.make("artifacts")
   )
   .middleware(ErrorModel) {}
 
+/** An HTML page a browser renders: the install form and the new App's credentials page. */
+const HtmlPage = Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/html" }));
+
+/**
+ * The operability routes beside the operator operations: the fleet view, the phase gate's records, the spend view and
+ * the GitHub App install flow. The operability area implements these handlers.
+ */
+export class OperabilityGroup extends HttpApiGroup.make("operability")
+  .add(
+    HttpApiEndpoint.get("fleet", "/v1/ops/fleet", {
+      success: Schema.Array(FleetEntry),
+      ...errors,
+    }),
+    HttpApiEndpoint.get("phaseGate", "/v1/ops/phase-gate", {
+      /** Gate n, a phase from 0 to 3. */
+      query: { gate: Schema.Literals(["0", "1", "2", "3"]) },
+      success: PhaseGateRecords,
+      ...errors,
+    }),
+    HttpApiEndpoint.get("spend", "/v1/spend", { success: SpendViewBody, ...errors }),
+    /** The form that posts the App manifest to GitHub with a new single-use state (FD-OPS-073). */
+    HttpApiEndpoint.get("installNew", "/v1/github/install/new", { success: HtmlPage, ...errors }),
+    /** The manifest conversion and the new App's credentials, `Cache-Control: no-store` (FD-OPS-074, FD-OPS-075). */
+    HttpApiEndpoint.get("installCallback", "/v1/github/install/callback", {
+      query: { state: Schema.optionalKey(Schema.String), code: Schema.optionalKey(Schema.String) },
+      success: HtmlPage,
+      ...errors,
+    }),
+  )
+  .middleware(ErrorModel) {}
+
 /** The declaration. Every route the dispatcher serves through the router is an endpoint of one of these groups. */
 export class FlareDispatchApi extends HttpApi.make("flare-dispatch")
   .add(DispatchGroup)
   .add(ExecutionsGroup)
   .add(OpsGroup)
+  .add(OperabilityGroup)
   .add(ExecutorsGroup)
   .add(WellKnownGroup)
   .add(LogsGroup)

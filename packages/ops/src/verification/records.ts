@@ -5,6 +5,7 @@
 // requirement that names it.
 import { HIT_RATE_WINDOW_MS } from "@fractalboxdev/flare-dispatch-cache";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { PageAlarmEpisode, PhaseGateRecords } from "@fractalboxdev/flare-dispatch-api/declaration";
 import { Effect, Schema } from "effect";
 import { decodeStrict } from "../decode.ts";
 import type { MeasureRecord, PageAlarmRecord } from "./phase-gate.ts";
@@ -21,31 +22,11 @@ export const WARM_SPEEDUP = 0.3;
 /** The executor kind of an owned device; every other kind is a cloud setup. */
 const DEVICE_KIND = "device";
 
-const MeasureRecordSchema = Schema.Struct({
-  name: Schema.String,
-  holds: Schema.Boolean,
-  detail: Schema.String,
-});
-
-/** One page-alarm episode of the window: raised at `raisedAt` (no earlier than the window start), resolved or not. */
-export const PageAlarmEpisode = Schema.Struct({
-  name: Schema.String,
-  dedupeKey: Schema.String,
-  raisedAt: Schema.Number,
-  resolvedAt: Schema.NullOr(Schema.Number),
-});
-export type PageAlarmEpisode = typeof PageAlarmEpisode.Type;
-
-/** What `GET /v1/ops/phase-gate?gate=<n>` answers and the `phase-gate` job's records file holds. */
-export const PhaseGateRecords = Schema.Struct({
-  gate: Schema.Number,
-  windowStart: Schema.Number,
-  windowEnd: Schema.Number,
-  measures: Schema.Array(MeasureRecordSchema),
-  pageAlarms: Schema.Array(PageAlarmEpisode),
-  killLines: Schema.Array(Schema.String),
-});
-export type PhaseGateRecords = typeof PhaseGateRecords.Type;
+/**
+ * What `GET /v1/ops/phase-gate?gate=<n>` answers and the `phase-gate` job's records file holds, with its page-alarm
+ * episodes: the declaration's response schemas.
+ */
+export { PageAlarmEpisode, PhaseGateRecords };
 
 /** A table the records read could not be read. */
 export class RecordsUnreadable extends Schema.TaggedError<RecordsUnreadable>()(

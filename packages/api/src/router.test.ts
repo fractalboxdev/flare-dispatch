@@ -9,7 +9,7 @@ import {
   type Harness,
 } from "./api.test-support.ts";
 import { FlareDispatchApi } from "./declaration.ts";
-import { artifactsGroup, declaredGroups, logsGroup } from "./groups.ts";
+import { artifactsGroup, declaredGroups, logsGroup, operabilityGroup } from "./groups.ts";
 import { DuplicateRoute, matchPath, mount, routerGroup } from "./router.ts";
 import { Effect, Layer } from "effect";
 
@@ -41,7 +41,39 @@ describe("declaration and router", () => {
           .handle("list", () => Effect.succeed({ artifacts: [], cursor: null })),
       ),
     );
-    const mounted = mount(...declaredGroups, logs, artifacts).routes.map(
+    const operability = operabilityGroup(
+      HttpApiBuilder.group(FlareDispatchApi, "operability", (handlers) =>
+        handlers
+          .handle("fleet", () => Effect.succeed([]))
+          .handle("phaseGate", () =>
+            Effect.succeed({
+              gate: 0,
+              windowStart: 0,
+              windowEnd: 0,
+              measures: [],
+              pageAlarms: [],
+              killLines: [],
+            }),
+          )
+          .handle("spend", () =>
+            Effect.succeed({
+              month: "2027-01",
+              budget: 0,
+              settled: 0,
+              reserved: 0,
+              committed: 0,
+              classes: [],
+              floor: 0,
+              measured_reserve_runway_days: null,
+              control_state: "run" as const,
+              resets_at: 0,
+            }),
+          )
+          .handle("installNew", () => Effect.succeed(""))
+          .handle("installCallback", () => Effect.succeed("")),
+      ),
+    );
+    const mounted = mount(...declaredGroups, operability, logs, artifacts).routes.map(
       (r) => `${r.method} ${r.path}`,
     );
     expect(mounted.sort()).toEqual(declared.sort());

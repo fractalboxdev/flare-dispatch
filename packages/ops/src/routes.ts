@@ -170,8 +170,9 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
   });
 
 /**
- * Serves an operability route, or answers null for a path it does not serve. Mount it first in the Worker's `fetch`:
- * `const ops = await opsFetch(request, env, deps); if (ops !== null) return ops;`.
+ * Serves an operability route, or answers null for a path it does not serve:
+ * `const ops = await opsFetch(request, env, deps); if (ops !== null) return ops;`. The control plane Worker mounts it
+ * for the dashboard's pages; its router serves the `/v1/` routes, the operability ones through `OperabilityHandlers`.
  */
 export const opsFetch = (
   request: Request,
