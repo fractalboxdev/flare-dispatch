@@ -2,7 +2,7 @@
 // seed fixes how many pull requests an Actions workflow dispatches `pr-review` for and at what virtual gaps, when an
 // executor claims the reviewed one inside its claim window, the size of its diff (so its change class and reviewer
 // count), the repo manifest's mode, and for each reviewer call how long it takes on the virtual clock and how it ends:
-// findings, `rate-limited` once the wait bound passes, or `unavailable`. Each dispatch goes through intake's admission
+// findings, `rate-limited` after its wait bound, or `unavailable`. Each dispatch goes through intake's admission
 // into mameko's admission on a SQLite D1 under the production class catalogue; the reviewed execution's body then runs
 // through `prReviewRun`'s workflow on `TestClock`. `scenarios` is what the `sim` job runs
 // (packages/ops/scripts/harness.ts): each seed fails on any violation.
@@ -34,7 +34,9 @@ import {
 import { fakeServices, recorder, type Recorder } from "../../src/recipes/fakes.test-support.ts";
 import {
   FULL_REVIEWERS,
+  LITE_REVIEWERS,
   PR_REVIEW_MARKER,
+  TRIVIAL_REVIEWERS,
   type Finding,
   type PrReviewInput,
 } from "../../src/recipes/pr-review.ts";
@@ -62,11 +64,13 @@ export type CallEnd =
   | { readonly _tag: "rate-limited" }
   | { readonly _tag: "unavailable" };
 
-/** One reviewer call: its virtual latency and how it ends. */
-export interface PlannedCall {
-  readonly latencyMs: number;
-  readonly end: CallEnd;
-}
+/**
+ * One reviewer call and how it ends: a `rate-limited` call ends at the wait bound, any other after its virtual
+ * latency.
+ */
+export type PlannedCall =
+  | { readonly end: Extract<CallEnd, { _tag: "rate-limited" }> }
+  | { readonly latencyMs: number; readonly end: Exclude<CallEnd, { _tag: "rate-limited" }> };
 
 /** Which way the seed makes the reviewers end. */
 export type Mode = "all-rate-limited" | "all-failed-mixed" | "some-answer";
@@ -97,10 +101,7 @@ export const plan = (seed: number): Plan => {
   const lineRoll = random();
   const lines = lineRoll < 0.34 ? 1 + int(25) : lineRoll < 0.67 ? 26 + int(175) : 201 + int(200);
   const latency = () => (1 + int(90)) * SECOND;
-  const rateLimited = (): PlannedCall => ({
-    latencyMs: (1 + int(1800)) * SECOND,
-    end: { _tag: "rate-limited" },
-  });
+  const rateLimited = (): PlannedCall => ({ end: { _tag: "rate-limited" } });
   const failure = (): PlannedCall =>
     random() < 0.5 ? rateLimited() : { latencyMs: latency(), end: { _tag: "unavailable" } };
   const level = (): Finding["level"] | null =>
@@ -142,6 +143,13 @@ export const plan = (seed: number): Plan => {
 /** The change class a diff of `lines` added lines to one ordinary path takes (FD-AGT-050). */
 export const classOfLines = (lines: number): "full" | "lite" | "trivial" =>
   lines > 200 ? "full" : lines > 25 ? "lite" : "trivial";
+
+/** How many reviewers each change class runs. */
+const REVIEWER_COUNT = {
+  full: FULL_REVIEWERS.length,
+  lite: LITE_REVIEWERS.length,
+  trivial: TRIVIAL_REVIEWERS.length,
+} as const;
 
 const diffOf = (lines: number) =>
   [
@@ -192,8 +200,9 @@ export interface Observation {
 }
 
 /**
- * A `ModelClient` answer on the virtual clock: each call waits its planned latency and ends as planned; a
- * `rate-limited` call ends no later than the wait bound, the class's queue age after admission (MAMEKO-MDL-046).
+ * A `ModelClient` answer on the virtual clock: each call ends as planned. A `rate-limited` call ends after its wait
+ * bound, the class's queue age after admission (MAMEKO-MDL-046), and at once when it starts past the bound; any other
+ * call ends after its planned latency.
  */
 const plannedModel = (p: Plan, waitBound: number, callSites: string[]) => {
   const seen = new Map<string, number>();
@@ -205,10 +214,7 @@ const plannedModel = (p: Plan, waitBound: number, callSites: string[]) => {
       seen.set(reviewer, attempt + 1);
       const call = p.calls[reviewer]![Math.min(attempt, 1)]!;
       const now = yield* Clock.currentTimeMillis;
-      const until =
-        call.end._tag === "rate-limited"
-          ? Math.min(now + call.latencyMs, Math.max(now, waitBound))
-          : now + call.latencyMs;
+      const until = "latencyMs" in call ? now + call.latencyMs : Math.max(now, waitBound);
       yield* Effect.sleep(until - now);
       if (call.end._tag === "rate-limited")
         return yield* new ModelCallError({
@@ -311,7 +317,7 @@ export const runScenario = async (seed: number): Promise<Observation> => {
           Effect.provide(Layer.provideMerge(prReviewRun.layer, Layer.merge(services, model))),
           Effect.forkChild,
         );
-      // Every call ends within the wait bound or 90 s, and each reviewer makes at most two, so the body ends well
+      // Every call ends at the wait bound or within 90 s, and each reviewer makes at most two, so the body ends well
       // inside one virtual hour after the wait bound; each step wakes the sleeping calls in order.
       for (let i = 0; i < 240 && fiber.pollUnsafe() === undefined; i++)
         yield* TestClock.adjust("1 minute");
@@ -387,7 +393,9 @@ export const checkCapacity = (seed: number, o: Observation): readonly SimViolati
   const violations: SimViolation[] = [];
   const v = (message: string) => violations.push({ id: "FD-AGT-057", message });
   const ends = reviewerEnds(p, o.callSites);
-  if (ends.size === 0) v("no reviewer ran");
+  const expectedCount = REVIEWER_COUNT[classOfLines(p.lines)];
+  if (ends.size !== expectedCount)
+    v(`${ends.size} reviewers ran, the ${classOfLines(p.lines)} class runs ${expectedCount}`);
   for (const [reviewer, end] of ends) {
     const calls = o.callSites.filter((s) => s === `reviewer:${reviewer}`).length;
     const firstFailed = p.calls[reviewer]![0].end._tag !== "findings";
@@ -407,6 +415,8 @@ export const checkCapacity = (seed: number, o: Observation): readonly SimViolati
       v("the review comment carries no marker");
   } else if (o.rec.intents.length > 0)
     v(`a run with no reviewer answer returned ${o.rec.intents.length} intents`);
+  if (p.mode === "all-rate-limited" && o.endedAt < o.reviewed.enqueuedAt + QUEUE_AGE_MS)
+    v(`the body ended at ${o.endedAt}, before the wait bound`);
   if (o.endedAt > o.reviewed.deadlineAt)
     v(`the body ended at ${o.endedAt}, past deadline_at ${o.reviewed.deadlineAt}`);
   return violations;

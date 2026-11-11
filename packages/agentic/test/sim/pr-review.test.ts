@@ -7,9 +7,9 @@ import {
   CAPACITY_SCENARIO,
   checkCapacity,
   checkPlacement,
-  classOfLines,
   PLACEMENT_SCENARIO,
   plan,
+  reviewerEnds,
   runScenario,
 } from "./pr-review.sim.ts";
 
@@ -29,12 +29,13 @@ describe("pr-review simulation", () => {
 
   it("[FD-AGT-057] when every reviewer's call ends rate-limited after its wait bound, pr-review concludes failure with capacity: model unavailable", async () => {
     const reasons = new Set<string>();
-    const classes = new Set<string>();
+    const reviewerCounts = new Set<number>();
     for (const seed of seedsOf(CAPACITY_SCENARIO, count, kept)) {
       const o = await runScenario(seed);
       expect(checkCapacity(seed, o), `seed ${seed}`).toEqual([]);
       reasons.add(o.result._tag === "failure" ? o.result.reason : o.result._tag);
-      if (plan(seed).mode === "all-rate-limited") classes.add(classOfLines(plan(seed).lines));
+      const p = plan(seed);
+      if (p.mode === "all-rate-limited") reviewerCounts.add(reviewerEnds(p, o.callSites).size);
     }
     if (count >= 100) {
       expect([...reasons].sort()).toEqual([
@@ -43,8 +44,8 @@ describe("pr-review simulation", () => {
         "review: changes requested",
         "success",
       ]);
-      // Every change class, so one reviewer and seven, reached the all-rate-limited path.
-      expect([...classes].sort()).toEqual(["full", "lite", "trivial"]);
+      // Every change class reached the all-rate-limited path with its full reviewer set: one, four and seven.
+      expect([...reviewerCounts].sort((a, b) => a - b)).toEqual([1, 4, 7]);
     }
   }, 120_000);
 });
