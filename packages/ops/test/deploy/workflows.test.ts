@@ -3,10 +3,18 @@
 // with `node`, `pnpm`, `git`, `wrangler` and `npx` replaced by recorders on `PATH` and each `uses:` step played by a
 // stand-in, so a suite sees every command a path runs and every file it writes. The `fd deploy` argument a path passes
 // then runs through the Operability service on a recording `DeployTarget`, which keeps what each Worker deploy received.
-import { spawnSync } from "node:child_process";
+//
+// The deploy workflow's own requirements (FD-OPS-008, FD-OPS-011, FD-OPS-025, FD-OPS-030) and the CI jobs the deploy and
+// the ruleset rest on (FD-OPS-027, FD-OPS-031, FD-VER-023, FD-VER-033) run the same way: GitHub's job selection,
+// `needs` and concurrency rules over the committed workflows, the selected jobs' steps in bash, and a job whose real
+// command is cheap enough (the diagram check, the documentation build, the reference-profile comparison) on a copy of
+// the repository a suite can break.
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  appendFileSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,6 +22,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,14 +31,35 @@ import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
+  buildProfile,
+  diffJson,
+  projectForReference,
+  referenceProfile,
+} from "@fractalboxdev/flare-dispatch-profile";
+import {
   APP_PERMISSIONS,
   DeployTarget,
   MERGE_GATE_CHECKS,
   placeholderOverlay,
   renderTemplate,
+  rulesetCheck,
   type OverlayValues,
 } from "../../src/index.ts";
-import { makeOperability, repositoryRoot, V2_WORKERS } from "../../src/cli/index.ts";
+import {
+  makeOperability,
+  operabilityCommand,
+  repositoryRoot,
+  V2_WORKERS,
+} from "../../src/cli/index.ts";
+import {
+  deploy as deployOn,
+  fd,
+  isWrite,
+  OVERLAY as PLACEHOLDER_OVERLAY,
+  SCRIPT as CONTROL_PLANE_SCRIPT,
+  since,
+  world,
+} from "./support.ts";
 
 const ROOT = repositoryRoot(import.meta.dirname);
 const SCRIPT = "packages/ops/scripts/fd-operability.ts";
@@ -60,14 +91,29 @@ type Action = {
   inputs: Record<string, { required?: boolean; default?: string }>;
   runs: { using: string; steps: Step[] };
 };
-type Workflow = { jobs: Record<string, { steps: Step[] }> };
+type Job = {
+  name?: string;
+  needs?: string | string[];
+  if?: string;
+  uses?: string;
+  steps?: Step[];
+  concurrency?: unknown;
+};
+type Workflow = {
+  name: string;
+  on: Record<string, { branches?: string[] } | null>;
+  env?: Record<string, string>;
+  concurrency?: { group: string; "cancel-in-progress": boolean | string };
+  jobs: Record<string, Job>;
+};
 
 const action = parse(
   readFileSync(join(ROOT, "actions/deploy-dispatcher-action/action.yml"), "utf8"),
 ) as Action;
-const deployWorkflow = parse(
-  readFileSync(join(ROOT, ".github/workflows/v2-deploy.yml"), "utf8"),
-) as Workflow;
+const workflowFile = (path: string) =>
+  parse(readFileSync(join(ROOT, path.replace(/^\.\//, "")), "utf8")) as Workflow;
+const deployWorkflow = workflowFile(".github/workflows/v2-deploy.yml");
+const ciWorkflow = workflowFile(".github/workflows/v2-ci.yml");
 
 /** A command a recorder on `PATH` ran: its name, the physical directory it ran in and its arguments. */
 interface Ran {
@@ -78,6 +124,12 @@ interface Ran {
 
 const RECORDED = ["node", "pnpm", "git", "wrangler", "npx"] as const;
 
+/** A bash that runs a `run:` step as the hosted runner's bash 5 does: `shopt -s globstar` needs bash 4 or later. */
+const BASH =
+  ["bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/usr/bin/bash"].find(
+    (b) => spawnSync(b, ["-c", "shopt -s globstar"]).status === 0,
+  ) ?? "bash";
+
 let scratch: string;
 beforeAll(() => {
   mkdirSync(join(ROOT, ".tmp"), { recursive: true });
@@ -85,8 +137,11 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-/** A fresh runner: a workspace, a temp dir, a home and the recorders, under the suite's scratch directory. */
-const runner = (name: string) => {
+/**
+ * A fresh runner: a workspace, a temp dir, a home and the recorders of `recorded`, under the suite's scratch directory.
+ * A command left out of `recorded` runs for real.
+ */
+const runner = (name: string, recorded: readonly string[] = RECORDED) => {
   const base = join(scratch, name);
   const dirs = {
     workspace: join(base, "workspace"),
@@ -97,7 +152,7 @@ const runner = (name: string) => {
   for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true });
   const log = join(base, "commands.log");
   writeFileSync(log, "");
-  for (const command of RECORDED) {
+  for (const command of recorded) {
     const path = join(dirs.bin, command);
     writeFileSync(
       path,
@@ -135,10 +190,15 @@ const runSteps = (
   r: Runner,
   values: Readonly<Record<string, string>>,
   uses: (step: Step, context: ReadonlyMap<string, string>) => void,
+  /**
+   * Environment under each step's own `env:`: the workflow's `env:`, and what replaces the runner's own, such as the
+   * real `HOME` a real `pnpm` reads its install from.
+   */
+  base: Readonly<Record<string, string>> = {},
 ) => {
   const context = new Map(Object.entries(values));
   context.set("github.workspace", r.workspace);
-  const results: { name: string; ok: boolean; stderr: string }[] = [];
+  const results: { name: string; ok: boolean; stderr: string; output: string }[] = [];
   for (const [n, step] of steps.entries()) {
     const name = step.name ?? step.uses ?? `step ${n}`;
     const failedBefore = results.some((s) => !s.ok);
@@ -147,7 +207,7 @@ const runSteps = (
     if (failedBefore) break;
     if (step.uses !== undefined) {
       uses(step, context);
-      results.push({ name, ok: true, stderr: "" });
+      results.push({ name, ok: true, stderr: "", output: "" });
       continue;
     }
     const output = join(r.temp, `output-${n}`);
@@ -159,15 +219,21 @@ const runSteps = (
       GITHUB_WORKSPACE: r.workspace,
       GITHUB_OUTPUT: output,
       GITHUB_STEP_SUMMARY: join(r.temp, "summary.md"),
+      ...base,
     };
     for (const [k, v] of Object.entries(step.env ?? {})) env[k] = evaluate(String(v), context);
     const cwd = join(r.workspace, evaluate(step["working-directory"] ?? ".", context));
     const run = spawnSync(
-      "bash",
+      BASH,
       ["--noprofile", "--norc", "-eo", "pipefail", "-c", evaluate(step.run ?? "", context)],
-      { cwd, env, encoding: "utf8" },
+      { cwd, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
     );
-    results.push({ name, ok: run.status === 0, stderr: run.stderr });
+    results.push({
+      name,
+      ok: run.status === 0,
+      stderr: run.stderr,
+      output: `${run.stdout}${run.stderr}${run.error === undefined ? "" : String(run.error)}`,
+    });
     for (const line of readFileSync(output, "utf8").split("\n")) {
       const eq = line.indexOf("=");
       if (step.id !== undefined && eq > 0)
@@ -200,10 +266,11 @@ const tree = (dir: string): Map<string, string> => {
 };
 
 /**
- * What each Worker deploy receives when `fd deploy` runs with `overlay`, on a target that records it. The deploy carries
- * the control plane alone: the committed documentation template still fails the template invariants of the drift check.
+ * What each Worker deploy receives when the ops script runs with `argv` (its arguments after the script path), on a
+ * target that records it. The deploy carries the control plane alone: the committed documentation template still fails
+ * the template invariants of the drift check.
  */
-const deployedBy = async (overlay: string) => {
+const deployedBy = async (argv: readonly string[]) => {
   const received = new Map<string, string>();
   const target = () =>
     Layer.succeed(DeployTarget, {
@@ -227,17 +294,13 @@ const deployedBy = async (overlay: string) => {
       writeRecord: () => Effect.void,
       raiseAlarm: () => Effect.void,
     });
-  const report = await Effect.runPromise(
-    makeOperability({
-      fail: (m) => new Error(m),
-      root: ROOT,
-      workers: [CONTROL_PLANE],
-      target,
-    }).deploy({
-      overlay,
-      dryRun: false,
-    }),
-  );
+  const service = makeOperability({
+    fail: (m) => new Error(m),
+    root: ROOT,
+    workers: [CONTROL_PLANE],
+    target,
+  });
+  const report = await Effect.runPromise(operabilityCommand(service, argv, (m) => new Error(m)));
   return { report, received };
 };
 
@@ -251,6 +314,9 @@ const rendered = (overlay: OverlayValues) =>
       ),
     ]),
   );
+
+/** The arguments a recorded ops-script run passed after the script path. */
+const scriptArgs = (call: Ran) => call.args.slice(call.args.indexOf(SCRIPT) + 1);
 
 /** The one `fd deploy` a path ran, with the overlay text its `@file` argument named. */
 const fdDeployOf = (ran: readonly Ran[]) => {
@@ -314,7 +380,7 @@ describe("every deploy path renders through the one renderer", () => {
     for (const [path, bytes] of checkedOut) expect(after.get(path)).toBe(bytes);
 
     // What the action hands fd deploy reaches each Worker deploy as the renderer's output for the operator's overlay.
-    const { report, received } = await deployedBy(overlay);
+    const { report, received } = await deployedBy(scriptArgs(call));
     expect(report.ok).toBe(true);
     expect(received).toEqual(rendered(OVERLAY));
     expect(received.get("control-plane")).toContain('"pattern": "dispatch.acme.test"');
@@ -369,7 +435,7 @@ describe("every deploy path renders through the one renderer", () => {
     const before = tree(r.workspace);
     const played: string[] = [];
     const results = runSteps(
-      deployWorkflow.jobs["deploy"]!.steps,
+      deployWorkflow.jobs["deploy"]!.steps!,
       r,
       {
         "secrets.FD_OPERATOR_OVERLAY": OVERLAY_TEXT,
@@ -389,7 +455,7 @@ describe("every deploy path renders through the one renderer", () => {
     expect(overlay).toBe(OVERLAY_TEXT);
     expect(tree(r.workspace)).toEqual(before);
 
-    const { report, received } = await deployedBy(overlay);
+    const { report, received } = await deployedBy(scriptArgs(call));
     expect(report.ok).toBe(true);
     expect(received).toEqual(rendered(OVERLAY));
   }, 30_000);
@@ -408,9 +474,584 @@ describe("every deploy path renders through the one renderer", () => {
     expect(script).toMatch(
       /const service = makeOperability\(\{ fail: \(message\) => new Error\(message\) \}\);/,
     );
-    expect(script).toMatch(/service\.deploy\(\{ overlay, dryRun: opts\.has\("dry-run"\) \}\)/);
+    expect(script).toMatch(
+      /operabilityCommand\(service, process\.argv\.slice\(2\), \(message\) => new Error\(message\)\)/,
+    );
     const bin = readFileSync(join(ROOT, "packages/fd/bin/fd-deploy.mjs"), "utf8");
     expect(bin).toContain('import { main } from "../src/main.ts";');
     expect(bin).toContain('main("deploy");');
   });
+});
+
+// --- GitHub's rules over the committed workflows ----------------------------------------------------------------------
+
+/** The event a run starts from: its name and `github.ref`. */
+interface Event {
+  readonly name: "push" | "pull_request" | "schedule" | "workflow_dispatch";
+  readonly ref: string;
+}
+const PUSH_MAIN: Event = { name: "push", ref: "refs/heads/main" };
+const PULL_REQUEST: Event = { name: "pull_request", ref: "refs/pull/7/merge" };
+const SCHEDULE: Event = { name: "schedule", ref: "refs/heads/main" };
+
+/** One `${{ }}` expression: a `github.*` value, or such a value compared with a string literal by `==` or `!=`. */
+const expressionValue = (text: string, event: Event, workflowName: string): string => {
+  const github: Record<string, string> = {
+    "github.event_name": event.name,
+    "github.ref": event.ref,
+    "github.workflow": workflowName,
+  };
+  const comparison = /^\s*([\w.]+)\s*(==|!=)\s*'([^']*)'\s*$/.exec(text);
+  if (comparison !== null) {
+    const value = github[comparison[1]!];
+    if (value === undefined) throw new Error(`no value for ${comparison[1]}`);
+    return String(comparison[2] === "==" ? value === comparison[3] : value !== comparison[3]);
+  }
+  const value = github[text.trim()];
+  if (value === undefined) throw new Error(`no evaluator for \${{ ${text} }}`);
+  return value;
+};
+const interpolate = (text: string, event: Event, workflowName: string) =>
+  text.replace(/\$\{\{\s*(.+?)\s*\}\}/g, (_m, e: string) =>
+    expressionValue(e, event, workflowName),
+  );
+/** A job's `if:`, which GitHub reads as an expression with or without `${{ }}`. */
+const condition = (text: string, event: Event, workflowName: string) =>
+  expressionValue(text.replace(/^\s*\$\{\{\s*|\s*\}\}\s*$/g, ""), event, workflowName) === "true";
+
+/** Whether `event` starts a run of `wf`: its `on:` names the event, and a push matches a listed branch. */
+const triggers = (wf: Workflow, event: Event) =>
+  event.name in wf.on &&
+  (event.name !== "push" ||
+    (wf.on["push"]?.branches ?? []).some((b) => event.ref === `refs/heads/${b}`));
+
+type Conclusion = "success" | "failure" | "skipped";
+
+/**
+ * The conclusion of every job of a run of `wf` from `event`, keyed by its path (`ci/lint` for a job of the workflow
+ * `ci` calls), as GitHub decides them: a job runs only when every job it `needs` succeeded and its `if:` holds; a job
+ * that calls a reusable workflow fails when any of the called workflow's jobs fails, and the called workflow sees the
+ * caller's `github` context; a job that runs concludes as `outcome` says.
+ */
+const conclusions = (
+  wf: Workflow,
+  event: Event,
+  outcome: (path: string) => "success" | "failure",
+  caller: string = wf.name,
+  prefix = "",
+): Map<string, Conclusion> => {
+  const all = new Map<string, Conclusion>();
+  const own = new Map<string, Conclusion>();
+  const visit = (key: string): Conclusion => {
+    const known = own.get(key);
+    if (known !== undefined) return known;
+    const job = wf.jobs[key];
+    if (job === undefined) throw new Error(`${prefix}${key}: no such job`);
+    const needs = [job.needs ?? []].flat().map(visit);
+    let c: Conclusion;
+    if (
+      needs.some((n) => n !== "success") ||
+      (job.if !== undefined && !condition(job.if, event, caller))
+    )
+      c = "skipped";
+    else if (job.uses?.startsWith("./.github/workflows/") === true) {
+      const called = workflowFile(job.uses);
+      expect(called.on).toHaveProperty("workflow_call");
+      const inner = conclusions(called, event, outcome, caller, `${prefix}${key}/`);
+      for (const [k, v] of inner) all.set(k, v);
+      c = [...inner.values()].includes("failure") ? "failure" : "success";
+    } else c = outcome(`${prefix}${key}`);
+    own.set(key, c);
+    all.set(`${prefix}${key}`, c);
+    return c;
+  };
+  for (const key of Object.keys(wf.jobs)) visit(key);
+  return all;
+};
+const allPass = () => "success" as const;
+const failing = (job: string) => (path: string) => (path === job ? "failure" : "success");
+const ran = (c: Map<string, Conclusion>) =>
+  [...c].filter(([, v]) => v !== "skipped").map(([k]) => k);
+
+/** The CI commands of FD-OPS-026, each as the `run:` line of the job that runs it. */
+const CI_COMMANDS: Readonly<Record<string, RegExp>> = {
+  lint: /^pnpm lint$/,
+  typecheck: /^pnpm typecheck$/,
+  "unit tests": /^pnpm test$/,
+  "formal build gate": /packages\/ops\/scripts\/formal-gate\.ts/,
+  "wrangler deploy --dry-run on the configuration rendered from the placeholder overlay":
+    /^pnpm exec wrangler deploy --dry-run -c apps\/control-plane\/control-plane\.jsonc$/,
+  "the render, cron and drift checks": /packages\/ops\/scripts\/drift-check\.ts/,
+  "documentation site build": /^pnpm --filter @fractalboxdev\/flare-dispatch-docs run build$/,
+};
+/** The `v2-ci` job that runs each CI command of FD-OPS-026. */
+const ciCommandJobs = () =>
+  new Map(
+    Object.entries(CI_COMMANDS).map(([command, line]) => {
+      const jobs = Object.entries(ciWorkflow.jobs)
+        .filter(([, j]) => (j.steps ?? []).some((s) => line.test((s.run ?? "").trim())))
+        .map(([k]) => k);
+      expect(jobs, command).toHaveLength(1);
+      return [command, jobs[0]!] as const;
+    }),
+  );
+
+/**
+ * GitHub's concurrency rules over the runs of one workflow: a run whose group has a run in progress waits, replacing
+ * the group's waiting run, which is cancelled; with `cancel-in-progress` true the run in progress is cancelled instead.
+ * A run of a workflow with no `concurrency` starts at once.
+ */
+const concurrencyQueue = (wf: Workflow) => {
+  type Run = {
+    id: string;
+    group: string | null;
+    state: "pending" | "running" | "done" | "cancelled";
+  };
+  const runs: Run[] = [];
+  const startedThenCancelled: string[] = [];
+  let mostRunning = 0;
+  const settle = () => {
+    for (const r of runs)
+      if (r.state === "pending" && !runs.some((o) => o.group === r.group && o.state === "running"))
+        r.state = "running";
+    mostRunning = Math.max(mostRunning, runs.filter((r) => r.state === "running").length);
+  };
+  return {
+    queue: (id: string, event: Event) => {
+      const c = wf.concurrency;
+      const group = c === undefined ? null : interpolate(c.group, event, wf.name);
+      const cancel =
+        c !== undefined && interpolate(String(c["cancel-in-progress"]), event, wf.name) === "true";
+      for (const r of runs)
+        if (group !== null && r.group === group) {
+          if (r.state === "pending") r.state = "cancelled";
+          if (r.state === "running" && cancel) {
+            r.state = "cancelled";
+            startedThenCancelled.push(r.id);
+          }
+        }
+      runs.push({ id, group, state: group === null ? "running" : "pending" });
+      settle();
+    },
+    finish: (id: string) => {
+      const r = runs.find((x) => x.id === id && x.state === "running");
+      if (r === undefined) throw new Error(`${id} is not running`);
+      r.state = "done";
+      settle();
+    },
+    state: (id: string) => runs.find((r) => r.id === id)?.state,
+    mostRunning: () => mostRunning,
+    startedThenCancelled: () => [...startedThenCancelled],
+  };
+};
+
+/** The minutes of `[from, from + days)` a five-field cron expression fires at, in UTC. */
+const cronFirings = (cron: string, from: Date, days: number): Date[] => {
+  const [minute, hour, dom, month, dow] = cron.trim().split(/\s+/);
+  const field = (spec: string, value: number) =>
+    spec.split(",").some((part) => {
+      const [range, step] = part.split("/");
+      const [lo, hi] =
+        range === "*"
+          ? [0, 59]
+          : range!.includes("-")
+            ? range!.split("-").map(Number)
+            : [Number(range), Number(range)];
+      return (
+        value >= lo! &&
+        value <= (step === undefined ? hi! : 59) &&
+        (value - lo!) % Number(step ?? 1) === 0
+      );
+    });
+  const out: Date[] = [];
+  for (let t = from.getTime(); t < from.getTime() + days * 86_400_000; t += 60_000) {
+    const d = new Date(t);
+    if (
+      field(minute!, d.getUTCMinutes()) &&
+      field(hour!, d.getUTCHours()) &&
+      field(dom!, d.getUTCDate()) &&
+      field(month!, d.getUTCMonth() + 1) &&
+      field(dow!, d.getUTCDay())
+    )
+      out.push(d);
+  }
+  return out;
+};
+
+/**
+ * A copy of the repository's working tree a suite may change: every tracked and untracked file that git does not
+ * ignore, with each workspace package's `node_modules` links copied as links, so a workspace import resolves inside
+ * the copy, and the root `node_modules` and the mameko submodule linked to the checkout's.
+ */
+const mirror = (name: string) => {
+  const dir = join(scratch, name, "repository");
+  mkdirSync(dir, { recursive: true });
+  const files = execFileSync(
+    "git",
+    ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  )
+    .split("\0")
+    .filter((f) => f !== "" && !f.startsWith(".tmp/"));
+  for (const f of new Set(files)) {
+    const from = join(ROOT, f);
+    if (!existsSync(from)) continue;
+    mkdirSync(dirname(join(dir, f)), { recursive: true });
+    if (statSync(from).isDirectory()) symlinkSync(from, join(dir, f));
+    else copyFileSync(from, join(dir, f));
+  }
+  symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"));
+  for (const f of files.filter((f) => f.endsWith("package.json") && !f.startsWith("vendor/"))) {
+    const modules = join(dirname(f), "node_modules");
+    if (modules === "node_modules" || !existsSync(join(ROOT, modules))) continue;
+    cpSync(join(ROOT, modules), join(dir, modules), {
+      recursive: true,
+      verbatimSymlinks: true,
+      filter: (src) => !/[/\\]node_modules[/\\]\.(?:astro|vite)(?:[/\\]|$)/.test(src),
+    });
+  }
+  return dir;
+};
+
+/**
+ * The stand-in for `pnpm --filter <package> run <script>` in a copy of the repository: the package's script in its
+ * directory with its `node_modules/.bin` on `PATH`, as pnpm runs it. It runs nothing else: a real pnpm checks the
+ * install before a run and reinstalls the copy, whose root `node_modules` is the checkout's own.
+ */
+const pnpmStandIn = (repository: string) => {
+  const packages = execFileSync("git", ["ls-files", "--", "package.json", "**/package.json"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter((f) => f !== "" && !f.startsWith("vendor/") && existsSync(join(repository, f)))
+    .map((f) => {
+      const { name } = JSON.parse(readFileSync(join(repository, f), "utf8")) as { name?: string };
+      return { name, dir: dirname(f) };
+    })
+    .filter((p): p is { name: string; dir: string } => p.name !== undefined);
+  return [
+    "#!/bin/sh",
+    'if [ "$#" -ne 4 ] || [ "$1" != "--filter" ] || [ "$3" != "run" ]; then echo "pnpm stand-in: no $*" >&2; exit 2; fi',
+    'case "$2" in',
+    ...packages.map((p) => `  '${p.name}') dir='${p.dir}' ;;`),
+    '  *) echo "pnpm stand-in: no package $2" >&2; exit 2 ;;',
+    "esac",
+    'cd "$GITHUB_WORKSPACE/$dir" || exit 2',
+    `script=$(node -e 'const s = require("./package.json").scripts?.[process.argv[1]]; if (!s) process.exit(3); process.stdout.write(s)' "$4") || { echo "pnpm stand-in: $2 has no script $4" >&2; exit 2; }`,
+    'PATH="$PWD/node_modules/.bin:$PATH" exec sh -c "$script"',
+    "",
+  ].join("\n");
+};
+
+/** Runs `job` of `v2-ci` in `workspace`, which already holds the checkout and the install its `uses:` steps make. */
+const runCiJob = (job: string, name: string, workspace: string) => {
+  const r = runner(name, []);
+  rmSync(r.workspace, { recursive: true, force: true });
+  symlinkSync(workspace, r.workspace);
+  writeFileSync(join(r.bin, "pnpm"), pnpmStandIn(workspace));
+  chmodSync(join(r.bin, "pnpm"), 0o755);
+  const played: string[] = [];
+  // `node` runs under the real home, as on the hosted runner.
+  const results = runSteps(
+    ciWorkflow.jobs[job]!.steps!,
+    r,
+    {},
+    (step) => {
+      expect(
+        step.uses === "actions/checkout@v4" || step.uses === "./.github/actions/v2-setup",
+        step.uses,
+      ).toBe(true);
+      played.push(step.uses!);
+    },
+    { ...ciWorkflow.env, HOME: process.env["HOME"] ?? r.home },
+  );
+  return { results, played };
+};
+
+describe("the deploy workflow over GitHub's rules", () => {
+  const secrets = (overlay: string) => ({
+    "secrets.FD_OPERATOR_OVERLAY": overlay,
+    "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
+    "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+    "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
+  });
+
+  it("[FD-OPS-008] reads the overlay from the FD_OPERATOR_OVERLAY secret alone, and without it fails before its first deploy step", () => {
+    for (const job of ["deploy", "doctor"]) {
+      // GitHub passes an unset secret as the empty string.
+      const missing = runner(`overlay-missing-${job}`);
+      checkout(missing.workspace);
+      const played: string[] = [];
+      const results = runSteps(
+        deployWorkflow.jobs[job]!.steps!,
+        missing,
+        secrets(""),
+        (step) => void played.push(step.uses!),
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ name: "Read the operator overlay", ok: false });
+      expect(results[0]!.output).toContain("the FD_OPERATOR_OVERLAY secret is not set");
+      expect(played).toEqual([]);
+      expect(missing.ran()).toEqual([]);
+
+      // With the secret set, the overlay the ops script reads is the secret's text, byte for byte.
+      const set = runner(`overlay-set-${job}`);
+      checkout(set.workspace);
+      const ok = runSteps(deployWorkflow.jobs[job]!.steps!, set, secrets(OVERLAY_TEXT), () => {});
+      expect(ok.filter((s) => !s.ok)).toEqual([]);
+      const scripts = set.ran().filter((c) => c.command === "node" && c.args.includes(SCRIPT));
+      expect(scripts).toHaveLength(1);
+      const argv = scriptArgs(scripts[0]!);
+      const file = argv[argv.indexOf("--overlay") + 1]!;
+      expect(readFileSync(file.slice(1), "utf8")).toBe(OVERLAY_TEXT);
+    }
+    // The overlay reaches each job through that one secret; no step reads another.
+    const read = Object.values(deployWorkflow.jobs)
+      .flatMap((j) => j.steps ?? [])
+      .flatMap((s) => Object.values(s.env ?? {}))
+      .filter((v) => /overlay/i.test(v));
+    expect(new Set(read)).toEqual(new Set(["${{ secrets.FD_OPERATOR_OVERLAY }}"]));
+  });
+
+  it("[FD-OPS-011] runs one deploy at a time whatever starts it, and never cancels a started one", () => {
+    const q = concurrencyQueue(deployWorkflow);
+    q.queue("push-1", PUSH_MAIN);
+    expect(q.state("push-1")).toBe("running");
+    // A manual run from another branch, the daily doctor and a second push, all while the first deploy runs.
+    q.queue("dispatch", { name: "workflow_dispatch", ref: "refs/heads/hotfix" });
+    q.queue("doctor", SCHEDULE);
+    q.queue("push-2", PUSH_MAIN);
+    expect(q.state("push-1")).toBe("running");
+    expect(q.state("push-2")).toBe("pending");
+    q.finish("push-1");
+    expect(q.state("push-2")).toBe("running");
+    q.finish("push-2");
+    expect(q.mostRunning()).toBe(1);
+    expect(q.startedThenCancelled()).toEqual([]);
+
+    // No job escapes the run's group, and the CI the deploy calls queues under a group of its own, so a deploy never
+    // waits on itself.
+    for (const job of Object.values(deployWorkflow.jobs)) expect(job.concurrency).toBeUndefined();
+    const deployGroup = interpolate(
+      deployWorkflow.concurrency!.group,
+      PUSH_MAIN,
+      deployWorkflow.name,
+    );
+    for (const event of [PUSH_MAIN, SCHEDULE])
+      expect(interpolate(ciWorkflow.concurrency!.group, event, deployWorkflow.name)).not.toBe(
+        deployGroup,
+      );
+  });
+
+  it("[FD-OPS-030] a push to the default branch runs every CI command first, and no deploy step starts unless all pass", () => {
+    expect(triggers(deployWorkflow, PUSH_MAIN)).toBe(true);
+    expect(triggers(deployWorkflow, { name: "push", ref: "refs/heads/feature" })).toBe(false);
+
+    const commandJobs = ciCommandJobs();
+    const green = conclusions(deployWorkflow, PUSH_MAIN, allPass);
+    for (const job of commandJobs.values()) expect(green.get(`ci/${job}`)).toBe("success");
+    expect(green.get("deploy")).toBe("success");
+    expect(green.get("doctor")).toBe("skipped");
+
+    for (const [command, job] of commandJobs) {
+      const red = conclusions(deployWorkflow, PUSH_MAIN, failing(`ci/${job}`));
+      expect(red.get("ci"), command).toBe("failure");
+      expect(red.get("deploy"), command).toBe("skipped");
+    }
+
+    // The deploy job's steps, run once CI passed: the deploy step is the ops script's `deploy`.
+    const r = runner("push-deploy");
+    checkout(r.workspace);
+    const results = runSteps(
+      deployWorkflow.jobs["deploy"]!.steps!,
+      r,
+      {
+        "secrets.FD_OPERATOR_OVERLAY": OVERLAY_TEXT,
+        "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
+        "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+        "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
+      },
+      () => {},
+    );
+    expect(results.filter((s) => !s.ok)).toEqual([]);
+    expect(fdDeployOf(r.ran()).call.args.slice(FD_DEPLOY.length)).toHaveLength(1);
+  });
+
+  it("[FD-OPS-025] runs fd doctor once every 24 h, and a failed check raises the notify alarm drift at the overlay's sink", async () => {
+    const schedule = deployWorkflow.on["schedule"] as unknown as { cron: string }[];
+    const firings = schedule.flatMap((s) =>
+      cronFirings(s.cron, new Date("2026-03-01T00:00:00Z"), 3),
+    );
+    expect(firings).toHaveLength(3);
+    for (const [i, t] of firings.entries())
+      if (i > 0) expect(t.getTime() - firings[i - 1]!.getTime()).toBe(86_400_000);
+
+    // A scheduled run runs the doctor alone: no CI, no deploy.
+    expect(ran(conclusions(deployWorkflow, SCHEDULE, allPass))).toEqual(["doctor"]);
+
+    const r = runner("doctor");
+    checkout(r.workspace);
+    const results = runSteps(
+      deployWorkflow.jobs["doctor"]!.steps!,
+      r,
+      {
+        "secrets.FD_OPERATOR_OVERLAY": PLACEHOLDER_OVERLAY,
+        "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
+        "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+        "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
+      },
+      () => {},
+    );
+    expect(results.filter((s) => !s.ok)).toEqual([]);
+    const calls = r.ran().filter((c) => c.command === "node" && c.args.includes(SCRIPT));
+    expect(calls).toHaveLength(1);
+    const argv = scriptArgs(calls[0]!);
+    expect(argv[0]).toBe("doctor");
+
+    // The doctor's command line on an account the last deploy left in place: no alarm.
+    const w = world();
+    expect((await deployOn(w)).ok).toBe(true);
+    const doctor = () => Effect.runPromise(operabilityCommand(fd(w), argv, (m) => new Error(m)));
+    const clean = await doctor();
+    expect(clean.ok).toBe(true);
+    expect(w.alarms).toEqual([]);
+
+    // A setting changed out of band fails the check and raises drift, as a notify alarm, and writes nothing.
+    w.scripts.get(CONTROL_PLANE_SCRIPT)!.crons = ["*/5 * * * *"];
+    const from = w.calls.length;
+    const drifted = await doctor();
+    expect(drifted.ok).toBe(false);
+    expect(drifted.stages.at(-1)).toMatchObject({ stage: "drift", ok: false });
+    expect(w.calls.slice(from)).toContain("POST alerts.example.com/hook");
+    expect(since(w, from).filter(isWrite)).toEqual([]);
+    expect(w.alarms).toHaveLength(1);
+    expect(w.alarms[0]).toMatchObject({
+      alarm: "drift",
+      severity: "notify",
+      state: "raised",
+      dedupe_key: "drift",
+      runbook: null,
+    });
+    expect(String(w.alarms[0]!["detail"])).toContain("control-plane.crons");
+
+    // The same check without the flag reports the drift and raises nothing.
+    const quiet = await Effect.runPromise(
+      operabilityCommand(
+        fd(w),
+        argv.filter((a) => a !== "--alarm-on-drift"),
+        (m) => new Error(m),
+      ),
+    );
+    expect(quiet.ok).toBe(false);
+    expect(w.alarms).toHaveLength(1);
+  });
+});
+
+describe("the CI jobs the merge gate and the deploy rest on", () => {
+  it("[FD-OPS-027] every pull request runs the CI commands under fallback-ci, which passes only when all pass and which the ruleset does not require", () => {
+    expect(triggers(ciWorkflow, PULL_REQUEST)).toBe(true);
+    const commandJobs = ciCommandJobs();
+    const green = conclusions(ciWorkflow, PULL_REQUEST, allPass);
+    for (const job of commandJobs.values()) expect(green.get(job)).toBe("success");
+    expect(green.get("fallback-ci")).toBe("success");
+    for (const [command, job] of commandJobs)
+      expect(
+        conclusions(ciWorkflow, PULL_REQUEST, failing(job)).get("fallback-ci"),
+        command,
+      ).not.toBe("success");
+
+    // The check name is the job's name; the drift check accepts a ruleset that leaves it out as complete.
+    const check = ciWorkflow.jobs["fallback-ci"]!.name ?? "fallback-ci";
+    const required = [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"];
+    expect(required).not.toContain(check);
+    expect(rulesetCheck(required)).toEqual([]);
+  });
+
+  it("[FD-VER-023] the drift check fails a deploy when the default branch's ruleset does not require one of the merge-gate checks", async () => {
+    expect([...MERGE_GATE_CHECKS].sort()).toEqual(
+      [
+        "lint",
+        "typecheck",
+        "spec-tags",
+        "unit",
+        "conf",
+        "sim",
+        "replay",
+        "e2e-local",
+        "deploy-dry-run",
+        "profile-reference",
+        "formal",
+        "diff",
+      ].sort(),
+    );
+    // Every required check is a job a pull request runs, so the ruleset blocks no pull request on a missing check.
+    const pr = conclusions(ciWorkflow, PULL_REQUEST, allPass);
+    for (const check of MERGE_GATE_CHECKS) expect(pr.get(check), check).toBe("success");
+
+    for (const check of MERGE_GATE_CHECKS) {
+      const w = world();
+      w.state.required = w.state.required.filter((c) => c !== check);
+      const report = await deployOn(w);
+      expect(report.ok, check).toBe(false);
+      const drift = report.stages.at(-1)!;
+      expect(drift).toMatchObject({ stage: "drift", ok: false });
+      expect(drift.detail).toContain(`required_status_checks.${check}`);
+      expect(w.calls.filter(isWrite), check).toEqual([]);
+    }
+    const w = world();
+    expect((await deployOn(w)).ok).toBe(true);
+  }, 30_000);
+
+  it("[FD-OPS-031] the docs job builds the site from the Markdown under specs/, and fails on a broken local link or a diagram the check rejects", () => {
+    expect(conclusions(ciWorkflow, PULL_REQUEST, allPass).get("docs")).toBe("success");
+
+    // A broken diagram fails the job at the diagram check, before the build.
+    const diagram = mirror("docs-diagram");
+    appendFileSync(
+      join(diagram, "specs/operability.md"),
+      "\n```mermaid\nflowchart LR\n  A[unclosed --> B\n```\n",
+    );
+    const bad = runCiJob("docs", "docs-diagram", diagram);
+    expect(bad.results.map((s) => s.ok)).toEqual([true, true, false]);
+    expect(bad.results.at(-1)!.output).toMatch(/specs\/operability\.md:\d+: failed \(parse\)/);
+
+    // A broken local link passes the diagram check and fails the build, which read it from specs/.
+    const link = mirror("docs-link");
+    appendFileSync(
+      join(link, "specs/operability.md"),
+      "\nSee [the retired page](retired-page.md).\n",
+    );
+    const broken = runCiJob("docs", "docs-link", link);
+    expect(broken.results.map((s) => s.ok)).toEqual([true, true, true, false]);
+    expect(broken.results[2]!.output).toMatch(/\d+ diagrams, 0 failed, 0 repairs/);
+    const build = broken.results.at(-1)!.output;
+    expect(build).toContain("specs/operability.md: broken link: retired-page.md");
+    // The page the build made from specs/operability.md carries the link that has no page.
+    expect(build).toContain("/specs/operability/: link retired-page.md has no page");
+  }, 300_000);
+
+  it("[FD-VER-033] every pull request runs profile-reference, which fails on a difference from the reference profile that profile.md does not list", () => {
+    expect(conclusions(ciWorkflow, PULL_REQUEST, allPass).get("profile-reference")).toBe("success");
+    // The committed profile differs from the reference only in listed rows, and the job passes.
+    expect(
+      diffJson(referenceProfile, projectForReference(buildProfile("production", 0))).length,
+    ).toBeGreaterThan(0);
+    const clean = runCiJob("profile-reference", "profile-clean", mirror("profile-clean"));
+    expect(clean.results.map((s) => s.ok)).toEqual([true, true, true]);
+    expect(clean.results.at(-1)!.output).toContain("profile-reference: 0 unlisted difference(s)");
+
+    // A value the list does not cover fails the job.
+    const drifted = mirror("profile-drifted");
+    const reference = join(drifted, "packages/profile/src/reference.ts");
+    const text = readFileSync(reference, "utf8");
+    const changed = text.replace(/(interactive: \{\s*rank: )2,/, (_m, head: string) => `${head}9,`);
+    expect(changed).not.toBe(text);
+    writeFileSync(reference, changed);
+    const bad = runCiJob("profile-reference", "profile-drifted", drifted);
+    expect(bad.results.map((s) => s.ok)).toEqual([true, true, false]);
+    expect(bad.results.at(-1)!.output).toMatch(
+      /phase 0 classes\.interactive\.rank: reference 9, FlareDispatch 2/,
+    );
+  }, 60_000);
 });

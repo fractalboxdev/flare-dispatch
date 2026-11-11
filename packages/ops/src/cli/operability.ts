@@ -89,6 +89,12 @@ export interface OperabilityOptions<E> {
   readonly target?: (overlay: OverlayValues) => Layer.Layer<DeployTarget>;
 }
 
+/** What `fd doctor` does beyond the drift check. */
+export interface DoctorOptions {
+  /** Raise the notify alarm `drift` when a check fails (FD-OPS-025). */
+  readonly alarmOnDrift?: boolean;
+}
+
 /** The repository root: the nearest directory above `from` that holds `pnpm-workspace.yaml`. */
 export const repositoryRoot = (from: string = process.cwd()): string => {
   let dir = from;
@@ -203,11 +209,29 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
         );
       }).pipe(Effect.catchCause((cause) => Effect.fail(options.fail(Cause.pretty(cause)))));
 
-  const doctor = (overlay: string) =>
-    report(
-      fdDoctor(overlay, workers(), APP_PERMISSIONS, renderedChecks(specs), profileFindings),
+  const problemsOf = (findings: readonly Finding[]) =>
+    findings.map((f) => `${f.severity} ${f.path}: ${f.detail}`).join("\n");
+
+  /**
+   * `fd doctor`. With `alarmOnDrift`, a check that fails raises the notify alarm `drift` at the overlay's alert sink
+   * (FD-OPS-025); an overlay that does not decode names no sink to raise it at.
+   */
+  const doctor = (overlay: string, opts: DoctorOptions = {}) => {
+    const drift = (detail: string) =>
+      opts.alarmOnDrift === true
+        ? Effect.flatMap(DeployTarget, (t) => t.raiseAlarm("drift", detail, "notify"))
+        : Effect.void;
+    return report(
+      fdDoctor(overlay, workers(), APP_PERMISSIONS, renderedChecks(specs), profileFindings).pipe(
+        Effect.tap((findings) => (failed(findings) ? drift(problemsOf(findings)) : Effect.void)),
+        Effect.tapError((f) =>
+          f.stage === "decode"
+            ? Effect.void
+            : drift(f.findings.map((x) => `failure ${x.path}: ${x.detail}`).join("\n")),
+        ),
+      ),
       (findings) => {
-        const problems = findings.map((f) => `${f.severity} ${f.path}: ${f.detail}`).join("\n");
+        const problems = problemsOf(findings);
         const ok = !failed(findings);
         return {
           ok,
@@ -219,6 +243,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
         };
       },
     )(overlay);
+  };
 
   return {
     deploy: (request: { readonly overlay: string; readonly dryRun: boolean }) =>
@@ -248,4 +273,27 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
           )(request.overlay),
     doctor,
   };
+};
+
+/** The service `makeOperability` builds. */
+export type OperabilityService<E> = ReturnType<typeof makeOperability<E>>;
+
+/**
+ * The command line of `packages/ops/scripts/fd-operability.ts`, which the deploy workflow and the deploy action run:
+ * `deploy --overlay <json|@file> [--dry-run]` or `doctor --overlay <json|@file> [--alarm-on-drift]`, as the service call
+ * it makes. `@file` names a file holding the overlay.
+ */
+export const operabilityCommand = <E>(
+  service: OperabilityService<E>,
+  argv: readonly string[],
+  fail: (message: string) => E,
+): Effect.Effect<OperabilityReport, E> => {
+  const [command, ...rest] = argv;
+  const at = rest.indexOf("--overlay");
+  const raw = at === -1 ? "" : (rest[at + 1] ?? "");
+  const overlay = raw.startsWith("@") ? readFileSync(raw.slice(1), "utf8") : raw;
+  if (command === "deploy") return service.deploy({ overlay, dryRun: rest.includes("--dry-run") });
+  if (command === "doctor")
+    return service.doctor(overlay, { alarmOnDrift: rest.includes("--alarm-on-drift") });
+  return Effect.fail(fail(`unknown command ${command ?? ""}; use deploy or doctor`));
 };

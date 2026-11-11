@@ -98,7 +98,12 @@ export class DeployTarget extends Context.Service<
       rendered: readonly RenderedWorker[],
     ) => Effect.Effect<CanaryResult, TargetFailed>;
     readonly writeRecord: (worker: RenderedWorker) => Effect.Effect<void, TargetFailed>;
-    readonly raiseAlarm: (name: string, detail: string) => Effect.Effect<void>;
+    /** Sends one alarm of specs/operability.md § Liveness and alerts to the overlay's alert sink. */
+    readonly raiseAlarm: (
+      name: string,
+      detail: string,
+      severity: "page" | "notify",
+    ) => Effect.Effect<void>;
   }
 >()("@fractalboxdev/flare-dispatch-ops/DeployTarget") {}
 
@@ -311,6 +316,7 @@ export const fdDeploy = (
       yield* target.raiseAlarm(
         "deploy-probe-failed",
         probes.map((p) => `${p.path}: ${p.detail}`).join("; "),
+        "page",
       );
       return yield* new DeployFailed({
         stage: "probes",

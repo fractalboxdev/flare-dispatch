@@ -79,7 +79,15 @@ export const world = () => {
     wranglerFails: boolean;
     /** The GitHub App's registration as `GET /app` answers it; the committed manifest by default. */
     app: AppPermissions;
-  } = { health: 200, deploys: 0, wranglerFails: false, app: APP_PERMISSIONS };
+    /** The status checks the default branch's ruleset requires; the merge gate and `check:ci` by default. */
+    required: string[];
+  } = {
+    health: 200,
+    deploys: 0,
+    wranglerFails: false,
+    app: APP_PERMISSIONS,
+    required: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"],
+  };
 
   const secretBindings = (script: string) =>
     [...(secrets.get(script) ?? new Map<string, string>())].map(([name, text]) => ({
@@ -213,9 +221,7 @@ export const world = () => {
         {
           type: "required_status_checks",
           parameters: {
-            required_status_checks: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"].map(
-              (context) => ({ context }),
-            ),
+            required_status_checks: state.required.map((context) => ({ context })),
           },
         },
       ]);
