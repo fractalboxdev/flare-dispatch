@@ -36,7 +36,14 @@ export interface RepoReusePolicy {
 export class ReuseInputs extends Context.Service<
   ReuseInputs,
   {
-    readonly repoPolicy: (repository: string) => Effect.Effect<RepoReusePolicy, ReuseReadFailed>;
+    /**
+     * The repository's policy from its manifest at the run's base commit, which the pull request cannot change
+     * (FD-INT-016).
+     */
+    readonly repoPolicy: (
+      repository: string,
+      baseCommit: string,
+    ) => Effect.Effect<RepoReusePolicy, ReuseReadFailed>;
     /** The base branch's required set, read from GitHub (ruleset and branch protection). */
     readonly readRequiredSet: (
       repository: string,
@@ -120,7 +127,7 @@ export const reuseRehearsal = (
     if (Exit.isFailure(decoded)) return null;
     const r = decoded.value;
     const inputs = yield* ReuseInputs;
-    const policy = yield* inputs.repoPolicy(r.repository);
+    const policy = yield* inputs.repoPolicy(r.repository, r.baseCommit);
     if (!policy.reuse) return null;
     if (r.placementRule === "cloud-only") return null;
     if (r.intentKinds.some((k) => !(CHECK_KINDS as readonly string[]).includes(k))) return null;
