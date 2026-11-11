@@ -66,7 +66,9 @@ const pass = (
 const fakeApplication = (gh: FakeGithub) =>
   Layer.mergeAll(
     CheckRunApplierLive.pipe(Layer.provide(fakeLayers(gh))),
-    ActuatorRateLimitLive.pipe(Layer.provide(installationQuotaLayer())),
+    ActuatorRateLimitLive.pipe(
+      Layer.provide(Layer.merge(installationQuotaLayer(), fakeLayers(gh))),
+    ),
   );
 
 const state = (outbox: ReturnType<typeof memoryOutboxStore>, id: string) =>

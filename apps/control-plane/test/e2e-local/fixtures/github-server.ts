@@ -170,7 +170,8 @@ const restApi = (
   const { state, publicKey } = app;
   /** Each installation token minted, and the installation it acts for. */
   const tokens = new Map<string, number>();
-  let checkRuns = 0;
+  /** Every check run the recorded state created, by repository, in creation order. */
+  const checkRuns: { readonly repository: string; readonly run: Record<string, unknown> }[] = [];
   const repository = (owner: string, name: string) =>
     Object.entries(state.repositories).find(
       ([fullName]) => fullName.toLowerCase() === `${owner}/${name}`.toLowerCase(),
@@ -265,16 +266,27 @@ const restApi = (
     if (request.method === "POST" && rest === "/check-runs") {
       const body = (await request.json()) as Record<string, unknown>;
       writes.push({ ...call, body });
-      checkRuns += 1;
-      return json(201, {
-        id: checkRuns,
+      const run = {
+        id: checkRuns.length + 1,
         name: body["name"],
         head_sha: body["head_sha"],
         external_id: body["external_id"] ?? null,
         status: body["status"] ?? "queued",
         conclusion: body["conclusion"] ?? null,
         output: body["output"] ?? { title: null, summary: null },
-      });
+      };
+      checkRuns.push({ repository: fullName, run });
+      return json(201, run);
+    }
+    // The check runs this state created on a commit, filtered by `check_name` as GitHub filters them.
+    const listed = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(rest)?.[1];
+    if (request.method === "GET" && listed !== undefined) {
+      const name = url.searchParams.get("check_name");
+      const runs = checkRuns
+        .filter((c) => c.repository === fullName && c.run["head_sha"] === listed)
+        .map((c) => c.run)
+        .filter((r) => name === null || r["name"] === name);
+      return json(200, { total_count: runs.length, check_runs: runs });
     }
     return undefined;
   };

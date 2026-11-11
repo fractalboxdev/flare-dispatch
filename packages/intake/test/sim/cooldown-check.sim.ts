@@ -50,7 +50,9 @@ export const simulateCooldownChecks = async (seed: number): Promise<CooldownChec
   const drainLayer = Layer.mergeAll(
     d1OutboxStore(h.db),
     CheckRunApplierLive.pipe(Layer.provide(fakeLayers(h.github))),
-    ActuatorRateLimitLive.pipe(Layer.provide(installationQuotaLayer())),
+    ActuatorRateLimitLive.pipe(
+      Layer.provide(Layer.merge(installationQuotaLayer(), fakeLayers(h.github))),
+    ),
   );
   /** Every id a request was held under. */
   const heldIds = new Set<string>();
