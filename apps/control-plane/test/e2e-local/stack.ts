@@ -12,6 +12,8 @@ import { generateKeyPairSync } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { decodeOverlay, type OverlayValues } from "@fractalboxdev/flare-dispatch-ops/overlay";
 import { renderTemplate, stripJsonc } from "@fractalboxdev/flare-dispatch-ops/render";
 import { Effect } from "effect";
@@ -140,41 +142,64 @@ export interface Stack {
   readonly close: () => Promise<void>;
 }
 
+/** Headers that describe one connection, not the message; the front sets its own. */
 const HOP_HEADERS: ReadonlySet<string> = new Set([
-  "content-encoding",
-  "content-length",
-  "transfer-encoding",
   "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "expect",
+  "host",
 ]);
 
-/** The front: forwards each client request to the Worker unchanged, recording it. */
-const startFront = async (target: URL, requests: StackRequest[]) => {
+/**
+ * The front: forwards each client request to the Worker unchanged, recording it. It streams each request and response
+ * body through without collecting it, so a body reaches the Worker, and the client, as it is sent.
+ */
+const startFront = async (requests: StackRequest[]) => {
+  let target: URL | undefined;
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(chunk as Buffer);
+      if (target === undefined) throw new Error("the Worker is not ready");
       const headers: Record<string, string> = {};
       for (const [name, value] of Object.entries(req.headers))
-        if (typeof value === "string" && name !== "host") headers[name] = value;
-      requests.push({ method: req.method ?? "GET", path: req.url ?? "/", headers });
+        if (typeof value === "string" && !HOP_HEADERS.has(name)) headers[name] = value;
+      const method = req.method ?? "GET";
+      requests.push({ method, path: req.url ?? "/", headers });
+      const length = req.headers["content-length"];
+      const hasBody =
+        req.headers["transfer-encoding"] !== undefined || (length !== undefined && length !== "0");
       const response = await fetch(new URL(req.url ?? "/", target), {
-        method: req.method ?? "GET",
+        method,
         headers,
         redirect: "manual",
-        ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }),
-      });
-      // `fetch` has already decoded the body, so its encoding and length headers no longer describe it.
+        ...(hasBody
+          ? { body: Readable.toWeb(req) as unknown as ReadableStream, duplex: "half" }
+          : {}),
+      } as RequestInit);
+      // `fetch` has already decoded an encoded body, so its encoding and length headers no longer describe it.
+      const decoded = response.headers.has("content-encoding");
       const out = Object.fromEntries(
-        [...response.headers].filter(([name]) => !HOP_HEADERS.has(name)),
+        [...response.headers].filter(
+          ([name]) =>
+            !HOP_HEADERS.has(name) &&
+            !(decoded && (name === "content-encoding" || name === "content-length")),
+        ),
       );
       res.writeHead(response.status, out);
-      res.end(Buffer.from(await response.arrayBuffer()));
-    })().catch((e: unknown) => res.writeHead(502).end(String(e)));
+      if (response.body === null) res.end();
+      else await pipeline(Readable.fromWeb(response.body as never), res);
+    })().catch((e: unknown) => {
+      if (res.headersSent) res.destroy();
+      else res.writeHead(502).end(String(e));
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   return {
     url: `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`,
+    forwardTo: (origin: URL) => {
+      target = origin;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();
@@ -192,6 +217,11 @@ const GITHUB_HOSTS: ReadonlySet<string> = new Set([
 export interface StackOptions {
   /** GitHub's recorded state: the Worker holds an App key and reads and writes GitHub through the App. */
   readonly github?: GithubState;
+  /**
+   * The Worker's `PUBLIC_ORIGIN` is the front's URL, so the links and endpoints it hands out (a lease's compile-cache
+   * endpoint, say) reach it. Without it the Worker has no public origin, as the rendered configuration gives none.
+   */
+  readonly publicOrigin?: boolean;
 }
 
 /** An App key pair, as the operator's `GITHUB_APP_PRIVATE_KEY` secret holds the private half. */
@@ -214,6 +244,8 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
   const overlay = overlayFor(team, options.github?.app.id ?? "0");
   const config = render(overlay);
   const containerClasses = new Set((config.containers ?? []).map((c) => c.class_name));
+  const requests: StackRequest[] = [];
+  const front = await startFront(requests);
   const vars = Object.fromEntries(
     Object.entries(config.vars).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
   );
@@ -242,6 +274,7 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
       CACHE_TOKEN_SECRET: "e2e-cache-token-secret",
       COMPILE_CACHE_SECRET,
       LINK_KEY,
+      ...(options.publicOrigin === true ? { PUBLIC_ORIGIN: front.url } : {}),
       // The template renders neither; the overlay holds both (`dispatchers`, `dispatch.oidcAudience`).
       DISPATCHERS: JSON.stringify(overlay.dispatchers ?? []),
       DISPATCH_OIDC_AUDIENCE: overlay.dispatch?.oidcAudience ?? "",
@@ -268,9 +301,7 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
       });
     },
   });
-  const origin = await mf.ready;
-  const requests: StackRequest[] = [];
-  const front = await startFront(origin, requests);
+  front.forwardTo(await mf.ready);
   return {
     url: front.url,
     mf,

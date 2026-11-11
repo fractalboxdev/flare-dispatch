@@ -185,8 +185,10 @@ jobs:
       - run: $STRIP_TYPES packages/ops/scripts/harness.ts diff --traces 10000
 
   # The V-E2E-LOCAL cloud path: the control plane Worker under workerd with the recorded GitHub fixture server, the
-  # dispatch action and the `fd-<subcommand>` executables against it, and `fd login` against the Secret Service, which
-  # runs in the job's own D-Bus session.
+  # dispatch action and the `fd-<subcommand>` executables against it, `fd login` against the Secret Service, which
+  # runs in the job's own D-Bus session, and a Rust build through sccache against the compile-cache route. The runner
+  # image's stable Rust toolchain builds; sccache is the release the sandbox image pins (`infra/Dockerfile.sandbox-demo`),
+  # checked against its SHA-256.
   e2e-local:
     runs-on: ubuntu-latest
     steps:
@@ -194,6 +196,18 @@ jobs:
       - uses: ./.github/actions/v2-setup
         with:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - name: Install sccache
+        env:
+          SCCACHE_VERSION: v0.18.0
+          SCCACHE_SHA256: 45f1447fbe231e3037bde351ef70677dd212216c8d62ae7ca409fecc4d6acc89
+        run: |
+          name="sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL -o "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VERSION}/${name}.tar.gz"
+          echo "${SCCACHE_SHA256}  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+          sudo tar -xzf "$RUNNER_TEMP/$name.tar.gz" --strip-components=1 -C /usr/local/bin "${name}/sccache"
+          sccache --version
+          cargo --version
       - name: Install the Secret Service
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnome-keyring libsecret-tools dbus-x11
       - name: e2e-local
