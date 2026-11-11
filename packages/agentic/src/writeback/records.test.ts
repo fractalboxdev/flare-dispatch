@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import type { D1Binding } from "../local/store.ts";
-import { stagedBlobName, type ManifestEntry } from "../staged-write/manifest.ts";
+import { DEFAULT_MAX_BYTES, stagedBlobName, type ManifestEntry } from "../staged-write/manifest.ts";
 import { StagedWriteReadFailed, WritebackRecords } from "./applier.ts";
 import { writebackRecordsLayer, type ArtifactObjects } from "./records.ts";
 import { artifactPath, memoryBucket, recordsDb } from "./records.test-support.ts";
@@ -44,7 +44,11 @@ describe("writebackRecordsLayer", () => {
     bucket.objects.set(artifactPath("x1", 3, stagedBlobName(sha256(text))), enc("stale epoch"));
     const answer = await run(
       Effect.flatMap(WritebackRecords, (r) =>
-        r.blobs("x1", [entry("bin.dat", binary), entry("a.md", text), entry("b.md", text)]),
+        r.blobs(
+          "x1",
+          [entry("bin.dat", binary), entry("a.md", text), entry("b.md", text)],
+          DEFAULT_MAX_BYTES,
+        ),
       ),
       db,
       bucket,
@@ -66,30 +70,62 @@ describe("writebackRecordsLayer", () => {
     const claimed = enc("claimed\n");
     bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(claimed))), enc("swapped\n"));
     const answer = await run(
-      Effect.flatMap(WritebackRecords, (r) => r.blobs("x1", [entry("a.md", claimed)])),
+      Effect.flatMap(WritebackRecords, (r) =>
+        r.blobs("x1", [entry("a.md", claimed)], DEFAULT_MAX_BYTES),
+      ),
       db,
       bucket,
     );
     expect(answer._tag === "Success" && answer.success[0]?.digest).toBe(sha256(enc("swapped\n")));
   });
 
+  it("[FD-AGT-026] reads no bytes when the stored blobs exceed the byte bound, and answers their sizes", async () => {
+    const db = recordsDb();
+    db.exec("insert into placements values ('x1', 'accepted', 1, null, 1)");
+    const bucket = memoryBucket();
+    const big = new Uint8Array(9);
+    const small = enc("ok\n");
+    for (const bytes of [big, small])
+      bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(bytes))), bytes);
+    const answer = await run(
+      Effect.flatMap(WritebackRecords, (r) =>
+        r.blobs("x1", [entry("big.bin", big), entry("a.md", small)], 8),
+      ),
+      db,
+      bucket,
+    );
+    expect(bucket.reads).toEqual([]);
+    expect(answer._tag).toBe("Success");
+    const blobs = answer._tag === "Success" ? answer.success : [];
+    expect(blobs.map((b) => [b.path, b.digest, b.size, b.text, b.bytes.byteLength])).toEqual([
+      ["big.bin", "", 9, null, 0],
+      ["a.md", "", 3, null, 0],
+    ]);
+  });
+
   it("[FD-AGT-013] leaves out a blob the store does not hold, and fails without a placement or a bucket", async () => {
     const db = recordsDb();
     db.exec("insert into placements values ('x1', 'accepted', 1, null, 1)");
     const missing = await run(
-      Effect.flatMap(WritebackRecords, (r) => r.blobs("x1", [entry("a.md", enc("a"))])),
+      Effect.flatMap(WritebackRecords, (r) =>
+        r.blobs("x1", [entry("a.md", enc("a"))], DEFAULT_MAX_BYTES),
+      ),
       db,
       memoryBucket(),
     );
     expect(missing).toMatchObject({ _tag: "Success", success: [] });
     const unplaced = await run(
-      Effect.flatMap(WritebackRecords, (r) => r.blobs("x2", [entry("a.md", enc("a"))])),
+      Effect.flatMap(WritebackRecords, (r) =>
+        r.blobs("x2", [entry("a.md", enc("a"))], DEFAULT_MAX_BYTES),
+      ),
       db,
       memoryBucket(),
     );
     expect(unplaced).toMatchObject({ _tag: "Failure", failure: { source: "placements" } });
     const unbound = await run(
-      Effect.flatMap(WritebackRecords, (r) => r.blobs("x1", [entry("a.md", enc("a"))])),
+      Effect.flatMap(WritebackRecords, (r) =>
+        r.blobs("x1", [entry("a.md", enc("a"))], DEFAULT_MAX_BYTES),
+      ),
       db,
       undefined,
     );

@@ -23,15 +23,27 @@ export const recordsDb = (): D1Binding & { readonly exec: (sql: string) => void 
   };
 };
 
-export const memoryBucket = (): ArtifactObjects & { readonly objects: Map<string, Uint8Array> } => {
+/** An R2-like bucket over a map; `reads` lists each key whose bytes were read. */
+export const memoryBucket = (): ArtifactObjects & {
+  readonly objects: Map<string, Uint8Array>;
+  readonly reads: string[];
+} => {
   const objects = new Map<string, Uint8Array>();
+  const reads: string[] = [];
   return {
     objects,
+    reads,
     get: async (key) => {
       const bytes = objects.get(key);
       return bytes === undefined
         ? null
-        : { arrayBuffer: async () => bytes.slice().buffer as ArrayBuffer };
+        : {
+            size: bytes.byteLength,
+            arrayBuffer: async () => {
+              reads.push(key);
+              return bytes.slice().buffer as ArrayBuffer;
+            },
+          };
     },
   };
 };

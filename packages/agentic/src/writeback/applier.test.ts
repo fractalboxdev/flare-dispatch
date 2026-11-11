@@ -17,7 +17,7 @@ import {
 import { BASE_SHA, fakeGitLayer, fakeRepo, type FakeRepo } from "./fake-git.test-support.ts";
 import { writebackRecordsLayer } from "./records.ts";
 import { artifactPath, memoryBucket, recordsDb } from "./records.test-support.ts";
-import { stagedBlobName } from "../staged-write/manifest.ts";
+import { DEFAULT_MAX_BYTES, stagedBlobName } from "../staged-write/manifest.ts";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const enc = (text: string) => new TextEncoder().encode(text);
@@ -168,6 +168,31 @@ describe("pr.propose", () => {
     expect(refused).toMatchObject({ _tag: "refused" });
     expect((refused as { reason: string }).reason).toMatch(/^writeback: digest-mismatch/);
     expect(swapped.calls.filter((c) => WRITES.includes(c))).toEqual([]);
+  });
+
+  it("[FD-AGT-026] refuses a staged blob larger than maxBytes as too-large without reading its bytes", async () => {
+    const db = recordsDb();
+    db.exec(
+      "insert into placements values ('x1', 'accepted', 1, 'e1', 1); insert into executors values ('e1', 'cloudflare')",
+    );
+    const bucket = memoryBucket();
+    const big = new Uint8Array(DEFAULT_MAX_BYTES + 1);
+    bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(big))), big);
+    const live = writebackRecordsLayer({
+      db,
+      artifacts: bucket,
+      artifactPath,
+      issuedCredentials: () => Effect.succeed([]),
+    });
+    const m = manifest({
+      entries: [{ path: "specs/big.bin", mode: "100644", digest: sha256(big) }],
+    });
+    const repo = fakeRepo();
+    const refused = await apply(repo, m, live);
+    expect(refused).toMatchObject({ _tag: "refused" });
+    expect((refused as { reason: string }).reason).toMatch(/^writeback: too-large/);
+    expect(bucket.reads).toEqual([]);
+    expect(repo.calls.filter((c) => WRITES.includes(c))).toEqual([]);
   });
 
   it("[FD-GH-083] reuses the open pull request whose head is the manifest's branch", async () => {

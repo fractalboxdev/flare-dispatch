@@ -9,7 +9,7 @@ import { StagedWriteReadFailed, textOf, WritebackRecords, type LoadedBlob } from
 
 /** The part of an R2 bucket the blob read takes. */
 export interface ArtifactObjects {
-  get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
+  get(key: string): Promise<{ readonly size: number; arrayBuffer(): Promise<ArrayBuffer> } | null>;
 }
 
 export interface WritebackRecordsConfig {
@@ -62,10 +62,13 @@ const placementOf = (db: D1Binding, executionId: string) =>
  * Reads each distinct blob of the entries from `artifacts/<execution_id>/<epoch>/staged-write/blobs/<sha256>` and
  * recomputes the SHA-256 digest of the bytes read, so the gate compares the manifest with what is stored rather than
  * with the key it was stored under. A blob absent from the store is left out, for the gate to reject as
- * `blob-missing`.
+ * `blob-missing`. When the stored sizes of the distinct blobs add up to more than `maxBytes`, no bytes are read, so an
+ * oversized staged write never enters the isolate's memory: each blob carries its stored size with empty bytes, an
+ * empty digest and no text, and the gate rejects the manifest as `too-large` (FD-AGT-026).
  */
 const readBlobs =
-  (config: WritebackRecordsConfig) => (executionId: string, entries: readonly ManifestEntry[]) =>
+  (config: WritebackRecordsConfig) =>
+  (executionId: string, entries: readonly ManifestEntry[], maxBytes: number) =>
     Effect.gen(function* () {
       const bucket = config.artifacts;
       if (bucket === undefined)
@@ -74,37 +77,55 @@ const readBlobs =
           detail: "this deploy binds no artifact bucket",
         });
       const { epoch } = yield* placementOf(config.db, executionId);
-      const byDigest = new Map<string, { bytes: Uint8Array; digest: string } | null>();
+      const artifactsFailed = (cause: unknown) =>
+        new StagedWriteReadFailed({ source: "artifacts", detail: String(cause) });
+      const objects = new Map<string, Awaited<ReturnType<ArtifactObjects["get"]>>>();
+      let total = 0;
       for (const digest of new Set(entries.map((e) => e.digest))) {
         const key = config.artifactPath(executionId, epoch, stagedBlobName(digest));
+        const object = yield* Effect.tryPromise({
+          try: () => bucket.get(key),
+          catch: artifactsFailed,
+        });
+        objects.set(digest, object);
+        total += object?.size ?? 0;
+      }
+      const oversized = total > maxBytes;
+      const byDigest = new Map<string, Omit<LoadedBlob, "path"> | null>();
+      for (const [digest, object] of objects) {
+        if (object === null) {
+          byDigest.set(digest, null);
+          continue;
+        }
+        if (oversized) {
+          byDigest.set(digest, {
+            digest: "",
+            size: object.size,
+            text: null,
+            bytes: new Uint8Array(),
+          });
+          continue;
+        }
         const read = yield* Effect.tryPromise({
           try: async () => {
-            const object = await bucket.get(key);
-            if (object === null) return null;
             const buffer = await object.arrayBuffer();
             return {
               bytes: new Uint8Array(buffer),
               digest: hex(await crypto.subtle.digest("SHA-256", buffer)),
             };
           },
-          catch: (cause) =>
-            new StagedWriteReadFailed({ source: "artifacts", detail: String(cause) }),
+          catch: artifactsFailed,
         });
-        byDigest.set(digest, read);
+        byDigest.set(digest, {
+          digest: read.digest,
+          size: read.bytes.byteLength,
+          text: textOf(read.bytes),
+          bytes: read.bytes,
+        });
       }
       return entries.flatMap((entry): LoadedBlob[] => {
         const read = byDigest.get(entry.digest);
-        return read === null || read === undefined
-          ? []
-          : [
-              {
-                path: entry.path,
-                digest: read.digest,
-                size: read.bytes.byteLength,
-                text: textOf(read.bytes),
-                bytes: read.bytes,
-              },
-            ];
+        return read === null || read === undefined ? [] : [{ path: entry.path, ...read }];
       });
     });
 
