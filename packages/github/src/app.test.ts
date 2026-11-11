@@ -2,7 +2,7 @@
 // eviction, the per-lease token and the reads.
 import { generateKeyPairSync, createPublicKey, verify } from "node:crypto";
 import { AlarmPort, CredentialMinter } from "@fractalboxdev/mameko-ports";
-import { Effect, Exit, Layer } from "effect";
+import { Effect, Exit, Layer, Logger } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 import { GithubApp, githubAppLayer, LEASE_READ_PERMISSIONS } from "./app.ts";
@@ -278,7 +278,7 @@ describe("the per-lease token", () => {
       Effect.gen(function* () {
         const minter = yield* CredentialMinter;
         const first = yield* minter.mint("source-read", lease("e1"));
-        const second = yield* minter.mint("model-gateway", lease("e1"));
+        const second = yield* minter.mint("source-read", lease("e1"));
         const other = yield* minter.mint("source-read", lease("e2"));
         yield* minter.revoke(lease("e1"));
         // A second revoke has nothing left to revoke.
@@ -297,14 +297,54 @@ describe("the per-lease token", () => {
     expect(revoked.map((c) => c.authorization)).not.toContain(`Bearer ${other.credential}`);
   });
 
-  it("a revoke GitHub refuses is logged and does not fail", async () => {
+  it("a mint for a grant other than the source grant fails and asks GitHub for no token", async () => {
     const calls: Call[] = [];
+    const exit = await live(
+      CredentialMinter.use((m) => m.mint("model-gateway", lease("e1"))).pipe(Effect.exit),
+      covered,
+      calls,
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(String(Exit.isFailure(exit) && exit.cause)).toContain("model-gateway");
+    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+
+  it("the profile's git-remote grant is the source grant and gets the per-lease read token", async () => {
+    const calls: Call[] = [];
+    const credential = await live(
+      CredentialMinter.use((m) => m.mint("git-remote", lease("e1"))),
+      covered,
+      calls,
+    );
+    expect(credential.credential).toMatch(/^ghs_/);
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
+
+  /** Runs `effect` with every log entry's message parts recorded in `logs`. */
+  const logged = <A, E, R>(effect: Effect.Effect<A, E, R>, logs: unknown[][]) =>
+    effect.pipe(
+      Effect.provide(
+        Layer.succeed(
+          Logger.CurrentLoggers,
+          new Set([
+            Logger.make((o) => void logs.push(Array.isArray(o.message) ? o.message : [o.message])),
+          ]),
+        ),
+      ),
+    );
+
+  it("a revoke GitHub refuses is logged with its status and does not fail", async () => {
+    const calls: Call[] = [];
+    const logs: unknown[][] = [];
     await live(
-      Effect.gen(function* () {
-        const minter = yield* CredentialMinter;
-        yield* minter.mint("source-read", lease("e1"));
-        yield* minter.revoke(lease("e1"));
-      }),
+      logged(
+        Effect.gen(function* () {
+          const minter = yield* CredentialMinter;
+          yield* minter.mint("source-read", lease("e1"));
+          yield* minter.revoke(lease("e1"));
+        }),
+        logs,
+      ),
       {
         ...covered,
         "DELETE /installation/token": () => ({ status: 502, body: { message: "Bad Gateway" } }),
@@ -312,6 +352,51 @@ describe("the per-lease token", () => {
       calls,
     );
     expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+    expect(logs).toContainEqual([
+      "per-lease token not revoked",
+      { executionId: "e1", status: 502 },
+    ]);
+  });
+
+  it("a revoke for a lease this isolate holds no token for is logged, since the token outlives it", async () => {
+    const calls: Call[] = [];
+    const logs: unknown[][] = [];
+    await live(
+      logged(
+        CredentialMinter.use((m) => m.revoke(lease("e9"))),
+        logs,
+      ),
+      covered,
+      calls,
+    );
+    expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    expect(logs).toContainEqual([
+      "per-lease token not held by this isolate; valid until GitHub expires_at",
+      { executionId: "e9", epoch: 2 },
+    ]);
+  });
+
+  it("a mint drops the held tokens of leases past their deadline", async () => {
+    const calls: Call[] = [];
+    const logs: unknown[][] = [];
+    await live(
+      logged(
+        Effect.gen(function* () {
+          const minter = yield* CredentialMinter;
+          // e1's deadline is already past when e2 mints, so e2's mint drops e1's token.
+          yield* minter.mint("source-read", lease("e1", NOW - 1));
+          yield* minter.mint("source-read", lease("e2"));
+          yield* minter.revoke(lease("e1"));
+        }),
+        logs,
+      ),
+      { ...covered, "DELETE /installation/token": () => ({ status: 204, body: null }) },
+      calls,
+    );
+    expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    expect(logs.map((l) => l[0])).toContain(
+      "per-lease token not held by this isolate; valid until GitHub expires_at",
+    );
   });
 
   it("a mint for a repository no installation covers fails the grant rather than answer no credential", async () => {

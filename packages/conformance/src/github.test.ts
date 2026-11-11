@@ -29,10 +29,10 @@ import { profile } from "@fractalboxdev/flare-dispatch-profile";
 import {
   Actuators,
   AlarmPort,
+  CredentialMinter,
   type IntentRow,
   type LookupAnswer,
 } from "@fractalboxdev/mameko-ports";
-import { CredentialMinter } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { writebackApplier } from "../../../apps/control-plane/src/agentic.ts";

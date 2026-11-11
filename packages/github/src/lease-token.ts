@@ -1,10 +1,10 @@
 // The per-lease GitHub token: an installation token scoped to the one
 // repository the execution targets and to read permissions only (FD-GH-002,
 // MAMEKO-HOST-048). It expires no later than the lease's `deadline_at`. The
-// credential minter port serves it for every grant a lease names, and revokes
-// the tokens it minted for a lease through `DELETE /installation/token`.
+// credential minter port serves it for the source grant only, and revokes the
+// tokens it minted for a lease through `DELETE /installation/token`.
 import { CredentialMinter, type LeaseRef } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer, Ref } from "effect";
+import { Clock, Effect, Layer, Match, Ref } from "effect";
 import {
   appCall,
   GithubApp,
@@ -37,39 +37,73 @@ export const leaseReadToken = (
 const leaseKey = (lease: LeaseRef) => `${lease.executionId}:${lease.epoch}`;
 
 /**
- * mameko's credential minter port over the App: `mint` answers the per-lease read token of `leaseReadToken` whatever
- * grant the lease names, since that token is the one application credential this deploy issues, and `revoke` revokes
- * every token the isolate minted for the lease. The port has no error channel, so a mint GitHub refuses is a defect and
- * the lease grant fails rather than hand the executor no credential; a revoke GitHub refuses is logged, since the token
- * still expires at GitHub's `expires_at`.
+ * The grants whose host is the GitHub source remote: mameko's `source-read` and the profile's `git-remote`
+ * (specs/profile.md § Approval floor, egress profiles and signing purposes). The per-lease read token is the credential
+ * for these grants and for no other.
+ */
+export const SOURCE_GRANTS = ["source-read", "git-remote"] as const;
+
+interface HeldTokens {
+  readonly deadlineAt: number;
+  readonly tokens: readonly string[];
+}
+
+/**
+ * mameko's credential minter port over the App. `mint` answers the per-lease read token of `leaseReadToken` for a
+ * source grant (`SOURCE_GRANTS`); this deploy issues no other application credential, so a mint for any other grant is
+ * a defect naming the grant, and no GitHub credential reaches a host that has no use for it. The port has no error
+ * channel, so a mint GitHub refuses is a defect too: the lease grant fails rather than hand the executor no credential.
+ *
+ * `revoke` covers only the tokens this isolate minted for the lease, held in memory. A revoke served by another
+ * isolate, or after this one is evicted, finds none and logs a warning; such a token stays valid until GitHub's
+ * `expires_at`. A revoke GitHub refuses is logged for the same reason. Each mint drops the held tokens of leases whose
+ * `deadline_at` has passed, so the map holds only live leases.
  */
 export const credentialMinterLayer = (app: Pick<AppOptions, "fetch" | "baseUrl">) =>
   Layer.effect(
     CredentialMinter,
     Effect.gen(function* () {
       const services = yield* Effect.context<GithubApp | GithubRead>();
-      const minted = yield* Ref.make<ReadonlyMap<string, readonly string[]>>(new Map());
+      const minted = yield* Ref.make<ReadonlyMap<string, HeldTokens>>(new Map());
+      const mintSource = (lease: LeaseRef) =>
+        Effect.gen(function* () {
+          const token = yield* leaseReadToken(lease).pipe(Effect.provideContext(services));
+          const now = yield* Clock.currentTimeMillis;
+          yield* Ref.update(minted, (m) => {
+            const live = new Map([...m].filter(([, held]) => held.deadlineAt > now));
+            const key = leaseKey(lease);
+            return live.set(key, {
+              deadlineAt: lease.deadlineAt,
+              tokens: [...(live.get(key)?.tokens ?? []), token.credential],
+            });
+          });
+          return token;
+        }).pipe(Effect.orDie);
       return {
-        mint: (_grant, lease) =>
-          Effect.gen(function* () {
-            const token = yield* leaseReadToken(lease).pipe(Effect.provideContext(services));
-            yield* Ref.update(minted, (m) =>
-              new Map(m).set(leaseKey(lease), [
-                ...(m.get(leaseKey(lease)) ?? []),
-                token.credential,
-              ]),
-            );
-            return token;
-          }).pipe(Effect.orDie),
+        mint: (grant, lease) =>
+          Match.value(grant).pipe(
+            Match.when(Match.is(...SOURCE_GRANTS), () => mintSource(lease)),
+            Match.orElse((g) =>
+              Effect.die(
+                new Error(`no application credential for grant ${g}: this deploy issues none`),
+              ),
+            ),
+          ),
         revoke: (lease) =>
           Effect.gen(function* () {
-            const tokens = yield* Ref.modify(minted, (m) => {
+            const held = yield* Ref.modify(minted, (m) => {
               const rest = new Map(m);
               rest.delete(leaseKey(lease));
-              return [m.get(leaseKey(lease)) ?? [], rest] as const;
+              return [m.get(leaseKey(lease)), rest] as const;
             });
+            if (held === undefined) {
+              return yield* Effect.logWarning(
+                "per-lease token not held by this isolate; valid until GitHub expires_at",
+                { executionId: lease.executionId, epoch: lease.epoch },
+              );
+            }
             yield* Effect.forEach(
-              tokens,
+              held.tokens,
               (token) =>
                 appCall(app, `Bearer ${token}`, "DELETE", "/installation/token").pipe(
                   Effect.flatMap(({ status }) =>
