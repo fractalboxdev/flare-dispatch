@@ -1,6 +1,7 @@
 // The v2 control plane Worker: mameko's coordinator on host-cloudflare, FlareDispatch's profile, the operability
 // routes and `packages/api`'s router. It shares no code with the v1 dispatcher.
 import { runApiMigrations } from "@fractalboxdev/flare-dispatch-api";
+import { migrateChildConclusions } from "@fractalboxdev/flare-dispatch-github";
 import { migrateIntake } from "@fractalboxdev/flare-dispatch-intake";
 import { opsFetch, scheduledHandler } from "@fractalboxdev/flare-dispatch-ops";
 import { CLASS_ORDER } from "@fractalboxdev/flare-dispatch-profile";
@@ -35,6 +36,7 @@ let migrated: Promise<unknown> | undefined;
 const migrate = (env: ControlPlaneEnv) =>
   (migrated ??= (async () => {
     await runD1Migrations(env.DB);
+    await Effect.runPromise(migrateChildConclusions(env.DB));
     await runApiMigrations(env.DB);
     await Effect.runPromise(migrateIntake(env.DB));
     await migrateLocalStore(env.DB);

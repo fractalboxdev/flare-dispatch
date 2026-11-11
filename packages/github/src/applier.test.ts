@@ -8,7 +8,13 @@ import {
   type ConclusionFacts,
   type ExecutionRecordFacts,
 } from "./conclude-facts.ts";
-import { checkConclusion, OUTPUT_LIMIT, verdictOf } from "./conclusion.ts";
+import {
+  checkConclusion,
+  OUTPUT_LIMIT,
+  PARENT_CLOSED,
+  verdictOf,
+  type Verdict,
+} from "./conclusion.ts";
 import { fakeGithub, fakeLayers, row, type FakeGithub } from "./fake.test-support.ts";
 
 const ref = {
@@ -427,6 +433,43 @@ describe("check.conclude from mameko's outcome row", () => {
     expect(broken.runs[0]?.conclusion).toBe("neutral");
     expect(broken.alarms.map((a) => [a.name, a.severity, a.dedupeKey])).toEqual([
       ["neutral-invariant", "page", "neutral-invariant:exec-1"],
+    ]);
+  });
+
+  it("[FD-GH-020] a child's cp:check:conclude row concludes with its verdict under the execution's own name", async () => {
+    const failed: Verdict = { _tag: "failure", category: "infra", reason: "lint: 3 errors" };
+    for (const verdict of [{ _tag: "success" } as const, failed, PARENT_CLOSED]) {
+      const gh = withFacts({ name: "flare-dispatch/offload-test:j1" });
+      const r = row("check.conclude", { verdict }, { intentKey: "cp:check:conclude" });
+      expect(await apply(gh, r)).toEqual({ _tag: "applied", externalRef: "1000" });
+      const expected = checkConclusion(verdict);
+      expect(gh.runs).toMatchObject([
+        {
+          name: "flare-dispatch/offload-test:j1",
+          external_id: "exec-1",
+          status: "completed",
+          conclusion: expected.conclusion,
+          output: { title: expected.title },
+        },
+      ]);
+    }
+  });
+
+  it("[FD-GH-020] the parent-ended cascade's outcome row concludes parent closed, not cancelled; another cancel stays cancelled", async () => {
+    const cascade = withFacts({ recorded: { _tag: "cancelled", cause: "parent-ended" } });
+    await apply(cascade, outcomeRow({ _tag: "Cancelled", cause: "parent-ended" }));
+    expect(cascade.runs).toMatchObject([
+      {
+        status: "completed",
+        conclusion: "failure",
+        output: { title: "parent closed before this part settled" },
+      },
+    ]);
+
+    const superseded = withFacts();
+    await apply(superseded, outcomeRow({ _tag: "Cancelled", cause: "superseded" }));
+    expect(superseded.runs).toMatchObject([
+      { conclusion: "cancelled", output: { title: "superseded" } },
     ]);
   });
 });
