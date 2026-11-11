@@ -12,7 +12,6 @@ import {
   intakeLayer,
   ManifestReporter,
   manifestSourceLayer,
-  oidcVerifierLayer,
   profileClassResolver,
   protectionSnapshotsLayer,
   type AdmissionPorts,
@@ -35,7 +34,7 @@ import {
   writebackApplier,
   writebackRecords,
 } from "./agentic.ts";
-import { appLoginOf, appOptionsOf, appServices, boundFetch, readsWithoutApp } from "./github.ts";
+import { appLoginOf, appOptionsOf, appServices, readsWithoutApp } from "./github.ts";
 
 const listOf = (value: unknown): readonly string[] => {
   if (Array.isArray(value)) return value.map(String);
@@ -59,8 +58,6 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     appId: Number(env.GITHUB_APP_ID ?? 0),
     webhookSecret: env.WEBHOOK_SECRET === "" ? undefined : env.WEBHOOK_SECRET,
     webhookEvents: events.length === 0 ? undefined : events,
-    oidcAudience: env.DISPATCH_OIDC_AUDIENCE === "" ? undefined : env.DISPATCH_OIDC_AUDIENCE,
-    dispatchers: listOf(raw["DISPATCHERS"]).map((d) => d.trim().toLowerCase()),
     allows: () => true,
     // No policy rule classifies a repository yet; a development deployment's captured repository carries its own mode.
     confidentiality: (repo) =>
@@ -144,9 +141,7 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
     return Layer.mergeAll(
       profileClassResolver.pipe(
-        Layer.provideMerge(
-          intakeLayer({ db: env.DB, settings, fetch: boundFetch, ...admissionPorts(env, alarms) }),
-        ),
+        Layer.provideMerge(intakeLayer({ db: env.DB, settings, ...admissionPorts(env, alarms) })),
       ),
       localPorts(env),
     ).pipe(Layer.provideMerge(applier), Layer.provideMerge(common));
@@ -159,7 +154,6 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     manifestSourceLayer,
     manifestReporterWithoutApp,
     evictionWithoutApp,
-    oidcVerifierLayer(boundFetch),
     profileClassResolver.pipe(
       Layer.provideMerge(protectionSnapshotsLayer),
       Layer.provide(Layer.succeed(IntakeConfig, settings)),

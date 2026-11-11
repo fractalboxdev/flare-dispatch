@@ -11,14 +11,14 @@ import { describe, expect, it } from "vitest";
 import { Admission, ExecutionStartFailed } from "./config.ts";
 import { canonicalJson } from "./dedup.ts";
 import {
-  actionsToken,
+  admit,
+  authenticated,
   BASE,
-  bodyOf,
-  dispatchRequest,
   harness,
   HEAD,
   NOW,
   pullRequestPayload,
+  refusal,
   signedWebhook,
   type Harness,
   type HarnessOptions,
@@ -27,8 +27,23 @@ import { handleIntake } from "./routes.ts";
 import { IntakeStore } from "./store.ts";
 import { releaseHeld } from "./submit.ts";
 
-const dispatch = (h: Harness, run: string, body: unknown, headers?: Record<string, string>) =>
-  h.run(handleIntake(dispatchRequest(run, body, headers), `dispatch/${run}`));
+/** A dispatch of `run` with the body's commit, inputs, label and class, keyed when `key` is given. */
+const dispatchOf = (
+  run: string,
+  body: { sha?: string; inputs: unknown; label?: string; class?: string },
+  key?: string,
+) =>
+  authenticated({
+    run,
+    sha: body.sha,
+    inputs: body.inputs,
+    label: body.label ?? null,
+    classInput: body.class ?? null,
+    idempotency: key === undefined ? null : { key, body },
+  });
+
+const dispatch = (h: Harness, run: string, body: Parameters<typeof dispatchOf>[1], key?: string) =>
+  admit(h, dispatchOf(run, body, key));
 
 /** Class resolution that answers a dispatch's `class` input, else the run's default class. */
 const requested: HarnessOptions["resolve"] = (r) => ({
@@ -69,9 +84,8 @@ describe("the workflow start at admission", () => {
             committed = h.rows("select status from executions where id = ?", payload.executionId);
           }),
       });
-      const body = await bodyOf(await dispatch(h, "check", check(cls)));
-      const id = body.execution_id as string;
-      expect(body.class).toBe(cls);
+      const { executionId: id, className } = await dispatch(h, "check", check(cls));
+      expect(className).toBe(cls);
       expect(h.recorded.started).toEqual([
         expect.objectContaining({ executionId: id, className: cls }),
       ]);
@@ -82,8 +96,8 @@ describe("the workflow start at admission", () => {
 
   it("MAMEKO-ADM-031 starts no workflow for a batch execution, whose class defers it", async () => {
     const h = await harness({ resolve: requested });
-    const body = await bodyOf(await dispatch(h, "check", check("batch")));
-    expect(executionRow(h, body.execution_id as string)).toMatchObject({
+    const { executionId } = await dispatch(h, "check", check("batch"));
+    expect(executionRow(h, executionId)).toMatchObject({
       status: "pending",
       engine_started_at: null,
     });
@@ -102,9 +116,8 @@ describe("the workflow start at admission", () => {
           }),
         ),
     });
-    const r = await dispatch(h, "check", check("required"));
-    expect(r!.status).toBe(202);
-    const id = (await bodyOf(r)).execution_id as string;
+    const { executionId: id, duplicate } = await dispatch(h, "check", check("required"));
+    expect(duplicate).toBe(false);
     expect(executionRow(h, id)).toMatchObject({ status: "pending", engine_started_at: null });
     expect((await h.run(IntakeStore.use((s) => s.get(id))))?.inputs).toEqual({ sha: HEAD });
     expect(recordKinds(h, id)).toBe(placementKinds(h, id));
@@ -133,7 +146,7 @@ describe("placement at admission", () => {
         alarm: null,
       }),
     });
-    const id = (await bodyOf(await dispatch(h, "check", check()))).execution_id as string;
+    const { executionId: id } = await dispatch(h, "check", check());
     expect(executionRow(h, id)).toMatchObject({
       status: "failure",
       reason: "placement: no eligible executor",
@@ -166,32 +179,24 @@ describe("placement at admission", () => {
 
   it("the record keeps the eligible kinds admission wrote on the placement row", async () => {
     const h = await harness({ resolve: requested });
-    const id = (await bodyOf(await dispatch(h, "check", check("interactive"))))
-      .execution_id as string;
+    const { executionId: id } = await dispatch(h, "check", check("interactive"));
     expect(placementKinds(h, id)).toMatch(/^\[.+\]$/);
     expect(recordKinds(h, id)).toBe(placementKinds(h, id));
   });
 });
 
 describe("an idempotent retry inside a cooldown window", () => {
-  const headers = { authorization: `Bearer ${actionsToken({})}`, "idempotency-key": "lint-7" };
   const lint = { inputs: { sha: HEAD } };
 
   it("[FD-INT-010] [FD-INT-057] answers the admitted execution for the same body and 409 conflict for another", async () => {
     const h = await harness();
-    const first = await bodyOf(await dispatch(h, "lint", lint, headers));
+    const first = await dispatch(h, "lint", lint, "lint-7");
     await h.adjust(10_000);
-    const same = await dispatch(h, "lint", lint, headers);
-    expect(same!.status).toBe(202);
-    expect(await bodyOf(same)).toMatchObject({
-      execution_id: first.execution_id,
-      duplicate: true,
-    });
-    const other = await dispatch(h, "lint", { inputs: { sha: BASE } }, headers);
-    expect(other!.status).toBe(409);
-    expect(await bodyOf(other)).toMatchObject({
-      error: "conflict",
-      execution_id: first.execution_id,
+    expect(await dispatch(h, "lint", lint, "lint-7")).toEqual({ ...first, duplicate: true });
+    expect(await refusal(h, dispatchOf("lint", { inputs: { sha: BASE } }, "lint-7"))).toEqual({
+      status: 409,
+      code: "conflict",
+      executionId: first.executionId,
     });
     // Admission stores the digest of the body's canonical JSON, the value intake compares on the held path.
     expect(h.rows("select request_digest from dedup_keys")).toEqual([
@@ -206,8 +211,7 @@ describe("a held request's release", () => {
     const h = await harness(options);
     await dispatch(h, "lint", { sha: HEAD, inputs: { sha: HEAD } });
     await h.adjust(10_000);
-    const id = (await bodyOf(await dispatch(h, "lint", { sha: BASE, inputs: { sha: BASE } })))
-      .execution_id as string;
+    const { executionId: id } = await dispatch(h, "lint", { sha: BASE, inputs: { sha: BASE } });
     expect(h.rows("select execution_id from intake_held")).toEqual([{ execution_id: id }]);
     const first = h.records()[0]!.execution_id as string;
     // The first `lint` has finished, so the class's per-repository queue bound has room.

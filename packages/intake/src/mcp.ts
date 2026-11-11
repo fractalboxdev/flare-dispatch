@@ -3,12 +3,18 @@
 // identity on the request (FD-INT-062). A `class` above the one `resolveClass`
 // assigns is clamped to the assigned class and the clamp is logged (FD-INT-063).
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
-import { Effect, Option, Schema } from "effect";
+import { Context, Effect, Option, Schema } from "effect";
 import { IntakeConfig, intakeError } from "./config.ts";
-import { AccessIdentity, lowerOnlyClass } from "./dispatch.ts";
+import { lowerOnlyClass } from "./dispatch.ts";
 import type { Caller } from "./event.ts";
 import { submission, submit } from "./submit.ts";
 import { readManifest } from "./triggers.ts";
+
+/** The Access identity gate of the HTTP API: the verified identity of the request, or null when it carries none. */
+export class AccessIdentity extends Context.Service<
+  AccessIdentity,
+  { readonly identity: (request: Request) => Effect.Effect<string | null> }
+>()("@fractalboxdev/flare-dispatch-intake/AccessIdentity") {}
 
 export const McpDispatchArgs = Schema.Struct({
   run: Schema.NonEmptyString,

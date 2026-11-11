@@ -1,20 +1,14 @@
-// `POST /v1/dispatch/:run`: identity before any run lookup, then the body bound,
-// the run, the body and input schemas, the repository binding, the signals caps,
-// the installation, the manifest and the commit, then one admission request
-// (specs/intake.md § Actions dispatch, specs/interfaces.md FD-IFC-024 to FD-IFC-036).
+// The admission of an authenticated dispatch: the run, the input schema, the signals caps, the installation, the
+// manifest and the commit, then one admission request (specs/intake.md § Actions dispatch). The HTTP API's declared
+// dispatch route authenticates the caller and decodes the body (specs/interfaces.md FD-IFC-024 to FD-IFC-036).
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { classNamed } from "@fractalboxdev/flare-dispatch-profile";
-import { Context, Effect, Match, Option, Schema } from "effect";
-import { ClassResolver, IntakeConfig, intakeError, type IntakeError } from "./config.ts";
-import { validIdempotencyKey } from "./dedup.ts";
+import { Effect, Match, Option, Schema } from "effect";
+import { ClassResolver, IntakeConfig, intakeError } from "./config.ts";
 import type { Caller } from "./event.ts";
-import { json, parseJson, readBody } from "./http.ts";
-import { OidcVerifier } from "./oidc.ts";
 import { readManifest, viewOf } from "./triggers.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
 import { submission, submit } from "./submit.ts";
-
-export const DISPATCH_MAX_BYTES = 1024 * 1024;
 
 /** The `signals/v1` caps (FD-INT-049, FD-IFC-030). */
 export const SIGNAL_CAPS = {
@@ -24,27 +18,6 @@ export const SIGNAL_CAPS = {
   detail: 2000,
   url: 1000,
 } as const;
-
-/** The Access identity gate of the HTTP API: the verified identity of the request, or null when it carries none. */
-export class AccessIdentity extends Context.Service<
-  AccessIdentity,
-  { readonly identity: (request: Request) => Effect.Effect<string | null> }
->()("@fractalboxdev/flare-dispatch-intake/AccessIdentity") {}
-
-const Sha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/));
-const Label = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/));
-
-export const DispatchBody = Schema.Struct({
-  /** `<owner>/<repo>`; an Actions token's `repository` claim binds it (FD-INT-036). */
-  repository: Schema.optionalKey(Schema.NonEmptyString),
-  ref: Schema.optionalKey(Schema.NonEmptyString),
-  sha: Schema.optionalKey(Sha),
-  label: Schema.optionalKey(Label),
-  inputs: Schema.optionalKey(Schema.Unknown),
-  class: Schema.optionalKey(Schema.NonEmptyString),
-  signals: Schema.optionalKey(Schema.Array(Schema.Unknown)),
-});
-export type DispatchBody = typeof DispatchBody.Type;
 
 const Signal = Schema.Struct({
   source: Schema.String.check(Schema.isMaxLength(SIGNAL_CAPS.source)),
@@ -75,61 +48,6 @@ export const checkSignals = (body: readonly unknown[] | undefined, inputs: unkno
     Effect.asVoid,
   );
 };
-
-interface Identified {
-  readonly caller: Caller;
-  /** The Actions token's claims, which bind the repository, ref and commit. */
-  readonly claims: {
-    readonly repository: string;
-    readonly ref?: string;
-    readonly sha?: string;
-  } | null;
-}
-
-const peekIssuer = (token: string) => {
-  try {
-    const claims = JSON.parse(
-      atob((token.split(".")[1] ?? "").replaceAll("-", "+").replaceAll("_", "/")),
-    ) as { iss?: unknown };
-    return typeof claims.iss === "string" ? claims.iss : null;
-  } catch {
-    return null;
-  }
-};
-
-/** An Actions OIDC token or an Access identity in `dispatchers`, else `401` (FD-INT-034, FD-IFC-027). */
-const identify = (
-  request: Request,
-): Effect.Effect<Identified, IntakeError, IntakeConfig | OidcVerifier | AccessIdentity> =>
-  Effect.gen(function* () {
-    const config = yield* IntakeConfig;
-    const unauthenticated = intakeError(
-      401,
-      "unauthenticated",
-      "a dispatch carries an Actions OIDC token or the Access identity of a dispatcher",
-    );
-    const header = request.headers.get("authorization");
-    const bearer = header?.startsWith("Bearer ") === true ? header.slice("Bearer ".length) : null;
-    if (bearer !== null && peekIssuer(bearer) === "https://token.actions.githubusercontent.com") {
-      if (config.oidcAudience === undefined) return yield* Effect.fail(unauthenticated);
-      const claims = yield* (yield* OidcVerifier)
-        .verify(bearer, config.oidcAudience)
-        .pipe(Effect.mapError(() => unauthenticated));
-      return {
-        caller: {
-          kind: "actions-oidc",
-          id: claims.sub,
-          ...(claims.workflow_ref === undefined ? {} : { workflowRef: claims.workflow_ref }),
-          ...(claims.ref === undefined ? {} : { ref: claims.ref }),
-        },
-        claims,
-      } satisfies Identified;
-    }
-    const identity = yield* (yield* AccessIdentity).identity(request);
-    if (identity === null || !config.dispatchers.includes(identity))
-      return yield* Effect.fail(unauthenticated);
-    return { caller: { kind: "access", id: identity }, claims: null } satisfies Identified;
-  });
 
 const decodeOr =
   <S extends Schema.Decoder<unknown>>(schema: S, code: string) =>
@@ -236,8 +154,8 @@ export const lowerOnlyClass = (r: {
   });
 
 /**
- * A dispatch whose caller is already authenticated and whose body is decoded: what the HTTP API's declared dispatch
- * route and this package's own route both hand to `admitDispatch`.
+ * A dispatch whose caller is already authenticated and whose body is decoded, as the HTTP API's declared dispatch
+ * route hands it to `admitDispatch`.
  */
 export interface AuthenticatedDispatch {
   readonly trigger: "dispatch" | "mcp";
@@ -349,62 +267,3 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
         ),
     }),
   );
-
-/** The dispatch route for one run name. */
-export const handleDispatch = (runName: string, request: Request) =>
-  Effect.gen(function* () {
-    const { caller, claims } = yield* identify(request);
-    const config = yield* IntakeConfig;
-    const bytes = yield* readBody(request, DISPATCH_MAX_BYTES);
-    if (config.catalog(runName) === undefined)
-      return yield* Effect.fail(intakeError(404, "run_not_found", `no run named ${runName}`));
-    const idemHeader = request.headers.get("idempotency-key");
-    if (idemHeader !== null && !validIdempotencyKey(idemHeader))
-      return yield* Effect.fail(
-        intakeError(
-          400,
-          "invalid_idempotency_key",
-          "an Idempotency-Key is 1 to 128 characters of [A-Za-z0-9._:-]",
-        ),
-      );
-    const raw = yield* parseJson(bytes);
-    const body = yield* decodeOr(DispatchBody, "invalid_body")(raw);
-    const repo = claims?.repository ?? body.repository;
-    if (repo === undefined)
-      return yield* Effect.fail(
-        intakeError(400, "invalid_body", "repository: a dispatch names a repository"),
-      );
-    if (claims !== null && body.repository !== undefined && body.repository !== claims.repository)
-      return yield* Effect.fail(
-        intakeError(
-          403,
-          "repository_mismatch",
-          `the token is for ${claims.repository}, not ${body.repository}`,
-        ),
-      );
-    const admitted = yield* admitDispatch({
-      trigger: "dispatch",
-      run: runName,
-      repository: repo,
-      ref: body.ref ?? claims?.ref,
-      sha: body.sha ?? (body.ref === undefined ? claims?.sha : undefined),
-      label: body.label ?? null,
-      inputs: body.inputs,
-      signals: body.signals,
-      classInput: body.class ?? null,
-      caller,
-      vouchedSha: claims?.sha,
-      idempotency: idemHeader === null ? null : { key: idemHeader, body: raw },
-    });
-    const base = new URL(request.url).origin;
-    return json(
-      {
-        execution_id: admitted.executionId,
-        class: admitted.className,
-        details_url: `${base}/v1/executions/${admitted.executionId}`,
-        logs_url: `${base}/v1/executions/${admitted.executionId}/logs`,
-        ...(admitted.duplicate ? { duplicate: true } : {}),
-      },
-      202,
-    );
-  });

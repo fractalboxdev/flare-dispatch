@@ -25,12 +25,8 @@ export {
   type RequestKey,
 } from "./dedup.ts";
 export {
-  AccessIdentity,
   admitDispatch,
   checkSignals,
-  DISPATCH_MAX_BYTES,
-  DispatchBody,
-  handleDispatch,
   lowerOnlyClass,
   SIGNAL_CAPS,
   type AuthenticatedDispatch,
@@ -72,14 +68,7 @@ export {
   validateManifest,
   type ManifestRead,
 } from "./manifest.ts";
-export { mcpDispatch, McpDispatchArgs } from "./mcp.ts";
-export {
-  ACTIONS_ISSUER,
-  ActionsClaims,
-  OidcInvalid,
-  OidcVerifier,
-  oidcVerifierLayer,
-} from "./oidc.ts";
+export { AccessIdentity, mcpDispatch, McpDispatchArgs } from "./mcp.ts";
 export {
   ExecutionCanceller,
   InstallationEviction,

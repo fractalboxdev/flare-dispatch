@@ -5,13 +5,13 @@ import { fakeRepo } from "@fractalboxdev/flare-dispatch-github/testing";
 import { describe, expect, it } from "vitest";
 import { catalogRuns } from "./catalog.ts";
 import {
-  actionsToken,
+  admit,
   APP_ID,
+  authenticated,
   BASE,
   bodyOf,
   checkRunRerequested,
   checkSuiteRerequested,
-  dispatchRequest,
   harness,
   HEAD,
   manifest,
@@ -668,30 +668,26 @@ describe("the catalogue's request decoders through the webhook route", () => {
         expect.objectContaining({ sha: HEAD, branch: "main", entry: { command: "pnpm deploy" } }),
       ],
     ]);
-    const dispatched = await bodyOf(
-      await h.run(
-        handleIntake(
-          dispatchRequest(
-            "worker-deploy",
-            {
-              sha: HEAD,
-              inputs: {
-                repo: `https://github.com/${REPO}.git`,
-                sha: HEAD,
-                ref: "refs/heads/main",
-                scope: REPO,
-                branch: "main",
-                entry: { command: "pnpm deploy" },
-              },
-            },
-            { authorization: `Bearer ${actionsToken({})}`, "idempotency-key": "deploy-1" },
-          ),
-          "dispatch/worker-deploy",
-        ),
-      ),
+    const inputs = {
+      repo: `https://github.com/${REPO}.git`,
+      sha: HEAD,
+      ref: "refs/heads/main",
+      scope: REPO,
+      branch: "main",
+      entry: { command: "pnpm deploy" },
+    };
+    const dispatched = await admit(
+      h,
+      authenticated({
+        run: "worker-deploy",
+        sha: HEAD,
+        label: null,
+        inputs,
+        idempotency: { key: "deploy-1", body: { sha: HEAD, inputs } },
+      }),
     );
     expect(dispatched).toMatchObject({
-      execution_id: (pushed.executions as string[])[0],
+      executionId: (pushed.executions as string[])[0],
       duplicate: true,
     });
     expect(h.rows("select canonical from dedup_keys")).toEqual([

@@ -5,7 +5,6 @@ import {
   ApiConfig,
   apiConfigFromEnv,
   apiError,
-  authenticateAccess,
   Cancellation,
   ConfigInvalid,
   d1DeviceRegistry,
@@ -15,7 +14,6 @@ import {
   executionsGroup,
   executorsGroup,
   FailureSummaries,
-  JwksSource,
   JwksSourceLive,
   mount,
   oidcKeyFromSecret,
@@ -27,11 +25,7 @@ import {
   wellKnownGroup,
   type ApiEnv,
 } from "@fractalboxdev/flare-dispatch-api";
-import {
-  AccessIdentity,
-  handleIntake,
-  WEBHOOK_MAX_BYTES,
-} from "@fractalboxdev/flare-dispatch-intake";
+import { handleIntake, WEBHOOK_MAX_BYTES } from "@fractalboxdev/flare-dispatch-intake";
 import { livenessReport, runOpsMigrations } from "@fractalboxdev/flare-dispatch-ops";
 import { Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -39,26 +33,11 @@ import { isolateServices, type IsolateServices } from "./composition.ts";
 import { profileOf, type ControlPlaneEnv } from "./config.ts";
 import { intakePort } from "./intake-port.ts";
 
-/** The Access identity the API's gate verified, as intake's route group asks for it. */
-const accessIdentity = Effect.gen(function* () {
-  const context = yield* Effect.context<ApiConfig | JwksSource>();
-  return AccessIdentity.of({
-    identity: (request) =>
-      authenticateAccess(request, { redirectBrowser: false }).pipe(
-        Effect.map((outcome) => (outcome._tag === "Access" ? outcome.id : null)),
-        Effect.orElseSucceed(() => null),
-        Effect.provide(context),
-      ),
-  });
-});
-
 /** Intake's webhook route, below the `/v1/` mount: the request and the path below it, as `handleIntake` takes them. */
 const intakeRoute = Effect.gen(function* () {
   const request = (yield* HttpServerRequest.HttpServerRequest).source as Request;
   const path = new URL(request.url).pathname.replace(/^\/v1\//, "");
-  const response = yield* handleIntake(request, path).pipe(
-    Effect.provideService(AccessIdentity, yield* accessIdentity),
-  );
+  const response = yield* handleIntake(request, path);
   return HttpServerResponse.fromWeb(
     response ??
       Response.json(errorBody(apiError("not_found", "no such route"), yield* RequestId), {

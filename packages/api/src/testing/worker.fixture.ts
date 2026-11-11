@@ -54,8 +54,6 @@ const intakeOverAdmission = (db: D1Like, deployment: Deployment, profile: Profil
       appId: 0,
       webhookSecret: undefined,
       webhookEvents: undefined,
-      oidcAudience: undefined,
-      dispatchers: [],
       allows: () => true,
       confidentiality: () => "unclassified",
     }),
