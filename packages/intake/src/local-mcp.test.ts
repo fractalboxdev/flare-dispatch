@@ -1,7 +1,15 @@
 // The local submit (phase 1) and the MCP dispatch tool (phase 2) through intake.
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { harness, HEAD, REPO, type Harness } from "./harness.test-support.ts";
+import {
+  authenticated,
+  harness,
+  HEAD,
+  REPO,
+  refusal,
+  type Harness,
+} from "./harness.test-support.ts";
+import { IntakeError } from "./config.ts";
 import { submitLocal } from "./local.ts";
 import { mcpDispatch } from "./mcp.ts";
 
@@ -103,5 +111,24 @@ describe("MCP dispatch", () => {
       }),
     );
     expect(lower.recorded.resolved.map((r) => r.classInput)).toEqual([null, "batch"]);
+  });
+
+  it("[FD-IFC-074] a call is admitted under the dispatch route's rules: no installation, no admission", async () => {
+    const none = await harness({ installations: {} });
+    const call = { run: "check", repo: REPO, label: "ci", inputs: { sha: HEAD } };
+    const refused = await none.run(
+      mcpDispatch(mcpRequest("agent@example.com"), call).pipe(
+        Effect.flip,
+        Effect.map((e) => (e instanceof IntakeError ? { status: e.status, code: e.code } : e)),
+      ),
+    );
+    const route = await refusal(
+      none,
+      authenticated({ caller: { kind: "access", id: "agent@example.com" } }),
+    );
+    expect(route).toEqual({ status: 422, code: "installation_not_found" });
+    expect(refused).toEqual(route);
+    expect(none.executions()).toEqual([]);
+    expect(none.records()).toEqual([]);
   });
 });

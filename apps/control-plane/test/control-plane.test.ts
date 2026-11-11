@@ -3,6 +3,7 @@
 // device executor.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Readable } from "node:stream";
 import { errorBody } from "@fractalboxdev/flare-dispatch-api/errors";
 import { checkLinkToken } from "@fractalboxdev/flare-dispatch-api/link-token";
 import { intakeError } from "@fractalboxdev/flare-dispatch-intake";
@@ -64,8 +65,11 @@ const miniflare = (
   access: boolean,
   repository: object = DEV_REPOSITORY,
   extra: Record<string, unknown> = {},
+  /** Receives the Worker's stdout and stderr; Miniflare prints them when absent. */
+  stdio?: (stdout: Readable, stderr: Readable) => void,
 ) =>
   new Miniflare({
+    ...(stdio === undefined ? {} : { handleRuntimeStdio: stdio }),
     modules: [{ type: "ESModule", path: "worker.js", contents: script }],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
@@ -1229,5 +1233,208 @@ describe("the intake port", () => {
       label: null,
       idempotency: { key: "k", body: { repository: "acme/app" } },
     });
+  });
+});
+
+describe("the MCP server at /mcp", () => {
+  /** The development repository with a manifest that lists `check` for dispatch and for MCP. */
+  const MCP_REPOSITORY = {
+    ...DEV_REPOSITORY,
+    files: {
+      ".github/flare-dispatch.json": Buffer.from(
+        JSON.stringify({
+          version: 1,
+          runs: [
+            {
+              recipe: "check",
+              triggers: ["dispatch", "mcp"],
+              params: { steps: [{ label: "test", command: "pnpm test", timeoutSec: 600 }] },
+            },
+          ],
+        }),
+      ).toString("base64"),
+    },
+  };
+  const VERSION = "2026-07-28";
+  let mcp: Miniflare;
+  let logs = "";
+  beforeAll(async () => {
+    mcp = miniflare("development", true, MCP_REPOSITORY, {}, (stdout, stderr) => {
+      stdout.on("data", (chunk: Buffer) => (logs += chunk.toString()));
+      stderr.on("data", (chunk: Buffer) => (logs += chunk.toString()));
+    });
+    await mcp.ready;
+  });
+  afterAll(async () => {
+    await mcp?.dispose();
+  });
+
+  const rpc = async (
+    mf: Miniflare,
+    method: string,
+    params: Record<string, unknown>,
+    identity: string | null,
+    name?: string,
+  ) =>
+    mf.dispatchFetch("http://x/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": VERSION,
+        "mcp-method": method,
+        ...(name === undefined ? {} : { "mcp-name": name }),
+        ...(await headersFor(identity)),
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params: {
+          ...params,
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": VERSION,
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    });
+
+  /** The JSON-RPC result of a Streamable HTTP answer, whether sent as JSON or as an event stream. */
+  const resultOf = async (r: { text(): Promise<string> }) => {
+    const text = await r.text();
+    const data = text
+      .split("\n")
+      .filter((l) => l.startsWith("data:"))
+      .map((l) => l.slice(5).trim());
+    const message = JSON.parse(data.at(-1) ?? text) as { result?: unknown; error?: unknown };
+    if (message.result === undefined)
+      throw new Error(`protocol error: ${JSON.stringify(message.error)}`);
+    return message.result as Record<string, unknown>;
+  };
+
+  const call = async (
+    tool: string,
+    args: Record<string, unknown>,
+    identity: string | null = OPERATOR,
+    mf: Miniflare = mcp,
+  ) => {
+    const result = (await resultOf(
+      await rpc(mf, "tools/call", { name: tool, arguments: args }, identity, tool),
+    )) as { isError?: boolean; content: { text: string }[] };
+    return {
+      isError: result.isError === true,
+      value: JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>,
+    };
+  };
+
+  const dispatchArgs = (sha: string) => ({
+    run: "check",
+    repo: "fractalboxdev/flare-dispatch",
+    sha,
+    inputs: dispatchBody(sha).inputs,
+  });
+
+  const intakeRecord = async (id: string) =>
+    (
+      await (
+        await mcp.getD1Database("DB")
+      )
+        .prepare("select trigger, caller, class from intake_records where execution_id = ?")
+        .bind(id)
+        .all()
+    ).results[0] as { trigger: string; caller: string | null; class: string } | undefined;
+
+  it("[FD-IFC-073] answers an /mcp request with no Access JWT, or one the team did not sign, with 401 unauthenticated", async () => {
+    for (const identity of [null, "invalid"]) {
+      const r = await rpc(mcp, "tools/list", {}, identity);
+      expect(r.status, String(identity)).toBe(401);
+      const body = (await r.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ error: "unauthenticated" });
+      expect(typeof body["request_id"]).toBe("string");
+    }
+  });
+
+  it("[FD-IFC-072] serves dispatch, get_verdict, get_failure_summary and cancel over Streamable HTTP", async () => {
+    const listed = (await resultOf(await rpc(mcp, "tools/list", {}, OPERATOR))) as {
+      tools: { name: string }[];
+    };
+    expect(listed.tools.map((t) => t.name).sort()).toEqual(
+      ["cancel", "dispatch", "get_failure_summary", "get_verdict"].sort(),
+    );
+
+    const dispatched = await call("dispatch", dispatchArgs("1".repeat(40)));
+    expect(dispatched.isError).toBe(false);
+    const id = String(dispatched.value["execution_id"]);
+    const verdict = await call("get_verdict", { execution_id: id }, "member@example.com");
+    expect(verdict).toMatchObject({
+      isError: false,
+      value: { execution_id: id, status: "queued", verdict: null },
+    });
+    const unfinished = await call("get_failure_summary", { execution_id: id });
+    expect(unfinished).toMatchObject({ isError: true, value: { error: "not_finished" } });
+    const cancelled = await call("cancel", { execution_id: id });
+    expect(cancelled).toMatchObject({ isError: false, value: { execution_id: id } });
+    await expect
+      .poll(() => execution(mcp, id), { timeout: 20_000 })
+      .toMatchObject({ status: "done", verdict: "cancelled" });
+  });
+
+  it("[FD-INT-062] submits a dispatch call through intake as trigger mcp, recording the caller's Access identity", async () => {
+    const dispatched = await call("dispatch", dispatchArgs("2".repeat(40)));
+    expect(dispatched.isError).toBe(false);
+    const id = String(dispatched.value["execution_id"]);
+    expect(await intakeRecord(id)).toMatchObject({ trigger: "mcp", caller: OPERATOR });
+    expect(await execution(mcp, id)).toMatchObject({ execution_id: id, run: "check" });
+  });
+
+  it("[FD-IFC-074] applies the dispatch route's identity, dedup, class and catalog rules to the dispatch tool", async () => {
+    const db = await mcp.getD1Database("DB");
+    const count = async () =>
+      (await db.prepare("select count(*) as n from intake_records").first<{ n: number }>())!.n;
+    const before = await count();
+
+    // Identity: an Access identity outside dispatchers is refused, as the route refuses it.
+    const member = await call("dispatch", dispatchArgs("3".repeat(40)), "member@example.com");
+    expect(member).toMatchObject({ isError: true, value: { error: "unauthenticated" } });
+
+    // Catalog: a run outside the catalogue, and a run the manifest lists for no MCP dispatch, are run_not_found.
+    const unknown = await call("dispatch", { ...dispatchArgs("3".repeat(40)), run: "nothing" });
+    expect(unknown).toMatchObject({ isError: true, value: { error: "run_not_found" } });
+    const unlisted = await call("dispatch", dispatchArgs("3".repeat(40)), OPERATOR, development);
+    expect(unlisted).toMatchObject({ isError: true, value: { error: "run_not_found" } });
+
+    // The run's input schema, as the route answers it (FD-IFC-029).
+    const invalid = await call("dispatch", { ...dispatchArgs("3".repeat(40)), inputs: {} });
+    expect(invalid).toMatchObject({ isError: true, value: { error: "invalid_inputs" } });
+    expect(await count()).toBe(before);
+
+    // Dedup: the same call again answers the admitted execution.
+    const first = await call("dispatch", dispatchArgs("3".repeat(40)));
+    const again = await call("dispatch", dispatchArgs("3".repeat(40)));
+    expect(again.value).toMatchObject({
+      execution_id: first.value["execution_id"],
+      duplicate: true,
+    });
+    expect(await count()).toBe(before + 1);
+
+    // Class: the class admission assigned is the one the route assigns the same run.
+    expect(first.value["class"]).toBe("batch");
+  });
+
+  it("[FD-INT-063] keeps the assigned class when a dispatch call requests a higher one, and logs the clamp", async () => {
+    const clamped = await call("dispatch", { ...dispatchArgs("4".repeat(40)), class: "release" });
+    expect(clamped.isError).toBe(false);
+    expect(clamped.value["class"]).toBe("batch");
+    expect(await intakeRecord(String(clamped.value["execution_id"]))).toMatchObject({
+      trigger: "mcp",
+      class: "batch",
+    });
+    await expect.poll(() => logs, { timeout: 5_000 }).toContain("mcp dispatch class clamped");
+    const at = logs.indexOf("mcp dispatch class clamped");
+    const entry = logs.slice(at, logs.indexOf("}", at) + 1);
+    expect(entry).toMatch(/requested\W+release/);
+    expect(entry).toMatch(/assigned\W+batch/);
+    expect(entry).toContain(OPERATOR);
   });
 });
