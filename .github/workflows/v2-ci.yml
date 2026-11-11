@@ -61,7 +61,8 @@ jobs:
         run: $STRIP_TYPES packages/ops/scripts/spec-tags.ts --report ${BASE:+--base "$BASE"}
 
   # FD-OPS-019 to FD-OPS-021, FD-OPS-026, FD-INT-050: each v2 template rendered from the placeholder overlay through the
-  # one renderer, the drift check's static checks, then `wrangler deploy --dry-run` on the rendered configuration.
+  # one renderer, the drift check's static checks, then `wrangler deploy --dry-run` on the rendered configuration. The
+  # deploy suites (`test/deploy/`) run `fd deploy` and `fd doctor` over the committed templates against fakes.
   deploy-dry-run:
     runs-on: ubuntu-latest
     steps:
@@ -72,6 +73,7 @@ jobs:
       # The rendered file sits beside its template, so the paths inside it (`main`, each container image) resolve.
       - run: $STRIP_TYPES packages/ops/scripts/drift-check.ts --out apps/control-plane
       - run: pnpm exec wrangler deploy --dry-run -c apps/control-plane/control-plane.jsonc
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-ops exec vitest run test/deploy
 
   # FD-VER-033, FD-PROF-002.
   profile-reference:

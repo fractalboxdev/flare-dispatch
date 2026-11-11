@@ -64,10 +64,10 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-DEPLOY`
 
-- **Runs:** `wrangler deploy --dry-run` for every Worker, mameko's profile validator and configuration validation over the committed profile and configuration, the reference-profile diff (FD-VER-033), and the overlay drift check of [operability.md](operability.md).
-- **Lives:** the `deploy-dry-run` and `profile-reference` jobs and the deploy workflow in `.github/workflows/`; the drift check is `fd doctor`.
+- **Runs:** `wrangler deploy --dry-run` for every Worker, mameko's profile validator and configuration validation over the committed profile and configuration, the reference-profile diff (FD-VER-033), the overlay drift check of [operability.md](operability.md), and the deploy suites: `fd deploy` and `fd doctor` over the committed Worker templates and the placeholder overlay, with fakes of the Cloudflare API, the GitHub API and `wrangler` that keep the deployed state between runs.
+- **Lives:** the `deploy-dry-run` and `profile-reference` jobs and the deploy workflow in `.github/workflows/`; the deploy suites in `test/deploy/` of a workspace package; the drift check is `fd doctor`.
 - **Runs when:** every pull request, against the committed placeholders; every deploy, against the operator overlay; every 24 h, as `fd doctor` (FD-OPS-025).
-- **Failure blocks:** the merge (dry run, validators and reference diff); the deploy (drift check).
+- **Failure blocks:** the merge (dry run, validators, deploy suites and reference diff); the deploy (drift check).
 
 #### `V-LIVE`
 
@@ -111,7 +111,7 @@ The default branch's ruleset requires these checks on every pull request. A pull
 | `sim` | 100 seeds per scenario plus every kept seed | `V-SIM` |
 | `replay` | Double run over cached journals | `V-REPLAY` |
 | `e2e-local` | The cloud path of the end-to-end stack | `V-E2E-LOCAL` |
-| `deploy-dry-run` | `wrangler deploy --dry-run` and the validators | `V-DEPLOY` |
+| `deploy-dry-run` | `wrangler deploy --dry-run`, the validators and the deploy suites | `V-DEPLOY` |
 | `profile-reference` | The comparison of FlareDispatch's profile with mameko's reference CI profile at the pinned commit, outside the listed differences (FD-VER-033, FD-PROF-002) | `V-DEPLOY` |
 | `formal` | `lake build`, the forbidden-term scan, `#print axioms`, `tamarin-prover --prove` | `V-PROOF` |
 | `diff` | The regressions file, then 10,000 traces of `stagedWriteGate` | `V-DIFF` |
