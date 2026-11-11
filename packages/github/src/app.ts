@@ -166,7 +166,7 @@ export class GithubApp extends Context.Service<
       path: string,
       body?: unknown,
     ) => Effect.Effect<
-      { readonly status: number; readonly json: unknown },
+      { readonly status: number; readonly json: unknown; readonly link?: string | null },
       GithubError | AppKeyInvalid
     >;
     /** The App's installation ids, at most 100. */
@@ -188,7 +188,10 @@ const appCall = (
   method: string,
   path: string,
   body?: unknown,
-): Effect.Effect<{ readonly status: number; readonly json: unknown }, GithubError> =>
+): Effect.Effect<
+  { readonly status: number; readonly json: unknown; readonly link: string | null },
+  GithubError
+> =>
   Effect.gen(function* () {
     const response = yield* Effect.tryPromise({
       try: (signal) =>
@@ -213,7 +216,7 @@ const appCall = (
       },
       catch: (e) => new GithubNetworkError({ sent: true, message: String(e) }),
     });
-    return { status: response.status, json };
+    return { status: response.status, json, link: response.headers.get("link") };
   });
 
 const httpError = (status: number, json: unknown) =>
@@ -377,3 +380,139 @@ export const tokenFromApp =
         Effect.fail(new GithubNetworkError({ sent: false, message: e.message })),
       ),
     );
+
+// ---------------------------------------------------------------------------
+// The probes' App-JWT reads (specs/operability.md FD-OPS-041, FD-OPS-044)
+
+/** One installation as `GET /app/installations/{installation_id}` answers it. */
+export type AppInstallationRead =
+  | { readonly status: "active"; readonly accountLogin: string }
+  | { readonly status: "suspended"; readonly accountLogin: string }
+  | { readonly status: "not-found" };
+
+/** One webhook delivery as `GET /app/hook/deliveries` lists it; `deliveredAt` is epoch ms. */
+export interface AppDelivery {
+  readonly id: number;
+  /** The webhook's GUID, shared by a delivery and its redeliveries. */
+  readonly guid: string;
+  readonly statusCode: number;
+  readonly deliveredAt: number;
+  readonly redelivery: boolean;
+}
+
+/** A listing follows at most this many pages of 100, which bounds one probe's subrequests. */
+export const APP_LIST_MAX_PAGES = 10;
+
+const AppInstallation = Schema.Struct({
+  id: Schema.Number,
+  account: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+  suspended_at: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const HookDelivery = Schema.Struct({
+  id: Schema.Number,
+  guid: Schema.String,
+  delivered_at: Schema.String,
+  redelivery: Schema.Boolean,
+  status_code: Schema.Number,
+});
+
+/** The path of the `rel="next"` page a `Link` header names, or null on the last page. */
+export const nextPagePath = (link: string | null | undefined): string | null => {
+  const next = /<([^>]+)>;\s*rel="next"/.exec(link ?? "");
+  if (next === null) return null;
+  const url = new URL(next[1]!);
+  return url.pathname + url.search;
+};
+
+const decodeAs =
+  <S extends Schema.Top>(schema: S, what: string) =>
+  (json: unknown) =>
+    Schema.decodeUnknownEffect(schema)(json).pipe(
+      Effect.mapError(
+        (e) => new GithubNetworkError({ sent: false, message: `${what}: ${e.message}` }),
+      ),
+    ) as Effect.Effect<S["Type"], GithubNetworkError>;
+
+/** Every page of an App-JWT listing from `path`, until `more` answers false for a page or no next page remains. */
+const appPages = <A>(
+  app: GithubApp["Service"],
+  path: string,
+  page: (json: unknown) => Effect.Effect<readonly A[], GithubError>,
+  more: (items: readonly A[]) => boolean,
+) =>
+  Effect.gen(function* () {
+    const out: A[] = [];
+    let next: string | null = path;
+    for (let n = 0; next !== null && n < APP_LIST_MAX_PAGES; n++) {
+      const response: {
+        readonly status: number;
+        readonly json: unknown;
+        readonly link?: string | null;
+      } = yield* app.rest("GET", next);
+      const { status, json, link } = response;
+      if (status < 200 || status >= 300) return yield* httpError(status, json);
+      const items: readonly A[] = yield* page(json);
+      out.push(...items);
+      next = items.length > 0 && more(items) ? nextPagePath(link) : null;
+    }
+    // A listing cut at the page bound is partial: the items past it are not read, and the caller sees only the first.
+    if (next !== null)
+      yield* Effect.logWarning("App listing truncated at the page bound", {
+        path,
+        pages: APP_LIST_MAX_PAGES,
+        items: out.length,
+      });
+    return out;
+  });
+
+/** `GET /app/installations/{installation_id}` under the App JWT: a `404` is `not-found` (FD-OPS-041, FD-OPS-042). */
+export const readAppInstallation = (app: GithubApp["Service"], installationId: string) =>
+  Effect.gen(function* () {
+    const { status, json } = yield* app.rest("GET", `/app/installations/${installationId}`);
+    if (status === 404) return { status: "not-found" } as AppInstallationRead;
+    if (status < 200 || status >= 300) return yield* httpError(status, json);
+    const i = yield* decodeAs(AppInstallation, "installation")(json);
+    const accountLogin = i.account?.login ?? "";
+    return (
+      i.suspended_at === null || i.suspended_at === undefined
+        ? { status: "active", accountLogin }
+        : { status: "suspended", accountLogin }
+    ) as AppInstallationRead;
+  });
+
+/** The App's installations with their account logins, through `GET /app/installations`. */
+export const listAppInstallations = (app: GithubApp["Service"]) =>
+  appPages(
+    app,
+    "/app/installations?per_page=100",
+    (json) =>
+      Effect.map(decodeAs(Schema.Array(AppInstallation), "installations")(json), (list) =>
+        list.map((i) => ({ installationId: String(i.id), accountLogin: i.account?.login ?? "" })),
+      ),
+    () => true,
+  );
+
+/**
+ * The App's webhook deliveries at or after `since` (epoch ms), newest first, through `GET /app/hook/deliveries`. GitHub
+ * lists newest first, so the listing stops at the first page that reaches back before `since` (FD-OPS-044).
+ */
+export const listAppDeliveries = (app: GithubApp["Service"], since: number) =>
+  Effect.map(
+    appPages(
+      app,
+      "/app/hook/deliveries?per_page=100",
+      (json) =>
+        Effect.map(decodeAs(Schema.Array(HookDelivery), "deliveries")(json), (list) =>
+          list.map((d): AppDelivery => ({
+            id: d.id,
+            guid: d.guid,
+            statusCode: d.status_code,
+            deliveredAt: Date.parse(d.delivered_at),
+            redelivery: d.redelivery,
+          })),
+        ),
+      (page) => page.every((d) => d.deliveredAt >= since),
+    ),
+    (all) => all.filter((d) => d.deliveredAt >= since),
+  );

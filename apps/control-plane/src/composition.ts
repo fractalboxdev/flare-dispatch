@@ -11,6 +11,7 @@ import {
   InstallationEviction,
   IntakeConfig,
   intakeLayer,
+  IntakeStore,
   ManifestReporter,
   manifestSourceLayer,
   profileClassResolver,
@@ -18,7 +19,7 @@ import {
   type AdmissionPorts,
   type IntakeSettings,
 } from "@fractalboxdev/flare-dispatch-intake";
-import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
+import { alarmPortFromEnv, recordDeliveryTime } from "@fractalboxdev/flare-dispatch-ops";
 import { type Actuator, Actuators, actuatorRegistry } from "@fractalboxdev/mameko-ports";
 import {
   ConfigurationSourceLive,
@@ -187,7 +188,40 @@ export const followOnActuators = Layer.effect(
   }),
 ).pipe(Layer.provide(followOnSubmitterLayer));
 
-const isolateLayer = (env: ControlPlaneEnv) => {
+/**
+ * Intake's record of a verified webhook delivery reaches the operability record of a registered installation too,
+ * which the canary's stage read and `webhook-silent` take (FD-INT-031, FD-OPS-040). A write that fails is logged, and
+ * the webhook still answers.
+ */
+export const withDeliveryTimes = (env: Pick<ControlPlaneEnv, "DB">) =>
+  Layer.effect(
+    IntakeStore,
+    Effect.gen(function* () {
+      const store = yield* IntakeStore;
+      return {
+        ...store,
+        recordDelivery: (installation: number, at: number) =>
+          store.recordDelivery(installation, at).pipe(
+            Effect.andThen(
+              Effect.tryPromise(() => recordDeliveryTime(env.DB, String(installation), at)).pipe(
+                Effect.asVoid,
+                Effect.catch((cause) =>
+                  Effect.logWarning("delivery time not recorded on the installation", {
+                    installation,
+                    cause: String(cause),
+                  }),
+                ),
+              ),
+            ),
+          ),
+      };
+    }),
+  );
+
+const isolateLayer = (env: ControlPlaneEnv) =>
+  withDeliveryTimes(env).pipe(Layer.provideMerge(servicesLayer(env)));
+
+const servicesLayer = (env: ControlPlaneEnv) => {
   const settings = intakeSettings(env);
   const alarms = alarmPortFromEnv(env);
   const app = appOptionsOf(env);

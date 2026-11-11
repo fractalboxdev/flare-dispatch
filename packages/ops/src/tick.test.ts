@@ -16,6 +16,7 @@ import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
 import {
   checkCronSilent,
   deliveriesToRedeliver,
+  FixtureInstallationMissing,
   GithubAppReads,
   livenessReport,
   minuteTick,
@@ -87,8 +88,10 @@ const appliers = () => {
 const reads = (
   installations: Record<string, InstallationRead>,
   deliveries: readonly Delivery[] = [],
+  listed: readonly { installationId: string; accountLogin: string }[] = [],
 ) =>
   Layer.succeed(GithubAppReads, {
+    installations: Effect.succeed(listed),
     installation: (id) => Effect.succeed(installations[id] ?? { status: "not-found" as const }),
     deliveries: () => Effect.succeed(deliveries),
   });
@@ -248,9 +251,9 @@ describe("minute tick", () => {
 
   it("[FD-OPS-044] a non-2xx delivery in the last 15 min raises delivery-failing with the statuses and the count", async () => {
     const deliveries: Delivery[] = [
-      { id: "d1", guid: "g1", statusCode: 502, deliveredAt: T0 - 60_000, redelivery: false },
-      { id: "d2", guid: "g2", statusCode: 404, deliveredAt: T0 - 120_000, redelivery: false },
-      { id: "d3", guid: "g3", statusCode: 200, deliveredAt: T0 - 3_600_000, redelivery: false },
+      { id: 1001, guid: "g1", statusCode: 502, deliveredAt: T0 - 60_000, redelivery: false },
+      { id: 1002, guid: "g2", statusCode: 404, deliveredAt: T0 - 120_000, redelivery: false },
+      { id: 1003, guid: "g3", statusCode: 200, deliveredAt: T0 - 3_600_000, redelivery: false },
     ];
     const { deps: d, alarms } = deps({ githubReads: reads({}, deliveries) });
     await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
@@ -262,28 +265,28 @@ describe("minute tick", () => {
 
   it("[FD-OPS-045] redelivers each failed delivery of the last 24 h with no later success, once the path answers 2xx", async () => {
     const failed: Delivery = {
-      id: "d1",
+      id: 1001,
       guid: "g1",
       statusCode: 502,
       deliveredAt: T0 - 7_200_000,
       redelivery: false,
     };
     const retried: Delivery = {
-      id: "d2",
+      id: 1002,
       guid: "g2",
       statusCode: 500,
       deliveredAt: T0 - 7_000_000,
       redelivery: false,
     };
     const retriedOk: Delivery = {
-      id: "d3",
+      id: 1003,
       guid: "g2",
       statusCode: 200,
       deliveredAt: T0 - 6_000_000,
       redelivery: true,
     };
     const healthy: Delivery = {
-      id: "d4",
+      id: 1004,
       guid: "g4",
       statusCode: 200,
       deliveredAt: T0 - 60_000,
@@ -296,7 +299,7 @@ describe("minute tick", () => {
     await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + PROBE_INTERVAL_MS);
     expect((await outbox()).filter((r) => r.kind === "delivery.redeliver")).toEqual([
       {
-        id: "app/ops:redeliver:d1",
+        id: "app/ops:redeliver:1001",
         kind: "delivery.redeliver",
         limit_key: "app",
         execution_id: null,
@@ -462,5 +465,155 @@ describe("minute tick", () => {
       ["cron-silent", "raised"],
       ["cron-silent", "resolved"],
     ]);
+  });
+});
+
+describe("the GitHub probes' rows and reads", () => {
+  const payloadOf = async (kind: string) =>
+    (
+      (
+        await t.db
+          .prepare("select payload_json from outbox where kind = ? order by id")
+          .bind(kind)
+          .all()
+      ).results as { payload_json: string }[]
+    ).map((r) => JSON.parse(r.payload_json) as unknown);
+
+  it("[FD-OPS-038] the canary.push payload names the canary branch and the tick time the commit message carries", async () => {
+    const { deps: d } = deps();
+    await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    expect(await payloadOf("canary.push")).toEqual([
+      { branch: "flare-dispatch-canary", tick_time: new Date(T0).toISOString() },
+    ]);
+  });
+
+  it("[FD-OPS-038] [FD-OPS-040] the push resolves the fixture installation once, and the check reads the installation the push recorded", async () => {
+    const a = appliers();
+    let reads = 0;
+    const { deps: d, alarms } = deps({
+      appliers: a.layer,
+      probes: Effect.sync(() => {
+        reads++;
+        return { fixtureRepo: "acme/canary", fixtureInstallation: "77", webhookSilentHours: 24 };
+      }),
+    });
+    await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + 60_000);
+    expect(a.permits[0]).toMatchObject({ limitKey: "77", kind: "canary.push" });
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + 300_000);
+    expect(report.steps.find((s) => s.step === "canary-check")).toMatchObject({
+      status: "ran",
+      detail: { stage: "push" },
+    });
+    expect(reads).toBe(1);
+    expect(alarms.delivered.find((x) => x.name === "canary-missed")).toMatchObject({
+      detail: { last_stage: "push" },
+    });
+  });
+
+  it("[FD-OPS-040] a probe configuration read that fails after a successful push still lets the check raise canary-missed", async () => {
+    let pushTick = true;
+    const { deps: d, alarms } = deps({
+      probes: Effect.suspend(() =>
+        pushTick
+          ? Effect.succeed({
+              fixtureRepo: "acme/canary",
+              fixtureInstallation: "42",
+              webhookSilentHours: 24,
+            })
+          : Effect.fail("GitHub answered 502"),
+      ),
+    });
+    await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    pushTick = false;
+    await recordVerifiedDelivery(t.db, { id: "42", accountLogin: "acme" }, T0 + 10_000);
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + 300_000);
+    expect(report.steps.find((s) => s.step === "canary-check")).toMatchObject({
+      status: "ran",
+      detail: { stage: "delivery" },
+    });
+    expect(alarms.delivered.find((x) => x.name === "canary-missed")).toMatchObject({
+      state: "raised",
+      detail: { last_stage: "delivery" },
+    });
+  });
+
+  it("[FD-OPS-038] [FD-OPS-040] a fixture repository no installation covers raises canary-missed at the push stage and records the canary probe not ok", async () => {
+    const { deps: d, alarms } = deps({
+      probes: Effect.fail(new FixtureInstallationMissing({ repository: "acme/canary" })),
+    });
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    expect(report.steps.find((s) => s.step === "canary-push")).toMatchObject({
+      status: "failed",
+      cause: expect.stringContaining("FixtureInstallationMissing"),
+    });
+    expect(alarms.delivered).toEqual([
+      expect.objectContaining({
+        name: "canary-missed",
+        severity: "page",
+        state: "raised",
+        detail: { last_stage: "push", repository: "acme/canary" },
+      }),
+    ]);
+    expect((await probeResults(t.db)).find((p) => p.name === "canary")).toMatchObject({
+      ok: false,
+      detail: { stage: "push", reason: "no installation covers acme/canary" },
+    });
+  });
+
+  it("[FD-OPS-038] a probe configuration read that fails fails the canary step alone", async () => {
+    const { deps: d } = deps({
+      githubReads: reads({}, []),
+      probes: Effect.fail("no installation covers acme/canary"),
+    });
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    expect(report.steps.find((s) => s.step === "canary-push")?.status).toBe("failed");
+    expect(
+      report.steps
+        .filter((s) => ["installation-probe", "delivery-probe", "webhook-silence"].includes(s.step))
+        .map((s) => s.status),
+    ).toEqual(["ran", "ran", "ran"]);
+    expect(await payloadOf("canary.push")).toEqual([]);
+  });
+
+  it("[FD-OPS-041] [FD-OPS-042] registers every installation the App lists, and one it stops listing reads lost", async () => {
+    const { deps: listed } = deps({
+      githubReads: reads(
+        { "5": { status: "active", accountLogin: "acme" } },
+        [],
+        [{ installationId: "5", accountLogin: "acme" }],
+      ),
+    });
+    await tick({ DB: t.db, MONITOR: monitor().ns }, listed, T0);
+    expect((await livenessReport(t.db, T0)).installations).toEqual([
+      expect.objectContaining({ installation_id: "5", account_login: "acme", status: "active" }),
+    ]);
+    // Uninstalled: the App lists it no more, and its read answers 404.
+    const { deps: gone, alarms } = deps({ githubReads: reads({}, [], []) });
+    await tick({ DB: t.db, MONITOR: monitor().ns }, gone, T0 + PROBE_INTERVAL_MS);
+    expect(alarms.delivered.find((a) => a.name === "installation-lost")).toMatchObject({
+      severity: "page",
+      detail: { account_login: "acme", status: "not-found" },
+    });
+  });
+
+  it("[FD-OPS-045] the delivery.redeliver payload carries GitHub's numeric delivery id", async () => {
+    const failed: Delivery = {
+      id: 9001,
+      guid: "g1",
+      statusCode: 502,
+      deliveredAt: T0 - 600_000,
+      redelivery: false,
+    };
+    const healthy: Delivery = {
+      id: 9002,
+      guid: "g2",
+      statusCode: 200,
+      deliveredAt: T0 - 60_000,
+      redelivery: false,
+    };
+    const { deps: d } = deps({ githubReads: reads({}, [failed, healthy]) });
+    await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    expect(await payloadOf("delivery.redeliver")).toEqual([{ delivery_id: 9001 }]);
   });
 });
