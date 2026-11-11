@@ -6,6 +6,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import {
   APP_PERMISSIONS,
@@ -299,13 +300,19 @@ export const targetOn =
 
 export const fd = (
   w: World,
-  opts: { workers?: readonly WorkerSpec[]; canary?: "live" | "passes" } = {},
+  opts: {
+    workers?: readonly WorkerSpec[];
+    canary?: "live" | "passes";
+    /** The profile document the deploy carries; the production document by default. */
+    profile?: ProfileDocument;
+  } = {},
 ) =>
   makeOperability({
     fail: (message) => new Error(message),
     root: ROOT,
     workers: opts.workers ?? [CONTROL_PLANE],
     target: targetOn(w, opts.canary ?? "passes"),
+    ...(opts.profile === undefined ? {} : { profile: opts.profile }),
   });
 
 export const deploy = (w: World, overlay = OVERLAY, opts: Parameters<typeof fd>[1] = {}) =>

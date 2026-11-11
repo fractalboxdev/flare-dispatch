@@ -173,6 +173,19 @@ export const profileCheck = (document: ProfileDocument, context: ValidationConte
     ),
   );
 
+/**
+ * The drift check's findings over one deploy: the configuration checks' findings, then the profile step's over the
+ * document the deploy carries (FD-OPS-021, `FdFormal.Drift.driftFindings`).
+ */
+export const driftCheckFindings = (
+  configFindings: readonly Finding[],
+  document: ProfileDocument,
+  context: ValidationContext,
+) =>
+  profileCheck(document, context).pipe(
+    Effect.map((profile): readonly Finding[] => [...configFindings, ...profile]),
+  );
+
 /** The deployed settings of one Worker the drift check compares; secrets by name only. */
 export const DeployedSettings = Schema.Struct({
   bindings: Schema.Array(

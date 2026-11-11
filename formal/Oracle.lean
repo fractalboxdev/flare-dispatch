@@ -13,9 +13,15 @@
 -- holds the class `resolveClass` gives the request, the declared constraints and the request's labels, whether
 -- `cloud-pinned` holds at that class, the eligible kinds at that class and the eligible kinds that place the request
 -- (FdFormal.Placement).
+--
+-- `oracle drift` answers drift-check events: the `configFindings` the configuration checks made, each a `check`, `path`,
+-- `detail` and `failure`, and the `answer` mameko's profile loader gives the document the deploy carries, `accepted` or
+-- `rejected` with its `rejections`, each an `item`, `path` and `reason`. The answer holds the drift check's `findings`
+-- and whether it `fails` (FdFormal.Drift).
 import Lean.Data.Json
 import FdFormal.StagedWrite
 import FdFormal.Placement
+import FdFormal.Drift
 
 open Lean FdFormal.StagedWrite
 
@@ -158,6 +164,30 @@ def placementAnswer (j : Json) : Except String Json := do
     ("eligible", strArr eligibleKinds),
     ("placeable", strArr (placeableKinds eligibleKinds r.labels advertisedBy))]
 
+def decodeFinding (j : Json) : Except String FdFormal.Drift.Finding := do
+  pure { check := ← str j "check", path := ← str j "path", detail := ← str j "detail", failure := ← getBool j "failure" }
+
+def decodeRejection (j : Json) : Except String FdFormal.Drift.Rejection := do
+  pure { item := ← str j "item", path := ← str j "path", reason := ← str j "reason" }
+
+def decodeLoadAnswer (j : Json) : Except String FdFormal.Drift.LoadAnswer := do
+  match ← str j "_tag" with
+  | "accepted" => pure .accepted
+  | "rejected" => .rejected <$> (← (← field j "rejections").getArr?).toList.mapM decodeRejection
+  | t => throw s!"unknown load answer {t}"
+
+def encodeFinding (f : FdFormal.Drift.Finding) : Json :=
+  Json.mkObj [("check", Json.str f.check), ("path", Json.str f.path), ("detail", Json.str f.detail),
+    ("failure", Json.bool f.failure)]
+
+open FdFormal.Drift in
+def driftAnswer (j : Json) : Except String Json := do
+  let configFindings ← (← (← field j "configFindings").getArr?).toList.mapM decodeFinding
+  let findings := driftFindings configFindings (← decodeLoadAnswer (← field j "answer"))
+  pure <| Json.mkObj [
+    ("findings", Json.arr (findings.map encodeFinding).toArray),
+    ("fails", Json.bool (driftFails findings))]
+
 def answer (respond : Json → Except String Json) (line : String) : Json :=
   match Json.parse line >>= respond with
   | .ok v => v
@@ -177,4 +207,5 @@ def main (args : List String) : IO UInt32 := do
   match args with
   | [] => loop stagedWriteAnswer (← IO.getStdin) (← IO.getStdout); pure 0
   | ["placement"] => loop placementAnswer (← IO.getStdin) (← IO.getStdout); pure 0
-  | _ => IO.eprintln "usage: oracle [placement]"; pure 2
+  | ["drift"] => loop driftAnswer (← IO.getStdin) (← IO.getStdout); pure 0
+  | _ => IO.eprintln "usage: oracle [placement | drift]"; pure 2
