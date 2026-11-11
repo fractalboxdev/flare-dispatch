@@ -142,6 +142,18 @@ describe("worker-deploy on a push (FD-GATE-062)", () => {
     ).toMatchObject({ branch: "release", entry: { ...release, label: "edge" } });
   });
 
+  it("[FD-GATE-062] a push that deletes the deploy branch decodes nothing", () => {
+    const deleted = webhook("push", {
+      ref: "refs/heads/main",
+      before: HEAD,
+      after: "0".repeat(40),
+      deleted: true,
+      head_commit: null,
+      repository,
+    } as {});
+    expect(decode("worker-deploy", deleted, { params })).toStrictEqual(Option.none());
+  });
+
   it("[FD-GATE-062] a pull request decodes no worker-deploy", () => {
     expect(decode("worker-deploy", pullRequest(), { params })).toStrictEqual(Option.none());
   });
@@ -175,5 +187,26 @@ describe("deploy-smoke on a deployment status (FD-GATE-070)", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("offload-test on a release tag push (FD-GATE-054)", () => {
+  const TAG_OBJECT = "d".repeat(40);
+  const params = { command: "pnpm test", release: true };
+
+  it("[FD-GATE-054] a tag push runs at head_commit.id, the tagged commit, not the tag object in after", () => {
+    const tag = webhook("push", {
+      ref: "refs/tags/v1.0.0",
+      before: "0".repeat(40),
+      after: TAG_OBJECT,
+      head_commit: { id: HEAD },
+      repository,
+    } as {});
+    const input = Option.getOrThrow(decode("offload-test", tag, { params })) as {
+      sha: string;
+      parentDedupKey: string;
+    };
+    expect(input.sha).toBe(HEAD);
+    expect(input.parentDedupKey).toBe(`offload-test:${REPO}:${HEAD}`);
   });
 });

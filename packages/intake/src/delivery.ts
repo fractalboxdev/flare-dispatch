@@ -34,6 +34,8 @@ const PushPayload = Schema.Struct({
   ref: Schema.String,
   before: Schema.optionalKey(Schema.String),
   after: Schema.String,
+  deleted: Schema.optionalKey(Schema.Boolean),
+  head_commit: Schema.optionalKey(Schema.NullOr(Schema.Struct({ id: Schema.String }))),
 });
 
 const MergeGroupPayload = Schema.Struct({
@@ -90,14 +92,21 @@ const rawDelivery = (
       })),
     ),
     Match.when("push", () =>
-      Option.map(Schema.decodeUnknownOption(PushPayload)(payload), (p) => ({
-        event,
-        action: "",
-        repository: repositoryOf(p.repository, context),
-        ref: p.ref,
-        before: p.before ?? "",
-        after: p.after,
-      })),
+      Option.flatMap(Schema.decodeUnknownOption(PushPayload)(payload), (p) => {
+        // A deleted ref names no commit to run. A tag push's `after` is the tag object, so the commit is
+        // `head_commit.id`, the same rule as `commitOf` (FD-INT-028).
+        if (p.deleted === true) return Option.none();
+        const after = p.ref.startsWith("refs/tags/") ? p.head_commit?.id : p.after;
+        if (after === undefined) return Option.none();
+        return Option.some({
+          event,
+          action: "",
+          repository: repositoryOf(p.repository, context),
+          ref: p.ref,
+          before: p.before ?? "",
+          after,
+        });
+      }),
     ),
     Match.when("merge_group", () =>
       Option.map(Schema.decodeUnknownOption(MergeGroupPayload)(payload), (p) => ({
