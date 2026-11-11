@@ -128,6 +128,8 @@ A phase-gate pull request moves `.github/phase` from n to n + 1. Its `phase-gate
 4. No `V-LIVE` page alarm of a phase n or lower requirement stayed unresolved for more than 24 h in the gate window.
 5. Every `V-MEASURE` threshold of gate n in [roadmap.md](roadmap.md) holds over its window.
 
+The gate window is the 14 days before the job reads its records. The job reads conditions 4 and 5, and the unresolved `kill-line` notifications, from `GET /v1/ops/phase-gate?gate=<n>` on the control plane that the deploy workflow targets, as an operator through an Access service token. That route computes each threshold from the executions table and its siblings, and answers every raise-to-resolve span of a page alarm in the window. The job counts a span only when a `V-LIVE` requirement names its alarm, at that requirement's phase.
+
 ```mermaid
 flowchart LR
   accTitle: CI gates from pull request to phase transition

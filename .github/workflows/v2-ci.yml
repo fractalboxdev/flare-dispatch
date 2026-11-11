@@ -107,7 +107,13 @@ jobs:
         run: $STRIP_TYPES packages/ops/scripts/formal-gate.ts ${BASE:+--base "$BASE"}
 
   # FD-VER-026 to FD-VER-031: only a pull request that changes .github/phase gates; the records come from the nightly
-  # runs and the deployed control plane, and a condition with no record fails.
+  # runs and the deployed control plane, and a condition with no record fails. The records step reads gate n's
+  # V-MEASURE thresholds, page alarms and kill lines from GET /v1/ops/phase-gate on the control plane the deploy
+  # workflow targets (FD-VER-028, FD-VER-029).
+  #
+  # CREDENTIALS. `FD_OPERATOR_OVERLAY`: the operator overlay the deploy reads, for the dispatcher hostname.
+  # `FD_ACCESS_CLIENT_ID`, `FD_ACCESS_CLIENT_SECRET`: a Cloudflare Access service token whose common name the overlay
+  # lists among `operators`.
   phase-gate:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -118,7 +124,15 @@ jobs:
       - uses: ./.github/actions/v2-setup
         with:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - name: phase-gate records
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          FD_OPERATOR_OVERLAY: ${{ secrets.FD_OPERATOR_OVERLAY }}
+          FD_ACCESS_CLIENT_ID: ${{ secrets.FD_ACCESS_CLIENT_ID }}
+          FD_ACCESS_CLIENT_SECRET: ${{ secrets.FD_ACCESS_CLIENT_SECRET }}
+        run: $STRIP_TYPES packages/ops/scripts/phase-gate.ts --base "$BASE" --fetch --records .tmp/phase-gate-records.json
       - name: phase-gate
+        if: ${{ !cancelled() }}
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: $STRIP_TYPES packages/ops/scripts/phase-gate.ts --base "$BASE" --records .tmp/phase-gate-records.json
