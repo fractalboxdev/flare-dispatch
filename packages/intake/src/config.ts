@@ -54,6 +54,11 @@ export interface IntakeSettings {
    * know to be `non-confidential`.
    */
   readonly confidentiality: (repo: string) => ConfidentialityMode;
+  /**
+   * The path of the first field of a request's inputs that holds a write credential the control plane never sends to
+   * an executor, or null when none does. A request with a hit is refused before admission (FD-AGT-008).
+   */
+  readonly writeCredentialIn: (inputs: unknown) => string | null;
 }
 
 export class IntakeConfig extends Context.Service<IntakeConfig, IntakeSettings>()(

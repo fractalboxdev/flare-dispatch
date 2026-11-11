@@ -246,6 +246,24 @@ export const submit = (
     const now = yield* Clock.currentTimeMillis;
     const name = checkName(s.run.name, s.label);
 
+    // The lease carries the recorded inputs to an executor, so inputs holding a write credential are refused here,
+    // before any record, execution or placement row exists (FD-AGT-008).
+    const credentialField = config.writeCredentialIn(s.inputs);
+    if (credentialField !== null) {
+      const field =
+        credentialField === "" || credentialField.startsWith("[")
+          ? `inputs${credentialField}`
+          : `inputs.${credentialField}`;
+      yield* shed(s.repo, s.run.name, `credential in payload: ${field}`);
+      return yield* Effect.fail(
+        intakeError(
+          400,
+          "invalid_inputs",
+          `CredentialInPayload: ${field} holds a write credential`,
+        ),
+      );
+    }
+
     const classRequest: ClassRequest = {
       run: s.run,
       trigger: s.trigger,

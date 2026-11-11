@@ -56,6 +56,7 @@ const intakeOverAdmission = (db: D1Like, deployment: Deployment, profile: Profil
       webhookEvents: undefined,
       allows: () => true,
       confidentiality: () => "unclassified",
+      writeCredentialIn: () => null,
     }),
     Layer.succeed(ClassResolver, {
       resolve: (r) =>

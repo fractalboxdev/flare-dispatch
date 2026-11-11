@@ -26,6 +26,27 @@ describe("dispatch validation", () => {
     expect(h.reads.calls).toEqual([]);
   });
 
+  it("[FD-AGT-008] inputs holding a write credential answer 400 before admission writes any row", async () => {
+    const h = await harness({
+      settings: {
+        writeCredentialIn: (inputs) =>
+          JSON.stringify(inputs).includes("ghs_") ? "steps[0]" : null,
+      },
+    });
+    expect(
+      await refusal(
+        h,
+        authenticated({ inputs: { sha: HEAD, steps: [`echo ghs_${"t".repeat(36)}`] } }),
+      ),
+    ).toEqual({ status: 400, code: "invalid_inputs" });
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+    expect(h.rows("select * from placements")).toEqual([]);
+    expect(h.sheds()).toEqual([
+      { scope_id: REPO, run: "check", reason: "credential in payload: inputs.steps[0]" },
+    ]);
+  });
+
   it("[FD-INT-040] inputs that fail the run's input schema answer 400 invalid_inputs", async () => {
     const h = await harness();
     expect(await refusal(h, authenticated({ inputs: { steps: 1 } }))).toEqual({

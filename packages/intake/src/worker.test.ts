@@ -109,6 +109,7 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
       webhookEvents: undefined,
       allows: () => true,
       confidentiality: () => "unclassified",
+      writeCredentialIn: () => null,
     },
   });
   const layer = Layer.mergeAll(

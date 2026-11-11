@@ -35,6 +35,7 @@ import {
   localPorts,
   writebackApplier,
   writebackRecords,
+  writeCredentialIn,
 } from "./agentic.ts";
 import { appLoginOf, appOptionsOf, appServices, readsWithoutApp } from "./github.ts";
 
@@ -65,13 +66,23 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     confidentiality: (repo) =>
       (dev !== undefined && dev.repository === repo ? dev.confidentiality : undefined) ??
       "unclassified",
+    writeCredentialIn: writeCredentialIn(env),
   };
 };
 
-/** A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037). */
+/**
+ * A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037). The execution is
+ * already admitted, so a wake that fails, such as a grant the channel refuses, is logged and the request still answers
+ * with the execution it admitted.
+ */
 const wake = (env: ControlPlaneEnv) => (className: string) =>
-  Effect.promise(() =>
+  Effect.tryPromise(() =>
     wakeStandingClaims(env.DB, env.CHANNEL, { className, eligibleKinds: ["device"] }),
+  ).pipe(
+    Effect.asVoid,
+    Effect.catchCause((cause) =>
+      Effect.logWarning("standing claim wake failed after admission", { className, cause }),
+    ),
   );
 
 /**

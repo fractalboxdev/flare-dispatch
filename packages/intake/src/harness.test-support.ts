@@ -147,6 +147,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     webhookEvents: undefined,
     allows: () => true,
     confidentiality: () => "unclassified",
+    writeCredentialIn: () => null,
     ...options.settings,
   };
   const readLayer = fakeReadLayer(reads);
