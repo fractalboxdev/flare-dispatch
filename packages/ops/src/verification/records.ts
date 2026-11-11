@@ -292,7 +292,7 @@ const ALARM_NAME =
 
 /**
  * Each alarm a `V-LIVE` requirement names, as an alarm or as a class's `queue_full_alarm` (raised at severity `page`,
- * MAMEKO-ADM-089), with the lowest phase of the requirements that name it.
+ * MAMEKO-ADM-090), with the lowest phase of the requirements that name it.
  */
 export const liveAlarmPhases = (
   requirements: readonly Requirement[],

@@ -88,7 +88,7 @@ describe("mameko's coordinator suite on host-cloudflare in FlareDispatch's contr
       const db = await freshDb();
       await s.run({
         layer: d1ExecutionStore(db),
-        // The claim of a serial group member's first lease takes the group (MAMEKO-ADM-069).
+        // The claim of a serial group member's first lease takes the group (MAMEKO-ADM-070).
         takeGroup: async (executionId, at) => {
           await db
             .prepare("update executions set serial_held_at = ? where id = ?")

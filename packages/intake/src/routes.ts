@@ -9,7 +9,7 @@ import type { Admission, ClassResolver, IntakeConfig } from "./config.ts";
 import { intakeError, type IntakeError } from "./config.ts";
 import { errorResponse, json } from "./http.ts";
 import type { ManifestSource } from "./manifest.ts";
-import type { ExecutionCanceller, InstallationEviction, ManifestReporter } from "./ports.ts";
+import type { InstallationEviction, ManifestReporter } from "./ports.ts";
 import type { ProtectionSnapshots } from "./protection.ts";
 import type { IntakeStore, ShedRecorder, StoreUnavailable } from "./store.ts";
 import { handleWebhook } from "./webhook.ts";
@@ -25,7 +25,6 @@ export type IntakeEnv =
   | ManifestReporter
   | GithubRead
   | InstallationEviction
-  | ExecutionCanceller
   | ProtectionSnapshots;
 
 /** The paths this group serves, below the `/v1/` mount, and the one method each takes. */

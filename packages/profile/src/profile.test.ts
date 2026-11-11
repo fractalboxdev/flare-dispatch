@@ -148,7 +148,7 @@ describe("load", () => {
     ]);
   });
 
-  it("MAMEKO-LEASE-092 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
+  it("MAMEKO-LEASE-093 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
     expect(profile.reason_kinds).toEqual({ provenance: "policy" });
     expect(acceptanceReasonKinds).toEqual(["provenance"]);
   });
@@ -428,7 +428,7 @@ describe("class catalogue", () => {
     expect(cls("batch").terminal_outcome).toBe("deferred");
   });
 
-  it("MAMEKO-ADM-076 only interactive and batch are sheddable", () => {
+  it("MAMEKO-ADM-077 only interactive and batch are sheddable", () => {
     expect(profile.classes.filter((c) => c.sheddable === true).map((c) => c.name)).toEqual([
       "interactive",
       "batch",
@@ -509,11 +509,11 @@ describe("delayed cloud claim", () => {
       staleAt: 99_000,
     });
 
-  it("MAMEKO-LEASE-019 release joins the cloud queue at admission", () => {
+  it("MAMEKO-LEASE-020 release joins the cloud queue at admission", () => {
     expect(at("release", {})).toBe(1_000);
   });
 
-  it("MAMEKO-LEASE-021 batch joins the cloud queue at stale_at", () => {
+  it("MAMEKO-LEASE-022 batch joins the cloud queue at stale_at", () => {
     expect(at("batch", {})).toBe(99_000);
   });
 
@@ -525,12 +525,12 @@ describe("delayed cloud claim", () => {
     expect(at("required", {})).toBe(61_000);
   });
 
-  it("MAMEKO-LEASE-022 a predicted miss opens the cloud entry at admission", () => {
+  it("MAMEKO-LEASE-023 a predicted miss opens the cloud entry at admission", () => {
     expect(at("required", {}, true)).toBe(1_000);
     expect(at("interactive", {}, true)).toBe(1_000);
   });
 
-  it("MAMEKO-LEASE-023 no cloud kind left means no cloud entry", () => {
+  it("MAMEKO-LEASE-024 no cloud kind left means no cloud entry", () => {
     expect(at("required", { confidentiality: "confidential-compute" })).toBeNull();
     expect(at("batch", { declaresClass: false })).toBeNull();
   });

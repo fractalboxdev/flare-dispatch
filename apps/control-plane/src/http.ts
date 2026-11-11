@@ -6,7 +6,6 @@ import {
   apiConfigFromEnv,
   apiError,
   artifactsGroup,
-  Cancellation,
   ConfigInvalid,
   d1DeviceRegistry,
   d1Executions,
@@ -33,7 +32,7 @@ import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
 import { apiEnvOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { failureSummaries } from "./failure-summary.ts";
-import { intakePort } from "./intake-port.ts";
+import { intakeCancellation, intakePort } from "./intake-port.ts";
 
 /** Intake's webhook route, below the `/v1/` mount: the request and the path below it, as `handleIntake` takes them. */
 const intakeRoute = Effect.gen(function* () {
@@ -82,12 +81,6 @@ const handler = toFetchHandler(router, { shared: JwksSourceLive });
 /** The posture of a device enrolled with no posture source: a single operator's own workstation. */
 const POSTURE_TIER = "unmanaged" as const;
 
-/** mameko offers no cancel of an admitted execution, so cancel answers `unavailable` (FD-IFC-046). */
-const cancellationDeferred = Layer.succeed(Cancellation)({
-  cancel: () =>
-    Effect.fail(apiError("unavailable", "cancel needs mameko's cancel of an admitted execution")),
-});
-
 /**
  * The liveness report reads the operability package's record; the operator operations need mameko's operator
  * transaction, which this deploy does not supply, so each answers `unavailable`.
@@ -108,7 +101,7 @@ const operations = (env: ControlPlaneEnv) =>
 
 const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateServices>) =>
   Layer.mergeAll(
-    intakePort.pipe(Layer.provide(Layer.succeedContext(isolate))),
+    Layer.merge(intakePort, intakeCancellation).pipe(Layer.provide(Layer.succeedContext(isolate))),
     d1Executions(env.DB),
     d1DeviceRegistry({
       db: env.DB,
@@ -118,7 +111,6 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
       verify: undefined,
     }),
     oidcKeyFromSecret(apiEnvOf(env).OIDC_SIGNING_JWK),
-    cancellationDeferred,
     failureSummaries(env),
     operations(env),
     cacheReads(env),

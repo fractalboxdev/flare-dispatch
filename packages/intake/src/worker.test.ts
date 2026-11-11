@@ -23,7 +23,6 @@ import {
   signedWebhook,
 } from "./harness.test-support.ts";
 import { intakeLayer, profileClassResolver } from "./layer.ts";
-import { ExecutionCanceller } from "./ports.ts";
 import { handleIntake } from "./routes.ts";
 import { migratedD1 } from "./testing.ts";
 
@@ -112,10 +111,7 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
       writeCredentialIn: () => null,
     },
   });
-  const layer = Layer.mergeAll(
-    intake,
-    Layer.succeed(ExecutionCanceller, { cancel: () => Effect.void }),
-  ).pipe(
+  const layer = intake.pipe(
     Layer.provideMerge(profileClassResolver.pipe(Layer.provide(alarms))),
     Layer.provideMerge(intake),
     Layer.provideMerge(githubLayer),

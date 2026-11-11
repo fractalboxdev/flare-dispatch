@@ -143,7 +143,7 @@ const devRepository = (sha: string) =>
       default_branch: "main",
       head: sha,
       files: { [MANIFEST_PATH]: manifest },
-      // The repository is public, so its runs may reach a host-process device (MAMEKO-LEASE-083).
+      // The repository is public, so its runs may reach a host-process device (MAMEKO-LEASE-084).
       confidentiality: "non-confidential",
     })),
   );

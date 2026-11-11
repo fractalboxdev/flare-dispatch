@@ -80,18 +80,24 @@ export const profileOf = (env: ControlPlaneEnv): Profile => buildProfile(deploym
 
 /**
  * One channel per device executor. No catalogue run requires `LocalContent` yet. A class whose terminal outcome is
- * `deferred` starts no workflow at admission, so the channel starts one at the winning claim (MAMEKO-ARCH-037).
+ * `deferred` starts no workflow at admission, so the channel starts one at the winning claim (MAMEKO-ARCH-037). A claim
+ * keyed by a name outside the catalogue answers `unknown-key` (MAMEKO-PROTO-031), and a run's staged intents may carry
+ * every kind the profile declares, under that kind's effect class.
  */
 export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHANNEL_CONFIG"] => ({
   reclaimPolicy: profile.reclaim_policy,
   deferredClasses: profile.classes
     .filter((c) => c.terminal_outcome === "deferred")
     .map((c) => c.name),
+  classes: profile.classes.map((c) => c.name),
   localContent: false,
   anyOutcomeKinds: Object.fromEntries(
     Object.entries(profile.intent_kinds)
       .filter(([, kind]) => kind.applied_for === "any")
       .map(([name, kind]) => [name, kind.effect_class]),
+  ),
+  intentKinds: Object.fromEntries(
+    Object.entries(profile.intent_kinds).map(([name, kind]) => [name, kind.effect_class]),
   ),
   notApplicableDetails: [...profile.outcome_mapping.not_applicable_details],
   executorKind: "device",
@@ -100,7 +106,7 @@ export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHAN
 
 /**
  * The stage configuration. A device execution has no container rate and the channel takes no hold at claim, so each
- * class's hold terms are zero.
+ * class's hold terms are zero. A staged intent is written only for an outcome its kind is applied for (MAMEKO-RUN-074).
  */
 export const executionConfig = (
   profile: Profile,
@@ -122,5 +128,8 @@ export const executionConfig = (
     ),
     outcomeKind: surface,
     outcomeEffectClass: profile.intent_kinds[surface]?.effect_class ?? "adoptable",
+    appliedFor: Object.fromEntries(
+      Object.entries(profile.intent_kinds).map(([name, kind]) => [name, kind.applied_for]),
+    ),
   };
 };
