@@ -80,7 +80,10 @@ export interface IntakeAdmitInput {
     /** The SHA-256 of `canonical`, as `dedupKey` computes it and admission stores it (MAMEKO-ADM-035). */
     readonly sha256: string;
     readonly canonical: string;
+    /** The SHA-256 of the dispatch body's canonical JSON, as admission stores it beside the key (MAMEKO-ADM-089). */
     readonly requestDigest: string | null;
+    /** The dispatch body the digest covers; admission hashes its canonical JSON itself, so it gets the body, not the digest. */
+    readonly digestBody: unknown;
     readonly onMismatch: "duplicate" | "conflict";
   };
   /** The request's facts and constraint parameters under its class, from the profile's placement. */
@@ -100,11 +103,26 @@ export class IntakeUnavailable extends Schema.TaggedError<IntakeUnavailable>()(
   },
 ) {}
 
+/**
+ * The `ExecutionEngine` start that follows admission's commit failed. The execution stays queued with no recorded engine
+ * start, and the admission sweep starts it (MAMEKO-ADM-031).
+ */
+export class ExecutionStartFailed extends Schema.TaggedError<ExecutionStartFailed>()(
+  "ExecutionStartFailed",
+  {
+    executionId: Schema.String,
+    className: Schema.String,
+    cause: Schema.String,
+  },
+) {}
+
 /** mameko's admission function, and what follows a queued admission. */
 export class Admission extends Context.Service<
   Admission,
   {
-    readonly admit: (input: IntakeAdmitInput) => Effect.Effect<AdmitAnswer, IntakeUnavailable>;
+    readonly admit: (
+      input: IntakeAdmitInput,
+    ) => Effect.Effect<AdmitAnswer, IntakeUnavailable | ExecutionStartFailed>;
     /** Runs after a request is queued, for the caller to wake standing claims. */
     readonly queued: (className: string) => Effect.Effect<void>;
   }
@@ -115,7 +133,9 @@ export interface AdmissionPorts {
   /** Wakes the standing claims of the class's device executors after a queued admission. */
   readonly queued?: (className: string) => Effect.Effect<void>;
   /** Starts an admitted execution's `Execution` workflow in its `ExecutionEngine` object (MAMEKO-ADM-030). */
-  readonly startExecution?: (payload: ExecutionPayload) => Effect.Effect<void>;
+  readonly startExecution?: (
+    payload: ExecutionPayload,
+  ) => Effect.Effect<void, ExecutionStartFailed>;
   readonly alarms?: Layer.Layer<AlarmPort>;
   /**
    * Whether an operator has quarantined the repository (MAMEKO-ADM-038). The operator operations are not served yet,
@@ -173,7 +193,7 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
               run: (r) => r.dedup.canonical,
               ...(input.dedup.requestDigest === null
                 ? {}
-                : { digest: (r: IntakeAdmitInput) => r.dedup.requestDigest }),
+                : { digest: (r: IntakeAdmitInput) => r.dedup.digestBody }),
               onMismatch: input.dedup.onMismatch,
             },
           ],
@@ -191,12 +211,20 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
           defaults: { queueAgeSec: 3_600, bounds },
           estimatedCostMicroUsd: 0,
           outcomeIntent: null,
-          startExecution: ports.startExecution ?? (() => Effect.void),
+          // mameko's start port is infallible: a failed start ends admission after its commit and before it records the
+          // engine start, and comes back out below as the typed failure.
+          startExecution:
+            ports.startExecution === undefined
+              ? () => Effect.void
+              : (payload) => Effect.orDie(ports.startExecution!(payload)),
           grants: input.grants,
         }).pipe(
           Effect.provide(Layer.merge(d1ExecutionStore(db), ports.alarms ?? loggedAlarms)),
           Effect.catch((cause) =>
             Effect.fail(new IntakeUnavailable({ cause: String(cause._tag ?? cause) })),
+          ),
+          Effect.catchDefect((defect) =>
+            defect instanceof ExecutionStartFailed ? Effect.fail(defect) : Effect.die(defect),
           ),
         );
       }),

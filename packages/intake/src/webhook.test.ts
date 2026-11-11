@@ -509,8 +509,9 @@ describe("cooldown", () => {
     expect(
       h.rows("select armed_at from intake_cooldowns where execution_id = ?", id)[0]!.armed_at,
     ).toBe(windowEnd);
-    // Admission at release writes the record's eligible kinds on the placement row, and counts the deadline it writes on
-    // the execution and placement rows from the release, as it counted the first execution's from its admission.
+    // The record carries the eligible kinds admission wrote on the placement row at release, and admission counts the
+    // deadline it writes on the execution and placement rows from the release, as it counted the first execution's from
+    // its admission.
     const placed = h.rows(
       "select p.eligible_kinds, p.deadline_at as p_deadline, e.deadline_at as e_deadline, e.enqueued_at from placements p join executions e on e.id = p.execution_id where p.execution_id = ?",
       id,
@@ -519,7 +520,11 @@ describe("cooldown", () => {
       "select deadline_at, enqueued_at from executions where id = ?",
       first!.execution_id as string,
     )[0]!;
-    expect(placed.eligible_kinds).toBe(held!.eligible_kinds);
+    expect(held!.eligible_kinds).toBeNull();
+    expect(
+      h.rows("select eligible_kinds from intake_records where execution_id = ?", id)[0]!
+        .eligible_kinds,
+    ).toBe(placed.eligible_kinds);
     expect(placed.e_deadline).toBe(placed.p_deadline);
     expect(placed.enqueued_at as number).toBeGreaterThanOrEqual(windowEnd);
     expect((placed.e_deadline as number) - (placed.enqueued_at as number)).toBe(

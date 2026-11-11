@@ -83,7 +83,10 @@ export interface IntakeRecord {
   readonly placementConstraint: string | null;
   /** The trigger as the cache namespaces read it (FD-CACHE-019). */
   readonly cacheTrigger: CacheTriggerRecord;
-  /** The executor kinds the profile's placement allows, as admission wrote them on the placement row. */
+  /**
+   * The executor kinds admission wrote on the placement row; empty when admission concluded the execution without one,
+   * null until admission answers.
+   */
   readonly eligibleKinds: readonly string[] | null;
   readonly createdAt: number;
 }
@@ -157,6 +160,11 @@ export class IntakeStore extends Context.Service<
     ) => Effect.Effect<readonly HeldRequest[], StoreUnavailable>;
     /** Ends the hold of a request admission answered. */
     readonly release: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
+    /**
+     * Copies the eligible kinds admission wrote on the execution's placement row to its record, or none when admission
+     * wrote no placement row.
+     */
+    readonly placed: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
     /** Removes the row of an id admission did not keep. */
     readonly drop: (executionId: string) => Effect.Effect<void, StoreUnavailable>;
     readonly get: (executionId: string) => Effect.Effect<RecordWithStatus | null, StoreUnavailable>;
@@ -377,6 +385,17 @@ export const d1IntakeStore = (db: D1Like) =>
         db
           .prepare(`insert into intake_records (${RECORD_COLUMNS}) values (${RECORD_PLACEHOLDERS})`)
           .bind(...recordValues(r))
+          .run(),
+      ).pipe(Effect.asVoid),
+    placed: (id) =>
+      query(() =>
+        db
+          .prepare(
+            `update intake_records set eligible_kinds =
+               coalesce((select eligible_kinds from placements where execution_id = ?), '[]')
+             where execution_id = ?`,
+          )
+          .bind(id, id)
           .run(),
       ).pipe(Effect.asVoid),
     drop: (id) =>

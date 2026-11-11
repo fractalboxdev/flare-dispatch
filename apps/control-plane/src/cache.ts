@@ -52,8 +52,15 @@ const first = async <T>(db: D1Like, sql: string, ...binds: unknown[]): Promise<T
       .all()
   ).results[0] as T | undefined;
 
-/** A lease's `cache_namespaces` and `upload_grant`, from the won placement's epoch and executor kind. */
-export const leaseCache = async (env: ControlPlaneEnv & CacheEnv, record: IntakeRecord) => {
+/**
+ * A lease's `cache_namespaces` and `upload_grant`, from the won placement's epoch and executor kind; no URL outlives the
+ * execution's `deadline_at` as admission wrote it.
+ */
+export const leaseCache = async (
+  env: ControlPlaneEnv & CacheEnv,
+  record: IntakeRecord,
+  deadlineAt: number,
+) => {
   const placement = await first<{ epoch: number; kind: ExecutorKind | null }>(
     env.DB,
     `select p.epoch, x.kind from placements p left join executors x on x.executor_id = p.executor_id
@@ -65,7 +72,7 @@ export const leaseCache = async (env: ControlPlaneEnv & CacheEnv, record: Intake
     {
       epoch: placement?.epoch ?? 1,
       executorKind: placement?.kind ?? "device",
-      deadlineAt: record.deadlineAtMs,
+      deadlineAt,
     },
     { publicOrigin: env.PUBLIC_ORIGIN, tokenSecret: env.COMPILE_CACHE_SECRET },
   );

@@ -11,11 +11,17 @@ import {
   type FakeRepo,
 } from "@fractalboxdev/flare-dispatch-github/testing";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
-import type { Resolution } from "@fractalboxdev/mameko-coordinator";
+import type { ExecutionPayload, Resolution } from "@fractalboxdev/mameko-coordinator";
 import { AlarmPort, type Alarm } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
-import { d1Admission, IntakeConfig, type ClassRequest, type IntakeSettings } from "./config.ts";
+import {
+  d1Admission,
+  IntakeConfig,
+  type AdmissionPorts,
+  type ClassRequest,
+  type IntakeSettings,
+} from "./config.ts";
 import { AccessIdentity } from "./dispatch.ts";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
 import { manifestSourceLayer } from "./manifest.ts";
@@ -126,6 +132,8 @@ export interface Recorded {
   readonly cancelled: { executionId: string; cause: string }[];
   readonly evicted: string[];
   readonly alarms: Alarm[];
+  /** Every `ExecutionEngine` start admission asked for, in order. */
+  readonly started: ExecutionPayload[];
   jwksFetches: number;
 }
 
@@ -136,6 +144,8 @@ export interface HarnessOptions {
   readonly resolve?: (r: ClassRequest) => Resolution;
   /** Resolve classes through the profile's `resolveClass` binding instead of the recording resolver. */
   readonly profileResolver?: boolean;
+  /** Answers each workflow start after it is recorded; a start succeeds by default. */
+  readonly startExecution?: AdmissionPorts["startExecution"];
 }
 
 /** A default repository: `main` at `BASE` carrying the default manifest. */
@@ -158,6 +168,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     cancelled: [],
     evicted: [],
     alarms: [],
+    started: [],
     jwksFetches: 0,
   };
   const settings: IntakeSettings = {
@@ -189,7 +200,14 @@ export const harness = async (options: HarnessOptions = {}) => {
       : recordingResolver(recorded.resolved, options.resolve);
   const layer = Layer.mergeAll(
     config,
-    d1Admission(db, settings.profile, { alarms }),
+    d1Admission(db, settings.profile, {
+      alarms,
+      startExecution: (payload) =>
+        Effect.andThen(
+          Effect.sync(() => void recorded.started.push(payload)),
+          options.startExecution?.(payload) ?? Effect.void,
+        ),
+    }),
     d1IntakeStore(db),
     d1ShedRecorder(db),
     manifestSourceLayer,

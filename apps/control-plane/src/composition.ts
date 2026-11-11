@@ -6,6 +6,7 @@ import {
   d1IntakeStore,
   d1ShedRecorder,
   ExecutionCanceller,
+  ExecutionStartFailed,
   InstallationEviction,
   IntakeConfig,
   intakeLayer,
@@ -75,15 +76,26 @@ const wake = (env: ControlPlaneEnv) => (className: string) =>
   );
 
 /**
- * What admission needs of the Worker: the wake-up after a queued admission, the `ExecutionEngine` start of an admitted
- * execution whose class does not defer its workflow (MAMEKO-ADM-030), and the alarm sink.
+ * The `ExecutionEngine` start of an admitted execution whose class does not defer its workflow (MAMEKO-ADM-030). A
+ * rejected start is `ExecutionStartFailed`: the execution stays queued, and the admission sweep starts it.
  */
+export const startExecutionOf =
+  (env: Pick<ControlPlaneEnv, "EXECUTION">) =>
+  (payload: ExecutionPayload): Effect.Effect<void, ExecutionStartFailed> =>
+    Effect.tryPromise({
+      try: () => env.EXECUTION.get(env.EXECUTION.idFromName(payload.executionId)).start(payload),
+      catch: (cause) =>
+        new ExecutionStartFailed({
+          executionId: payload.executionId,
+          className: payload.className,
+          cause: String(cause),
+        }),
+    }).pipe(Effect.asVoid);
+
+/** What admission needs of the Worker: the wake-up after a queued admission, the workflow start and the alarm sink. */
 const admissionPorts = (env: ControlPlaneEnv, alarms: AdmissionPorts["alarms"]) => ({
   queued: wake(env),
-  startExecution: (payload: ExecutionPayload) =>
-    Effect.promise(() =>
-      env.EXECUTION.get(env.EXECUTION.idFromName(payload.executionId)).start(payload),
-    ),
+  startExecution: startExecutionOf(env),
   alarms,
 });
 
