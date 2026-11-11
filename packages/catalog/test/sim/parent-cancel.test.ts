@@ -20,9 +20,11 @@ describe("simulation: a job matrix's parent cancelled while its jobs are placed 
     expect(reached.neverStarted).toBeGreaterThan(0);
   }, 300_000);
 
-  it("replays a seed exactly", async () => {
-    const first = await simulateParentCancel(11);
-    expect((await simulateParentCancel(11)).trace).toEqual(first.trace);
-    expect(first.trace.length).toBeGreaterThan(0);
-  });
+  it("replays every seed exactly", async () => {
+    for (const seed of seedsOf("parent-cancel", PR_SEEDS, readKeptSeeds())) {
+      const first = await simulateParentCancel(seed);
+      expect((await simulateParentCancel(seed)).trace, `seed ${seed}`).toEqual(first.trace);
+      expect(first.trace.length).toBeGreaterThan(0);
+    }
+  }, 300_000);
 });
