@@ -2,7 +2,14 @@ import { VERDICT_AUDIT_SCHEMA } from "@fractalboxdev/flare-dispatch-cache";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
-import { KILL_LINE_RISKS, killLineMonitor, readKillLines } from "./kill-lines.ts";
+import {
+  availabilityLine,
+  KILL_LINE_RISKS,
+  killLineMonitor,
+  readKillLines,
+  requiredSlowdownLine,
+  warmStateLine,
+} from "./kill-lines.ts";
 
 const DAY = 86_400_000;
 const NOW = 400 * DAY;
@@ -60,6 +67,25 @@ const monitor = (now = NOW) => {
 };
 
 describe("kill-line monitor", () => {
+  it("[FD-VER-030] rounding a displayed metric never hides a crossed kill line", () => {
+    const samples = (deviceMs: number) => [
+      { run: "check", kind: "device", ms: deviceMs },
+      { run: "check", kind: "cloudflare-sandbox", ms: 100_000 },
+    ];
+    expect(warmStateLine(samples(70_001))).toMatchObject({ value: 30, crossed: true });
+    expect(warmStateLine(samples(70_000))).toMatchObject({ value: 30, crossed: false });
+    expect(availabilityLine({ eligible: 1_000_001, on_device: 500_000 })).toMatchObject({
+      value: 50,
+      crossed: true,
+    });
+    expect(availabilityLine({ eligible: 1_000_000, on_device: 500_000 })).toMatchObject({
+      value: 50,
+      crossed: false,
+    });
+    expect(requiredSlowdownLine(samples(160_001))).toMatchObject({ value: 60, crossed: true });
+    expect(requiredSlowdownLine(samples(160_000))).toMatchObject({ value: 60, crossed: false });
+  });
+
   it("[FD-VER-030] a device median less than 30% below the best cloud setup raises kill-line naming the risk, the metric, its value and the threshold", async () => {
     // The cloud verdicts were not eligible for a device, so the availability line reads 100%.
     for (const ms of [80_000, 80_000, 80_000]) await verdict("check", "device", ms);
