@@ -5,7 +5,7 @@ import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
 import { Context, Effect, Schema } from "effect";
 import { random128 } from "./crypto.ts";
 import { CacheClock, CacheLeases, DEFAULT_BYTE_BOUNDS, type ByteBounds } from "./lease.ts";
-import { signCapability, verifyCapability } from "./logs.ts";
+import { signCapability } from "./logs.ts";
 import { CacheBucket } from "./manifest.ts";
 import { MAX_URL_LIFETIME_MS, R2Presigner } from "./presign.ts";
 import { MiB } from "./ledger.ts";
@@ -372,22 +372,13 @@ export interface ArtifactServeDeps {
   readonly terminal: (executionId: string) => Promise<boolean>;
 }
 
-export interface ArtifactRouteDeps extends ArtifactServeDeps {
-  readonly secret: string;
-  /** A viewer identity with read access to `repo`, when the request carries one. */
-  readonly viewerMayRead?: (request: Request, repo: string) => Promise<boolean>;
-}
-
 /** The answer of an artifact read: the body, nothing to serve, or a row whose body stays on its producing executor. */
 export type ArtifactRead =
   | { readonly _tag: "Served"; readonly response: Response }
   | { readonly _tag: "Missing" }
   | { readonly _tag: "OnExecutor"; readonly artifactId: string; readonly executorId: string };
 
-const notFound = () => new Response("not found", { status: 404 });
 const ARTIFACT_ID = /^[0-9a-f]{32}$/;
-const ARTIFACT_ROUTE = /^\/v1\/artifacts\/([0-9a-f]{32})(?:\/(.+))?$/;
-const LIST_ROUTE = /^\/v1\/executions\/([A-Za-z0-9:_-]{3,128})\/artifacts$/;
 export const ARTIFACT_PAGE_SIZE = 100;
 
 /** The row of an unexpired artifact, or `null` for an id that names none. */
@@ -433,46 +424,6 @@ export const serveArtifact = async (
     }),
   };
 };
-
-const tokenOf = (request: Request, url: URL) => {
-  const auth = request.headers.get("authorization");
-  return (auth === null ? null : /^Bearer\s+(\S+)$/i.exec(auth.trim())?.[1]) ?? url.searchParams.get("token");
-};
-
-/**
- * `GET /v1/artifacts/<artifact_id>[/<browse path>]` and `GET /v1/executions/<id>/artifacts`. A private repository's
- * artifact needs a viewer with read access or an unexpired capability token bound to the `artifact_id`; otherwise
- * `404` (FD-CACHE-076). Once the producing execution is terminal the body is served `Cache-Control: immutable`
- * (FD-CACHE-075). The listing pages at most 100 rows with a cursor and lists artifact rows only, never the files of
- * a browse expansion (FD-CACHE-078).
- */
-export const handleArtifacts = async (request: Request, deps: ArtifactRouteDeps): Promise<Response | null> => {
-  const url = new URL(request.url);
-  const list = LIST_ROUTE.exec(url.pathname);
-  if (list !== null) return listArtifacts(request, url, list[1]!, deps);
-  const m = ARTIFACT_ROUTE.exec(url.pathname);
-  if (m === null) return null;
-  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405 });
-  const row = await findArtifact(deps, m[1]!);
-  if (row === null) return notFound();
-  if (row.private === 1) {
-    const token = await verifyCapability(deps.secret, ARTIFACT_TOKEN_LABEL, row.artifact_id, tokenOf(request, url), deps.now());
-    const viewer = !token && deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, row.repo));
-    if (!token && !viewer) return notFound();
-  }
-  const read = await serveArtifact(request, row, m[2], deps);
-  if (read._tag === "OnExecutor")
-    return Response.json({ artifact_id: read.artifactId, kept_on_executor: read.executorId }, { status: 409 });
-  return read._tag === "Served" ? read.response : notFound();
-};
-
-const listArtifacts = (request: Request, url: URL, executionId: string, deps: ArtifactRouteDeps) =>
-  artifactPage(
-    deps,
-    executionId,
-    { limit: Number(url.searchParams.get("limit") ?? ARTIFACT_PAGE_SIZE), cursor: url.searchParams.get("cursor") ?? "" },
-    async (repo) => deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, repo)),
-  ).then((page) => Response.json(page));
 
 /** One artifact as a listing shows it. */
 export interface ArtifactEntry {

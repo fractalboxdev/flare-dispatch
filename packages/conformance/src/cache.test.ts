@@ -86,7 +86,6 @@ const controlPlane = (script: string, ledger: boolean) =>
       PLANE_ID: PLANE,
       PUBLIC_ORIGIN: ORIGIN,
       COMPILE_CACHE_SECRET: SECRET,
-      CACHE_TOKEN_SECRET: "cache-token-secret-for-conformance",
       ACCESS_TEAM_DOMAIN: team.teamDomain,
       ACCESS_AUD: AUD,
       OPERATORS: JSON.stringify([OPERATOR]),

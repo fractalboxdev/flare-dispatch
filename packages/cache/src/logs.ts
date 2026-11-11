@@ -180,49 +180,11 @@ export interface LogServeDeps {
   readonly nonce?: () => string;
 }
 
-export interface LogRouteDeps extends LogServeDeps {
-  readonly secret: string;
-  readonly now: () => number;
-  /** A viewer identity with read access to the execution's repository, when the request carries one. */
-  readonly viewerMayRead?: (request: Request, executionId: string) => Promise<boolean>;
-}
-
 /** The answer of a log read: the response, or which of the execution and the file does not exist. */
 export type LogRead =
   | { readonly _tag: "Served"; readonly response: Response }
   | { readonly _tag: "NoExecution" }
   | { readonly _tag: "NoFile" };
-
-const LOG_ROUTE = /^\/v1\/executions\/([A-Za-z0-9:_-]{3,128})\/logs(?:\/(.+))?$/;
-
-const tokenOf = (request: Request, url: URL) => {
-  const auth = request.headers.get("authorization");
-  const bearer = auth === null ? null : /^Bearer\s+(\S+)$/i.exec(auth.trim());
-  return bearer?.[1] ?? url.searchParams.get("token");
-};
-
-const plain = (status: number, body: string) =>
-  new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
-
-/**
- * `GET /v1/executions/<id>/logs/<file>` and `GET /v1/executions/<id>/logs` (FD-CACHE-083): one file as NDJSON, as
- * plain text with `?format=text`, or the HTML viewer with `?format=html`; without a file, the aggregate of every file
- * in step order. A name outside the grammar is `404` (FD-CACHE-082). A terminal execution's logs are served
- * `Cache-Control: immutable` (FD-CACHE-085). Access needs a viewer identity or a log token bound to the execution.
- */
-export const handleLogs = async (request: Request, deps: LogRouteDeps): Promise<Response | null> => {
-  const url = new URL(request.url);
-  const m = LOG_ROUTE.exec(url.pathname);
-  if (m === null) return null;
-  if (request.method !== "GET") return plain(405, "method not allowed");
-  const executionId = m[1]!;
-  const allowed =
-    (await verifyCapability(deps.secret, LOG_TOKEN_LABEL, executionId, tokenOf(request, url), deps.now())) ||
-    (deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, executionId)));
-  if (!allowed) return plain(404, "not found");
-  const read = await serveLogs(request, { executionId, file: m[2] }, deps);
-  return read._tag === "Served" ? read.response : plain(404, "not found");
-};
 
 /**
  * One execution's logs for a caller already identified: one file, or with no `file` the aggregate of every file in
