@@ -232,7 +232,8 @@ stateDiagram-v2
 | `fd logs <id>` | `GET /v1/executions/:id/logs/:file` | 0 |
 | `fd cancel <id>` | `POST /v1/executions/:id/cancel`, or the local scheduler for a local id | 0 |
 | `fd ls` | `GET /v1/executions` | 0 |
-| `fd ops halt`, `drain`, `quarantine`, `release`, `force-admit`, `top-up`, `revoke`, `pause-key`, `resume-key` | `/v1/ops/*` | 0 |
+| `fd ops halt`, `quarantine`, `release`, `force-admit`, `top-up` | `/v1/ops/*` | 0 |
+| `fd ops drain`, `revoke`, `pause-key`, `resume-key` | `/v1/ops/*` | 1 |
 | `fd deploy`, `fd doctor` | As [operability.md](operability.md) specifies | 0 |
 | `fd rehearse <run>`, `fd queue`, `fd lease` | The local scheduler socket; commands mameko's `<cli>` defines | 1 |
 | `fd identity` | The key helper socket; a command mameko's `<cli>` defines ([MAMEKO-EXEC-141](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/executors.md)) | 1 |
