@@ -21,7 +21,7 @@ import {
   type HarnessOptions,
 } from "./harness.test-support.ts";
 import { handleIntake } from "./routes.ts";
-import { dataClassesOf, submission } from "./submit.ts";
+import { dataClassesOf, releaseHeld, submission } from "./submit.ts";
 
 /** `triage` reaches the Cloudflare API from its agent phase; `lint` keeps the agent profile's base grants. */
 const TRIFECTA_CATALOG = {
@@ -121,8 +121,11 @@ describe("the trifecta rule at admission", () => {
       reason: "placement: no eligible executor",
     });
     expect(h.recorded.started).toEqual([]);
-    // No check.open row: the execution concluded before admission wrote the rows of its admitted kinds.
-    expect(h.rows("select id from outbox")).toEqual([]);
+    // Neither execution reached placement. Their failure rows close the checks without any admitted check.open.
+    expect(h.rows("select kind from outbox")).toEqual([
+      { kind: "check.conclude" },
+      { kind: "check.conclude" },
+    ]);
   });
 
   it("[FD-AGT-005] text from a principal outside OWNER, MEMBER and COLLABORATOR makes the input untrusted on a same-repository pull request", async () => {
@@ -176,6 +179,58 @@ describe("the trifecta rule at admission", () => {
       { attempt: 2, status: "failure", reason: "policy: trifecta", placed: false },
     ]);
     expect(h.recorded.started).toEqual([]);
+  });
+
+  it("[FD-AGT-005] [FD-INT-057] rechecks unknown legacy held input before granting outbound access, while safe held lint work still releases", async () => {
+    for (const outbound of [false, true]) {
+      const name = outbound ? "triage" : "lint";
+      const run = testRun(name, {
+        defaultClass: "interactive",
+        grants: { setup: [], agent: outbound ? ["cf-api"] : [] },
+        cooldown: { seconds: 300, scope: () => "all" },
+      });
+      const h = await harness({
+        settings: { catalog: (key) => (key === name ? run : undefined) },
+        repos: {
+          [REPO]: repoWithManifest(manifest([{ recipe: name, triggers: ["pull_request"] }])),
+        },
+      });
+      await deliver(h, pullRequest({ association: "MEMBER" }));
+      await h.adjust(10_000);
+      const head = "e".repeat(40);
+      await deliver(h, pullRequest({ association: "MEMBER", head }), "d-2");
+      const held = h.rows("select execution_id from intake_held")[0]!.execution_id as string;
+      // This is how the additive migration reads a hold created before author facts and refusal were recorded.
+      h.db.sqlite
+        .prepare(
+          "update intake_records set repository_public = null, input_associations_json = '[\"NONE\"]' where execution_id = ?",
+        )
+        .run(held);
+      h.db.sqlite
+        .prepare(
+          "update intake_held set admit_json = json_remove(admit_json, '$.refusal') where execution_id = ?",
+        )
+        .run(held);
+      expect(h.recorded.started).toHaveLength(1);
+      await h.adjust(300_000);
+      expect(await h.run(releaseHeld())).toMatchObject(
+        outbound ? { admitted: 0, concluded: 1 } : { admitted: 1, concluded: 0 },
+      );
+      expect(outcomes(h, head)[name]).toMatchObject(
+        outbound
+          ? { status: "failure", reason: "policy: trifecta", placed: false }
+          : { status: "pending", reason: null, placed: true },
+      );
+      expect(h.recorded.started).toHaveLength(outbound ? 1 : 2);
+      expect(h.rows("select execution_id from intake_held")).toEqual([]);
+      if (outbound)
+        expect(
+          h.rows(
+            "select kind, state from outbox where execution_id = ? and kind = 'check.conclude'",
+            held,
+          ),
+        ).toEqual([{ kind: "check.conclude", state: "pending" }]);
+    }
   });
 
   it("[FD-AGT-005] a follow-on of an execution started by untrusted input keeps its parent's data classes", async () => {

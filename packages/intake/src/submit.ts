@@ -42,7 +42,7 @@ import {
   IntakeStore,
   ShedRecorder,
   type IntakeRecord,
-  type StoreUnavailable,
+  StoreUnavailable,
 } from "./store.ts";
 
 export const COOLDOWN_MIN_SEC = 60;
@@ -163,9 +163,16 @@ const concludedReason = (c: Concluded): string =>
  * profile's base grants and the run's own agent grants. Every intent applier writes to the execution's own repository,
  * the row's scope, so no intent targets another.
  */
+type DataClassRequest = Pick<
+  Submission,
+  "trigger" | "repo" | "repositoryPublic" | "inputAssociations"
+> & {
+  readonly run: Pick<IntakeRun, "grants">;
+};
+
 export const dataClassesOf = (
   profile: Profile,
-  s: Submission,
+  s: DataClassRequest,
   confidentiality: ConfidentialityMode,
 ): DataClasses =>
   computeDataClasses({
@@ -177,6 +184,17 @@ export const dataClassesOf = (
     intentRepositories: [s.repo],
     repository: s.repo,
   });
+
+const dataClassRefusal = (
+  profile: Profile,
+  request: DataClassRequest,
+  confidentiality: ConfidentialityMode,
+) =>
+  Match.value(trifectaAdmission(dataClassesOf(profile, request, confidentiality))).pipe(
+    Match.tag("refuse", (r) => r.reason),
+    Match.tag("admit", () => null),
+    Match.exhaustive,
+  );
 
 /** Records a request rejected before admission (MAMEKO-ADM-091). */
 export const shed = (repo: string, run: string | null, reason: string) =>
@@ -337,13 +355,7 @@ export const submit = (
     const confidentiality = config.confidentiality(s.repo);
     // An execution whose computed classes are all true concludes `failure` with `policy: trifecta` at admission, before
     // placement (FD-AGT-005); it waits out no cooldown window.
-    const refusal = Match.value(
-      trifectaAdmission(dataClassesOf(config.profile, s, confidentiality)),
-    ).pipe(
-      Match.tag("refuse", (r) => r.reason),
-      Match.tag("admit", () => null),
-      Match.exhaustive,
-    );
+    const refusal = dataClassRefusal(config.profile, s, confidentiality);
     const cooldown = refusal === null ? yield* cooldownWait(s, now) : null;
     const id = newExecutionId(now, Math.random);
 
@@ -523,10 +535,15 @@ export interface ReleaseReport {
  */
 export const releaseHeld = (
   limit: number = RELEASE_PER_PASS,
-): Effect.Effect<ReleaseReport, StoreUnavailable, Admission | IntakeStore | HeldCheckReporter> =>
+): Effect.Effect<
+  ReleaseReport,
+  StoreUnavailable,
+  Admission | IntakeConfig | IntakeStore | HeldCheckReporter
+> =>
   Effect.gen(function* () {
     const store = yield* IntakeStore;
     const admission = yield* Admission;
+    const config = yield* IntakeConfig;
     const checks = yield* HeldCheckReporter;
     const now = yield* Clock.currentTimeMillis;
     const due = yield* store.due(now, limit);
@@ -536,8 +553,26 @@ export const releaseHeld = (
     let unavailable = 0;
     for (const held of due) {
       const id = held.admit.executionId;
+      const record = yield* store.get(id);
+      if (record === null)
+        return yield* new StoreUnavailable({ message: `held release: no intake record ${id}` });
+      // An older hold predates the refusal field. Recheck its migrated facts and the grants actually stored in the
+      // held admission, so unknown legacy input cannot gain outbound authority when a cooldown ends after upgrade.
+      const refusal =
+        held.admit.refusal ??
+        dataClassRefusal(
+          config.profile,
+          {
+            repo: record.repo,
+            trigger: record.trigger,
+            repositoryPublic: record.repositoryPublic,
+            inputAssociations: record.inputAssociations,
+            run: { grants: held.admit.grants },
+          },
+          config.confidentiality(record.repo),
+        );
       const result: Answer | null = yield* admission
-        .admit({ ...held.admit, enqueuedAtMs: now })
+        .admit({ ...held.admit, enqueuedAtMs: now, refusal })
         .pipe(
           Effect.catchTags({
             IntakeUnavailable: () => Effect.succeed(null),

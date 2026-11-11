@@ -32,7 +32,7 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     cache_trigger_json text,
     eligible_kinds text,
     repository_public integer,
-    input_associations_json text,
+    input_associations_json text not null default '["NONE"]',
     created_at integer not null)`,
   `create index if not exists intake_records_family on intake_records (family_root)`,
   `create index if not exists intake_records_commit on intake_records (repo, sha)`,
@@ -80,8 +80,41 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     primary key (repo, number, delivery_id))`,
 ];
 
-export const migrateIntake = (db: D1Like): Effect.Effect<void> =>
-  Effect.promise(() => db.batch(INTAKE_MIGRATIONS.map((s) => db.prepare(s)))).pipe(Effect.asVoid);
+const DATA_CLASS_COLUMNS = [
+  ["repository_public", "integer"],
+  // Existing requests carry no evidence of a trusted author. The default backfills those rows conservatively;
+  // new submissions explicitly write their observed associations, including an empty list when appropriate.
+  ["input_associations_json", `text not null default '["NONE"]'`],
+] as const;
+
+const intakeColumns = async (db: D1Like): Promise<ReadonlySet<string>> => {
+  const { results } = await db.prepare("pragma table_info(intake_records)").all();
+  return new Set((results as readonly { name: string }[]).map((r) => r.name));
+};
+
+/** Creates fresh tables and upgrades existing deployments without changing their recorded request facts. */
+export const migrateIntake = (db: D1Like): Effect.Effect<void, StoreUnavailable> =>
+  Effect.tryPromise({
+    try: async () => {
+      await db.batch(INTAKE_MIGRATIONS.map((s) => db.prepare(s)));
+      const columns = await intakeColumns(db);
+      for (const [name, declaration] of DATA_CLASS_COLUMNS) {
+        if (columns.has(name)) continue;
+        try {
+          await db.prepare(`alter table intake_records add column ${name} ${declaration}`).run();
+        } catch (cause) {
+          // Two cold isolates can observe the old schema concurrently. Ignore only the duplicate-column error when
+          // the other isolate demonstrably added this column; permission, storage and other migration errors fail.
+          if (
+            !String(cause).includes("duplicate column name") ||
+            !(await intakeColumns(db)).has(name)
+          )
+            throw cause;
+        }
+      }
+    },
+    catch: (cause) => new StoreUnavailable({ message: `intake migration: ${String(cause)}` }),
+  });
 
 export interface IntakeRecord {
   readonly executionId: string;
@@ -406,7 +439,9 @@ const fromRow = (r: Row): RecordWithStatus => ({
   eligibleKinds: r.eligible_kinds === null ? null : (JSON.parse(r.eligible_kinds) as string[]),
   repositoryPublic: r.repository_public === null ? null : r.repository_public === 1,
   inputAssociations:
-    r.input_associations_json === null ? [] : (JSON.parse(r.input_associations_json) as string[]),
+    r.input_associations_json === null
+      ? ["NONE"]
+      : (JSON.parse(r.input_associations_json) as string[]),
   createdAt: r.created_at,
   status: r.status,
 });
