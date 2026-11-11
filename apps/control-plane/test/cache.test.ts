@@ -11,7 +11,12 @@ import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import type { CacheEnv } from "../src/cache.ts";
-import { cacheSweeps } from "../src/cache-retention.ts";
+import {
+  cacheSweeps,
+  LEDGER_END_BATCH,
+  migrateCache,
+  NEWLY_TERMINAL,
+} from "../src/cache-retention.ts";
 import { cacheExecutionOf } from "../src/cache-execution.ts";
 import type { ControlPlaneEnv } from "../src/config.ts";
 
@@ -67,7 +72,9 @@ const memoryBucket = () => {
     objects,
     put: async (key: string, body: string) => void objects.set(key, body),
     list: async ({ prefix }: { prefix?: string }) => ({
-      objects: [...objects.keys()].filter((k) => k.startsWith(prefix ?? "")).map((key) => ({ key })),
+      objects: [...objects.keys()]
+        .filter((k) => k.startsWith(prefix ?? ""))
+        .map((key) => ({ key })),
       truncated: false,
     }),
     delete: async (keys: string | string[]) => {
@@ -82,6 +89,7 @@ const plane = async () => {
   const ledgers = memoryLedgers();
   const ends: string[] = [];
   let failNextEnd = false;
+  const failing = new Set<string>();
   const namespace = {
     idFromName: (name: string) => name,
     get: (id: string): CacheLedgerApi => {
@@ -89,7 +97,7 @@ const plane = async () => {
       return {
         ...ledger,
         end: async (request) => {
-          if (failNextEnd) {
+          if (failNextEnd || failing.has(request.executionId)) {
             failNextEnd = false;
             throw new Error("ledger unreachable");
           }
@@ -133,6 +141,7 @@ const plane = async () => {
     ends,
     ledger: ledgers("acme/app"),
     failNextEnd: () => void (failNextEnd = true),
+    failing,
     execution,
     step,
   };
@@ -163,7 +172,10 @@ describe("the cache's minute-tick steps", () => {
     expect(await p.step("ledger-end")).toEqual({ ended: 1, failed: 0 });
     // The 200 unused bytes of e-done are released; e-live's reservation stays.
     expect(await p.ledger.usage()).toEqual({ stored: 100, pending: 50 });
-    expect(await p.ledger.reserve(reserve("e-done", 1))).toMatchObject({ ok: false, reason: "ended" });
+    expect(await p.ledger.reserve(reserve("e-done", 1))).toMatchObject({
+      ok: false,
+      reason: "ended",
+    });
     expect((await p.ledger.reserve(reserve("e-live", 1))).ok).toBe(true);
 
     // A later pass calls no ledger again for an execution it already ended.
@@ -180,6 +192,34 @@ describe("the cache's minute-tick steps", () => {
     expect(await p.ledger.usage()).toEqual({ stored: 0, pending: 70 });
     expect(await p.step("ledger-end", NOW + 60_000)).toEqual({ ended: 1, failed: 0 });
     expect(await p.ledger.usage()).toEqual({ stored: 0, pending: 0 });
+  });
+
+  it("[FD-CACHE-055] executions whose ledger call keeps failing wait behind every execution not yet tried", async () => {
+    const p = await plane();
+    for (let i = 0; i < LEDGER_END_BATCH; i++) {
+      const id = `e-stuck-${String(i).padStart(3, "0")}`;
+      await p.execution(id, "failure", NOW - 10_000 + i);
+      p.failing.add(id);
+    }
+    await p.execution("e-new", "success", NOW - 1000);
+    // The oldest ends fill the first batch and all fail; e-new is past the batch.
+    expect(await p.step("ledger-end")).toEqual({ ended: 0, failed: LEDGER_END_BATCH });
+    // The next pass tries e-new before any execution that already failed.
+    expect(await p.step("ledger-end", NOW + 60_000)).toEqual({
+      ended: 1,
+      failed: LEDGER_END_BATCH - 1,
+    });
+    expect(p.ends).toEqual(["e-new"]);
+  });
+
+  it("[FD-CACHE-055] the ledger-end select seeks executions by finished_at rather than scanning them", async () => {
+    const db = await migratedD1();
+    await migrateCache(db);
+    const plan = (
+      db.sqlite.prepare(`explain query plan ${NEWLY_TERMINAL}`).all(0) as { detail: string }[]
+    ).map((row) => row.detail);
+    expect(plan).toContain("SEARCH e USING INDEX cache_ledger_end_finished (finished_at>?)");
+    expect(plan.filter((detail) => detail.startsWith("SCAN"))).toEqual([]);
   });
 
   it("[FD-CACHE-089] the log sweep deletes an execution's logs 30 days after its finished_at, with no reservation", async () => {

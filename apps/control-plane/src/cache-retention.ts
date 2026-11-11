@@ -18,14 +18,24 @@ import type { ControlPlaneEnv } from "./config.ts";
 const TERMINAL = "status not in ('pending', 'running')";
 
 /**
- * The executions whose reservations the ledger-end step released (FD-CACHE-055), kept for the lookback so a repeat
- * pass calls no `CacheLedger` twice for one execution.
+ * The ledger-end step's tables (FD-CACHE-055). `cache_ledger_ended` holds the executions whose reservations the step
+ * released, kept for the lookback so a repeat pass calls no `CacheLedger` twice for one execution.
+ * `cache_ledger_end_retry` holds when the step last failed to end an execution, so a failing execution waits behind
+ * every one not yet tried. `cache_ledger_end_finished` lets the per-minute select seek `executions` by `finished_at`
+ * instead of scanning the table.
  */
 export const LEDGER_END_SCHEMA = [
   `create table if not exists cache_ledger_ended (
     execution_id text primary key,
     finished_at integer not null)`,
   `create index if not exists cache_ledger_ended_finished on cache_ledger_ended (finished_at)`,
+  `create table if not exists cache_ledger_end_retry (
+    execution_id text primary key,
+    finished_at integer not null,
+    attempted_at integer not null)`,
+  `create index if not exists cache_ledger_end_retry_finished on cache_ledger_end_retry (finished_at)`,
+  `create index if not exists cache_ledger_end_finished on executions (finished_at, id)
+    where finished_at is not null`,
 ];
 
 const migrated = new WeakMap<D1Like, Promise<unknown>>();
@@ -57,14 +67,16 @@ export const LEDGER_END_LOOKBACK_MS = 7 * 24 * 3600 * 1000;
 export const LEDGER_END_BATCH = 100;
 
 /**
- * Every execution that reached a terminal status in the lookback and whose ledger the step has not ended, oldest end
- * first. Only an execution intake recorded has a repository, and so a ledger to hold its reservations.
+ * Every execution that reached a terminal status in the lookback and whose ledger the step has not ended: first those
+ * the step has not tried, oldest end first, then those whose call failed, least recently tried first. Only an
+ * execution intake recorded has a repository, and so a ledger to hold its reservations.
  */
-const NEWLY_TERMINAL = `select e.id, r.repo, e.deadline_at, e.finished_at from executions e
+export const NEWLY_TERMINAL = `select e.id, r.repo, e.deadline_at, e.finished_at from executions e
   join intake_records r on r.execution_id = e.id
+  left join cache_ledger_end_retry f on f.execution_id = e.id
   where e.finished_at >= ? and e.${TERMINAL}
     and not exists (select 1 from cache_ledger_ended d where d.execution_id = e.id)
-  order by e.finished_at, e.id
+  order by coalesce(f.attempted_at, 0), e.finished_at, e.id
   limit ${LEDGER_END_BATCH}`;
 
 interface EndedRow {
@@ -83,9 +95,10 @@ export const releaseEndedReservations = (db: D1Like, ledgers: CacheLedgers, now:
   Effect.gen(function* () {
     yield* Effect.promise(() => migrateCache(db));
     const since = now - LEDGER_END_LOOKBACK_MS;
-    yield* Effect.promise(() =>
-      db.prepare(`delete from cache_ledger_ended where finished_at < ?`).bind(since).run(),
-    );
+    for (const table of ["cache_ledger_ended", "cache_ledger_end_retry"])
+      yield* Effect.promise(() =>
+        db.prepare(`delete from ${table} where finished_at < ?`).bind(since).run(),
+      );
     const { results } = yield* Effect.promise(() => db.prepare(NEWLY_TERMINAL).bind(since).all());
     const outcomes = yield* Effect.forEach(results as readonly EndedRow[], (row) =>
       Effect.tryPromise({
@@ -94,19 +107,33 @@ export const releaseEndedReservations = (db: D1Like, ledgers: CacheLedgers, now:
             executionId: row.id,
             expiresAt: Math.max(row.deadline_at ?? row.finished_at, row.finished_at),
           });
-          await db
-            .prepare(
-              `insert into cache_ledger_ended (execution_id, finished_at) values (?, ?)
-               on conflict (execution_id) do nothing`,
-            )
-            .bind(row.id, row.finished_at)
-            .run();
+          await db.batch([
+            db
+              .prepare(
+                `insert into cache_ledger_ended (execution_id, finished_at) values (?, ?)
+                 on conflict (execution_id) do nothing`,
+              )
+              .bind(row.id, row.finished_at),
+            db.prepare(`delete from cache_ledger_end_retry where execution_id = ?`).bind(row.id),
+          ]);
         },
         catch: (e) => new LedgerEndFailed({ executionId: row.id, message: String(e) }),
       }).pipe(
         Effect.as(true),
         Effect.catchTag("LedgerEndFailed", (e) =>
           Effect.logWarning("cache.ledger_end_failed", e.executionId, e.message).pipe(
+            Effect.andThen(
+              Effect.tryPromise(() =>
+                db
+                  .prepare(
+                    `insert into cache_ledger_end_retry (execution_id, finished_at, attempted_at)
+                     values (?, ?, ?)
+                     on conflict (execution_id) do update set attempted_at = excluded.attempted_at`,
+                  )
+                  .bind(row.id, row.finished_at, now)
+                  .run(),
+              ).pipe(Effect.ignore),
+            ),
             Effect.as(false),
           ),
         ),
