@@ -39,7 +39,7 @@ export const COMMIT_SCOPED_RUNS: ReadonlySet<string> = new Set(["worker-deploy"]
 
 const runLabel = (r: KeyedRequest) => (r.label === null ? r.run : `${r.run}:${r.label}`);
 
-/** The three recipes in the profile's order; `commit` is total (MAMEKO-ADM-034). */
+/** The three recipes in the profile's order; `commit` is total (MAMEKO-ADM-033). */
 export const dedupRecipes: readonly DedupRecipe<KeyedRequest>[] = [
   {
     name: "idempotency-key",
@@ -88,7 +88,7 @@ export interface RequestKey {
   readonly recipe: string;
   readonly canonical: string;
   readonly sha256: string;
-  /** The SHA-256 of the dispatch body's canonical JSON, for the `idempotency-key` recipe only (MAMEKO-ADM-089). */
+  /** The SHA-256 of the dispatch body's canonical JSON, for the `idempotency-key` recipe only (MAMEKO-ADM-093). */
   readonly requestDigest: string | null;
   readonly onMismatch: "duplicate" | "conflict";
 }

@@ -20,9 +20,20 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly DB: D1Like;
   readonly CHANNEL: {
     idFromName(name: string): unknown;
-    get(id: unknown): { fetch(request: Request): Promise<Response>; wake(): Promise<void> };
+    get(
+      id: unknown,
+    ): { fetch(request: Request): Promise<Response> } & ReturnType<
+      NonNullable<ExecutionEngineEnv["CHANNEL"]>["get"]
+    >;
   };
-  readonly EXECUTION: ExecutorChannelEnv["EXECUTION"];
+  /** Both mameko classes call the engine: the channel to grant leases, the engine to cancel a parent's children. */
+  readonly EXECUTION: {
+    idFromName(name: string): unknown;
+    get(
+      id: unknown,
+    ): ReturnType<ExecutorChannelEnv["EXECUTION"]["get"]> &
+      ReturnType<NonNullable<ExecutionEngineEnv["EXECUTION"]>["get"]>;
+  };
   readonly EPOCH_ANCHOR: ExecutorChannelEnv["EPOCH_ANCHOR"];
   /** The one `LivenessMonitor` object the minute tick starts. */
   readonly MONITOR: MonitorNamespace;

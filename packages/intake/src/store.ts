@@ -194,7 +194,7 @@ export class IntakeStore extends Context.Service<
 >()("@fractalboxdev/flare-dispatch-intake/IntakeStore") {}
 
 /**
- * `recordShed(scope_id, run, reason, estimated cost)` (MAMEKO-ADM-086): a request rejected before admission, written to
+ * `recordShed(scope_id, run, reason, estimated cost)` (MAMEKO-ADM-090): a request rejected before admission, written to
  * mameko's `shed` table with a null class.
  */
 export class ShedRecorder extends Context.Service<
@@ -486,7 +486,7 @@ export const d1IntakeStore = (db: D1Like) =>
   });
 
 /**
- * A refusal that ends intake for a whole trigger, before any run is known, records a null run (MAMEKO-ADM-044); an
+ * A refusal that ends intake for a whole trigger, before any run is known, records a null run (MAMEKO-ADM-043); an
  * unestimated request records a cost of 0.
  */
 export const d1ShedRecorder = (db: D1Like) =>

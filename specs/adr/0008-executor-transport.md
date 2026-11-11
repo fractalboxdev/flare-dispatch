@@ -1,6 +1,6 @@
 # ADR-0008: An outbound WebSocket to a per-executor Durable Object; Tailscale only between devices
 
-Status: Superseded by mameko [ADR-0010](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/adr/0010-executor-transport.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0010](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/adr/0010-executor-transport.md) · 2026-10-24
 
 ## Context
 
