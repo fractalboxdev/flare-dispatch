@@ -3,11 +3,7 @@
 // only while the suppression ledger leaves its key open (FD-AGT-043, FD-AGT-044).
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Schema } from "effect";
-import {
-  checkSuppression,
-  SUPPRESSION_READ_FAILED,
-  suppressionKey,
-} from "../suppression/ledger.ts";
+import { checkSuppression, suppressionReadFailed, suppressionKey } from "../suppression/ledger.ts";
 import { EditLoop, Shell, StagedWrites } from "./services.ts";
 
 export const Dimension = Schema.Struct({
@@ -103,8 +99,8 @@ export const runImprovePr = (input: ImprovePrInput) =>
   Effect.gen(function* () {
     const d = input.dimension;
     const branch = improveBranch(d);
-    const suppression = yield* checkSuppression(suppressionKey(input.repo, branch));
-    if (suppression.suppressed) return { _tag: "success" } satisfies RunResult;
+    const suppressed = yield* checkSuppression(suppressionKey(input.repo, branch));
+    if (suppressed) return { _tag: "success" } satisfies RunResult;
     const before = yield* measure(d);
     const edit = yield* EditLoop;
     const loop = yield* edit.run(improvePrompt(d, before.output));
@@ -137,7 +133,7 @@ export const runImprovePr = (input: ImprovePrInput) =>
     return { _tag: "success" } satisfies RunResult;
   }).pipe(
     Effect.catchTags({
-      SuppressionReadFailed: () => Effect.succeed(SUPPRESSION_READ_FAILED satisfies RunResult),
+      SuppressionReadFailed: suppressionReadFailed,
       MeasureFailed: (e) =>
         Effect.succeed({
           _tag: "failure",

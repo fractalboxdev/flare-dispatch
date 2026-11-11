@@ -3,11 +3,7 @@
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Exit, Schema } from "effect";
 import { sanitizeModelText } from "../boundary.ts";
-import {
-  checkSuppression,
-  SUPPRESSION_READ_FAILED,
-  suppressionKey,
-} from "../suppression/ledger.ts";
+import { checkSuppression, suppressionReadFailed, suppressionKey } from "../suppression/ledger.ts";
 import { inAllowlist } from "../staged-write/gate.ts";
 import { extractJson } from "./pr-review.ts";
 import {
@@ -81,8 +77,8 @@ const SYSTEM = [
  */
 export const runSpecDrift = (input: SpecDriftInput) =>
   Effect.gen(function* () {
-    const suppression = yield* checkSuppression(suppressionKey(input.repo, SPEC_DRIFT_BRANCH));
-    if (suppression.suppressed) return { _tag: "success" } satisfies RunResult;
+    const suppressed = yield* checkSuppression(suppressionKey(input.repo, SPEC_DRIFT_BRANCH));
+    if (suppressed) return { _tag: "success" } satisfies RunResult;
     const context = yield* readContext;
     const model = yield* ModelClient;
     const text = yield* model.complete({
@@ -127,7 +123,7 @@ export const runSpecDrift = (input: SpecDriftInput) =>
     return { _tag: "success" } satisfies RunResult;
   }).pipe(
     Effect.catchTags({
-      SuppressionReadFailed: () => Effect.succeed(SUPPRESSION_READ_FAILED satisfies RunResult),
+      SuppressionReadFailed: suppressionReadFailed,
       ReadFailed: (e) =>
         Effect.succeed({
           _tag: "failure",

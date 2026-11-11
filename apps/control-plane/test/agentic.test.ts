@@ -5,6 +5,8 @@ import {
   LOCAL_STORE_MIGRATIONS,
   ReuseInputs,
   StagedWriteReadFailed,
+  SuppressionLedger,
+  suppressionLedgerD1,
   WritebackRecords,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
@@ -30,6 +32,7 @@ import { describe, expect, it } from "vitest";
 import {
   guardLease,
   issuedCredentials,
+  migrateLocalStore,
   repoReusePolicy,
   reuseInputsLayer,
   writebackApplier,
@@ -479,5 +482,23 @@ describe("the reuse policy's repository read", () => {
     expect(await run({ _tag: "Invalid", errors: ["runs[0].recipe: no recipe named x"] })).toBe(
       "acme/widgets: invalid manifest: runs[0].recipe: no recipe named x",
     );
+  });
+});
+
+describe("the control plane's local-store migration", () => {
+  it("[FD-AGT-043] creates the suppression ledger's table, so a lookup of a key with no row answers null", async () => {
+    const db = await migratedD1();
+    await migrateLocalStore(db);
+    expect(
+      db.sqlite
+        .prepare("select name from sqlite_master where type = 'table' and name = 'fd_suppressions'")
+        .all(),
+    ).toEqual([{ name: "fd_suppressions" }]);
+    const entry = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* SuppressionLedger).lookup("acme/widgets:flare-dispatch/spec-drift");
+      }).pipe(Effect.provide(suppressionLedgerD1(db))),
+    );
+    expect(entry).toBeNull();
   });
 });

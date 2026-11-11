@@ -122,34 +122,20 @@ describe("the suppression ledger's decision", () => {
   const key = "o/r:flare-dispatch/improve-size";
 
   it("[FD-AGT-043] suppresses a declined key whatever its age, and no row leaves the proposal open", () => {
-    expect(decideSuppression(null, now)).toEqual({ suppressed: false });
-    expect(decideSuppression({ key, declined: true, closedAt: null }, now)).toEqual({
-      suppressed: true,
-      why: "declined",
-    });
-    expect(decideSuppression({ key, declined: true, closedAt: now - 400 * DAY }, now)).toEqual({
-      suppressed: true,
-      why: "declined",
-    });
+    expect(decideSuppression(null, now)).toBe(false);
+    expect(decideSuppression({ key, declined: true, closedAt: null }, now)).toBe(true);
+    expect(decideSuppression({ key, declined: true, closedAt: now - 400 * DAY }, now)).toBe(true);
   });
 
   it("[FD-AGT-043] suppresses a key for 30 days from the matching pull request's closed_at, by default", () => {
     expect(SUPPRESSION_COOLDOWN_DAYS_DEFAULT).toBe(30);
     const closedAt = now - 30 * DAY;
-    expect(decideSuppression({ key, declined: false, closedAt: closedAt + 1 }, now)).toEqual({
-      suppressed: true,
-      why: "cooldown",
-      until: closedAt + 1 + 30 * DAY,
-    });
-    expect(decideSuppression({ key, declined: false, closedAt }, now)).toEqual({
-      suppressed: false,
-    });
-    expect(decideSuppression({ key, declined: false, closedAt: null }, now)).toEqual({
-      suppressed: false,
-    });
-    expect(decideSuppression({ key, declined: false, closedAt: now - 10 * DAY }, now, 7)).toEqual({
-      suppressed: false,
-    });
+    expect(decideSuppression({ key, declined: false, closedAt: closedAt + 1 }, now)).toBe(true);
+    expect(decideSuppression({ key, declined: false, closedAt }, now)).toBe(false);
+    expect(decideSuppression({ key, declined: false, closedAt: null }, now)).toBe(false);
+    expect(decideSuppression({ key, declined: false, closedAt: now - 10 * DAY }, now, 7)).toBe(
+      false,
+    );
   });
 });
 

@@ -46,7 +46,7 @@ import { boundFetch } from "./github.ts";
 
 let migrated: Promise<unknown> | undefined;
 
-/** The local-work tables (FD-LOCAL-018). */
+/** The local-work tables (FD-LOCAL-018) and the suppression ledger (FD-AGT-043). */
 export const migrateLocalStore = (db: D1Like) =>
   (migrated ??= (async () => {
     for (const m of LOCAL_STORE_MIGRATIONS) for (const sql of m.sql) await db.prepare(sql).run();

@@ -88,7 +88,7 @@ export interface D1Binding {
   };
 }
 
-/** The store's tables, forward-only. */
+/** The store's tables and the suppression ledger's, forward-only. */
 export const LOCAL_STORE_MIGRATIONS: readonly {
   readonly name: string;
   readonly sql: readonly string[];
@@ -127,6 +127,17 @@ export const LOCAL_STORE_MIGRATIONS: readonly {
         at integer not null
       )`,
       `create index if not exists fd_local_writebacks_lease on fd_local_writebacks (lease_id, at)`,
+    ],
+  },
+  {
+    // The suppression ledger, read by `suppressionLedgerD1` (specs/runs/agentic.md § Suppression ledger).
+    name: "fd_suppressions",
+    sql: [
+      `create table if not exists fd_suppressions (
+        key text primary key,
+        declined integer not null default 0,
+        closed_at integer
+      )`,
     ],
   },
 ];

@@ -31,11 +31,6 @@ export const suppressionKey = (
   branch: string,
 ): string => `${repo.owner}/${repo.name}:${branch}`;
 
-export type SuppressionDecision =
-  | { readonly suppressed: false }
-  | { readonly suppressed: true; readonly why: "declined" }
-  | { readonly suppressed: true; readonly why: "cooldown"; readonly until: number };
-
 /**
  * Whether the ledger's row for a key suppresses the proposal at `now`: a declined key always does; a key whose matching
  * pull request closed at `closedAt` does until `closedAt + cooldownDays` days; no row does not.
@@ -44,42 +39,33 @@ export const decideSuppression = (
   entry: SuppressionEntry | null,
   now: number,
   cooldownDays: number = SUPPRESSION_COOLDOWN_DAYS_DEFAULT,
-): SuppressionDecision => {
-  if (entry === null) return { suppressed: false };
-  if (entry.declined) return { suppressed: true, why: "declined" };
-  if (entry.closedAt === null) return { suppressed: false };
-  const until = entry.closedAt + cooldownDays * DAY_MS;
-  return now < until ? { suppressed: true, why: "cooldown", until } : { suppressed: false };
+): boolean => {
+  if (entry === null) return false;
+  if (entry.declined) return true;
+  if (entry.closedAt === null) return false;
+  return now < entry.closedAt + cooldownDays * DAY_MS;
 };
 
-/** Reads the key's row and decides on it at the clock's time. A failed read fails with `SuppressionReadFailed`. */
-export const checkSuppression = (
-  key: string,
-  cooldownDays: number = SUPPRESSION_COOLDOWN_DAYS_DEFAULT,
-) =>
+/**
+ * Whether the key is suppressed at the clock's time, under the default cooldown. A failed read fails with
+ * `SuppressionReadFailed`.
+ */
+export const checkSuppression = (key: string) =>
   Effect.gen(function* () {
     const ledger = yield* SuppressionLedger;
     const entry = yield* ledger.lookup(key);
     const now = yield* Clock.currentTimeMillis;
-    return decideSuppression(entry, now, cooldownDays);
+    return decideSuppression(entry, now);
   });
 
-/** The ledger's table in the control plane's database, forward-only. */
-export const SUPPRESSION_LEDGER_MIGRATIONS: readonly {
-  readonly name: string;
-  readonly sql: readonly string[];
-}[] = [
-  {
-    name: "fd_suppressions",
-    sql: [
-      `create table if not exists fd_suppressions (
-        key text primary key,
-        declined integer not null default 0,
-        closed_at integer
-      )`,
-    ],
-  },
-];
+/**
+ * A recipe's verdict on a failed ledger read: the fixed reason `suppression: read failed`, with the key and the read's
+ * error logged so the cause stays visible to the operator.
+ */
+export const suppressionReadFailed = (e: SuppressionReadFailed) =>
+  Effect.logWarning("suppression read failed", { key: e.key, detail: e.detail }).pipe(
+    Effect.as(SUPPRESSION_READ_FAILED),
+  );
 
 const entryOf = (key: string, row: { readonly [column: string]: unknown }): SuppressionEntry => {
   const declined = row["declined"];
@@ -92,7 +78,7 @@ const entryOf = (key: string, row: { readonly [column: string]: unknown }): Supp
 };
 
 /**
- * `SuppressionLedger` over the control plane's D1 database, after `SUPPRESSION_LEDGER_MIGRATIONS`. The lookup compares
+ * `SuppressionLedger` over the control plane's D1 database, after `LOCAL_STORE_MIGRATIONS` create `fd_suppressions`. The lookup compares
  * the key with `=`, so it matches the exact string, letter case included. A query that throws and a row outside the
  * table's shape each fail the read.
  */
