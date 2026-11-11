@@ -1,7 +1,8 @@
 // The credential boundary on the composed control plane: the control plane Worker under workerd through Miniflare,
 // on a deploy that holds the GitHub App private key. An execution reaches its lease the way a device's does: an
-// operator dispatch, a signed executor socket, a claim. Whatever the recorded inputs carry, no `exec.lease` leaves the
-// control plane with a write credential in it (specs/runs/agentic.md § Credential boundary).
+// operator dispatch, a signed executor socket, a claim. Intake refuses a dispatch whose inputs carry a write credential
+// before admission, and whatever the recorded inputs carry, no `exec.lease` leaves the control plane with a write
+// credential in it (specs/runs/agentic.md § Credential boundary).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { build } from "esbuild";
@@ -216,5 +217,74 @@ describe("the lease the composed control plane grants", () => {
     expect(leaking!.frame).toMatchObject({ type: "session.error" });
     expect(String(leaking!.frame["message"])).toContain("CredentialInPayload");
     expect(JSON.stringify(leaking!.frame)).not.toContain(INSTALLATION_TOKEN);
+  }, 60_000);
+
+  it("[FD-AGT-008] refuses a dispatch whose inputs carry an installation token before admission, while a device holds a standing claim", async () => {
+    const plane = await controlPlane();
+    try {
+      const executorId = "conf-boundary-standing";
+      const device = await newDevice();
+      const headers = {
+        "content-type": "application/json",
+        "cf-access-jwt-assertion": await team.jwt(OPERATOR),
+      };
+      const enrolled = await plane.dispatchFetch("http://x/v1/executors/register", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(registration(executorId, device.identity)),
+      });
+      expect(enrolled.status).toBe(201);
+      const socket = await connect(plane, executorId, device.keys);
+      socket.send(hello(executorId));
+      await socket.next("session.welcome");
+      socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
+      await socket.next("exec.idle");
+
+      const dispatch = (sha: string, command: string) =>
+        plane.dispatchFetch("http://x/v1/dispatch/check", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            repository: REPO,
+            sha,
+            inputs: {
+              repo: `https://github.com/${REPO}`,
+              sha,
+              ref: "main",
+              steps: [{ label: "push", command }],
+            },
+          }),
+        });
+      const refused = await dispatch(
+        "d".repeat(40),
+        `git push https://x-access-token:${INSTALLATION_TOKEN}@github.com/${REPO}`,
+      );
+      expect(refused.status).toBe(400);
+      const answer = (await refused.json()) as Record<string, unknown>;
+      expect(answer).toMatchObject({ error: "invalid_inputs" });
+      expect(String(answer["message"])).toContain("CredentialInPayload: inputs.steps[0].command");
+      expect(JSON.stringify(answer)).not.toContain(INSTALLATION_TOKEN);
+
+      const db = (await plane.getD1Database("DB")) as unknown as D1Database;
+      const count = async (sql: string) => (await db.prepare(sql).first<{ n: number }>())!.n;
+      expect(await count("select count(*) as n from executions")).toBe(0);
+      expect(await count("select count(*) as n from placements")).toBe(0);
+      expect(await count("select count(*) as n from intake_records")).toBe(0);
+
+      // The standing claim is still open and took no lease: the next admitted execution is the first lease it sees.
+      const clean = await dispatch("e".repeat(40), "pnpm test");
+      expect(clean.status).toBe(202);
+      const { execution_id: id } = (await clean.json()) as { execution_id: string };
+      const lease = await socket.next("exec.lease");
+      expect(lease).toMatchObject({ type: "exec.lease", execution_id: id });
+      expect(JSON.stringify(lease)).not.toMatch(INSTALLATION_TOKEN_SHAPE);
+      const leased = await db
+        .prepare("select execution_id from placements where state = 'leased'")
+        .all<{ execution_id: string }>();
+      expect(leased.results).toEqual([{ execution_id: id }]);
+      await endStandingClaim(socket);
+    } finally {
+      await plane.dispose();
+    }
   }, 60_000);
 });

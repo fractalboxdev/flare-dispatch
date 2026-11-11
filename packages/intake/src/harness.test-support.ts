@@ -181,6 +181,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     dispatchers: ["dev@example.com"],
     allows: () => true,
     confidentiality: () => "unclassified",
+    writeCredentialIn: () => null,
     ...options.settings,
   };
   const fetch = (async (input: string | URL | Request) => {

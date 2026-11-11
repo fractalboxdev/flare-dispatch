@@ -15,7 +15,12 @@ import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Actuators, actuatorRegistry, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { guardLease, issuedCredentials, writebackApplier } from "../src/agentic.ts";
+import {
+  guardLease,
+  issuedCredentials,
+  writebackApplier,
+  writeCredentialIn,
+} from "../src/agentic.ts";
 import { leaseCacheAt } from "../src/cache-execution.ts";
 import type { ControlPlaneEnv } from "../src/config.ts";
 
@@ -240,5 +245,12 @@ describe("the lease credential guard", () => {
         Effect.flip(guardLease(bare, lease({ key: "app-key-material-0123456789" }))),
       ),
     ).toMatchObject({ _tag: "CredentialInPayload", field: "inputs.key" });
+  });
+
+  it("[FD-AGT-008] names the field of a request's inputs that carries a write credential, for intake to refuse", () => {
+    const inputsGuard = writeCredentialIn(env);
+    expect(inputsGuard({ steps: [{ label: "test", command: "pnpm test" }] })).toBeNull();
+    expect(inputsGuard({ steps: [{ label: "k", command: APP_KEY }] })).toBe("steps[0].command");
+    expect(inputsGuard({ token: `ghs_${"t".repeat(36)}` })).toBe("token");
   });
 });

@@ -57,9 +57,19 @@ export const heldWriteCredentials = (env: ControlPlaneEnv): WriteCredentials => 
 });
 
 /**
+ * The field of a request's inputs that holds the App private key, a PEM private key or an installation token, or null.
+ * Intake refuses such a request before admission, since the lease carries the recorded inputs (FD-AGT-008).
+ */
+export const writeCredentialIn =
+  (env: ControlPlaneEnv) =>
+  (inputs: unknown): string | null =>
+    assertNoWriteCredential(inputs, heldWriteCredentials(env))?.field ?? null;
+
+/**
  * The lease payload, checked before `exec.lease` leaves the control plane: a payload with the App private key, a PEM
  * private key or an installation token in any field fails the grant, so no executor, device executor or job sandbox
- * receives a write credential (FD-AGT-008).
+ * receives a write credential (FD-AGT-008). Intake refuses such inputs before admission; this check covers every
+ * field the lease adds to them.
  */
 export const guardLease = <L>(
   env: ControlPlaneEnv,

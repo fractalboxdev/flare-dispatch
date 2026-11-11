@@ -116,6 +116,33 @@ describe("dispatch validation", () => {
     ]);
   });
 
+  it("[FD-AGT-008] inputs holding a write credential answer 400 before admission writes any row", async () => {
+    const h = await harness({
+      settings: {
+        writeCredentialIn: (inputs) =>
+          JSON.stringify(inputs).includes("ghs_") ? "steps[0]" : null,
+      },
+    });
+    const r = await dispatch(
+      h,
+      dispatchRequest("check", {
+        ...ok,
+        inputs: { sha: HEAD, steps: [`echo ghs_${"t".repeat(36)}`] },
+      }),
+    );
+    expect(r!.status).toBe(400);
+    const body = await bodyOf(r);
+    expect(body.error).toBe("invalid_inputs");
+    expect(String(body.message)).toContain("CredentialInPayload: inputs.steps[0]");
+    expect(JSON.stringify(body)).not.toContain("ghs_");
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+    expect(h.rows("select * from placements")).toEqual([]);
+    expect(h.sheds()).toEqual([
+      { scope_id: REPO, run: "check", reason: "credential in payload: inputs.steps[0]" },
+    ]);
+  });
+
   it("[FD-INT-010] [FD-INT-011] an Idempotency-Key outside 1 to 128 characters of [A-Za-z0-9._:-] answers 400 invalid_idempotency_key", async () => {
     const h = await harness();
     const bearer = { authorization: `Bearer ${actionsToken({})}` };
