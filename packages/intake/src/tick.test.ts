@@ -16,13 +16,13 @@ import { planTick, runTickUnit, type TickUnit } from "./tick.ts";
 const at = (h: number, m: number) => Date.UTC(2026, 10, 4, h, m, 0);
 
 describe("cron", () => {
-  it("FD-INT-050 the template's one trigger is the minute tick; any other set drifts", () => {
+  it("[FD-INT-050] the template's one trigger is the minute tick; any other set drifts", () => {
     expect(cronDrift([MINUTE_TICK])).toBeNull();
     expect(cronDrift([MINUTE_TICK, "*/10 * * * *"])).toContain("differ");
     expect(cronDrift([])).toContain("differ");
   });
 
-  it("FD-INT-051 matches five-field expressions against the scheduled minute in UTC", () => {
+  it("[FD-INT-051] matches five-field expressions against the scheduled minute in UTC", () => {
     const daily = parseCron("0 3 * * *")!;
     expect(cronMatches(daily, at(3, 0))).toBe(true);
     expect(cronMatches(daily, at(3, 1))).toBe(false);
@@ -37,7 +37,7 @@ describe("cron", () => {
 });
 
 describe("planTick", () => {
-  it("FD-INT-067 the tick only plans: a schedules unit per installation every minute, a sweep unit every 10 min", () => {
+  it("[FD-INT-067] the tick only plans: a schedules unit per installation every minute, a sweep unit every 10 min", () => {
     expect(planTick(at(12, 1), [7, 8]).map((u) => `${u._tag}:${u.installation}`)).toEqual([
       "schedules:7",
       "schedules:8",
@@ -55,7 +55,7 @@ const nightly = manifest([
 ]);
 
 describe("scheduled runs", () => {
-  it("FD-INT-051 FD-INT-052 a matching schedule submits once per repository, pinned to its branch's head", async () => {
+  it("[FD-INT-051] [FD-INT-052] a matching schedule submits once per repository, pinned to its branch's head", async () => {
     const h = await harness({
       repos: { [REPO]: repoWithManifest(nightly, { branches: { main: BASE, release: HEAD } }) },
     });
@@ -75,7 +75,7 @@ describe("scheduled runs", () => {
     expect(quiet.outcome.executions).toEqual([]);
   });
 
-  it("FD-INT-053 a tick fired twice for one minute creates at most one execution per run and repository", async () => {
+  it("[FD-INT-053] a tick fired twice for one minute creates at most one execution per run and repository", async () => {
     const h = await harness({ repos: { [REPO]: repoWithManifest(nightly) } });
     const unit: TickUnit = {
       _tag: "schedules",
@@ -89,7 +89,7 @@ describe("scheduled runs", () => {
     expect(h.executions()).toHaveLength(1);
   });
 
-  it("FD-INT-058 a cron trigger takes no cooldown", async () => {
+  it("[FD-INT-058] a cron trigger takes no cooldown", async () => {
     const h = await harness({
       repos: {
         [REPO]: repoWithManifest(
@@ -124,7 +124,7 @@ describe("the missed-webhook sweep", () => {
     pullsSeen: 0,
   };
 
-  it("FD-INT-032 submits a webhook trigger for each recent head that lacks a required FlareDispatch check run", async () => {
+  it("[FD-INT-032] submits a webhook trigger for each recent head that lacks a required FlareDispatch check run", async () => {
     const covered = "1".repeat(40);
     const h = await harness({
       repos: {
@@ -150,7 +150,7 @@ describe("the missed-webhook sweep", () => {
     expect(h.records().every((r) => r.trigger === "webhook")).toBe(true);
   });
 
-  it("FD-INT-033 an installation below 30% of its quota is skipped", async () => {
+  it("[FD-INT-033] an installation below 30% of its quota is skipped", async () => {
     const h = await harness({
       repos: {
         [REPO]: repoWithManifest(undefined, {
@@ -169,7 +169,7 @@ describe("the missed-webhook sweep", () => {
     expect(h.executions()).toHaveLength(2);
   });
 
-  it("FD-INT-067 a unit that reaches its budget returns the cursor of the unit that continues it", async () => {
+  it("[FD-INT-067] a unit that reaches its budget returns the cursor of the unit that continues it", async () => {
     const pulls = Array.from({ length: 100 }, (_, i) =>
       pull(i, i.toString(16).padStart(40, "0"), 0),
     );

@@ -176,7 +176,7 @@ const writes = (w: World) =>
   w.side.calls.filter((c) => /^(create|update|add|remove|set|close|publish|upload)/.test(c));
 
 describe("comment, review and issue", () => {
-  it("FD-GH-092 a comment carries the hidden marker; a repeat adopts it and lookup finds it once", async () => {
+  it("[FD-GH-092] a comment carries the hidden marker; a repeat adopts it and lookup finds it once", async () => {
     const w = world();
     const r = row("comment", { issue_number: 3, body: "hello" });
     const first = await apply(w, r);
@@ -198,7 +198,7 @@ describe("comment, review and issue", () => {
     expect(await lookup(w, r)).toMatchObject({ _tag: "undetermined" });
   });
 
-  it("FD-GH-092 more than one object carrying the marker is undetermined", async () => {
+  it("[FD-GH-092] more than one object carrying the marker is undetermined", async () => {
     const w = world();
     const r = row("review", { pull_number: 5, body: "lgtm" });
     const marker = intentMarker(r);
@@ -209,7 +209,7 @@ describe("comment, review and issue", () => {
     expect(await lookup(w, r)).toMatchObject({ _tag: "undetermined" });
   });
 
-  it("FD-GH-092 a review is a COMMENT review with the marker; an issue is created once and found by marker", async () => {
+  it("[FD-GH-092] a review is a COMMENT review with the marker; an issue is created once and found by marker", async () => {
     const w = world();
     await apply(w, row("review", { pull_number: 5, body: "notes" }));
     expect(w.side.reviews.get(5)![0]!.body).toContain(intentMarker(row("review", {})));
@@ -224,7 +224,7 @@ describe("comment, review and issue", () => {
     expect(await lookup(w, issue)).toMatchObject({ _tag: "found" });
   });
 
-  it("FD-GH-092 an issue older than the first page is found, and a search that cannot finish is undetermined", async () => {
+  it("[FD-GH-092] an issue older than the first page is found, and a search that cannot finish is undetermined", async () => {
     const w = world();
     const r = row("issue", { title: "flake", body: "seen" }, { intentKey: "run:triage:2" });
     w.side.issues.push({
@@ -254,7 +254,7 @@ describe("comment, review and issue", () => {
     expect(w.side.issues).toHaveLength(150);
   });
 
-  it("FD-GH-092 an issue list longer than the search bound is undetermined, never absent", async () => {
+  it("[FD-GH-092] an issue list longer than the search bound is undetermined, never absent", async () => {
     const w = world();
     for (let n = 1; n <= ISSUE_PAGES * 100; n++)
       w.side.issues.push({ id: n, number: n, title: "other", body: "other", labels: [] });
@@ -264,7 +264,7 @@ describe("comment, review and issue", () => {
     expect(w.side.calls.filter((c) => c === "createIssue")).toEqual([]);
   });
 
-  it("FD-GH-046 a lost answer after GitHub made the comment is adopted on the next attempt", async () => {
+  it("[FD-GH-046] a lost answer after GitHub made the comment is adopted on the next attempt", async () => {
     const w = world();
     const r = row("comment", { issue_number: 3, body: "hello" });
     w.side.lostAnswers.push(new GithubNetworkError({ sent: true, message: "reset" }));
@@ -300,7 +300,7 @@ const proposal = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("pr.propose", () => {
-  it("FD-GH-080 the staged-write gate runs before any GitHub call; a rejection names the first kind and every reason", async () => {
+  it("[FD-GH-080] the staged-write gate runs before any GitHub call; a rejection names the first kind and every reason", async () => {
     const w = world();
     w.gate = {
       _tag: "rejected",
@@ -317,7 +317,7 @@ describe("pr.propose", () => {
     expect(w.side.calls).toEqual([]);
   });
 
-  it("FD-GH-081 FD-GH-083 each blob is the file's raw bytes in base64, and a new pull request is a draft", async () => {
+  it("[FD-GH-081] [FD-GH-083] each blob is the file's raw bytes in base64, and a new pull request is a draft", async () => {
     const w = world();
     const bytes = new Uint8Array([0x89, 0x50, 0x00, 0xff]);
     w.blobs.set("d1", bytes);
@@ -333,7 +333,7 @@ describe("pr.propose", () => {
     expect(w.side.commits.get(head)).toMatchObject({ message: "fix: thing", parents: ["base0"] });
   });
 
-  it("FD-GH-083 a repeat reuses the open pull request; draft false opens a ready one", async () => {
+  it("[FD-GH-083] a repeat reuses the open pull request; draft false opens a ready one", async () => {
     const w = world();
     w.blobs.set("d1", new Uint8Array([1]));
     await apply(w, row("pr.propose", proposal()));
@@ -352,7 +352,7 @@ describe("pr.propose", () => {
     );
   });
 
-  it("FD-GH-082 a branch outside flare-dispatch/ or a protected one is never written", async () => {
+  it("[FD-GH-082] a branch outside flare-dispatch/ or a protected one is never written", async () => {
     const w = world();
     w.blobs.set("d1", new Uint8Array([1]));
     expect(await apply(w, row("pr.propose", proposal({ branch: "main" })))).toEqual({
@@ -369,7 +369,7 @@ describe("pr.propose", () => {
     expect(writes(w)).toEqual([]);
   });
 
-  it("FD-GH-084 a target branch holding a human's commit is refused and left unchanged", async () => {
+  it("[FD-GH-084] a target branch holding a human's commit is refused and left unchanged", async () => {
     const w = world();
     w.blobs.set("d1", new Uint8Array([1]));
     commitOn(w.side, "flare-dispatch/fix", { login: BOT.login, email: BOT.email });
@@ -385,7 +385,7 @@ describe("pr.propose", () => {
     expect(writes(w)).toEqual([]);
   });
 
-  it("FD-GH-080 a deployment with no staged-write gate refuses pr.propose", async () => {
+  it("[FD-GH-080] a deployment with no staged-write gate refuses pr.propose", async () => {
     const w = world();
     const answer = await Effect.runPromise(
       actuatorFor(row("pr.propose", proposal())).pipe(
@@ -413,7 +413,7 @@ describe("pr.close", () => {
     });
   };
 
-  it("FD-GH-087 closes a flare-dispatch/ pull request whose commits are all the App's", async () => {
+  it("[FD-GH-087] closes a flare-dispatch/ pull request whose commits are all the App's", async () => {
     const w = world();
     commitOn(w.side, "flare-dispatch/fix", { login: BOT.login, email: BOT.email });
     open(w, "flare-dispatch/fix");
@@ -449,7 +449,7 @@ describe("pr.close", () => {
 describe("releases", () => {
   const draft = { tag: "v1.2.0", target: "main", name: "v1.2.0", body: "notes" };
 
-  it("FD-GH-085 a draft is created only when no release exists for the tag, with its assets", async () => {
+  it("[FD-GH-085] a draft is created only when no release exists for the tag, with its assets", async () => {
     const w = world();
     w.blobs.set("a1", new Uint8Array([1, 2]));
     const r = row("release.draft", {
@@ -464,7 +464,7 @@ describe("releases", () => {
     expect(await lookup(w, r)).toMatchObject({ _tag: "found" });
   });
 
-  it("FD-GH-085 a published release for the tag is refused and not modified", async () => {
+  it("[FD-GH-085] a published release for the tag is refused and not modified", async () => {
     const w = world();
     w.side.releases.push({ id: 1, tag_name: "v1.2.0", draft: false, assets: [] });
     expect(await apply(w, row("release.draft", draft))).toEqual({
@@ -474,7 +474,7 @@ describe("releases", () => {
     expect(writes(w)).toEqual([]);
   });
 
-  it("FD-GH-086 publishes only the tag's draft, and leaves a published release unchanged", async () => {
+  it("[FD-GH-086] publishes only the tag's draft, and leaves a published release unchanged", async () => {
     const w = world();
     expect(await apply(w, row("release.publish", { tag: "v1.2.0" }))).toEqual({
       _tag: "refused",
@@ -494,7 +494,7 @@ describe("releases", () => {
 });
 
 describe("notifications and follow-ons", () => {
-  it("FD-GH-079 a Slack verdict POST carries a timestamp and an HMAC-SHA256 over the timestamp and the body", async () => {
+  it("[FD-GH-079] a Slack verdict POST carries a timestamp and an HMAC-SHA256 over the timestamp and the body", async () => {
     const w = world();
     await apply(w, row("notify.slack", { text: "check failed" }, { effectClass: "replay-safe" }));
     const [post] = w.slackPosts;
@@ -504,7 +504,7 @@ describe("notifications and follow-ons", () => {
     expect(post!.headers.get("x-flare-dispatch-delivery")).toBe("exec-1/run:step:0");
   });
 
-  it("FD-GH-078 email and notices go out only through the applier, with ids derived from the key", async () => {
+  it("[FD-GH-078] email and notices go out only through the applier, with ids derived from the key", async () => {
     const w = world();
     await apply(
       w,
@@ -535,7 +535,7 @@ describe("notifications and follow-ons", () => {
     expect(w.notices).toEqual([{ deliveryId: "nightly:digest:2026-11-04", title: "t", body: "b" }]);
   });
 
-  it("FD-GH-088 a follow-on submits one admission request keyed by the row's execution and intent key", async () => {
+  it("[FD-GH-088] a follow-on submits one admission request keyed by the row's execution and intent key", async () => {
     const w = world();
     const answer = await apply(
       w,
@@ -556,7 +556,7 @@ describe("notifications and follow-ons", () => {
 });
 
 describe("ops kinds", () => {
-  it("FD-GH-089 a redelivery uses the App JWT, not an installation token, and lookup reads the delivery's attempts", async () => {
+  it("[FD-GH-089] a redelivery uses the App JWT, not an installation token, and lookup reads the delivery's attempts", async () => {
     const w = world();
     const r = row(
       "delivery.redeliver",
@@ -572,7 +572,7 @@ describe("ops kinds", () => {
     expect(w.appCalls.filter((c) => c.startsWith("POST"))).toHaveLength(1);
   });
 
-  it("FD-GH-089 FD-GH-092 a canary push is an empty commit under the installation token, found by its tick time", async () => {
+  it("[FD-GH-089] [FD-GH-092] a canary push is an empty commit under the installation token, found by its tick time", async () => {
     const w = world();
     w.side.branches.set("canary", { sha: "base0", protected: false });
     const r = row(
@@ -594,7 +594,7 @@ describe("ops kinds", () => {
 });
 
 describe("answers", () => {
-  it("FD-GH-004 a GitHub kind with no installation is refused and pages installation-lost", async () => {
+  it("[FD-GH-004] a GitHub kind with no installation is refused and pages installation-lost", async () => {
     const w = world();
     expect(await apply(w, row("comment", { issue_number: 1, body: "x" }), {})).toEqual({
       _tag: "refused",
@@ -603,7 +603,7 @@ describe("answers", () => {
     expect(w.alarms.map((a) => a.name)).toEqual(["installation-lost"]);
   });
 
-  it("FD-GH-047 FD-GH-048 a 401 retries once after a new token, and a second 401 is refused and pages", async () => {
+  it("[FD-GH-047] [FD-GH-048] a 401 retries once after a new token, and a second 401 is refused and pages", async () => {
     const w = world();
     const unauthorized = () =>
       new GithubHttpError({ status: 401, message: "Bad credentials", rateLimited: false });
@@ -620,7 +620,7 @@ describe("answers", () => {
     expect(w.alarms.map((a) => a.name)).toEqual(["installation-lost"]);
   });
 
-  it("FD-GH-091 a kind no applier serves, or a payload its schema rejects, is refused without a GitHub call", async () => {
+  it("[FD-GH-091] a kind no applier serves, or a payload its schema rejects, is refused without a GitHub call", async () => {
     const w = world();
     expect(await apply(w, row("git.notes", {}))).toEqual({
       _tag: "refused",
@@ -649,7 +649,7 @@ describe("write authority", () => {
   const files = [...sources(join(root, "github/src")), ...sources(join(root, "intake/src"))];
   const rel = (f: string) => f.slice(root.length + 1);
 
-  it("FD-GH-001 only the appliers call a GitHub write for an execution", () => {
+  it("[FD-GH-001] only the appliers call a GitHub write for an execution", () => {
     const writeCall =
       /\.(createCheckRun|updateCheckRun|createComment|createReview|createIssue|updateIssue|addLabels|removeLabel|createBlob|createTree|createCommit|setBranch|createPull|closePull|createDraftRelease|publishRelease|uploadAsset)\(/;
     const callers = files.filter((f) => writeCall.test(readFileSync(f, "utf8"))).map(rel);
@@ -661,7 +661,7 @@ describe("write authority", () => {
     ]);
   });
 
-  it("FD-GH-078 email, Slack posts and notices are sent only from the side-output applier", () => {
+  it("[FD-GH-078] email, Slack posts and notices are sent only from the side-output applier", () => {
     const send = /\.send\(\{|\.publish\(\{|x-flare-dispatch-signature/;
     expect(files.filter((f) => send.test(readFileSync(f, "utf8"))).map(rel)).toEqual([
       "github/src/side-applier.ts",

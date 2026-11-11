@@ -29,7 +29,7 @@ const deliver = async (h: Harness, event: string, payload: unknown, delivery = "
   post(h, await signedWebhook(event, payload, { delivery }));
 
 describe("webhook authentication", () => {
-  it("FD-INT-022 with no webhook secret every webhook answers 503 webhook_unconfigured and submits nothing", async () => {
+  it("[FD-INT-022] with no webhook secret every webhook answers 503 webhook_unconfigured and submits nothing", async () => {
     const h = await harness({ settings: { webhookSecret: undefined } });
     const r = await deliver(h, "pull_request", pullRequestPayload());
     expect(r!.status).toBe(503);
@@ -37,7 +37,7 @@ describe("webhook authentication", () => {
     expect(h.executions()).toEqual([]);
   });
 
-  it("FD-INT-023 a body over 25 MiB answers 413 before it is verified", async () => {
+  it("[FD-INT-023] a body over 25 MiB answers 413 before it is verified", async () => {
     const h = await harness();
     const r = await post(
       h,
@@ -54,7 +54,7 @@ describe("webhook authentication", () => {
     expect((await bodyOf(r)).error).toBe("payload_too_large");
   });
 
-  it("FD-INT-024 FD-INT-025 a missing or mismatched signature answers 401 and submits nothing", async () => {
+  it("[FD-INT-024] [FD-INT-025] a missing or mismatched signature answers 401 and submits nothing", async () => {
     const h = await harness();
     const missing = await post(h, await signedWebhook("push", pushPayload(), { signature: null }));
     const wrong = await post(h, await signedWebhook("push", pushPayload(), { secret: "other" }));
@@ -64,14 +64,14 @@ describe("webhook authentication", () => {
     expect(h.reads.calls).toEqual([]);
   });
 
-  it("FD-INT-026 a signed webhook without X-GitHub-Delivery answers 400", async () => {
+  it("[FD-INT-026] a signed webhook without X-GitHub-Delivery answers 400", async () => {
     const h = await harness();
     const r = await post(h, await signedWebhook("push", pushPayload(), { delivery: null }));
     expect(r!.status).toBe(400);
     expect(h.executions()).toEqual([]);
   });
 
-  it("FD-INT-027 an event outside intake.webhookEvents is ignored after the signature check; an empty list admits none", async () => {
+  it("[FD-INT-027] an event outside intake.webhookEvents is ignored after the signature check; an empty list admits none", async () => {
     const h = await harness({ settings: { webhookEvents: ["push"] } });
     const r = await deliver(h, "pull_request", pullRequestPayload());
     expect(r!.status).toBe(202);
@@ -89,7 +89,7 @@ describe("webhook authentication", () => {
     expect(unsigned!.status).toBe(401);
   });
 
-  it("FD-INT-031 a verified delivery records its time per installation", async () => {
+  it("[FD-INT-031] a verified delivery records its time per installation", async () => {
     const h = await harness();
     await deliver(h, "push", pushPayload());
     expect(h.rows("select installation, verified_at from intake_deliveries")).toEqual([
@@ -99,7 +99,7 @@ describe("webhook authentication", () => {
 });
 
 describe("webhook to admission", () => {
-  it("FD-INT-001 FD-INT-009 a pull request submits each listed run through admission, keyed by commit without the trigger", async () => {
+  it("[FD-INT-001] [FD-INT-009] a pull request submits each listed run through admission, keyed by commit without the trigger", async () => {
     const h = await harness();
     const r = await deliver(h, "pull_request", pullRequestPayload());
     expect(r!.status).toBe(202);
@@ -115,7 +115,7 @@ describe("webhook to admission", () => {
     expect(h.rows("select count(*) as n from placements")[0]!.n).toBe(2);
   });
 
-  it("FD-INT-003 a redelivery answers 202 with the same executions and duplicate: true", async () => {
+  it("[FD-INT-003] a redelivery answers 202 with the same executions and duplicate: true", async () => {
     const h = await harness();
     const first = await bodyOf(await deliver(h, "pull_request", pullRequestPayload(), "d-1"));
     const again = await bodyOf(await deliver(h, "pull_request", pullRequestPayload(), "d-2"));
@@ -124,7 +124,7 @@ describe("webhook to admission", () => {
     expect(h.records()).toHaveLength(2);
   });
 
-  it("FD-INT-009 a push and a pull request for one run on one commit resolve to one execution", async () => {
+  it("[FD-INT-009] a push and a pull request for one run on one commit resolve to one execution", async () => {
     const h = await harness({
       repos: {
         [REPO]: repoWithManifest(
@@ -138,7 +138,7 @@ describe("webhook to admission", () => {
     expect(h.executions()).toHaveLength(1);
   });
 
-  it("FD-INT-015 a run the manifest does not list for the trigger, or the operator policy refuses, is not submitted", async () => {
+  it("[FD-INT-015] a run the manifest does not list for the trigger, or the operator policy refuses, is not submitted", async () => {
     const h = await harness({ settings: { allows: (_, run) => run !== "lint" } });
     await deliver(h, "pull_request", pullRequestPayload());
     expect(h.executions().map((e) => e.run)).toEqual(["check"]);
@@ -147,7 +147,7 @@ describe("webhook to admission", () => {
     expect(push.executions().map((e) => e.run)).toEqual(["check"]);
   });
 
-  it("FD-INT-016 the manifest is read at the base branch head for a pull request and at the pushed commit on the default branch", async () => {
+  it("[FD-INT-016] the manifest is read at the base branch head for a pull request and at the pushed commit on the default branch", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload());
     expect(h.reads.calls).toContain(`branchHead ${REPO}`);
@@ -169,7 +169,7 @@ describe("webhook to admission", () => {
     expect(pushed.reads.calls).not.toContain(`branchHead ${REPO}`);
   });
 
-  it("FD-INT-017 FD-INT-018 a manifest over 50 runs is invalid: nothing is submitted, a shed row and the manifest check run record it", async () => {
+  it("[FD-INT-017] [FD-INT-018] a manifest over 50 runs is invalid: nothing is submitted, a shed row and the manifest check run record it", async () => {
     const many = Array.from({ length: 51 }, () => ({ recipe: "lint", triggers: ["pull_request"] }));
     const h = await harness({ repos: { [REPO]: repoWithManifest(manifest(many)) } });
     const r = await deliver(h, "pull_request", pullRequestPayload());
@@ -181,7 +181,7 @@ describe("webhook to admission", () => {
     ]);
   });
 
-  it("FD-INT-018 an entry whose parameters fail its recipe's schema makes the whole manifest invalid", async () => {
+  it("[FD-INT-018] an entry whose parameters fail its recipe's schema makes the whole manifest invalid", async () => {
     const text = manifest([
       { recipe: "check", triggers: ["pull_request"], params: { steps: "not a list" } },
       { recipe: "lint", triggers: ["pull_request"] },
@@ -195,7 +195,7 @@ describe("webhook to admission", () => {
     expect(errors).toContain("runs[2].recipe: no recipe named missing");
   });
 
-  it("FD-INT-019 a manifest read that fails with a 5xx submits nothing and sheds manifest: unreadable", async () => {
+  it("[FD-INT-019] a manifest read that fails with a 5xx submits nothing and sheds manifest: unreadable", async () => {
     const h = await harness();
     h.reads.failures.set(
       `file ${REPO}`,
@@ -206,14 +206,14 @@ describe("webhook to admission", () => {
     expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: unreadable" }]);
   });
 
-  it("FD-INT-020 a repository with no manifest submits nothing and sheds nothing", async () => {
+  it("[FD-INT-020] a repository with no manifest submits nothing and sheds nothing", async () => {
     const h = await harness({ repos: { [REPO]: repoWithManifest(undefined, { files: {} }) } });
     const r = await bodyOf(await deliver(h, "pull_request", pullRequestPayload()));
     expect(r.executions).toEqual([]);
     expect(h.sheds()).toEqual([]);
   });
 
-  it("FD-INT-021 a decoded manifest is cached per (repository, commit) for at most 10 min", async () => {
+  it("[FD-INT-021] a decoded manifest is cached per (repository, commit) for at most 10 min", async () => {
     const h = await harness();
     const files = () => h.reads.calls.filter((c) => c.startsWith("file")).length;
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
@@ -224,7 +224,7 @@ describe("webhook to admission", () => {
     expect(files()).toBe(2);
   });
 
-  it("FD-INT-028 the commit is the first present field: pull_request.head.sha over check_run.head_sha", async () => {
+  it("[FD-INT-028] the commit is the first present field: pull_request.head.sha over check_run.head_sha", async () => {
     const h = await harness();
     await deliver(h, "pull_request", {
       ...pullRequestPayload(),
@@ -233,7 +233,7 @@ describe("webhook to admission", () => {
     expect(h.records().every((r) => r.sha === HEAD)).toBe(true);
   });
 
-  it("FD-INT-029 an event with no commit field submits nothing and sheds intake: no commit", async () => {
+  it("[FD-INT-029] an event with no commit field submits nothing and sheds intake: no commit", async () => {
     const h = await harness();
     const r = await deliver(h, "deployment_status", {
       action: "created",
@@ -243,7 +243,7 @@ describe("webhook to admission", () => {
     expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "intake: no commit" }]);
   });
 
-  it("FD-INT-030 a pull request from a fork is recorded as fork-pr and class resolution returns untrusted-input", async () => {
+  it("[FD-INT-030] a pull request from a fork is recorded as fork-pr and class resolution returns untrusted-input", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ headRepo: "mallory/app" }));
     expect(h.recorded.resolved.every((r) => r.trigger === "fork-pr")).toBe(true);
@@ -279,7 +279,7 @@ describe("webhook to admission", () => {
     expect(cacheTriggerOf("check_suite", {}, "main", false)).toEqual({ _tag: "Other" });
   });
 
-  it("FD-INT-004 when admission fails the webhook answers 503 intake_unavailable and keeps no record", async () => {
+  it("[FD-INT-004] when admission fails the webhook answers 503 intake_unavailable and keeps no record", async () => {
     const h = await harness();
     h.db.sqlite.exec("drop table placements");
     const r = await deliver(h, "pull_request", pullRequestPayload());
@@ -290,7 +290,7 @@ describe("webhook to admission", () => {
 });
 
 describe("installation events", () => {
-  it("FD-GH-066 an installation deleted, suspended or repositories-removed webhook evicts before it answers", async () => {
+  it("[FD-GH-066] an installation deleted, suspended or repositories-removed webhook evicts before it answers", async () => {
     const h = await harness();
     await deliver(h, "installation", { action: "deleted", installation: { id: 7 } });
     await deliver(h, "installation", { action: "suspend", installation: { id: 8 } }, "d-2");
@@ -310,7 +310,7 @@ describe("installation events", () => {
 });
 
 describe("merge queue", () => {
-  it("FD-GH-075 checks_requested opens the base branch's required gating runs on the group's head", async () => {
+  it("[FD-GH-075] checks_requested opens the base branch's required gating runs on the group's head", async () => {
     const h = await harness({
       repos: {
         [REPO]: repoWithManifest(undefined, { required: { main: ["flare-dispatch/check:ci"] } }),
@@ -321,13 +321,13 @@ describe("merge queue", () => {
     expect(h.records().map((x) => [x.run, x.label, x.sha])).toEqual([["check", "ci", HEAD]]);
   });
 
-  it("FD-GH-075 a gating run whose check is not required opens nothing", async () => {
+  it("[FD-GH-075] a gating run whose check is not required opens nothing", async () => {
     const h = await harness();
     await deliver(h, "merge_group", mergeGroupPayload("checks_requested"));
     expect(h.executions()).toEqual([]);
   });
 
-  it("FD-GH-076 destroyed cancels every non-terminal execution on the group's head with merge-group-destroyed", async () => {
+  it("[FD-GH-076] destroyed cancels every non-terminal execution on the group's head with merge-group-destroyed", async () => {
     const h = await harness({
       repos: {
         [REPO]: repoWithManifest(undefined, { required: { main: ["flare-dispatch/check:ci"] } }),
@@ -360,7 +360,7 @@ describe("check re-runs", () => {
     return { h, id: (opened.executions as string[])[0]! };
   };
 
-  it("FD-INT-054 a rerequested check run submits attempt n + 1 with the attempt key suffix, the same name and class, and no cooldown", async () => {
+  it("[FD-INT-054] a rerequested check run submits attempt n + 1 with the attempt key suffix, the same name and class, and no cooldown", async () => {
     const { h, id } = await firstRun();
     settle(h, "failure");
     const r = await bodyOf(await deliver(h, "check_run", checkRunRerequested(id), "d-2"));
@@ -393,13 +393,13 @@ describe("check re-runs", () => {
     },
   );
 
-  it("FD-INT-055 a family with a non-terminal attempt sheds in_progress", async () => {
+  it("[FD-INT-055] a family with a non-terminal attempt sheds in_progress", async () => {
     const { h, id } = await firstRun();
     await deliver(h, "check_run", checkRunRerequested(id), "d-2");
     expect(h.sheds().map((s) => s.reason)).toEqual(["in_progress"]);
   });
 
-  it("FD-INT-055 a family with 5 attempts sheds attempts_exhausted", async () => {
+  it("[FD-INT-055] a family with 5 attempts sheds attempts_exhausted", async () => {
     const { h, id } = await firstRun();
     for (let n = 2; n <= 5; n++) {
       settle(h, "failure");
@@ -411,7 +411,7 @@ describe("check re-runs", () => {
     expect(h.sheds().map((s) => s.reason)).toEqual(["attempts_exhausted"]);
   });
 
-  it("FD-INT-055 an unregistered run sheds run_not_registered and undecodable inputs shed inputs_unreplayable", async () => {
+  it("[FD-INT-055] an unregistered run sheds run_not_registered and undecodable inputs shed inputs_unreplayable", async () => {
     const { h, id } = await firstRun();
     settle(h, "failure");
     h.db.sqlite.exec(`update intake_records set inputs_json = '{"steps": 3}'`);
@@ -421,7 +421,7 @@ describe("check re-runs", () => {
     expect(h.sheds().map((s) => s.reason)).toEqual(["inputs_unreplayable", "run_not_registered"]);
   });
 
-  it("FD-INT-056 a rerequested check suite re-runs every family whose latest attempt did not succeed", async () => {
+  it("[FD-INT-056] a rerequested check suite re-runs every family whose latest attempt did not succeed", async () => {
     const { h } = await firstRun();
     const lint = await harness();
     await deliver(lint, "pull_request", pullRequestPayload());
@@ -439,7 +439,7 @@ describe("check re-runs", () => {
     expect(h.records()).toHaveLength(1);
   });
 
-  it("FD-SPD-032 an attempt beyond the family's retry allowance admits against the interactive line", async () => {
+  it("[FD-SPD-032] an attempt beyond the family's retry allowance admits against the interactive line", async () => {
     const { h, id } = await firstRun();
     settle(h, "failure");
     h.db.sqlite.exec(
@@ -460,7 +460,7 @@ describe("check re-runs", () => {
 });
 
 describe("cooldown", () => {
-  it("FD-INT-057 FD-INT-058 an execution within a run's window waits until the window ends; the window clamps to 60 s", async () => {
+  it("[FD-INT-057] [FD-INT-058] an execution within a run's window waits until the window ends; the window clamps to 60 s", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
     await h.adjust(10_000);
@@ -476,7 +476,7 @@ describe("cooldown", () => {
     ).toBe(true);
   });
 
-  it("FD-INT-057 a request inside its window is held from admission until the window ends; the tick then admits it and arms the next window", async () => {
+  it("[FD-INT-057] a request inside its window is held from admission until the window ends; the tick then admits it and arms the next window", async () => {
     const h = await harness();
     const windowEnd = Date.UTC(2026, 10, 4, 12, 1, 0);
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
@@ -527,7 +527,7 @@ describe("cooldown", () => {
     );
   });
 
-  it("FD-INT-057 MAMEKO-ADM-041 a held request released into a full queue concludes capacity: queue full and leaves the hold", async () => {
+  it("[FD-INT-057] MAMEKO-ADM-041 a held request released into a full queue concludes capacity: queue full and leaves the hold", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
     await h.adjust(10_000);
@@ -539,7 +539,7 @@ describe("cooldown", () => {
     expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
   });
 
-  it("FD-INT-057 a redelivered request whose execution is held answers the held execution and writes nothing", async () => {
+  it("[FD-INT-057] a redelivered request whose execution is held answers the held execution and writes nothing", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
     await h.adjust(10_000);
@@ -554,7 +554,7 @@ describe("cooldown", () => {
     );
   });
 
-  it("FD-INT-058 a check re-run takes no cooldown", async () => {
+  it("[FD-INT-058] a check re-run takes no cooldown", async () => {
     const h = await harness({
       repos: {
         [REPO]: repoWithManifest(manifest([{ recipe: "review", triggers: ["pull_request"] }])),
@@ -568,7 +568,7 @@ describe("cooldown", () => {
 });
 
 describe("other webhook events", () => {
-  it("FD-INT-016 a push to another branch reads the manifest at the default branch head", async () => {
+  it("[FD-INT-016] a push to another branch reads the manifest at the default branch head", async () => {
     const h = await harness();
     await deliver(h, "push", pushPayload("refs/heads/feature"));
     expect(h.reads.calls.filter((c) => c.startsWith("file"))).toHaveLength(1);

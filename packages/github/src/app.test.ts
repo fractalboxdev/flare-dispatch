@@ -109,7 +109,7 @@ describe("the App JWT", () => {
     },
   );
 
-  it("FD-GH-068 a PEM of another type fails AppKeyInvalid", async () => {
+  it("[FD-GH-068] a PEM of another type fails AppKeyInvalid", async () => {
     const pem = "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----";
     const exit = await Effect.runPromise(
       Effect.exit(GithubApp.use((a) => a.jwt)).pipe(
@@ -121,7 +121,7 @@ describe("the App JWT", () => {
 });
 
 describe("installation tokens", () => {
-  it("FD-GH-065 caches a token and mints anew within 60 s of its expires_at", async () => {
+  it("[FD-GH-065] caches a token and mints anew within 60 s of its expires_at", async () => {
     const calls: Call[] = [];
     const fetch = fakeApi(
       { "POST /app/installations/7/access_tokens": tokenRoute(3_600_000) },
@@ -149,7 +149,7 @@ describe("installation tokens", () => {
     expect(calls[0]!.authorization).toMatch(/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/);
   });
 
-  it("FD-GH-066 evicting an installation drops its token and its repository mappings", async () => {
+  it("[FD-GH-066] evicting an installation drops its token and its repository mappings", async () => {
     const calls: Call[] = [];
     const fetch = fakeApi(
       {
@@ -185,7 +185,7 @@ describe("installation tokens", () => {
     ]);
   });
 
-  it("FD-INT-043 a repository the App does not cover maps to no installation", async () => {
+  it("[FD-INT-043] a repository the App does not cover maps to no installation", async () => {
     const id = await run(
       GithubApp.use((a) => a.installationFor("acme/none")),
       fakeApi({}, []),
@@ -228,7 +228,7 @@ const covered = {
 };
 
 describe("the per-lease token", () => {
-  it("FD-GH-002 scopes the token to the one repository and to read permissions, expiring by the deadline", async () => {
+  it("[FD-GH-002] scopes the token to the one repository and to read permissions, expiring by the deadline", async () => {
     const calls: Call[] = [];
     const credential = await live(
       leaseReadToken({
@@ -248,7 +248,7 @@ describe("the per-lease token", () => {
 });
 
 describe("GithubRead", () => {
-  it("FD-GH-003 a read for a repository with no installation fails GithubUncredentialed, never empty", async () => {
+  it("[FD-GH-003] a read for a repository with no installation fails GithubUncredentialed, never empty", async () => {
     const result = await live(
       GithubRead.use((r) => r.openPulls("acme/none")).pipe(
         Effect.match({ onFailure: (e) => e._tag, onSuccess: (v) => v }),
@@ -258,7 +258,7 @@ describe("GithubRead", () => {
     expect(result).toBe("GithubUncredentialed");
   });
 
-  it("FD-INT-016 reads a file at a ref as text, and a missing path as null", async () => {
+  it("[FD-INT-016] reads a file at a ref as text, and a missing path as null", async () => {
     const content = Buffer.from('{"version":1}').toString("base64");
     const calls: Call[] = [];
     const [found, missing] = await live(
@@ -285,7 +285,7 @@ describe("GithubRead", () => {
     ).toBe(true);
   });
 
-  it("FD-INT-032 the required set is the union of ruleset and branch-protection checks", async () => {
+  it("[FD-INT-032] the required set is the union of ruleset and branch-protection checks", async () => {
     const checks = await live(
       GithubRead.use((r) => r.requiredChecks("acme/app", "main")),
       {
@@ -309,7 +309,7 @@ describe("GithubRead", () => {
     expect(checks).toEqual(["flare-dispatch/check:ci", "lint"]);
   });
 
-  it("FD-CACHE-017 a branch is protected by any rule that targets it or by branch protection", async () => {
+  it("[FD-CACHE-017] a branch is protected by any rule that targets it or by branch protection", async () => {
     const protectedRef = (routes: Parameters<typeof fakeApi>[0], ref: string) =>
       live(
         GithubRead.use((r) => r.refProtected("acme/app", ref)),
@@ -351,7 +351,7 @@ describe("GithubRead", () => {
     expect([ruled, classic, open, deleted]).toEqual([true, true, false, false]);
   });
 
-  it("FD-PROF-012 a tag is protected only by an active tag ruleset with a rule whose conditions name it", async () => {
+  it("[FD-PROF-012] a tag is protected only by an active tag ruleset with a rule whose conditions name it", async () => {
     const rulesets = {
       "GET /repos/acme/app/rulesets": () => ({
         status: 200,
@@ -396,7 +396,7 @@ describe("GithubRead", () => {
     ).toBe(true);
   });
 
-  it("FD-PROF-012 a ruleset ref pattern spans / only with **, and ~ALL names every ref", () => {
+  it("[FD-PROF-012] a ruleset ref pattern spans / only with **, and ~ALL names every ref", () => {
     expect(refPatternMatches("refs/tags/v*", "refs/tags/v1.2.0")).toBe(true);
     expect(refPatternMatches("refs/tags/v*", "refs/tags/v1/rc")).toBe(false);
     expect(refPatternMatches("refs/tags/**", "refs/tags/v1/rc")).toBe(true);

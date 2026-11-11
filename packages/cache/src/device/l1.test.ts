@@ -53,7 +53,7 @@ describe("L1 on the device", async () => {
   const keys = await signingKeys();
   const verification = { controlPlane: keys.publicJwk, device: () => null };
 
-  it("FD-CACHE-004 keeps one directory per namespace on local disk and serves cache.get, cache.put and cache.evict", async () => {
+  it("[FD-CACHE-004] keeps one directory per namespace on local disk and serves cache.get, cache.put and cache.evict", async () => {
     const root = mkdtempSync(join(tmpdir(), "fd-l1-"));
     const l1 = await openL1({ disk: nodeDisk(root), l2: memoryL2().client, keys: verification });
     const put = await run(answerCacheRequest(l1, { type: "cache.put", id: "1", namespace: NS, key: key(1), bytes: Buffer.from("abc").toString("base64") }));
@@ -68,7 +68,7 @@ describe("L1 on the device", async () => {
     expect(await run(l1.get("../../etc", key(1)))).toBeNull();
   });
 
-  it("FD-CACHE-006 a miss reads through to L2 and places the entry only after every digest verifies", async () => {
+  it("[FD-CACHE-006] a miss reads through to L2 and places the entry only after every digest verifies", async () => {
     const l2 = memoryL2();
     l2.entries.set(`${NS}/${key(1)}`, await entryFor(keys.pair.privateKey, NS, key(1), bytes("good")));
     const tampered = await entryFor(keys.pair.privateKey, NS, key(2), bytes("good"));
@@ -81,7 +81,7 @@ describe("L1 on the device", async () => {
     expect(disk.files.has(`${NS}/${key(2)}`)).toBe(false);
   });
 
-  it("FD-CACHE-007 a put writes L1 and then uploads to L2; a failed upload leaves the L1 entry", async () => {
+  it("[FD-CACHE-007] a put writes L1 and then uploads to L2; a failed upload leaves the L1 entry", async () => {
     const l2 = memoryL2();
     const disk = memoryDisk(1_000_000);
     const l1 = await openL1({ disk, l2: l2.client, keys: verification });
@@ -93,7 +93,7 @@ describe("L1 on the device", async () => {
     expect(disk.files.has(`${NS}/${key(2)}`)).toBe(true);
   });
 
-  it("FD-CACHE-008 FD-CACHE-013 a confidential namespace or an offline lease never reads or writes L2", async () => {
+  it("[FD-CACHE-008] [FD-CACHE-013] a confidential namespace or an offline lease never reads or writes L2", async () => {
     const l2 = memoryL2();
     l2.entries.set(`${NS}/${key(1)}`, await entryFor(keys.pair.privateKey, NS, key(1), bytes("good")));
     for (const opts of [{ offline: () => true }, { confidential: () => true }]) {
@@ -104,7 +104,7 @@ describe("L1 on the device", async () => {
     expect(l2.uploads).toEqual([]);
   });
 
-  it("FD-CACHE-009 L1 caps at 20% of the free disk at start and evicts the least recently read entry first", async () => {
+  it("[FD-CACHE-009] L1 caps at 20% of the free disk at start and evicts the least recently read entry first", async () => {
     let t = 0;
     const disk = memoryDisk(100);
     const l1 = await openL1({ disk, l2: memoryL2().client, keys: verification, now: () => ++t });
@@ -119,7 +119,7 @@ describe("L1 on the device", async () => {
     expect(half.usage().cap).toBe(50);
   });
 
-  it("FD-CACHE-010 cache.evict frees least recently read entries until the target or empty and returns the bytes freed", async () => {
+  it("[FD-CACHE-010] cache.evict frees least recently read entries until the target or empty and returns the bytes freed", async () => {
     let t = 0;
     const disk = memoryDisk(1000);
     const l1 = await openL1({ disk, l2: memoryL2().client, keys: verification, now: () => ++t });
@@ -131,7 +131,7 @@ describe("L1 on the device", async () => {
     expect(disk.files.size).toBe(0);
   });
 
-  it("FD-CACHE-030 a content-tier restore requests only a trusted digest and hashes the bytes to it", async () => {
+  it("[FD-CACHE-030] a content-tier restore requests only a trusted digest and hashes the bytes to it", async () => {
     const good = bytes("tarball");
     const digest = await sha256Hex(good);
     let fetched = 0;
@@ -142,7 +142,7 @@ describe("L1 on the device", async () => {
     expect(await run(restoreContent(digest, new Set([digest]), async () => bytes("other")))).toBeNull();
   });
 
-  it("FD-CACHE-014 a peer's entry from the same member is placed only after its signature and digests verify", async () => {
+  it("[FD-CACHE-014] a peer's entry from the same member is placed only after its signature and digests verify", async () => {
     const disk = memoryDisk(1_000_000);
     const l1 = await openL1({ disk, l2: memoryL2().client, keys: verification });
     const good = await entryFor(keys.pair.privateKey, NS, key(1), bytes("peer"));

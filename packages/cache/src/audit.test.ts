@@ -23,7 +23,7 @@ const device: ConcludedExecution = {
 const audit: ConcludedExecution = { ...device, executionId: "audit-exec", executorId: "cf-1", executorKind: "cloudflare" };
 
 describe("verdict audit", () => {
-  it("FD-PROV-069 a device execution of a gate recipe is audited with probability audit_rate as a cloud ops run", () => {
+  it("[FD-PROV-069] a device execution of a gate recipe is audited with probability audit_rate as a cloud ops run", () => {
     expect(auditRequestFor(device, { random: () => 0.049 })).toEqual({
       run: "check",
       commit: device.commit,
@@ -44,7 +44,7 @@ describe("verdict audit", () => {
     expect(selected / 20_000).toBeLessThan(0.06);
   });
 
-  it("FD-PROV-070 a disagreement writes a verdict_audits row naming both and raises a notify alarm; agreement writes nothing", async () => {
+  it("[FD-PROV-070] a disagreement writes a verdict_audits row naming both and raises a notify alarm; agreement writes nothing", async () => {
     const alarms: Alarm[] = [];
     const layer = Layer.succeed(AlarmPort, { deliver: (a: Alarm) => Effect.sync(() => void alarms.push(a)) });
     expect(await Effect.runPromise(recordAuditVerdict(mf.db, device, audit, 1).pipe(Effect.provide(layer)))).toBe("agree");

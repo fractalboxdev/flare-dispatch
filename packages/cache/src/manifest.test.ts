@@ -74,7 +74,7 @@ const verification = () => ({ controlPlane: keys.publicJwk, device: () => null }
 const reader = { namespaces: { read: [NS, protectedCloud(REPO)], write: NS }, class: "interactive", constraints: [], executorKind: "cloudflare" };
 
 describe("cache entries, commit and verification", () => {
-  it("FD-CACHE-039 FD-CACHE-042 a commit records key, namespace, tier, writer, epoch, time and every object", async () => {
+  it("[FD-CACHE-039] [FD-CACHE-042] a commit records key, namespace, tier, writer, epoch, time and every object", async () => {
     const w = world();
     const objects = await upload(NS, 2, { "store.tar": "abc" });
     expect(await ok(commit(w, { epoch: 2, manifest: { key: KEY, namespace: NS, objects } }))).toBe("accepted");
@@ -90,7 +90,7 @@ describe("cache entries, commit and verification", () => {
     expect(read?.lastReadAt).toBe(w.now);
   });
 
-  it("FD-CACHE-039 a commit before every object is uploaded, or naming an object outside the epoch path, is refused", async () => {
+  it("[FD-CACHE-039] a commit before every object is uploaded, or naming an object outside the epoch path, is refused", async () => {
     const w = world();
     const objects = await upload(NS, 2, { a: "1" });
     const missing = { path: `${objectPrefix(NS, KEY, EXEC, 2)}b`, size: 1, sha256: "e".repeat(64) };
@@ -100,14 +100,14 @@ describe("cache entries, commit and verification", () => {
     expect(await bucket.head(manifestPath(NS, KEY))).toBeNull();
   });
 
-  it("FD-CACHE-040 FD-CACHE-051 a commit at an epoch other than the current one is stale and creates no entry", async () => {
+  it("[FD-CACHE-040] [FD-CACHE-051] a commit at an epoch other than the current one is stale and creates no entry", async () => {
     const w = world();
     const objects = await upload(NS, 1, { a: "1" });
     expect(await ok(commit(w, { epoch: 1, manifest: { key: KEY, namespace: NS, objects } }))).toBe("stale");
     expect(await bucket.head(manifestPath(NS, KEY))).toBeNull();
   });
 
-  it("FD-CACHE-029 a commit to a namespace other than the writable one fails with CacheNamespaceDenied", async () => {
+  it("[FD-CACHE-029] a commit to a namespace other than the writable one fails with CacheNamespaceDenied", async () => {
     const w = world();
     const objects = await upload(protectedCloud(REPO), 2, { a: "1" });
     const exit = await commit(w, { epoch: 2, manifest: { key: KEY, namespace: protectedCloud(REPO), objects } });
@@ -115,14 +115,14 @@ describe("cache entries, commit and verification", () => {
     expect(await bucket.head(manifestPath(protectedCloud(REPO), KEY))).toBeNull();
   });
 
-  it("FD-CACHE-055 a terminal execution's commit is refused with 403", async () => {
+  it("[FD-CACHE-055] a terminal execution's commit is refused with 403", async () => {
     const w = world([lease({ status: "terminal" })]);
     const objects = await upload(NS, 2, { a: "1" });
     const exit = await commit(w, { epoch: 2, manifest: { key: KEY, namespace: NS, objects } });
     expect(failureOf(exit)).toMatchObject({ _tag: "CommitRefused", status: 403 });
   });
 
-  it("FD-CACHE-041 the first committed manifest stays and a later commit for the key is answered duplicate (Miniflare R2)", async () => {
+  it("[FD-CACHE-041] the first committed manifest stays and a later commit for the key is answered duplicate (Miniflare R2)", async () => {
     const first = world();
     const objects = await upload(NS, 2, { a: "first" });
     expect(await ok(commit(first, { epoch: 2, manifest: { key: KEY, namespace: NS, objects } }))).toBe("accepted");
@@ -134,7 +134,7 @@ describe("cache entries, commit and verification", () => {
     expect(await bucket.put(manifestPath(NS, KEY), "{}", { onlyIf: { etagDoesNotMatch: "*" } })).toBeNull();
   });
 
-  it("FD-CACHE-043 a device manifest needs a valid signature by the device's registered cache-entry key", async () => {
+  it("[FD-CACHE-043] a device manifest needs a valid signature by the device's registered cache-entry key", async () => {
     const device = await signingKeys();
     const spki = Buffer.from(await crypto.subtle.exportKey("spki", device.pair.publicKey)).toString("base64");
     const w = world([lease({ executorId: "dev-1", executorKind: "device" })]);
@@ -158,12 +158,12 @@ describe("cache entries, commit and verification", () => {
     expect(await Effect.runPromise(lookupEntry({ ...reader, executorKind: "device" }, KEY, fetchManifest, { controlPlane: keys.publicJwk, device: (id) => (id === "dev-1" ? spki : null) }))).not.toBeNull();
   });
 
-  it("FD-CACHE-044 objects without a committed manifest are a miss", async () => {
+  it("[FD-CACHE-044] objects without a committed manifest are a miss", async () => {
     await upload(NS, 2, { a: "1" });
     expect(await Effect.runPromise(lookupEntry(reader, KEY, fetchManifest, verification()))).toBeNull();
   });
 
-  it("FD-CACHE-045 a failed signature or object digest is a miss logged as cache.verify_failed", async () => {
+  it("[FD-CACHE-045] a failed signature or object digest is a miss logged as cache.verify_failed", async () => {
     const w = world();
     const objects = await upload(NS, 2, { a: "1" });
     await ok(commit(w, { epoch: 2, manifest: { key: KEY, namespace: NS, objects } }));
@@ -187,14 +187,14 @@ describe("cache entries, commit and verification", () => {
     expect(restored?.size).toBe(1);
   });
 
-  it("FD-CACHE-024 a pull-request reader restores its own namespace before a protected tier", async () => {
+  it("[FD-CACHE-024] a pull-request reader restores its own namespace before a protected tier", async () => {
     await ok(commit(world([lease({ namespaces: { read: [], write: protectedCloud(REPO) } })]), { epoch: 2, manifest: { key: KEY, namespace: protectedCloud(REPO), objects: await upload(protectedCloud(REPO), 2, { a: "base" }) } }));
     expect((await Effect.runPromise(lookupEntry(reader, KEY, fetchManifest, verification())))?.namespace).toBe(protectedCloud(REPO));
     await ok(commit(world(), { epoch: 2, manifest: { key: KEY, namespace: NS, objects: await upload(NS, 2, { a: "pr" }) } }));
     expect((await Effect.runPromise(lookupEntry(reader, KEY, fetchManifest, verification())))?.namespace).toBe(NS);
   });
 
-  it("FD-CACHE-027 a required execution on a cloud executor skips an entry a device wrote", async () => {
+  it("[FD-CACHE-027] a required execution on a cloud executor skips an entry a device wrote", async () => {
     const forged: Manifest = {
       key: KEY,
       namespace: NS,
@@ -211,7 +211,7 @@ describe("cache entries, commit and verification", () => {
     expect(found).toBeNull();
   });
 
-  it("FD-CACHE-028 a release or cloud-only reader restores nothing, and FD-CACHE-011 a failing read is a miss", async () => {
+  it("[FD-CACHE-028] a release or cloud-only reader restores nothing, and [FD-CACHE-011] a failing read is a miss", async () => {
     let reads = 0;
     const fetch = async () => {
       reads++;
@@ -224,7 +224,7 @@ describe("cache entries, commit and verification", () => {
     expect(reads).toBe(2);
   });
 
-  it("FD-CACHE-046 save skips the upload when a committed manifest exists, and FD-CACHE-012 a failed write is logged, not raised", async () => {
+  it("[FD-CACHE-046] save skips the upload when a committed manifest exists, and [FD-CACHE-012] a failed write is logged, not raised", async () => {
     let uploads = 0;
     const upload = Effect.sync(() => void uploads++);
     expect(await Effect.runPromise(saveEntry({ key: KEY, committed: Effect.succeed(true), upload, commit: Effect.succeed("accepted") }))).toBe("skipped-existing");
@@ -234,7 +234,7 @@ describe("cache entries, commit and verification", () => {
     expect(await Effect.runPromise(saveEntry({ key: KEY, committed: Effect.die("boom"), upload, commit: Effect.succeed("accepted") }))).toBe("failed");
   });
 
-  it("FD-CACHE-061 a restore of an entry last read over TTL/2 ago refreshes last_read_at", async () => {
+  it("[FD-CACHE-061] a restore of an entry last read over TTL/2 ago refreshes last_read_at", async () => {
     const w = world();
     await ok(commit(w, { epoch: 2, manifest: { key: KEY, namespace: NS, objects: await upload(NS, 2, { a: "1" }) } }));
     const read = (await Effect.runPromise(readManifest(bucket, NS, KEY)))!;

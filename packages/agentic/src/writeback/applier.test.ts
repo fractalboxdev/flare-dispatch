@@ -101,7 +101,7 @@ const WRITES = [
 ];
 
 describe("pr.propose", () => {
-  it("FD-AGT-034 the binding returns the manifest of a success result with a staged write, and none otherwise", () => {
+  it("[FD-AGT-034] the binding returns the manifest of a success result with a staged write, and none otherwise", () => {
     const base = { executionId: "x1", run: "spec-drift-pr", repo: { owner: "o", name: "r" } };
     expect(prProposePayload({ ...base, outcome: "success", stagedWrite: manifest() })).toEqual({
       _tag: "payload",
@@ -113,7 +113,7 @@ describe("pr.propose", () => {
     });
   });
 
-  it("FD-AGT-035 FD-AGT-013 FD-GH-083 commits each blob byte for byte on the base commit and opens a draft pull request", async () => {
+  it("[FD-AGT-035] [FD-AGT-013] [FD-GH-083] commits each blob byte for byte on the base commit and opens a draft pull request", async () => {
     const repo = fakeRepo();
     const answer = await apply(repo, manifest());
     expect(answer).toEqual({ _tag: "applied", externalRef: "https://github.com/o/r/pull/1" });
@@ -133,7 +133,7 @@ describe("pr.propose", () => {
     });
   });
 
-  it("FD-GH-083 reuses the open pull request whose head is the manifest's branch", async () => {
+  it("[FD-GH-083] reuses the open pull request whose head is the manifest's branch", async () => {
     const repo = fakeRepo();
     await apply(repo, manifest());
     const second = await apply(
@@ -145,7 +145,7 @@ describe("pr.propose", () => {
     expect(repo.pulls[0]?.title).toBe("Again");
   });
 
-  it("FD-AGT-016 FD-AGT-018 a rejected manifest is refused with every reason before any GitHub call", async () => {
+  it("[FD-AGT-016] [FD-AGT-018] a rejected manifest is refused with every reason before any GitHub call", async () => {
     const repo = fakeRepo();
     const bad = manifest({
       branch: "main",
@@ -165,7 +165,7 @@ describe("pr.propose", () => {
     expect(repo.calls).toEqual([]);
   });
 
-  it("FD-AGT-032 a URL host present in the file at the base commit is read back before any write and accepted", async () => {
+  it("[FD-AGT-032] a URL host present in the file at the base commit is read back before any write and accepted", async () => {
     const repo = fakeRepo();
     repo.files.set("specs/a.md", enc("see https://kept.example/x\n"));
     const text = "see https://kept.example/x\nmore https://kept.example/y\n";
@@ -179,7 +179,7 @@ describe("pr.propose", () => {
     expect((refused as { reason: string }).reason).toMatch(/^writeback: url-not-allowed/);
   });
 
-  it("FD-GH-084 refuses a branch holding a commit whose author is not the App, and leaves it unchanged", async () => {
+  it("[FD-GH-084] refuses a branch holding a commit whose author is not the App, and leaves it unchanged", async () => {
     const repo = fakeRepo();
     repo.commits.set("h".repeat(40), {
       sha: "h".repeat(40),
@@ -197,7 +197,7 @@ describe("pr.propose", () => {
     expect(repo.calls.filter((c) => WRITES.includes(c))).toEqual([]);
   });
 
-  it("FD-GH-082 refuses a protected branch under the prefix", async () => {
+  it("[FD-GH-082] refuses a protected branch under the prefix", async () => {
     const repo = fakeRepo();
     repo.protectedBranches.add("flare-dispatch/spec-drift");
     expect(await apply(repo, manifest())).toEqual({
@@ -207,12 +207,12 @@ describe("pr.propose", () => {
     expect(repo.calls.filter((c) => WRITES.includes(c))).toEqual([]);
   });
 
-  it("FD-AGT-042 a failed record read answers retryable, never an empty staged write", async () => {
+  it("[FD-AGT-042] a failed record read answers retryable, never an empty staged write", async () => {
     const answer = await apply(fakeRepo(), manifest(), recordsLayer({ fail: true }));
     expect(answer).toEqual({ _tag: "retryable", reason: "writeback: read artifacts" });
   });
 
-  it("FD-AGT-038 a refusal leaves only the row's answer: the applier has no outcome to change", async () => {
+  it("[FD-AGT-038] a refusal leaves only the row's answer: the applier has no outcome to change", async () => {
     const answer = await apply(fakeRepo(), manifest({ branch: "feature/x" }));
     expect(Object.keys(answer).sort()).toEqual(["_tag", "reason"]);
   });
@@ -249,7 +249,7 @@ describe("pr.close", () => {
       applyPrClose(config)(closeRow(branch)).pipe(Effect.provide(fakeGitLayer(repo))),
     );
 
-  it("FD-GH-087 FD-AGT-070 closes the App's pull request, and refuses one carrying a human commit", async () => {
+  it("[FD-GH-087] [FD-AGT-070] closes the App's pull request, and refuses one carrying a human commit", async () => {
     const repo = fakeRepo();
     await apply(repo, manifest());
     expect((await close(repo, "flare-dispatch/spec-drift"))._tag).toBe("applied");

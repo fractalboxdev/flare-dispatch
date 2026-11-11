@@ -13,14 +13,14 @@ const failing = (status: number | undefined) =>
   });
 
 describe("fd dispatch retry", () => {
-  it("FD-IFC-066: a 5xx or a network failure is retried, and every 4xx is final", () => {
+  it("[FD-IFC-066]: a 5xx or a network failure is retried, and every 4xx is final", () => {
     expect(retryable(failing(503))).toBe(true);
     expect(retryable(failing(undefined))).toBe(true);
     for (const status of [400, 401, 403, 404, 409, 422, 429])
       expect(retryable(failing(status))).toBe(false);
   });
 
-  it("FD-IFC-066: up to 3 attempts in total, sleeping attempt × 5 s between them", async () => {
+  it("[FD-IFC-066]: up to 3 attempts in total, sleeping attempt × 5 s between them", async () => {
     let attempts = 0;
     const attempt = Effect.suspend(() => {
       attempts++;

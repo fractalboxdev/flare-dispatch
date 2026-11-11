@@ -79,7 +79,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["wait", "granted"]);
   });
 
-  it("FD-GH-058 MAMEKO-OUT-041 at the reserve only check.open and check.conclude rows get a permit", async () => {
+  it("[FD-GH-058] MAMEKO-OUT-041 at the reserve only check.open and check.conclude rows get a permit", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 10, resetAt: NOW + 5000 });
@@ -94,7 +94,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual([{ _tag: "wait", retryAt: NOW + 5000 }, "granted", "granted"]);
   });
 
-  it("FD-GH-059 at 30% the lowest-rank class gets no permit outside the reserve kinds", async () => {
+  it("[FD-GH-059] at 30% the lowest-rank class gets no permit outside the reserve kinds", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 30, resetAt: NOW + 5000 });
@@ -108,7 +108,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["wait", "granted", "granted"]);
   });
 
-  it("FD-GH-060 grants nothing before a Retry-After instant", async () => {
+  it("[FD-GH-060] grants nothing before a Retry-After instant", async () => {
     const answer = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { retryAfterAt: NOW + 30_000 });
@@ -118,7 +118,7 @@ describe("applier rate limit", () => {
     expect(answer).toEqual({ _tag: "wait", retryAt: NOW + 30_000 });
   });
 
-  it("FD-GH-061 at 0 remaining grants nothing until the reset, then the budget refills", async () => {
+  it("[FD-GH-061] at 0 remaining grants nothing until the reset, then the budget refills", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 0, resetAt: NOW + 60_000 });
@@ -131,7 +131,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual([{ _tag: "wait", retryAt: NOW + 60_000 }, "granted"]);
   });
 
-  it("FD-GH-062 MAMEKO-OUT-038 caps apply permits per minute; lookup and reconcile do not count", async () => {
+  it("[FD-GH-062] MAMEKO-OUT-038 caps apply permits per minute; lookup and reconcile do not count", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         const tags: string[] = [];
@@ -146,7 +146,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["granted", "granted", "granted", "granted", "granted", "wait"]);
   });
 
-  it("FD-GH-063 MAMEKO-OUT-039 a 9th concurrent call waits until a permit is released", async () => {
+  it("[FD-GH-063] MAMEKO-OUT-039 a 9th concurrent call waits until a permit is released", async () => {
     const result = await withQuota(
       Effect.gen(function* () {
         const limit = yield* ActuatorRateLimit;
@@ -214,7 +214,7 @@ describe("live client", () => {
       installationQuotaLayer(),
     );
 
-  it("FD-GH-057 stores x-ratelimit-remaining and x-ratelimit-reset from every response", () => {
+  it("[FD-GH-057] stores x-ratelimit-remaining and x-ratelimit-reset from every response", () => {
     const headers = new Headers({
       "x-ratelimit-limit": "5000",
       "x-ratelimit-remaining": "42",
@@ -230,7 +230,7 @@ describe("live client", () => {
     });
   });
 
-  it("FD-GH-057 FD-GH-061 a response's headers reach the installation's quota", async () => {
+  it("[FD-GH-057] [FD-GH-061] a response's headers reach the installation's quota", async () => {
     const calls: string[] = [];
     const fetch: typeof globalThis.fetch = async (input, init) => {
       calls.push(`${init?.method} ${String(input)}`);
@@ -256,7 +256,7 @@ describe("live client", () => {
     expect(answer).toEqual({ _tag: "wait", retryAt: 4_102_444_800_000 });
   });
 
-  it("FD-GH-046 marks a secondary-rate-limit 403 as rate-limited and a permission 403 as not", async () => {
+  it("[FD-GH-046] marks a secondary-rate-limit 403 as rate-limited and a permission 403 as not", async () => {
     const run = (headers: Record<string, string>, message: string) =>
       Effect.runPromise(
         Effect.gen(function* () {

@@ -128,7 +128,7 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
 };
 
 describe("the intake routes on the live Layers", () => {
-  it("FD-INT-001 FD-INT-016 a signed pull request reaches admission through the App's token and reads", async () => {
+  it("[FD-INT-001] [FD-INT-016] a signed pull request reaches admission through the App's token and reads", async () => {
     const w = await worker();
     const r = await w.handle(
       await signedWebhook("pull_request", pullRequestPayload()),
@@ -148,7 +148,7 @@ describe("the intake routes on the live Layers", () => {
     ]);
   });
 
-  it("FD-PROF-013 FD-PROF-014 a gating run whose check the base branch's ruleset requires resolves to required", async () => {
+  it("[FD-PROF-013] [FD-PROF-014] a gating run whose check the base branch's ruleset requires resolves to required", async () => {
     const w = await worker(DEFAULT_MANIFEST, ["flare-dispatch/check:ci"]);
     await w.handle(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github");
     expect(w.db.sqlite.prepare("select run, class from executions order by run").all()).toEqual([
@@ -158,7 +158,7 @@ describe("the intake routes on the live Layers", () => {
     expect(w.calls).toContain(`GET /repos/${REPO}/rules/branches/main`);
   });
 
-  it("FD-INT-018 an invalid manifest posts the failing flare-dispatch/manifest check run through the App", async () => {
+  it("[FD-INT-018] an invalid manifest posts the failing flare-dispatch/manifest check run through the App", async () => {
     const w = await worker('{"version": 2}');
     await w.handle(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github");
     expect(w.calls).toContain(`POST /repos/${REPO}/check-runs`);
@@ -167,7 +167,7 @@ describe("the intake routes on the live Layers", () => {
     ]);
   });
 
-  it("FD-INT-034 FD-IFC-027 a dispatch with no OIDC audience configured and no Access identity answers 401", async () => {
+  it("[FD-INT-034] [FD-IFC-027] a dispatch with no OIDC audience configured and no Access identity answers 401", async () => {
     const w = await worker();
     const r = await w.handle(
       new Request("https://cp.example.com/v1/dispatch/check", { method: "POST", body: "{}" }),

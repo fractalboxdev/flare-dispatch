@@ -26,7 +26,7 @@ const submit = (
   );
 
 describe("dispatch.followOn", () => {
-  it("FD-GH-088 a repeated apply submits one request keyed <execution_id>/<intent_key> on the parent's commit", async () => {
+  it("[FD-GH-088] a repeated apply submits one request keyed <execution_id>/<intent_key> on the parent's commit", async () => {
     const h = await harness();
     const opened = await bodyOf(
       await h.run(
@@ -55,7 +55,7 @@ describe("dispatch.followOn", () => {
     ).toEqual([{ canonical: `${parent}/run:review:0` }]);
   });
 
-  it("FD-GH-088 a follow-on of an unknown execution is refused and admits nothing", async () => {
+  it("[FD-GH-088] a follow-on of an unknown execution is refused and admits nothing", async () => {
     const h = await harness();
     expect(await submit(h, "no-such-execution")).toMatchObject({ _tag: "refused" });
     expect(h.executions()).toEqual([]);
@@ -63,7 +63,7 @@ describe("dispatch.followOn", () => {
 });
 
 describe("ops intents", () => {
-  it("FD-GH-089 a probe inserts its ops intent once, keyed ops:<key>, scoped to the repository it names", async () => {
+  it("[FD-GH-089] a probe inserts its ops intent once, keyed ops:<key>, scoped to the repository it names", async () => {
     const db = await migratedD1();
     const intent = {
       kind: "canary.push" as const,

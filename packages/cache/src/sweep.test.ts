@@ -40,7 +40,7 @@ const options = (ledgers: CacheLedgers, closed: Record<number, number> = {}) => 
 });
 
 describe("cache sweep", () => {
-  it("FD-CACHE-062 deletes every entry last read more than the TTL ago", async () => {
+  it("[FD-CACHE-062] deletes every entry last read more than the TTL ago", async () => {
     const stale = await entry(protectedCloud(REPO), 1, NOW - 15 * DAY);
     const fresh = await entry(protectedCloud(REPO), 2, NOW - 13 * DAY);
     await bucket.put(compileObjectKey(protectedCloud(REPO), "cc"), "y");
@@ -54,7 +54,7 @@ describe("cache sweep", () => {
     expect(later.expired).toBeGreaterThanOrEqual(2);
   });
 
-  it("FD-CACHE-063 an over-bound repository loses its oldest entries down to 90% and the ledger is measured", async () => {
+  it("[FD-CACHE-063] an over-bound repository loses its oldest entries down to 90% and the ledger is measured", async () => {
     const ledgers = memoryLedgers();
     for (let i = 0; i < 10; i++) await entry(protectedCloud(REPO), i, NOW - (10 - i) * 1000, 100);
     const r = await sweepCache(bucket, NOW, { ...options(ledgers), repoBoundBytes: 950 });
@@ -66,7 +66,7 @@ describe("cache sweep", () => {
     expect((await ledgers(REPO).usage()).stored).toBe(800);
   });
 
-  it("FD-CACHE-064 deletes a pull request's namespace once it has been closed for the delay", async () => {
+  it("[FD-CACHE-064] deletes a pull request's namespace once it has been closed for the delay", async () => {
     const open = await entry(pullRequestNamespace(REPO, 1), 1, NOW);
     const justClosed = await entry(pullRequestNamespace(REPO, 2), 2, NOW);
     const closed = await entry(pullRequestNamespace(REPO, 3), 3, NOW);
@@ -77,7 +77,7 @@ describe("cache sweep", () => {
     expect(r.closedPullRequests).toBe(2);
   });
 
-  it("FD-CACHE-065 deletes an exec/ namespace 7 days after its creation", async () => {
+  it("[FD-CACHE-065] deletes an exec/ namespace 7 days after its creation", async () => {
     const ns = executionNamespace(REPO, "rehearsal-1");
     const path = await entry(ns, 1, NOW);
     expect((await sweepCache(bucket, NOW + 6 * DAY, { ...options(memoryLedgers()), ttlMs: 30 * DAY })).expired).toBe(0);
@@ -85,7 +85,7 @@ describe("cache sweep", () => {
     expect(await exists(path)).toBe(false);
   });
 
-  it("FD-CACHE-066 deletes objects no committed manifest lists once older than 24 h", async () => {
+  it("[FD-CACHE-066] deletes objects no committed manifest lists once older than 24 h", async () => {
     const listed = await entry(protectedCloud(REPO), 1, NOW);
     const stray = `${objectPrefix(protectedCloud(REPO), key(1), "late", 2)}obj`;
     const torn = `${objectPrefix(protectedCloud(REPO), key(9), "torn", 1)}obj`;
@@ -98,7 +98,7 @@ describe("cache sweep", () => {
     expect(r.orphaned).toBe(2);
   });
 
-  it("FD-CACHE-067 lists at most the page bound per run and resumes after the key it persists", async () => {
+  it("[FD-CACHE-067] lists at most the page bound per run and resumes after the key it persists", async () => {
     // 1000 objects per page: two pages of committed entries.
     for (let i = 0; i < 550; i++) await entry(protectedCloud(REPO), i, NOW - 20 * DAY, 1);
     const first = await sweepCache(bucket, NOW, { ...options(memoryLedgers()), maxPages: 1 });

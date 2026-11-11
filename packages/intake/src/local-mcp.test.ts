@@ -24,7 +24,7 @@ const registration = {
 };
 
 describe("FD-INT-061 local submit", () => {
-  it("FD-INT-061 an accepted local.register records trigger local and the local-only constraint", async () => {
+  it("[FD-INT-061] an accepted local.register records trigger local and the local-only constraint", async () => {
     const h = await harness();
     const answer = await register(h, "check", registration);
     expect(answer).toMatchObject({ _tag: "accepted", executionId: expect.any(String) });
@@ -40,7 +40,7 @@ describe("FD-INT-061 local submit", () => {
     expect(h.recorded.resolved).toEqual([]);
   });
 
-  it("FD-INT-061 an unknown run or undecodable registration is rejected and admits nothing", async () => {
+  it("[FD-INT-061] an unknown run or undecodable registration is rejected and admits nothing", async () => {
     const h = await harness();
     expect(await register(h, "no-such-run", registration)).toEqual({ _tag: "rejected" });
     expect(await register(h, "check", { ...registration, sha: "short" })).toEqual({
@@ -58,7 +58,7 @@ const mcpRequest = (identity: string | null) =>
   });
 
 describe("MCP dispatch", () => {
-  it("FD-INT-062 an authenticated call submits trigger mcp with the caller's identity", async () => {
+  it("[FD-INT-062] an authenticated call submits trigger mcp with the caller's identity", async () => {
     const h = await harness();
     const result = await h.run(
       mcpDispatch(mcpRequest("agent@example.com"), {
@@ -72,7 +72,7 @@ describe("MCP dispatch", () => {
     expect(h.records()[0]).toMatchObject({ trigger: "mcp", caller: "agent@example.com" });
   });
 
-  it("FD-INT-062 a call with no Access identity is refused 401 and submits nothing", async () => {
+  it("[FD-INT-062] a call with no Access identity is refused 401 and submits nothing", async () => {
     const h = await harness();
     const exit = await h.run(
       Effect.exit(mcpDispatch(mcpRequest(null), { run: "check", repo: REPO })),
@@ -81,7 +81,7 @@ describe("MCP dispatch", () => {
     expect(h.executions()).toEqual([]);
   });
 
-  it("FD-INT-063 a class above the assigned one keeps the assigned class; a lower one reaches resolution", async () => {
+  it("[FD-INT-063] a class above the assigned one keeps the assigned class; a lower one reaches resolution", async () => {
     const h = await harness();
     await h.run(
       mcpDispatch(mcpRequest("agent@example.com"), {

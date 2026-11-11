@@ -72,7 +72,7 @@ describe("stagedWriteGate", () => {
     expect(gate({ "src/a.ts": "export const a = 1;\n" })).toEqual({ _tag: "accept" });
   });
 
-  it("FD-AGT-014 rejects a stored blob whose digest differs from its entry", () => {
+  it("[FD-AGT-014] rejects a stored blob whose digest differs from its entry", () => {
     const files = { "src/a.ts": "one" };
     const verdict = stagedWriteGate(
       { ...write(files), entries: [{ path: "src/a.ts", mode: "100644", digest: sha("two") }] },
@@ -83,7 +83,7 @@ describe("stagedWriteGate", () => {
     expect(kinds(verdict)).toEqual(["digest-mismatch"]);
   });
 
-  it("FD-AGT-017 rejects the whole manifest and returns every reason for every entry in one result", () => {
+  it("[FD-AGT-017] rejects the whole manifest and returns every reason for every entry in one result", () => {
     const verdict = gate(
       { "../x": "a", "runs/r.ts": "b", "package.json": "{}", "ok.ts": "c" },
       { model: true, over: { branch: "main" } },
@@ -96,7 +96,7 @@ describe("stagedWriteGate", () => {
     ]);
   });
 
-  it("FD-AGT-019 rejects every malformed path with path-invalid", () => {
+  it("[FD-AGT-019] rejects every malformed path with path-invalid", () => {
     for (const path of [
       "/etc/passwd",
       "a/../b",
@@ -113,7 +113,7 @@ describe("stagedWriteGate", () => {
     expect(kinds(gate({ "a/.gitignore": "x", ".github/CODEOWNERS": "x" }))).toEqual([]);
   });
 
-  it("FD-AGT-020 rejects runs/, infra/, .github/workflows/ and wrangler.jsonc in any case for model-authored writes, whatever the opt-ins", () => {
+  it("[FD-AGT-020] rejects runs/, infra/, .github/workflows/ and wrangler.jsonc in any case for model-authored writes, whatever the opt-ins", () => {
     for (const path of [
       "runs/x.ts",
       "INFRA/Dockerfile.sandbox",
@@ -132,21 +132,21 @@ describe("stagedWriteGate", () => {
     expect(kinds(gate({ "runs/x.ts": "x" }, { model: false }))).toEqual([]);
   });
 
-  it("FD-AGT-021 rejects wrangler.json and wrangler.toml for model-authored writes", () => {
+  it("[FD-AGT-021] rejects wrangler.json and wrangler.toml for model-authored writes", () => {
     expect(kinds(gate({ "a/WRANGLER.json": "x", "wrangler.toml": "y" }, { model: true }))).toEqual([
       "protected-path",
       "protected-path",
     ]);
   });
 
-  it("FD-AGT-022 rejects a human-authored workflow change unless the recipe sets allowWorkflows", () => {
+  it("[FD-AGT-022] rejects a human-authored workflow change unless the recipe sets allowWorkflows", () => {
     expect(kinds(gate({ ".github/workflows/ci.yml": "x" }))).toEqual(["workflows-not-opted-in"]);
     expect(
       kinds(gate({ ".github/workflows/ci.yml": "x" }, { spec: { allowWorkflows: true } })),
     ).toEqual([]);
   });
 
-  it("FD-AGT-023 rejects sensitive paths without allowSensitivePaths, in any case", () => {
+  it("[FD-AGT-023] rejects sensitive paths without allowSensitivePaths, in any case", () => {
     const sensitive = [
       "package.json",
       "sub/Cargo.toml",
@@ -170,7 +170,7 @@ describe("stagedWriteGate", () => {
       );
   });
 
-  it("FD-AGT-024 rejects a path no allowlist glob matches, and an empty allowlist rejects every entry", () => {
+  it("[FD-AGT-024] rejects a path no allowlist glob matches, and an empty allowlist rejects every entry", () => {
     expect(
       kinds(gate({ "specs/a.md": "x", "src/b.ts": "y" }, { spec: { allowlist: ["specs/**"] } })),
     ).toEqual(["outside-allowlist"]);
@@ -190,18 +190,18 @@ describe("stagedWriteGate", () => {
     ]);
   });
 
-  it("FD-AGT-025 rejects more entries than maxFiles, default 200", () => {
+  it("[FD-AGT-025] rejects more entries than maxFiles, default 200", () => {
     const many = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`f/${i}.txt`, `${i}`]));
     expect(kinds(gate(many))).toEqual(["too-many-files"]);
     expect(kinds(gate({ a: "1", b: "2" }, { spec: { maxFiles: 1 } }))).toEqual(["too-many-files"]);
   });
 
-  it("FD-AGT-026 rejects blobs over maxBytes, default 5 MiB", () => {
+  it("[FD-AGT-026] rejects blobs over maxBytes, default 5 MiB", () => {
     expect(kinds(gate({ big: "x".repeat(5 * 1024 * 1024 + 1) }))).toEqual(["too-large"]);
     expect(kinds(gate({ a: "12345" }, { spec: { maxBytes: 4 } }))).toEqual(["too-large"]);
   });
 
-  it("FD-AGT-027 rejects a mode other than 100644 or 100755", () => {
+  it("[FD-AGT-027] rejects a mode other than 100644 or 100755", () => {
     const files = { "a.sh": "x", "b.sh": "y", link: "z" };
     const m = write(files);
     const verdict = stagedWriteGate(
@@ -219,7 +219,7 @@ describe("stagedWriteGate", () => {
     expect(verdict).toEqual({ _tag: "reject", reasons: [{ kind: "mode-invalid", path: "link" }] });
   });
 
-  it("FD-AGT-028 rejects a branch that does not start with flare-dispatch/", () => {
+  it("[FD-AGT-028] rejects a branch that does not start with flare-dispatch/", () => {
     expect(kinds(gate({ a: "x" }, { over: { branch: "feature/x" } }))).toEqual(["branch-invalid"]);
     expect(kinds(gate({ a: "x" }, { over: { branch: "flare-dispatch" } }))).toEqual([
       "branch-invalid",
@@ -227,7 +227,7 @@ describe("stagedWriteGate", () => {
     expect(kinds(gate({ a: "x" }, { over: { branch: "flare-dispatch/" } }))).toEqual([]);
   });
 
-  it("FD-AGT-029 rejects credential patterns in added lines and text fields, and issued credentials", () => {
+  it("[FD-AGT-029] rejects credential patterns in added lines and text fields, and issued credentials", () => {
     const secrets = [
       `ghp_${"a".repeat(36)}`,
       `gho_${"B".repeat(36)}`,
@@ -262,7 +262,7 @@ describe("stagedWriteGate", () => {
     expect(kinds(gate({ "a.ts": `${kept}\nnew line` }, { base: { "a.ts": kept } }))).toEqual([]);
   });
 
-  it("FD-AGT-030 names the path and line of a secret and never the matched value", () => {
+  it("[FD-AGT-030] names the path and line of a secret and never the matched value", () => {
     const token = `ghp_${"z".repeat(36)}`;
     const verdict = gate({ "src/a.ts": `one\ntwo ${token}\n` });
     expect(verdict).toEqual({
@@ -272,7 +272,7 @@ describe("stagedWriteGate", () => {
     expect(JSON.stringify(verdict)).not.toContain(token);
   });
 
-  it("FD-AGT-031 rejects a model-authored message, title or body linking outside the link allowlist", () => {
+  it("[FD-AGT-031] rejects a model-authored message, title or body linking outside the link allowlist", () => {
     const body = (text: string) => ({ pr: { title: "t", body: text, draft: true, labels: [] } });
     expect(
       kinds(gate({ a: "x" }, { model: true, over: body("see https://evil.example/x") })),
@@ -310,7 +310,7 @@ describe("stagedWriteGate", () => {
     ).toEqual([]);
   });
 
-  it("FD-AGT-032 rejects an added model-authored line linking a host neither allowlisted nor in the file at base", () => {
+  it("[FD-AGT-032] rejects an added model-authored line linking a host neither allowlisted nor in the file at base", () => {
     expect(kinds(gate({ "README.md": "go to https://new.example/" }, { model: true }))).toEqual([
       "url-not-allowed",
     ]);
@@ -327,7 +327,7 @@ describe("stagedWriteGate", () => {
     );
   });
 
-  it("FD-AGT-033 rejects a run of 64 base64 or hex characters in model-authored text fields", () => {
+  it("[FD-AGT-033] rejects a run of 64 base64 or hex characters in model-authored text fields", () => {
     expect(
       kinds(gate({ a: "x" }, { model: true, over: { message: `fix ${"ab12".repeat(16)}` } })),
     ).toEqual(["encoded-run"]);
@@ -367,7 +367,7 @@ describe("S8 properties", () => {
     .map(([d, f]) => `${d}/${f}.txt`);
   const optIns = fc.record({ allowSensitivePaths: fc.boolean(), allowWorkflows: fc.boolean() });
 
-  it("FD-AGT-020 FD-AGT-016 no model-authored manifest holding a protected path is accepted, whatever the opt-ins", () => {
+  it("[FD-AGT-020] [FD-AGT-016] no model-authored manifest holding a protected path is accepted, whatever the opt-ins", () => {
     fc.assert(
       fc.property(
         fc.uniqueArray(plainPath, { maxLength: 5 }),
@@ -386,7 +386,7 @@ describe("S8 properties", () => {
     );
   });
 
-  it("FD-AGT-017 a manifest is accepted only when each of its entries is accepted alone", () => {
+  it("[FD-AGT-017] a manifest is accepted only when each of its entries is accepted alone", () => {
     const anyPath = fc.oneof(
       plainPath,
       protectedPath,

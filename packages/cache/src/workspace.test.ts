@@ -14,7 +14,7 @@ const execution = {
 };
 
 describe("workspace rule", () => {
-  it("FD-CACHE-002 nothing the control plane hands an executor can carry a checkout, workspace or build output", async () => {
+  it("[FD-CACHE-002] nothing the control plane hands an executor can carry a checkout, workspace or build output", async () => {
     for (const executorKind of ["cloudflare", "aws", "device", "gha"]) {
       const { upload_grant } = await leaseCacheFields(execution, { epoch: 3, executorKind, deadlineAt: 10 }, { publicOrigin: "https://ci.example.com", tokenSecret: "s" });
       expect(grantCarriesNoWorkspace(upload_grant, "e-1", 3)).toBe(true);
@@ -28,7 +28,7 @@ describe("workspace rule", () => {
     ]);
   });
 
-  it("FD-CACHE-003 an epoch above 1 starts from an empty workspace and fetches the commit again", () => {
+  it("[FD-CACHE-003] an epoch above 1 starts from an empty workspace and fetches the commit again", () => {
     expect(workspacePlan()).toMatchObject({ emptyWorkspace: true, fetchCommit: true });
     expect(checkWorkspaceStart({ epoch: 2, entriesAtStart: 0, fetchedCommit: true, placed: [{ path: "~/.cache/uv", source: "dependency" }] })).toEqual([]);
     expect(checkWorkspaceStart({ epoch: 2, entriesAtStart: 4, fetchedCommit: false, placed: [] })).toEqual([

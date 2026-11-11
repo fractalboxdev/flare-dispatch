@@ -57,7 +57,7 @@ const setup = async (opts: { read?: string[]; write?: string | null; down?: bool
 };
 
 describe("device compile-cache proxy", () => {
-  it("FD-CACHE-060 serves a hit from L1 and forwards a miss to the route under the execution's token", async () => {
+  it("[FD-CACHE-060] serves a hit from L1 and forwards a miss to the route under the execution's token", async () => {
     await bucket.put(compileObjectKey(BASE, "k1"), "from-base");
     const { req, calls } = await setup();
     expect(await (await req("k1", "GET")).text()).toBe("from-base");
@@ -66,7 +66,7 @@ describe("device compile-cache proxy", () => {
     expect((await req("absent", "GET")).status).toBe(404);
   });
 
-  it("FD-CACHE-060 a write goes to the route's writable namespace and then to L1; MKCOL and PROPFIND Depth 0 answer locally for collections", async () => {
+  it("[FD-CACHE-060] a write goes to the route's writable namespace and then to L1; MKCOL and PROPFIND Depth 0 answer locally for collections", async () => {
     const { req, calls } = await setup();
     expect((await req("a/", "MKCOL")).status).toBe(201);
     expect((await req("a/", "PROPFIND")).status).toBe(207);
@@ -76,7 +76,7 @@ describe("device compile-cache proxy", () => {
     expect(calls).toEqual(["PUT /v1/compile-cache/acme/widgets/a/obj"]);
   });
 
-  it("FD-CACHE-060 an L1 copy is filed only under the namespace that answered, so a pull request's object never answers a protected reader", async () => {
+  it("[FD-CACHE-060] an L1 copy is filed only under the namespace that answered, so a pull request's object never answers a protected reader", async () => {
     await bucket.put(compileObjectKey(PR, "k"), "pr-object");
     const pr = await setup();
     expect(await (await pr.req("k", "GET")).text()).toBe("pr-object");
@@ -85,7 +85,7 @@ describe("device compile-cache proxy", () => {
     expect((await base.req("k", "GET")).status).toBe(404);
   });
 
-  it("FD-CACHE-060 FD-CACHE-011 an unreachable route is a miss, a write without a writable namespace is refused, and an object over 100 MiB is 413", async () => {
+  it("[FD-CACHE-060] [FD-CACHE-011] an unreachable route is a miss, a write without a writable namespace is refused, and an object over 100 MiB is 413", async () => {
     const down = await setup({ down: true });
     expect((await down.req("k", "GET")).status).toBe(404);
     const readOnly = await setup({ write: null });

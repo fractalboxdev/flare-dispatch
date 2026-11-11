@@ -26,7 +26,7 @@ describe("the command's verdict", () => {
     expect(exitCodeOf(null)).toBe(5);
   });
 
-  it("prints the record's failure reason, exit: <code> (FD-GATE-003)", () => {
+  it("prints the record's failure reason, exit: <code> ([FD-GATE-003])", () => {
     expect(verdictLines(view)[0]).toBe("verdict: failure (exit: 1)");
   });
 
