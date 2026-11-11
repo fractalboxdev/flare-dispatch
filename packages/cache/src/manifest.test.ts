@@ -1,4 +1,4 @@
-import { Effect, Exit, Layer } from "effect";
+import { Effect, Exit, Layer, Logger, References } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "./crypto.ts";
 import {
@@ -195,20 +195,26 @@ describe("cache entries, commit and verification", () => {
   });
 
   it("[FD-CACHE-027] a required execution on a cloud executor skips an entry a device wrote", async () => {
-    const forged: Manifest = {
+    const device = await signingKeys();
+    const spki = Buffer.from(await crypto.subtle.exportKey("spki", device.pair.publicKey)).toString("base64");
+    const body = {
       key: KEY,
       namespace: NS,
-      tier: "pull-request",
-      writer: { executor_id: "dev-1", executor_kind: "device", execution_id: EXEC, epoch: 1 },
+      tier: "pull-request" as const,
+      writer: { executor_id: "dev-1", executor_kind: "device" as const, execution_id: EXEC, epoch: 1 },
       objects: [],
       created_at: 0,
-      signature: { alg: "ES256", key_id: "dev-1", value: "" },
     };
-    const verifyAll = { controlPlane: keys.publicJwk, device: () => "x" };
-    const found = await Effect.runPromise(
-      lookupEntry({ ...reader, class: "required" }, KEY, async () => forged, verifyAll),
-    );
-    expect(found).toBeNull();
+    const deviceWritten: Manifest = {
+      ...body,
+      signature: { alg: "ES256", key_id: "dev-1", value: await es256Sign(device.pair.privateKey, signedBody(body)) },
+    };
+    const keysWithDevice = { controlPlane: keys.publicJwk, device: (id: string) => (id === "dev-1" ? spki : null) };
+    const look = (cls: string) =>
+      Effect.runPromise(lookupEntry({ ...reader, class: cls }, KEY, async () => deviceWritten, keysWithDevice));
+    // The manifest verifies, so only the reader's class separates the hit from the skip.
+    expect((await look("interactive"))?.manifest.writer.executor_id).toBe("dev-1");
+    expect(await look("required")).toBeNull();
   });
 
   it("[FD-CACHE-028] a release or cloud-only reader restores nothing, and [FD-CACHE-011] a failing read is a miss", async () => {
@@ -230,8 +236,29 @@ describe("cache entries, commit and verification", () => {
     expect(await Effect.runPromise(saveEntry({ key: KEY, committed: Effect.succeed(true), upload, commit: Effect.succeed("accepted") }))).toBe("skipped-existing");
     expect(uploads).toBe(0);
     expect(await Effect.runPromise(saveEntry({ key: KEY, committed: Effect.succeed(false), upload, commit: Effect.succeed("accepted") }))).toBe("saved");
-    expect(await Effect.runPromise(saveEntry({ key: KEY, committed: Effect.succeed(false), upload: Effect.fail("507"), commit: Effect.succeed("accepted") }))).toBe("failed");
-    expect(await Effect.runPromise(saveEntry({ key: KEY, committed: Effect.die("boom"), upload, commit: Effect.succeed("accepted") }))).toBe("failed");
+    const logs: { message: unknown; key: unknown }[] = [];
+    const capture = Effect.provide(
+      Layer.succeed(
+        Logger.CurrentLoggers,
+        new Set([
+          Logger.make((o) =>
+            void logs.push({ message: o.message, key: o.fiber.getRef(References.CurrentLogAnnotations).key }),
+          ),
+        ]),
+      ),
+    );
+    const saved = (committed: Effect.Effect<boolean>, up: Effect.Effect<void, string>) =>
+      Effect.runPromise(saveEntry({ key: KEY, committed, upload: up, commit: Effect.succeed("accepted") }).pipe(capture));
+    for (const [committed, up] of [
+      [Effect.succeed(false), Effect.fail("507")],
+      [Effect.die("boom"), upload],
+    ] as const) {
+      logs.length = 0;
+      expect(await saved(committed, up)).toBe("failed");
+      const failures = logs.filter((l) => JSON.stringify(l.message).includes("cache.save_failed"));
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.key).toBe(KEY);
+    }
   });
 
   it("[FD-CACHE-061] a restore of an entry last read over TTL/2 ago refreshes last_read_at", async () => {
