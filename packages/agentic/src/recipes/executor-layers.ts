@@ -27,6 +27,7 @@ import {
   Shell,
   StagedWrites,
   StageFailed,
+  SuppressionLedger,
   type CommandResult,
 } from "./services.ts";
 
@@ -256,6 +257,8 @@ export interface CloudAgenticConfig {
   readonly env: NodeJS.ProcessEnv;
   /** Credentials the runner holds, such as a clone token; a model request carrying one is refused (FD-AGT-011). */
   readonly credentials: readonly string[];
+  /** The suppression ledger's read; the job holds no binding of the control plane's database (FD-AGT-043). */
+  readonly suppressionLedger: Layer.Layer<SuppressionLedger>;
 }
 
 export type CloudAgenticServices =
@@ -266,14 +269,15 @@ export type CloudAgenticServices =
   | StagedWrites
   | Artifacts
   | RecipeIntents
-  | ExecutionsRead;
+  | ExecutionsRead
+  | SuppressionLedger;
 
 /**
  * The agentic recipes' services on the cloud executor. The model client sends no credential and reaches the model
  * route through the egress proxy, which alone holds the per-lease token; the shell and the edit loop start with the
  * sandbox environment, so no runner variable reaches them (FD-AGT-010). Artifacts go to the execution's artifact store
  * (FD-AGT-059). `ExecutionsRead` reads the control plane's executions and log routes, so the job holds no binding of the
- * executions table or the log store (FD-AGT-071).
+ * executions table or the log store (FD-AGT-071). The suppression ledger is the read the runner entry supplies.
  */
 export const cloudAgenticLayers = (
   config: CloudAgenticConfig,
@@ -292,5 +296,6 @@ export const cloudAgenticLayers = (
     artifactsLayer(config.artifacts),
     runnerIntentsLayer,
     executionsApiReadLayer({ baseUrl: config.controlPlaneUrl, fetch: config.fetch }),
+    config.suppressionLedger,
   );
 };

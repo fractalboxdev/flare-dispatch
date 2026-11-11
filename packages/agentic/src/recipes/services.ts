@@ -199,3 +199,27 @@ export class EditLoop extends Context.Service<
  */
 export const editLoopUnavailable = (loop: EditLoopResult) =>
   !loop.started || loop.exitCode === 126 || loop.exitCode === 127;
+
+/** A suppression ledger row: the proposal's key, declined for good, or the matching pull request's close time. */
+export interface SuppressionEntry {
+  readonly key: string;
+  readonly declined: boolean;
+  /** When the matching pull request closed unmerged, epoch ms; null when none did. */
+  readonly closedAt: number | null;
+}
+
+export class SuppressionReadFailed extends Schema.TaggedError<SuppressionReadFailed>()(
+  "SuppressionReadFailed",
+  { key: Schema.String, detail: Schema.String },
+) {}
+
+/**
+ * The suppression ledger, read by a proposal's exact suppression key (specs/runs/agentic.md § Suppression ledger). A
+ * key with no row answers null; a read that fails is `SuppressionReadFailed`, never null (FD-AGT-042, FD-AGT-044).
+ */
+export class SuppressionLedger extends Context.Service<
+  SuppressionLedger,
+  {
+    readonly lookup: (key: string) => Effect.Effect<SuppressionEntry | null, SuppressionReadFailed>;
+  }
+>()("@fractalboxdev/flare-dispatch-agentic/SuppressionLedger") {}

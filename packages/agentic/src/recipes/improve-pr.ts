@@ -1,7 +1,9 @@
 // `improve-pr`: per dimension of the repo manifest, a measurement, an edit loop that sees only the measurement, a
-// materiality floor and a verified staged write (specs/runs/agentic.md § `improve-pr`, FD-AGT-060 to FD-AGT-062).
+// materiality floor and a verified staged write (specs/runs/agentic.md § `improve-pr`, FD-AGT-060 to FD-AGT-062), opened
+// only while the suppression ledger leaves its key open (FD-AGT-043, FD-AGT-044).
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Schema } from "effect";
+import { checkSuppression, suppressionReadFailed, suppressionKey } from "../suppression/ledger.ts";
 import { EditLoop, editLoopUnavailable, Shell, StagedWrites } from "./services.ts";
 
 export const Dimension = Schema.Struct({
@@ -17,6 +19,7 @@ export const Dimension = Schema.Struct({
 export type Dimension = typeof Dimension.Type;
 
 export const ImprovePrInput = Schema.Struct({
+  repo: Schema.Struct({ owner: Schema.String, name: Schema.String }),
   baseBranch: Schema.String,
   dimension: Dimension,
 });
@@ -32,13 +35,24 @@ export const ImprovePrParams = Schema.Struct({
 export type ImprovePrParams = typeof ImprovePrParams.Type;
 
 /**
- * The input of the `improve-pr` execution a manifest entry's schedule starts. `branch` is the branch whose head the
- * execution checks out, so the pull request targets the branch the measurement read.
+ * The input of the `improve-pr` execution a manifest entry's schedule starts for `repo` (`owner/name`). `branch` is the
+ * branch whose head the execution checks out, so the pull request targets the branch the measurement read.
  */
-export const improvePrRequest = (params: ImprovePrParams, branch: string): ImprovePrInput => ({
-  baseBranch: branch,
-  dimension: params.dimension,
-});
+export const improvePrRequest = (
+  params: ImprovePrParams,
+  repo: string,
+  branch: string,
+): ImprovePrInput => {
+  const slash = repo.indexOf("/");
+  return {
+    repo: { owner: repo.slice(0, slash), name: repo.slice(slash + 1) },
+    baseBranch: branch,
+    dimension: params.dimension,
+  };
+};
+
+/** The head branch of a dimension's pull request. */
+export const improveBranch = (d: Dimension) => `flare-dispatch/improve-${d.name}`;
 
 export class MeasureFailed extends Schema.TaggedError<MeasureFailed>()("MeasureFailed", {
   dimension: Schema.String,
@@ -77,10 +91,16 @@ export const improvePrompt = (d: Dimension, measurementOutput: string) =>
 export const gainOf = (d: Dimension, before: number, after: number) =>
   d.better === "lower" ? before - after : after - before;
 
-/** The `improve-pr` body for one dimension. */
+/**
+ * The `improve-pr` body for one dimension. It reads the suppression ledger first, so a declined or cooling key spends
+ * no measurement and no edit loop, and opens nothing.
+ */
 export const runImprovePr = (input: ImprovePrInput) =>
   Effect.gen(function* () {
     const d = input.dimension;
+    const branch = improveBranch(d);
+    const suppressed = yield* checkSuppression(suppressionKey(input.repo, branch));
+    if (suppressed) return { _tag: "success" } satisfies RunResult;
     const before = yield* measure(d);
     const edit = yield* EditLoop;
     const loop = yield* edit.run(improvePrompt(d, before.output));
@@ -96,7 +116,7 @@ export const runImprovePr = (input: ImprovePrInput) =>
 
     const stage = yield* StagedWrites;
     yield* stage.stage({
-      branch: `flare-dispatch/improve-${d.name}`,
+      branch,
       baseBranch: input.baseBranch,
       message: `chore: improve ${d.name}`,
       pr: {
@@ -113,6 +133,7 @@ export const runImprovePr = (input: ImprovePrInput) =>
     return { _tag: "success" } satisfies RunResult;
   }).pipe(
     Effect.catchTags({
+      SuppressionReadFailed: suppressionReadFailed,
       MeasureFailed: (e) =>
         Effect.succeed({
           _tag: "failure",

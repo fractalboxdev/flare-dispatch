@@ -11,8 +11,11 @@ import {
   RecipeIntents,
   Shell,
   StagedWrites,
+  SuppressionLedger,
+  SuppressionReadFailed,
   type CommandResult,
   type ModelRequest,
+  type SuppressionEntry,
 } from "./services.ts";
 
 export interface Recorder {
@@ -25,6 +28,8 @@ export interface Recorder {
   readonly staged: Parameters<StagedWrites["Service"]["stage"]>[0][];
   readonly files: Map<string, string>;
   readonly prompts: string[];
+  /** Every key the run looked up in the suppression ledger. */
+  readonly suppressionLookups: string[];
 }
 
 export interface FakeOptions {
@@ -34,6 +39,8 @@ export interface FakeOptions {
   readonly files?: Record<string, string>;
   /** The edit loop's exit code; null when its executable cannot start, `"killed"` when a signal ends it. */
   readonly editLoop?: (prompt: string, files: Map<string, string>) => number | null | "killed";
+  /** The suppression ledger's row per key; `"fail"` fails the read. No row by default. */
+  readonly suppression?: (key: string) => SuppressionEntry | null | "fail";
 }
 
 export const recorder = (files: Record<string, string> = {}): Recorder => ({
@@ -45,6 +52,7 @@ export const recorder = (files: Record<string, string> = {}): Recorder => ({
   staged: [],
   files: new Map(Object.entries(files)),
   prompts: [],
+  suppressionLookups: [],
 });
 
 export const fakeServices = (rec: Recorder, options: FakeOptions = {}) =>
@@ -100,6 +108,16 @@ export const fakeServices = (rec: Recorder, options: FakeOptions = {}) =>
           return exit === "killed"
             ? { started: true, exitCode: null }
             : { started: exit !== null, exitCode: exit };
+        }),
+    }),
+    Layer.succeed(SuppressionLedger, {
+      lookup: (key) =>
+        Effect.suspend(() => {
+          rec.suppressionLookups.push(key);
+          const row = options.suppression?.(key) ?? null;
+          return row === "fail"
+            ? Effect.fail(new SuppressionReadFailed({ key, detail: "D1_ERROR: injected" }))
+            : Effect.succeed(row);
         }),
     }),
     WorkflowEngine.layerMemory,
