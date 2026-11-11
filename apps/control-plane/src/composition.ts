@@ -33,7 +33,7 @@ import {
   gitDataWithoutApp,
   localPorts,
   writebackApplier,
-  writebackRecordsDeferred,
+  writebackRecords,
 } from "./agentic.ts";
 import { appLoginOf, appOptionsOf, appServices, boundFetch, readsWithoutApp } from "./github.ts";
 
@@ -140,9 +140,7 @@ const isolateLayer = (env: ControlPlaneEnv) => {
   if (app !== undefined) {
     const github = appServices(env, app, alarms);
     // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.
-    const support = Layer.mergeAll(gitData, writebackRecordsDeferred).pipe(
-      Layer.provideMerge(github),
-    );
+    const support = Layer.mergeAll(gitData, writebackRecords(env)).pipe(Layer.provideMerge(github));
     const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
     return Layer.mergeAll(
       profileClassResolver.pipe(

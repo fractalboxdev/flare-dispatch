@@ -370,6 +370,9 @@ importers:
 
   packages/conformance:
     dependencies:
+      '@fractalboxdev/flare-dispatch-agentic':
+        specifier: workspace:*
+        version: link:../agentic
       '@fractalboxdev/flare-dispatch-ops':
         specifier: workspace:*
         version: link:../ops

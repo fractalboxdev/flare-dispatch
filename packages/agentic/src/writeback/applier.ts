@@ -6,6 +6,7 @@ import { Context, Effect, Exit, Match, Schema } from "effect";
 import { stagedWriteGate } from "../staged-write/gate.ts";
 import {
   BRANCH_PREFIX,
+  DEFAULT_MAX_BYTES,
   Manifest,
   refusalReason,
   type GateVerdict,
@@ -67,10 +68,15 @@ export interface LoadedBlob extends StoredBlob {
 export class WritebackRecords extends Context.Service<
   WritebackRecords,
   {
-    /** The blobs of the execution's staged write from the artifact store, each with the digest of the bytes read. */
+    /**
+     * The blobs of the execution's staged write from the artifact store, each with the digest of the bytes read. When
+     * the distinct blobs together exceed `maxBytes`, no bytes are read: each blob carries its stored size, empty
+     * bytes, an empty digest and no text, for the gate to reject as `too-large`.
+     */
     readonly blobs: (
       executionId: string,
       entries: readonly ManifestEntry[],
+      maxBytes: number,
     ) => Effect.Effect<readonly LoadedBlob[], StagedWriteReadFailed>;
     /** Whether the gateway recorded a model call for the execution or the device executor reported a local one. */
     readonly modelCalls: (executionId: string) => Effect.Effect<boolean, StagedWriteReadFailed>;
@@ -98,7 +104,8 @@ export const executionTrailer = (executionId: string) => `Flare-Dispatch-Executi
 
 const decodePayload = Schema.decodeUnknownExit(PrProposePayload);
 
-const textOf = (bytes: Uint8Array): string | null => {
+/** The bytes as UTF-8 text, or null when they are not valid UTF-8. */
+export const textOf = (bytes: Uint8Array): string | null => {
   try {
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
   } catch {
@@ -150,7 +157,11 @@ export const gateStagedWrite = (input: {
     const records = yield* WritebackRecords;
     const git = yield* GitData;
     const { manifest } = input;
-    const blobs = yield* records.blobs(input.executionId, manifest.entries);
+    const blobs = yield* records.blobs(
+      input.executionId,
+      manifest.entries,
+      input.writeback.maxBytes ?? DEFAULT_MAX_BYTES,
+    );
     const issued = yield* records.issuedCredentials(input.executionId);
     const runGate = (baseText: (path: string) => string | null) =>
       stagedWriteGate(manifest, input.writeback, input.modelAuthored, {
