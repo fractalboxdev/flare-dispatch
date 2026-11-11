@@ -13,7 +13,7 @@ import {
 import { newRow, onLocalRegister, onLocalWriteback } from "@fractalboxdev/mameko-kernel";
 import { LocalRegistration, WritebackGate, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
-import { localRegistrationLayer } from "../src/local/registration.ts";
+import { LocalSubmit, localRegistrationLayer } from "../src/local/registration.ts";
 import type { WritebackIntent, WritebackRequest } from "../src/local/run-context.ts";
 import { LOCAL_STORE_MIGRATIONS, LocalStore, localStoreD1 } from "../src/local/store.ts";
 import { CapacityUsage, writebackGateLayer } from "../src/local/writeback-gate.ts";
@@ -72,14 +72,39 @@ export const registrationPayload = (
   runDigest: "sha256:run",
   imageDigest: "sha256:img",
   platform: "darwin-arm64",
-  inputsDigest: "sha256:in",
+  inputsDigest: `sha256:in:${reuseKey}`,
   reuseKey,
   scopeId: SCOPE,
   executorId: "dev-1",
   repository: SCOPE,
+  ref: "refs/heads/feature",
+  inputs: { reuseKey },
   environmentNames: ["CI"],
   wants,
 });
+
+/**
+ * Intake's local submit as the registration port sees it: `RUN` is the one catalogue run, and a submit keys on the
+ * lease, run, tree hash and inputs digest, so a repeated one answers the execution it admitted first.
+ */
+const localSubmit = () => {
+  const admitted = new Map<string, string>();
+  return Layer.succeed(LocalSubmit, {
+    submit: (lease, run, submission) =>
+      Effect.sync(() => {
+        if (run !== RUN) return { _tag: "rejected" } as const;
+        const key = JSON.stringify([
+          lease.leaseId,
+          run,
+          submission.treeHash,
+          submission.inputsDigest,
+        ]);
+        const executionId = admitted.get(key) ?? `01J${String(admitted.size).padStart(23, "0")}`;
+        admitted.set(key, executionId);
+        return { _tag: "admitted", executionId } as const;
+      }),
+  });
+};
 
 /** The verb and table of a statement that writes, or null for a read. */
 const writeOf = (sql: string): string | null => {
@@ -167,8 +192,8 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
   });
   const usage = Layer.succeed(CapacityUsage, { modelCalls: () => Effect.succeed(false) });
   const deps = Layer.mergeAll(store, records, usage, fakeGitLayer(repo));
-  const registration = localRegistrationLayer({ runKnown: (r) => r === RUN }).pipe(
-    Layer.provide(store),
+  const registration = localRegistrationLayer.pipe(
+    Layer.provide(Layer.merge(store, localSubmit())),
   );
   const gate = writebackGateLayer({
     writebackFor: (run: string) => (run === RUN ? WRITEBACK : undefined),
