@@ -63,6 +63,22 @@ describe("dedup recipes", () => {
     expect(canonicalJson({ b: 1, a: { d: undefined, c: [1] } })).toBe('{"a":{"c":[1]},"b":1}');
   });
 
+  it("[FD-GATE-062] a worker-deploy dispatch with an Idempotency-Key takes the commit-scoped key a push of its commit takes", async () => {
+    const pushed = await key({ run: "worker-deploy", label: "edge" });
+    const dispatched = await key({
+      run: "worker-deploy",
+      label: "edge",
+      idempotency: { key: "deploy-1", body: { sha: "a".repeat(40) } },
+    });
+    expect(dispatched).toEqual(pushed);
+    expect(dispatched).toMatchObject({
+      recipe: "commit",
+      canonical: `worker-deploy:edge:acme/app:${"a".repeat(40)}`,
+      requestDigest: null,
+      onMismatch: "duplicate",
+    });
+  });
+
   it("[FD-INT-011] accepts 1 to 128 characters of [A-Za-z0-9._:-] and nothing else", () => {
     expect(validIdempotencyKey("a")).toBe(true);
     expect(validIdempotencyKey("A.b_c:d-9".padEnd(128, "x"))).toBe(true);

@@ -162,7 +162,7 @@ const listedEntry = (run: IntakeRun, repo: string, label: string | null, default
         config.allows(repo, run.name),
     );
     if (entry === undefined) return yield* Effect.fail(notListed);
-    return viewOf(entry);
+    return viewOf(entry, manifest.value);
   });
 
 const readFailure = (e: { readonly _tag: string; readonly message?: string }) =>

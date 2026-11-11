@@ -38,16 +38,16 @@ The missed-webhook sweep, check re-runs and the `dispatch.followOn` applier are 
 
 | Recipe | Trigger | Canonical dedup key |
 | --- | --- | --- |
-| `idempotency-key` | `dispatch` with an `Idempotency-Key` header | `idem:<owner>/<repo>:<Idempotency-Key>`, with a request digest over the dispatch body |
+| `idempotency-key` | `dispatch` with an `Idempotency-Key` header, of any run but `worker-deploy` | `idem:<owner>/<repo>:<Idempotency-Key>`, with a request digest over the dispatch body |
 | `follow-on` | A `dispatch.followOn` intent | `<execution_id>/<intent_key>` ([github-output.md](github-output.md) FD-GH-088) |
 | `commit` | Commit-scoped (`webhook`, `dispatch`, `mcp`) | `<run>[:<label>]:<owner>/<repo>:<sha>` |
 | `commit` | Check re-run, attempt *n* ≥ 2 | `<run>[:<label>]:<owner>/<repo>:<sha>:attempt-<n>` |
 | `commit` | `cron` | `<run>:<owner>/<repo>:cron:<scheduled minute, ISO 8601 UTC>` |
 | `commit` | `local` | `local:<lease_id>:<run>:<tree hash>:<inputs digest>` |
 
-The commit-scoped key omits the trigger kind, so a webhook and an Actions dispatch for one run on one commit resolve to one execution. A child execution's key derives from its parent's ([mameko run-model.md § Children](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/run-model.md#children)).
+The commit-scoped key omits the trigger kind, so a webhook and an Actions dispatch for one run on one commit resolve to one execution. A `worker-deploy` dispatch always takes the commit-scoped key, so a push and a dispatch deploy one commit once ([runs/gate.md](runs/gate.md) FD-GATE-062). A child execution's key derives from its parent's ([mameko run-model.md § Children](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/run-model.md#children)).
 
-- **Repo manifest.** `.github/flare-dispatch.json` in the consumer repository, decoded by the `RepoManifest` schema (`version: 1`). Each entry names a recipe, an optional label, the triggers it answers, its parameters and, for cron, its schedule. A run dispatches for a repository only when the manifest lists it.
+- **Repo manifest.** `.github/flare-dispatch.json` in the consumer repository, decoded by the `RepoManifest` schema (`version: 1`). Each entry names a recipe, an optional label, the triggers it answers, its parameters and, for cron, its schedule. A gate recipe's parameters are the fields of its manifest key ([runs/gate.md](runs/gate.md) § Recipes), which its request decoder reads. The optional top-level `skipAuthors` lists the pull-request authors the gate recipes skip ([runs/gate.md](runs/gate.md) FD-GATE-017). A run dispatches for a repository only when the manifest lists it.
 
 ### Intake path
 
@@ -163,7 +163,7 @@ sequenceDiagram
 ### Dedup keys
 
 - **FD-INT-009** · phase 0 · `V-UNIT` — The `commit` recipe must return `<run>[:<label>]:<owner>/<repo>:<sha>` for a commit-scoped trigger, without the trigger kind, so that one run on one commit yields at most one execution across webhook, dispatch and MCP triggers ([MAMEKO-ADM-034](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/admission-qos.md)).
-- **FD-INT-010** · phase 0 · `V-UNIT` — Where a dispatch carries an `Idempotency-Key` header of 1 to 128 characters from `[A-Za-z0-9._:-]`, the `idempotency-key` recipe must return `idem:<owner>/<repo>:<Idempotency-Key>` and declare `digest` as the canonical JSON of the dispatch body with `on_mismatch: conflict`, so that a reused key with a different body answers `409` ([MAMEKO-ADM-089](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/admission-qos.md)).
+- **FD-INT-010** · phase 0 · `V-UNIT` — Where a dispatch of a run other than `worker-deploy` carries an `Idempotency-Key` header of 1 to 128 characters from `[A-Za-z0-9._:-]`, the `idempotency-key` recipe must return `idem:<owner>/<repo>:<Idempotency-Key>` and declare `digest` as the canonical JSON of the dispatch body with `on_mismatch: conflict`, so that a reused key with a different body answers `409` ([MAMEKO-ADM-089](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/admission-qos.md)).
 - **FD-INT-011** · phase 0 · `V-UNIT` — If an `Idempotency-Key` header is empty, longer than 128 characters or contains a character outside `[A-Za-z0-9._:-]`, the dispatcher Worker must reject the dispatch with `400` and error `invalid_idempotency_key`.
 
 ### Repo manifests

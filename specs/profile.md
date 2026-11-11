@@ -106,7 +106,7 @@ Besides the class, `resolveClass` returns the label `untrusted-input` for a requ
 
 | Recipe | Binding | Returns |
 | --- | --- | --- |
-| `idempotency-key` | `idempotencyKeyRecipe` | `idem:<owner>/<repo>:<Idempotency-Key>` when the dispatch carries an `Idempotency-Key` header of 1 to 128 characters from `[A-Za-z0-9._:-]`; `none` otherwise. Declares a `digest` binding over the dispatch body and `on_mismatch: conflict` |
+| `idempotency-key` | `idempotencyKeyRecipe` | `idem:<owner>/<repo>:<Idempotency-Key>` when the dispatch carries an `Idempotency-Key` header of 1 to 128 characters from `[A-Za-z0-9._:-]`; `none` otherwise, and for every `worker-deploy` dispatch ([runs/gate.md](runs/gate.md) FD-GATE-062). Declares a `digest` binding over the dispatch body and `on_mismatch: conflict` |
 | `follow-on` | `followOnRecipe` | `<execution_id>/<intent_key>` for a request a `dispatch.followOn` intent raises; `none` otherwise |
 | `commit`, total | `commitRecipe` | `<run>[:<label>]:<owner>/<repo>:<sha>`, without the trigger kind |
 

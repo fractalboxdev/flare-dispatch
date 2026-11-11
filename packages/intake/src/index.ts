@@ -1,4 +1,5 @@
-export { catalogRuns, CheckParams, checkTrigger } from "./catalog.ts";
+export { catalogRuns, CheckParams, requestDecoderOf } from "./catalog.ts";
+export { catalogEventOf, deliveryOf, type TriggerContext } from "./delivery.ts";
 export {
   Admission,
   boundsOf,
