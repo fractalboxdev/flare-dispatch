@@ -34,7 +34,7 @@ const row = (over: Partial<CacheLookup>): CacheLookup => ({
 });
 
 describe("cache measurement", () => {
-  it("FD-CACHE-090 the compile-cache route reports each GET's hit or miss and the namespace that answered", async () => {
+  it("[FD-CACHE-090] the compile-cache route reports each GET's hit or miss and the namespace that answered", async () => {
     const seen: CompileCacheLookup[] = [];
     await mf.bucket.put(compileObjectKey(protectedCloud(REPO), "hit"), "abc");
     const token = await signCompileCacheToken(SECRET, {
@@ -68,7 +68,7 @@ describe("cache measurement", () => {
     ]);
   });
 
-  it("FD-CACHE-090 records each lookup's level, tier, hit and bytes, and reports the 28-day hit rate per tier and executor kind", async () => {
+  it("[FD-CACHE-090] records each lookup's level, tier, hit and bytes, and reports the 28-day hit rate per tier and executor kind", async () => {
     await recordCacheLookups(mf.db, [
       row({}),
       row({ tier: "pull-request", bytes: 50 }),

@@ -138,18 +138,18 @@ const dispatchBody = (sha: string) => ({
 });
 
 describe("the identity gate", () => {
-  it("FD-IFC-014 answers not_configured with no Access team set", async () => {
+  it("[FD-IFC-014] answers not_configured with no Access team set", async () => {
     const r = await post(unconfigured, "/v1/dispatch/check", dispatchBody(SHA));
     expect(r.status).toBe(503);
     expect(await r.json()).toMatchObject({ error: "not_configured" });
   });
 
-  it("FD-IFC-027 refuses a dispatch with no identity and with a token the team did not sign", async () => {
+  it("[FD-IFC-027] refuses a dispatch with no identity and with a token the team did not sign", async () => {
     expect((await post(development, "/v1/dispatch/nothing", {}, null)).status).toBe(401);
     expect((await post(development, "/v1/dispatch/nothing", {}, "invalid")).status).toBe(401);
   });
 
-  it("FD-IFC-012 refuses an Access token outside operators on an operator route", async () => {
+  it("[FD-IFC-012] refuses an Access token outside operators on an operator route", async () => {
     const { identity } = await newDevice();
     const r = await post(
       development,
@@ -167,7 +167,7 @@ describe("the identity gate", () => {
 });
 
 describe("the minute tick", () => {
-  it("FD-INT-050 records the tick and starts the liveness monitor", async () => {
+  it("[FD-INT-050] records the tick and starts the liveness monitor", async () => {
     const worker = await unconfigured.getWorker();
     const at = Date.now();
     await worker.scheduled({ cron: "* * * * *", scheduledTime: new Date(at) });
@@ -180,7 +180,7 @@ describe("the minute tick", () => {
       .toEqual([{ at }]);
   });
 
-  it("FD-OPS-036 serves the liveness report to an operator", async () => {
+  it("[FD-OPS-036] serves the liveness report to an operator", async () => {
     const r = await development.dispatchFetch("http://x/v1/ops/health", {
       headers: await headersFor(OPERATOR),
     });
@@ -189,7 +189,7 @@ describe("the minute tick", () => {
 });
 
 describe("the cache, artifact and log routes", () => {
-  it("FD-CACHE-083 serves an execution's logs to a member and nothing without a token or identity", async () => {
+  it("[FD-CACHE-083] serves an execution's logs to a member and nothing without a token or identity", async () => {
     expect((await development.dispatchFetch("http://x/v1/executions/01ABC/logs")).status).toBe(404);
     const r = await development.dispatchFetch("http://x/v1/executions/01ABC/logs", {
       headers: await headersFor(OPERATOR),
@@ -197,7 +197,7 @@ describe("the cache, artifact and log routes", () => {
     expect(r.status).toBe(404);
   });
 
-  it("FD-CACHE-051 refuses a compile-cache request without a signing secret", async () => {
+  it("[FD-CACHE-051] refuses a compile-cache request without a signing secret", async () => {
     const r = await development.dispatchFetch("http://x/v1/compile-cache/acme/widgets/ns/key");
     expect(r.status).toBe(503);
   });
@@ -210,7 +210,7 @@ describe("a production deployment", () => {
     expect(await r.json()).toMatchObject({ error: "run_not_found" });
   });
 
-  it("FD-IFC-087 at phase 0 refuses a key that claims a hardware store nothing attests, and writes no executor row", async () => {
+  it("[FD-IFC-087] at phase 0 refuses a key that claims a hardware store nothing attests, and writes no executor row", async () => {
     const { identity } = await newDevice();
     const claimed = { ...identity, key_store: "secure-enclave" };
     const r = await post(production, "/v1/executors/register", registration("mac", claimed));
@@ -224,13 +224,13 @@ describe("a production deployment", () => {
 });
 
 describe("a development deployment", () => {
-  it("FD-IFC-028 answers run_not_found for a run outside the catalogue", async () => {
+  it("[FD-IFC-028] answers run_not_found for a run outside the catalogue", async () => {
     const r = await post(development, "/v1/dispatch/nothing", dispatchBody(SHA));
     expect(r.status).toBe(404);
     expect(await r.json()).toMatchObject({ error: "run_not_found" });
   });
 
-  it("FD-IFC-028 answers run_not_found for a run and label the repository's manifest does not list", async () => {
+  it("[FD-IFC-028] answers run_not_found for a run and label the repository's manifest does not list", async () => {
     const r = await post(development, "/v1/dispatch/check", {
       ...dispatchBody(SHA),
       label: "nightly",
@@ -239,7 +239,7 @@ describe("a development deployment", () => {
     expect(await r.json()).toMatchObject({ error: "run_not_found" });
   });
 
-  it("FD-INT-022 refuses a webhook on a deployment that holds no webhook secret", async () => {
+  it("[FD-INT-022] refuses a webhook on a deployment that holds no webhook secret", async () => {
     const r = await development.dispatchFetch("http://x/v1/webhooks/github", {
       method: "POST",
       headers: { "content-type": "application/json", "x-github-event": "ping" },
@@ -249,13 +249,13 @@ describe("a development deployment", () => {
     expect(await r.json()).toMatchObject({ error: "webhook_unconfigured" });
   });
 
-  it("FD-IFC-029 answers invalid_inputs for a body that fails the run's schema", async () => {
+  it("[FD-IFC-029] answers invalid_inputs for a body that fails the run's schema", async () => {
     const r = await post(development, "/v1/dispatch/check", dispatchBody("not-a-sha"));
     expect(r.status).toBe(400);
     expect(await r.json()).toMatchObject({ error: "invalid_inputs" });
   });
 
-  it("FD-IFC-086 enrolls a software key, and an upgrade with another key is refused", async () => {
+  it("[FD-IFC-086] enrolls a software key, and an upgrade with another key is refused", async () => {
     const { identity } = await newDevice();
     const stranger = await newDevice();
     const r = await post(development, "/v1/executors/register", registration("mac-1", identity));

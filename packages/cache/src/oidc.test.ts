@@ -16,7 +16,7 @@ const decode = (jwt: string) =>
   JSON.parse(new TextDecoder().decode(fromBase64url(jwt.split(".")[1]!))) as Record<string, unknown>;
 
 describe("OIDC issuer", () => {
-  it("FD-PROV-049 a key retired by rotation stays in the JWKS for at least 3600 s", async () => {
+  it("[FD-PROV-049] a key retired by rotation stays in the JWKS for at least 3600 s", async () => {
     const current = await keyPair("k2");
     const old = await keyPair("k1");
     const keys: OidcKeys = { current: current.private as OidcKeys["current"], retired: [{ jwk: old.public as OidcKeys["current"], retiredAt: NOW }] };
@@ -37,7 +37,7 @@ describe("OIDC issuer", () => {
     expect(await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pub, fromBase64url(s!)!.buffer as ArrayBuffer, new TextEncoder().encode(`${h}.${p}`))).toBe(true);
   });
 
-  it("FD-PROV-050 sub is <run>:<execution_id>, the lifetime defaults to 900 s and caps at 3600 s, and reserved claims are refused", async () => {
+  it("[FD-PROV-050] sub is <run>:<execution_id>, the lifetime defaults to 900 s and caps at 3600 s, and reserved claims are refused", async () => {
     const k = await keyPair("k1");
     const keys: OidcKeys = { current: k.private as OidcKeys["current"], retired: [] };
     const issue = (over: object = {}) =>

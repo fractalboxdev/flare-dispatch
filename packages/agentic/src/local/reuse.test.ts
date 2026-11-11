@@ -120,18 +120,18 @@ const reuse = async (
 ) => Effect.runPromise((await reuseHarness(records, knobs)).reuse(req));
 
 describe("reuse policy", () => {
-  it("FD-LOCAL-078 names a registered rehearsal that matches on every field and carries an accepted statement", async () => {
+  it("[FD-LOCAL-078] names a registered rehearsal that matches on every field and carries an accepted statement", async () => {
     expect(await reuse([record()])).toBe("01HREHEARSAL00000000000000");
   });
 
-  it("FD-LOCAL-077 names none unless the repository turns reuse on", async () => {
+  it("[FD-LOCAL-077] names none unless the repository turns reuse on", async () => {
     expect(
       await reuse([record()], { policy: { reuse: false, equivalentPlatforms: [] } }),
     ).toBeNull();
     expect(await reuse([record()], { policy: "fail" })).toBeNull();
   });
 
-  it("FD-LOCAL-078 names none when any condition fails (simulation over single-field changes)", async () => {
+  it("[FD-LOCAL-078] names none when any condition fails (simulation over single-field changes)", async () => {
     const breaks: readonly Partial<RegistrationRecord>[] = [
       { startedAt: null },
       { startedAt: 500 },
@@ -163,15 +163,15 @@ describe("reuse policy", () => {
     ).toBe("A".repeat(26));
   });
 
-  it("FD-LOCAL-079 names none for a check in the base branch's required set", async () => {
+  it("[FD-LOCAL-079] names none for a check in the base branch's required set", async () => {
     expect(await reuse([record()], { required: ["flare-dispatch/check:lint"] })).toBeNull();
   });
 
-  it("FD-LOCAL-080 names none when the required-set read fails", async () => {
+  it("[FD-LOCAL-080] names none when the required-set read fails", async () => {
     expect(await reuse([record()], { required: "fail" })).toBeNull();
   });
 
-  it("FD-LOCAL-081 reads the required set again once the cached set is older than 10 min", async () => {
+  it("[FD-LOCAL-081] reads the required set again once the cached set is older than 10 min", async () => {
     const h = await reuseHarness([record()]);
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -188,18 +188,18 @@ describe("reuse policy", () => {
     );
   });
 
-  it("FD-LOCAL-082 names none for a cloud-only placement rule", async () => {
+  it("[FD-LOCAL-082] names none for a cloud-only placement rule", async () => {
     expect(await reuse([record()], {}, { ...request, placementRule: "cloud-only" })).toBeNull();
   });
 
-  it("FD-LOCAL-083 names none for a run requesting an intent other than its own check", async () => {
+  it("[FD-LOCAL-083] names none for a run requesting an intent other than its own check", async () => {
     for (const kind of ["pr.propose", "release.publish", "comment"])
       expect(
         await reuse([record()], {}, { ...request, intentKinds: ["check.summary", kind] }),
       ).toBeNull();
   });
 
-  it("FD-LOCAL-084 names a rehearsal on another platform only when the repository names both equivalent", async () => {
+  it("[FD-LOCAL-084] names a rehearsal on another platform only when the repository names both equivalent", async () => {
     const other = { ...request, platform: "linux-arm64" };
     expect(await reuse([record()], {}, other)).toBeNull();
     expect(
@@ -211,11 +211,11 @@ describe("reuse policy", () => {
     ).toBe("01HREHEARSAL00000000000000");
   });
 
-  it("FD-LOCAL-085 names none signed by a device whose posture is unmanaged", async () => {
+  it("[FD-LOCAL-085] names none signed by a device whose posture is unmanaged", async () => {
     expect(await reuse([record()], { posture: "unmanaged" })).toBeNull();
   });
 
-  it("FD-LOCAL-086 the check summary names the rehearsal, the device and the statement", () => {
+  it("[FD-LOCAL-086] the check summary names the rehearsal, the device and the statement", () => {
     expect(rehearsalSummary(record())).toBe(
       "A rehearsal produced this verdict: local execution 01HREHEARSAL00000000000000 on device dev-1, device-signed statement stmt-1.",
     );
@@ -301,7 +301,7 @@ const propose = (m: Manifest) => [
 const review = [{ intent_key: "run:review:0", kind: "review", payload: { body: "LGTM" } }];
 
 describe("writeback gate", () => {
-  it("FD-LOCAL-087 accepts a registered success's device-signed draft pull request or review, and nothing else", async () => {
+  it("[FD-LOCAL-087] accepts a registered success's device-signed draft pull request or review, and nothing else", async () => {
     const h = await gateHarness();
     expect(await h.decide(review)).toEqual({ _tag: "accepted" });
     expect(await h.decide(propose(manifest({ "src/a.ts": "a" })))).toEqual({ _tag: "accepted" });
@@ -333,7 +333,7 @@ describe("writeback gate", () => {
     });
   });
 
-  it("FD-LOCAL-088 rejects an intent that opens an issue or pushes to a protected branch", async () => {
+  it("[FD-LOCAL-088] rejects an intent that opens an issue or pushes to a protected branch", async () => {
     const h = await gateHarness();
     expect(await h.decide([{ intent_key: "run:i:0", kind: "issue", payload: {} }])).toEqual({
       _tag: "rejected",
@@ -346,7 +346,7 @@ describe("writeback gate", () => {
     expect(await h.port([{ intent_key: "run:i:0", kind: "issue", payload: {} }])).toBe(false);
   });
 
-  it("FD-LOCAL-089 answers requests past local_writeback_rate per lease per hour rate_limited with a retry_after", async () => {
+  it("[FD-LOCAL-089] answers requests past local_writeback_rate per lease per hour rate_limited with a retry_after", async () => {
     const h = await gateHarness();
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -366,7 +366,7 @@ describe("writeback gate", () => {
     ).toBeLessThanOrEqual(3_600_000);
   });
 
-  it("FD-LOCAL-094 runs stagedWriteGate with the run's writeback block, model-authored from the lease's usage report", async () => {
+  it("[FD-LOCAL-094] runs stagedWriteGate with the run's writeback block, model-authored from the lease's usage report", async () => {
     const outside = await gateHarness({ files: { "docs/x.md": "x" } });
     const r1 = await outside.decide(propose(manifest({ "docs/x.md": "x" })));
     expect(r1).toEqual({

@@ -56,7 +56,7 @@ const apply = (seen: string[], r: IntentRow) =>
   );
 
 describe("the writeback appliers inside every actuator", () => {
-  it("FD-AGT-009 routes pr.close to the agentic applier, which checks its branch before any GitHub call", async () => {
+  it("[FD-AGT-009] routes pr.close to the agentic applier, which checks its branch before any GitHub call", async () => {
     const seen: string[] = [];
     const answer = await apply(
       seen,
@@ -66,7 +66,7 @@ describe("the writeback appliers inside every actuator", () => {
     expect(answer).toMatchObject({ _tag: "refused", reason: "writeback: branch-invalid" });
   });
 
-  it("FD-AGT-009 refuses a pr.propose whose payload does not decode, without the GitHub applier", async () => {
+  it("[FD-AGT-009] refuses a pr.propose whose payload does not decode, without the GitHub applier", async () => {
     const seen: string[] = [];
     expect(await apply(seen, row("pr.propose", {}))).toMatchObject({
       _tag: "refused",
@@ -75,13 +75,13 @@ describe("the writeback appliers inside every actuator", () => {
     expect(seen).toEqual([]);
   });
 
-  it("FD-GH-001 leaves every other kind to the GitHub package's applier", async () => {
+  it("[FD-GH-001] leaves every other kind to the GitHub package's applier", async () => {
     const seen: string[] = [];
     expect(await apply(seen, row("check.conclude", {}))).toMatchObject({ externalRef: "base" });
     expect(seen).toEqual(["check.conclude"]);
   });
 
-  it("FD-AGT-001 lists each agentic recipe with a body in the catalogue, on a cloud executor", () => {
+  it("[FD-AGT-001] lists each agentic recipe with a body in the catalogue, on a cloud executor", () => {
     for (const name of ["pr-review", "improve-pr", "spec-drift-pr", "ci-triage-pr"]) {
       const found = lookupRun("production", name);
       expect(found._tag).toBe("Available");

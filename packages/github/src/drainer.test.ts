@@ -67,7 +67,7 @@ const state = (outbox: ReturnType<typeof memoryOutboxStore>, id: string) =>
   outbox.rows.get(id)?.row;
 
 describe("the applier under the drainer", () => {
-  it("FD-GH-010 MAMEKO-OUT-018 a create GitHub made but answered 502 is found on the retry", async () => {
+  it("[FD-GH-010] MAMEKO-OUT-018 a create GitHub made but answered 502 is found on the retry", async () => {
     const gh = fakeGithub();
     const outbox = memoryOutboxStore();
     await outbox.seed([stored("1", row("check.open", ref))]);
@@ -82,7 +82,7 @@ describe("the applier under the drainer", () => {
     expect(gh.runs).toHaveLength(1);
   });
 
-  it("FD-GH-010 MAMEKO-OUT-022 MAMEKO-OUT-024 a lost acknowledgement is adopted by lookup", async () => {
+  it("[FD-GH-010] MAMEKO-OUT-022 MAMEKO-OUT-024 a lost acknowledgement is adopted by lookup", async () => {
     const gh = fakeGithub();
     const outbox = memoryOutboxStore();
     await outbox.seed([stored("1", row("check.open", ref))]);
@@ -95,7 +95,7 @@ describe("the applier under the drainer", () => {
     expect(gh.calls.filter((c) => c === "create")).toHaveLength(1);
   });
 
-  it("FD-GH-052 MAMEKO-OUT-042 the outcome row goes first; the later check.open adopts its check run", async () => {
+  it("[FD-GH-052] MAMEKO-OUT-042 the outcome row goes first; the later check.open adopts its check run", async () => {
     const gh = fakeGithub();
     const outbox = memoryOutboxStore();
     await outbox.seed([

@@ -138,7 +138,7 @@ const check = async (steps: readonly CheckStep[], at = sha) => {
 };
 
 describe("check through the runner entry", () => {
-  it("FD-GATE-019 runs every step in a checkout of that commit and answers one result line", async () => {
+  it("[FD-GATE-019] runs every step in a checkout of that commit and answers one result line", async () => {
     await expect(
       check([
         { label: "stdout", command: "echo not-json" },
@@ -147,7 +147,7 @@ describe("check through the runner entry", () => {
     ).resolves.toEqual({ _tag: "success" });
   });
 
-  it("FD-GATE-003 records exit: <code> for the failing step and runs no step after it", async () => {
+  it("[FD-GATE-003] records exit: <code> for the failing step and runs no step after it", async () => {
     const after = join(root, "ran-after");
     await expect(
       check([
@@ -158,7 +158,7 @@ describe("check through the runner entry", () => {
     expect(existsSync(after)).toBe(false);
   });
 
-  it("FD-GATE-006 kills a step's process group at its timeout", async () => {
+  it("[FD-GATE-006] kills a step's process group at its timeout", async () => {
     const survivor = join(root, "survivor");
     await expect(
       check([{ label: "slow", command: `(sleep 2; touch ${survivor}) & sleep 30`, timeoutSec: 1 }]),
@@ -167,7 +167,7 @@ describe("check through the runner entry", () => {
     expect(existsSync(survivor)).toBe(false);
   });
 
-  it("FD-GATE-014 leaves the executor's environment out of a job, and FD-GATE-013 sets its fields", async () => {
+  it("[FD-GATE-014] leaves the executor's environment out of a job, and [FD-GATE-013] sets its fields", async () => {
     const { lines } = await runEntry(
       {
         repo: `file://${repo}`,
@@ -185,7 +185,7 @@ describe("check through the runner entry", () => {
     expect(JSON.parse(lines[0]!)).toMatchObject({ result: { _tag: "success" } });
   });
 
-  it("FD-GATE-010 reports a commit the repository lacks as infra: <error tag>, not a finding", async () => {
+  it("[FD-GATE-010] reports a commit the repository lacks as infra: <error tag>, not a finding", async () => {
     await expect(
       check([{ label: "never", command: "true" }], "0".repeat(40)),
     ).resolves.toMatchObject({ _tag: "failure", reason: "infra: CheckoutFailed" });
@@ -211,7 +211,7 @@ describe("check through the runner entry", () => {
 });
 
 describe("runCommand", () => {
-  it("FD-GATE-008 stops a command past its output limit", async () => {
+  it("[FD-GATE-008] stops a command past its output limit", async () => {
     const { exit } = await Effect.runPromise(
       runCommand({
         command: "yes",
@@ -224,7 +224,7 @@ describe("runCommand", () => {
     expect(exit).toEqual(CommandExit.OverLimit());
   });
 
-  it("FD-GATE-005 answers a command killed by a signal", async () => {
+  it("[FD-GATE-005] answers a command killed by a signal", async () => {
     const { exit } = await Effect.runPromise(
       runCommand({ command: "kill -KILL $$", cwd: tmpdir(), env: {}, timeoutMs: 10_000 }),
     );

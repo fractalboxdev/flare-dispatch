@@ -61,7 +61,7 @@ const answer = async (p: Promise<Exit.Exit<unknown, unknown>>) => {
 };
 
 describe("SigV4 presigning", () => {
-  it("FD-CACHE-091 signs AWS's published presigned GET example", async () => {
+  it("[FD-CACHE-091] signs AWS's published presigned GET example", async () => {
     const url = await presignV4({
       method: "GET",
       host: "examplebucket.s3.amazonaws.com",
@@ -78,7 +78,7 @@ describe("SigV4 presigning", () => {
     );
   });
 
-  it("FD-CACHE-091 FD-CACHE-048 FD-CACHE-049 the live signer uses the account's S3 endpoint, one key, one method and signs a PUT's length", async () => {
+  it("[FD-CACHE-091] [FD-CACHE-048] [FD-CACHE-049] the live signer uses the account's S3 endpoint, one key, one method and signs a PUT's length", async () => {
     const live = R2PresignerLive({ accountId: "0123abcd", bucket: "cache", accessKeyId: "AK", secretAccessKey: "SK" }).pipe(
       Layer.provide(Layer.succeed(CacheClock, { now: () => Date.UTC(2026, 0, 1) })),
     );
@@ -101,7 +101,7 @@ describe("SigV4 presigning", () => {
 });
 
 describe("presign policy", () => {
-  it("FD-CACHE-048 a URL expires at the earlier of 15 min after minting and deadline_at", async () => {
+  it("[FD-CACHE-048] a URL expires at the earlier of 15 min after minting and deadline_at", async () => {
     const w = world();
     const late = await answer(presign(w, [put(own("a"), 10)]));
     expect(late.urls?.[0]?.expires_at).toBe(w.now + MAX_URL_LIFETIME_MS);
@@ -110,7 +110,7 @@ describe("presign policy", () => {
     expect(w.signed[0]).toMatchObject({ key: own("a"), method: "PUT", length: 10 });
   });
 
-  it("FD-CACHE-049 a PUT URL only under the writable namespace and current epoch, with its declared length", async () => {
+  it("[FD-CACHE-049] a PUT URL only under the writable namespace and current epoch, with its declared length", async () => {
     const w = world();
     for (const key of [
       `${objectPrefix(protectedCloud(REPO), KEY, EXEC, 2)}a`,
@@ -123,7 +123,7 @@ describe("presign policy", () => {
     expect((await answer(presign(w, [put(own("a"), 7)]))).urls).toHaveLength(1);
   });
 
-  it("FD-CACHE-050 a GET URL only for an object a committed manifest of a readable namespace lists", async () => {
+  it("[FD-CACHE-050] a GET URL only for an object a committed manifest of a readable namespace lists", async () => {
     const writer = world([lease({ namespaces: { read: [], write: protectedCloud(REPO) } })]);
     const path = `${objectPrefix(protectedCloud(REPO), KEY, EXEC, 2)}a`;
     await bucket.put(path, "x");
@@ -143,7 +143,7 @@ describe("presign policy", () => {
     expect(failureOf(await presign(world(), [get(`${objectPrefix(protectedCloud(REPO), KEY, EXEC, 2)}b`)]))).toMatchObject({ status: 404 });
   });
 
-  it("FD-CACHE-061 a GET of an entry last read over TTL/2 ago refreshes last_read_at", async () => {
+  it("[FD-CACHE-061] a GET of an entry last read over TTL/2 ago refreshes last_read_at", async () => {
     const writer = world([lease({ namespaces: { read: [], write: protectedCloud(REPO) } })]);
     const path = `${objectPrefix(protectedCloud(REPO), KEY, EXEC, 2)}a`;
     await bucket.put(path, "x");
@@ -158,13 +158,13 @@ describe("presign policy", () => {
     expect((await Effect.runPromise(readManifest(bucket, protectedCloud(REPO), KEY)))?.lastReadAt).toBe(reader.now);
   });
 
-  it("FD-CACHE-051 a URL request carrying an old epoch is stale and mints nothing", async () => {
+  it("[FD-CACHE-051] a URL request carrying an old epoch is stale and mints nothing", async () => {
     const w = world();
     expect(await answer(presign(w, [put(own("a", 1), 1)], 1))).toEqual({ status: "stale" });
     expect(w.signed).toHaveLength(0);
   });
 
-  it("FD-CACHE-052 FD-CACHE-054 each PUT reserves its length first and a reservation over a bound is 507", async () => {
+  it("[FD-CACHE-052] [FD-CACHE-054] each PUT reserves its length first and a reservation over a bound is 507", async () => {
     const w = world();
     await answer(presign(w, [put(own("a"), 3 * GiB), put(own("b"), 3 * GiB)]));
     expect(await w.ledgers(REPO).usage()).toEqual({ stored: 0, pending: 6 * GiB });
@@ -172,23 +172,23 @@ describe("presign policy", () => {
     expect(w.signed).toHaveLength(2);
   });
 
-  it("FD-CACHE-053 an object over 4 GiB is refused with 413", async () => {
+  it("[FD-CACHE-053] an object over 4 GiB is refused with 413", async () => {
     const w = world();
     expect(failureOf(await presign(w, [put(own("a"), 4 * GiB + 1)]))).toMatchObject({ status: 413 });
     expect(await w.ledgers(REPO).usage()).toEqual({ stored: 0, pending: 0 });
   });
 
-  it("FD-CACHE-055 after the execution is terminal every write request is 403", async () => {
+  it("[FD-CACHE-055] after the execution is terminal every write request is 403", async () => {
     const w = world([lease({ status: "terminal" })]);
     expect(failureOf(await presign(w, [put(own("a"), 1)]))).toMatchObject({ status: 403 });
   });
 
-  it("FD-CACHE-008 a confidential-compute repository gets no L2 URL", async () => {
+  it("[FD-CACHE-008] a confidential-compute repository gets no L2 URL", async () => {
     const w = world([lease({ confidential: true })]);
     expect(failureOf(await presign(w, [put(own("a"), 1)]))).toMatchObject({ status: 403 });
   });
 
-  it("FD-CACHE-047 a log segment of this epoch gets a PUT URL and reserves no cache bytes", async () => {
+  it("[FD-CACHE-047] a log segment of this epoch gets a PUT URL and reserves no cache bytes", async () => {
     const w = world();
     const key = `logs/${EXEC}/2/${"0".repeat(24)}/stdout-0-10.ndjson`;
     expect((await answer(presign(w, [put(key, 10)]))).urls?.[0]?.url).toMatch(/^fake:\/\/PUT\/logs\//);

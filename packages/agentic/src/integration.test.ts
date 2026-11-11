@@ -15,7 +15,7 @@ import { WritebackRecords } from "./writeback/applier.ts";
 import { fakeGitLayer, fakeRepo } from "./writeback/fake-git.test-support.ts";
 
 describe("local ports as the control plane mounts them", () => {
-  it("FD-LOCAL-072 FD-LOCAL-078 FD-LOCAL-087 a rehearsal registers, reports, stands in for a check and writes back a review", async () => {
+  it("[FD-LOCAL-072] [FD-LOCAL-078] [FD-LOCAL-087] a rehearsal registers, reports, stands in for a check and writes back a review", async () => {
     const db = memoryD1();
     const inputs = Layer.mergeAll(
       Layer.succeed(ReuseInputs, {

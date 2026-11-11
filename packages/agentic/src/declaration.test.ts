@@ -22,7 +22,7 @@ const valid = {
 };
 
 describe("declaration", () => {
-  it("FD-AGT-002 rejects a declaration omitting a call site's tier, its data classes or its intent kinds", () => {
+  it("[FD-AGT-002] rejects a declaration omitting a call site's tier, its data classes or its intent kinds", () => {
     expect(validateDeclaration("pr-review", valid)).toEqual([]);
     const noTier = { ...valid, callSites: [{ name: "reviewer" }] };
     const { dataClasses: _d, ...noClasses } = valid;
@@ -31,7 +31,7 @@ describe("declaration", () => {
       expect(validateDeclaration("pr-review", bad)[0]?.reason).toMatch(/^declaration: /);
   });
 
-  it("FD-AGT-004 rejects a declaration that sets privateData, untrustedInput and outbound together", () => {
+  it("[FD-AGT-004] rejects a declaration that sets privateData, untrustedInput and outbound together", () => {
     expect(
       validateDeclaration("x", {
         ...valid,
@@ -40,7 +40,7 @@ describe("declaration", () => {
     ).toEqual([{ run: "x", reason: "policy: trifecta" }]);
   });
 
-  it("FD-AGT-009 FD-AGT-039 offers exactly the eight write kinds and no merge kind (S8 assumption)", () => {
+  it("[FD-AGT-009] [FD-AGT-039] offers exactly the eight write kinds and no merge kind (S8 assumption)", () => {
     expect(WRITE_KINDS).toEqual([
       "comment",
       "review",
@@ -65,7 +65,7 @@ describe("declaration", () => {
     ]);
   });
 
-  it("FD-AGT-003 a result returning an undeclared kind applies none of its intents", () => {
+  it("[FD-AGT-003] a result returning an undeclared kind applies none of its intents", () => {
     expect(
       checkResultIntents(["review"], [{ kind: "review", key: "run:r:0", payload: {} }]),
     ).toEqual({ _tag: "apply" });
@@ -94,7 +94,7 @@ describe("trifecta", () => {
     repository: "o/r",
   };
 
-  it("FD-AGT-005 computes the three classes and refuses an execution where all are true", () => {
+  it("[FD-AGT-005] computes the three classes and refuses an execution where all are true", () => {
     expect(computeDataClasses(facts)).toEqual({
       privateData: true,
       untrustedInput: false,
@@ -124,7 +124,7 @@ describe("trifecta", () => {
     },
   ];
 
-  it("FD-AGT-006 passes untrusted text only in the user message, in a delimited untrusted block", () => {
+  it("[FD-AGT-006] passes untrusted text only in the user message, in a delimited untrusted block", () => {
     const [system, user] = promptMessages({
       system: "You review code.",
       instruction: "Review.",
@@ -139,7 +139,7 @@ describe("trifecta", () => {
     expect(block.trimEnd().endsWith("</untrusted-data>")).toBe(true);
   });
 
-  it("FD-AGT-007 drops untrusted text before the call where the recipe declares untrustedInput false", () => {
+  it("[FD-AGT-007] drops untrusted text before the call where the recipe declares untrustedInput false", () => {
     const messages = promptMessages({
       system: "s",
       instruction: "i",
@@ -157,7 +157,7 @@ describe("credential boundary", () => {
     installationTokens: ["ghs_" + "t".repeat(36)],
   };
 
-  it("FD-AGT-008 refuses a payload for an executor that carries the App key or a write-scoped installation token", () => {
+  it("[FD-AGT-008] refuses a payload for an executor that carries the App key or a write-scoped installation token", () => {
     expect(assertNoWriteCredential({ run: "pr-review", input: { sha: "a" } }, held)).toBeNull();
     expect(assertNoWriteCredential({ env: { KEY: held.appPrivateKey } }, held)?.field).toBe(
       "env.KEY",
@@ -168,7 +168,7 @@ describe("credential boundary", () => {
     expect(assertNoWriteCredential({ t: `ghs_${"q".repeat(36)}` }, held)?.field).toBe("t");
   });
 
-  it("FD-AGT-011 refuses a model request carrying a clone token, a per-lease token or another credential", () => {
+  it("[FD-AGT-011] refuses a model request carrying a clone token, a per-lease token or another credential", () => {
     const clean = [{ role: "user" as const, content: "diff --git a/x b/x" }];
     expect(assertNoCredentialInRequest(clean, ["lease-token-abcdef"])).toBeNull();
     expect(
@@ -186,7 +186,7 @@ describe("credential boundary", () => {
 });
 
 describe("model-authored text", () => {
-  it("FD-AGT-041 escapes mentions, strips HTML, renders links as code and closes an open fence", () => {
+  it("[FD-AGT-041] escapes mentions, strips HTML, renders links as code and closes an open fence", () => {
     const text =
       "Hi @octocat and @org/team <b>bold</b><!-- hidden -->\nSee [docs](https://evil.example) and ![i](x.png)\n```ts\nconst a = '@keep';\n";
     expect(sanitizeModelText(text)).toBe(

@@ -79,7 +79,7 @@ const as = async (email: string) => ({
 });
 
 describe("/mcp", () => {
-  it("FD-IFC-073: a request with no valid Access JWT answers 401 unauthenticated", async () => {
+  it("[FD-IFC-073]: a request with no valid Access JWT answers 401 unauthenticated", async () => {
     const missing = await call("get_verdict", { execution_id: "x" }, {});
     expect(missing.status).toBe(401);
     expect(((await missing.json()) as { error: string }).error).toBe("unauthenticated");
@@ -91,7 +91,7 @@ describe("/mcp", () => {
     expect(forged.status).toBe(401);
   });
 
-  it("FD-IFC-072: the server answers get_verdict over Streamable HTTP", async () => {
+  it("[FD-IFC-072]: the server answers get_verdict over Streamable HTTP", async () => {
     h.doubles.executions.set(
       "01JV",
       record({ execution_id: "01JV", verdict: "success", conclusion: "success" }),
@@ -107,7 +107,7 @@ describe("/mcp", () => {
     });
   });
 
-  it("FD-IFC-074: dispatch keeps the dispatch route's identity rule and submits through intake as an mcp trigger", async () => {
+  it("[FD-IFC-074]: dispatch keeps the dispatch route's identity rule and submits through intake as an mcp trigger", async () => {
     const args = { run: "check", repo: "acme/widgets", sha: "a".repeat(40), inputs: {} };
     const member = await reply(await call("dispatch", args, await as(MEMBER)));
     expect(member.isError).toBe(true);
@@ -129,7 +129,7 @@ describe("/mcp", () => {
     });
   });
 
-  it("FD-IFC-074: a duplicate dispatch answers the existing execution, as the route does", async () => {
+  it("[FD-IFC-074]: a duplicate dispatch answers the existing execution, as the route does", async () => {
     h.doubles.intake = () =>
       Effect.succeed({ _tag: "Duplicate", executionId: "01JOLD", class: "batch" });
     const result = await reply(
@@ -142,7 +142,7 @@ describe("/mcp", () => {
     expect(result.value).toMatchObject({ execution_id: "01JOLD", duplicate: true });
   });
 
-  it("FD-IFC-078: wait_seconds over 60 on get_verdict or dispatch is the invalid_wait tool error", async () => {
+  it("[FD-IFC-078]: wait_seconds over 60 on get_verdict or dispatch is the invalid_wait tool error", async () => {
     const verdict = await reply(
       await call("get_verdict", { execution_id: "x", wait_seconds: 61 }, await as(MEMBER)),
     );
@@ -157,7 +157,7 @@ describe("/mcp", () => {
     expect(dispatch.value["error"]).toBe("invalid_wait");
   });
 
-  it("FD-IFC-080: a route error is a tool error carrying its code, not a protocol error", async () => {
+  it("[FD-IFC-080]: a route error is a tool error carrying its code, not a protocol error", async () => {
     const missing = await reply(
       await call("get_verdict", { execution_id: "nope" }, await as(MEMBER)),
     );
@@ -173,7 +173,7 @@ describe("/mcp", () => {
     expect(unfinished.value["error"]).toBe("not_finished");
   });
 
-  it("FD-IFC-079: a failure summary result stays within 16 KiB", async () => {
+  it("[FD-IFC-079]: a failure summary result stays within 16 KiB", async () => {
     h.doubles.executions.set("01JFAIL", record({ execution_id: "01JFAIL" }));
     const result = await reply(
       await call("get_failure_summary", { execution_id: "01JFAIL" }, await as(MEMBER)),
@@ -182,7 +182,7 @@ describe("/mcp", () => {
     expect(result.bytes).toBeLessThanOrEqual(MAX_TOOL_RESULT_BYTES);
   });
 
-  it("FD-IFC-046: cancel keeps the route's rule: only the dispatcher or an operator", async () => {
+  it("[FD-IFC-046]: cancel keeps the route's rule: only the dispatcher or an operator", async () => {
     h.doubles.executions.set("01JC", record({ execution_id: "01JC", status: "running" }));
     const denied = await reply(await call("cancel", { execution_id: "01JC" }, await as(MEMBER)));
     expect(denied.value["error"]).toBe("forbidden");

@@ -12,31 +12,31 @@ import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { installVerdictOf, NOTHING_TO_LINT_LINE, verdictOf } from "./verdict.ts";
 
 describe("exit to verdict", () => {
-  it("FD-GATE-002 records success for exit 0", () => {
+  it("[FD-GATE-002] records success for exit 0", () => {
     expect(verdictOf(CommandExit.Exited({ code: 0 }))).toEqual({ _tag: "success" });
   });
 
-  it("FD-GATE-003 records exit: <code> for a non-zero exit", () => {
+  it("[FD-GATE-003] records exit: <code> for a non-zero exit", () => {
     expect(verdictOf(CommandExit.Exited({ code: 2 }))).toEqual({
       _tag: "failure",
       reason: "exit: 2",
     });
   });
 
-  it("FD-GATE-005 records exit: signal <name>", () => {
+  it("[FD-GATE-005] records exit: signal <name>", () => {
     expect(verdictOf(CommandExit.Signalled({ signal: "SIGSEGV" }))).toEqual({
       _tag: "failure",
       reason: "exit: signal SIGSEGV",
     });
   });
 
-  it("FD-GATE-006, FD-GATE-007 and FD-GATE-008 record the timeout, deadline and output-limit reasons", () => {
+  it("[FD-GATE-006], [FD-GATE-007] and [FD-GATE-008] record the timeout, deadline and output-limit reasons", () => {
     expect(verdictOf(CommandExit.TimedOut())).toEqual(Outcome.failure("timeout: job"));
     expect(verdictOf(CommandExit.DeadlineReached())).toEqual(Outcome.failure("deadline"));
     expect(verdictOf(CommandExit.OverLimit())).toEqual(Outcome.failure("output: over limit"));
   });
 
-  it("FD-GATE-024 skips an oxlint run that found nothing to lint, and only an oxlint run with exit 0", () => {
+  it("[FD-GATE-024] skips an oxlint run that found nothing to lint, and only an oxlint run with exit 0", () => {
     const output = `scanning\n${NOTHING_TO_LINT_LINE}\n`;
     expect(verdictOf(CommandExit.Exited({ code: 0 }), { output, lint: true })).toEqual(
       Outcome.skipped("nothing-to-lint"),
@@ -47,14 +47,14 @@ describe("exit to verdict", () => {
     );
   });
 
-  it("FD-GATE-028 records install: exit <code> for a failed install", () => {
+  it("[FD-GATE-028] records install: exit <code> for a failed install", () => {
     expect(installVerdictOf(CommandExit.Exited({ code: 7 }))).toEqual(
       Outcome.failure("install: exit 7"),
     );
     expect(installVerdictOf(CommandExit.TimedOut())).toEqual(Outcome.failure("timeout: job"));
   });
 
-  it("FD-GATE-004 maps no non-zero exit to success", () => {
+  it("[FD-GATE-004] maps no non-zero exit to success", () => {
     for (let code = 1; code < 256; code++)
       for (const lint of [true, false])
         expect(
@@ -72,7 +72,7 @@ describe("exit to verdict", () => {
 });
 
 describe("reason kinds", () => {
-  it("FD-RUN-057 declares every kind of specs/run-model.md § Reason kinds but provenance, in its category", () => {
+  it("[FD-RUN-057] declares every kind of specs/run-model.md § Reason kinds but provenance, in its category", () => {
     expect(FD_REASON_KINDS).toEqual({
       exit: "finding",
       timeout: "finding",
@@ -94,7 +94,7 @@ describe("reason kinds", () => {
       expect(kind in MAMEKO_REASON_KINDS).toBe(false);
   });
 
-  it("FD-RUN-057 types a failure reason as a closed union of kinds", () => {
+  it("[FD-RUN-057] types a failure reason as a closed union of kinds", () => {
     const ok: Reason[] = ["exit: 1", "infra: no verdict", "deadline", "release: tag moved"];
     expect(ok.map(categoryOf)).toEqual(["finding", "infra", "deadline", "policy"]);
     // @ts-expect-error a kind neither table declares fails typecheck

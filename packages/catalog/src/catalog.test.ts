@@ -32,14 +32,14 @@ const pullRequest = (action: string, draft = false): DispatchEvent => ({
 });
 
 describe("DispatchEvent", () => {
-  it("FD-RUN-008 has one member per trigger kind", () => {
+  it("[FD-RUN-008] has one member per trigger kind", () => {
     const tags = DispatchEvent.members.map(
       (m) => (m.fields._tag.ast as unknown as { literal: string }).literal,
     );
     expect(tags).toEqual([...TRIGGER_KINDS]);
   });
 
-  it("FD-RUN-008 decodes each trigger kind and is what every request decoder takes", () => {
+  it("[FD-RUN-008] decodes each trigger kind and is what every request decoder takes", () => {
     const events: unknown[] = [
       pullRequest("opened"),
       {
@@ -60,7 +60,7 @@ describe("DispatchEvent", () => {
     expect(Exit.isSuccess(Schema.decodeUnknownExit(DispatchEvent)({ _tag: "email" }))).toBe(false);
   });
 
-  it("FD-GATE-001 takes a gate's command only from the manifest entry or the dispatch inputs", () => {
+  it("[FD-GATE-001] takes a gate's command only from the manifest entry or the dispatch inputs", () => {
     const entry = { label: "unit", command: "pnpm test" };
     const fromWebhook = Option.getOrUndefined(checkDecoder(entry)(pullRequest("synchronize")));
     expect(fromWebhook?.steps).toEqual([entry]);
@@ -79,7 +79,7 @@ describe("DispatchEvent", () => {
     expect(Option.isNone(offloadTestDecoder({})(pullRequest("labeled")))).toBe(true);
   });
 
-  it("FD-GATE-017 passes the pull request's draft flag and author to the run", () => {
+  it("[FD-GATE-017] passes the pull request's draft flag and author to the run", () => {
     const decoded = Option.getOrUndefined(oxlintDecoder({})(pullRequest("ready_for_review", true)));
     expect(decoded?.pullRequest).toEqual({ draft: true, author: "dev" });
   });
@@ -96,12 +96,12 @@ describe("GithubRead", () => {
       }).pipe(Effect.provide(layer), Effect.exit),
     );
 
-  it("FD-RUN-017 answers the value of a successful read", async () => {
+  it("[FD-RUN-017] answers the value of a successful read", async () => {
     const exit = await head(read(() => Response.json({ object: { sha: SHA, type: "commit" } })));
     expect(exit).toEqual(Exit.succeed(SHA));
   });
 
-  it("FD-RUN-017 fails with GithubUncredentialed or GithubReadFailed, never an empty answer", async () => {
+  it("[FD-RUN-017] fails with GithubUncredentialed or GithubReadFailed, never an empty answer", async () => {
     const tags = async (respond: () => Response | Promise<Response>) => {
       const exit = await head(read(respond));
       return Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "succeeded";
@@ -112,7 +112,7 @@ describe("GithubRead", () => {
     expect(await tags(() => Promise.reject(new Error("offline")))).toContain("GithubReadFailed");
   });
 
-  it("FD-RUN-017 peels an annotated tag and reads reachability from a comparison", async () => {
+  it("[FD-RUN-017] peels an annotated tag and reads reachability from a comparison", async () => {
     const answers: Record<string, unknown> = {
       "/repos/o/r/git/ref/tags/v1.0.0": { object: { sha: "t".repeat(40), type: "tag" } },
       [`/repos/o/r/git/tags/${"t".repeat(40)}`]: { object: { sha: SHA, type: "commit" } },
@@ -138,14 +138,14 @@ describe("GithubRead", () => {
 });
 
 describe("signals/v1", () => {
-  it("FD-RUN-054 commits the JSON Schema generated from the Schema definition", () => {
+  it("[FD-RUN-054] commits the JSON Schema generated from the Schema definition", () => {
     for (const schema of PUBLISHED_SCHEMAS)
       expect(readFileSync(schema.path, "utf8"), `regenerate with pnpm gen:schemas`).toBe(
         schema.text(),
       );
   });
 
-  it("FD-RUN-054 carries the signals/v1 caps", () => {
+  it("[FD-RUN-054] carries the signals/v1 caps", () => {
     const doc = signalsJsonSchema() as {
       maxItems: number;
       items: { properties: Record<string, { maxLength?: number }> };
@@ -169,11 +169,11 @@ describe("signals/v1", () => {
 });
 
 describe("the run catalogue", () => {
-  it("FD-RUN-061 passes defineRun the profile's class ranks", () => {
+  it("[FD-RUN-061] passes defineRun the profile's class ranks", () => {
     expect(classRanks).toEqual({ release: 0, required: 1, interactive: 2, batch: 3 });
   });
 
-  it("FD-RUN-062 lists only mameko's capability names in requires and keeps GithubRead beside them", () => {
+  it("[FD-RUN-062] lists only mameko's capability names in requires and keeps GithubRead beside them", () => {
     for (const name of RUN_NAMES) {
       const found = lookupRun("development", name);
       if (found._tag !== "Available") throw new Error(name);
@@ -184,7 +184,7 @@ describe("the run catalogue", () => {
     expect(deploy._tag === "Available" && deploy.entry.appCapabilities).toEqual(["GithubRead"]);
   });
 
-  it("FD-RUN-063 has one registry, the only list of runs, matching the catalogue", () => {
+  it("[FD-RUN-063] has one registry, the only list of runs, matching the catalogue", () => {
     expect(registry.map((r) => r.spec.name)).toEqual([...RUN_NAMES]);
     const entry = readFileSync(new URL("./runner-entry.ts", import.meta.url), "utf8");
     expect(entry).toContain("runnerMain({ runs: runsFor(");
@@ -192,7 +192,7 @@ describe("the run catalogue", () => {
     expect(runsFor("production")).toEqual([]);
   });
 
-  it("FD-GATE-045 gives the matrix parent a container rate of 0 and no sandbox capability", () => {
+  it("[FD-GATE-045] gives the matrix parent a container rate of 0 and no sandbox capability", () => {
     const found = lookupRun("production", "offload-test");
     if (found._tag !== "Available") throw new Error("offload-test");
     expect(found.entry.containerRateUsdPerHour).toBe(0);

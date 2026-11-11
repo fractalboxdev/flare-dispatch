@@ -45,7 +45,7 @@ describe("provider registry", () => {
     upstreamModel: "@cf/x",
   };
 
-  it("FD-MDL-020 registers workers-ai and bedrock only; validation accepts those and mameko's built-in kinds", () => {
+  it("[FD-MDL-020] registers workers-ai and bedrock only; validation accepts those and mameko's built-in kinds", () => {
     expect(FD_ROUTE_KINDS).toEqual(["workers-ai", "bedrock"]);
     const of = (routeKind: string): RegistryEntry => ({
       ...workersAi,
@@ -70,7 +70,7 @@ describe("provider registry", () => {
     ]);
   });
 
-  it("FD-MDL-022 the deploy check fails a workers-ai entry with no per-token rate derived from its Neurons price", () => {
+  it("[FD-MDL-022] the deploy check fails a workers-ai entry with no per-token rate derived from its Neurons price", () => {
     const { neuronsPerMTok: _n, ...noNeurons } = workersAi;
     const { inputPriceMicroUsdPerMTok: _i, ...noRate } = workersAi;
     expect(checkRegistry([noNeurons])[0]?.reason).toMatch(/no per-token rate/);
@@ -80,7 +80,7 @@ describe("provider registry", () => {
     );
   });
 
-  it("FD-MDL-021 never prices a workers-ai entry at the fallback rate", () => {
+  it("[FD-MDL-021] never prices a workers-ai entry at the fallback rate", () => {
     const fallback = { input: 75_000_000, output: 75_000_000 };
     expect(entryPrice(workersAi, fallback)).toEqual({
       _tag: "priced",
@@ -141,7 +141,7 @@ const referenceSignature = (secret: string, date: string, region: string, string
 };
 
 describe("bedrock route", () => {
-  it("FD-MDL-024 signs InvokeModel with SigV4 in the control plane and sends the Anthropic body", async () => {
+  it("[FD-MDL-024] signs InvokeModel with SigV4 in the control plane and sends the Anthropic body", async () => {
     const sent: { url: string; init: RequestInit }[] = [];
     const credentials = {
       accessKeyId: "AKIDEXAMPLE",
@@ -207,7 +207,7 @@ describe("bedrock route", () => {
     );
   });
 
-  it("FD-MDL-024 the executor entry carries no bedrock route or signer", () => {
+  it("[FD-MDL-024] the executor entry carries no bedrock route or signer", () => {
     const executorEntry = readFileSync(
       fileURLToPath(new URL("../executor.ts", import.meta.url)),
       "utf8",

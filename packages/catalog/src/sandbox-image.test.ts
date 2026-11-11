@@ -42,7 +42,7 @@ const build = (input: SandboxImageInput, script: readonly Scripted[] = [], docke
 };
 
 describe("sandbox-image", () => {
-  it("FD-GATE-076 builds every image for both architectures, smokes each and publishes nothing on a pull request", async () => {
+  it("[FD-GATE-076] builds every image for both architectures, smokes each and publishes nothing on a pull request", async () => {
     const { outcome, commands, artifacts } = await build(imageInput(false));
     expect(outcome).toEqual({ _tag: "success" });
     expect(commands.filter((c) => c.includes("buildx build --platform linux/"))).toHaveLength(2);
@@ -54,7 +54,7 @@ describe("sandbox-image", () => {
     expect(artifacts.uploads.has("image-digests.json")).toBe(false);
   });
 
-  it("FD-GATE-077 publishes each image by digest on a default-branch push and uploads image-digests.json", async () => {
+  it("[FD-GATE-077] publishes each image by digest on a default-branch push and uploads image-digests.json", async () => {
     const { outcome, commands, artifacts } = await build(imageInput(true));
     expect(outcome).toEqual({ _tag: "success" });
     expect(commands.filter((c) => c.includes("--push"))).toHaveLength(1);
@@ -63,7 +63,7 @@ describe("sandbox-image", () => {
     });
   });
 
-  it("FD-GATE-076 and FD-GATE-077 trigger on a change under sandboxImage.paths only", () => {
+  it("[FD-GATE-076] and [FD-GATE-077] trigger on a change under sandboxImage.paths only", () => {
     const entry = imageInput(false).entry;
     const repository = { fullName: "o/r", cloneUrl: ctx.repo, defaultBranch: "main" };
     const pr = (changedPaths: string[]): DispatchEvent => ({
@@ -105,7 +105,7 @@ describe("sandbox-image", () => {
     expect(Option.getOrUndefined(sandboxImageDecoder(entry)(push))?.publish).toBe(true);
   });
 
-  it("FD-GATE-078 refuses an unpinned base image, an unchecked download or a channel toolchain before any build", async () => {
+  it("[FD-GATE-078] refuses an unpinned base image, an unchecked download or a channel toolchain before any build", async () => {
     expect(unpinnedInput("FROM node:22\n")).toBe("node:22");
     expect(unpinnedInput(`${PINNED}FROM base AS build\n`)).toBe("base");
     expect(
@@ -131,7 +131,7 @@ describe("sandbox-image", () => {
     expect(commands).toEqual([]);
   });
 
-  it("FD-GATE-078 passes the v2 gate image's own Dockerfile", () => {
+  it("[FD-GATE-078] passes the v2 gate image's own Dockerfile", () => {
     const dockerfile = readFileSync(
       fileURLToPath(new URL("../../../infra/v2/Dockerfile.gate", import.meta.url)),
       "utf8",
@@ -139,7 +139,7 @@ describe("sandbox-image", () => {
     expect(unpinnedInput(dockerfile)).toBeUndefined();
   });
 
-  it("FD-GATE-079 publishes nothing when a build or smoke fails on either architecture", async () => {
+  it("[FD-GATE-079] publishes nothing when a build or smoke fails on either architecture", async () => {
     const failures = [
       [
         { match: "buildx build --platform linux/amd64", exit: CommandExit.Exited({ code: 1 }) },
@@ -158,7 +158,7 @@ describe("sandbox-image", () => {
     }
   });
 
-  it("FD-GATE-080 places a publish at release, cloud-pinned, on a container-artifact executor", () => {
+  it("[FD-GATE-080] places a publish at release, cloud-pinned, on a container-artifact executor", () => {
     expect(sandboxImagePlacement(true)).toEqual({
       className: "release",
       constraints: ["cloud-pinned"],
@@ -167,7 +167,7 @@ describe("sandbox-image", () => {
     expect(sandboxImagePlacement(false).className).toBe("required");
   });
 
-  it("FD-GATE-082 smokes arm64 under emulation off a linux-arm64 executor, and refuses where emulation is absent", async () => {
+  it("[FD-GATE-082] smokes arm64 under emulation off a linux-arm64 executor, and refuses where emulation is absent", async () => {
     const emulated = await build(imageInput(false, []));
     expect(emulated.commands[0]).toBe(EMULATION_PROBE);
     expect(emulated.outcome).toEqual({ _tag: "success" });

@@ -37,7 +37,7 @@ const repo = async () => {
 const sha = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
 describe("buildStagedWrite", () => {
-  it("FD-AGT-012 holds every tracked change and untracked file not ignored, excluding its staging directory (S8 assumption)", async () => {
+  it("[FD-AGT-012] holds every tracked change and untracked file not ignored, excluding its staging directory (S8 assumption)", async () => {
     const { dir, base } = await repo();
     await writeFile(join(dir, "edited.txt"), "after\n");
     await rm(join(dir, "removed.txt"));
@@ -68,7 +68,7 @@ describe("buildStagedWrite", () => {
     expect(manifest.baseCommit).toBe(base);
   });
 
-  it("FD-AGT-013 stores each blob byte for byte under its SHA-256 digest, with its mode", async () => {
+  it("[FD-AGT-013] stores each blob byte for byte under its SHA-256 digest, with its mode", async () => {
     const { dir, base } = await repo();
     const binary = Uint8Array.from([0, 255, 10, 13, 128, 7]);
     await writeFile(join(dir, "bin.dat"), binary);

@@ -40,7 +40,7 @@ const write = async (name: string, lines: string[], meta = { executor_id: "cf-1"
   bucket.put(name, `${lines.map((l) => JSON.stringify({ line: l })).join("\n")}\n`, { customMetadata: meta });
 
 describe("logs", () => {
-  it("FD-CACHE-081 a log name derives from the journal name, epoch and offsets, never a process counter", async () => {
+  it("[FD-CACHE-081] a log name derives from the journal name, epoch and offsets, never a process counter", async () => {
     const a = await segment("step:install", "stdout", 0, 100);
     expect(a).toBe(`logs/${EXEC}/1/${(await sha256Hex("step:install")).slice(0, 24)}/stdout-0-100.ndjson`);
     // A replay computes the same name; a reclaimed epoch another one.
@@ -49,7 +49,7 @@ describe("logs", () => {
     expect(await stepKey("x")).toHaveLength(24);
   });
 
-  it("FD-CACHE-082 the reader rejects a name outside the grammar", async () => {
+  it("[FD-CACHE-082] the reader rejects a name outside the grammar", async () => {
     for (const bad of [
       `logs/${EXEC}/1/${"0".repeat(24)}/stdout-10-5.ndjson`,
       `logs/${EXEC}/0/${"0".repeat(24)}/stdout-0-5.ndjson`,
@@ -64,7 +64,7 @@ describe("logs", () => {
     expect(r?.status).toBe(404);
   });
 
-  it("FD-CACHE-083 serves one file as NDJSON or text, and the aggregate in step order past 1000 objects", async () => {
+  it("[FD-CACHE-083] serves one file as NDJSON or text, and the aggregate in step order past 1000 objects", async () => {
     const first = await segment("step:a", "stdout", 0, 10);
     await write(first, ["\u001b[32mgreen\u001b[0m"]);
     const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
@@ -83,7 +83,7 @@ describe("logs", () => {
     expect(lines.at(-1)).toBe("b1001");
   }, 120_000);
 
-  it("FD-CACHE-084 FD-CACHE-086 the viewer sends a nonce CSP, inserts text only as textContent, strips ANSI and names the producer", async () => {
+  it("[FD-CACHE-084] [FD-CACHE-086] the viewer sends a nonce CSP, inserts text only as textContent, strips ANSI and names the producer", async () => {
     const name = await segment("step:a", "stderr", 0, 10);
     await write(name, ["</script><img src=x onerror=alert(1)>", "\u001b[1mbold\u001b[0m"]);
     const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
@@ -101,7 +101,7 @@ describe("logs", () => {
     expect(stripAnsi("\u001b]8;;http://x\u0007link\u001b]8;;\u0007")).toBe("link");
   });
 
-  it("FD-CACHE-085 a terminal execution's logs are immutable; a running one's are not cached", async () => {
+  it("[FD-CACHE-085] a terminal execution's logs are immutable; a running one's are not cached", async () => {
     const name = await segment("step:a", "stdout", 0, 1);
     await write(name, ["x"]);
     const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
@@ -110,7 +110,7 @@ describe("logs", () => {
     expect((await handleLogs(new Request(url), deps({ terminal: false })))!.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("FD-CACHE-087 a log token binds one execution, lasts at most 7 days and uses the log label", async () => {
+  it("[FD-CACHE-087] a log token binds one execution, lasts at most 7 days and uses the log label", async () => {
     const token = await signLogToken(SECRET, EXEC, NOW + 30 * 24 * 3600 * 1000, NOW);
     expect(await verifyCapability(SECRET, LOG_TOKEN_LABEL, EXEC, token, NOW + 6 * 24 * 3600 * 1000)).toBe(true);
     expect(await verifyCapability(SECRET, LOG_TOKEN_LABEL, EXEC, token, NOW + 7 * 24 * 3600 * 1000 + 1)).toBe(false);
@@ -119,7 +119,7 @@ describe("logs", () => {
     expect((await handleLogs(new Request(`http://x/v1/executions/${EXEC}/logs`), deps()))?.status).toBe(404);
   });
 
-  it("FD-CACHE-088 a confidential-compute execution's viewer shows a pointer and fetches no log content", async () => {
+  it("[FD-CACHE-088] a confidential-compute execution's viewer shows a pointer and fetches no log content", async () => {
     const name = await segment("step:a", "stdout", 0, 1);
     await write(name, ["secret"]);
     const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
@@ -130,7 +130,7 @@ describe("logs", () => {
     expect(html).not.toContain("secret");
   });
 
-  it("FD-CACHE-089 the log sweep deletes an execution's logs 30 days after it ended", async () => {
+  it("[FD-CACHE-089] the log sweep deletes an execution's logs 30 days after it ended", async () => {
     const ended = await segment("step:a", "stdout", 0, 1);
     await write(ended, ["x"]);
     const running = `logs/exec-running/1/${"0".repeat(24)}/stdout-0-1.ndjson`;

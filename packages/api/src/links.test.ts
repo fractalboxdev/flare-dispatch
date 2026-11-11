@@ -70,7 +70,7 @@ const token = (overrides: { objectId?: string; expiresAtS?: number; epoch?: numb
   });
 
 describe("link surface", () => {
-  it("FD-IFC-017: a log route serves an Access identity or a link token bound to that execution", async () => {
+  it("[FD-IFC-017]: a log route serves an Access identity or a link token bound to that execution", async () => {
     const jwt = await access.sign(accessClaims(MEMBER));
     expect(
       (await call("/v1/executions/exec-1/logs", { headers: { "cf-access-jwt-assertion": jwt } }))
@@ -82,7 +82,7 @@ describe("link surface", () => {
     expect(((await other.json()) as { error: string }).error).toBe("forbidden");
   });
 
-  it("FD-IFC-020: an expired link token answers 403 link_expired", async () => {
+  it("[FD-IFC-020]: an expired link token answers 403 link_expired", async () => {
     const response = await call(
       `/v1/executions/exec-1/logs?t=${await token({ expiresAtS: now() - 5 })}`,
     );
@@ -90,7 +90,7 @@ describe("link surface", () => {
     expect(((await response.json()) as { error: string }).error).toBe("link_expired");
   });
 
-  it("FD-IFC-021: a link token below the current epoch answers 403 link_revoked", async () => {
+  it("[FD-IFC-021]: a link token below the current epoch answers 403 link_revoked", async () => {
     const response = await call(
       `/v1/executions/exec-1/logs?t=${await token({ epoch: 1 })}`,
       {},
@@ -100,7 +100,7 @@ describe("link surface", () => {
     expect(((await response.json()) as { error: string }).error).toBe("link_revoked");
   });
 
-  it("FD-IFC-013: a browser with neither is redirected to the Access login; an API caller gets 401", async () => {
+  it("[FD-IFC-013]: a browser with neither is redirected to the Access login; an API caller gets 401", async () => {
     const browser = await call("/v1/executions/exec-1/logs", {
       headers: { accept: "text/html" },
       redirect: "manual",
@@ -112,7 +112,7 @@ describe("link surface", () => {
     expect((await call("/v1/executions/exec-1/logs")).status).toBe(401);
   });
 
-  it("FD-IFC-035, FD-IFC-019: a dispatch answers details and logs links whose token opens that execution's logs", async () => {
+  it("[FD-IFC-035], [FD-IFC-019]: a dispatch answers details and logs links whose token opens that execution's logs", async () => {
     const jwt = await actions.sign(actionsClaims("acme/widgets"));
     doubles.intake = () =>
       Effect.succeed({ _tag: "Admitted", executionId: "exec-1", class: "batch" });

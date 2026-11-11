@@ -33,14 +33,14 @@ const dispatch = async (run: string, body: unknown, headers: Record<string, stri
 };
 
 describe("dispatch", () => {
-  it("FD-IFC-028: a run intake does not find answers 404 run_not_found", async () => {
+  it("[FD-IFC-028]: a run intake does not find answers 404 run_not_found", async () => {
     h.doubles.intake = () => Effect.fail(apiError("run_not_found", "no run named nope"));
     const response = await dispatch("nope", { repository: "acme/widgets", inputs: {} });
     expect(response.status).toBe(404);
     expect((await json(response))["error"]).toBe("run_not_found");
   });
 
-  it("FD-IFC-029: inputs that fail the run's schema answer 400 invalid_inputs", async () => {
+  it("[FD-IFC-029]: inputs that fail the run's schema answer 400 invalid_inputs", async () => {
     h.doubles.intake = () =>
       Effect.fail(apiError("invalid_inputs", "inputs.sha: expected a commit"));
     const response = await dispatch("check", { repository: "acme/widgets", inputs: { sha: 1 } });
@@ -48,7 +48,7 @@ describe("dispatch", () => {
     expect((await json(response))["error"]).toBe("invalid_inputs");
   });
 
-  it("FD-IFC-030: signals over the signals/v1 caps answer 400 invalid_signals and reach no intake", async () => {
+  it("[FD-IFC-030]: signals over the signals/v1 caps answer 400 invalid_signals and reach no intake", async () => {
     const before = h.doubles.calls.submissions.length;
     const long = { source: "s".repeat(121), title: "t", detail: "d" };
     const many = Array.from({ length: 51 }, () => ({ source: "s", title: "t", detail: "d" }));
@@ -64,14 +64,14 @@ describe("dispatch", () => {
     expect(h.doubles.calls.submissions.length).toBe(before);
   });
 
-  it("FD-IFC-032: a repository with no installation answers 422 installation_not_found", async () => {
+  it("[FD-IFC-032]: a repository with no installation answers 422 installation_not_found", async () => {
     h.doubles.intake = () =>
       Effect.fail(apiError("installation_not_found", "no installation covers acme/widgets"));
     const response = await dispatch("check", { repository: "acme/widgets", inputs: {} });
     expect(response.status).toBe(422);
   });
 
-  it("FD-IFC-033: a named class reaches intake as the class input, and the response carries the resolved class", async () => {
+  it("[FD-IFC-033]: a named class reaches intake as the class input, and the response carries the resolved class", async () => {
     h.doubles.intake = () =>
       Effect.succeed({ _tag: "Admitted", executionId: "01JNEW", class: "interactive" });
     const response = await dispatch("check", {
@@ -83,7 +83,7 @@ describe("dispatch", () => {
     expect((await json(response))["class"]).toBe("interactive");
   });
 
-  it("FD-IFC-036: a duplicate answers 202 with the existing id and duplicate: true; a conflict 409 with it", async () => {
+  it("[FD-IFC-036]: a duplicate answers 202 with the existing id and duplicate: true; a conflict 409 with it", async () => {
     h.doubles.intake = () =>
       Effect.succeed({ _tag: "Duplicate", executionId: "01JOLD", class: "batch" });
     const duplicate = await dispatch("check", { repository: "acme/widgets", inputs: {} });
@@ -100,7 +100,7 @@ describe("dispatch", () => {
     expect(await json(conflict)).toMatchObject({ error: "conflict", execution_id: "01JOLD" });
   });
 
-  it("FD-INT-011: an Idempotency-Key outside 1 to 128 of [A-Za-z0-9._:-] answers 400 invalid_idempotency_key", async () => {
+  it("[FD-INT-011]: an Idempotency-Key outside 1 to 128 of [A-Za-z0-9._:-] answers 400 invalid_idempotency_key", async () => {
     for (const key of ["has space", "k".repeat(129), "semi;colon"]) {
       const response = await dispatch(
         "check",
@@ -142,7 +142,7 @@ describe("executions", () => {
     }
   });
 
-  it("FD-IFC-037: the list filters, pages newest first and returns next_before while more rows exist", async () => {
+  it("[FD-IFC-037]: the list filters, pages newest first and returns next_before while more rows exist", async () => {
     const first = await json(await h.fetch("/v1/executions?limit=2", await h.asAccess(MEMBER)));
     const ids = (first["executions"] as { execution_id: string }[]).map((e) => e.execution_id);
     expect(ids).toEqual(["01JEXEC4", "01JEXEC3"]);
@@ -157,7 +157,7 @@ describe("executions", () => {
     expect((await h.fetch("/v1/executions?limit=201", await h.asAccess(MEMBER))).status).toBe(400);
   });
 
-  it("FD-IFC-038, FD-IFC-039: each execution carries placement, executor, class, epoch, verdict, conclusion and costs, and no inputs", async () => {
+  it("[FD-IFC-038], [FD-IFC-039]: each execution carries placement, executor, class, epoch, verdict, conclusion and costs, and no inputs", async () => {
     const view = await json(await h.fetch("/v1/executions/01JEXEC0", await h.asAccess(MEMBER)));
     for (const key of [
       "placement",
@@ -176,7 +176,7 @@ describe("executions", () => {
     expect(view).not.toHaveProperty("dispatchedBy");
   });
 
-  it("FD-IFC-040: wait holds the response until the execution is done", async () => {
+  it("[FD-IFC-040]: wait holds the response until the execution is done", async () => {
     setTimeout(() => {
       h.doubles.executions.set(
         "01JEXEC1",
@@ -192,14 +192,14 @@ describe("executions", () => {
     expect(Date.now() - started).toBeLessThan(4000);
   });
 
-  it("FD-IFC-040: a wait that ends before done answers the current status", async () => {
+  it("[FD-IFC-040]: a wait that ends before done answers the current status", async () => {
     const view = await json(
       await h.fetch("/v1/executions/01JEXEC3?wait=1", await h.asAccess(MEMBER)),
     );
     expect(view["status"]).toBe("running");
   });
 
-  it("FD-IFC-041: a wait that is not a whole number from 1 to 60 answers 400 invalid_wait", async () => {
+  it("[FD-IFC-041]: a wait that is not a whole number from 1 to 60 answers 400 invalid_wait", async () => {
     for (const wait of ["0", "61", "1.5", "abc", "-1"]) {
       const response = await h.fetch(
         `/v1/executions/01JEXEC0?wait=${wait}`,
@@ -210,7 +210,7 @@ describe("executions", () => {
     }
   });
 
-  it("FD-IFC-042: a failure summary is bounded to the incident/v1 caps and 16 KiB", async () => {
+  it("[FD-IFC-042]: a failure summary is bounded to the incident/v1 caps and 16 KiB", async () => {
     const response = await h.fetch(
       "/v1/executions/01JEXEC0/failure-summary",
       await h.asAccess(MEMBER),
@@ -224,7 +224,7 @@ describe("executions", () => {
     expect(pack.ciFailures[0]!.logTail.length).toBeLessThanOrEqual(INCIDENT_CAPS.logTail);
   });
 
-  it("FD-IFC-043: a failure summary of an execution that did not fail answers 409 not_failed", async () => {
+  it("[FD-IFC-043]: a failure summary of an execution that did not fail answers 409 not_failed", async () => {
     h.doubles.executions.set("01JOK", record({ execution_id: "01JOK", verdict: "success" }));
     const response = await h.fetch(
       "/v1/executions/01JOK/failure-summary",
@@ -234,7 +234,7 @@ describe("executions", () => {
     expect((await json(response))["error"]).toBe("not_failed");
   });
 
-  it("FD-IFC-044: a failure summary of an execution not done answers 409 not_finished", async () => {
+  it("[FD-IFC-044]: a failure summary of an execution not done answers 409 not_finished", async () => {
     const response = await h.fetch(
       "/v1/executions/01JEXEC1/failure-summary",
       await h.asAccess(MEMBER),
@@ -243,7 +243,7 @@ describe("executions", () => {
     expect((await json(response))["error"]).toBe("not_finished");
   });
 
-  it("FD-IFC-046: only the dispatcher or an operator may cancel", async () => {
+  it("[FD-IFC-046]: only the dispatcher or an operator may cancel", async () => {
     const path = "/v1/executions/01JEXEC1/cancel";
     const member = await h.fetch(path, await h.asAccess(MEMBER, { method: "POST" }));
     expect(member.status).toBe(403);
@@ -262,7 +262,7 @@ describe("executions", () => {
     expect(h.doubles.calls.cancels.map((c) => c.identity)).toEqual([DISPATCHER, OPERATOR]);
   });
 
-  it("FD-IFC-059: an Actions token reads its own repository's execution, and no other route or repository", async () => {
+  it("[FD-IFC-059]: an Actions token reads its own repository's execution, and no other route or repository", async () => {
     h.doubles.executions.set(
       "01JOTHER",
       record({ execution_id: "01JOTHER", repository: "acme/other" }),
@@ -280,7 +280,7 @@ describe("executions", () => {
     ).toBe(401);
   });
 
-  it("FD-IFC-003: an unauthenticated request looks up no execution", async () => {
+  it("[FD-IFC-003]: an unauthenticated request looks up no execution", async () => {
     const before = h.doubles.calls.lookups.length;
     expect((await h.fetch("/v1/executions/01JEXEC0")).status).toBe(401);
     expect((await h.fetch("/v1/executions/01JEXEC0/cancel", { method: "POST" })).status).toBe(401);
@@ -289,7 +289,7 @@ describe("executions", () => {
 });
 
 describe("operator routes", () => {
-  it("FD-IFC-083: each operation passes the operator's identity, the reason and the request id through", async () => {
+  it("[FD-IFC-083]: each operation passes the operator's identity, the reason and the request id through", async () => {
     const response = await h.fetch(
       "/v1/ops/halt",
       await h.asAccess(OPERATOR, post({ state: "halt-cloud", reason: "runaway spend" })),
@@ -303,7 +303,7 @@ describe("operator routes", () => {
     expect(call.requestId).toBe(result["request_id"]);
   });
 
-  it("FD-IFC-047: a reason the coordinator rejects answers 400 reason_required", async () => {
+  it("[FD-IFC-047]: a reason the coordinator rejects answers 400 reason_required", async () => {
     const response = await h.fetch(
       "/v1/ops/drain",
       await h.asAccess(OPERATOR, post({ executor: "e1", reason: "" })),
@@ -312,7 +312,7 @@ describe("operator routes", () => {
     expect((await json(response))["error"]).toBe("reason_required");
   });
 
-  it("FD-IFC-049, FD-IFC-050: a failed store transaction answers 503 unavailable; a rejected expiry 400 invalid_body", async () => {
+  it("[FD-IFC-049], [FD-IFC-050]: a failed store transaction answers 503 unavailable; a rejected expiry 400 invalid_body", async () => {
     const cases = [
       [apiError("unavailable", "the store transaction failed; nothing changed"), 503],
       [apiError("invalid_body", "expires_at: at most 7 days ahead"), 400],
@@ -329,7 +329,7 @@ describe("operator routes", () => {
     h.doubles.opsFailure = undefined;
   });
 
-  it("FD-OPS-077: the operator routes are exactly the operations of the operator routes table", async () => {
+  it("[FD-OPS-077]: the operator routes are exactly the operations of the operator routes table", async () => {
     const { OpsGroup } = await import("../declaration.ts");
     const paths = Object.values(OpsGroup.endpoints)
       .map((e) => `${e.method} ${e.path}`)
@@ -352,7 +352,7 @@ describe("operator routes", () => {
 });
 
 describe("well-known", () => {
-  it("FD-IFC-051: the OIDC routes answer 503 not_configured while no key is set, and cache for an hour once one is", async () => {
+  it("[FD-IFC-051]: the OIDC routes answer 503 not_configured while no key is set, and cache for an hour once one is", async () => {
     h.doubles.oidcJwk = undefined;
     expect((await h.fetch("/.well-known/jwks.json")).status).toBe(503);
     expect((await h.fetch("/.well-known/openid-configuration")).status).toBe(503);
@@ -377,7 +377,7 @@ describe("well-known", () => {
     );
   });
 
-  it("FD-IFC-052: the JWKS carries no private key member", async () => {
+  it("[FD-IFC-052]: the JWKS carries no private key member", async () => {
     h.doubles.oidcJwk = {
       kty: "RSA",
       kid: "k1",

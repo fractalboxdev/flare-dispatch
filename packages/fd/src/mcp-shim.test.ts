@@ -112,7 +112,7 @@ const toolError = (r: { readonly _tag: string; readonly failure?: unknown }) => 
 };
 
 describe("fd mcp", () => {
-  it("FD-IFC-075: the shim serves the union of the dispatcher's and the local scheduler's tools", () => {
+  it("[FD-IFC-075]: the shim serves the union of the dispatcher's and the local scheduler's tools", () => {
     expect(Object.keys(ShimTools.tools).sort()).toEqual([
       "cancel",
       "dispatch",
@@ -123,7 +123,7 @@ describe("fd mcp", () => {
     ]);
   });
 
-  it("FD-IFC-075: rehearse, lease_status and local- ids go to the local scheduler", async () => {
+  it("[FD-IFC-075]: rehearse, lease_status and local- ids go to the local scheduler", async () => {
     calls.length = 0;
     ok(await run(shimHandlers.rehearse({ run: "check", wait_seconds: 30 })));
     ok(await run(shimHandlers.get_verdict({ execution_id: "local-01JREH" })));
@@ -137,7 +137,7 @@ describe("fd mcp", () => {
     ]);
   });
 
-  it("FD-IFC-075: every other call goes to the HTTP API with the developer's own Access token", async () => {
+  it("[FD-IFC-075]: every other call goes to the HTTP API with the developer's own Access token", async () => {
     const view = ok(
       await run(shimHandlers.get_verdict({ execution_id: "01JOK" }), { email: MEMBER }),
     );
@@ -155,7 +155,7 @@ describe("fd mcp", () => {
     expect(anonymous.message).toContain("fd login");
   });
 
-  it("FD-IFC-077: each control-plane tool takes its schemas from the route it wraps", () => {
+  it("[FD-IFC-077]: each control-plane tool takes its schemas from the route it wraps", () => {
     const params = DispatchTool.parametersSchema as unknown as { fields: Record<string, unknown> };
     expect(params.fields["repo"]).toBe(DispatchBody.fields.repository);
     expect(params.fields["inputs"]).toBe(DispatchBody.fields.inputs);
@@ -167,7 +167,7 @@ describe("fd mcp", () => {
     expect(GetFailureSummaryTool.successSchema).toBe(IncidentV1);
   });
 
-  it("FD-IFC-078: wait_seconds over 60 on get_verdict and dispatch, or 600 on rehearse, is the invalid_wait tool error", async () => {
+  it("[FD-IFC-078]: wait_seconds over 60 on get_verdict and dispatch, or 600 on rehearse, is the invalid_wait tool error", async () => {
     expect(
       toolError(await run(shimHandlers.get_verdict({ execution_id: "01JOK", wait_seconds: 61 })))
         .error,
@@ -183,7 +183,7 @@ describe("fd mcp", () => {
     ok(await run(shimHandlers.rehearse({ run: "c", wait_seconds: 600 })));
   });
 
-  it("FD-IFC-079: every result stays within 16 KiB", async () => {
+  it("[FD-IFC-079]: every result stays within 16 KiB", async () => {
     const pack = ok(await run(shimHandlers.get_failure_summary({ execution_id: "local-01JREH" })));
     expect(new TextEncoder().encode(JSON.stringify(pack)).byteLength).toBeLessThanOrEqual(
       MAX_TOOL_RESULT_BYTES,
@@ -196,7 +196,7 @@ describe("fd mcp", () => {
     );
   });
 
-  it("FD-IFC-080: a route or scheduler error is a tool error with its code", async () => {
+  it("[FD-IFC-080]: a route or scheduler error is a tool error with its code", async () => {
     expect(
       toolError(await run(shimHandlers.get_verdict({ execution_id: "nope" }), { email: MEMBER }))
         .error,
@@ -211,7 +211,7 @@ describe("fd mcp", () => {
     expect(unreachable.error).toBe("scheduler_unreachable");
   });
 
-  it("FD-IFC-081: a verdict of capacity-lease work is advisory", async () => {
+  it("[FD-IFC-081]: a verdict of capacity-lease work is advisory", async () => {
     expect(ok(await run(shimHandlers.get_verdict({ execution_id: "local-01JREH" }))).advisory).toBe(
       true,
     );
@@ -224,7 +224,7 @@ describe("fd mcp", () => {
 });
 
 describe("fd-mcp over stdio", () => {
-  it("FD-IFC-075: the executable serves the six tools over stdio and exits 0 when the client closes it", async () => {
+  it("[FD-IFC-075]: the executable serves the six tools over stdio and exits 0 when the client closes it", async () => {
     const child = spawn(
       process.execPath,
       [

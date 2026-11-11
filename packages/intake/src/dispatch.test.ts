@@ -21,7 +21,7 @@ const dispatch = (h: Harness, request: Request) =>
 const ok = { inputs: { sha: HEAD }, label: "ci" };
 
 describe("the dispatch identity gate", () => {
-  it("FD-INT-034 an unauthenticated dispatch answers 401 whatever the run name", async () => {
+  it("[FD-INT-034] an unauthenticated dispatch answers 401 whatever the run name", async () => {
     const h = await harness();
     const known = await dispatch(h, dispatchRequest("check", ok, {}));
     const unknown = await dispatch(h, dispatchRequest("no-such-run", ok, {}));
@@ -30,7 +30,7 @@ describe("the dispatch identity gate", () => {
     expect(h.reads.calls).toEqual([]);
   });
 
-  it("FD-INT-035 a token from another issuer, audience, an expired token or a bad signature answers 401", async () => {
+  it("[FD-INT-035] a token from another issuer, audience, an expired token or a bad signature answers 401", async () => {
     const h = await harness();
     const tokens = [
       actionsToken({ aud: "https://other.example.com" }),
@@ -45,7 +45,7 @@ describe("the dispatch identity gate", () => {
     expect(h.executions()).toEqual([]);
   });
 
-  it("FD-INT-035 the issuer's keys are cached for at most 1 h", async () => {
+  it("[FD-INT-035] the issuer's keys are cached for at most 1 h", async () => {
     const h = await harness();
     await dispatch(h, dispatchRequest("check", ok));
     await dispatch(h, dispatchRequest("check", ok));
@@ -60,14 +60,14 @@ describe("the dispatch identity gate", () => {
     expect(h.recorded.jwksFetches).toBe(2);
   });
 
-  it("FD-INT-036 a body naming another repository than the token's claim answers 403 repository_mismatch", async () => {
+  it("[FD-INT-036] a body naming another repository than the token's claim answers 403 repository_mismatch", async () => {
     const h = await harness();
     const r = await dispatch(h, dispatchRequest("check", { ...ok, repository: "acme/other" }));
     expect(r!.status).toBe(403);
     expect((await bodyOf(r)).error).toBe("repository_mismatch");
   });
 
-  it("FD-IFC-027 an Access identity in dispatchers may dispatch; another is 401", async () => {
+  it("[FD-IFC-027] an Access identity in dispatchers may dispatch; another is 401", async () => {
     const h = await harness();
     const member = await dispatch(
       h,
@@ -91,14 +91,14 @@ describe("the dispatch identity gate", () => {
 });
 
 describe("dispatch validation", () => {
-  it("FD-INT-039 an authenticated dispatch of an unknown run answers 404 run_not_found", async () => {
+  it("[FD-INT-039] an authenticated dispatch of an unknown run answers 404 run_not_found", async () => {
     const h = await harness();
     const r = await dispatch(h, dispatchRequest("no-such-run", ok));
     expect(r!.status).toBe(404);
     expect((await bodyOf(r)).error).toBe("run_not_found");
   });
 
-  it("FD-INT-040 a body over 1 MiB is 413, a schema failure invalid_body and an input failure invalid_inputs", async () => {
+  it("[FD-INT-040] a body over 1 MiB is 413, a schema failure invalid_body and an input failure invalid_inputs", async () => {
     const h = await harness();
     const large = await dispatch(
       h,
@@ -116,7 +116,7 @@ describe("dispatch validation", () => {
     ]);
   });
 
-  it("FD-INT-010 FD-INT-011 an Idempotency-Key outside 1 to 128 characters of [A-Za-z0-9._:-] answers 400 invalid_idempotency_key", async () => {
+  it("[FD-INT-010] [FD-INT-011] an Idempotency-Key outside 1 to 128 characters of [A-Za-z0-9._:-] answers 400 invalid_idempotency_key", async () => {
     const h = await harness();
     const bearer = { authorization: `Bearer ${actionsToken({})}` };
     for (const key of ["", "x".repeat(129), "has space", "slash/no"]) {
@@ -129,7 +129,7 @@ describe("dispatch validation", () => {
     }
   });
 
-  it("FD-INT-010 FD-INT-003 a reused Idempotency-Key with the same body is a duplicate, with another body 409 conflict", async () => {
+  it("[FD-INT-010] [FD-INT-003] a reused Idempotency-Key with the same body is a duplicate, with another body 409 conflict", async () => {
     const h = await harness();
     const headers = { authorization: `Bearer ${actionsToken({})}`, "idempotency-key": "build-7" };
     const first = await bodyOf(await dispatch(h, dispatchRequest("check", ok, headers)));
@@ -152,7 +152,7 @@ describe("dispatch validation", () => {
     ]);
   });
 
-  it("FD-INT-049 more than 50 merged signals or an over-long field answers 400 invalid_signals", async () => {
+  it("[FD-INT-049] more than 50 merged signals or an over-long field answers 400 invalid_signals", async () => {
     const h = await harness();
     const signal = { source: "lint", title: "t" };
     const many = await dispatch(
@@ -173,7 +173,7 @@ describe("dispatch validation", () => {
 });
 
 describe("dispatch to admission", () => {
-  it("FD-INT-001 FD-IFC-035 an admitted dispatch answers 202 with execution_id, class, details_url and logs_url", async () => {
+  it("[FD-INT-001] [FD-IFC-035] an admitted dispatch answers 202 with execution_id, class, details_url and logs_url", async () => {
     const h = await harness();
     const r = await dispatch(h, dispatchRequest("check", ok));
     expect(r!.status).toBe(202);
@@ -193,14 +193,14 @@ describe("dispatch to admission", () => {
     ]);
   });
 
-  it("FD-INT-009 a dispatch after a webhook for the same run and commit is a duplicate of it", async () => {
+  it("[FD-INT-009] a dispatch after a webhook for the same run and commit is a duplicate of it", async () => {
     const h = await harness();
     const first = await bodyOf(await dispatch(h, dispatchRequest("check", { ...ok, sha: HEAD })));
     const second = await bodyOf(await dispatch(h, dispatchRequest("check", { ...ok, sha: HEAD })));
     expect(second).toMatchObject({ execution_id: first.execution_id, duplicate: true });
   });
 
-  it("FD-INT-041 a dispatch with no ref pins the default branch head", async () => {
+  it("[FD-INT-041] a dispatch with no ref pins the default branch head", async () => {
     const h = await harness();
     await dispatch(
       h,
@@ -213,7 +213,7 @@ describe("dispatch to admission", () => {
     expect(h.records()[0]).toMatchObject({ sha: BASE, ref: "refs/heads/main" });
   });
 
-  it("FD-INT-042 FD-INT-043 the installation resolves from the repository; a repository no installation covers answers 422", async () => {
+  it("[FD-INT-042] [FD-INT-043] the installation resolves from the repository; a repository no installation covers answers 422", async () => {
     const h = await harness();
     await dispatch(h, dispatchRequest("check", ok));
     expect(h.records()[0]!.installation).toBe(7);
@@ -247,14 +247,14 @@ describe("dispatch to admission", () => {
     expect(matching!.status).toBe(202);
   });
 
-  it("FD-IFC-028 FD-INT-015 a run the manifest does not list for dispatch answers 404 run_not_found", async () => {
+  it("[FD-IFC-028] [FD-INT-015] a run the manifest does not list for dispatch answers 404 run_not_found", async () => {
     const h = await harness();
     const r = await dispatch(h, dispatchRequest("nightly", { inputs: { sha: HEAD } }));
     expect(r!.status).toBe(404);
     expect(h.executions()).toEqual([]);
   });
 
-  it("FD-IFC-033 a class input reaches class resolution", async () => {
+  it("[FD-IFC-033] a class input reaches class resolution", async () => {
     const h = await harness();
     await dispatch(h, dispatchRequest("check", { ...ok, class: "batch" }));
     expect(h.recorded.resolved[0]).toMatchObject({ classInput: "batch", trigger: "dispatch" });
@@ -264,7 +264,7 @@ describe("dispatch to admission", () => {
 });
 
 describe("the route group", () => {
-  it("FD-INT-064 a served path with another method answers 405; an unserved path is the router's 404", async () => {
+  it("[FD-INT-064] a served path with another method answers 405; an unserved path is the router's 404", async () => {
     const h = await harness();
     const get = await h.run(
       handleIntake(
@@ -282,7 +282,7 @@ describe("the route group", () => {
     ).toBeNull();
   });
 
-  it("FD-INT-065 a defect answers 500 internal with a request id and no exception text", async () => {
+  it("[FD-INT-065] a defect answers 500 internal with a request id and no exception text", async () => {
     const h = await harness({
       settings: {
         catalog: () => {
