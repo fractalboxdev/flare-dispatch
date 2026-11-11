@@ -249,9 +249,8 @@ theorem entryReasons_infix (spec : Spec) (ma : Bool) (ev : Evidence) :
 /--
 If any entry fails any check, the staged-write gate rejects the whole manifest, and its one result holds every reason
 of every entry, each entry's reasons in order (FD-AGT-017), a model-authored entry on a protected path (FD-AGT-020)
-included. The `pr.propose` applier (FD-AGT-016) and the writeback
-gate on a `local.writeback` that proposes file changes (FD-LOCAL-094) both run this gate on the manifest and refuse
-the write on that rejection.
+included. The `pr.propose` applier (FD-AGT-016) and the writeback gate on a `local.writeback` that proposes file changes
+(FD-LOCAL-094) both run this gate on the manifest and refuse the write on that rejection.
 -/
 theorem reject_whole_manifest (m : Manifest) (spec : Spec) (ma : Bool) (ev : Evidence) (i : Nat)
     (hi : i < m.entries.length)
