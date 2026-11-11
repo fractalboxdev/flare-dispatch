@@ -223,14 +223,25 @@ describe("a gate job", () => {
   });
 
   it("[FD-GATE-081] stages nothing for a failed job", async () => {
-    const exec = fakeExec([{ match: "pnpm test", exit: CommandExit.Exited({ code: 1 }) }]);
+    const exec = fakeExec(
+      [
+        { match: "pnpm test", exit: CommandExit.Exited({ code: 1 }) },
+        { match: "git status", output: " M test/fixtures/a.json\0" },
+      ],
+      { "test/fixtures/a.json": "{}\n" },
+    );
     const artifacts = fakeArtifacts();
-    await run(
-      runGateJob(job({ writeback: { branch: "x", paths: ["**"] } })).pipe(
+    const outcome = await run(
+      runGateJob(job({ writeback: { branch: "x", paths: ["test/fixtures/**"] } })).pipe(
         Effect.provide(withFakes(exec, artifacts)),
       ),
     );
+    expect(outcome).toEqual({ _tag: "failure", reason: "exit: 1" });
     expect(artifacts.uploads.has("staged-write.json")).toBe(false);
+    expect([...artifacts.uploads.keys()].some((k) => k.startsWith("staged-write/blobs/"))).toBe(
+      false,
+    );
+    expect(exec.ran.some((r) => r.command.includes("git status"))).toBe(false);
   });
 });
 
