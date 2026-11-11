@@ -2,6 +2,8 @@
 -- and of the reference profile's placement (packages/profile/src/placement.ts `eligibleKinds`, over the fold in
 -- `FdFormal.Intake`) for the two recipes that must stay off devices: `worker-deploy` and a publishing `sandbox-image`
 -- (packages/catalog/src/spec.ts), the FlareDispatch side of property S3 of specs/verification.md § Formal properties.
+-- The `placement` mode of the `oracle` executable answers placement events with `requestPlacement`, `eligible` and
+-- `placeableKinds`, with the profile's predicates evaluated by `Pred.holds` (specs/verification.md § V-DIFF).
 import FdFormal.Intake
 
 namespace FdFormal.Placement
@@ -49,6 +51,95 @@ structure SandboxPlacement where
 def sandboxImagePublish : SandboxPlacement :=
   { className := "release", constraints := ["cloud-pinned"], labels := ["container-artifact"] }
 
+/-- `sandboxImagePlacement(publish)`: a publish is `sandboxImagePublish`; a pull request runs `required` and declares
+no constraint and no label. -/
+def sandboxImagePlacement (publish : Bool) : SandboxPlacement :=
+  if publish then sandboxImagePublish else { className := "required", constraints := [], labels := [] }
+
+/-- `requestPlacement` for `worker-deploy` and `sandbox-image`: the run's own constraints, then those of
+`sandboxImagePlacement(true)` for a `sandbox-image` request whose input publishes, each list without repeats in
+first-occurrence order. Neither run declares a label of its own. -/
+def requestPlacement (run : String) (publish : Bool) : List String × List String :=
+  let own := if run == "worker-deploy" then workerDeployConstraints else []
+  let extra := if run == "sandbox-image" && publish then sandboxImagePublish.constraints else []
+  let labels := if run == "sandbox-image" && publish then sandboxImagePublish.labels else []
+  ((own ++ extra).eraseDups, labels.eraseDups)
+
+/-- A profile placement predicate (mameko's `Predicate`): one single-key object, recursive through `not`, `all` and
+`any`. -/
+inductive Pred where
+  | cls (name : String)
+  | label (name : String)
+  | trigger (name : String)
+  | undeclaredClass
+  | not (p : Pred)
+  | all (ps : List Pred)
+  | any (ps : List Pred)
+  deriving Repr
+
+/-- What a predicate reads of a request (`PlacementRequest` in packages/profile/src/placement.ts). -/
+structure Request where
+  cls : String
+  labels : List String
+  trigger : Option String
+  declaresClass : Option Bool
+
+mutual
+/-- `holds` in packages/profile/src/placement.ts: `undeclared_class` holds only for a run that declares no class. -/
+def Pred.holds (r : Request) : Pred → Bool
+  | .cls c => r.cls == c
+  | .label l => r.labels.contains l
+  | .trigger t => r.trigger == some t
+  | .undeclaredClass => r.declaresClass == some false
+  | .not p => !p.holds r
+  | .all ps => holdsAll r ps
+  | .any ps => holdsAny r ps
+
+def holdsAll (r : Request) : List Pred → Bool
+  | [] => true
+  | p :: ps => p.holds r && holdsAll r ps
+
+def holdsAny (r : Request) : List Pred → Bool
+  | [] => false
+  | p :: ps => p.holds r || holdsAny r ps
+end
+
+/-- The parts of a profile placement reads besides `cloud_pinned` and `cloud_pinned_kinds`, which stay the reference
+profile's (`cloudPinnedHolds`, `cloudPinnedKinds`). -/
+structure ProfilePlacement where
+  /-- Each class's name, cloud kinds and `device_eligible`. -/
+  classes : List (String × List String × Option Bool)
+  cloudOnly : Pred
+  localOnly : Pred
+  launcherKinds : List String
+  /-- Each declared constraint's `holds_for` and `removes`. -/
+  declared : List (Pred × List String)
+
+/-- The class's cloud kinds, then `device` unless the class sets `device_eligible: false`; none for an unknown
+class. -/
+def ProfilePlacement.classKinds (p : ProfilePlacement) (cls : String) : List String :=
+  match p.classes.find? (·.1 == cls) with
+  | none => []
+  | some (_, cloud, deviceEligible) => cloud ++ (if deviceEligible == some false then [] else ["device"])
+
+/-- Every executor kind `placementInputs` folds over. -/
+def ProfilePlacement.kinds (p : ProfilePlacement) : List String := ["cloudflare", "device", "aws"] ++ p.launcherKinds
+
+/-- `placementInputs`' facts: a `cloud-only` or `local-only` label, or the profile's predicate, sets the fact. -/
+def ProfilePlacement.facts (p : ProfilePlacement) (r : Request) (confidentiality : String)
+    (deviceLocalInput needsLocalModel : Bool) : Facts :=
+  { runLabels := r.labels
+    confidentialCompute := confidentiality == "confidential-compute"
+    cloudPinned := false
+    cloudOnly := r.labels.contains "cloud-only" || p.cloudOnly.holds r
+    localOnly := r.labels.contains "local-only" || p.localOnly.holds r
+    deviceLocalInput
+    needsLocalModel }
+
+/-- Each declared constraint with whether its predicate holds for the request. -/
+def ProfilePlacement.held (p : ProfilePlacement) (r : Request) : List (Bool × List String) :=
+  p.declared.map (fun (q, ks) => (q.holds r, ks))
+
 theorem fold_keepOnly_subset (pre post : List Constraint) (l ks : List String) :
     ∀ k ∈ foldConstraints l (pre ++ Constraint.keepOnly ks :: post), k ∈ ks := by
   intro k h
@@ -94,6 +185,15 @@ theorem worker_deploy_cloud_pinned (classKinds : List String) (cls : String) (la
 label the run declares. -/
 def placeable (eligibleKinds runLabels : List String) (advertised : String → List String) (k : String) : Prop :=
   k ∈ eligibleKinds ∧ ∀ l ∈ runLabels, l ∈ advertised k
+
+/-- The eligible kinds that place the request, in eligibility order: the list form of `placeable` the oracle
+answers. -/
+def placeableKinds (eligibleKinds runLabels : List String) (advertised : String → List String) : List String :=
+  eligibleKinds.filter (fun k => runLabels.all (fun l => (advertised k).contains l))
+
+theorem mem_placeableKinds (eligibleKinds runLabels : List String) (advertised : String → List String) (k : String) :
+    k ∈ placeableKinds eligibleKinds runLabels advertised ↔ placeable eligibleKinds runLabels advertised k := by
+  simp [placeableKinds, placeable, List.mem_filter, List.all_eq_true]
 
 /--
 The control plane places a publishing `sandbox-image` execution at class `release` under the `cloud-pinned`
