@@ -27,6 +27,7 @@
     "effect": "4.0.6"
   },
   "devDependencies": {
+    "@fractalboxdev/flare-dispatch-intake": "workspace:*",
     "@cloudflare/workers-types": "5.20261012.1",
     "@types/node": "^22.19.0",
     "esbuild": "0.28.2",

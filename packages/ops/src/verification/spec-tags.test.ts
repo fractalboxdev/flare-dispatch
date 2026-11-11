@@ -172,6 +172,12 @@ describe("spec-tags", () => {
     expect(harnessTagOf("packages/ops/src/tick.test.ts")).toBe("V-UNIT");
     expect(harnessTagOf("test/sim/fleet.test.ts")).toBe("V-SIM");
     expect(harnessTagOf("formal/FdFormal/Cache.lean")).toBe("V-PROOF");
+    expect(harnessTagOf("packages/ops/test/deploy/pipeline.test.ts")).toBe("V-DEPLOY");
+    expect(
+      harnessEntries("packages/ops/test/deploy/pipeline.test.ts", 'it("[FD-OPS-010] x", () => {})'),
+    ).toEqual([
+      { id: "FD-OPS-010", tag: "V-DEPLOY", file: "packages/ops/test/deploy/pipeline.test.ts" },
+    ]);
     expect(
       harnessEntries("packages/x/src/a.test.ts", 'it("[FD-OPS-053] x FD-OPS-054", () => {})'),
     ).toEqual([{ id: "FD-OPS-053", tag: "V-UNIT", file: "packages/x/src/a.test.ts" }]);

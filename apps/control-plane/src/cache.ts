@@ -13,7 +13,6 @@ import {
   handleArtifacts,
   handleCompileCache,
   handleLogs,
-  leaseCacheFields,
   ledgersOf,
   sweepArtifacts,
   sweepCache,
@@ -22,10 +21,9 @@ import {
 import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
 import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
-import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
 import { Effect } from "effect";
 import type { ControlPlaneEnv } from "./config.ts";
-import { cacheExecutionOf } from "./cache-execution.ts";
+import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
 import { apiEnvOf } from "./http.ts";
 
 /** The bindings this area reads beside the control plane's. */
@@ -52,23 +50,22 @@ const first = async <T>(db: D1Like, sql: string, ...binds: unknown[]): Promise<T
       .all()
   ).results[0] as T | undefined;
 
-/** A lease's `cache_namespaces` and `upload_grant`, from the won placement's epoch and executor kind. */
-export const leaseCache = async (env: ControlPlaneEnv & CacheEnv, record: IntakeRecord) => {
-  const placement = await first<{ epoch: number; kind: ExecutorKind | null }>(
+/**
+ * A lease's `cache_namespaces` and `upload_grant`, from the won placement's epoch and executor kind; no URL outlives the
+ * execution's `deadline_at` as admission wrote it.
+ */
+export const leaseCache = async (
+  env: ControlPlaneEnv & CacheEnv,
+  record: IntakeRecord,
+  deadlineAt: number,
+) => {
+  const placement = await first<LeaseOf>(
     env.DB,
     `select p.epoch, x.kind from placements p left join executors x on x.executor_id = p.executor_id
      where p.execution_id = ?`,
     record.executionId,
   );
-  return leaseCacheFields(
-    cacheExecutionOf(record),
-    {
-      epoch: placement?.epoch ?? 1,
-      executorKind: placement?.kind ?? "device",
-      deadlineAt: record.deadlineAtMs,
-    },
-    { publicOrigin: env.PUBLIC_ORIGIN, tokenSecret: env.COMPILE_CACHE_SECRET },
-  );
+  return leaseCacheAt(env, record, placement ?? { epoch: 1, kind: null }, deadlineAt);
 };
 
 /** Whether the request carries a valid Access identity of the team: any member reads an execution's logs. */

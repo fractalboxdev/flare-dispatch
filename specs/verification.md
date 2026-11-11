@@ -64,10 +64,10 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-DEPLOY`
 
-- **Runs:** `wrangler deploy --dry-run` for every Worker, mameko's profile validator and configuration validation over the committed profile and configuration, the reference-profile diff (FD-VER-033), and the overlay drift check of [operability.md](operability.md).
-- **Lives:** the `deploy-dry-run` and `profile-reference` jobs and the deploy workflow in `.github/workflows/`; the drift check is `fd doctor`.
+- **Runs:** `wrangler deploy --dry-run` for every Worker, mameko's profile validator and configuration validation over the committed profile and configuration, the reference-profile diff (FD-VER-033), the overlay drift check of [operability.md](operability.md), and the deploy suites: `fd deploy` and `fd doctor` over the committed Worker templates and the placeholder overlay, with fakes of the Cloudflare API, the GitHub API and `wrangler` that keep the deployed state between runs.
+- **Lives:** the `deploy-dry-run` and `profile-reference` jobs and the deploy workflow in `.github/workflows/`; the deploy suites in `test/deploy/` of a workspace package; the drift check is `fd doctor`.
 - **Runs when:** every pull request, against the committed placeholders; every deploy, against the operator overlay; every 24 h, as `fd doctor` (FD-OPS-025).
-- **Failure blocks:** the merge (dry run, validators and reference diff); the deploy (drift check).
+- **Failure blocks:** the merge (dry run, validators, deploy suites and reference diff); the deploy (drift check).
 
 #### `V-LIVE`
 
@@ -92,7 +92,7 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-DIFF`
 
-- **Runs:** `fast-check` traces through `stagedWriteGate` and through the native oracle compiled from its Lean model, comparing outputs after every event. mameko's kernels are differentially tested in mameko ([mameko verification.md § Differential testing](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/verification.md#differential-testing)).
+- **Runs:** `fast-check` traces through each kernel with a Lean model and through the native oracle compiled from that model, comparing outputs after every event: `stagedWriteGate` against `formal/FdFormal/StagedWrite.lean`, and the placement of a `worker-deploy` or `sandbox-image` request (the profile's `resolveClass`, the catalogue's `requestPlacement`, the profile's `eligibleKinds` at the resolved class and mameko's `unplaceable`) against `formal/FdFormal/Placement.lean`, which `oracle placement` answers. mameko's kernels are differentially tested in mameko ([mameko verification.md § Differential testing](https://github.com/fractalboxdev/mameko/blob/f4b48b06df95f623f666719794238b91dbad5cb9/specs/verification.md#differential-testing)).
 - **Lives:** `test/diff/` for the generators and the comparison, the `oracle` executable built by `lake build oracle` in `formal/`, and `formal/regressions.jsonl` for every trace that ever differed.
 - **Runs when:** every pull request with 10,000 traces, in the `diff` job; nightly with 1,000,000 traces. Every run first replays every line of `formal/regressions.jsonl`.
 - **Failure blocks:** the merge (per pull request); the phase gate (nightly).
@@ -111,10 +111,10 @@ The default branch's ruleset requires these checks on every pull request. A pull
 | `sim` | 100 seeds per scenario plus every kept seed | `V-SIM` |
 | `replay` | Double run over cached journals | `V-REPLAY` |
 | `e2e-local` | The cloud path of the end-to-end stack | `V-E2E-LOCAL` |
-| `deploy-dry-run` | `wrangler deploy --dry-run` and the validators | `V-DEPLOY` |
+| `deploy-dry-run` | `wrangler deploy --dry-run`, the validators and the deploy suites | `V-DEPLOY` |
 | `profile-reference` | The comparison of FlareDispatch's profile with mameko's reference CI profile at the pinned commit, outside the listed differences (FD-VER-033, FD-PROF-002) | `V-DEPLOY` |
 | `formal` | `lake build`, the forbidden-term scan, `#print axioms`, `tamarin-prover --prove` | `V-PROOF` |
-| `diff` | The regressions file, then 10,000 traces of `stagedWriteGate` | `V-DIFF` |
+| `diff` | The regressions file, then 10,000 traces of `stagedWriteGate` and of placement | `V-DIFF` |
 
 `V-LIVE` and `V-MEASURE` run against a deployed control plane and are not merge checks.
 
@@ -216,7 +216,7 @@ The `formal` job fails on any of these:
 - `#print axioms` for a theorem in `formal/` lists an axiom other than `propext`, `Classical.choice` and `Quot.sound`.
 - `tamarin-prover --prove formal/provenance.spthy`, at the pinned prover version, reports a lemma other than `verified`. An expected attack is stated as an `exists-trace` lemma, so the attack trace that lemma finds is a pass (FD-PROV-073).
 
-The `diff` job runs every line of `formal/regressions.jsonl`, then 10,000 generated traces per pull request or 1,000,000 nightly, through `stagedWriteGate` and the oracle built from the same commit. The first trace whose outputs differ fails the job; the harness shrinks it and writes it as one `regressions.jsonl` line.
+The `diff` job runs every line of `formal/regressions.jsonl`, then 10,000 generated traces per pull request or 1,000,000 nightly, through `stagedWriteGate`, through placement and through the oracle built from the same commit. The first trace whose outputs differ fails the job; the harness shrinks it and writes it as one `regressions.jsonl` line.
 
 ```mermaid
 flowchart TB

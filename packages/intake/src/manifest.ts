@@ -46,6 +46,8 @@ export type ManifestEntry = typeof ManifestEntry.Type;
 export const RepoManifest = Schema.Struct({
   version: Schema.Literal(1),
   runs: Schema.Array(ManifestEntry),
+  /** The pull-request authors the gate recipes skip; `dependabot[bot]` when absent (FD-GATE-017). */
+  skipAuthors: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type RepoManifest = typeof RepoManifest.Type;
 

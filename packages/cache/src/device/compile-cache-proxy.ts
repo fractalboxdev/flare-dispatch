@@ -62,6 +62,18 @@ export const compileCacheProxy = (options: CompileCacheProxyOptions) => {
     }
   };
 
+  /**
+   * A forwarded read: the route's answer when it is `found`, and otherwise a miss. A route that fails or refuses the
+   * read (a deploy without a `CacheLedger`, a stale epoch's token, a `5xx`) is a miss to sccache, which compiles
+   * locally (FD-CACHE-011).
+   */
+  const forwardRead = async (path: string, init: RequestInit, found: number) => {
+    const upstream = await forward(path, init);
+    if (upstream.status === found) return upstream;
+    await upstream.body?.cancel().catch(() => undefined);
+    return new Response("not found", { status: 404 });
+  };
+
   return async (request: Request): Promise<Response> => {
     const parsed = pathOf(new URL(request.url).pathname);
     if (parsed === undefined) return new Response("not found", { status: 404 });
@@ -75,19 +87,26 @@ export const compileCacheProxy = (options: CompileCacheProxyOptions) => {
         const local = await fromL1(path);
         if (local !== null)
           return xml(`/${path}`, `<D:getcontentlength>${local.byteLength}</D:getcontentlength><D:resourcetype/>`);
-        return forward(path, { method: "PROPFIND", headers: { depth: "0" } });
+        return forwardRead(path, { method: "PROPFIND", headers: { depth: "0" } }, 207);
       }
       case "HEAD":
       case "GET": {
         if (collection) return new Response("not found", { status: 404 });
         const local = await fromL1(path);
         if (local !== null)
-          return new Response(request.method === "HEAD" ? null : local, {
+          // L1's bytes sit on an ArrayBuffer; the DOM's BodyInit takes no SharedArrayBuffer view.
+          return new Response(request.method === "HEAD" ? null : (local as Uint8Array<ArrayBuffer>), {
             headers: { "content-type": "application/octet-stream", "content-length": String(local.byteLength) },
           });
-        const upstream = await forward(path, { method: request.method });
+        const upstream = await forwardRead(path, { method: request.method }, 200);
         if (request.method === "HEAD" || upstream.status !== 200) return upstream;
-        const bytes = new Uint8Array(await upstream.arrayBuffer());
+        // A body that fails after the route answered `200` is a miss as well (FD-CACHE-011).
+        let bytes: Uint8Array<ArrayBuffer>;
+        try {
+          bytes = new Uint8Array(await upstream.arrayBuffer());
+        } catch {
+          return new Response("not found", { status: 404 });
+        }
         const namespace = upstream.headers.get(CACHE_NAMESPACE_HEADER);
         if (namespace !== null && options.read.includes(namespace))
           await Effect.runPromise(options.l1.keep(namespace, await l1Key(path), bytes));

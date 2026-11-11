@@ -190,7 +190,11 @@ describe("live deploy target", () => {
     expect(await use(layer, (t) => t.lastRecord(worker))).toBeNull();
     await use(layer, (t) => t.writeRecord(worker));
     const stored = JSON.parse([...w.objects.values()][0]!);
-    expect(stored).toEqual({ rendered: TEMPLATE, secrets: ["GITHUB_APP_PRIVATE_KEY"] });
+    expect(stored).toEqual({
+      rendered: TEMPLATE,
+      secrets: ["GITHUB_APP_PRIVATE_KEY"],
+      containers: [],
+    });
     expect(await use(layer, (t) => t.lastRecord(worker))).toEqual(
       settingsFromConfig("fd-cp", worker.config, ["GITHUB_APP_PRIVATE_KEY"]),
     );

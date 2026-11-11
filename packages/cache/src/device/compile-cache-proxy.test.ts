@@ -32,7 +32,19 @@ const buffered = (): Bucket => ({
     bucket.put(k, v instanceof ReadableStream ? await new Response(v).arrayBuffer() : (v as string), o)) as Bucket["put"],
 });
 
-const setup = async (opts: { read?: string[]; write?: string | null; down?: boolean } = {}) => {
+/** A `200` whose body fails after the headers arrive, as on a connection reset mid-transfer. */
+const brokenBody = () =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial"));
+        controller.error(new Error("connection reset"));
+      },
+    }),
+    { status: 200 },
+  );
+
+const setup = async (opts: { read?: string[]; write?: string | null; down?: boolean; brokenBody?: boolean } = {}) => {
   const read = opts.read ?? [PR, BASE];
   const write = opts.write === undefined ? PR : opts.write;
   const token = await signCompileCacheToken(SECRET, { repo: REPO, executionId: "e-dev", epoch: 1, read, write, expiresAt: Date.now() + 60_000 });
@@ -48,6 +60,7 @@ const setup = async (opts: { read?: string[]; write?: string | null; down?: bool
     fetch: (async (url: string, init: RequestInit) => {
       calls.push(`${init.method} ${new URL(url).pathname}`);
       if (opts.down === true) throw new TypeError("network down");
+      if (opts.brokenBody === true) return brokenBody();
       return (await handleCompileCache(new Request(url, init), { bucket: buffered(), ledgers: memoryLedgers(), secret: SECRET, now: Date.now }))!;
     }) as typeof fetch,
   });
@@ -98,5 +111,11 @@ describe("device compile-cache proxy", () => {
     expect(huge.status).toBe(413);
     expect(calls).toEqual([]);
     expect((await req("../etc/passwd", "GET")).status).toBe(404);
+  });
+
+  it("[FD-CACHE-011] a GET whose body fails after the route answered 200 is a miss, and L1 keeps nothing", async () => {
+    const { req, disk } = await setup({ brokenBody: true });
+    expect((await req("k", "GET")).status).toBe(404);
+    expect(disk.files.size).toBe(0);
   });
 });

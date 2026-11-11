@@ -16,6 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fractalboxdev/flare-dispatch-agentic": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
     "@fractalboxdev/mameko-coordinator": "workspace:*",
     "@fractalboxdev/mameko-host-cloudflare": "workspace:*",

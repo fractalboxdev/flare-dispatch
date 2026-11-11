@@ -149,7 +149,7 @@ describe("the identity gate", () => {
     expect((await post(development, "/v1/dispatch/nothing", {}, "invalid")).status).toBe(401);
   });
 
-  it("[FD-IFC-012] refuses an Access token outside operators on an operator route", async () => {
+  it("[FD-IFC-088] refuses executor registration from an Access identity outside operators", async () => {
     const { identity } = await newDevice();
     const r = await post(
       development,
@@ -158,6 +158,7 @@ describe("the identity gate", () => {
       "member@example.com",
     );
     expect(r.status).toBe(403);
+    expect(await r.json()).toMatchObject({ error: "forbidden" });
   });
 
   it("serves health without identity and names the deployment", async () => {
@@ -293,6 +294,22 @@ describe("a development deployment", () => {
       inputs: dispatchBody(sha).inputs,
       credentials: {},
     });
+    // The lease carries the deadline admission wrote on the execution and placement rows, and the gate run's input
+    // carries it too (FD-GATE-007).
+    const [deadlines] = (
+      await (
+        await development.getD1Database("DB")
+      )
+        .prepare(
+          `select e.deadline_at as execution, p.deadline_at as placement from executions e
+           join placements p on p.execution_id = e.id where e.id = ?`,
+        )
+        .bind(id)
+        .all()
+    ).results as { execution: number; placement: number }[];
+    expect(deadlines!.placement).toBe(deadlines!.execution);
+    expect(lease["deadline_at"]).toBe(deadlines!.execution);
+    expect((lease["inputs"] as { deadlineAt: unknown }).deadlineAt).toBe(deadlines!.execution);
     const epoch = lease["epoch"];
     // A device restores the device and content tiers and writes none for a dispatch (FD-CACHE-016).
     expect(lease["upload_grant"]).toMatchObject({
@@ -396,11 +413,22 @@ const PLACEMENT_REPOSITORY = {
     ".github/flare-dispatch.json": Buffer.from(
       JSON.stringify({
         version: 1,
-        runs: ["worker-deploy", "sandbox-image"].map((recipe) => ({
-          recipe,
-          triggers: ["dispatch"],
-          params: { steps: [{ label: "run", command: "true" }] },
-        })),
+        runs: [
+          {
+            recipe: "worker-deploy",
+            triggers: ["dispatch"],
+            params: { command: "pnpm deploy" },
+          },
+          {
+            recipe: "sandbox-image",
+            triggers: ["dispatch"],
+            params: {
+              images: [
+                { name: "sandbox", dockerfile: "infra/Dockerfile.sandbox", smoke: ["true"] },
+              ],
+            },
+          },
+        ],
       }),
     ).toString("base64"),
   },

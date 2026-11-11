@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { Effect, Layer } from "effect";
 import { pathInvalid } from "../staged-write/gate.ts";
-import { buildStagedWrite } from "../staged-write/build.ts";
+import { buildStagedWrite, uploadStagedWrite, type ArtifactSink } from "../staged-write/build.ts";
 import {
   Checkout,
   EditLoop,
@@ -110,16 +110,27 @@ export const editLoopLayer = (
       ),
   });
 
-/** `StagedWrites` over `buildStagedWrite` against the base commit, written under the staging directory. */
+/**
+ * `StagedWrites` over `buildStagedWrite` against the base commit, written under the staging directory, then uploaded
+ * to the execution's artifact store, so the manifest a run returns names only blobs the control plane can read back
+ * (FD-AGT-013).
+ */
 export const stagedWritesLayer = (
   checkout: string,
   baseCommit: string,
   stagingDir: string,
+  artifacts: ArtifactSink,
 ): Layer.Layer<StagedWrites> =>
   Layer.succeed(StagedWrites, {
     stage: (input) =>
-      buildStagedWrite({ checkout, baseCommit, stagingDir, ...input }).pipe(
-        Effect.map((w) => w.manifest),
-        Effect.mapError((e) => new StageFailed({ detail: `${e.step}: ${e.detail}` })),
-      ),
+      Effect.gen(function* () {
+        const { manifest } = yield* buildStagedWrite({
+          checkout,
+          baseCommit,
+          stagingDir,
+          ...input,
+        });
+        yield* uploadStagedWrite(stagingDir, manifest, artifacts);
+        return manifest;
+      }).pipe(Effect.mapError((e) => new StageFailed({ detail: `${e.step}: ${e.detail}` }))),
   });

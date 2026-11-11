@@ -2,6 +2,7 @@
 // input schemas, its class and the FlareDispatch declarations beside
 // `defineRun`'s answer (specs/run-model.md § Run catalogue).
 import { Option, Schema } from "effect";
+import type { TriggerContext } from "./delivery.ts";
 import type { DispatchEvent } from "./event.ts";
 
 /** A run's `cooldown { seconds, scope }` (FD-INT-057). */
@@ -15,6 +16,8 @@ export interface Cooldown {
 export interface EntryView {
   readonly label: string | null;
   readonly params: unknown;
+  /** The manifest's `skipAuthors`; absent leaves each recipe's default (FD-GATE-017). */
+  readonly skipAuthors?: readonly string[];
 }
 
 export interface IntakeRun {
@@ -24,7 +27,11 @@ export interface IntakeRun {
   /** The run's input schema; a dispatch's inputs and a re-run's recorded inputs must pass it (FD-INT-040, FD-INT-055). */
   readonly input: Schema.Decoder<unknown>;
   /** The request decoder: the run's input for an event, or none when the run does not answer it. */
-  readonly trigger: (event: DispatchEvent, entry: EntryView) => Option.Option<unknown>;
+  readonly trigger: (
+    event: DispatchEvent,
+    entry: EntryView,
+    context: TriggerContext,
+  ) => Option.Option<unknown>;
   /** `limits.qosClass`, the class `resolveClass` starts from. */
   readonly defaultClass: string;
   /** `limits.qosCeiling`, the highest class `resolveClass` gives the run; absent caps at `required`. */

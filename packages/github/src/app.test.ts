@@ -405,4 +405,62 @@ describe("GithubRead", () => {
     expect(refPatternMatches("~DEFAULT_BRANCH", "refs/tags/main")).toBe(false);
     expect(refPatternMatches("refs/tags/v1.0", "refs/tags/v1x0")).toBe(false);
   });
+
+  it("[FD-OPS-029] every ruleset and branch-protection request is a GET", async () => {
+    const calls: Call[] = [];
+    const routes = {
+      ...covered,
+      "GET /repos/acme/app/rules/branches/main": () => ({
+        status: 200,
+        body: [
+          {
+            type: "required_status_checks",
+            parameters: { required_status_checks: [{ context: "flare-dispatch/check:ci" }] },
+          },
+        ],
+      }),
+      "GET /repos/acme/app/branches/main/protection/required_status_checks": () => ({
+        status: 200,
+        body: { contexts: ["lint"] },
+      }),
+      "GET /repos/acme/app/rules/branches/feature": () => ({ status: 200, body: [] }),
+      "GET /repos/acme/app/branches/feature": () => ({
+        status: 200,
+        body: { protected: false, commit: { sha: "a".repeat(40) } },
+      }),
+      "GET /repos/acme/app/rulesets": () => ({
+        status: 200,
+        body: [{ id: 1, target: "tag", enforcement: "active" }],
+      }),
+      "GET /repos/acme/app/rulesets/1": () => ({
+        status: 200,
+        body: {
+          enforcement: "active",
+          conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+          rules: [{ type: "deletion" }],
+        },
+      }),
+    };
+    await live(
+      Effect.gen(function* () {
+        const read = yield* GithubRead;
+        yield* read.requiredChecks("acme/app", "main");
+        yield* read.refProtected("acme/app", "refs/heads/main");
+        yield* read.refProtected("acme/app", "refs/heads/feature");
+        yield* read.refProtected("acme/app", "refs/tags/v1.0.0");
+      }),
+      routes,
+      calls,
+    );
+    const ruleCalls = calls.filter((c) => /\/(rules|rulesets|protection)(\/|\?|$)/.test(c.path));
+    expect(ruleCalls.map((c) => c.path.split("?")[0])).toEqual(
+      expect.arrayContaining([
+        "/repos/acme/app/rules/branches/main",
+        "/repos/acme/app/branches/main/protection/required_status_checks",
+        "/repos/acme/app/rulesets",
+        "/repos/acme/app/rulesets/1",
+      ]),
+    );
+    expect(ruleCalls.every((c) => c.method === "GET" && c.body === undefined)).toBe(true);
+  });
 });

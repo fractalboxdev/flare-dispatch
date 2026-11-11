@@ -1,3 +1,5 @@
+import { BUILT_IN_REASON_KINDS } from "@fractalboxdev/mameko-coordinator";
+import { DEFAULT_APPROVAL_FLOOR, missingFloorPatterns } from "@fractalboxdev/mameko-egress";
 import { reclaimPolicyFor } from "@fractalboxdev/mameko-kernel";
 import {
   APPLICATION_PORTS,
@@ -458,6 +460,45 @@ describe("class catalogue", () => {
   });
 });
 
+describe("isolation and signing", () => {
+  const DEPLOYMENTS = ["production", "development"] as const;
+  const PHASES = [0, 1, 2, 3, 4] as const;
+  const builds = DEPLOYMENTS.flatMap((d) => PHASES.map((p) => buildProfile(d, p)));
+  const floorOf = (p: Profile) =>
+    p.approval_floor.map(({ program, subcommands }) => [program, ...subcommands].join(" "));
+
+  it("[FD-PROF-049] the approval floor is mameko's default list plus wrangler d1 and gh release", () => {
+    for (const p of builds) {
+      const floor = floorOf(p);
+      expect(missingFloorPatterns(floor)).toEqual([]);
+      expect([...floor].sort()).toEqual(
+        [...DEFAULT_APPROVAL_FLOOR, "wrangler d1", "gh release"].sort(),
+      );
+    }
+  });
+
+  it("[FD-PROF-050] setup grants registries and git with declared methods elsewhere; agent grants the model gateway and git with read-only elsewhere", () => {
+    for (const p of builds)
+      expect(p.egress_profiles).toEqual({
+        setup: { grants: ["package-registries", "git-remote"], other_hosts: "declared-methods" },
+        agent: { grants: ["model-gateway", "git-remote"], other_hosts: "read-only" },
+      });
+  });
+
+  it("[FD-PROF-051] the signing purposes are statement and cache-entry and no other", () => {
+    for (const p of builds) expect(p.signing_purposes).toEqual(["statement", "cache-entry"]);
+  });
+
+  it("[FD-PROF-053] provenance is a declared reason kind in category policy, so an acceptance rejection is a policy failure", () => {
+    expect("provenance" in BUILT_IN_REASON_KINDS).toBe(false);
+    for (const p of builds) expect(p.reason_kinds).toEqual({ provenance: "policy" });
+    expect(phase4.reason_kinds).toEqual({ provenance: "policy" });
+    expect(acceptanceReasonKinds).toContain("provenance");
+    const undeclared = mutate(({ reason_kinds: _, ...d }) => d);
+    expect(rejections(undeclared).map((r) => r.path)).toEqual(["reason_kinds.provenance"]);
+  });
+});
+
 describe("delayed cloud claim", () => {
   const at = (name: string, request: Partial<PlacementRequest>, predictedMiss = false) =>
     cloudEligibleAt({
@@ -752,7 +793,8 @@ describe("deployments", () => {
       {
         item: "registration",
         path: "registration.key_stores",
-        reason: "hardware key store under attestation: none; list only software or set attestation: verifier",
+        reason:
+          "hardware key store under attestation: none; list only software or set attestation: verifier",
       },
       {
         item: "registration",

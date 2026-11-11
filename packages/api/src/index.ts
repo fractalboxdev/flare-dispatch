@@ -14,12 +14,6 @@ export * from "./request-id.ts";
 export * from "./router.ts";
 export { canonicalJson, idempotencyOf, submissionOf, submit } from "./routes/dispatch.ts";
 export { d1Executions, recordOf, reportedStatus } from "./live/executions.ts";
-export {
-  d1Intake,
-  dispatchRecipes,
-  type ClassResolver,
-  type InstallationLookup,
-} from "./live/intake.ts";
 export { oidcKeyFromSecret, parseSigningJwk } from "./live/oidc-key.ts";
 export { d1DeviceRegistry } from "./live/registry.ts";
 export * from "./live/tables.ts";

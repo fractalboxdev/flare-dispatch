@@ -90,6 +90,7 @@ describe("operability routes", () => {
     for (const path of [
       "/",
       "/v1/executions",
+      "/executions/e1",
       "/v1/ops/health",
       "/v1/ops/fleet",
       "/v1/github/install/new",
@@ -108,6 +109,35 @@ describe("operability routes", () => {
     expect(
       await opsFetch(requestWith(s.operator, "/v1/webhooks/github"), s.env, s.deps),
     ).toBeNull();
+  });
+
+  it("[FD-AGT-018] GET /executions/:id serves the execution page with every reason of its refused pr.propose row", async () => {
+    const s = await setup();
+    await t.db
+      .prepare(
+        "insert into executions (id, scope_id, run, class, status, enqueued_at) values ('e 1', 'acme/app', 'spec-drift-pr', 'required', 'success', 0)",
+      )
+      .run();
+    await t.db
+      .prepare(
+        `insert into outbox (id, execution_id, scope_id, intent_key, kind, limit_key, tier, priority, class_rank,
+           draws_reserve, payload_json, payload_digest, intent_attempts, effect_class, state, attempts, sends,
+           next_attempt_at, last_error, inserted_at, undetermined)
+         values ('1', 'e 1', 'acme/app', 'cp:pr:propose', 'pr.propose', '7', 'effect', 0, 1, 0, '{}', 'd', 0,
+           'adoptable', 'refused', 1, 1, 0, ?, 0, 0)`,
+      )
+      .bind("writeback: outside-allowlist; outside-allowlist src/a.ts; too-many-files")
+      .run();
+    const res = await s.call(s.viewer, "/executions/e%201");
+    expect(res.status).toBe(200);
+    const page = await res.text();
+    expect(page).toContain("<tr><th>Verdict</th><td>success</td></tr>");
+    expect(page).toContain(
+      '<li class="mono">outside-allowlist src/a.ts</li><li class="mono">too-many-files</li>',
+    );
+    expect(page).toContain("/v1/executions/e%201/logs/run.log?t=");
+    expect((await s.call(s.viewer, "/executions/nope")).status).toBe(404);
+    expect((await s.call(s.viewer, "/executions/%E0")).status).toBe(404);
   });
 
   it("[FD-OPS-036] GET /v1/ops/health returns the liveness report with each installation's status and delivery age", async () => {

@@ -209,7 +209,7 @@ const schedules = (unit: TickUnit & { readonly _tag: "schedules" }) =>
             repo,
             schedule: s.cron,
           };
-          const inputs = run.trigger(event, viewOf(entry));
+          const inputs = run.trigger(event, viewOf(entry, manifest.value), { defaultBranch });
           if (Option.isNone(inputs)) continue;
           subs.push(
             submission({
