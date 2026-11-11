@@ -5,6 +5,7 @@ import {
   ApiConfig,
   apiConfigFromEnv,
   apiError,
+  artifactsGroup,
   Cancellation,
   ConfigInvalid,
   d1DeviceRegistry,
@@ -15,6 +16,7 @@ import {
   executorsGroup,
   FailureSummaries,
   JwksSourceLive,
+  logsGroup,
   mount,
   oidcKeyFromSecret,
   Operations,
@@ -28,6 +30,7 @@ import { handleIntake, WEBHOOK_MAX_BYTES } from "@fractalboxdev/flare-dispatch-i
 import { livenessReport, runOpsMigrations } from "@fractalboxdev/flare-dispatch-ops";
 import { Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
 import { apiEnvOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { intakePort } from "./intake-port.ts";
@@ -59,7 +62,10 @@ export const intakeGroup = routerGroup(
   HttpRouter.add("POST", "/v1/webhooks/github", intakeRoute) as never,
 );
 
-/** The groups the Worker mounts; `/v1/executors/connect` is answered before the router, since it upgrades. */
+/**
+ * The groups the Worker mounts; `/v1/executors/connect` is answered before the router, since it upgrades. The log and
+ * artifact reads pass the link surface's gate like every other route (FD-IFC-017).
+ */
 export const router = mount(
   wellKnownGroup,
   dispatchGroup,
@@ -67,6 +73,8 @@ export const router = mount(
   executionsGroup,
   opsGroup,
   executorsGroup,
+  logsGroup(LogsHandlers),
+  artifactsGroup(ArtifactsHandlers),
 );
 
 const handler = toFetchHandler(router, { shared: JwksSourceLive });
@@ -118,6 +126,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     cancellationDeferred,
     failureSummariesDeferred,
     operations(env),
+    cacheReads(env),
   );
 
 /** One request through the router, with the isolate's services and the ones its routes read. */

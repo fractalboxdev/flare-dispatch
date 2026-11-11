@@ -1,16 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "./crypto.ts";
 import {
-  handleLogs,
   logObjectName,
   LOG_TOKEN_LABEL,
   parseLogObjectName,
+  serveLogs,
   signLogToken,
   stepKey,
   stripAnsi,
   sweepLogs,
   verifyCapability,
   type LogExecution,
+  type LogRead,
 } from "./logs.ts";
 import type { Bucket } from "./manifest.ts";
 import { emptyBucket, startMiniflare } from "./support.test-support.ts";
@@ -29,11 +30,20 @@ beforeEach(async () => emptyBucket(bucket));
 const NOW = 1_700_000_000_000;
 const deps = (execution: LogExecution | null = { terminal: true }) => ({
   bucket,
-  secret: SECRET,
-  now: () => NOW,
   execution: async () => execution,
   nonce: () => "n0nce",
 });
+/** Reads `/v1/executions/<EXEC>/logs[/<file>][?query]` for a caller already identified. */
+const logs = (file: string | undefined, query = "", execution?: LogExecution) =>
+  serveLogs(
+    new Request(`http://x/v1/executions/${EXEC}/logs${file === undefined ? "" : `/${file}`}${query}`),
+    { executionId: EXEC, file },
+    deps(execution),
+  );
+const served = (r: LogRead) => {
+  expect(r).toMatchObject({ _tag: "Served" });
+  return (r as Extract<LogRead, { _tag: "Served" }>).response;
+};
 const segment = async (journal: string, stream: string, start: number, end: number, epoch = 1) =>
   (await logObjectName({ executionId: EXEC, epoch, journalName: journal, stream, start, end }))!;
 const write = async (name: string, lines: string[], meta = { executor_id: "cf-1", executor_kind: "cloudflare" }) =>
@@ -59,23 +69,20 @@ describe("logs", () => {
       `logs/${EXEC}/1/${"0".repeat(24)}/stdout-0-5-7.ndjson`,
     ])
       expect(parseLogObjectName(bad)).toBeUndefined();
-    const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
-    const r = await handleLogs(new Request(`http://x/v1/executions/${EXEC}/logs/1/x/stdout.ndjson?token=${token}`), deps());
-    expect(r?.status).toBe(404);
+    expect(await logs("1/x/stdout.ndjson")).toEqual({ _tag: "NoFile" });
   });
 
   it("[FD-CACHE-083] serves one file as NDJSON or text, and the aggregate in step order past 1000 objects", async () => {
     const first = await segment("step:a", "stdout", 0, 10);
     await write(first, ["\u001b[32mgreen\u001b[0m"]);
-    const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
     const file = first.slice(`logs/${EXEC}/`.length);
-    const nd = (await handleLogs(new Request(`http://x/v1/executions/${EXEC}/logs/${file}?token=${token}`), deps()))!;
+    const nd = served(await logs(file));
     expect(nd.headers.get("content-type")).toBe("application/x-ndjson");
     expect(await nd.text()).toContain('"line"');
-    const text = (await handleLogs(new Request(`http://x/v1/executions/${EXEC}/logs/${file}?format=text&token=${token}`), deps()))!;
+    const text = served(await logs(file, "?format=text"));
     expect(await text.text()).toBe("green");
     for (let i = 1; i <= 1001; i++) await write(await segment("step:b", "stdout", i * 10, i * 10 + 10), [`b${i}`]);
-    const all = (await handleLogs(new Request(`http://x/v1/executions/${EXEC}/logs?format=text&token=${token}`), deps()))!;
+    const all = served(await logs(undefined, "?format=text"));
     const lines = (await all.text()).split("\n");
     expect(lines).toHaveLength(1002);
     expect(lines[0]).toBe("green");
@@ -86,8 +93,7 @@ describe("logs", () => {
   it("[FD-CACHE-084] [FD-CACHE-086] the viewer sends a nonce CSP, inserts text only as textContent, strips ANSI and names the producer", async () => {
     const name = await segment("step:a", "stderr", 0, 10);
     await write(name, ["</script><img src=x onerror=alert(1)>", "\u001b[1mbold\u001b[0m"]);
-    const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
-    const r = (await handleLogs(new Request(`http://x/v1/executions/${EXEC}/logs?format=html&token=${token}`), deps()))!;
+    const r = served(await logs(undefined, "?format=html"));
     const csp = r.headers.get("content-security-policy")!;
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'nonce-n0nce'");
@@ -104,26 +110,22 @@ describe("logs", () => {
   it("[FD-CACHE-085] a terminal execution's logs are immutable; a running one's are not cached", async () => {
     const name = await segment("step:a", "stdout", 0, 1);
     await write(name, ["x"]);
-    const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
-    const url = `http://x/v1/executions/${EXEC}/logs?token=${token}`;
-    expect((await handleLogs(new Request(url), deps({ terminal: true })))!.headers.get("cache-control")).toContain("immutable");
-    expect((await handleLogs(new Request(url), deps({ terminal: false })))!.headers.get("cache-control")).toBe("no-store");
+    expect(served(await logs(undefined, "", { terminal: true })).headers.get("cache-control")).toContain("immutable");
+    expect(served(await logs(undefined, "", { terminal: false })).headers.get("cache-control")).toBe("no-store");
   });
 
-  it("[FD-CACHE-087] a log token binds one execution, lasts at most 7 days and uses the log label", async () => {
+  it("a log token binds one execution, lasts at most 7 days and uses the log label", async () => {
     const token = await signLogToken(SECRET, EXEC, NOW + 30 * 24 * 3600 * 1000, NOW);
     expect(await verifyCapability(SECRET, LOG_TOKEN_LABEL, EXEC, token, NOW + 6 * 24 * 3600 * 1000)).toBe(true);
     expect(await verifyCapability(SECRET, LOG_TOKEN_LABEL, EXEC, token, NOW + 7 * 24 * 3600 * 1000 + 1)).toBe(false);
     expect(await verifyCapability(SECRET, LOG_TOKEN_LABEL, "exec-other", token, NOW)).toBe(false);
     expect(await verifyCapability(SECRET, "flare-dispatch/artifact/v1", EXEC, token, NOW)).toBe(false);
-    expect((await handleLogs(new Request(`http://x/v1/executions/${EXEC}/logs`), deps()))?.status).toBe(404);
   });
 
   it("[FD-CACHE-088] a confidential-compute execution's viewer shows a pointer and fetches no log content", async () => {
     const name = await segment("step:a", "stdout", 0, 1);
     await write(name, ["secret"]);
-    const token = await signLogToken(SECRET, EXEC, NOW + 1000, NOW);
-    const r = (await handleLogs(new Request(`http://x/v1/executions/${EXEC}/logs?format=html&token=${token}`), deps({ terminal: true, confidential: true, executorId: "dev-1" })))!;
+    const r = served(await logs(undefined, "?format=html", { terminal: true, confidential: true, executorId: "dev-1" }));
     const html = await r.text();
     expect(html).toContain('"executorId":"dev-1"');
     expect(html).toContain(`"executionId":"${EXEC}"`);

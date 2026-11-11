@@ -115,7 +115,6 @@ beforeAll(async () => {
     r2Buckets: ["CACHE"],
     bindings: {
       DEPLOYMENT: "development",
-      CACHE_TOKEN_SECRET: "cache-token-secret-for-tests",
       PLANE_ID: PLANE,
       ACCESS_TEAM_DOMAIN: team.teamDomain,
       ACCESS_AUD: AUD,

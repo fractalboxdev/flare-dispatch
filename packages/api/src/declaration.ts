@@ -329,9 +329,12 @@ export class WellKnownGroup extends HttpApiGroup.make("wellKnown")
   )
   .middleware(ErrorModel) {}
 
-/** A log as the route serves it: NDJSON, or plain text with `?format=text` (FD-CACHE-083). */
+/**
+ * A log as the route serves it: NDJSON, plain text with `?format=text` (FD-CACHE-083), or the HTML viewer with
+ * `?format=html` (FD-CACHE-084).
+ */
 const LogText = Schema.String.pipe(HttpApiSchema.asText({ contentType: "application/x-ndjson" }));
-const LogQuery = { format: Schema.optionalKey(Schema.Literal("text")) };
+const LogQuery = { format: Schema.optionalKey(Schema.Literals(["text", "html"])) };
 
 /**
  * The redacted step logs. The cache-artifacts area implements these handlers; the declaration holds their schemas so
@@ -354,6 +357,53 @@ export class LogsGroup extends HttpApiGroup.make("logs")
   )
   .middleware(ErrorModel) {}
 
+/** An artifact's body or a browse file, as stored, with the content type recorded at upload. */
+const ArtifactBody = Schema.Uint8Array.pipe(
+  HttpApiSchema.asUint8Array({ contentType: "application/octet-stream" }),
+);
+
+/** One artifact row as a listing shows it (FD-CACHE-078). */
+export const ArtifactEntry = Schema.Struct({
+  artifact_id: Schema.String,
+  name: Schema.String,
+  size: Schema.Number,
+  sha256: Schema.String,
+  content_type: Schema.String,
+  epoch: Schema.Number,
+  producer: Schema.Struct({ executor_id: Schema.String, executor_kind: Schema.String }),
+  expires_at: Schema.Number,
+});
+
+export const ArtifactsPage = Schema.Struct({
+  artifacts: Schema.Array(ArtifactEntry),
+  /** The cursor of the next page; `null` on the last page. */
+  cursor: Schema.NullOr(Schema.String),
+});
+
+/**
+ * The stored artifacts. The cache-artifacts area implements these handlers; an artifact and its browse paths serve a
+ * link token for that artifact (FD-IFC-017).
+ */
+export class ArtifactsGroup extends HttpApiGroup.make("artifacts")
+  .add(
+    /** The artifact itself, or with a path below it one file of its browse expansion (FD-CACHE-073). */
+    HttpApiEndpoint.get("get", "/v1/artifacts/:artifact_id/*", {
+      params: { artifact_id: Schema.String, "*": Schema.optionalKey(Schema.String) },
+      success: ArtifactBody,
+      ...errors,
+    }),
+    HttpApiEndpoint.get("list", "/v1/executions/:id/artifacts", {
+      ...IdParam,
+      query: {
+        limit: Schema.optionalKey(Schema.NumberFromString.check(Schema.isInt())),
+        cursor: Schema.optionalKey(Schema.String),
+      },
+      success: ArtifactsPage,
+      ...errors,
+    }),
+  )
+  .middleware(ErrorModel) {}
+
 /** The declaration. Every route the dispatcher serves through the router is an endpoint of one of these groups. */
 export class FlareDispatchApi extends HttpApi.make("flare-dispatch")
   .add(DispatchGroup)
@@ -361,4 +411,5 @@ export class FlareDispatchApi extends HttpApi.make("flare-dispatch")
   .add(OpsGroup)
   .add(ExecutorsGroup)
   .add(WellKnownGroup)
-  .add(LogsGroup) {}
+  .add(LogsGroup)
+  .add(ArtifactsGroup) {}

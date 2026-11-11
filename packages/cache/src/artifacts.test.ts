@@ -4,16 +4,19 @@ import { Effect, Exit } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   ARTIFACT_TOKEN_LABEL,
+  artifactPage,
   artifactPath,
   beginArtifactUpload,
   commitArtifact,
-  handleArtifacts,
+  findArtifact,
   multipartPlan,
   newArtifactId,
   recordDeviceArtifact,
+  serveArtifact,
   signArtifactToken,
   sweepArtifacts,
   validArtifactName,
+  type ArtifactRead,
   type BeginArtifact,
 } from "./artifacts.ts";
 import { GiB, MiB } from "./ledger.ts";
@@ -62,14 +65,18 @@ const value = <A, E>(exit: Exit.Exit<A, E>) => {
   return exit.value;
 };
 
-const deps = (w: World, terminal = true, viewer = false) => ({
+const deps = (w: World, terminal = true) => ({
   db,
   bucket,
-  secret: SECRET,
   now: () => w.now,
   terminal: async () => terminal,
-  viewerMayRead: async () => viewer,
 });
+const read = async (w: World, id: string, terminal = true) =>
+  serveArtifact(new Request(`http://x/v1/artifacts/${id}`), (await findArtifact(deps(w), id))!, undefined, deps(w, terminal));
+const served = (r: ArtifactRead) => {
+  expect(r).toMatchObject({ _tag: "Served" });
+  return (r as Extract<ArtifactRead, { _tag: "Served" }>).response;
+};
 
 describe("artifacts", () => {
   it("[FD-CACHE-068] [FD-CACHE-069] a committed artifact records one row with a 128-bit random id", async () => {
@@ -154,28 +161,25 @@ describe("artifacts", () => {
     expect(failureOf(await begin(w, { name: "c.bin", size: 1 }))).toMatchObject({ _tag: "ArtifactTooLarge" });
   });
 
-  it("[FD-CACHE-075] [FD-CACHE-076] [FD-CACHE-077] a private artifact is 404 without a viewer or a token for its id, and immutable once terminal", async () => {
+  it("[FD-CACHE-075] an artifact is served immutable once its execution is terminal, uncached while it runs", async () => {
     const w = world();
     value(await begin(w));
     await bucket.put(artifactPath(EXEC, 2, "report.html"), "<p/>!");
     const { artifact_id: id } = value(await commit(w)) as { artifact_id: string };
-    const url = `http://x/v1/artifacts/${id}`;
-    expect((await handleArtifacts(new Request(url), deps(w)))?.status).toBe(404);
+    const done = served(await read(w, id));
+    expect(await done.text()).toBe("<p/>!");
+    expect(done.headers.get("cache-control")).toContain("immutable");
+    expect(served(await read(w, id, false)).headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("an artifact token binds one artifact id, lasts at most 7 days and uses the artifact label", async () => {
+    const w = world();
+    const id = "1".repeat(32);
     const token = await signArtifactToken(SECRET, id, w.now + 30 * 24 * 3600 * 1000, w.now);
-    const served = (await handleArtifacts(new Request(`${url}?token=${token}`), deps(w)))!;
-    expect(served.status).toBe(200);
-    expect(await served.text()).toBe("<p/>!");
-    expect(served.headers.get("cache-control")).toContain("immutable");
-    const running = (await handleArtifacts(new Request(url), deps(w, false, true)))!;
-    expect(running.status).toBe(200);
-    expect(running.headers.get("cache-control")).toBe("no-store");
-    // A token for another artifact, or one past its expiry, is 404 too.
-    const other = await signArtifactToken(SECRET, "0".repeat(32), w.now + 1000, w.now);
-    expect((await handleArtifacts(new Request(`${url}?token=${other}`), deps(w)))?.status).toBe(404);
-    w.now += 8 * 24 * 3600 * 1000;
-    expect(await verifyCapability(SECRET, ARTIFACT_TOKEN_LABEL, id, token, w.now)).toBe(false);
-    // The log label does not verify an artifact token.
-    expect(await verifyCapability(SECRET, "flare-dispatch/log/v1", id, token, w.now - 8 * 24 * 3600 * 1000)).toBe(false);
+    expect(await verifyCapability(SECRET, ARTIFACT_TOKEN_LABEL, id, token, w.now)).toBe(true);
+    expect(await verifyCapability(SECRET, ARTIFACT_TOKEN_LABEL, "0".repeat(32), token, w.now)).toBe(false);
+    expect(await verifyCapability(SECRET, ARTIFACT_TOKEN_LABEL, id, token, w.now + 8 * 24 * 3600 * 1000)).toBe(false);
+    expect(await verifyCapability(SECRET, "flare-dispatch/log/v1", id, token, w.now)).toBe(false);
   });
 
   it("[FD-CACHE-078] the listing pages at most 100 rows with a cursor and lists rows only", async () => {
@@ -186,9 +190,10 @@ describe("artifacts", () => {
         .bind(i.toString(16).padStart(32, "0"), EXEC, `f${i}`, SHA, artifactPath(EXEC, 2, `f${i}`), w.now + 1000)
         .run();
     await bucket.put(`${artifactPath(EXEC, 2, "f0")}.browse/index.html`, "x");
-    const page = (await (await handleArtifacts(new Request(`http://x/v1/executions/${EXEC}/artifacts?limit=500`), deps(w)))!.json()) as { artifacts: unknown[]; cursor: string };
+    const all = async () => true;
+    const page = await artifactPage(deps(w), EXEC, { limit: 500, cursor: "" }, all);
     expect(page.artifacts).toHaveLength(100);
-    const next = (await (await handleArtifacts(new Request(`http://x/v1/executions/${EXEC}/artifacts?cursor=${page.cursor}`), deps(w)))!.json()) as { artifacts: unknown[]; cursor: string | null };
+    const next = await artifactPage(deps(w), EXEC, { limit: 100, cursor: page.cursor! }, all);
     expect(next.artifacts).toHaveLength(20);
     expect(next.cursor).toBeNull();
     expect(JSON.stringify(next)).not.toContain("index.html");
@@ -218,8 +223,7 @@ describe("artifacts", () => {
     );
     const row = await db.prepare("select r2_path, producer_executor_id from artifacts where artifact_id = ?").bind(id).first();
     expect(row).toEqual({ r2_path: null, producer_executor_id: "dev-1" });
-    const served = (await handleArtifacts(new Request(`http://x/v1/artifacts/${id}`), deps(w)))!;
-    expect(await served.json()).toEqual({ artifact_id: id, kept_on_executor: "dev-1" });
+    expect(await read(w, id)).toEqual({ _tag: "OnExecutor", artifactId: id, executorId: "dev-1" });
   });
 
   it("[FD-CACHE-069] ids are distinct across many artifacts", () => {

@@ -33,7 +33,7 @@ Every surface passes exactly one identity check before any route logic runs.
 | `POST /v1/webhooks/github` | Dispatcher | GitHub | HMAC-SHA256 over the raw body ([intake.md](intake.md)) | 0 |
 | `/v1/executors/connect` | Dispatcher, then the `ExecutorChannel` Durable Object | Device executors and `gha` runners | A `connect` signature by the device key on the upgrade, verified against the executor row's `device_public_key` ([MAMEKO-PROTO-002](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/executor-protocol.md)); for a `gha` runner, the launcher port's `verify` of its OIDC token ([executors.md](executors.md)) | 1 |
 | `POST /v1/executors/register` | Dispatcher | An operator enrolling a device | Access JWT of an identity in `operators` | 1 |
-| `/v1/executions/:id/logs/:file`, `/v1/artifacts/:artifact_id` | Dispatcher | Anyone holding a link | Link token, or Access JWT | 0 |
+| `/v1/executions/:id/logs`, `/v1/executions/:id/logs/:file`, `/v1/artifacts/:artifact_id/*` | Dispatcher | Anyone holding a link | Link token, or Access JWT | 0 |
 | `/v1/compile-cache/*` | Dispatcher | `sccache` in a job | Compile-cache token ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-057) | 0 |
 | `POST /v1/model/completions` | Dispatcher | An executor's egress proxy, a local scheduler's host proxy | The execution's per-lease token with its epoch, or a capacity-lease proof of possession ([MAMEKO-MDL-040](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/model-gateway.md), [MAMEKO-MDL-041](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/model-gateway.md), [MAMEKO-MDL-043](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/model-gateway.md)) | 0 |
 | `/.well-known/*`, `/health` | Dispatcher | Anyone | None | 0 |
@@ -151,8 +151,10 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `GET /v1/executions/:id` | One execution; `?wait=<s>` holds the response until a verdict or the wait ends | 0 |
 | `GET /v1/executions/:id/failure-summary` | The bounded `incident/v1` pack of a failed execution | 0 |
 | `POST /v1/executions/:id/cancel` | Request cancellation | 0 |
+| `GET /v1/executions/:id/logs` | Every redacted step log of an execution, in step order ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-083) | 0 |
 | `GET /v1/executions/:id/logs/:file` | The redacted step log ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-083) | 0 |
-| `GET /v1/artifacts/:artifact_id` | One stored artifact and its browse paths ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-075) | 0 |
+| `GET /v1/executions/:id/artifacts` | An execution's artifacts, one page with a cursor ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-078) | 0 |
+| `GET /v1/artifacts/:artifact_id/*` | One stored artifact, or with a path below it one file of its browse expansion ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-075) | 0 |
 | `GET`, `HEAD`, `PUT`, `PROPFIND`, `MKCOL` `/v1/compile-cache/:owner/:name/*` | The compile cache ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-056) | 0 |
 | `POST /v1/model/completions` | One `ModelCompletionRequest` through the model gateway | 0 |
 | `POST /v1/executors/register` | Register one device key ([§ Device connection and enrollment](#device-connection-and-enrollment)) | 1 |
