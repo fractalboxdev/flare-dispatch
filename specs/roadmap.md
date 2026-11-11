@@ -130,12 +130,12 @@ flowchart LR
 
 ### mameko dependency order
 
-The control plane pins mameko at f4b48b0, which holds the composed `admit`, the admission sweep and the amended outbox `retryable` rule ([MAMEKO-OUT-018](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/outbox.md)). Production intake admits every request through mameko's `admit`, so admission applies the placeability check and the class refusal conclusion ([intake.md](intake.md)).
+The control plane pins mameko at f4b48b0, which holds the composed `admit`, the admission sweep and the amended outbox `retryable` rule ([MAMEKO-OUT-018](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md)). Production intake admits every request through mameko's `admit`, so admission applies the placeability check and the class refusal conclusion ([intake.md](intake.md)).
 
 Two changes depend on further mameko work and are delivered in this order. Each step waits on the step before it and on the mameko work that step names.
 
-1. `Operations.apply` calls mameko's operator operations for halt, drain, quarantine, release, cancel, force-admit, top-up and revoke, each with a reason and an audit row ([MAMEKO-OPS-030](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/operability.md) to MAMEKO-OPS-034), and admission reads repository quarantine through `AdmissionPorts.quarantined`. The step retires `packages/ops/src/operator-routes.ts`, a second operator surface that production never reaches. Waits on: mameko's operator operations.
-2. The `pause-key` and `resume-key` operations. Waits on: step 1, and mameko's `pause` and `resume` of a delivery key ([MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/operability.md), [MAMEKO-OUT-068](https://github.com/fractalboxdev/mameko/blob/ccd6d9cf9231bd5310104cacfbbc9ecef7e522cb/specs/outbox.md)).
+1. `Operations.apply` calls mameko's operator operations for halt, drain, quarantine, release, cancel, force-admit, top-up and revoke, each with a reason and an audit row ([MAMEKO-OPS-030](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) to MAMEKO-OPS-034), and admission reads repository quarantine through `AdmissionPorts.quarantined`. The step retires `packages/ops/src/operator-routes.ts`, a second operator surface that production never reaches. Waits on: mameko's operator operations.
+2. The `pause-key` and `resume-key` operations. Waits on: step 1, and mameko's `pause` and `resume` of a delivery key ([MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md), [MAMEKO-OUT-068](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md)).
 
 Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and admission quarantines no repository. Until step 2, no delivery key can be paused.
 
