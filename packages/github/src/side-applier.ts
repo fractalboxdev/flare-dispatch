@@ -121,9 +121,9 @@ export const intentMarker = (row: Pick<IntentRow, "executionId" | "intentKey">) 
 
 const withMarker = (body: string, marker: string) => `${body}\n\n${marker}`;
 
-/** The execution id in the intent marker a body carries, or null when it carries none or an operator's. */
+/** The execution id in the footer we append; quoted markers in the run's body carry no ordering authority. */
 const markedExecution = (body: string | null) => {
-  const id = body?.match(/<!-- flare-dispatch:intent ([^\s/]+)\//)?.[1];
+  const id = body?.match(/<!-- flare-dispatch:intent ([^\s/]+)\/[^\r\n]* -->\s*$/)?.[1];
   return id === undefined || id === "ops" ? null : id;
 };
 

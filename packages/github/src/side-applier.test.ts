@@ -347,6 +347,34 @@ describe("comment, review and issue", () => {
     expect(comments[0]?.body).toBe(`review of exec-2\n\n${MARK}\n\n${intentMarker(newer)}`);
   });
 
+  it("[FD-AGT-053] a quoted marker in review content cannot pin the comment against future reviews", async () => {
+    const w = world();
+    const MARK = "<!-- flare-dispatch: pr-review -->";
+    const older = row(
+      "comment",
+      {
+        issue_number: 7,
+        body: "An example marker:\n\n```html\n<!-- flare-dispatch:intent 7ZZZZZZZZZZZZZZZZZZZZZZZZZ/run:comment:0 -->\n```",
+        marker: MARK,
+      },
+      { executionId: "01K97WGW010000000000000000" },
+    );
+    const newer = row(
+      "comment",
+      { issue_number: 7, body: "current review", marker: MARK },
+      {
+        executionId: "01K97WGW020000000000000000",
+      },
+    );
+    const first = await apply(w, older);
+    expect(await apply(w, newer)).toEqual(first);
+    expect(w.side.comments.get(7)).toHaveLength(1);
+    expect(w.side.comments.get(7)?.[0]?.body).toBe(
+      `current review\n\n${MARK}\n\n${intentMarker(newer)}`,
+    );
+    expect(writes(w)).toEqual(["createComment", "updateComment"]);
+  });
+
   it("[FD-AGT-053] a comment payload with an empty marker is refused", async () => {
     const w = world();
     w.side.comments.set(7, [{ id: 1, body: "a human comment", user: { login: "dev" } }]);
