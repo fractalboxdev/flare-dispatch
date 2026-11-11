@@ -1,4 +1,4 @@
-// The dogfood command's own Access team. The control plane's routes admit only a verified Cloudflare Access identity,
+// The local CI command's own Access team. The control plane's routes admit only a verified Cloudflare Access identity,
 // and a local run has no Access edge, so the command holds an RS256 key, serves its JWKS on a local port at Access's
 // certs path and signs the operator's JWT. The control plane verifies it exactly as it verifies Access's.
 import { createSign, generateKeyPairSync, randomBytes } from "node:crypto";
@@ -6,9 +6,9 @@ import { createServer } from "node:http";
 import { Effect } from "effect";
 
 /** The identity the command enrolls and dispatches as; the deployment lists it in `operators` and `dispatchers`. */
-export const DOGFOOD_IDENTITY = "dogfood@localhost";
+export const LOCAL_CI_IDENTITY = "local-ci@localhost";
 
-/** How long the operator's JWT verifies: longer than any dogfood run. */
+/** How long the operator's JWT verifies: longer than any local CI run. */
 const JWT_LIFETIME_SEC = 4 * 3600;
 
 const base64url = (value: Buffer | string) => Buffer.from(value).toString("base64url");
@@ -45,7 +45,7 @@ export const startAccessTeam = Effect.acquireRelease(
         JSON.stringify({
           iss: teamDomain,
           aud: [aud],
-          email: DOGFOOD_IDENTITY,
+          email: LOCAL_CI_IDENTITY,
           iat: now,
           exp: now + JWT_LIFETIME_SEC,
         }),

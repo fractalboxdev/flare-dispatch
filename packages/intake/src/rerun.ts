@@ -1,7 +1,8 @@
 // Check re-runs: a `check_run` or `check_suite` `rerequested` event submits the
-// next attempt of a FlareDispatch check family, with the same check name and
-// class and no cooldown (FD-INT-054 to FD-INT-056). An attempt beyond the family's
-// retry allowance counts against the `interactive` line (FD-SPD-032).
+// next attempt of a FlareDispatch check family, with the same check name, class,
+// labels and placement constraint and no cooldown (FD-INT-054 to FD-INT-056). A
+// suite re-run skips a local family, which posted no check run. An attempt beyond
+// the family's retry allowance counts against the `interactive` line (FD-SPD-032).
 import { Effect, Result, Schema } from "effect";
 import { IntakeConfig } from "./config.ts";
 import type { WebhookFields } from "./event.ts";
@@ -72,6 +73,8 @@ const nextAttempt = (family: readonly RecordWithStatus[]) =>
         attempt: latest.attempt + 1,
         familyRoot: latest.familyRoot,
         forcedClass: latest.className,
+        extraLabels: latest.labels,
+        placementConstraint: latest.placementConstraint,
         spendLine,
         cacheTrigger: latest.cacheTrigger,
         applyCooldown: false,
@@ -129,7 +132,8 @@ export const rerunCheckSuite = (fields: WebhookFields, repo: string) =>
       families.set(r.familyRoot, [...(families.get(r.familyRoot) ?? []), r]);
     const outcomes: TriggerOutcome[] = [];
     for (const family of families.values()) {
-      if (latestOf(family).status === "success") continue;
+      const latest = latestOf(family);
+      if (latest.status === "success" || latest.trigger === "local") continue;
       outcomes.push(yield* rerunFamily(yield* store.family(family[0]!.familyRoot)));
     }
     return {
