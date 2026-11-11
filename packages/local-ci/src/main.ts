@@ -387,7 +387,7 @@ const reportAndExit = (message: string) =>
   );
 
 const command = Command.make(
-  "local-ci",
+  "ci:local",
   { ref: Argument.String("ref").pipe(Argument.withDefault("HEAD")) },
   ({ ref }) => ciLocal(ref),
 );
