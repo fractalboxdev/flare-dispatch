@@ -218,6 +218,34 @@ describe("dispatch action", () => {
     expect(seen.dispatches).toHaveLength(1);
   });
 
+  it("[FD-INT-049] the action checks the run inputs' signals merged with the signals input", async () => {
+    const signal = { source: "s", title: "t", detail: "d" };
+    const withInputs = (inInputs: readonly unknown[], inSignals: number) => ({
+      ...base,
+      inputs: JSON.stringify({ signals: inInputs }),
+      signals: JSON.stringify(Array(inSignals).fill(signal)),
+    });
+    const seen = fresh();
+    const over = await Effect.runPromise(
+      Effect.flip(runAction(withInputs(Array(30).fill(signal), 21), oidc, fetchWith(seen))),
+    );
+    expect(over.code).toBe("invalid_signals");
+    expect(over.message).toContain("51 signals");
+    const field = await Effect.runPromise(
+      Effect.flip(
+        runAction(withInputs([{ source: "s", title: "t".repeat(201) }], 1), oidc, fetchWith(seen)),
+      ),
+    );
+    expect(field.code).toBe("invalid_signals");
+    expect(field.message).toContain("inputs.signals.0.title");
+    expect(seen.tokenRequests).toHaveLength(0);
+    expect(seen.dispatches).toHaveLength(0);
+    await Effect.runPromise(
+      runAction(withInputs(Array(25).fill(signal), 25), oidc, fetchWith(seen)),
+    );
+    expect(seen.dispatches).toHaveLength(1);
+  });
+
   it("[FD-IFC-002]: the action's requests go through the client derived from the declaration", async () => {
     const seen = fresh();
     await Effect.runPromise(runAction({ ...base, class: "batch" }, oidc, fetchWith(seen)));
