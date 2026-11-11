@@ -132,6 +132,7 @@ jobs:
           FD_ACCESS_CLIENT_SECRET: ${{ secrets.FD_ACCESS_CLIENT_SECRET }}
         run: $STRIP_TYPES packages/ops/scripts/phase-gate.ts --base "$BASE" --fetch --records .tmp/phase-gate-records.json
       - name: phase-gate
+        if: ${{ !cancelled() }}
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: $STRIP_TYPES packages/ops/scripts/phase-gate.ts --base "$BASE" --records .tmp/phase-gate-records.json

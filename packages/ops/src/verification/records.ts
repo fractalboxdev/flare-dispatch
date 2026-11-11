@@ -3,6 +3,7 @@
 // the page alarms raised in the window, and the unresolved `kill-line` notifications. `GET /v1/ops/phase-gate` serves
 // them; the `phase-gate` job fetches them into its records file and maps each page alarm to the phase of the `V-LIVE`
 // requirement that names it.
+import { HIT_RATE_WINDOW_MS } from "@fractalboxdev/flare-dispatch-cache";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Schema } from "effect";
 import { decodeStrict } from "../decode.ts";
@@ -13,9 +14,6 @@ const DAY_MS = 86_400_000;
 
 /** The gate window: the 14 days before the records are read (specs/roadmap.md, each gate's `V-MEASURE` line). */
 export const GATE_WINDOW_MS = 14 * DAY_MS;
-
-/** The window of the cache hit rate (FD-CACHE-090). */
-export const CACHE_HIT_RATE_WINDOW_MS = 28 * DAY_MS;
 
 /** Gate 0: a warm run's median time to verdict is at least 30% below the best cloud setup. */
 export const WARM_SPEEDUP = 0.3;
@@ -120,7 +118,10 @@ export const warmVerdictMeasure = (samples: readonly VerdictSample[]): MeasureRe
   };
 };
 
-/** One cache tier's lookups and hits for one executor kind and level over 28 days. */
+/**
+ * One cache tier's hits for one executor kind and level over 28 days, with every lookup of that executor kind and
+ * level: a miss has no tier, so the hit rate per tier is `hits` over `lookups` (`cacheHitRates`, FD-CACHE-090).
+ */
 export interface CacheHitRow {
   readonly executor_kind: string;
   readonly level: string;
@@ -218,9 +219,15 @@ export const phaseGateRecords = (db: D1Like, gate: number, now: number) =>
       measures.push(warmVerdictMeasure(samples));
       const cache = yield* query<CacheHitRow>(
         db,
-        `select executor_kind, level, tier, count(*) as lookups, sum(hit) as hits from cache_lookups
-         where at > ? and at <= ? group by executor_kind, level, tier order by executor_kind, level, tier`,
-        now - CACHE_HIT_RATE_WINDOW_MS,
+        `with totals as (
+           select executor_kind, level, count(*) as lookups from cache_lookups
+           where at > ?1 and at <= ?2 group by executor_kind, level
+         )
+         select l.executor_kind, l.level, l.tier, t.lookups, sum(l.hit) as hits
+         from cache_lookups l join totals t on t.executor_kind = l.executor_kind and t.level = l.level
+         where l.at > ?1 and l.at <= ?2 group by l.executor_kind, l.level, l.tier
+         order by l.executor_kind, l.level, l.tier`,
+        now - HIT_RATE_WINDOW_MS,
         now,
       ).pipe(Effect.catchTag("RecordsUnreadable", () => Effect.succeed(null)));
       measures.push(cacheHitRateMeasure(cache));
@@ -269,10 +276,10 @@ export const phaseGateRoute = (
   Effect.gen(function* () {
     if (request.method !== "GET")
       return errorResponse(405, "method_not_allowed", "the phase-gate records take GET", requestId);
-    const gate = Number(url.searchParams.get("gate"));
-    if (url.searchParams.get("gate") === null || !Number.isInteger(gate) || gate < 0 || gate > 3)
+    const raw = url.searchParams.get("gate") ?? "";
+    if (!/^[0-3]$/.test(raw))
       return errorResponse(400, "invalid_query", "gate must be a phase from 0 to 3", requestId);
-    return yield* phaseGateRecords(db, gate, now).pipe(
+    return yield* phaseGateRecords(db, Number(raw), now).pipe(
       Effect.map((records) => Response.json(records)),
       Effect.catchTag("RecordsUnreadable", (e) =>
         Effect.succeed(errorResponse(503, "records_unreadable", e.reason, requestId)),
@@ -280,9 +287,13 @@ export const phaseGateRoute = (
     );
   });
 
-const ALARM_NAME = /`([a-z][a-z0-9-]*)` (?:page |notify )?alarm|alarm `([a-z][a-z0-9-]*)`/g;
+const ALARM_NAME =
+  /`([a-z][a-z0-9-]*)` (?:page |notify )?alarm|alarm `([a-z][a-z0-9-]*)`|`([a-z][a-z0-9-]*)` as the `queue_full_alarm`/g;
 
-/** Each alarm a `V-LIVE` requirement names, with the lowest phase of the requirements that name it. */
+/**
+ * Each alarm a `V-LIVE` requirement names, as an alarm or as a class's `queue_full_alarm` (raised at severity `page`,
+ * MAMEKO-ADM-089), with the lowest phase of the requirements that name it.
+ */
 export const liveAlarmPhases = (
   requirements: readonly Requirement[],
 ): ReadonlyMap<string, number> => {
@@ -290,7 +301,7 @@ export const liveAlarmPhases = (
   for (const r of requirements)
     if (r.tags.includes("V-LIVE"))
       for (const m of r.sentence.matchAll(ALARM_NAME)) {
-        const name = (m[1] ?? m[2])!;
+        const name = (m[1] ?? m[2] ?? m[3])!;
         out.set(name, Math.min(out.get(name) ?? r.phase, r.phase));
       }
   return out;

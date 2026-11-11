@@ -328,7 +328,7 @@ describe("phase-gate records from the control plane", () => {
     r = await records();
     expect(r.measures).toEqual([
       expect.objectContaining({ name: "warm-verdict", holds: true }),
-      { name: "cache-hit-rate", holds: true, detail: "device L2 miss: 0/1; device L2 repo: 1/1" },
+      { name: "cache-hit-rate", holds: true, detail: "device L2 miss: 0/2; device L2 repo: 1/2" },
       {
         name: "estimate-drift",
         holds: false,
@@ -419,6 +419,7 @@ describe("phase-gate records from the control plane", () => {
     expect(phases.get("canary-missed")).toBe(0);
     expect(phases.get("installation-lost")).toBe(0);
     expect(phases.get("neutral-invariant")).toBe(0);
+    expect(phases.get("p0-breach")).toBe(0);
     expect(phases.has("estimate-drift")).toBe(false);
     const episode = { dedupeKey: "k", raisedAt: 0, resolvedAt: null };
     expect(

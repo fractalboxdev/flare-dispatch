@@ -254,6 +254,8 @@ describe("operator routes", () => {
     expect((await s.call(s.viewer, "/v1/ops/phase-gate?gate=0")).status).toBe(403);
     expect((await s.call(s.operator, "/v1/ops/phase-gate")).status).toBe(400);
     expect((await s.call(s.operator, "/v1/ops/phase-gate?gate=4")).status).toBe(400);
+    for (const gate of ["", "0x1", "1e0", " 1"])
+      expect((await s.call(s.operator, `/v1/ops/phase-gate?gate=${encodeURIComponent(gate)}`)).status).toBe(400);
     expect((await s.call(s.operator, "/v1/ops/phase-gate?gate=0", post({}))).status).toBe(405);
   });
 
