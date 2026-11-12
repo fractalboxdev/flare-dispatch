@@ -363,6 +363,7 @@ describe("check.conclude from mameko's outcome row", () => {
         claimLatencyMs: 4_000,
         leasedKind: "cloudflare",
         acceptedKind: "cloudflare",
+        executorId: "cf-pool-3",
         cloudWon: true,
       },
       reservation: { holdMicroUsd: 20_000, state: "settled", meteredMicroUsd: 12_000 },
@@ -407,6 +408,7 @@ describe("check.conclude from mameko's outcome row", () => {
         claimLatencyMs: null,
         leasedKind: null,
         acceptedKind: null,
+        executorId: null,
         cloudWon: null,
       },
       reservation: { holdMicroUsd: 5_000, state: "held", meteredMicroUsd: null },
@@ -519,6 +521,214 @@ describe("check.summary and check.annotations", () => {
     await apply(gh, annotations(120));
     expect(gh.annotations.get(1000)).toHaveLength(120);
     expect(await lookup(gh, annotations(120))).toEqual({ _tag: "found", externalRef: "1000" });
+  });
+});
+
+describe("a confidential-compute repository's check run", () => {
+  const LOG = "https://fd.example.com/v1/executions/exec-1/logs?t=token";
+  /** What the run produced: none of it may reach GitHub. */
+  const SECRETS = [
+    "const apiKey = readSecret()",
+    "diff --git a/src/secret.ts",
+    "ERROR at line 12: token mismatch",
+    "The model suggests renaming",
+    "secret.spec.ts",
+    "src/secret.ts",
+  ];
+  const confidentialDetails = {
+    ...details,
+    executor_id: "mac-mini-7",
+    failing_step: "unit-tests",
+    error_tag: "TestFailed",
+    markdown: `${SECRETS[0]}\n${SECRETS[1]}\n${SECRETS[2]}\n${SECRETS[3]}`,
+    quarantined: [{ test: SECRETS[4]!, path: SECRETS[5]!, line: 12, message: SECRETS[2]! }],
+  };
+  const confidential = async () => {
+    const gh = fakeGithub();
+    gh.confidential.add("acme/app");
+    await apply(gh, row("check.open", { ...ref, details_url: LOG }));
+    return gh;
+  };
+  const sent = (gh: FakeGithub) => JSON.stringify(gh.bodies);
+  const failure = {
+    _tag: "failure",
+    category: "finding",
+    reason: "tests: 2 failed",
+  } as const;
+
+  it("[FD-GH-019] the conclusion states only the outcome, the reason, the class, the executor id and the log pointer", async () => {
+    const gh = await confidential();
+    const conclude = row("check.conclude", {
+      ...ref,
+      details_url: LOG,
+      verdict: failure,
+      attempt: 1,
+      details: confidentialDetails,
+    });
+    expect(await apply(gh, conclude)).toEqual({
+      _tag: "applied",
+      externalRef: "1000",
+    });
+    expect(gh.runs[0]).toMatchObject({
+      status: "completed",
+      conclusion: "failure",
+      output: {
+        title: "tests: 2 failed",
+        summary: [
+          "- Outcome: failure",
+          "- Reason: tests: 2 failed",
+          "- Class: required",
+          "- Executor: mac-mini-7",
+          `- Logs: kept on executor mac-mini-7; pointer: ${LOG}`,
+        ].join("\n"),
+      },
+    });
+    expect(gh.detailsUrls.get(1000)).toBe(LOG);
+    expect(gh.annotations.get(1000)).toBeUndefined();
+    for (const secret of [...SECRETS, "unit-tests", "TestFailed", "USD", "cloud entry won"])
+      expect(sent(gh)).not.toContain(secret);
+    expect(await lookup(gh, conclude)).toEqual({
+      _tag: "found",
+      externalRef: "1000",
+    });
+  });
+
+  it("[FD-GH-019] the conclusion built from mameko's outcome row reads the executor id from the execution's records", async () => {
+    const gh = fakeGithub();
+    gh.confidential.add("acme/app");
+    gh.facts.set(
+      "exec-1",
+      conclusionFactsOf(
+        {
+          name: ref.name,
+          headSha: ref.head_sha,
+          attempt: 2,
+          className: "required",
+          status: "failure",
+          reason: "tests: 2 failed",
+          enqueuedAt: 1_000,
+          finishedAt: 90_000,
+          placement: {
+            admittedAt: 1_000,
+            claimLatencyMs: 4_000,
+            leasedKind: "device",
+            acceptedKind: "device",
+            executorId: "mac-mini-7",
+            cloudWon: false,
+          },
+          reservation: {
+            holdMicroUsd: 20_000,
+            state: "settled",
+            meteredMicroUsd: 12_000,
+          },
+        },
+        LOG,
+      ),
+    );
+    await apply(
+      gh,
+      row(
+        "check.conclude",
+        { outcome: { _tag: "Failure", reason: "tests: 2 failed" } },
+        { intentKey: "outcome" },
+      ),
+    );
+    expect(gh.runs[0]?.output).toEqual({
+      title: "tests: 2 failed (attempt 2)",
+      summary: [
+        "- Outcome: failure",
+        "- Reason: tests: 2 failed",
+        "- Class: required",
+        "- Executor: mac-mini-7",
+        `- Logs: kept on executor mac-mini-7; pointer: ${LOG}`,
+      ].join("\n"),
+    });
+  });
+
+  it("[FD-GH-019] check.start and check.progress state no executor kind, epoch, queue position or deadline", async () => {
+    const gh = await confidential();
+    await apply(
+      gh,
+      row("check.start", {
+        ...ref,
+        epoch: 4,
+        executor_kind: "device",
+        attempt: 1,
+      }),
+    );
+    expect(gh.runs[0]).toMatchObject({
+      status: "in_progress",
+      output: {
+        title: "Running",
+        summary: "Running; the logs stay on the executor.",
+      },
+    });
+    await apply(
+      gh,
+      row("check.progress", {
+        ...ref,
+        class: "required",
+        bucket: "6–20",
+        deadline_at: 0,
+      }),
+    );
+    expect(gh.runs[0]?.output).toEqual({
+      title: "Queued",
+      summary: "Class `required`.",
+    });
+    for (const fact of ["device", "epoch", "6–20", "1970-01-01"])
+      expect(sent(gh)).not.toContain(fact);
+  });
+
+  it("[FD-GH-019] run-authored markdown and annotations are refused and never sent", async () => {
+    const gh = await confidential();
+    gh.calls.length = 0;
+    const refused = {
+      _tag: "refused",
+      reason: "confidential-compute: run-authored check-run output stays on the executor",
+    };
+    expect(
+      await apply(gh, row("check.summary", { ...ref, title: "Review", markdown: SECRETS[3] })),
+    ).toEqual(refused);
+    expect(
+      await apply(
+        gh,
+        row("check.annotations", {
+          ...ref,
+          title: "lint",
+          summary: SECRETS[2],
+          annotations: [
+            {
+              path: SECRETS[5],
+              start_line: 1,
+              end_line: 1,
+              annotation_level: "failure",
+              message: SECRETS[0],
+            },
+          ],
+        }),
+      ),
+    ).toEqual(refused);
+    expect(gh.calls.filter((c) => c !== "list")).toEqual([]);
+    for (const secret of SECRETS) expect(sent(gh)).not.toContain(secret);
+  });
+
+  it("a repository outside confidential-compute keeps its check run's full output", async () => {
+    const gh = fakeGithub();
+    gh.confidential.add("acme/secret");
+    await apply(gh, row("check.open", ref));
+    await apply(
+      gh,
+      row("check.conclude", {
+        ...ref,
+        verdict: failure,
+        attempt: 1,
+        details: confidentialDetails,
+      }),
+    );
+    expect(gh.runs[0]?.output.summary).toContain("**Failed step:** `unit-tests` (TestFailed)");
+    expect(gh.runs[0]?.output.summary).toContain(SECRETS[3]);
+    expect(gh.annotations.get(1000)).toHaveLength(1);
   });
 });
 

@@ -28,6 +28,7 @@ import {
   ConcludeDetails,
   concludedVerdictOf,
   concludeSummary,
+  confidentialSummary,
   OutcomePayload,
   quarantineAnnotations,
   truncate,
@@ -113,6 +114,8 @@ interface Ctx extends RepoCall {
   readonly row: IntentRow;
   /** The outcome the execution row records, for a conclusion built from mameko's outcome row. */
   readonly recorded: Verdict | null;
+  /** True while the repository's confidentiality mode is `confidential-compute` (FD-GH-019). */
+  readonly confidential: boolean;
 }
 
 interface Handler<K extends CheckKind> {
@@ -135,6 +138,14 @@ const afterConclusion: ApplyAnswer = {
   _tag: "refused",
   reason: "superseded: check run already completed",
 };
+/**
+ * A `confidential-compute` repository's check run carries no run-authored markdown or annotation: either can quote
+ * source, a diff, a log line or model output (FD-GH-019).
+ */
+const confidentialOutput: ApplyAnswer = {
+  _tag: "refused",
+  reason: "confidential-compute: run-authored check-run output stays on the executor",
+};
 
 const update = (
   ctx: Ctx,
@@ -146,20 +157,38 @@ const update = (
     return applied(yield* github.updateCheckRun({ ...ctx, checkRunId: run.id, body }));
   });
 
-const startOutput = (p: PayloadOf<"check.start">) => ({
-  title: withAttempt(`Running on ${p.executor_kind}`, p.attempt),
-  summary: `Executor kind \`${p.executor_kind}\`, epoch ${p.epoch}.`,
-});
+// Under `confidential-compute` each output states only what FD-GH-019 lists: the outcome, the conclusion reason, the
+// class, the executor id and the log pointer.
 
-const progressOutput = (p: PayloadOf<"check.progress">) => ({
-  title: `Queued: position ${p.bucket}`,
-  summary: `Class \`${p.class}\`; queue position ${p.bucket}; deadline ${new Date(p.deadline_at).toISOString()}.`,
-});
+const startOutput = (ctx: Ctx, p: PayloadOf<"check.start">) =>
+  ctx.confidential
+    ? {
+        title: withAttempt("Running", p.attempt),
+        summary: "Running; the logs stay on the executor.",
+      }
+    : {
+        title: withAttempt(`Running on ${p.executor_kind}`, p.attempt),
+        summary: `Executor kind \`${p.executor_kind}\`, epoch ${p.epoch}.`,
+      };
 
-const concludeOutput = (p: PayloadOf<"check.conclude">) => ({
+const progressOutput = (ctx: Ctx, p: PayloadOf<"check.progress">) =>
+  ctx.confidential
+    ? { title: "Queued", summary: `Class \`${p.class}\`.` }
+    : {
+        title: `Queued: position ${p.bucket}`,
+        summary: `Class \`${p.class}\`; queue position ${p.bucket}; deadline ${new Date(p.deadline_at).toISOString()}.`,
+      };
+
+const concludeOutput = (ctx: Ctx, p: PayloadOf<"check.conclude">) => ({
   title: withAttempt(checkConclusion(p.verdict).title, p.attempt),
-  summary: truncate(concludeSummary(p.verdict, p.details), p.details_url),
+  summary: ctx.confidential
+    ? confidentialSummary(p.verdict, p.details, p.details_url)
+    : truncate(concludeSummary(p.verdict, p.details), p.details_url),
 });
+
+/** The quarantined failures a conclusion annotates; none under `confidential-compute`, since each quotes a test. */
+const concludeAnnotations = (ctx: Ctx, p: PayloadOf<"check.conclude">) =>
+  ctx.confidential ? [] : quarantineAnnotations(p.details);
 
 const detailsUrl = (p: { readonly details_url?: string }) =>
   p.details_url === undefined ? {} : { details_url: p.details_url };
@@ -168,13 +197,13 @@ const detailsUrl = (p: { readonly details_url?: string }) =>
  * The conclusion with the log link and the first batch of quarantined-failure annotations (FD-GH-013, FD-GH-077). The
  * link is sent again, so the check run carries the token minted at its conclusion.
  */
-const concludeBody = (p: PayloadOf<"check.conclude">) => {
-  const first = quarantineAnnotations(p.details).slice(0, ANNOTATION_BATCH);
+const concludeBody = (ctx: Ctx, p: PayloadOf<"check.conclude">) => {
+  const first = concludeAnnotations(ctx, p).slice(0, ANNOTATION_BATCH);
   return {
     ...detailsUrl(p),
     status: "completed" as const,
     conclusion: checkConclusion(p.verdict).conclusion,
-    output: { ...concludeOutput(p), ...(first.length === 0 ? {} : { annotations: first }) },
+    output: { ...concludeOutput(ctx, p), ...(first.length === 0 ? {} : { annotations: first }) },
   };
 };
 
@@ -183,13 +212,13 @@ const restOfQuarantine = (ctx: Ctx, p: PayloadOf<"check.conclude">, run: CheckRu
   Effect.gen(function* () {
     const github = yield* GithubClient;
     for (const batch of chunks(
-      quarantineAnnotations(p.details).slice(ANNOTATION_BATCH),
+      concludeAnnotations(ctx, p).slice(ANNOTATION_BATCH),
       ANNOTATION_BATCH,
     ))
       yield* github.updateCheckRun({
         ...ctx,
         checkRunId: run.id,
-        body: { output: { ...concludeOutput(p), annotations: batch } },
+        body: { output: { ...concludeOutput(ctx, p), annotations: batch } },
       });
     return applied(run);
   });
@@ -227,18 +256,18 @@ const handlers: { readonly [K in CheckKind]: Handler<K> } = {
     apply: (ctx, p, run) => {
       if (run === null) return Effect.succeed(notOpenYet);
       if (run.status === "completed") return Effect.succeed(afterConclusion);
-      return update(ctx, run, { status: "in_progress", output: startOutput(p) });
+      return update(ctx, run, { status: "in_progress", output: startOutput(ctx, p) });
     },
-    adopted: (_, p, run) =>
-      Effect.succeed(run.status !== "queued" && run.output.summary === startOutput(p).summary),
+    adopted: (ctx, p, run) =>
+      Effect.succeed(run.status !== "queued" && run.output.summary === startOutput(ctx, p).summary),
   },
   "check.progress": {
     apply: (ctx, p, run) => {
       if (run === null) return Effect.succeed(notOpenYet);
       if (run.status === "completed") return Effect.succeed(afterConclusion);
-      return update(ctx, run, { output: progressOutput(p) });
+      return update(ctx, run, { output: progressOutput(ctx, p) });
     },
-    adopted: (_, p, run) => Effect.succeed(run.output.title === progressOutput(p).title),
+    adopted: (ctx, p, run) => Effect.succeed(run.output.title === progressOutput(ctx, p).title),
   },
   "check.conclude": {
     // Without an applied `check.open`, the conclusion creates the check run completed (FD-GH-052). The conclusion
@@ -248,14 +277,18 @@ const handlers: { readonly [K in CheckKind]: Handler<K> } = {
         const github = yield* GithubClient;
         const concluded =
           run !== null
-            ? yield* github.updateCheckRun({ ...ctx, checkRunId: run.id, body: concludeBody(p) })
+            ? yield* github.updateCheckRun({
+                ...ctx,
+                checkRunId: run.id,
+                body: concludeBody(ctx, p),
+              })
             : yield* github.createCheckRun({
                 ...ctx,
                 body: {
                   name: p.name,
                   head_sha: p.head_sha,
                   external_id: ctx.executionId,
-                  ...concludeBody(p),
+                  ...concludeBody(ctx, p),
                 },
               });
         yield* checkNeutralInvariant(
@@ -267,38 +300,44 @@ const handlers: { readonly [K in CheckKind]: Handler<K> } = {
         return yield* restOfQuarantine(ctx, p, concluded);
       }),
     adopted: (_, p, run) =>
-      Effect.succeed(run.status === "completed" && run.conclusion === concludeBody(p).conclusion),
+      Effect.succeed(
+        run.status === "completed" && run.conclusion === checkConclusion(p.verdict).conclusion,
+      ),
   },
   "check.summary": {
     apply: (ctx, p, run) =>
-      run === null
-        ? Effect.succeed(notOpenYet)
-        : update(ctx, run, {
-            output: { title: p.title, summary: truncate(p.markdown, p.details_url) },
-          }),
+      ctx.confidential
+        ? Effect.succeed(confidentialOutput)
+        : run === null
+          ? Effect.succeed(notOpenYet)
+          : update(ctx, run, {
+              output: { title: p.title, summary: truncate(p.markdown, p.details_url) },
+            }),
     adopted: (_, p, run) => Effect.succeed(run.output.title === p.title),
   },
   "check.annotations": {
     // Annotations are read back by check-run id first, so a repeat sends only the missing ones.
     apply: (ctx, p, run) =>
-      run === null
-        ? Effect.succeed(notOpenYet)
-        : Effect.gen(function* () {
-            const github = yield* GithubClient;
-            const missing = yield* missingAnnotations(ctx, p, run);
-            // The run's own title and summary stay, so a batch never overwrites a conclusion's output.
-            const output = {
-              title: run.output.title ?? p.title,
-              summary: run.output.summary ?? p.summary,
-            };
-            for (const batch of chunks(missing, ANNOTATION_BATCH))
-              yield* github.updateCheckRun({
-                ...ctx,
-                checkRunId: run.id,
-                body: { output: { ...output, annotations: batch } },
-              });
-            return applied(run);
-          }),
+      ctx.confidential
+        ? Effect.succeed(confidentialOutput)
+        : run === null
+          ? Effect.succeed(notOpenYet)
+          : Effect.gen(function* () {
+              const github = yield* GithubClient;
+              const missing = yield* missingAnnotations(ctx, p, run);
+              // The run's own title and summary stay, so a batch never overwrites a conclusion's output.
+              const output = {
+                title: run.output.title ?? p.title,
+                summary: run.output.summary ?? p.summary,
+              };
+              for (const batch of chunks(missing, ANNOTATION_BATCH))
+                yield* github.updateCheckRun({
+                  ...ctx,
+                  checkRunId: run.id,
+                  body: { output: { ...output, annotations: batch } },
+                });
+              return applied(run);
+            }),
     adopted: (ctx, p, run) => Effect.map(missingAnnotations(ctx, p, run), (m) => m.length === 0),
   },
 };
@@ -435,7 +474,14 @@ export const makeCheckRunApplier = Effect.gen(function* () {
         yield* raiseInstallationLost(row, "installation: not found");
         return yield* unservable("installation: not found");
       }
-      const ctx: Ctx = { installation, repo: row.scopeId, executionId, row, recorded };
+      const ctx: Ctx = {
+        installation,
+        repo: row.scopeId,
+        executionId,
+        row,
+        recorded,
+        confidential: facts.confidentialCompute(row.scopeId),
+      };
       // The handler table is keyed by kind, and the payload decoded under that kind's schema.
       const handler = handlers[kind] as unknown as Handler<CheckKind>;
       // Every check run of the execution, oldest first; more than one means an earlier create was doubled.

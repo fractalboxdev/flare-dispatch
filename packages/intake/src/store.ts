@@ -377,6 +377,7 @@ interface FactsRow {
   readonly claim_latency_ms: number | null;
   readonly leased_kind: string | null;
   readonly accepted_kind: string | null;
+  readonly executor_id: string | null;
   readonly cloud_won: number | null;
   readonly reserved: number | null;
   readonly hold_micro_usd: number | null;
@@ -385,7 +386,8 @@ interface FactsRow {
 }
 
 const FACTS = `select r.run, r.label, r.sha, r.attempt, r.class, e.status, e.reason, e.enqueued_at, e.finished_at,
-    p.execution_id is not null as placed, p.admitted_at, p.claim_latency_ms, p.leased_kind, p.accepted_kind, p.cloud_won,
+    p.execution_id is not null as placed, p.admitted_at, p.claim_latency_ms, p.leased_kind, p.accepted_kind,
+    p.executor_id, p.cloud_won,
     s.execution_id is not null as reserved, s.hold_micro_usd, s.state as reservation_state, s.metered_micro_usd
   from intake_records r
   join executions e on e.id = r.execution_id
@@ -409,6 +411,7 @@ const factsOfRow = (f: FactsRow): ExecutionRecordFacts => ({
           claimLatencyMs: f.claim_latency_ms,
           leasedKind: f.leased_kind,
           acceptedKind: f.accepted_kind,
+          executorId: f.executor_id,
           cloudWon: f.cloud_won === null ? null : f.cloud_won === 1,
         }
       : null,

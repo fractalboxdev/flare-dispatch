@@ -2,13 +2,7 @@
 // reservation rows of the same execution.
 import { conclusionFactsOf } from "@fractalboxdev/flare-dispatch-github";
 import { describe, expect, it } from "vitest";
-import {
-  admit,
-  authenticated,
-  harness,
-  NOW,
-  type Harness,
-} from "./harness.test-support.ts";
+import { admit, authenticated, harness, NOW, type Harness } from "./harness.test-support.ts";
 import { IntakeStore } from "./store.ts";
 
 const admitCheck = async (h: Harness) =>
@@ -32,8 +26,8 @@ describe("the conclusion facts of an execution", () => {
     const id = await admitCheck(h);
     exec(
       h,
-      `update placements set leased_kind = 'device', accepted_kind = 'device', cloud_won = 0, claim_latency_ms = 4000
-       where execution_id = ?`,
+      `update placements set leased_kind = 'device', accepted_kind = 'device', executor_id = 'mac-mini-7', cloud_won = 0,
+       claim_latency_ms = 4000 where execution_id = ?`,
       id,
     );
     exec(
@@ -58,12 +52,18 @@ describe("the conclusion facts of an execution", () => {
       className: "required",
       status: "failure",
       reason: "lint: 3 errors",
-      placement: { claimLatencyMs: 4000, acceptedKind: "device", cloudWon: false },
+      placement: {
+        claimLatencyMs: 4000,
+        acceptedKind: "device",
+        executorId: "mac-mini-7",
+        cloudWon: false,
+      },
       reservation: { holdMicroUsd: 20000, state: "settled", meteredMicroUsd: 12000 },
     });
     expect(conclusionFactsOf(facts!, undefined).details).toEqual({
       class: "required",
       executor_kind: "device",
+      executor_id: "mac-mini-7",
       placement_reason: "device entry won",
       queue_age_ms: 4000,
       reserved_micro_usd: 20000,

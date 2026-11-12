@@ -26,7 +26,12 @@ import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake
 import type { ActuatorRateLimit, Actuators, AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { apiEnvOf, type ControlPlaneEnv } from "./config.ts";
-import { devFile, devRepositoryOf, type DevRepository } from "./dev-repository.ts";
+import {
+  devFile,
+  devRepositoryOf,
+  repositoryConfidentiality,
+  type DevRepository,
+} from "./dev-repository.ts";
 
 /** `fetch` as a plain function: workerd refuses it called as a method of another object. */
 export const boundFetch: typeof fetch = (input, init) => fetch(input, init);
@@ -76,7 +81,8 @@ export const linkConfigOf = (env: ControlPlaneEnv): ApiConfigShape | undefined =
 
 /**
  * The facts of an execution's conclusion: the intake record beside mameko's execution, placement and reservation rows,
- * with the log viewer link carrying a link token minted for a check run (FD-GH-013, FD-GH-015).
+ * with the log viewer link carrying a link token minted for a check run (FD-GH-013, FD-GH-015), and a repository's
+ * confidentiality mode as `repositoryConfidentiality` reads it (FD-GH-019).
  */
 export const concludeFactsLayer = (env: ControlPlaneEnv) =>
   Layer.effect(
@@ -84,7 +90,9 @@ export const concludeFactsLayer = (env: ControlPlaneEnv) =>
     Effect.gen(function* () {
       const store = yield* IntakeStore;
       const links = linkConfigOf(env);
+      const confidentiality = repositoryConfidentiality(env);
       return {
+        confidentialCompute: (repo: string) => confidentiality(repo) === "confidential-compute",
         of: (executionId: string) =>
           Effect.gen(function* () {
             const record = yield* store
