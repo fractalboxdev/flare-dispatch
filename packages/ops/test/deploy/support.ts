@@ -202,6 +202,8 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     tokensReadFails: boolean;
     /** Every cache bucket object write answers 403, as for a deploy token without write on that bucket. */
     cacheWriteFails: boolean;
+    /** Every cache bucket object write answers 404, as for an overlay whose r2.CACHE bucket does not exist. */
+    cacheBucketMissing: boolean;
     /** The GitHub App's registration as `GET /app` answers it; the committed manifest by default. */
     app: AppPermissions;
     /** The status checks the default branch's ruleset requires; the merge gate and `check:ci` by default. */
@@ -232,6 +234,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     accessReadFails: false,
     tokensReadFails: false,
     cacheWriteFails: false,
+    cacheBucketMissing: false,
     app: APP_PERMISSIONS,
     required: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"],
     runnerWorkflows: {},
@@ -426,6 +429,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     ).exec(path)?.[1];
     if (cacheKey !== undefined) {
       if (method !== "PUT") return new Response(null, { status: 405 });
+      if (state.cacheBucketMissing) return new Response(null, { status: 404 });
       if (state.cacheWriteFails) return new Response(null, { status: 403 });
       cacheObjects.set(cacheKey, new Uint8Array(bytes ?? new TextEncoder().encode(body)));
       return new Response(null, { status: 200 });

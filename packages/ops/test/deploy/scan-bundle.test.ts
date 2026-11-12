@@ -108,28 +108,36 @@ describe("fd deploy over the scan bundle", () => {
     expect(w.calls.findIndex((c) => c.startsWith("wrangler "))).toBeGreaterThan(put);
   });
 
-  it("[FD-OPS-099] stops at the scan bundle write, before any migration or Worker deploy, when the envelope cannot be stored", async () => {
-    const key = await signingKey("bundle-2026");
-    const { bytes, digest } = await signedBy(key);
-    const now = Date.now();
-    const w = hostWith(bytes);
-    w.state.cacheWriteFails = true;
-    const report = await deploy(
-      w,
-      overlayWith({
-        bundleDigest: digest,
-        bundleFile: FILE,
-        bundleKeys: [keyEntry(key, now - HOUR, now + HOUR)],
-      }),
-    );
-    expect(report.ok).toBe(false);
-    expect(report.stages.map((s) => [s.stage, s.ok]).slice(2)).toEqual([
-      ["drift", true],
-      ["scan-bundle", false],
-    ]);
-    expect(w.calls.filter((c) => c.startsWith("wrangler "))).toEqual([]);
-    expect(w.scripts.size).toBe(0);
-  });
+  it.each([
+    ["a refused write (403)", "cacheWriteFails", "403"],
+    ["a missing r2.CACHE bucket (404)", "cacheBucketMissing", `bucket ${placeholderOverlay.r2["CACHE"]} not found`],
+  ] as const)(
+    "[FD-OPS-099] stops at the scan bundle write, before any migration or Worker deploy, on %s",
+    async (_, mode, detail) => {
+      const key = await signingKey("bundle-2026");
+      const { bytes, digest } = await signedBy(key);
+      const now = Date.now();
+      const w = hostWith(bytes);
+      w.state[mode] = true;
+      const report = await deploy(
+        w,
+        overlayWith({
+          bundleDigest: digest,
+          bundleFile: FILE,
+          bundleKeys: [keyEntry(key, now - HOUR, now + HOUR)],
+        }),
+      );
+      expect(report.ok).toBe(false);
+      expect(report.stages.map((s) => [s.stage, s.ok]).slice(2)).toEqual([
+        ["drift", true],
+        ["scan-bundle", false],
+      ]);
+      expect(report.stages.at(-1)!.detail).toContain(detail);
+      expect(w.cacheObjects.size).toBe(0);
+      expect(w.calls.filter((c) => c.startsWith("wrangler "))).toEqual([]);
+      expect(w.scripts.size).toBe(0);
+    },
+  );
 
   it("[FD-OPS-099] writes no envelope where the overlay pins no scan.bundleDigest, or where the drift check fails", async () => {
     const unpinned = world();

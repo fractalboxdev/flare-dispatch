@@ -6,6 +6,7 @@
 // and AWS Organizations, signed with SigV4, for the AWS account's Budgets actions and the policies they apply; the
 // overlay's alert sink for `deploy-probe-failed`; the local file system for the scan bundle envelope the overlay pins.
 import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
+import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Effect, Layer } from "effect";
@@ -91,9 +92,6 @@ const RECORD_BUCKET = "ARTIFACTS";
 
 /** The bucket binding whose `cas/<sha256>` objects every scan reads the scan bundle from (FD-OPS-099, FD-GATE-100). */
 const CAS_BUCKET = "CACHE";
-
-/** The cache-bucket key of the scan bundle envelope whose SHA-256 is `digest`. */
-export const scanBundleKey = (digest: string): string => `cas/${digest}`;
 
 /** The page size the Access applications are listed in. */
 const ACCESS_PAGE = 100;
@@ -711,11 +709,17 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
             operation: "scan-bundle",
             message: "the overlay names no r2.CACHE bucket",
           });
-        yield* c.cloudflare.raw(
+        // The R2 object API answers 404 for a bucket that does not exist, which `raw` answers as null.
+        const stored = yield* c.cloudflare.raw(
           "PUT",
-          `${account}/r2/buckets/${cache}/objects/${scanBundleKey(digest)}`,
+          `${account}/r2/buckets/${cache}/objects/${contentObjectKey(digest)}`,
           bytes,
         );
+        if (stored === null)
+          return yield* new TargetFailed({
+            operation: "scan-bundle",
+            message: `bucket ${cache} not found`,
+          });
       }),
     deployedSettings,
     apiToken,

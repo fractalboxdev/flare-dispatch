@@ -3,6 +3,7 @@
 // (specs/operability.md § Deploy pipeline). The stages run in that order and stop at the first that fails
 // (FD-OPS-009); the Cloudflare and GitHub reads and writes go through the `DeployTarget` port, so `fd doctor` runs the
 // same checks with no write (FD-OPS-024).
+import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces";
 import { readOnlyScanRunsOf, RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { Clock, Context, Effect, Schema } from "effect";
 import {
@@ -550,7 +551,7 @@ export const fdDeploy = (
         : yield* target
             .writeScanBundle(check.bundle.digest, check.bundle.bytes)
             .pipe(
-              Effect.as(`cas/${check.bundle.digest}`),
+              Effect.as(contentObjectKey(check.bundle.digest)),
               Effect.mapError(stageFailed("scan-bundle")),
             );
     const d1 = yield* target
