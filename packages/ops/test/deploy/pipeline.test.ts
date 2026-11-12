@@ -1,11 +1,21 @@
 // The deploy suites of `V-DEPLOY` (specs/verification.md § Harness catalog) for the deploy pipeline: `fd deploy` and
-// `fd doctor` over the committed Worker templates and the placeholder overlay, on the fakes of `support.ts`.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+// `fd doctor` over the committed Worker templates and the placeholder overlay, on the fakes of `support.ts`, and the
+// committed workflows, actions and package scripts, which deploy a v2 Worker only through them.
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { Effect } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { placeholderOverlay } from "../../src/index.ts";
-import { V2_WORKERS, type WorkerSpec } from "../../src/cli/index.ts";
+import { parse } from "yaml";
+import { parseJsonc, placeholderOverlay } from "../../src/index.ts";
+import { operabilityCommand, V2_WORKERS, type WorkerSpec } from "../../src/cli/index.ts";
 import {
   API,
   CONTROL_PLANE,
@@ -238,6 +248,7 @@ describe("fd deploy over the committed templates and the placeholder overlay", (
     expect(drift).toMatchObject({ stage: "drift", ok: false });
     expect(drift.detail.split("\n").sort()).toEqual([
       'control-plane.crons: deployed ["*/5 * * * *"], recorded ["* * * * *"]',
+      'control-plane.crons: deployed cron set ["*/5 * * * *"] is not ["* * * * *"]',
       "control-plane.secrets.ROGUE_TOKEN: secret ROGUE_TOKEN present on the deployed Worker, absent in the record",
       'control-plane.vars.ALERT_SINK: deployed "https://other.example.com/hook", recorded "https://alerts.example.com/hook"',
     ]);
@@ -272,5 +283,189 @@ describe("fd deploy over the committed templates and the placeholder overlay", (
     expect(w.files.size).toBe(0);
     expect(w.alarms).toEqual([]);
     expect(w.snapshot()).toBe(before);
+  });
+});
+
+// --- The deploy and drift-check paths ----------------------------------------------------------------------------------
+
+/** One step of a committed workflow or composite action, with the environment its job and the step give it. */
+interface PathStep {
+  readonly file: string;
+  readonly run: string;
+  readonly uses: string;
+  readonly cwd: string;
+  readonly env: Readonly<Record<string, unknown>>;
+}
+
+type YamlStep = {
+  run?: string;
+  uses?: string;
+  env?: Record<string, unknown>;
+  "working-directory"?: string;
+};
+
+/** Every step of the committed workflows and actions. */
+const committedSteps = (): readonly PathStep[] => {
+  const files = [
+    ...readdirSync(join(ROOT, ".github/workflows")).map((f) => `.github/workflows/${f}`),
+    ...[".github/actions", "actions"].flatMap((d) =>
+      readdirSync(join(ROOT, d))
+        .map((a) => `${d}/${a}/action.yml`)
+        .filter((f) => existsSync(join(ROOT, f))),
+    ),
+  ].filter((f) => /\.ya?ml$/.test(f));
+  return files.flatMap((file) => {
+    const doc = parse(readFileSync(join(ROOT, file), "utf8")) as {
+      jobs?: Record<string, { steps?: YamlStep[]; env?: Record<string, unknown> }>;
+      runs?: { steps?: YamlStep[] };
+    };
+    const jobs =
+      doc.jobs === undefined ? [{ steps: doc.runs?.steps, env: {} }] : Object.values(doc.jobs);
+    return jobs.flatMap((job) =>
+      (job.steps ?? []).map((step) => ({
+        file,
+        run: (step.run ?? "").replace(/\\\n\s*/g, " "),
+        uses: step.uses ?? "",
+        cwd:
+          step["working-directory"]?.includes("${{") === true
+            ? "."
+            : (step["working-directory"] ?? "."),
+        env: { ...job.env, ...step.env },
+      })),
+    );
+  });
+};
+
+/** Every package script, as a step run from its package's directory. */
+const packageScripts = (): readonly PathStep[] =>
+  ["", ...["apps", "packages"].flatMap((d) => readdirSync(join(ROOT, d)).map((p) => `${d}/${p}`))]
+    .filter((dir) => existsSync(join(ROOT, dir, "package.json")))
+    .flatMap((dir) =>
+      Object.values(
+        (
+          JSON.parse(readFileSync(join(ROOT, dir, "package.json"), "utf8")) as {
+            scripts?: Record<string, string>;
+          }
+        ).scripts ?? {},
+      ).map((run) => ({
+        file: join(dir, "package.json"),
+        run,
+        uses: "",
+        cwd: dir || ".",
+        env: {},
+      })),
+    );
+
+/** The `wrangler` invocations of a step's commands, each as its argument list. */
+const wranglerCalls = (run: string): readonly string[][] =>
+  [...run.matchAll(/(?:^|[\s(;&|])wrangler\s+([^\n|;&)]*)/g)].map((m) => m[1]!.trim().split(/\s+/));
+
+/**
+ * The Worker a `wrangler` invocation acts on: the `-c` configuration, or the nearest `wrangler.jsonc` above `cwd`. A
+ * configuration the drift check renders in CI (`<worker>.jsonc` beside its template) acts on its template's Worker.
+ */
+const wranglerWorker = (cwd: string, args: readonly string[]): string => {
+  const at = args.findIndex((a) => a === "-c" || a === "--config");
+  let path: string | undefined = at === -1 ? undefined : join(ROOT, cwd, args[at + 1]!);
+  for (let dir = join(ROOT, cwd); path === undefined; dir = dirname(dir))
+    if (existsSync(join(dir, "wrangler.jsonc"))) path = join(dir, "wrangler.jsonc");
+  const rendered = V2_WORKERS.find(
+    (w) => join(ROOT, dirname(w.templatePath), `${w.worker}.jsonc`) === path,
+  );
+  return parseJsonc(
+    readFileSync(join(ROOT, rendered?.templatePath ?? relative(ROOT, path)), "utf8"),
+  )["name"] as string;
+};
+
+const V2_SCRIPTS = V2_WORKERS.map(
+  (w) => parseJsonc(readFileSync(join(ROOT, w.templatePath), "utf8"))["name"] as string,
+);
+
+describe("the deploy and drift-check paths", () => {
+  it("[FD-IFC-070] no committed workflow, action or package script deploys a v2 Worker or reads its account except through fd deploy and fd doctor, which run the stages of the deploy pipeline and the drift check", async () => {
+    expect(V2_SCRIPTS).toEqual(["flare-dispatch-control-plane", "flare-dispatch-docs"]);
+    const steps = [...committedSteps(), ...packageScripts()];
+
+    // No step uses the wrangler action, whose deploy bypasses the renderer and the drift check.
+    expect(steps.filter((s) => s.uses.startsWith("cloudflare/wrangler-action"))).toEqual([]);
+
+    // Every `wrangler` invocation that can change an account acts on a Worker outside the v2 deploy; on a v2 Worker,
+    // only `wrangler deploy --dry-run` and a local `wrangler dev` run, and neither reaches the account.
+    const onV2: string[] = [];
+    for (const step of steps)
+      for (const args of wranglerCalls(step.run)) {
+        const local =
+          (args[0] === "deploy" && args.includes("--dry-run")) ||
+          (args[0] === "dev" && !args.includes("--remote"));
+        const worker = wranglerWorker(step.cwd, args);
+        if (V2_SCRIPTS.includes(worker)) onV2.push(`${step.file}: wrangler ${args.join(" ")}`);
+        if (!local)
+          expect(V2_SCRIPTS, `${step.file}: wrangler ${args.join(" ")}`).not.toContain(worker);
+      }
+    // The CI dry runs over the rendered v2 configurations are found, so the scan reads the commands it checks.
+    expect(onV2).toEqual(
+      expect.arrayContaining([
+        ".github/workflows/v2-ci.yml: wrangler deploy --dry-run -c apps/control-plane/control-plane.jsonc",
+        ".github/workflows/v2-ci.yml: wrangler deploy --dry-run -c apps/docs/docs.jsonc",
+      ]),
+    );
+
+    // The steps that run the Operability service run `deploy` or `doctor`, and nothing else.
+    const OPS = "packages/ops/scripts/fd-operability.ts";
+    const operability = steps.flatMap((s) =>
+      [...s.run.matchAll(new RegExp(`${OPS.replace(/\./g, "\\.")}\\s+(\\S+)`, "g"))].map(
+        (m) => `${s.file}: ${m[1]!}`,
+      ),
+    );
+    expect(operability.sort()).toEqual([
+      ".github/workflows/v2-deploy.yml: deploy",
+      ".github/workflows/v2-deploy.yml: doctor",
+      "actions/deploy-dispatcher-action/action.yml: deploy",
+    ]);
+
+    // A step holding the Cloudflare API token runs fd deploy or fd doctor, or acts only on a Worker outside the v2 deploy.
+    for (const step of steps.filter((s) => "CLOUDFLARE_API_TOKEN" in s.env)) {
+      if (step.run.includes(OPS)) continue;
+      const calls = wranglerCalls(step.run);
+      expect(calls.length, `${step.file}: ${step.run}`).toBeGreaterThan(0);
+      for (const args of calls) expect(V2_SCRIPTS).not.toContain(wranglerWorker(step.cwd, args));
+    }
+
+    // The commands those steps run: fd deploy runs every stage of the pipeline, and fd doctor runs the drift check alone
+    // and changes nothing.
+    const overlayFile = join(edgeDir, "overlay.json");
+    writeFileSync(overlayFile, OVERLAY);
+    const w = world();
+    const deployed = await Effect.runPromise(
+      operabilityCommand(fd(w), ["deploy", "--overlay", `@${overlayFile}`], (m) => new Error(m)),
+    );
+    expect(deployed.stages.map((s) => [s.stage, s.ok])).toEqual([
+      ["decode", true],
+      ["render", true],
+      ["drift", true],
+      ["migrations", true],
+      ["deploy", true],
+      ["probes", true],
+      ["record", true],
+    ]);
+    const before = w.snapshot();
+    const from = w.calls.length;
+    const doctor = await Effect.runPromise(
+      operabilityCommand(
+        fd(w),
+        ["doctor", "--overlay", `@${overlayFile}`, "--alarm-on-drift"],
+        (m) => new Error(m),
+      ),
+    );
+    expect(doctor.stages.map((s) => [s.stage, s.ok])).toEqual([
+      ["decode", true],
+      ["render", true],
+      ["drift", true],
+    ]);
+    expect(since(w, from).filter(isWrite)).toEqual([]);
+    expect(w.snapshot()).toBe(before);
+    await expect(
+      Effect.runPromise(operabilityCommand(fd(w), ["rollback"], (m) => new Error(m))),
+    ).rejects.toThrow("unknown command rollback; use deploy or doctor");
   });
 });

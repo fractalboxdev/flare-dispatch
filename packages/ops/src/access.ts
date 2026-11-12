@@ -215,11 +215,19 @@ export interface AccessConfig {
   readonly now?: () => number;
 }
 
-/** The identity of a request, or the refusal the route answers; no route logic runs before it (FD-IFC-010). */
+/** A configured value, trimmed; a blank one is no value, as the API reads the same bindings. */
+const configured = (value: string | undefined): string | undefined =>
+  value === undefined || value.trim() === "" ? undefined : value.trim();
+
+/**
+ * The identity of a request, or the refusal the route answers; no route logic runs before it (FD-IFC-010). A team
+ * domain or audience that is absent or blank answers `not_configured` (FD-IFC-014).
+ */
 export const requireAccess = (request: Request, config: AccessConfig) =>
   Effect.gen(function* () {
-    const { teamDomain, aud } = config;
-    if (teamDomain === undefined || teamDomain === "" || aud === undefined || aud === "")
+    const teamDomain = configured(config.teamDomain);
+    const aud = configured(config.aud);
+    if (teamDomain === undefined || aud === undefined)
       return yield* new AccessDenied({
         status: 503,
         code: "not_configured",
