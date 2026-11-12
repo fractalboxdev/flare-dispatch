@@ -479,11 +479,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // The installation the check-run posts under — `null` on a deploy or
     // dispatch with no live `Checks` Layer, where no verdict is owed.
     const deliveryInstallationId = resolveChecksConfig(this.env, payload.github)?.installationId ?? null;
-    // The Cloudflare Workflows instance page for this execution — the "Details"
-    // link on the GitHub check-run + a markdown link in its summary. `undefined`
-    // when CLOUDFLARE_ACCOUNT_ID is unset (BYOC default): the check-run renders
-    // exactly as before, no link.
-    const detailsUrl = workflowDashboardUrl(this.env.CLOUDFLARE_ACCOUNT_ID, payload.executionId);
+    // The Cloudflare Workflows instance page for this execution, for the
+    // operator's private Slack verdict only. A check-run never carries it: the
+    // URL embeds the deploying account's id (summary-links.ts). `undefined`
+    // when CLOUDFLARE_ACCOUNT_ID is unset.
+    const slackDetailsUrl = workflowDashboardUrl(this.env.CLOUDFLARE_ACCOUNT_ID, payload.executionId);
     // The public origin absolutizing artifact URLs: the dispatch request's
     // origin (captured by the route) wins; `PUBLIC_ORIGIN` covers payloads
     // that predate the field or came from the cron path.
@@ -505,12 +505,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       publicOrigin !== undefined && logToken !== undefined
         ? buildLogsUrl(publicOrigin, payload.executionId, logToken)
         : undefined;
-    // The check-run's "Details" link: prefer the in-product log viewer
-    // (`<PUBLIC_ORIGIN>/logs/<id>?t=…`) over the operator-only Cloudflare
-    // dashboard, so a PR reviewer lands on the readable surface they can reach
-    // rather than a CF account page they have no access to. Falls back to the
-    // dashboard URL when there is no public origin / log-link secret.
-    const checkDetailsUrl = logsBaseUrl ?? detailsUrl;
+    // The check-run's "Details" link: the in-product log viewer
+    // (`<PUBLIC_ORIGIN>/logs/<id>?t=…`), the surface a PR reviewer can open.
+    // Never the Cloudflare dashboard, whose URL carries the deploying account's
+    // id onto a check-run as public as the repository (summary-links.ts).
+    const checkDetailsUrl = logsBaseUrl;
     // The product-demo viewer (`/demos/:execution`) — only meaningful for a
     // `product-demo` run, and only once it succeeds (a failed run persists no
     // `summary_json` for the page to render). Appended to the check-run success
@@ -527,10 +526,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // alike (summary-links.ts). Assembled once, up here, so the two posting
     // sites below cannot drift apart again (the opener historically carried
     // only the Cloudflare link).
-    const summaryLinks = {
-      ...(detailsUrl !== undefined ? { detailsUrl } : {}),
-      ...(logsBaseUrl !== undefined ? { logsUrl: logsBaseUrl } : {}),
-    };
+    const summaryLinks = logsBaseUrl !== undefined ? { logsUrl: logsBaseUrl } : {};
     const logsSuffix = logLinksSuffix(summaryLinks);
 
     // Self-heal agent-tier setup (specs/08-self-healing.md § 6.3): for a
@@ -1701,7 +1697,9 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             origin: slackOrigin,
             checkRunName,
             ...(logsBaseUrl !== undefined ? { logsUrl: logsBaseUrl } : {}),
-            ...(detailsUrl !== undefined ? { detailsUrl } : {}),
+            // The operator's Slack channel is private, so it may carry the
+            // dashboard link a public check-run leaves out.
+            ...(slackDetailsUrl !== undefined ? { detailsUrl: slackDetailsUrl } : {}),
             ...(failureMd !== undefined ? { failureSummary: failureMd } : {}),
             ...(skipReason !== undefined ? { skipReason } : {}),
           });
