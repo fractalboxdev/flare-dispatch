@@ -108,3 +108,38 @@ export class MatrixChildren extends Context.Service<
     readonly discover: (request: ChildRequest) => Effect.Effect<DiscoveryResult, ChildStartFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-catalog/MatrixChildren") {}
+
+export class ScanBundleUnreadable extends Schema.TaggedError<ScanBundleUnreadable>()(
+  "ScanBundleUnreadable",
+  { digest: Schema.String, detail: Schema.String },
+) {}
+
+/**
+ * The scan bundle as the deploy stored it: the bytes of `cas/<digest>` in the deployment's content-addressed store, or
+ * `null` where no such object exists (specs/runs/gate.md FD-GATE-100, FD-GATE-102). The store answers bytes as read;
+ * the recipe checks them against the digest it asked for.
+ */
+export class ScanBundleStore extends Context.Service<
+  ScanBundleStore,
+  {
+    readonly read: (digest: string) => Effect.Effect<Uint8Array | null, ScanBundleUnreadable>;
+  }
+>()("@fractalboxdev/flare-dispatch-catalog/ScanBundleStore") {}
+
+export class ScannerVersionUnknown extends Schema.TaggedError<ScannerVersionUnknown>()(
+  "ScannerVersionUnknown",
+  { scanner: Schema.String, detail: Schema.String },
+) {}
+
+/**
+ * What the gate image holds: each scanner's version as the binary reports it (FD-GATE-105), and the binaries its
+ * `/etc/flare-dispatch/scan-tools` file lists (FD-GATE-109). An image without that file lists no binary, so every
+ * baseline check fails its precondition.
+ */
+export class ScanImage extends Context.Service<
+  ScanImage,
+  {
+    readonly scannerVersion: (scanner: string) => Effect.Effect<string, ScannerVersionUnknown>;
+    readonly scanTools: Effect.Effect<readonly string[]>;
+  }
+>()("@fractalboxdev/flare-dispatch-catalog/ScanImage") {}

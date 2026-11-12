@@ -39,7 +39,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `dispatchers` | Access identities allowed to dispatch through `fd` and `/mcp` ([interfaces.md](interfaces.md) FD-IFC-027); the control plane's `DISPATCHERS` var carries them, none where the overlay names none |
 | `dispatch.scoped` | Entries `{ identity, runs, repositories, classCeiling }` for automated callers of read-only scan runs ([interfaces.md](interfaces.md) FD-IFC-089 to FD-IFC-093) |
 | `containment` | Access identities allowed the tightening operator routes ([interfaces.md](interfaces.md) FD-IFC-095) |
-| `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256, the path of its envelope beside the overlay, and each public signing key with its UTC RFC 3339 `notBefore` (inclusive) and `notAfter` (exclusive) deploy-verification window ([runs/gate.md](runs/gate.md) § Security gate) |
+| `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256 as 64 lowercase hex digits, the path of its envelope relative to the repository root `fd deploy` runs in, and each public signing key, an ES256 JWK `{ kty, crv, x, y, kid }` under `publicKey`, with its UTC RFC 3339 `notBefore` (inclusive) and `notAfter` (exclusive) deploy-verification window ([runs/gate.md](runs/gate.md) § Security gate) |
 | `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores; the snapshot age a scan accepts, default 48 |
 | `records.url` | The HTTPS URL that receives job and verdict records ([github-output.md](github-output.md) § Job and verdict records) |
 | `github.appId`, `github.fixtureRepo` | GitHub App id; the repository the synthetic webhook canary pushes to |

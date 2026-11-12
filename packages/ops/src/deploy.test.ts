@@ -45,6 +45,7 @@ const target = (
 ) => {
   const calls: string[] = [];
   const layer = Layer.succeed(DeployTarget, {
+    readScanBundle: () => Effect.succeed(null),
     deployedSettings: ({ worker: w }) =>
       Effect.sync(() => {
         calls.push(`read:${w}`);

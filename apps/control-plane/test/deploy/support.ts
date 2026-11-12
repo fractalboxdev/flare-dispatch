@@ -51,6 +51,7 @@ export const account = (
   const varsOf = () =>
     (deployed.get("control-plane")?.config["vars"] ?? {}) as Readonly<Record<string, unknown>>;
   const target = Layer.succeed(DeployTarget, {
+    readScanBundle: () => Effect.succeed(null),
     deployedSettings: () => Effect.succeed(null),
     lastRecord: () => Effect.succeed(null),
     appRegistration: Effect.succeed(APP_PERMISSIONS),

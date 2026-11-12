@@ -40,6 +40,13 @@ export const ProvenancePublicJwk = Schema.Struct({
   y: Schema.NonEmptyString,
   kid: Schema.NonEmptyString,
 });
+/** The public coordinates of an EC JWK, the fields a signature check imports. */
+export interface PublicJwk {
+  readonly kty?: string;
+  readonly crv?: string;
+  readonly x?: string;
+  readonly y?: string;
+}
 /** The active provenance key: a private ES256 JWK with its `kid`. */
 export const ProvenanceKey = Schema.Struct({ ...ProvenancePublicJwk.fields, d: Schema.NonEmptyString });
 export type ProvenanceKey = typeof ProvenanceKey.Type;
@@ -169,7 +176,7 @@ export const signPae = async (key: ProvenanceKey, pae: Uint8Array): Promise<Dsse
  * `sig` DER. A P1363 `sig` does not verify.
  */
 export const verifyDsseSignature = async (
-  publicJwk: JsonWebKey,
+  publicJwk: PublicJwk,
   envelope: AnyDsseEnvelope,
   signature: DsseSignature,
 ): Promise<boolean> => {
@@ -179,7 +186,8 @@ export const verifyDsseSignature = async (
   if (pae === undefined || sig === undefined) return false;
   try {
     const { kty, crv, x, y } = publicJwk;
-    const key = await crypto.subtle.importKey("jwk", { kty, crv, x, y }, P256, false, ["verify"]);
+    const jwk = { kty: kty ?? "", crv, x, y };
+    const key = await crypto.subtle.importKey("jwk", jwk, P256, false, ["verify"]);
     return await crypto.subtle.verify(ES256, key, asBuffer(sig), asBuffer(pae));
   } catch {
     return false;

@@ -1,6 +1,7 @@
 // The operator overlay: a JSON document of values only, decoded against the value schema with every undeclared key
 // rejected (specs/operability.md § Template, overlay and rendered configuration, FD-OPS-002 to FD-OPS-004, FD-OPS-056).
 import type { RegistryEntry } from "@fractalboxdev/flare-dispatch-agentic";
+import { BundleDigest, ScanBundleKey } from "@fractalboxdev/flare-dispatch-catalog";
 import {
   PolicyRules,
   spendConfigWith,
@@ -110,6 +111,20 @@ export const OverlayValues = Schema.Struct({
    * confidentiality mode, which policy sync checks before the deploy writes anything (FD-PROF-025).
    */
   policy: opt(Schema.Struct({ rules: opt(PolicyRules) })),
+  /**
+   * The security gate's scan bundle and advisory snapshots (specs/operability.md § Overlay keys): the pinned envelope's
+   * SHA-256, its file relative to the repository root, the keys that may sign it with their deploy-verification
+   * windows, the OSV ecosystems `advisory-refresh` stores and the snapshot age a scan accepts.
+   */
+  scan: opt(
+    Schema.Struct({
+      bundleDigest: opt(BundleDigest),
+      bundleFile: opt(NonEmpty),
+      bundleKeys: opt(Schema.Array(ScanBundleKey)),
+      advisoryEcosystems: opt(Schema.Array(NonEmpty)),
+      advisoryMaxAgeHours: opt(Count),
+    }),
+  ),
   provenance: opt(
     Schema.Struct({
       attestationMaxAgeDays: opt(Count),
