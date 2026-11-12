@@ -283,11 +283,19 @@ describe("matched values", () => {
     expect(log).toContain('"RuleID": "generic-password"');
     expect(log).toContain("8:52AM WRN leaks found: 2");
 
-    // A report the output limit cut short still has its members withheld.
-    const whole = pretty([gitleaksEntry({ Secret: "ghx-not-a-token-shape", Match: "x" })]);
-    const truncated = whole.slice(0, whole.indexOf('"File"'));
-    expect(matchedValues(truncated)).toEqual([]);
-    expect(scanLog(truncated)).not.toContain("ghx-not-a-token-shape");
+    // A report the output limit cut off inside a matched value still has that value withheld.
+    const value = "ghx-not-a-token-shape";
+    const whole = pretty([gitleaksEntry({ Secret: value, Match: `pw = ${value}` })]);
+    for (const cut of [whole.indexOf(value) + 8, whole.lastIndexOf(value) + 8]) {
+      const truncated = whole.slice(0, cut);
+      expect(matchedValues(truncated)).toEqual([]);
+      expect(scanLog(truncated)).not.toContain(value.slice(0, 8));
+    }
+    // A cut right after an escaping backslash.
+    const escaped = pretty([gitleaksEntry({ Secret: 'zq7\\"cd-value', Match: "x" })]);
+    const atEscape = escaped.slice(0, escaped.indexOf("zq7\\") + 4);
+    expect(atEscape.endsWith("zq7\\")).toBe(true);
+    expect(scanLog(atEscape)).not.toContain("zq7");
   });
 });
 

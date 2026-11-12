@@ -288,8 +288,12 @@ export const scanFindings = (
 /** The members of a gitleaks report that hold a matched value. */
 const MATCHED_MEMBERS = ["Secret", "Match"] as const;
 
+/**
+ * A `Secret` or `Match` member and its string value. A value the output limit cut off ends at the end of the output,
+ * after at most a lone escaping backslash, and is matched up to there.
+ */
 const MATCHED_MEMBER = new RegExp(
-  `"(${MATCHED_MEMBERS.join("|")})"(\\s*):(\\s*)"(?:[^"\\\\]|\\\\.)*"`,
+  `"(${MATCHED_MEMBERS.join("|")})"(\\s*):(\\s*)"(?:[^"\\\\]|\\\\.)*(?:"|\\\\?$)`,
   "g",
 );
 
