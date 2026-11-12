@@ -147,3 +147,25 @@ export {
 } from "./side-ports.ts";
 export { GithubWrites, githubWritesLayer, type WritesOptions } from "./writes.ts";
 export { d1CommentWrites } from "./comment-writes.ts";
+export {
+  d1GhaLaunches,
+  dispatchInputs,
+  fromRunnerWorkflow,
+  GHA_KIND,
+  GhaClaim,
+  GhaLaunchesUnavailable,
+  ghaLauncherLayer,
+  type DispatchInputs,
+  type GhaLauncherConfig,
+  type GhaLauncherOptions,
+  type GhaLaunches,
+} from "./gha-launcher.ts";
+export {
+  ACTIONS_ISSUER,
+  ACTIONS_JWKS,
+  JwksSource,
+  JwksSourceLive,
+  JwksUnavailable,
+  verifyJwt,
+  verifyWithJwks,
+} from "./jwks.ts";
