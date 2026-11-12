@@ -14,7 +14,7 @@ Status: Proposed · 2026-11-08
 ## Decision
 
 - **Two recipes.** `security-gate` runs on `pull_request`, `merge_group` and check re-runs under the check name `flare-dispatch/security-gate`. It has no command input, no skip path and no dispatch trigger. `security-rescan` runs the same scan on a dispatch under the check name `flare-dispatch/security-rescan`, so a re-scan cannot replace a required result.
-- **A signed scan bundle, pinned in the overlay.** The bundle holds the gitleaks rules, the zizmor configuration, the baseline checks, the accepted scanner versions, the exit maps and the suppression policy, in a DSSE envelope with a key history. `scan.bundleDigest` is an overlay value. The deploy verifies the signature and digest before any change, and each run verifies the digest. A bad pin fails the deploy, so the running Worker keeps enforcing the previous pin.
+- **A signed scan bundle, pinned in the overlay.** The bundle holds the gitleaks rules, the zizmor configuration, the baseline checks, the accepted scanner versions, the exit maps and the suppression policy, in a DSSE envelope with a key history. `scan.bundleDigest` is an overlay value. The deploy verifies the signature and digest before any change, accepting a key only while its window contains the deploy-verification time; it makes no claim about historical signing time. Each run verifies the digest. A bad pin fails the deploy, so the running Worker keeps enforcing the previous pin.
 - **Suppressions come from the target branch.** The recipe restores each suppression file from the base commit, removes suppression markers from the lines the pull request adds, and replaces each scanner's configuration file with the bundle's.
 - **An offline advisory snapshot.** A daily ops run writes OSV's published archives to the deploying account's R2. A snapshot older than `scan.advisoryMaxAgeHours`, default 48, ends the scan `failure` with a `config:` reason.
 - **Cloud executors only.** `security-gate` and `security-rescan` carry the `cloud-only` constraint, so a compromised device cannot report a passing scan.
@@ -87,6 +87,7 @@ zizmor documents exit codes 11 to 14 for findings by highest severity and 1 to 3
 - A check re-run of `security-gate` on the same commit runs the same scan under the same check name, and it may conclude differently after the bundle or the snapshot changes.
 - A pause of an installation's delivery key leaves `check.open` and `check.conclude` pending, which blocks a merge on a check that has not concluded. A check that already concluded `success` stays mergeable.
 - Bundle signing keys and their history become an operator duty.
+- An expired or removed bundle key cannot authorize a new deploy, even of an envelope signed earlier. A new deploy needs a signature from a currently valid configured key; there is no historical-timestamp acceptance. Expiry does not replace an already-running pin or change the digest-only check that its runs perform.
 
 ## Revisit triggers
 

@@ -145,13 +145,13 @@ stateDiagram-v2
 
 ### Exit to verdict
 
-Every gate job outcome maps to exactly one verdict and reason. [github-output.md](../github-output.md) maps the verdict to a check-run conclusion.
+Every gate job outcome maps to exactly one verdict and reason. [github-output.md](../github-output.md) maps the verdict to a check-run conclusion. A command-based job takes its verdict from its job command. The fixed scanner and baseline-check subprocesses of `security-gate` and `security-rescan` instead produce scan results under § Security gate; FD-GATE-089 to FD-GATE-091 aggregate those results into the recipe's verdict. For example, OSV-Scanner exit 128 means `nothing-in-scope`, so it permits a successful scan when every other result is `clean` or `nothing-in-scope`.
 
 | Job outcome | Verdict | Reason |
 | --- | --- | --- |
 | Exit code 0 | `success` | — |
 | `oxlint` exit code 0 with the line `No files found to lint` | `skipped` | `not-applicable: nothing-to-lint` |
-| Non-zero exit code | `failure` | `exit: <code>` |
+| Non-zero job-command exit code | `failure` | `exit: <code>` |
 | Killed by a signal | `failure` | `exit: signal <name>` |
 | Killed at the job timeout | `failure` | `timeout: job` |
 | Still running at `deadline_at` | `failure` | `deadline` |
@@ -166,7 +166,7 @@ Every gate job outcome maps to exactly one verdict and reason. [github-output.md
 
 ```mermaid
 flowchart TB
-  accTitle: Decision path from a job's end to its verdict
+  accTitle: Decision path from a command-based job's end to its verdict
   start[Job command ends] --> sup{Superseded or parent cancelled?}
   sup -->|yes| canc[cancelled]
   sup -->|no| infra{Infrastructure error?}
@@ -196,7 +196,7 @@ flowchart TB
   class e3 failure
 ```
 
-*exit-to-verdict · no branch from a non-zero exit reaches success.*
+*command-job exit-to-verdict · no branch from a non-zero job-command exit reaches success; scan subprocesses follow the scan-result decision below.*
 
 ### Security gate
 
@@ -308,9 +308,9 @@ sequenceDiagram
 ### Every gate recipe
 
 - **FD-GATE-001** · phase 0 · `V-UNIT` — Where a gate recipe runs a command, other than `security-gate` or `security-rescan`, the recipe must take that command only from the repository's repo manifest entry or from the dispatch inputs, and the control plane must not hold a default command that applies to every repository.
-- **FD-GATE-002** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — When a gate job's command exits with code 0, the recipe must record the verdict `success` for that job.
-- **FD-GATE-003** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — When a gate job's command exits with a non-zero code, the recipe must record the verdict `failure` with the reason `exit: <code>`.
-- **FD-GATE-004** · phase 0 · `V-UNIT` — The gate recipes and the job matrix must not offer any manifest field, input or default that maps a non-zero exit, a failed job or a failed shard to `success`.
+- **FD-GATE-002** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — When a command-based gate job's command exits with code 0, unless FD-GATE-024 applies, the recipe must record the verdict `success` for that job; scanner and baseline-check subprocesses follow FD-GATE-089 to FD-GATE-091.
+- **FD-GATE-003** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — When a command-based gate job's command exits with a non-zero code, the recipe must record the verdict `failure` with the reason `exit: <code>`; scanner and baseline-check subprocesses follow FD-GATE-089 to FD-GATE-091.
+- **FD-GATE-004** · phase 0 · `V-UNIT` — The gate recipes and the job matrix must not offer any manifest field, input or default that maps a non-zero job-command exit, a failed job or a failed shard to `success`; the fixed scanner and baseline-check exit maps of the verified scan bundle must be interpreted only as FD-GATE-089 to FD-GATE-091 specify.
 - **FD-GATE-005** · phase 0 · `V-UNIT` — If a gate job's command ends on a signal, then the recipe must record `failure` with the reason `exit: signal <name>`.
 - **FD-GATE-006** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — If a gate job's command runs past its job timeout, then the executor must kill its process group and the recipe must record `failure` with the reason `timeout: job`.
 - **FD-GATE-007** · phase 0 · `V-UNIT` `V-SIM` — If a gate job's command is still running when the executor stops the job at the execution's `deadline_at` ([MAMEKO-EXEC-002](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/executors.md)), then the recipe must record `failure` with the reason `deadline`.

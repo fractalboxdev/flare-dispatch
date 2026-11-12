@@ -38,7 +38,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `dispatchers` | Access identities allowed to dispatch through `fd` and `/mcp` ([interfaces.md](interfaces.md) FD-IFC-027) |
 | `dispatch.scoped` | Entries `{ identity, runs, repositories, classCeiling }` for automated callers of read-only scan runs ([interfaces.md](interfaces.md) FD-IFC-089 to FD-IFC-093) |
 | `containment` | Access identities allowed the tightening operator routes ([interfaces.md](interfaces.md) FD-IFC-095) |
-| `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256, the path of its envelope beside the overlay, and each public signing key with its validity window ([runs/gate.md](runs/gate.md) § Security gate) |
+| `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256, the path of its envelope beside the overlay, and each public signing key with its UTC RFC 3339 `notBefore` (inclusive) and `notAfter` (exclusive) deploy-verification window ([runs/gate.md](runs/gate.md) § Security gate) |
 | `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores; the snapshot age a scan accepts, default 48 |
 | `records.url` | The HTTPS URL that receives job and verdict records ([github-output.md](github-output.md) § Job and verdict records) |
 | `github.appId`, `github.fixtureRepo` | GitHub App id; the repository the synthetic webhook canary pushes to |
@@ -374,8 +374,10 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 
 ### Scan bundle and advisory snapshot
 
+The scan-bundle verifier samples the deploy host's current time once when verification starts and applies every key's validity window to that verification time. A missing, malformed or reversed window authorizes no deploy. The DSSE envelope supplies no trusted signing time: the verifier accepts no historical or signer-declared timestamp in place of its current-time check. A key retained in history after expiry, or removed from `scan.bundleKeys`, cannot authorize a new deploy, including a redeploy of a previously signed envelope. A failed verification leaves the already-running Worker's previous pin unchanged; runs continue to verify that pinned envelope's digest under FD-GATE-100.
+
 - **FD-OPS-094** · phase 2 · `V-DEPLOY` `V-UNIT` — Where the overlay sets `scan.bundleDigest`, before any deploy step changes Cloudflare state, the drift check must verify the envelope at `scan.bundleFile`.
-- **FD-OPS-095** · phase 2 · `V-DEPLOY` `V-UNIT` — If the envelope's DSSE signature does not verify under a key in `scan.bundleKeys` whose validity window holds the signing time, then the drift check must fail, so that the running Worker keeps enforcing the previous pin.
+- **FD-OPS-095** · phase 2 · `V-DEPLOY` `V-UNIT` — If no DSSE signature of the envelope verifies under a key in `scan.bundleKeys` whose valid `notBefore`/`notAfter` window contains the deploy-verification time, then the drift check must fail, so that an expired or removed key cannot authorize a new deploy and the running Worker keeps enforcing the previous pin.
 - **FD-OPS-096** · phase 2 · `V-DEPLOY` `V-UNIT` — If the envelope's SHA-256 differs from `scan.bundleDigest`, then the drift check must fail.
 - **FD-OPS-097** · phase 2 · `V-DEPLOY` `V-UNIT` — If the payload fails the scan bundle schema, then the drift check must fail, naming the first failing path.
 - **FD-OPS-098** · phase 2 · `V-DEPLOY` `V-UNIT` — If a scanner version in the rendered image falls outside `scanners.<name>.versions`, then the drift check must fail, naming the scanner.
