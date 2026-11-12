@@ -10,7 +10,8 @@
     "./ledger-object": "./src/ledger-object.ts",
     "./device": "./src/device/index.ts",
     "./log-names": "./src/log-names.ts",
-    "./oidc": "./src/oidc.ts"
+    "./oidc": "./src/oidc.ts",
+    "./provenance": "./src/provenance/index.ts"
   },
   "scripts": {
     "test": "vitest run"
