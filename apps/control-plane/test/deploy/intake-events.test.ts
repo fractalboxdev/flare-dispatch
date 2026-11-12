@@ -32,6 +32,7 @@ const deployedVars = async (overlay: OverlayValues): Promise<Record<string, unkn
   const deployed = new Map<string, RenderedWorker>();
   const target = Layer.succeed(DeployTarget, {
     readScanBundle: () => Effect.succeed(null),
+    writeScanBundle: () => Effect.void,
     deployedSettings: () => Effect.succeed(null),
     lastRecord: () => Effect.succeed(null),
     appRegistration: Effect.succeed(APP_PERMISSIONS),

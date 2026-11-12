@@ -161,6 +161,7 @@ sequenceDiagram
   alt drift found
     CLI-->>GHA: fail, no state changed
   else clean
+    CLI->>API: write verified scan bundle to R2 cas, keyed by its digest
     CLI->>API: apply D1 migrations
     CLI->>W: deploy Workers, bound services first
     CLI->>W: GET /health, container canary on deployed digest

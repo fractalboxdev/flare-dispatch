@@ -46,6 +46,7 @@ const target = (files: ReadonlyMap<string, Uint8Array>) => {
   const calls: string[] = [];
   const layer = Layer.succeed(DeployTarget, {
     readScanBundle: (path) => Effect.sync(() => (calls.push(`bundle:${path}`), files.get(path) ?? null)),
+    writeScanBundle: (digest) => Effect.sync(() => void calls.push(`cas:${digest}`)),
     deployedSettings: ({ worker: w }) => Effect.sync(() => (calls.push(`read:${w}`), settings)),
     lastRecord: () => Effect.succeed(settings),
     appRegistration: Effect.succeed(APP_PERMISSIONS),
@@ -68,7 +69,7 @@ const target = (files: ReadonlyMap<string, Uint8Array>) => {
   return { calls, layer };
 };
 
-const isWrite = (c: string) => /^(migrate|deploy:|write:)/.test(c);
+const isWrite = (c: string) => /^(cas:|migrate|deploy:|write:)/.test(c);
 
 const deployWith = async (scan: OverlayValues["scan"], files: ReadonlyMap<string, Uint8Array>) => {
   const t = target(files);

@@ -402,6 +402,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
                 last: "record",
                 details: {
                   drift: r.warnings.map((w) => `warning ${w.path}: ${w.detail}`).join("\n"),
+                  "scan-bundle": r.scanBundle ?? "",
                   migrations: r.migrations.join(", "),
                   deploy: [
                     ...r.deployed.map((d) => `${d.worker} ${d.version}`),

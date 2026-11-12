@@ -89,6 +89,12 @@ export const recordKey = (scriptName: string): string => `deploys/${scriptName}/
 
 const RECORD_BUCKET = "ARTIFACTS";
 
+/** The bucket binding whose `cas/<sha256>` objects every scan reads the scan bundle from (FD-OPS-099, FD-GATE-100). */
+const CAS_BUCKET = "CACHE";
+
+/** The cache-bucket key of the scan bundle envelope whose SHA-256 is `digest`. */
+export const scanBundleKey = (digest: string): string => `cas/${digest}`;
+
 /** The page size the Access applications are listed in. */
 const ACCESS_PAGE = 100;
 
@@ -696,6 +702,20 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       Effect.try({
         try: () => readLocal(resolve(c.root, path)),
         catch: (e) => new TargetFailed({ operation: `read ${path}`, message: String(e) }),
+      }),
+    writeScanBundle: (digest, bytes) =>
+      Effect.gen(function* () {
+        const cache = c.overlay.r2[CAS_BUCKET];
+        if (cache === undefined)
+          return yield* new TargetFailed({
+            operation: "scan-bundle",
+            message: "the overlay names no r2.CACHE bucket",
+          });
+        yield* c.cloudflare.raw(
+          "PUT",
+          `${account}/r2/buckets/${cache}/objects/${scanBundleKey(digest)}`,
+          bytes,
+        );
       }),
     deployedSettings,
     apiToken,
