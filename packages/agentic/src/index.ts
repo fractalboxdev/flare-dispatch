@@ -21,6 +21,7 @@ export * from "./recipes/spec-drift-pr.ts";
 export * from "./recipes/ci-triage-pr.ts";
 export * from "./recipes/executions-read.ts";
 export * from "./recipes/triage-issues.ts";
+export * from "./recipes/triage-prs.ts";
 export * from "./recipes/catalog.ts";
 export * from "./suppression/ledger.ts";
 export * from "./integration.ts";

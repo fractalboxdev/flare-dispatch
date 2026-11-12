@@ -16,6 +16,7 @@ import {
 import { ExecutionsRead } from "./ci-triage-pr.ts";
 import { executionsApiReadLayer } from "./executions-read.ts";
 import { githubIssuesReadLayer, IssuesRead } from "./triage-issues.ts";
+import { githubPullRequestsReadLayer, PullRequestsRead } from "./triage-prs.ts";
 import {
   ArtifactFailed,
   Artifacts,
@@ -272,6 +273,7 @@ export type CloudAgenticServices =
   | RecipeIntents
   | ExecutionsRead
   | IssuesRead
+  | PullRequestsRead
   | SuppressionLedger;
 
 /**
@@ -279,8 +281,8 @@ export type CloudAgenticServices =
  * route through the egress proxy, which alone holds the per-lease token; the shell and the edit loop start with the
  * sandbox environment, so no runner variable reaches them (FD-AGT-010). Artifacts go to the execution's artifact store
  * (FD-AGT-059). `ExecutionsRead` reads the control plane's executions and log routes, so the job holds no binding of the
- * executions table or the log store (FD-AGT-071). `IssuesRead` reads GitHub's issue list through the egress proxy. The
- * suppression ledger is the read the runner entry supplies.
+ * executions table or the log store (FD-AGT-071). `IssuesRead` reads GitHub's issue list and `PullRequestsRead` its
+ * open pull requests through the egress proxy. The suppression ledger is the read the runner entry supplies.
  */
 export const cloudAgenticLayers = (
   config: CloudAgenticConfig,
@@ -300,6 +302,10 @@ export const cloudAgenticLayers = (
     runnerIntentsLayer,
     executionsApiReadLayer({ baseUrl: config.controlPlaneUrl, fetch: config.fetch }),
     githubIssuesReadLayer({
+      apiBase: "https://api.github.com",
+      fetch: config.fetch,
+    }),
+    githubPullRequestsReadLayer({
       apiBase: "https://api.github.com",
       fetch: config.fetch,
     }),

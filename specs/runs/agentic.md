@@ -275,6 +275,16 @@ A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the reposito
 
 ### `triage-prs`
 
+`triage-prs` reads check health from the head commit's check runs and the review state from each reviewer's latest approval or change request. It takes the first route that matches:
+
+| Order | State | Route |
+| --- | --- | --- |
+| 1 | Draft, or a label `do-not-merge`, `wip`, `blocked` or `on-hold` | `ask` |
+| 2 | A check failed, or a check is still pending 1 day or more after the last update | `unstick` |
+| 3 | At least one check passed, none failed or is pending, a reviewer approved, and no reviewer's latest review requests changes | `auto-merge` |
+| 4 | No standing approval (none, or a change request), and 3 days or more since the last update | `nudge` |
+| 5 | Any other state | `ask` |
+
 - **FD-AGT-078** · phase 3 · `V-UNIT` — `triage-prs` must derive each open pull request's state (check health, review state, days since last update, labels) without a model call, and route it to exactly one of `auto-merge`, `nudge`, `unstick` and `ask`.
 - **FD-AGT-079** · phase 3 · `V-UNIT` — `triage-prs` may write each pull request's digest line with one `transform` call, and the route must not depend on that call's output.
 - **FD-AGT-080** · phase 3 · `V-UNIT` — `triage-prs` must report its routes as one staged write to the repository its repo manifest names, with the path allowlist `.flare-dispatch/triage/**`, and must return no merge, assignment or close intent.
