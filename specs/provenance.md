@@ -34,7 +34,7 @@ Not specified: a search endpoint, push feed or bulk export over statements, verd
 
 ### Statement
 
-A statement is an in-toto Statement v1 inside a DSSE envelope with payload type `application/vnd.in-toto+json`. Its `subject` lists each output artifact by name and `sha256` digest. Build recipes use the SLSA provenance v1 predicate (`https://slsa.dev/provenance/v1`); gate recipes use the in-toto test-result predicate (`https://in-toto.io/attestation/test-result/v0.1`).
+A statement is an in-toto Statement v1 inside a DSSE envelope with payload type `application/vnd.in-toto+json`. Its `subject` lists each output artifact by name and `sha256` digest; a statement with no output artifact, such as most gate recipes', names the commit as its one subject, `{"name": "commit", "digest": {"gitCommit": <commit SHA>}}`, since in-toto Statement v1 requires at least one subject. Build recipes use the SLSA provenance v1 predicate (`https://slsa.dev/provenance/v1`); gate recipes use the in-toto test-result predicate (`https://in-toto.io/attestation/test-result/v0.1`).
 
 Every statement carries a **lease binding**: `execution_id`, `epoch`, `nonce`, `executor_id` and `binding_kind` (`execution-lease` or `registration`). The SLSA predicate holds it at `buildDefinition.internalParameters.lease`; the test-result predicate holds it as the `configuration` resource descriptor named `lease`, beside one `configuration` descriptor for each other input and log digest the table lists. The SLSA predicate's `buildType` is `https://github.com/fractalboxdev/flare-dispatch/blob/main/specs/provenance.md#statement`. The statement builder answers the envelope with an empty signature list; the device executor signs DSSE's pre-authentication encoding of its payload.
 

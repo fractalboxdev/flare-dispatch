@@ -57,7 +57,10 @@ export const StatementInput = Schema.Struct({
   outcome: Schema.String.check(Schema.isPattern(/^[a-z_-]{1,32}$/)),
   /** Each command's step name, from the run definition, and its exit status, the one field the job sandbox reports. */
   commands: Schema.Array(Schema.Struct({ name: Name, exit_status: Int })),
-  /** The digests the device executor computed from the detached output volume after the job sandbox exited. */
+  /**
+   * The digests the device executor computed from the detached output volume after the job sandbox exited. With none,
+   * the commit is the statement's one subject, since in-toto Statement v1 requires at least one.
+   */
   outputs: Schema.Array(Schema.Struct({ name: Name, digest: Digest })),
   lockfiles: Schema.Array(Schema.Struct({ path: Name, digest: Digest })),
   /** The egress proxy's records of admitted fetches; `response_digest` is null where the proxy saw no plaintext. */
@@ -105,7 +108,7 @@ export interface Statement {
 
 export interface DsseEnvelope {
   readonly payloadType: typeof DSSE_PAYLOAD_TYPE;
-  /** The statement's canonical JSON, base64-encoded. */
+  /** The statement's JSON serialization, base64-encoded. */
   readonly payload: string;
   readonly signatures: readonly { readonly keyid: string; readonly sig: string }[];
 }
@@ -114,27 +117,31 @@ export interface DsseEnvelope {
 const digestSet = (digest: string) => ({ sha256: digest.slice("sha256:".length) });
 
 /**
- * Each resolved dependency the job fetched, with the source of its digest: `proxy` where the egress proxy hashed the
- * fetched bytes, `lockfile` where the digest comes from the run's lockfiles (FD-PROV-006). A fetch with no digest from
- * either source resolves nothing; the egress proxy log, whose digest the statement carries, still records it.
+ * Each dependency the job fetched, from the egress proxy's records of admitted fetches, with the source of its digest:
+ * `proxy` where the egress proxy hashed the fetched bytes, `lockfile` where the digest comes from the run's lockfiles
+ * entry for the fetched URI (FD-PROV-006). A fetch with no digest from either source resolves nothing; the egress proxy
+ * log, whose digest the statement carries, still records it. A locked dependency the job did not fetch is not listed.
  */
 export const resolvedFetches = (input: StatementInput): ResourceDescriptor[] => {
-  const proxied = new Map<string, string>();
-  for (const f of input.fetches)
-    if (f.response_digest !== null) proxied.set(`https://${f.host}${f.path}`, f.response_digest);
-  const out: ResourceDescriptor[] = [...proxied].map(([uri, digest]) => ({
-    uri,
-    digest: digestSet(digest),
-    annotations: { digest_source: "proxy" },
-  }));
-  for (const d of input.locked_dependencies)
-    if (!proxied.has(d.uri))
-      out.push({
-        uri: d.uri,
-        digest: digestSet(d.digest),
-        annotations: { digest_source: "lockfile" },
-      });
-  return out;
+  const locked = new Map(input.locked_dependencies.map((d) => [d.uri, d.digest]));
+  const out = new Map<string, ResourceDescriptor>();
+  for (const f of input.fetches) {
+    const uri = `https://${f.host}${f.path}`;
+    const prior = out.get(uri);
+    if (f.response_digest !== null) {
+      if (prior?.annotations?.digest_source !== "proxy")
+        out.set(uri, {
+          uri,
+          digest: digestSet(f.response_digest),
+          annotations: { digest_source: "proxy" },
+        });
+      continue;
+    }
+    const digest = locked.get(uri);
+    if (prior === undefined && digest !== undefined)
+      out.set(uri, { uri, digest: digestSet(digest), annotations: { digest_source: "lockfile" } });
+  }
+  return [...out.values()];
 };
 
 const leaseBinding = (input: StatementInput) => ({
@@ -227,7 +234,8 @@ const LEAF = /^[\x21-\x7e]{1,2400}$/;
 
 /**
  * The path of the first statement value that is not a digest, id, name, timestamp, verdict or count — such as source,
- * file contents, a diff, a log, a prompt or a completion — or `null` when every value is one (FD-PROV-043).
+ * file contents, a diff, a log, a prompt or a completion — or `null` when every value is one (FD-PROV-043). The
+ * builder's input schema already admits only such values; this check holds any statement to the same rule.
  */
 export const disallowedContent = (value: unknown, path = "$"): string | null => {
   if (typeof value === "string") return LEAF.test(value) ? null : path;
@@ -250,25 +258,24 @@ export const disallowedContent = (value: unknown, path = "$"): string | null => 
 };
 
 /**
- * The in-toto Statement v1 for one execution: subjects from the output digests the device executor passes, the SLSA
- * provenance v1 predicate for a build recipe and the test-result predicate for a gate recipe (FD-PROV-001, -005, -007).
+ * The in-toto Statement v1 for one execution: subjects from the output digests the device executor passes, or the
+ * commit when it passes none, the SLSA provenance v1 predicate for a build recipe and the test-result predicate for a gate recipe (FD-PROV-001, -005, -007).
  */
 export const buildStatement = (raw: unknown): Effect.Effect<Statement, StatementInputInvalid> =>
   Effect.gen(function* () {
     const input = yield* Schema.decodeUnknownEffect(StatementInput)(raw).pipe(
       Effect.mapError((e) => new StatementInputInvalid({ message: e.message })),
     );
-    const statement: Statement = {
+    return {
       _type: STATEMENT_TYPE,
-      subject: input.outputs.map((o) => ({ name: o.name, digest: digestSet(o.digest) })),
+      subject:
+        input.outputs.length === 0
+          ? [{ name: "commit", digest: { gitCommit: input.lease.commit_sha } }]
+          : input.outputs.map((o) => ({ name: o.name, digest: digestSet(o.digest) })),
       ...(input.lease.run.kind === "build"
         ? { predicateType: SLSA_PROVENANCE_V1, predicate: slsaPredicate(input) }
         : { predicateType: TEST_RESULT_V0_1, predicate: testResultPredicate(input) }),
-    };
-    const bad = disallowedContent(statement);
-    if (bad !== null)
-      return yield* new StatementInputInvalid({ message: `${bad} is not a digest, id or name` });
-    return statement;
+    } satisfies Statement;
   });
 
 /** The statement as an unsigned DSSE envelope with payload type `application/vnd.in-toto+json` (FD-PROV-004). */

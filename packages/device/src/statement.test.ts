@@ -249,6 +249,21 @@ describe("statement builder", () => {
       x.uri?.startsWith("https://"),
     );
     expect(gate.map((x) => x.annotations?.digest_source)).toEqual(["proxy", "lockfile"]);
+
+    // A locked dependency the job did not fetch is no resolved dependency, and a fetch neither source hashed is none.
+    const unfetched = "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz";
+    const fromCache = slsa(
+      await build(
+        input("build", {
+          fetches: [
+            { host: "example.com", method: "GET", path: "/unlocked.tgz", response_digest: null },
+          ],
+          locked_dependencies: [{ uri: unfetched, digest: d(23) }],
+        }),
+      ),
+    ).buildDefinition.resolvedDependencies;
+    expect(fromCache.filter((x) => x.uri?.startsWith("https://"))).toEqual([]);
+    expect(JSON.stringify(fromCache)).not.toContain(hex(23));
   });
 
   it("[FD-PROV-007] uses the SLSA provenance v1 predicate for build recipes and the in-toto test-result predicate for gate recipes", async () => {
@@ -269,9 +284,15 @@ describe("statement builder", () => {
       failedTests: [],
     });
     expect(testResult(await build(input("gate", { outcome: "failure" }))).result).toBe("FAILED");
+
+    // A gate with no output artifact still has the one subject in-toto Statement v1 requires: the commit.
+    const bare = await build(input("gate", { outputs: [] }));
+    expect(bare.subject).toEqual([{ name: "commit", digest: { gitCommit: COMMIT } }]);
+    expect(bare.predicateType).toBe(TEST_RESULT_V0_1);
   });
 
-  it("[FD-PROV-043] writes only digests, ids, names, timestamps and verdicts, never source, file contents, diffs, logs, prompts or completions", async () => {
+  // FD-PROV-043's statement-builder half; the control plane's own statements and log entries are not covered here.
+  it("writes only digests, ids, names, timestamps and verdicts into a device statement, never source, file contents, diffs, logs, prompts or completions (FD-PROV-043, statement builder)", async () => {
     for (const kind of ["build", "gate"] as const)
       expect(disallowedContent(await build(input(kind)))).toBeNull();
 
