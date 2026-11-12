@@ -172,7 +172,13 @@ jobs:
       - uses: ./.github/actions/v2-setup
         with:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      # FD-CACHE-041's real-R2 leg runs when the operator provides an R2 token with object read and write on one
+      # bucket; without it the leg is skipped and the Miniflare leg still runs.
       - run: pnpm --filter @fractalboxdev/flare-dispatch-conformance test
+        env:
+          FD_R2_CONFORMANCE_BUCKET: ${{ vars.FD_R2_CONFORMANCE_BUCKET }}
+          FD_R2_CONFORMANCE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FD_R2_CONFORMANCE_API_TOKEN: ${{ secrets.FD_R2_CONFORMANCE_API_TOKEN }}
 
   # FD-VER-024: 100 seeds per V-SIM scenario plus every kept seed.
   sim:
