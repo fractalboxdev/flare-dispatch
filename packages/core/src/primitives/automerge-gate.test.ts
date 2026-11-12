@@ -377,10 +377,14 @@ const githubService = (over: Partial<GithubService>): GithubService => ({
   removeIssueLabel: () => Effect.void,
   commentOnIssue: () => Effect.void,
   closeIssueAsDuplicate: () => Effect.void,
+  closeBotIssue: ({ issue }) =>
+    Effect.succeed({ closed: false, reason: "not-open", number: issue } as const),
   actionRuns: () => Effect.succeed([]),
   pullRequestHistory: () => Effect.succeed([]),
   readTextFile: () => Effect.succeed({ found: false }),
   branchHead: () => Effect.succeed("0".repeat(40)),
+  commitPullRequests: () => Effect.succeed([]),
+  pullRequest: () => Effect.die("unused"),
   appendMeasureNote: () => Effect.void,
   pullReview: () => Effect.void,
   openDraftPullRequest: () =>

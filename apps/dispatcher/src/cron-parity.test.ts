@@ -16,6 +16,8 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { DELIVERY_SWEEP_CRON } from "./delivery-sweep";
+import { COMPILE_CACHE_SWEEP_CRON } from "./routes/compile-cache";
 import { runNames, schedulesByCron, scheduledRuns } from "./registry";
 
 /**
@@ -38,7 +40,7 @@ const readArmedCrons = (): readonly string[] => {
  * that explains why. Adding a name here is the deliberate act; forgetting to is
  * what this test catches.
  */
-const DELIBERATELY_UNARMED = new Set(["release-notes", "product-demo"]);
+const DELIBERATELY_UNARMED = new Set(["release-notes", "product-demo", "contextful-measures", "contextful-protocol"]);
 
 describe("cron parity", () => {
   it("every armed cron binds at least one registered run", () => {
@@ -47,7 +49,22 @@ describe("cron parity", () => {
     // silently yields no crons passes every assertion below while checking
     // nothing.
     expect(armed.length).toBeGreaterThan(0);
-    expect(armed.filter((cron) => schedulesByCron(cron).length === 0)).toEqual([]);
+    // The two sweeps' crons are the armed expressions that bind no run: the
+    // scheduled handler routes each to its sweep.
+    expect(
+      armed.filter(
+        (cron) =>
+          cron !== DELIVERY_SWEEP_CRON && cron !== COMPILE_CACHE_SWEEP_CRON && schedulesByCron(cron).length === 0,
+      ),
+    ).toEqual([]);
+  });
+
+  it("arms the verdict reconcile sweep", () => {
+    expect(readArmedCrons()).toContain(DELIVERY_SWEEP_CRON);
+  });
+
+  it("arms the compile-cache sweep", () => {
+    expect(readArmedCrons()).toContain(COMPILE_CACHE_SWEEP_CRON);
   });
 
   it("every cron a scheduled run declares is armed unless deliberately left off", () => {
@@ -81,4 +98,15 @@ describe("cron parity", () => {
       .map((r) => r.name);
     expect(armedButListed).toEqual([]);
   });
+
+  it("arms no contextful schedule", () => {
+    // contextful uses FlareDispatch for tag releases only.
+    const armed = readArmedCrons();
+    const contextful = scheduledRuns().filter((r) => r.name.startsWith("contextful-"));
+    for (const { crons } of contextful) {
+      for (const cron of crons) expect(armed).not.toContain(cron);
+    }
+    expect(contextful.length).toBeGreaterThan(0);
+  });
+
 });

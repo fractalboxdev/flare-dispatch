@@ -177,6 +177,38 @@ export type CloseDraftPullRequest = {
   readonly installationId?: number;
 };
 
+/**
+ * A request to close a ledger issue the loop itself filed, once the condition it
+ * reports clears. The live Layer reads the issue and closes it as `completed`
+ * only when it is open, this installation's bot opened it, and it carries
+ * `label`; it posts `comment` first. Anything else stays open.
+ */
+export type CloseBotIssue = {
+  /** "owner/name". */
+  readonly repo: string;
+  readonly issue: number;
+  /** The ledger label the issue must carry. */
+  readonly label: string;
+  /** Posted before the close — a rendered template, never model prose. */
+  readonly comment: string;
+  readonly installationId?: number;
+};
+
+/** The outcome of {@link GithubService.closeBotIssue}. */
+export type CloseBotIssueResult =
+  | { readonly closed: true; readonly number: number }
+  | {
+      readonly closed: false;
+      /** `not-open`, `human-owned`, `foreign-owned`, `unlabelled`: left as found. `uncredentialed`: no App. */
+      readonly reason:
+        | "not-open"
+        | "human-owned"
+        | "foreign-owned"
+        | "unlabelled"
+        | "uncredentialed";
+      readonly number: number;
+    };
+
 /** The outcome of {@link GithubService.closeDraftPullRequest}. */
 export type CloseDraftPullRequestResult =
   | { readonly closed: true; readonly number: number }
@@ -249,6 +281,8 @@ export type TagTarget = { readonly refSha: string; readonly commitSha: string };
 export type PublishRelease = {
   readonly repo: string;
   readonly releaseId: number;
+  /** Release notes replacing the draft's body as it publishes. */
+  readonly body?: string;
   readonly installationId?: number;
 };
 
@@ -374,6 +408,20 @@ export type PullRequestHistoryRef = {
  * a run can leave an always-visible PR comment (on success AND failure), which
  * the read-only check-run summary alone does not guarantee.
  */
+/**
+ * One pull request GitHub associates with a commit — what a gate reads to
+ * learn whether the PR it gates is still open and still at that commit.
+ */
+export type CommitPullRequest = {
+  readonly number: number;
+  readonly state: "open" | "closed";
+  readonly merged: boolean;
+  /** The PR's current head commit. */
+  readonly headSha: string;
+  /** `owner/name` of the head repository; `""` when unknown. */
+  readonly headRepo: string;
+};
+
 export type PullReviewRequest = {
   /** "owner/name". */
   readonly repo: string;
@@ -483,6 +531,29 @@ export interface GithubService {
     installationId?: number;
   }) => Effect.Effect<string, GitHubApiError>;
 
+  /**
+   * The pull requests associated with a commit (`commits/{sha}/pulls`). Fails
+   * on any unreadable answer and on an uncredentialed deploy rather than
+   * returning an empty list. GitHub answers `[]` for a commit a force-push
+   * moved off its branch, so an empty list does not mean no pull request
+   * held the commit.
+   */
+  readonly commitPullRequests: (req: {
+    repo: string;
+    sha: string;
+    installationId?: number;
+  }) => Effect.Effect<readonly CommitPullRequest[], GitHubApiError>;
+
+  /**
+   * One pull request's state and current head (`pulls/{number}`). Fails on
+   * any unreadable answer and on an uncredentialed deploy.
+   */
+  readonly pullRequest: (req: {
+    repo: string;
+    number: number;
+    installationId?: number;
+  }) => Effect.Effect<CommitPullRequest, GitHubApiError>;
+
   /** Append one JSON report to a commit's refs/notes/measures note. */
   readonly appendMeasureNote: (req: {
     repo: string;
@@ -581,8 +652,9 @@ export interface GithubService {
   }) => Effect.Effect<void, GitHubApiError>;
 
   /**
-   * Close an issue **as a duplicate of `duplicateOf`** — the only close on this
-   * service, and deliberately not spellable as a bare "close".
+   * Close an issue **as a duplicate of `duplicateOf`** — the only close of a
+   * reporter's issue on this service, and deliberately not spellable as a bare
+   * "close". `closeBotIssue` closes only the loop's own ledger issues.
    *
    * §5 authorizes closing for exactly one verdict. Requiring the link in the
    * signature makes closing-on-another-verdict unrepresentable rather than
@@ -596,6 +668,16 @@ export interface GithubService {
     duplicateOf: number;
     installationId?: number;
   }) => Effect.Effect<void, GitHubApiError>;
+
+  /**
+   * Close a bot-opened ledger issue **as completed** — the one other close.
+   *
+   * It closes no reporter's issue: the live Layer reads the issue and refuses
+   * (`closed: false`) unless a bot account opened it and it carries `label`, so
+   * the verdict recorded is the loop's claim about its own artifact. Closing any
+   * other issue, or on any other verdict, remains unspellable.
+   */
+  readonly closeBotIssue: (req: CloseBotIssue) => Effect.Effect<CloseBotIssueResult, GitHubApiError>;
 
   readonly pullReview: (req: PullReviewRequest) => Effect.Effect<void, GitHubApiError>;
 
@@ -668,6 +750,10 @@ export const github = {
   readTextFile: (req: ReadTextFileRequest) => Effect.flatMap(Github, (g) => g.readTextFile(req)),
   branchHead: (req: { repo: string; branch: string; installationId?: number }) =>
     Effect.flatMap(Github, (g) => g.branchHead(req)),
+  commitPullRequests: (req: { repo: string; sha: string; installationId?: number }) =>
+    Effect.flatMap(Github, (g) => g.commitPullRequests(req)),
+  pullRequest: (req: { repo: string; number: number; installationId?: number }) =>
+    Effect.flatMap(Github, (g) => g.pullRequest(req)),
   appendMeasureNote: (req: {
     repo: string;
     commit: string;
@@ -710,6 +796,7 @@ export const github = {
     duplicateOf: number;
     installationId?: number;
   }) => Effect.flatMap(Github, (g) => g.closeIssueAsDuplicate(req)),
+  closeBotIssue: (req: CloseBotIssue) => Effect.flatMap(Github, (g) => g.closeBotIssue(req)),
   pullReview: (req: PullReviewRequest) => Effect.flatMap(Github, (g) => g.pullReview(req)),
   openDraftPullRequest: (req: OpenDraftPullRequest) =>
     Effect.flatMap(Github, (g) => g.openDraftPullRequest(req)),

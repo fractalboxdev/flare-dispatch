@@ -28,6 +28,7 @@ import {
   appendGitNote,
   addIssueLabels,
   closeBotPullRequest,
+  closeBotIssue,
   closeIssueAsDuplicate,
   createIssue,
   createIssueComment,
@@ -45,6 +46,8 @@ import {
   listPullRequests,
   openDraftPullRequest,
   readBranchHead,
+  getPullRequest,
+  listCommitPullRequests,
   readRepoTextFile,
   removeIssueLabel,
   resolveRepoInstallationId,
@@ -52,7 +55,9 @@ import {
 } from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect, Layer, Schedule } from "effect";
 import {
+  type CloseBotIssueResult,
   type CloseDraftPullRequestResult,
+  type CommitPullRequest,
   type DraftPullRequestResult,
   Github,
   GitHubApiError,
@@ -66,7 +71,7 @@ import {
   type WorkflowRunRef,
 } from "@fractalboxdev/flare-dispatch-core";
 import { artifactKey } from "./artifact-r2";
-import { pushGhcrImage } from "./ghcr-push";
+import { classifyGhcrFailure, pushGhcrImage } from "./ghcr-push";
 
 /** The GitHub App credentials the live `pullReview` write needs. */
 export type GithubLiveConfig = {
@@ -297,6 +302,20 @@ export const makeGithubLive = (
         return yield* ghCall(() => readBranchHead({ token, repo, branch }));
       }),
 
+    commitPullRequests: ({ repo, sha, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* readNeedsCredentials<readonly CommitPullRequest[]>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() => listCommitPullRequests({ token, repo, sha }));
+      }),
+
+    pullRequest: ({ repo, number, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* readNeedsCredentials<CommitPullRequest>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() => getPullRequest({ token, repo, number }));
+      }),
+
     appendMeasureNote: ({ repo, commit, text, installationId }) =>
       Effect.gen(function* () {
         if (config === undefined) return yield* readNeedsCredentials<void>();
@@ -394,6 +413,26 @@ export const makeGithubLive = (
         if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
         const token = yield* mintToken(config, repo, installationId);
         yield* ghCall(() => closeIssueAsDuplicate({ token, repo, issue, duplicateOf }));
+      }),
+
+    closeBotIssue: (req): Effect.Effect<CloseBotIssueResult, GitHubApiError> =>
+      Effect.gen(function* () {
+        if (config === undefined) {
+          yield* Effect.logInfo(
+            `github.closeBotIssue skipped (no GitHub App credentials) — ${req.repo}#${req.issue} left open`,
+          );
+          return { closed: false, reason: "uncredentialed", number: req.issue } as const;
+        }
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() =>
+          closeBotIssue({
+            token,
+            repo: req.repo,
+            issue: req.issue,
+            label: req.label,
+            comment: req.comment,
+          }),
+        );
       }),
 
     pullReview: ({ repo, pr, sha, body, installationId }) =>
@@ -525,7 +564,8 @@ export const makeGithubLive = (
       Effect.gen(function* () {
         if (config === undefined) return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
         const token = yield* mintToken(config, req.repo, req.installationId);
-        const release = yield* ghCall(() => publishRelease({ token, repo: req.repo, releaseId: req.releaseId }));
+        const release = yield* ghCall(() => publishRelease({ token, repo: req.repo, releaseId: req.releaseId,
+          ...(req.body === undefined ? {} : { body: req.body }) }));
         return { id: release.id, url: release.htmlUrl, tag: release.tagName, published: true, draft: false };
       }),
     publishReleaseAsset: (req): Effect.Effect<ReleaseAssetResult, GitHubApiError> =>
@@ -541,7 +581,10 @@ export const makeGithubLive = (
           return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
         }
         const token = yield* mintToken(config, req.repo, req.installationId);
-        return yield* ghCall(() =>
+        // One attempt, outside `ghCall`'s retry: the R2 body is a stream a
+        // resend finds consumed, and a rate limit's wait belongs to the run's
+        // durable sleep. The caller's step retries re-read the artifact.
+        return yield* Effect.tryPromise({ catch: toGitHubApiError, try: () =>
           uploadReleaseAsset({
             token,
             repo: req.repo,
@@ -552,7 +595,7 @@ export const makeGithubLive = (
             size: source.size,
             ...(req.sha256 !== undefined ? { sha256: req.sha256 } : {}),
           }),
-        );
+        });
       }),
     publishContainerImage: (req): Effect.Effect<void, GitHubApiError> =>
       Effect.gen(function* () {
@@ -586,7 +629,7 @@ export const makeGithubLive = (
             layer: source.body, layerSize: source.size,
             layerDigest: req.layerDigest, diffId: req.diffId,
           }),
-          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+          catch: (cause) => new GitHubApiError(classifyGhcrFailure(cause)),
         });
       }),
   };

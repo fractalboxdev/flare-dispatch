@@ -315,11 +315,18 @@ export async function applyGrant(target: GrantTarget, grant: Grant): Promise<voi
  */
 /** One diagnostic constructor excludes arbitrary provider names, text and identities. */
 const revokeFailure = (operation: RevokeFailure["operation"], error: unknown): RevokeFailure => {
-  const errorClass = error instanceof TypeError ? "TypeError" : error instanceof RangeError ? "RangeError"
-    : error instanceof DOMException ? "DOMException" : error instanceof Error ? "Error" : "unknown";
+  let errorClass: RevokeFailure["errorClass"] = "unknown";
+  try {
+    if (error instanceof TypeError) errorClass = "TypeError";
+    else if (error instanceof RangeError) errorClass = "RangeError";
+    else if (error instanceof DOMException) errorClass = "DOMException";
+    else if (error instanceof Error) errorClass = "Error";
+  } catch { /* A hostile prototype must not interrupt the remaining cleanup. */ }
   let status: unknown;
-  try { status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined; }
-  catch { /* A provider getter is not trusted diagnostic evidence. */ }
+  try {
+    if (typeof error === "object" && error !== null)
+      status = Object.getOwnPropertyDescriptor(error, "status")?.value;
+  } catch { /* Failed reflection contributes no status evidence. */ }
   return { operation, errorClass, ...(typeof status === "number" && Number.isInteger(status)
     && status >= 100 && status <= 599 ? { status } : {}) };
 };
@@ -331,8 +338,13 @@ export class EgressRevokeError extends AggregateError {
 }
 
 /** Convert before Workers RPC, which does not preserve custom exception fields. */
-export const revokeRefusal = (error: unknown): SandboxUnavailable | undefined =>
-  error instanceof EgressRevokeError ? { kind:"sandbox-unavailable", reason:error.message, revokeFailures:error.failures } : undefined;
+export const revokeRefusal = (error: unknown): SandboxUnavailable | undefined => {
+  try {
+    return error instanceof EgressRevokeError
+      ? { kind: "sandbox-unavailable", reason: error.message, revokeFailures: error.failures }
+      : undefined;
+  } catch { return undefined; }
+};
 
 export async function revokeGrant(target: GrantTarget, grant: Grant): Promise<void> {
   const errors: unknown[] = [];

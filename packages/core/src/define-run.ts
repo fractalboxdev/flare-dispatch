@@ -9,12 +9,20 @@
 import type { Effect, Schema } from "effect";
 import type { RunContext } from "./context";
 import type { RunError } from "./errors";
+import type { AdmissionClass } from "./run-admission";
 import type { WritebackSpec } from "./writeback";
+import type { CompileCacheLane } from "./primitives/compile-cache";
 
 export type RunLimits<I = unknown> = {
   readonly maxDurationSec: number;
   /** Maximum admission wait; defaults to the dispatcher's standard queue age. */
   readonly admissionMaxQueueAgeSec?: number | ((input: I) => number);
+  /**
+   * The admission class this run waits in; `interactive` runs are admitted
+   * ahead of `batch` ones in the same pool. Defaults to `batch`
+   * (specs/adr/0009-fast-trustworthy-verdicts.md).
+   */
+  readonly admissionClass?: AdmissionClass;
   readonly maxConcurrency?: number;
   readonly requiresBrowser?: boolean;
 };
@@ -52,6 +60,11 @@ export type CooldownSpec<I> = {
   readonly secondsKey?: string;
   /** Rate-limit bucket within `{run}:{repo}` — e.g. ``pr-${input.pr}``. */
   readonly scope: (input: I) => string;
+};
+
+/** What a run's `optIn` reads its keys from: the dispatch's inputs. */
+export type OptInContext<I> = {
+  readonly input: I;
 };
 
 /** The raw GitHub webhook delivery; a run narrows it per-event itself. */
@@ -158,6 +171,17 @@ export type RunSpec<I, O, IEnc, OEnc> = {
    */
   readonly cooldown?: CooldownSpec<I>;
   /**
+   * The CONFIG_KV keys whose presence means the repo opted in to this run —
+   * exactly the keys the run body reads its command from. The webhook
+   * receiver reads them before it creates a Workflow: with none present it
+   * dispatches nothing and reports the run `skipped` as `not-configured`. An
+   * empty list means the inputs already carry the command (an Action or a
+   * fan-out parent named it), so no read happens. A failed read dispatches.
+   * The run body keeps its own opt-in check. See
+   * specs/adr/0007-cost-efficient-execution.md § Dispatch only work.
+   */
+  readonly optIn?: (ctx: OptInContext<I>) => readonly string[];
+  /**
    * Declares that this run PAUSES for a human decision partway through — it
    * hibernates in `step.waitForEvent` until a person approves or rejects, and
    * cannot finish without one.
@@ -181,6 +205,34 @@ export type RunSpec<I, O, IEnc, OEnc> = {
    * `SerializeSpec`.
    */
   readonly serialize?: (input: I) => SerializeSpec | undefined;
+  /**
+   * Cancels older executions that share a group: a newer execution of the
+   * group terminates every older live one — queued or running — together with
+   * its children, releases their admission slots, and concludes their check
+   * runs `cancelled`; an older one that registers after a newer one cancels
+   * itself. A re-run (an execution carrying `retryOf`) joins the group and
+   * cancels nothing. See `SupersedeSpec`.
+   */
+  readonly supersede?: (input: I) => SupersedeSpec | undefined;
+  /**
+   * This run joins every child it spawns, so a child still waiting for an
+   * admission slot once this run's row has ended has no reader for its verdict:
+   * it leaves the queue `cancelled`. A run that spawns children without
+   * waiting on them leaves this unset, and its children outlive it.
+   */
+  readonly joinsChildren?: boolean;
+  /**
+   * The compile-cache lane this execution writes, or `undefined` when it
+   * compiles without the cache. For a lane, the dispatcher mints a token bound
+   * to the execution's repository, execution and lane, valid until the
+   * execution's queue age plus its `maxDurationSec` from creation, and injects
+   * it with the cache endpoint under `COMPILE_CACHE_TOKEN_KEY` /
+   * `COMPILE_CACHE_ENDPOINT_KEY` (primitives/compile-cache.ts). Only a
+   * default-branch execution answers `base`; a pull request's answers its own
+   * `pr-<n>`. A deploy without a public origin or `HMAC_SECRET` injects
+   * neither, and the run compiles without the cache.
+   */
+  readonly compileCache?: (input: I) => CompileCacheLane | undefined;
   readonly run: (input: I) => Effect.Effect<O, RunError, RunContext>;
 };
 
@@ -205,6 +257,22 @@ export type SerializeSpec = {
    * order alone decides.
    */
   readonly current?: Effect.Effect<string | undefined, never, RunContext>;
+};
+
+/**
+ * The supersession group one execution joins. `undefined` from `supersede`
+ * opts that execution out.
+ */
+export type SupersedeSpec = {
+  /** Executions with equal `group` strings: only the newest stays live. */
+  readonly group: string;
+  /**
+   * The member's revision rank — larger is newer — such as the pull request's
+   * `updated_at` in ms. A member registering below a live member's rank cancels
+   * itself instead of the higher one. Omitted, the rank is the registration
+   * time; every member of one group supplies a rank or none does.
+   */
+  readonly order?: number;
 };
 
 /**

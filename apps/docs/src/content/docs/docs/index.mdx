@@ -28,6 +28,13 @@ A run starts from a **GitHub Actions** step (`flare-dispatch-action` HMAC-signs 
 
 Tag-driven runs use the GitHub App's `push` event. New Apps created from the manifest subscribe to it. Existing Apps retain their own event settings: enable **Pushes** under GitHub App settings → Permissions & events, then save the subscription before expecting tag pushes to dispatch.
 
+Action-mode deployments can retain the App's event subscriptions and set
+`GITHUB_WEBHOOK_EVENTS: "check_run,check_suite"` in their Worker overlay. Signed
+deliveries outside this comma-separated allowlist receive `202` without starting
+runs or signalling workflows, so PR webhooks cannot duplicate Action-mode reviews.
+Check reruns still work with `GITHUB_WEBHOOK_SECRET` configured. Omitting the
+allowlist accepts all subscribed events; an empty value accepts none.
+
 ## Runs are programs
 
 Runs are written against a layered Effect-TS DSL: **capabilities** wrap Cloudflare primitives, **primitives** compose them into build, test and cache steps, and **recipes** are the named runs a Dispatcher registers. Steps are typed, errors are tagged, and matches are exhaustive.

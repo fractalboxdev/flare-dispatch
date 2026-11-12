@@ -35,7 +35,7 @@ let seq = 0;
 const freshKey = () => `exec-${++seq}-${crypto.randomUUID().slice(0, 8)}`;
 
 describe("exec revoke diagnostics across the service binding", () => {
-  it("keeps revocation fatal, attempts all cleanup and carries only safe evidence", async () => {
+  it.each(["typed", "hostile"] as const)("keeps %s revocation failures fatal with exhaustive cleanup and safe evidence", async (kind) => {
     const key = freshKey(), calls: string[] = [];
     const stub = env.SANDBOX_LEAN.get(env.SANDBOX_LEAN.idFromName(`dispatcher:${key}`)) as DurableObjectStub<SubstrateSandboxBase>;
     await runInDurableObject(stub, (instance) => {
@@ -47,14 +47,22 @@ describe("exec revoke diagnostics across the service binding", () => {
         denyHost: async () => {}, allowHost: async () => {}, setOutboundByHost: async () => {},
         removeAllowedHost: async (host: string) => {
           calls.push(`unallow:${host}`);
-          if (executed && host === "github.com") throw Object.assign(new TypeError("Bearer fixture-secret https://private.invalid?token=fixture-secret"), { status:503 });
+          if (executed && host === "github.com") {
+            if (kind === "hostile") throw new Proxy({}, {
+              getPrototypeOf() { throw new Error("Bearer fixture-secret https://private.invalid"); },
+              getOwnPropertyDescriptor() { throw new Error("fixture-secret status reflection"); },
+            });
+            throw Object.assign(new TypeError("Bearer fixture-secret https://private.invalid?token=fixture-secret"), { status:503 });
+          }
         },
         removeOutboundByHost: async (host: string) => { calls.push(`unmap:${host}`); },
       });
     });
     const outcome = await dispatcher().execUnderGrant(key, { recipe:RECIPE, command:"true", idempotencyKey:"diagnostic-step", logPath:"command.log" });
     expect(outcome).toMatchObject({ ok:false, refusal:{ kind:"sandbox-unavailable",
-      revokeFailures:[{ operation:"remove-admission", errorClass:"TypeError", status:503 }] } });
+      revokeFailures:[kind === "hostile"
+        ? { operation:"remove-admission", errorClass:"unknown" }
+        : { operation:"remove-admission", errorClass:"TypeError", status:503 }] } });
     expect(JSON.stringify(outcome)).not.toMatch(/fixture-secret|private\.invalid|Bearer|github\.com/);
     expect(structuredClone(outcome)).toEqual(outcome);
     const afterExec = calls.slice(calls.indexOf("exec") + 1);

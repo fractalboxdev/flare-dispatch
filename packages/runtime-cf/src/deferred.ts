@@ -79,6 +79,8 @@ export const ChildRunsDeferred: Layer.Layer<ChildRuns> = Layer.succeed(
       Effect.die(`spawnChildRun: no RUNS_WORKFLOW binding on this runtime (run="${run}")`),
     handoffAdmission: () =>
       Effect.die("handoffChildAdmission: no RUNS_WORKFLOW binding on this runtime"),
+    spendGate: (run) =>
+      Effect.die(`fanOut: no RUNS_WORKFLOW binding on this runtime (run="${run}")`),
     poll: () => Effect.die("waitForChildren: no RUNS_WORKFLOW binding on this runtime"),
   }))(),
 );
@@ -127,6 +129,9 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
     readTextFile: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     // `branchHead` has no empty answer at all — any string would be read as a SHA.
     branchHead: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    // An empty PR list is a real answer — "no pull request" — so it fails too.
+    commitPullRequests: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
+    pullRequest: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     appendMeasureNote: () => Effect.fail(new GitHubApiError({ status: 0, reason: "unauthorized" })),
     // `issues` is the same class: an empty list reads as "nothing to triage",
     // which a scheduled run would act on by reporting a clean estate.
@@ -153,6 +158,10 @@ export const GithubDeferred: Layer.Layer<Github> = Layer.succeed(
       Effect.logInfo(
         `github.closeIssueAsDuplicate skipped (no GitHub App credentials) — ${repo}#${issue} (dup of #${duplicateOf}) left open`,
       ),
+    closeBotIssue: ({ repo, issue }) =>
+      Effect.logInfo(
+        `github.closeBotIssue skipped (no GitHub App credentials) — ${repo}#${issue} left open`,
+      ).pipe(Effect.as({ closed: false, reason: "uncredentialed", number: issue } as const)),
     // `pullReview` is *reporting*, not correctness — a deploy without GitHub
     // App credentials degrades to a logged no-op (the same posture as the no-op
     // `Checks` Layer), never failing an otherwise-green run. The live

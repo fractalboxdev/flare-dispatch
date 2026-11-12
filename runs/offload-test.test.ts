@@ -469,6 +469,16 @@ describe("offload-test", () => {
     ).toBe(false);
   });
 
+  it("optIn — names the keys resolve-command decides on; none when the dispatch carries a command", () => {
+    const input = offloadTest.triggers![0]!.inputs({ payload: prPayload() });
+    expect(offloadTest.optIn?.({ input })).toEqual([
+      "offload-test.command:owner/name",
+      "offload-test.command",
+      "offload-test.stages:owner/name",
+    ]);
+    expect(offloadTest.optIn?.({ input: { ...input, command: "pnpm test" } })).toEqual([]);
+  });
+
   it.effect(
     "command resolution — a dispatch without `command` resolves it from CONFIG_KV (per-repo wins over the default)",
     () => {
@@ -561,6 +571,94 @@ describe("offload-test", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it("webhook trigger — carries the pull request's base branch", () => {
+    const trigger = offloadTest.triggers?.[0];
+    const payload = prPayload({
+      pull_request: {
+        draft: false,
+        base: { ref: "main" },
+        head: { sha: "abcdef0123456789cafe" },
+        user: { login: "alice" },
+      },
+    });
+    expect(trigger?.inputs({ payload })).toMatchObject({ baseRef: "main" });
+  });
+
+  it.effect(
+    "base scoping — a pull request into a base `offload-test.bases:<repo>` leaves out skips with RunSkipped before checkout",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { "pnpm test": { exitCode: 0 } },
+        config: {
+          "offload-test.bases:owner/name": "main, release",
+          "offload-test.command:owner/name": "pnpm test",
+        },
+      });
+      const input = {
+        repo: "owner/name",
+        sha: "abc123",
+        secrets: [] as readonly string[],
+        failOnNonZeroExit: true,
+        baseRef: "v2",
+      };
+
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(offloadTest.run(input));
+        const failure = Exit.isFailure(exit)
+          ? Option.getOrUndefined(Cause.failureOption(exit.cause))
+          : undefined;
+        expect((failure as { _tag?: string })?._tag).toBe("RunSkipped");
+        expect((failure as { reason?: string })?.reason).toContain("offload-test.bases:owner/name");
+        expect((failure as { reason?: string })?.reason).toContain("`v2`");
+        expect(handles.sandbox.clones).toHaveLength(0);
+        expect(handles.sandbox.execs).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("base scoping — a listed base runs the suite", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "pnpm test": { exitCode: 0 } },
+      config: {
+        "offload-test.bases:owner/name": "main",
+        "offload-test.command:owner/name": "pnpm test",
+      },
+    });
+    const input = {
+      repo: "owner/name",
+      sha: "abc123",
+      secrets: [] as readonly string[],
+      failOnNonZeroExit: true,
+      baseRef: "main",
+    };
+
+    return Effect.gen(function* () {
+      const result = yield* offloadTest.run(input);
+      expect(result.exitCode).toBe(0);
+      expect(handles.sandbox.execs.map((e) => e.command)).toContain("pnpm test");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("base scoping — no `offload-test.bases` key runs every base", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { "pnpm test": { exitCode: 0 } },
+      config: { "offload-test.command:owner/name": "pnpm test" },
+    });
+    const input = {
+      repo: "owner/name",
+      sha: "abc123",
+      secrets: [] as readonly string[],
+      failOnNonZeroExit: true,
+      baseRef: "v2",
+    };
+
+    return Effect.gen(function* () {
+      const result = yield* offloadTest.run(input);
+      expect(result.exitCode).toBe(0);
+      expect(handles.sandbox.execs.map((e) => e.command)).toContain("pnpm test");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect(
     "command resolution — an Action dispatch passing an empty `command` fails fast with StepFailed",
@@ -1861,4 +1959,12 @@ describe("offload-test source determinism", () => {
       expect(code).not.toMatch(/\bMath\s*\.\s*random\b/);
     }),
   );
+});
+
+describe("run ceiling (issue #42)", () => {
+  it("covers one documented 1800 s exec plus setup, and bounds its retries", () => {
+    // Four aligned 1800 s exec attempts ran 3h11m; the ceiling ends that at an hour.
+    expect(offloadTest.limits.maxDurationSec).toBeGreaterThanOrEqual(3600);
+    expect(offloadTest.limits.maxDurationSec).toBeLessThan(4 * 1800);
+  });
 });

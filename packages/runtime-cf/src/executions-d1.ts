@@ -45,8 +45,13 @@
 //
 // Spec: specs/05-byoc.md § D1 schema, specs/pm/plan.md § PR4.
 
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schedule } from "effect";
 import { Executions, type ExecutionsService } from "@fractalboxdev/flare-dispatch-core";
+
+/** Five retries, 200 ms doubling: about 6 s of D1 unavailability absorbed. */
+const WRITE_RETRY = Schedule.exponential("200 millis").pipe(
+  Schedule.intersect(Schedule.recurs(5)),
+);
 
 /**
  * The run-invocation context the `executions` row needs but the core
@@ -79,11 +84,16 @@ export const makeD1ExecutionsLive = (
   // contract is `Effect.Effect<void>` (no typed error), so a write failure
   // surfaces as a defect: a D1 outage mid-run is genuinely exceptional and
   // should fail the execution loudly, not be silently swallowed.
+  //
+  // Every statement here is idempotent (see "Replay idempotency"), so a
+  // rejected write retries before it dies: a transient D1 fault on the
+  // terminal `finishExecution` otherwise strands the row in `running`, and
+  // the parent join and the check-run wait on a verdict that never lands.
   const run = (label: string, stmt: () => Promise<D1Result | D1Response>): Effect.Effect<void> =>
     Effect.tryPromise({
       try: () => stmt().then(() => undefined),
       catch: (cause) => new Error(`D1ExecutionsLive: ${label} failed`, { cause }),
-    }).pipe(Effect.orDie);
+    }).pipe(Effect.retry(WRITE_RETRY), Effect.orDie);
 
   const service: ExecutionsService = {
     startExecution: ({ id, run: runName, startedAt, parentExecutionId, attempt, retryOf }) =>
@@ -118,13 +128,13 @@ export const makeD1ExecutionsLive = (
       ),
 
     finishExecution: ({ id, completedAt, status, summaryJson }) =>
-      run("finishExecution", () =>
-        summaryJson === undefined
+      Effect.tryPromise({
+        try: () => (summaryJson === undefined
           ? db
               .prepare(
                 `UPDATE executions
                    SET status = ?, completed_at = ?
-                 WHERE id = ?`,
+                 WHERE id = ? AND status = 'running'`,
               )
               .bind(status, completedAt, id)
               .run()
@@ -132,11 +142,12 @@ export const makeD1ExecutionsLive = (
               .prepare(
                 `UPDATE executions
                    SET status = ?, completed_at = ?, summary_json = ?
-                 WHERE id = ?`,
+                 WHERE id = ? AND status = 'running'`,
               )
               .bind(status, completedAt, summaryJson, id)
-              .run(),
-      ),
+              .run()).then((result) => result.meta.changes > 0),
+        catch: (cause) => new Error("D1ExecutionsLive: finishExecution failed", { cause }),
+      }).pipe(Effect.retry(WRITE_RETRY), Effect.orDie),
 
     startStep: ({ executionId, name, startedAt }) =>
       run("startStep", () =>

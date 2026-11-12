@@ -45,6 +45,7 @@ import { handleProductDemo } from "./routes/product-demos";
 import { handleReplay } from "./routes/replay";
 import { handleGithubWebhook } from "./routes/webhook";
 import { handleSignalsWebhook } from "./routes/signals-webhook";
+import { handleSpend, readSpendNow, spendLine, spendView } from "./routes/spend";
 
 /** `owner/repo` slug for the dashboard source link. */
 const REPO_SLUG = "fractalbox/flare-dispatch";
@@ -151,6 +152,21 @@ const route = (method: "GET" | "POST", produce: Produce, opts?: { readonly viewe
   });
 
 const decode = (params: Params, key: string): string => decodeURIComponent(params[key] ?? "");
+
+/**
+ * The log file name of `GET /v1/executions/:id/logs/<file>`, from the raw
+ * pathname: a chunk name holds `/`, linked either encoded (`%2F`) or literal.
+ * Decoded once, whole, so empty and dot segments reach the grammar check
+ * intact; a malformed escape yields `""`, which the grammar refuses.
+ */
+const logFileParam = (url: URL): string => {
+  const raw = /^\/v1\/executions\/[^/]*\/logs\/(.*)$/.exec(url.pathname)?.[1] ?? "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return "";
+  }
+};
 
 /**
  * A GET viewer route whose handler is itself an Effect over the ports (the
@@ -307,6 +323,7 @@ const dashboardData = Effect.gen(function* () {
         logsUrl: Option.getOrNull(logsUrl),
         demosUrl: Option.getOrNull(demosUrl),
         selfHealPrUrl,
+        supersededBy: row.superseded_by ?? null,
       } satisfies DashboardRow;
     }),
   );
@@ -353,6 +370,8 @@ const appShellRoute = Effect.gen(function* () {
   }
 
   const { origin, rows, filters, pagination } = yield* dashboardData;
+  // The spend line is a read beside the list, never a reason the page fails.
+  const spend = yield* readSpendNow(env).pipe(Effect.option);
   const html = renderDashboard({
     origin,
     rows,
@@ -360,6 +379,7 @@ const appShellRoute = Effect.gen(function* () {
     pagination,
     nowMs: Date.now(),
     repoSlug: REPO_SLUG,
+    ...(Option.isSome(spend) ? { spendLine: spendLine(spend.value) } : {}),
   });
   return HttpServerResponse.raw(html, {
     status: 200,
@@ -381,8 +401,13 @@ const dashboardJsonRoute = Effect.gen(function* () {
   if (request.method !== "GET") return methodNotAllowed;
 
   const { origin, rows, filters, pagination } = yield* dashboardData;
+  const env = yield* CurrentEnv;
+  const spend = yield* readSpendNow(env).pipe(
+    Effect.map((status) => ({ ...spendView(status), line: spendLine(status) })),
+    Effect.orElseSucceed(() => null),
+  );
   return HttpServerResponse.raw(
-    JSON.stringify({ origin, repoSlug: REPO_SLUG, rows, filters, pagination }),
+    JSON.stringify({ origin, repoSlug: REPO_SLUG, rows, filters, pagination, spend }),
     {
       status: 200,
       headers: { "content-type": "application/json; charset=utf-8" },
@@ -543,10 +568,8 @@ const router = baseRouter.pipe(
     routeEffect(({ request, url }) => handleExecutionsList(request, url)),
   ),
   HttpRouter.all(
-    "/v1/executions/:id/logs/:file",
-    routeEffect(({ params, url }) =>
-      handleLogFile(decode(params, "id"), decode(params, "file"), url),
-    ),
+    "/v1/executions/:id/logs/*",
+    routeEffect(({ params, url }) => handleLogFile(decode(params, "id"), logFileParam(url), url)),
   ),
   HttpRouter.all(
     "/v1/executions/:id/logs",
@@ -572,6 +595,12 @@ const router = baseRouter.pipe(
   ),
   HttpRouter.all("/v1/dashboard.json", dashboardJsonRoute),
   HttpRouter.all("/v1/analytics.json", analyticsJsonRoute),
+  // The spend guard's month-to-date view (ADR-0006) — Access-gated like the
+  // executions and analytics reads.
+  HttpRouter.all(
+    "/api/spend",
+    route("GET", ({ env }) => handleSpend(env), { viewer: true }),
+  ),
   // Container-side OTP read — TOKEN-ONLY (no `viewer: true`): a sandbox can't
   // carry an Access JWT, so the expiring capability token + burn-after-read are
   // the gate. See routes/mailbox.ts for the posture.

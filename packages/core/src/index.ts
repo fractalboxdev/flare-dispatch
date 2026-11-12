@@ -17,9 +17,11 @@ export {
   type RunSpec,
   type RunLimits,
   type CooldownSpec,
+  type OptInContext,
   type HumanGateSpec,
   type SandboxImage,
   type SerializeSpec,
+  type SupersedeSpec,
   type TriggerSpec,
   type ScheduleSpec,
   type ScheduleContext,
@@ -81,10 +83,51 @@ export {
 export {
   decideAdmission,
   admissionAcquireAttempts,
+  admissionPollSleepMs,
+  admissionJitterMs,
+  ADMISSION_CLASS_DEFAULT,
+  ADMISSION_POLL_MIN_MS,
+  ADMISSION_POLL_MAX_MS,
+  ADMISSION_JITTER_MAX_MS,
+  type AdmissionClass,
   type AdmissionPool,
   type AdmissionObservation,
   type AdmissionDecision,
 } from "./run-admission";
+
+// --- Spend guard (pure budget + burn-ceiling math, ADR-0006) -----------------
+export {
+  SPEND_BUDGET_MONTHLY_USD_DEFAULT,
+  SPEND_BURN_MAX_USD_PER_HOUR_DEFAULT,
+  SPEND_OVERHEAD_FACTOR_DEFAULT,
+  SPEND_WARN_RATIO_DEFAULT,
+  SPEND_UNLIMITED,
+  SPEND_BUDGET_KV_KEY,
+  SPEND_BURN_KV_KEY,
+  spendWarnedKvKey,
+  parseUsdLimit,
+  resolveSpendLimits,
+  spendMonth,
+  monthToDateMicroUsd,
+  formatUsd,
+  decideBudget,
+  fitsBurnCeiling,
+  spendCeilingReason,
+  type SpendLimits,
+  type SpendVars,
+  type SpendOverrides,
+  type SpendMonth,
+  type SpendReading,
+  type BudgetDecision,
+} from "./spend";
+
+// --- Run ceiling (limits.maxDurationSec, replay-stable) ----------------------
+export { withRunCeiling, type RunCeiling } from "./run-ceiling";
+export {
+  EngineInterrupted,
+  isEngineInterruptedCause,
+  isEngineInterruption,
+} from "./engine-interruption";
 
 // --- Agent token-budget (pure decision logic for the AgentBudget DO) ----------
 export {
@@ -116,7 +159,15 @@ export {
 export { browser, Browser, type BrowserService, type CDPSession } from "./services/browser";
 export { cache, Cache, type CacheService } from "./services/cache";
 export { artifact, Artifact, type ArtifactService, type ArtifactInfo } from "./services/artifact";
-export { io, IO, type IOService, type LogLevel, type PriorExecution } from "./services/io";
+export {
+  DEPLOYED_VERSION_ENV,
+  EXECUTION_CREATED_AT_ENV,
+  io,
+  IO,
+  type IOService,
+  type LogLevel,
+  type PriorExecution,
+} from "./services/io";
 export { config, Config, type ConfigService } from "./services/config";
 export { secrets, Secrets, type SecretsService } from "./services/secrets";
 export {
@@ -165,6 +216,7 @@ export {
   github,
   Github,
   type GithubService,
+  type CommitPullRequest,
   type IssueCreated,
   type IssueRef,
   type PullRequestHistoryRef,
@@ -176,6 +228,8 @@ export {
   type DraftPullRequestResult,
   type CloseDraftPullRequest,
   type CloseDraftPullRequestResult,
+  type CloseBotIssue,
+  type CloseBotIssueResult,
   type CreateRelease,
   type ReleaseResult,
   type PublishReleaseAsset,
@@ -205,6 +259,9 @@ export {
   type ChecksService,
   type CheckConclusion,
   type CheckOutput,
+  type CheckRunState,
+  type CheckDelivery,
+  type CheckConcludeOptions,
 } from "./services/checks";
 export {
   spawnChildRun,
@@ -282,6 +339,9 @@ export {
   INSTANCE_SPECS,
   CONTAINER_VCPU_MICRO_USD_PER_SEC,
   CONTAINER_GIB_MICRO_USD_PER_SEC,
+  CONTAINER_DISK_MICRO_USD_PER_SEC,
+  containerMicroUsdPerSec,
+  containerMicroUsdPerHour,
   modelRate,
   modelCost,
   containerCostMicroUsd,

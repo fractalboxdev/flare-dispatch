@@ -28,7 +28,8 @@
 //
 //   * The App credentials (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`) come from
 //     `env`; the installation id rides in the dispatch payload's
-//     `github.installation_id` (PR5's dispatch route fills it in). When any of
+//     `github.installation_id` (PR5's dispatch route fills it in; the
+//     scheduled path resolves it for a run that targets a branch). When any of
 //     the three is absent — local dev without secrets, or a dispatch with no
 //     installation — `makeCFRuntimeLive` selects the *no-op* `Checks` Layer:
 //     the execution runs to completion and records its D1 rows, only the PR
@@ -43,48 +44,85 @@
 //       specs/04-gha-integration.md § Check-runs callback,
 //       specs/pm/plan.md § PR4 + § PR6.
 
+import { checkConclusion } from "./terminal-verdict";
+import { openCheckRun, persistCheckRunId } from "./check-run-open";
+import { concludeOpenChildCheckRuns, readChildCheckRuns } from "./child-check-runs";
+import {
+  cancelSupersededTree,
+  enterSupersession,
+  type SupersedePorts,
+  withSupersessionRelease,
+} from "./supersede";
+import { closeGroup, isCloseGroupPayload } from "./pr-close";
+import { claimUnlessParentEnded, isParentEnded, leaveQueueForEndedParent } from "./admission-parent";
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { getSandbox } from "@cloudflare/sandbox";
-import { Duration, Effect, Exit, Runtime, Schedule, Schema } from "effect";
+import { Duration, Effect, Exit, identity, Runtime, Schedule, Schema } from "effect";
 import {
   admissionAcquireAttempts,
-  type AdmissionPool,
+  ADMISSION_CLASS_DEFAULT,
+  admissionJitterMs,
+  admissionPollSleepMs,
   AdmissionTimedOut,
   Checks,
   decideAdmission,
+  DEPLOYED_VERSION_ENV,
   Email,
+  EXECUTION_CREATED_AT_ENV,
   Executions,
+  EngineInterrupted,
+  isEngineInterruptedCause,
+  isEngineInterruption,
+  withRunCeiling,
+  RunSkipped,
+  spendCeilingReason,
+  type AdmissionObservation,
+  type SpendLimits,
   type RunContext,
   type RunError,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
+  makeWorkflowEngine,
   ADMISSION_MAX_QUEUE_AGE_MS,
   ADMISSION_POLL_EVERY_MS,
   type BrowserRenderingConfig,
   type ChecksGithubConfig,
   describeOutcome,
   type EmailCloudflareConfig,
+  hourlyRateForSandboxImage,
   instanceForSandboxImage,
   LEASE_HEARTBEAT_EVERY_MS,
   makeCFRuntimeLive,
+  makeChecksGithubLive,
   makeContainerLeaseD1,
   makeRunAdmissionD1,
+  makeRunSupersedeD1,
   makeSerialQueueD1,
   makeWritebackTokenMinter,
   previewSafeSandboxId,
+  readSpendLimits,
+  readSpendStatus,
   recordExecutionCost,
-  resolveAdmissionCap,
   runSerialGate,
   runWriteback,
+  type SpendStatus,
+  warnSpendOnce,
   type WritebackOutcome,
 } from "@fractalboxdev/flare-dispatch-runtime-cf";
 import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
 import { preAssertedApproval, resolveTargets, runGrant, runsOnFacade } from "./grant-catalog";
-import { selectSandboxNs } from "./sandbox-routing";
-import { queuedSummary, serialQueuedSummary } from "./admission-summary";
-import { appendFailureSummary, failureSummaryMd, runSkippedReason } from "./failure-summary";
+import { selectAdmission, selectSandboxNs } from "./sandbox-routing";
+import { nextPositionReport, type PositionReport, queuedSummary, serialQueuedSummary } from "./admission-summary";
+import {
+  appendFailureSummary,
+  type FailedStepRow,
+  failingStepMd,
+  failureSummaryMd,
+  runSkippedReason,
+  unrecordedFailureTag,
+} from "./failure-summary";
 import { renderResultEmail } from "./notify";
 import { workflowDashboardUrl } from "./dashboard-url";
 import { checkRunNameFor, checkRunTitleFor } from "./check-name";
@@ -92,6 +130,9 @@ import { buildLogsUrl, resolveLogLinkSecret, signLogToken } from "./log-token";
 import { logLinksSuffix, startedSummary } from "./summary-links";
 import { resolveMailboxLinkSecret, signMailboxToken } from "./mailbox-token";
 import { resolveAgentProxySecret, signAgentToken } from "./agent-token";
+import { compileCacheOverrides, resolveCompileCacheSecret } from "./compile-cache-token";
+import { ledgersOf } from "./routes/compile-cache";
+import { revokeAtRunEnd } from "./run-end";
 import {
   deliverSlackVerdict,
   emitSlackNotice,
@@ -271,11 +312,82 @@ const resolveEmailConfig = (env: Env): EmailCloudflareConfig | undefined => {
 };
 
 /**
+ * The live ports `cancelSupersededTree` stops a tree through: the Workflow
+ * binding, the container (or substrate) each row's run uses, and the
+ * check-runs service.
+ */
+const liveSupersedePorts = (
+  env: Env,
+  store: SupersedePorts["store"],
+  checks: SupersedePorts["checks"],
+): SupersedePorts => ({
+  store,
+  terminate: async (id) => {
+    const instance = await env.RUNS_WORKFLOW.get(id);
+    const { status } = await instance.status();
+    if (status !== "complete" && status !== "errored" && status !== "terminated") {
+      await instance.terminate();
+    }
+  },
+  destroySandbox: (row) => {
+    const rowRun = lookupRun(row.run);
+    const substrate =
+      env.SUBSTRATE_BACKEND === "on" && runsOnFacade(row.run) ? env.SUBSTRATE : undefined;
+    return substrate !== undefined
+      ? substrate.abort(row.id).then(() => undefined)
+      : getSandbox(
+          selectSandboxNs(rowRun?.sandboxImage, {
+            lean: env.RUNS_SANDBOX,
+            browser: env.RUNS_SANDBOX_BROWSER,
+            agent: env.RUNS_SANDBOX_AGENT,
+            release: env.RUNS_SANDBOX_RELEASE,
+          }),
+          previewSafeSandboxId(row.id),
+        ).destroy();
+  },
+  checks,
+});
+
+/**
  * The Cloudflare Workflows name backing `RUNS_WORKFLOW` — the dashboard
  * URL segment. MUST stay in sync with `wrangler.jsonc` → `workflows[0].name`.
  */
 export class RunWorkflow extends WorkflowEntrypoint<Env> {
-  override async run(event: WorkflowEvent<unknown>, step: WorkflowStep): Promise<void> {
+  override async run(event: WorkflowEvent<unknown>, platformStep: WorkflowStep): Promise<void> {
+    // Every durable call this invocation makes — the run body's, through the
+    // runtime, and the dispatcher's own — goes through one engine, so one
+    // engine rejection ends all of them (runtime-cf's workflow-engine.ts).
+    const engine = Effect.runSync(makeWorkflowEngine(platformStep));
+    // A pull request's close: cancel its group's live members (pr-close.ts).
+    // No execution row, no admission — the instance holds no container.
+    if (isCloseGroupPayload(event.payload)) {
+      const close = event.payload.closeGroup;
+      const env = this.env;
+      const store = makeRunSupersedeD1(env.RUNS_METADATA);
+      const stepDo = <T>(name: string, body: () => Promise<T>): Effect.Effect<T> =>
+        engine.do(name, body, identity).pipe(Effect.orDie);
+      const checksConfig = resolveChecksConfig(env, {
+        repo: close.repo,
+        ref: "refs/heads/main",
+        sha: "",
+        ...(close.installation_id !== undefined ? { installation_id: close.installation_id } : {}),
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const checks = yield* Checks;
+          const cancelled = yield* closeGroup(close, {
+            stepDo,
+            store,
+            cancelTree: (rootId, markerId) =>
+              cancelSupersededTree(rootId, markerId, close.group, liveSupersedePorts(env, store, checks)),
+          });
+          yield* Effect.logInfo(
+            `pull request closed: ${close.group} — cancelled ${cancelled.length} execution(s)${cancelled.length > 0 ? `: ${cancelled.join(", ")}` : ""}`,
+          );
+        }).pipe(Effect.provide(makeChecksGithubLive(checksConfig))),
+      );
+      return;
+    }
     // Decode the dispatch payload — a malformed event is a hard failure.
     const payload: DispatchPayload = Schema.decodeUnknownSync(DispatchPayload)(event.payload);
 
@@ -333,19 +445,15 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     });
 
     // The admission-semaphore pool key — the SAME routing rule as the binding
-    // selection above (browser/agent image without a bound container degrades to
-    // lean), so a run is always metered against the pool whose container it will
-    // actually consume.
-    const admissionPool = selectSandboxNs<AdmissionPool>(run.sandboxImage, {
-      lean: "lean",
-      browser: this.env.RUNS_SANDBOX_BROWSER !== undefined ? "browser" : undefined,
-      agent: this.env.RUNS_SANDBOX_AGENT !== undefined ? "agent" : undefined,
-      release: this.env.RUNS_SANDBOX_RELEASE !== undefined ? "release" : undefined,
-    });
-    // The per-pool slot cap, from the plain `ADMISSION_CAP` wrangler var
-    // (one var for both pools; keep it ≤ each container's `max_instances` —
-    // see the paired comments in wrangler.jsonc). Unset/unparsable → 16.
-    const admissionCap = resolveAdmissionCap(this.env.ADMISSION_CAP);
+    // selection above (browser/agent/release image without a bound container
+    // degrades to lean), so a run is always metered against the pool whose
+    // container it will actually consume — and that pool's slot cap: the plain
+    // `ADMISSION_CAP` wrangler var (unset/unparsable → 16), and for the agent,
+    // browser and release pools the smaller of that and `ADMISSION_CAP_AGENT` /
+    // `ADMISSION_CAP_BROWSER` / `ADMISSION_CAP_RELEASE` (unset → 8, 16, 8).
+    // Keep every cap ≤ its container's
+    // `max_instances` (sandbox-routing.test.ts reads wrangler.jsonc to check).
+    const { pool: admissionPool, cap: admissionCap } = selectAdmission(run.sandboxImage, this.env);
 
     // Build the per-execution live runtime: D1 + R2 + Containers + Checks, with
     // `StepRunner` bound to *this* Workflow's `step` so each `step(...)` in the
@@ -368,11 +476,14 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // output title carries the attempt so a re-run reads as one.
     const attempt = payload.attempt ?? 1;
     const checkRunTitle = checkRunTitleFor(checkRunName, attempt);
-    // The Cloudflare Workflows instance page for this execution — the "Details"
-    // link on the GitHub check-run + a markdown link in its summary. `undefined`
-    // when CLOUDFLARE_ACCOUNT_ID is unset (BYOC default): the check-run renders
-    // exactly as before, no link.
-    const detailsUrl = workflowDashboardUrl(this.env.CLOUDFLARE_ACCOUNT_ID, payload.executionId);
+    // The installation the check-run posts under — `null` on a deploy or
+    // dispatch with no live `Checks` Layer, where no verdict is owed.
+    const deliveryInstallationId = resolveChecksConfig(this.env, payload.github)?.installationId ?? null;
+    // The Cloudflare Workflows instance page for this execution, for the
+    // operator's private Slack verdict only. A check-run never carries it: the
+    // URL embeds the deploying account's id (summary-links.ts). `undefined`
+    // when CLOUDFLARE_ACCOUNT_ID is unset.
+    const slackDetailsUrl = workflowDashboardUrl(this.env.CLOUDFLARE_ACCOUNT_ID, payload.executionId);
     // The public origin absolutizing artifact URLs: the dispatch request's
     // origin (captured by the route) wins; `PUBLIC_ORIGIN` covers payloads
     // that predate the field or came from the cron path.
@@ -394,12 +505,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       publicOrigin !== undefined && logToken !== undefined
         ? buildLogsUrl(publicOrigin, payload.executionId, logToken)
         : undefined;
-    // The check-run's "Details" link: prefer the in-product log viewer
-    // (`<PUBLIC_ORIGIN>/logs/<id>?t=…`) over the operator-only Cloudflare
-    // dashboard, so a PR reviewer lands on the readable surface they can reach
-    // rather than a CF account page they have no access to. Falls back to the
-    // dashboard URL when there is no public origin / log-link secret.
-    const checkDetailsUrl = logsBaseUrl ?? detailsUrl;
+    // The check-run's "Details" link: the in-product log viewer
+    // (`<PUBLIC_ORIGIN>/logs/<id>?t=…`), the surface a PR reviewer can open.
+    // Never the Cloudflare dashboard, whose URL carries the deploying account's
+    // id onto a check-run as public as the repository (summary-links.ts).
+    const checkDetailsUrl = logsBaseUrl;
     // The product-demo viewer (`/demos/:execution`) — only meaningful for a
     // `product-demo` run, and only once it succeeds (a failed run persists no
     // `summary_json` for the page to render). Appended to the check-run success
@@ -416,10 +526,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // alike (summary-links.ts). Assembled once, up here, so the two posting
     // sites below cannot drift apart again (the opener historically carried
     // only the Cloudflare link).
-    const summaryLinks = {
-      ...(detailsUrl !== undefined ? { detailsUrl } : {}),
-      ...(logsBaseUrl !== undefined ? { logsUrl: logsBaseUrl } : {}),
-    };
+    const summaryLinks = logsBaseUrl !== undefined ? { logsUrl: logsBaseUrl } : {};
     const logsSuffix = logLinksSuffix(summaryLinks);
 
     // Self-heal agent-tier setup (specs/08-self-healing.md § 6.3): for a
@@ -430,6 +537,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     // is a deterministic HMAC of the execution id, and `AgentBudget.init` ignores
     // a refill once spending has begun.
     let configOverrides: Record<string, string> | undefined;
+    let agentBudgetArmed = false;
     if (
       run.sandboxImage === "agent" &&
       this.env.AGENT_BUDGET !== undefined &&
@@ -458,20 +566,35 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           "self-heal.proxy-url": proxyUrl,
           "self-heal.agent-token": token,
         };
+        agentBudgetArmed = true;
       }
     }
 
-    // Per-repo container transport — the canary knob for `rpc`.
-    //
-    // The SDK's streaming file APIs exist only on its `rpc` client (`http` is
-    // the "route-based compatibility" path), which is why the R2 dependency
-    // cache misses on every run: its restore hands `writeFile` a stream, the SDK
-    // routes any stream to `writeFileStream`, and that raises off `rpc`.
-    // `SANDBOX_TRANSPORT=rpc` as a Worker var would fix it for every repo at
-    // once; this lets one prove it first.
-    //
-    // A value the SDK does not recognise is ignored by it with a warning, so a
-    // typo degrades to the default rather than breaking the run.
+    // Shared compile cache (routes/compile-cache.ts): a run whose definition
+    // names a lane gets the cache endpoint and a token scoped to this
+    // repository, execution and lane. The token derives from the instance's
+    // creation time, so every invocation mints the same one and a check
+    // command's fingerprint, which covers its env, holds across replays.
+    const cacheQueueAgeSec =
+      typeof run.limits.admissionMaxQueueAgeSec === "function"
+        ? run.limits.admissionMaxQueueAgeSec(input)
+        : (run.limits.admissionMaxQueueAgeSec ?? ADMISSION_MAX_QUEUE_AGE_MS / 1000);
+    const cacheGrant = await compileCacheOverrides({
+      lane: run.compileCache?.(input),
+      repo: payload.github.repo,
+      executionId: payload.executionId,
+      createdAtMs: event.timestamp.getTime(),
+      ceilingSec: (Number.isFinite(cacheQueueAgeSec) ? cacheQueueAgeSec : 0) + run.limits.maxDurationSec,
+      publicOrigin,
+      secret: resolveCompileCacheSecret(this.env),
+    });
+    if (cacheGrant !== undefined) configOverrides = { ...configOverrides, ...cacheGrant.overrides };
+
+    // Per-repo container transport pin. It outranks the Worker-wide
+    // `SANDBOX_TRANSPORT` in either direction, and with neither set containers
+    // run on `rpc`, the one transport that streams a cache archive in
+    // (`resolveSandboxTransport`). A value that is not a transport name is
+    // skipped, so a typo falls through rather than breaking the run.
     // Container path only — the substrate owns its own transport, so a run
     // there should not pay a KV read to be told about one it cannot use.
     const sandboxTransport =
@@ -517,10 +640,21 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
               };
             },
           }),
-      workflowStep: step,
+      engine,
       // The `Workflow` binding backs the `childRuns` capability — a run can
       // `spawnChildRun` / `fanOut` to independent child `RunWorkflow` instances.
       runsWorkflow: this.env.RUNS_WORKFLOW,
+      // A fan-out parent reads spend before it spawns children: over the
+      // monthly budget it skips and spawns none (ADR-0006). `fanOut` calls
+      // this inside its spawn step, so a replay reads the checkpoint.
+      spendGate: async () => {
+        const status = await Effect.runPromise(
+          readSpendLimits(this.env.CONFIG_KV, this.env).pipe(
+            Effect.flatMap((limits) => readSpendStatus(this.env.RUNS_METADATA, limits, Date.now())),
+          ),
+        );
+        return status.decision._kind === "closed" ? status.decision.reason : undefined;
+      },
       executionId: payload.executionId,
       execution: {
         repo: payload.github.repo,
@@ -597,13 +731,19 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         ? { aiGatewayAuthToken: this.env.AI_GATEWAY_AUTH_TOKEN }
         : {}),
       sandboxPreviewHostname: this.env.SANDBOX_PREVIEW_HOSTNAME,
-      ...(sandboxTransport === "rpc" ||
-      sandboxTransport === "websocket" ||
-      sandboxTransport === "http"
-        ? { sandboxTransport }
+      ...(sandboxTransport != null ? { sandboxTransport } : {}),
+      ...(this.env.SANDBOX_TRANSPORT !== undefined
+        ? { sandboxTransportDefault: this.env.SANDBOX_TRANSPORT }
         : {}),
       ...(publicOrigin !== undefined ? { publicOrigin } : {}),
       ...(logsBaseUrl !== undefined ? { logsViewerBase: logsBaseUrl } : {}),
+      // When the engine created this instance, and which Worker version runs
+      // this invocation: a replay after a deploy reports the new version
+      // beside the original creation time.
+      ioVars: {
+        [EXECUTION_CREATED_AT_ENV]: event.timestamp.toISOString(),
+        [DEPLOYED_VERSION_ENV]: this.env.VERSION_METADATA?.id ?? "unknown",
+      },
       // Wire the live OIDC signing Layer when both the JWK + issuer URL are
       // configured. Subject defaults to `<run>:<execution-id>` so an IAM
       // trust policy can scope a role to a single run+execution.
@@ -625,6 +765,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
     //      recorded `failure` row + a `failure` check-run conclusion — never a
     //      thrown Workflow infra error);
     //   4. write the terminal `executions` status + complete the check-run.
+    // Set when this invocation ends in an engine interruption — wherever it
+    // struck, the check-run open and admission included: the replay continues
+    // the execution, so this invocation leaves its post-run teardown alone.
+    let engineInterrupted = false;
     const program = Effect.gen(function* () {
       const executions = yield* Executions;
       const checks = yield* Checks;
@@ -642,31 +786,91 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         ...(payload.retryOf !== undefined ? { retryOf: payload.retryOf } : {}),
       });
 
-      // Open the check-run (`in_progress`). With no App config this resolves
-      // to the no-op sentinel id and posts nothing.
-      const checkRunId = yield* checks.create({
-        repo: payload.github.repo,
-        sha: payload.github.sha,
-        name: checkRunName,
-        ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
-        output: {
-          title: checkRunTitle,
-          // Both log links from the very first render (summary-links.ts) — a
-          // reviewer watching an in-progress check reaches the viewer without
-          // waiting for the verdict update.
-          summary: startedSummary(payload.executionId, summaryLinks),
-        },
+      // Wrap a raw CF durable step as an Effect. The check-run open, the
+      // admission gate and the run ceiling run their I/O in `step.do` /
+      // `step.sleep` (NOT the run DSL's StepRunner — these steps precede the
+      // run body) so every clock read + claim is checkpointed and a replay
+      // re-reads the recorded result. A rejected step promise is
+      // platform/infra breakage → defect (`orDie`), keeping the gate's typed
+      // error channel a clean `AdmissionTimedOut`; an engine interruption is
+      // the `EngineInterrupted` defect (runtime-cf's workflow-engine.ts).
+      const stepDo = <T>(name: string, body: () => Promise<T>): Effect.Effect<T> =>
+        engine.do(name, body, identity).pipe(Effect.orDie);
+      const stepSleep = (name: string, ms: number): Effect.Effect<void> =>
+        engine.sleep(name, ms, identity).pipe(Effect.orDie);
+
+      // Open the check-run (`in_progress`) once per execution — a replay reads
+      // the id back (check-run-open.ts). With no App config this resolves to
+      // the no-op sentinel id and posts nothing.
+      const checkRunId = yield* openCheckRun(
+        stepDo,
+        checks.create({
+          repo: payload.github.repo,
+          sha: payload.github.sha,
+          name: checkRunName,
+          ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
+          output: {
+            title: checkRunTitle,
+            // Both log links from the very first render (summary-links.ts) — a
+            // reviewer watching an in-progress check reaches the viewer without
+            // waiting for the verdict update.
+            summary: startedSummary(payload.executionId, summaryLinks),
+          },
+        }),
+      );
+      const supersessions = makeRunSupersedeD1(db);
+      // The canceller waits for this id before terminating the Workflow.
+      // If cancellation won during creation, the opener concludes the check.
+      const active = yield* persistCheckRunId(checkRunId, {
+        // The installation rides beside the id: it marks the row as owing a
+        // verdict on GitHub, which the reconcile sweep re-sends if the
+        // concluding write never lands (delivery-sweep.ts).
+        persist: (id) => Effect.tryPromise(() =>
+          db.prepare(`UPDATE executions SET check_run_id = ?, installation_id = ? WHERE id = ?`)
+            .bind(id, deliveryInstallationId, payload.executionId).run(),
+        ).pipe(Effect.retry(Schedule.once.pipe(Schedule.addDelay(() => "500 millis"))), Effect.asVoid, Effect.orDie),
+        status: supersessions.status(payload.executionId),
+        cancel: (id) => checks.update({
+          repo: payload.github.repo,
+          checkRunId: id,
+          conclusion: "cancelled",
+          output: { title: checkRunTitle, summary: "⊘ Cancelled — execution was superseded." },
+        }),
       });
-      // Persist the GitHub check-run id onto the `executions` row.
-      // D1 write for check_run_id — best-effort metadata, retry once on
-      // transient errors then die (the execution and check-run are already
-      // complete; losing the check_run_id on the D1 row is a minor loss).
-      yield* Effect.tryPromise(() =>
-        db
-          .prepare(`UPDATE executions SET check_run_id = ? WHERE id = ?`)
-          .bind(checkRunId, payload.executionId)
-          .run(),
-      ).pipe(Effect.retry(Schedule.once.pipe(Schedule.addDelay(() => "500 millis"))), Effect.orDie);
+      if (!active) return;
+
+      // --- Supersession (children of a cancelled parent; runs that declare `supersede`) ---
+      //
+      // Before it queues for a slot, a child of a cancelled parent ends itself
+      // `cancelled`, a member below a live higher-ranked one ends itself, and a
+      // higher-ranked member cancels every lower one with its children — so
+      // the slots those held are free when it asks for one (supersede.ts).
+      const supersedeSpec = run.supersede?.(input);
+      const entered = yield* enterSupersession(
+        {
+          executionId: payload.executionId,
+          ...(payload.parentExecutionId !== undefined
+            ? { parentExecutionId: payload.parentExecutionId }
+            : {}),
+          ...(payload.retryOf !== undefined ? { retryOf: payload.retryOf } : {}),
+          spec: supersedeSpec,
+        },
+        {
+          stepDo,
+          store: supersessions,
+          cancelTree: (olderId, group) =>
+            cancelSupersededTree(olderId, payload.executionId, group, liveSupersedePorts(env, supersessions, checks)),
+          concludeCancelled: (summary) =>
+            checks.update({
+              repo: payload.github.repo,
+              checkRunId,
+              conclusion: "cancelled",
+              ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
+              output: { title: checkRunTitle, summary },
+            }),
+        },
+      );
+      if (entered === "stood-down") return;
 
       // --- Global run admission (the per-pool semaphore, issue #109) -------
       //
@@ -697,42 +901,140 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         throw new Error(`Invalid admission queue age for run ${run.name}`);
       }
       const admissionMaxQueueAgeMs = admissionMaxQueueAgeSec * 1000;
-      // Wrap a raw CF durable step as an Effect. The gate runs its I/O in
-      // `step.do` / `step.sleep` (NOT the run DSL's StepRunner — these steps
-      // precede the run body) so every clock read + claim is checkpointed and
-      // a replay re-reads the recorded result. A rejected step promise is
-      // platform/infra breakage → defect (`orDie`), keeping the gate's typed
-      // error channel a clean `AdmissionTimedOut`.
-      // CF types `step.do<T extends Rpc.Serializable<T>>`; the admission step
-      // results are plain JSON records, so bridge through the simple
-      // `(name, callback)` view — the same narrowing `step-runner-cf.ts` uses
-      // for its `WorkflowStepLike`.
-      const stepDo = <T>(name: string, body: () => Promise<T>): Effect.Effect<T> =>
-        Effect.tryPromise(() =>
-          (step.do as unknown as (n: string, cb: () => Promise<T>) => Promise<T>)(name, body),
-        ).pipe(Effect.orDie);
+      // A queued admission timeout records an `admission` step failed
+      // `AdmissionTimedOut`, so a fan-out parent polling this child reads why
+      // it failed (`ChildStatusRecord.failureTag`) and stops spawning into a
+      // saturated pool.
+      const admissionTimedOut = (
+        error: AdmissionTimedOut,
+        enqueuedAt: number,
+        completedAt: number,
+      ): Effect.Effect<never, AdmissionTimedOut> =>
+        Effect.gen(function* () {
+          yield* executions.startStep({ executionId: payload.executionId, name: "admission", startedAt: enqueuedAt });
+          yield* executions.finishStep({
+            executionId: payload.executionId,
+            name: "admission",
+            completedAt,
+            status: "failure",
+            errorTag: error._tag,
+          });
+          return yield* Effect.fail(error);
+        });
+      // --- Spend guard (specs/adr/0006-spend-guard.md) -----------------------
+      //
+      // Admission reads month-to-date spend before it enqueues and again
+      // before each claim; at or over the monthly budget the run ends
+      // `RunSkipped` — a neutral check, a `skipped` row. The claim itself
+      // enforces the burn ceiling across every pool, at this run's container
+      // class rate. Every read sits in a `step.do`, so a replay reads the
+      // checkpointed answer.
+      const hourlyRateMicroUsd = hourlyRateForSandboxImage(admissionPool);
+      const spendCheck = (name: string, limits: SpendLimits) =>
+        Effect.gen(function* () {
+          const status: SpendStatus = yield* stepDo(name, () =>
+            Effect.runPromise(readSpendStatus(db, limits, Date.now())),
+          );
+          if (status.decision._kind === "closed") {
+            yield* Effect.logWarning(`spend.closed ${payload.executionId} — ${status.decision.reason}`);
+            return yield* Effect.fail(new RunSkipped({ reason: status.decision.reason }));
+          }
+          return status;
+        });
+      const admissionGate: Effect.Effect<void, AdmissionTimedOut | RunSkipped> = Effect.gen(function* () {
+        const limits = yield* stepDo("spend-limits", () =>
+          Effect.runPromise(readSpendLimits(env.CONFIG_KV, env)),
+        );
+        let spend = yield* spendCheck("spend-check-enqueue", limits);
+        const burnMaxMicroUsdPerHour = limits.burnMaxMicroUsdPerHour;
+        // The run's admission class (ADR-0009): interactive waiters are
+        // admitted ahead of batch ones in the same pool. The burn ceiling
+        // applies to both and never reorders the line.
+        const claimer = makeRunAdmissionD1(
+          db,
+          Date.now,
+          admissionCap,
+          { hourlyRateMicroUsd, burnMaxMicroUsdPerHour },
+          run.limits.admissionClass ?? ADMISSION_CLASS_DEFAULT,
+        );
+        // A queue timeout while the burn ceiling, not the pool cap, held the
+        // run back is a spend skip; under the cap alone it stays a failure.
+        const queueTimeout = (
+          observed: AdmissionObservation & { readonly now: number },
+          timedOut: AdmissionTimedOut,
+        ): Effect.Effect<never, AdmissionTimedOut | RunSkipped> =>
+          observed.ceilingHeld === true && burnMaxMicroUsdPerHour !== null
+            ? Effect.fail(
+                new RunSkipped({
+                  reason: spendCeilingReason({
+                    admittedMicroUsdPerHour: spend.reading.admittedMicroUsdPerHour,
+                    ownMicroUsdPerHour: hourlyRateMicroUsd,
+                    burnMaxMicroUsdPerHour,
+                  }),
+                }),
+              )
+            : admissionTimedOut(timedOut, enqueuedAt, observed.now);
 
-      const admissionGate: Effect.Effect<void, AdmissionTimedOut> = Effect.gen(function* () {
         // Enqueue — the row's `enqueued_at` (FIFO key + dispatch-age basis)
         // is read inside the step, so a replay sees the SAME timestamp.
         const { enqueuedAt } = yield* stepDo("admission-enqueue", () =>
           Effect.runPromise(
-            admissions.enqueue(payload.executionId, admissionPool, payload.parentExecutionId),
+            claimer.enqueue(payload.executionId, admissionPool, payload.parentExecutionId),
           ),
         );
 
         // Bounded claim/sleep loop uses a count, so the bound is replay-stable
-        // and trivial against the Workflows step cap (#83 precedent).
+        // and trivial against the Workflows step cap (#83 precedent). Each
+        // attempt is three steps (spend check, claim, sleep). The count is
+        // derived from the SHORTEST sleep, so it covers the queue age however
+        // the sleeps scale; a waiter sleeping longer reaches the age limit,
+        // read inside its claim step, in fewer attempts.
         const maxAttempts = admissionAcquireAttempts(
           admissionMaxQueueAgeMs,
           ADMISSION_POLL_EVERY_MS,
         );
-        let lastReportedPosition: number | undefined;
+        let lastReport: PositionReport | undefined;
 
         for (let i = 0; i < maxAttempts; i++) {
+          // A child reads its parent's row before each claim: once a parent
+          // that joins its children has ended, the child leaves the queue
+          // instead (admission-parent.ts).
+          spend = yield* spendCheck(`spend-check-${i}`, limits);
           const observed = yield* stepDo(`admission-claim-${i}`, () =>
-            Effect.runPromise(admissions.attempt(payload.executionId, admissionPool, enqueuedAt)),
+            claimUnlessParentEnded({
+              parentExecutionId: payload.parentExecutionId,
+              parentRow: (id) => Effect.runPromise(supersessions.row(id)),
+              joinsChildren: (name) => lookupRun(name)?.joinsChildren === true,
+              claim: () => Effect.runPromise(claimer.attempt(payload.executionId, admissionPool, enqueuedAt)),
+            }),
           );
+          if (isParentEnded(observed)) {
+            return yield* leaveQueueForEndedParent(
+              {
+                executionId: payload.executionId,
+                parentExecutionId: payload.parentExecutionId ?? "",
+                parentStatus: observed.parentEnded,
+              },
+              {
+                stepDo,
+                store: supersessions,
+                concludeCancelled: (summary) =>
+                  checks
+                    .update({
+                      repo: payload.github.repo,
+                      checkRunId,
+                      conclusion: "cancelled",
+                      ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
+                      output: { title: checkRunTitle, summary },
+                    })
+                    .pipe(
+                      Effect.catchAllCause((cause) =>
+                        Effect.logWarning(`admission: parent-ended conclusion failed — ${cause}`),
+                      ),
+                    ),
+              },
+            );
+          }
           const decision = decideAdmission(
             observed,
             enqueuedAt,
@@ -740,9 +1042,37 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             admissionMaxQueueAgeMs,
           );
 
-          if (decision._kind === "admit") return;
+          if (decision._kind === "admit") {
+            // The month's one warning, past `SPEND_WARN_RATIO` of the budget.
+            const status = spend;
+            yield* stepDo("spend-warn", () =>
+              Effect.runPromise(
+                warnSpendOnce({
+                  kv: env.CONFIG_KV,
+                  status,
+                  notify: async (text, monthKey) => {
+                    const sent = await emitSlackNotice(env, {
+                      useCase: "spend-warn",
+                      deliveryId: `spend-warn-${monthKey}`,
+                      text,
+                      run: payload.run,
+                      executionId: payload.executionId,
+                    });
+                    if (sent.outcome === "failed") throw new Error(sent.reason);
+                  },
+                }),
+              ),
+            );
+            // Spread a burst of admissions over up to two seconds before the
+            // container starts (ADR-0009). Derived from the execution id and
+            // slept durably, so a replay neither re-draws nor re-sleeps it.
+            const jitterMs = admissionJitterMs(payload.executionId);
+            if (jitterMs > 0) yield* stepSleep("admission-jitter", jitterMs);
+            return;
+          }
           if (decision._kind === "timeout") {
-            return yield* Effect.fail(
+            return yield* queueTimeout(
+              observed,
               new AdmissionTimedOut({
                 queuedForMs: decision.queuedForMs,
                 position: decision.position,
@@ -752,11 +1082,13 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           }
 
           // `wait`: surface the queue position on the in-progress check-run
-          // — only when it CHANGED, bounding GitHub API writes to at most
-          // one per drained peer. Best-effort: a GitHub blip while queued
-          // must never kill the run.
-          if (decision.position !== lastReportedPosition) {
-            lastReportedPosition = decision.position;
+          // — only when its bucket changes, at most once a minute
+          // (admission-summary.ts), and only while the installation's quota
+          // is above the verdict reserve (checks-github.ts). Best-effort: a
+          // GitHub blip while queued must never kill the run.
+          const report = nextPositionReport(lastReport, decision.position, observed.now);
+          if (report !== undefined) {
+            lastReport = report;
             yield* checks
               .progress({
                 repo: payload.github.repo,
@@ -765,7 +1097,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                 output: {
                   title: checkRunTitle,
                   summary: queuedSummary(
-                    decision.position,
+                    report.bucket,
                     decision.poolBusy,
                     admissionCap,
                     enqueuedAt + admissionMaxQueueAgeMs,
@@ -779,14 +1111,24 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
               );
           }
 
-          // Durable, free hibernation between polls. Don't sleep after the
-          // final attempt — fall straight through to timeout.
+          // Durable, free hibernation between polls, scaled with the position
+          // the claim step observed (ADR-0008): 20 s at the head, up to 60 s
+          // several slots back, never past the age limit by more than one
+          // 20 s poll. Both inputs are checkpointed, so a replay sleeps the
+          // same length. Don't sleep after the final attempt — fall straight
+          // through to timeout.
           if (i < maxAttempts - 1) {
-            yield* Effect.tryPromise(() =>
-              step.sleep(`admission-wait-${i}`, ADMISSION_POLL_EVERY_MS),
-            ).pipe(Effect.orDie);
+            yield* stepSleep(
+              `admission-wait-${i}`,
+              admissionPollSleepMs(
+                decision.position,
+                admissionCap,
+                enqueuedAt + admissionMaxQueueAgeMs - observed.now,
+              ),
+            );
           } else {
-            return yield* Effect.fail(
+            return yield* queueTimeout(
+              observed,
               new AdmissionTimedOut({
                 queuedForMs: Math.max(0, observed.now - enqueuedAt),
                 position: decision.position,
@@ -867,6 +1209,11 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // On the substrate path the same teardown is `abort(key)` — kill + stop,
       // skipping the snapshot, and it releases the admission slot with it. The
       // dispatcher holds no container to destroy there, which is the point.
+      // A lost invocation releases nothing: the replay is the same execution,
+      // re-enters its own lease, admission and serial rows, and keeps using
+      // the container this invocation would otherwise destroy under it.
+      const unlessLost = (teardown: Effect.Effect<void>): Effect.Effect<void> =>
+        Effect.unlessEffect(teardown, engine.lost).pipe(Effect.asVoid);
       const destroySandbox: Effect.Effect<void> = Effect.tryPromise(() =>
         substrateFacade !== undefined
           ? substrateFacade.abort(payload.executionId).then(() => undefined)
@@ -896,15 +1243,25 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             Effect.asVoid,
           );
         yield* Effect.forkScoped(heartbeatLoop);
+        // The run ceiling (`limits.maxDurationSec`, issue #42) starts here,
+        // once admission and the lease are held — those waits carry their own
+        // ceilings. The start time is a checkpointed step, so a replay resumes
+        // the countdown, and the ceiling bounds the body's step retries as one
+        // budget. On `RunDurationExceeded` the interrupted body still meets the
+        // teardown below, then lands as a recorded `failure`.
+        const { startedAt: bodyStartedAt } = yield* stepDo("run-ceiling-start", async () => ({
+          startedAt: Date.now(),
+        }));
         // Finalizer order matters: `ensuring`s run inner-first, so the
         // container is destroyed BEFORE the lease is released — a waiting
         // peer never sees its freshly-acquired container torn down.
-        return yield* run
-          .run(input)
-          .pipe(
-            Effect.ensuring(destroySandbox),
-            Effect.ensuring(lease.release().pipe(Effect.ignore)),
-          );
+        return yield* withRunCeiling(run.run(input), {
+          maxDurationSec: run.limits.maxDurationSec,
+          startedAt: bodyStartedAt,
+        }).pipe(
+          Effect.ensuring(unlessLost(destroySandbox)),
+          Effect.ensuring(unlessLost(lease.release().pipe(Effect.ignore))),
+        );
       }).pipe(Effect.scoped);
 
       // The admitted slot, held live for the WHOLE post-gate window. The beat
@@ -934,7 +1291,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // failure-summary.ts rendering it unmistakably as an infra-wait timeout.
       const admitted: Effect.Effect<unknown, RunError, RunContext> = admissionGate.pipe(
         Effect.andThen(admissionHeld),
-        Effect.ensuring(admissions.release(payload.executionId).pipe(Effect.ignore)),
+        Effect.ensuring(unlessLost(admissions.release(payload.executionId).pipe(Effect.ignore))),
       );
 
       // --- Per-group serialization (runs that declare `serialize`) ---------
@@ -964,8 +1321,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                 ...(readCurrent !== undefined
                   ? { current: () => Runtime.runPromise(rt)(readCurrent) }
                   : {}),
-                sleep: (name, ms) =>
-                  Effect.tryPromise(() => step.sleep(name, ms)).pipe(Effect.orDie),
+                sleep: stepSleep,
                 onWait: (holderRevision) =>
                   checks
                     .progress({
@@ -994,10 +1350,32 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                     return yield* admitted;
                   }).pipe(Effect.scoped),
                 ),
-                Effect.ensuring(serialQueue.release(payload.executionId).pipe(Effect.ignore)),
+                Effect.ensuring(
+                  unlessLost(serialQueue.release(payload.executionId).pipe(Effect.ignore)),
+                ),
               );
             });
-      const exit = yield* Effect.exit(gated);
+      const exit = yield* Effect.exit(
+        withSupersessionRelease(gated, {
+          joined: supersedeSpec !== undefined,
+          release: supersessions.release(payload.executionId).pipe(Effect.ignore),
+          lost: engine.lost,
+        }),
+      );
+      // The engine lost this instance mid-step and replays it from its last
+      // checkpoint: nothing this invocation writes is the run's verdict, so it
+      // writes nothing and ends here (core's engine-interruption.ts). The
+      // latch covers a run body that recovered the defect and returned.
+      if ((yield* engine.lost) || (Exit.isFailure(exit) && isEngineInterruptedCause(exit.cause))) {
+        yield* Effect.logWarning(
+          `engine interruption in ${payload.executionId} — leaving the verdict to the replay`,
+        );
+        return yield* Exit.isFailure(exit) && isEngineInterruptedCause(exit.cause)
+          ? Effect.failCause(exit.cause)
+          : Effect.die(
+              new EngineInterrupted({ step: "run", reason: "a recovered step lost the instance" }),
+            );
+      }
       const completedAt = yield* Effect.sync(() => Date.now());
 
       // A `RunSkipped` failure is a CAPACITY bow-out (the run's work was
@@ -1019,9 +1397,49 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // carry markdown (`AcceptanceFailed.summaryMd` — e.g. `product-demo`'s
       // per-chapter table). Extracted ONCE here and reused by both the
       // check-run failure summary and the notify email below. `undefined` on
-      // success, on a defect/interrupt, and on a summary-less failure — those
-      // render the generic line alone, exactly as before.
-      const failureMd = failureSummaryMd(exit);
+      // success and on a defect/interrupt — those render the generic line alone.
+      //
+      // A failure leads with the step it died in and its error tag, read from
+      // the last `steps` row recorded `failure` — the diagnosis a scheduled run
+      // otherwise leaves only in D1. The read is best-effort: a D1 error drops
+      // the step name, never the verdict.
+      const failedStep = Exit.isFailure(exit)
+        ? yield* Effect.tryPromise(() =>
+            db
+              .prepare(
+                `SELECT name, error_tag AS errorTag FROM steps
+                  WHERE execution_id = ? AND status = 'failure'
+                  ORDER BY completed_at DESC LIMIT 1`,
+              )
+              .bind(payload.executionId)
+              .first<FailedStepRow>(),
+          ).pipe(Effect.orElseSucceed(() => null))
+        : null;
+      const failureMd =
+        [failingStepMd(exit, failedStep ?? undefined), failureSummaryMd(exit)]
+          .filter((part): part is string => part !== undefined && part.trim() !== "")
+          .join("\n\n") || undefined;
+
+      // A typed failure raised outside any step leaves no tag on a `steps`
+      // row. Record it as a `run` step before the terminal row, so a parent
+      // polling this child reads why it failed. Best-effort, like the read.
+      const runFailureTag = unrecordedFailureTag(exit, failedStep ?? undefined);
+      if (runFailureTag !== undefined) {
+        yield* Effect.gen(function* () {
+          yield* executions.startStep({ executionId: payload.executionId, name: "run", startedAt });
+          yield* executions.finishStep({
+            executionId: payload.executionId,
+            name: "run",
+            completedAt,
+            status: "failure",
+            errorTag: runFailureTag,
+          });
+        }).pipe(
+          Effect.catchAllCause((cause) =>
+            Effect.logWarning(`run failure tag not recorded for ${payload.executionId} — ${cause}`),
+          ),
+        );
+      }
 
       // Persist the run output as JSON so `io.priorExecution` can recover it
       // on the next execution in the semantic family. A failed Exit has no
@@ -1037,22 +1455,41 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
         onFailure: () => undefined,
       });
 
-      yield* executions.finishExecution({
-        id: payload.executionId,
-        completedAt,
-        status,
-        ...(summaryJson !== undefined ? { summaryJson } : {}),
-      });
+      // A terminal write that still fails after the layer's retries leaves the
+      // row `running`. The check-run is concluded regardless — as a failure,
+      // since no verdict is on record — and the instance then fails, so a
+      // fan-out parent reading the engine status settles instead of waiting
+      // out its deadline.
+      const recorded = yield* Effect.exit(
+        executions.finishExecution({
+          id: payload.executionId,
+          completedAt,
+          status,
+          ...(summaryJson !== undefined ? { summaryJson } : {}),
+        }),
+      );
+      if (Exit.isSuccess(recorded) && !recorded.value) {
+        // A replay after a prior finish may still need to publish its verdict.
+        // A superseding cancellation, however, owns the check-run from here.
+        if ((yield* supersessions.status(payload.executionId)) !== status) return;
+      }
+      const unrecorded = Exit.isFailure(recorded);
+      if (unrecorded) {
+        yield* Effect.logError(
+          `finishExecution failed for ${payload.executionId} — concluding the check-run as failure`,
+        );
+      }
 
       // Per-execution cost rollup — METERED model tokens (summed from
       // `execution_model_usage`, written by the modelGateway wrapper) + MODELED
-      // container compute (instance × wall-time). Runs AFTER finishExecution so
-      // the wall-time it reads is complete. Best-effort: a cost failure logs and
-      // never flips the verdict (recordExecutionCost absorbs its own errors).
+      // container compute (the admission pool's instance list rate × admitted
+      // seconds, ADR-0006 § Meter). Runs AFTER finishExecution so the window
+      // it reads is closed. Best-effort: a cost failure logs and never flips
+      // the verdict (recordExecutionCost absorbs its own errors).
       yield* recordExecutionCost({
         db,
         executionId: payload.executionId,
-        instance: instanceForSandboxImage(run.sandboxImage),
+        instance: instanceForSandboxImage(admissionPool),
       });
 
       // --- Post-run writeback (the Worker proposes the diff as a PR) --------
@@ -1071,7 +1508,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // Runs in its own durable `step.do` so a Worker eviction mid-commit
       // replays the recorded outcome rather than re-committing.
       let writebackLine: string | undefined;
-      if (run.writeback !== undefined && status === "success") {
+      if (run.writeback !== undefined && status === "success" && !unrecorded) {
         const spec = run.writeback;
         if (githubAppConfig === undefined) {
           writebackLine =
@@ -1083,33 +1520,30 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             repo,
             payload.github.installation_id,
           );
-          const outcome: WritebackOutcome = yield* Effect.tryPromise(() =>
-            (
-              step.do as unknown as (
-                n: string,
-                cb: () => Promise<WritebackOutcome>,
-              ) => Promise<WritebackOutcome>
-            )("writeback", () =>
-              runWriteback({
-                bucket,
-                executionId: payload.executionId,
-                spec,
-                repo,
-                dispatchRef: payload.github.ref,
-                artifactName: WRITEBACK_ARTIFACT,
-                mintToken,
-              }),
-            ),
+          const outcome: WritebackOutcome = yield* stepDo("writeback", () =>
+            runWriteback({
+              bucket,
+              executionId: payload.executionId,
+              spec,
+              repo,
+              dispatchRef: payload.github.ref,
+              artifactName: WRITEBACK_ARTIFACT,
+              mintToken,
+            }),
           ).pipe(
             // A writeback failure (GitHub API error, missing creds mid-flight)
-            // must never turn a green run red — log it and surface a line.
+            // must never turn a green run red — log it and surface a line. An
+            // engine interruption is not a writeback failure: the replay
+            // re-runs the step, so this invocation ends without concluding.
             Effect.catchAllCause((cause) =>
-              Effect.logError(`writeback failed — ${cause}`).pipe(
-                Effect.as<WritebackOutcome>({
-                  kind: "rejected",
-                  reasons: ["writeback errored — see Worker logs"],
-                }),
-              ),
+              isEngineInterruptedCause(cause)
+                ? Effect.failCause(cause)
+                : Effect.logError(`writeback failed — ${cause}`).pipe(
+                    Effect.as<WritebackOutcome>({
+                      kind: "rejected",
+                      reasons: ["writeback errored — see Worker logs"],
+                    }),
+                  ),
             ),
           );
           writebackLine = describeOutcome(outcome);
@@ -1123,18 +1557,26 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       // has no `summary_json` for `/demos/:execution` to render.
       const demoSuffix = demoUrl !== undefined ? ` — [▶ view product demo ↗](${demoUrl})` : "";
       const writebackSuffix = writebackLine !== undefined ? `\n\n${writebackLine}` : "";
-      yield* checks.update({
+      //
+      // The write runs in a durable step: it may create the check-run (an
+      // opener that degraded left none), and a replay must not create a
+      // second. `delivered_at` records that GitHub took it; a row without one
+      // is re-sent by the reconcile sweep (delivery-sweep.ts).
+      const delivery = yield* stepDo("deliver-verdict", () => Effect.runPromise(checks.conclude({
         repo: payload.github.repo,
+        sha: payload.github.sha,
+        name: checkRunName,
         checkRunId,
         // `skipped` has no check-run conclusion of its own in the Checks
         // service — it lands as `neutral` (passes branch protection, renders
         // grey), with the skip reason as the whole summary.
-        conclusion: status === "skipped" ? "neutral" : status,
+        conclusion: checkConclusion(status, !unrecorded),
         ...(checkDetailsUrl !== undefined ? { detailsUrl: checkDetailsUrl } : {}),
         output: {
           title: checkRunTitle,
-          summary:
-            skipReason !== undefined
+          summary: unrecorded
+            ? `✗ ${payload.run} — the execution record could not be written; no verdict is on record.${logsSuffix}`
+            : skipReason !== undefined
               ? `⊘ ${payload.run} — skipped: ${skipReason}.${logsSuffix}`
               : Exit.match(exit, {
                   onSuccess: () =>
@@ -1149,7 +1591,32 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
                     ),
                 }),
         },
-      });
+      })));
+      if (delivery._tag === "delivered") {
+        yield* Effect.tryPromise(() =>
+          db.prepare(`UPDATE executions SET delivered_at = ?, check_run_id = ? WHERE id = ?`)
+            .bind(Date.now(), delivery.checkRunId, payload.executionId).run(),
+        ).pipe(
+          Effect.catchAll((cause) =>
+            Effect.logWarning(`delivery: delivered_at not recorded — ${String(cause)}`),
+          ),
+        );
+      } else {
+        yield* Effect.logWarning(
+          `delivery: verdict for ${payload.executionId} ${delivery._tag} (${delivery.reason}) — the reconcile sweep re-sends it`,
+        );
+      }
+
+      // A fan-out parent concludes any child check-run still open — one whose
+      // own terminal update never landed (child-check-runs.ts). Best-effort.
+      const childrenConcluded = yield* readChildCheckRuns(db, payload.executionId).pipe(
+        Effect.flatMap((rows) => concludeOpenChildCheckRuns(rows, checks)),
+      );
+      if (childrenConcluded.length > 0) {
+        yield* Effect.logWarning(
+          `concluded ${childrenConcluded.length} open child check-run(s) at parent close`,
+        );
+      }
 
       // Completion-notify email — the other side of the GitHub check-run, for
       // recipients who aren't watching the PR. Renders the run's verdict +
@@ -1230,7 +1697,9 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
             origin: slackOrigin,
             checkRunName,
             ...(logsBaseUrl !== undefined ? { logsUrl: logsBaseUrl } : {}),
-            ...(detailsUrl !== undefined ? { detailsUrl } : {}),
+            // The operator's Slack channel is private, so it may carry the
+            // dashboard link a public check-run leaves out.
+            ...(slackDetailsUrl !== undefined ? { detailsUrl: slackDetailsUrl } : {}),
             ...(failureMd !== undefined ? { failureSummary: failureMd } : {}),
             ...(skipReason !== undefined ? { skipReason } : {}),
           });
@@ -1244,20 +1713,42 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
           }
         }
       }
+
+      // Re-raise the unrecorded terminal write once every report is out: the
+      // instance ends `errored`, which is what a polling parent reads.
+      if (Exit.isFailure(recorded)) yield* Effect.failCause(recorded.cause);
     });
 
     try {
-      await Effect.runPromise(program.pipe(Effect.provide(runtime)));
+      await Effect.runPromise(
+        program.pipe(
+          Effect.onExit((exit) =>
+            Effect.map(engine.lost, (lost) => {
+              engineInterrupted = lost || isEngineInterruption(exit);
+            }),
+          ),
+          Effect.provide(runtime),
+        ),
+      );
     } finally {
-      // Self-heal: mark the AgentBudget no longer live once the run ends, so the
-      // (deterministic, non-expiring) capability token can't drain the remaining
-      // budget after the execution finishes. Best-effort — the hard token cap
-      // already bounds spend; this revokes the post-run tail. specs/08 § 6.3.
-      if (configOverrides !== undefined && this.env.AGENT_BUDGET !== undefined) {
-        await this.env.AGENT_BUDGET.get(this.env.AGENT_BUDGET.idFromName(payload.executionId))
-          .kill()
-          .catch(() => {});
-      }
+      // Revoke what the run held (run-end.ts): the self-heal AgentBudget of a
+      // run that armed it, so its non-expiring token cannot drain the budget
+      // after the execution (specs/08 § 6.3), and the compile-cache writes of
+      // a writable lane, so the token stops writing before it expires.
+      const agentBudget = this.env.AGENT_BUDGET;
+      await revokeAtRunEnd(
+        {
+          engineInterrupted,
+          agentBudgetArmed,
+          executionId: payload.executionId,
+          repo: payload.github.repo,
+          ...(cacheGrant !== undefined ? { compileCache: { lane: cacheGrant.lane, expiresAt: cacheGrant.expiresAt } } : {}),
+        },
+        {
+          agentBudget: (executionId) => agentBudget?.get(agentBudget.idFromName(executionId)),
+          ledger: (repo) => ledgersOf(this.env)(repo),
+        },
+      );
     }
   }
 }

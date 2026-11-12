@@ -257,6 +257,46 @@ function target(failOn: string[] = []) {
 }
 
 describe("applyGrant / revokeGrant", () => {
+  it("keeps revoking every host and handler when error reflection throws", async () => {
+    const { t, calls } = target();
+    const grant = { ...buildGrant(PARAMS), catchAll: { method: "reportOnly" as const, params: PARAMS } };
+    const hostile = new Proxy({}, {
+      getPrototypeOf() { throw new Error("Bearer fixture-secret https://private.invalid"); },
+      getOwnPropertyDescriptor() { throw new Error("fixture-secret status reflection"); },
+    });
+    const remove = t.removeAllowedHost;
+    t.removeAllowedHost = async (host) => {
+      await remove(host);
+      if (host === grant.allow[0]) throw hostile;
+    };
+    const failure = await revokeGrant(t, grant).catch((error: unknown) => error);
+    expect(calls).toEqual([
+      ...grant.allow.map((host) => `unallow:${host}`),
+      ...grant.handlers.map(({ host }) => `unmap:${host}`),
+      "catchall:denyAll",
+    ]);
+    const refusal = revokeRefusal(failure);
+    expect(refusal).toEqual({
+      kind: "sandbox-unavailable",
+      reason: "egress: 1 revoke call(s) failed",
+      revokeFailures: [{ operation: "remove-admission", errorClass: "unknown" }],
+    });
+    expect(JSON.stringify(refusal)).not.toMatch(/fixture-secret|private\.invalid|Bearer|github\.com/);
+    expect(revokeRefusal(hostile)).toBeUndefined();
+  });
+
+  it("never invokes a provider's status accessor to collect diagnostic evidence", async () => {
+    const { t } = target();
+    let getterCalls = 0;
+    const error = Object.defineProperty(new Error("fixture-secret"), "status", {
+      get() { getterCalls++; return 503; },
+    });
+    t.removeAllowedHost = async () => { throw error; };
+    const failure = await revokeGrant(t, buildGrant(PARAMS)).catch((error: unknown) => error);
+    expect(revokeRefusal(failure)?.revokeFailures?.[0]).toEqual({ operation: "remove-admission", errorClass: "Error" });
+    expect(getterCalls).toBe(0);
+  });
+
   it("admits only closed error classes and integer HTTP status evidence", async () => {
     for (const [error, expected] of [
       [Object.assign(new Error("fixture-secret"), { name:"private-name", status:"503" }), { errorClass:"Error" }],

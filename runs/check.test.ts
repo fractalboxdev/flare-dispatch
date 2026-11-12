@@ -21,7 +21,12 @@ import { it } from "@effect/vitest";
 import { Cause, Effect, Either, Exit, Option, Schema } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
-import { Sandbox, type CheckCommandService } from "@fractalboxdev/flare-dispatch-core";
+import {
+  Cache,
+  Sandbox,
+  type CacheService,
+  type CheckCommandService,
+} from "@fractalboxdev/flare-dispatch-core";
 import { check } from "./check";
 
 const CHECK_CMD = "pnpm lint";
@@ -89,6 +94,86 @@ describe("check", () => {
         expect(calls).toEqual(["prepare", "start", "observe", "finalize"]);
         expect(handles.sandbox.execs.map((e) => e.command)).not.toContain(CHECK_CMD);
         expect(handles.executions.steps.map((s) => s.name)).toContain("exec-finalize");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+  const lossyDurable = (lostAttempts: number, calls: string[]): CheckCommandService => ({
+    prepare: (opts) =>
+      Effect.sync(() => {
+        calls.push(`prepare:${opts.stepName}`);
+        return {
+          id: `handle-${opts.stepName}`,
+          container: opts.container!,
+          fingerprint: "stable",
+          startedAt: 1000,
+          deadline: 1801000,
+        };
+      }),
+    start: (h) => Effect.sync(() => void calls.push(`start:${h.id}`)),
+    observe: (h) =>
+      Effect.sync(() => {
+        calls.push(`observe:${h.id}`);
+        const attempt = calls.filter((c) => c.startsWith("prepare:")).length;
+        return attempt <= lostAttempts
+          ? { state: "missing" as const }
+          : { state: "exited" as const, exitCode: 0, durationMs: 27 };
+      }),
+    finalize: (h) =>
+      Effect.sync(() => {
+        calls.push(`finalize:${h.id}`);
+        return { exitCode: 0, durationMs: 27, logPath: "logs/relaunched.ndjson", stdout: "", stderr: "" };
+      }),
+  });
+  it.effect(
+    "a long check whose process is lost with its container relaunches in a fresh container and reports that verdict",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest();
+      const calls: string[] = [];
+      return Effect.gen(function* () {
+        const original = yield* Sandbox;
+        const result = yield* check
+          .run({ ...baseInput, timeoutSec: 1800, failOnNonZeroExit: true })
+          .pipe(
+            Effect.provideService(Sandbox, { ...original, checkCommand: lossyDurable(1, calls) }),
+          );
+        expect(result.exitCode).toBe(0);
+        expect(calls).toEqual([
+          "prepare:exec",
+          "start:handle-exec",
+          "observe:handle-exec",
+          "prepare:exec-relaunch-1",
+          "start:handle-exec-relaunch-1",
+          "observe:handle-exec-relaunch-1",
+          "finalize:handle-exec-relaunch-1",
+        ]);
+        expect(handles.sandbox.destroyed).toContain("fake-container");
+        expect(handles.executions.steps.map((s) => s.name)).toEqual(
+          expect.arrayContaining(["exec-observe-0", "exec-relaunch-1-observe-0", "exec-relaunch-1-finalize"]),
+        );
+      }).pipe(Effect.provide(layer));
+    },
+  );
+  it.effect(
+    "a long check that loses its process on every launch fails as a sandbox loss, never a command verdict",
+    () => {
+      const { layer } = makeCFRuntimeTest();
+      const calls: string[] = [];
+      return Effect.gen(function* () {
+        const original = yield* Sandbox;
+        const exit = yield* Effect.exit(
+          check
+            .run({ ...baseInput, timeoutSec: 1800, failOnNonZeroExit: true })
+            .pipe(
+              Effect.provideService(Sandbox, { ...original, checkCommand: lossyDurable(99, calls) }),
+            ),
+        );
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          const failure = Option.getOrUndefined(Cause.failureOption(exit.cause));
+          expect(failure).toMatchObject({ _tag: "SandboxProcessLost", launches: 3 });
+        }
+        expect(calls.filter((c) => c.startsWith("prepare:"))).toHaveLength(3);
+        expect(calls.some((c) => c.startsWith("finalize:"))).toBe(false);
       }).pipe(Effect.provide(layer));
     },
   );
@@ -461,6 +546,66 @@ describe("check", () => {
     },
   );
 
+  describe("compile cache", () => {
+    const ENDPOINT = "https://dispatch.example/v1/compile-cache";
+    const TOKEN = "cc1.1700000000.ZXhlYw.mac";
+
+    it.effect("wraps the command in sccache and hands it the injected endpoint and token", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [CHECK_CMD]: { exitCode: 0, stdout: `token=${TOKEN}` } },
+        config: { "compile-cache.endpoint": ENDPOINT, "compile-cache.token": TOKEN },
+      });
+      return Effect.gen(function* () {
+        const result = yield* check.run({ ...baseInput, compileCache: true, env: { SCCACHE_WEBDAV_TOKEN: "spoofed" } });
+        expect(result.exitCode).toBe(0);
+        const exec = handles.sandbox.execs.find((e) => e.command.includes(CHECK_CMD));
+        expect(exec?.env).toEqual({ SCCACHE_WEBDAV_ENDPOINT: ENDPOINT, SCCACHE_WEBDAV_TOKEN: TOKEN });
+        expect(exec?.command).toContain("export RUSTC_WRAPPER=sccache");
+        expect(exec?.command).toContain('export SCCACHE_WEBDAV_KEY_PREFIX="owner/name/$fd_cc_release/$fd_cc_host"');
+        expect(exec?.command).toContain("CARGO_INCREMENTAL=0");
+        expect(exec?.command).toContain("SCCACHE_IGNORE_SERVER_IO_ERROR=1");
+        expect(exec?.command).toContain("sccache --show-stats");
+        expect(exec?.command).toContain(`(\n${CHECK_CMD}\n)`);
+        expect(exec?.stdout ?? "").not.toContain(TOKEN);
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("runs the command unwrapped when no token was injected", () => {
+      const { layer, handles } = makeCFRuntimeTest({ sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } } });
+      return Effect.gen(function* () {
+        yield* check.run({ ...baseInput, compileCache: true });
+        const exec = handles.sandbox.execs.find((e) => e.command.includes(CHECK_CMD));
+        expect(exec?.command).toBe(CHECK_CMD);
+        expect(exec?.env ?? {}).toEqual({});
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("ignores injected access when the dispatch does not ask for the cache", () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
+        config: { "compile-cache.endpoint": ENDPOINT, "compile-cache.token": TOKEN },
+      });
+      return Effect.gen(function* () {
+        yield* check.run(baseInput);
+        const exec = handles.sandbox.execs.find((e) => e.command.includes(CHECK_CMD));
+        expect(exec?.command).toBe(CHECK_CMD);
+      }).pipe(Effect.provide(layer));
+    });
+
+    it("asks the dispatcher for a token in the input's lane, read-only when it names none", () => {
+      expect(check.compileCache?.({ ...baseInput, compileCache: true, compileCacheLane: "base" } as never)).toBe("base");
+      expect(check.compileCache?.({ ...baseInput, compileCache: true, compileCacheLane: "pr-7" } as never)).toBe("pr-7");
+      expect(check.compileCache?.({ ...baseInput, compileCache: true } as never)).toBe("read-only");
+      expect(check.compileCache?.(baseInput as never)).toBeUndefined();
+    });
+
+    it("refuses a lane outside the lane grammar", () => {
+      expect(() =>
+        Schema.decodeUnknownSync(check.inputs)({ ...baseInput, compileCache: true, compileCacheLane: "pr-1/../base" }),
+      ).toThrow();
+    });
+  });
+
   it.effect(
     "secrets — a named-but-unset secret fails with SecretsMissing before checkout or exec",
     () => {
@@ -569,6 +714,16 @@ describe("check", () => {
       }),
     ).toBe(false);
   });
+
+  it("optIn — names the command keys resolve-config reads; none when the dispatch carries one", () => {
+    const input = check.triggers![0]!.inputs({ payload: prPayload() });
+    expect(check.optIn?.({ input })).toEqual(["check.command:owner/name"]);
+    expect(check.optIn?.({ input: { ...input, checkLabel: "codegen" } })).toEqual([
+      "check.command:owner/name:codegen",
+      "check.command:owner/name",
+    ]);
+    expect(check.optIn?.({ input: { ...input, command: "pnpm lint" } })).toEqual([]);
+  });
 });
 
 // --- Source guard: no direct Date.now() / crypto.randomUUID() in the run -----
@@ -614,5 +769,115 @@ describe("check source determinism", () => {
       ]);
       expect(result.exitCode).toBe(0);
     }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("check restore", () => {
+  const entry = {
+    key: `contextful-ci-${"c".repeat(64)}`,
+    base: "/tmp/flare-dispatch-prebuilt/contextful-ci",
+    paths: ["bin"],
+  };
+  const mkdirs = (commands: readonly string[]) =>
+    commands.filter((command) => command === `mkdir -p ${entry.base}`);
+  /** A cache answering every restore with `hit`, recording each request and each save. */
+  const recordingCache = (hit: boolean) => {
+    const calls: { key: string; base?: string; paths: readonly string[]; dir?: string }[] = [];
+    const saves: string[] = [];
+    const service: CacheService = {
+      restoreOr: (opts) =>
+        Effect.suspend(() => {
+          calls.push({ key: opts.key, base: opts.base, paths: opts.paths, dir: opts.dir });
+          return hit
+            ? Effect.void
+            : Effect.asVoid(opts.onMiss()).pipe(
+                Effect.tap(() => Effect.sync(() => saves.push(opts.key))),
+              );
+        }),
+      save: () => Effect.void,
+    };
+    return { service, calls, saves };
+  };
+  const requested = {
+    key: entry.key,
+    base: entry.base,
+    paths: entry.paths,
+    dir: "/workspace/name",
+  };
+
+  it.effect(
+    "restores each entry by its key, base and paths after the clone, before the command",
+    () => {
+      const { layer, handles } = makeCFRuntimeTest({
+        sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
+      });
+      const cache = recordingCache(true);
+      return Effect.gen(function* () {
+        expect((yield* check.run({ ...baseInput, restore: [entry] })).exitCode).toBe(0);
+        expect(cache.calls).toEqual([requested]);
+        expect(cache.saves).toEqual([]);
+        const commands = handles.sandbox.execs.map((exec) => exec.command);
+        expect(mkdirs(commands)).toHaveLength(1);
+        expect(commands.indexOf(`mkdir -p ${entry.base}`)).toBeLessThan(
+          commands.indexOf(CHECK_CMD),
+        );
+        expect(handles.executions.steps.map((step) => step.name)).toEqual([
+          "resolve-config",
+          "checkout",
+          "exec",
+          "upload-log",
+        ]);
+      }).pipe(Effect.provideService(Cache, cache.service), Effect.provide(layer));
+    },
+  );
+
+  it.effect("restores again into a re-cloned container", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        "test -d /workspace/name/.git": { exitCode: 1 },
+        [CHECK_CMD]: { exitCode: 0 },
+      },
+    });
+    const cache = recordingCache(true);
+    return Effect.gen(function* () {
+      yield* check.run({ ...baseInput, restore: [entry] });
+      expect(handles.sandbox.clones).toHaveLength(2);
+      expect(mkdirs(handles.sandbox.execs.map((exec) => exec.command))).toHaveLength(2);
+      expect(cache.calls).toEqual([requested, requested]);
+    }).pipe(Effect.provideService(Cache, cache.service), Effect.provide(layer));
+  });
+
+  it.effect("runs the command and saves nothing when the entry is not in the cache", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [CHECK_CMD]: { exitCode: 0 } },
+    });
+    const cache = recordingCache(false);
+    return Effect.gen(function* () {
+      expect(
+        (yield* check.run({ ...baseInput, restore: [entry], failOnNonZeroExit: true })).exitCode,
+      ).toBe(0);
+      expect(cache.calls).toEqual([requested]);
+      expect(cache.saves).toEqual([]);
+      expect(handles.sandbox.execs.map((exec) => exec.command)).toContain(CHECK_CMD);
+    }).pipe(Effect.provideService(Cache, cache.service), Effect.provide(layer));
+  });
+
+  it("refuses an entry outside /tmp or with a path-shaped key at the input schema", () => {
+    const decode = Schema.decodeUnknownEither(check.inputs);
+    expect(Either.isRight(decode({ ...baseInput, restore: [entry] }))).toBe(true);
+    expect(
+      Either.isLeft(decode({ ...baseInput, restore: [{ ...entry, base: "/usr/local/cargo" }] })),
+    ).toBe(true);
+    expect(
+      Either.isLeft(decode({ ...baseInput, restore: [{ ...entry, key: "../owner/other" }] })),
+    ).toBe(true);
+  });
+});
+
+describe("run ceiling (issue #42)", () => {
+  it("covers a full 2700 s exec — the gate's per-stage ceiling — plus checkout and upload", () => {
+    // A ceiling at the exec ceiling cuts every stage that uses its full exec
+    // budget before the sandbox's own deadline reports `ExecTimeout`.
+    expect(check.limits.maxDurationSec).toBeGreaterThanOrEqual(2700 + 1800);
   });
 });

@@ -16,10 +16,9 @@ name: deploy
 # `workflow_dispatch` with `target: substrate` stops after the canary, so a
 # security patch to the substrate never queues behind a product release.
 #
-# CREDENTIALS. `CLOUDFLARE_API_TOKEN` — account-scoped to FractalBox
-# (c91d52c2…), no zone resources: Workers Scripts:Edit, Workers KV:Edit,
-# Workers R2:Edit, D1:Edit, Containers:Edit, Account Settings:Read.
-# Created 2026-08-06 · dash.cloudflare.com/profile/api-tokens · no expiry.
+# CREDENTIALS. `CLOUDFLARE_API_TOKEN` — scoped to the deploying org's account,
+# no zone resources: Workers Scripts:Edit, Workers KV:Edit, Workers R2:Edit,
+# D1:Edit, Containers:Edit, Account Settings:Read.
 # Scope is recorded here because GitHub secrets have no comment field and a
 # Cloudflare token cannot report its own policies — reading them needs a
 # *second* token with API Tokens:Read, so an undocumented token's grants are
@@ -47,15 +46,23 @@ on:
       - "wrangler.jsonc"
       - "pnpm-lock.yaml"
       - ".github/workflows/deploy.yml"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
     inputs:
       target:
         description: "What to deploy"
         type: choice
         default: all
+        # `dispatcher` ships the dispatcher's Worker code alone: no substrate
+        # deploy, no container image build, and no container rollout
+        # (`--containers-rollout none`), so the running sandbox images stay as
+        # they are. It is the path for a Worker-side fix when an image build
+        # cannot complete, such as when the runner cannot reach an apt mirror.
+        # A change that touches a container image needs `all`.
         options:
           - all
           - substrate
+          - dispatcher
 
 # Never let two deploys race onto the same Worker.
 concurrency:
@@ -63,32 +70,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Lint, typecheck, the bundle dry runs and the suite — the same workflow
+  # every pull request into main runs (ci.yml).
   ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      # wrangler.jsonc names code that no TypeScript gate checks: entrypoints,
-      # and Durable Object classes the entrypoint must export. Rename a class
-      # without its binding and lint, typecheck and test all stay green — the
-      # first failure is the deploy below, after migrations have been applied.
-      # `--containers-rollout none` keeps this to the bundle: without it a dry
-      # run still builds every container image, which the deploy jobs then
-      # build again. BEFORE `pnpm test`, deliberately: these cost seconds and
-      # the suite costs minutes, so on the main-push run a config that names
-      # missing code reds this job without waiting out the suite. After
-      # `typecheck`, also deliberately: a real code error should fail with the
-      # typechecker's message, not esbuild's.
-      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none
-      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none -c apps/substrate/wrangler.jsonc
-      - run: pnpm test
+    uses: ./.github/workflows/ci.yml
 
   # The substrate deploys BEFORE the dispatcher, and its own job rather than a
   # step in `deploy`, because the ordering is a real constraint and not a
@@ -101,6 +86,7 @@ jobs:
   # the correct blast radius: half a topology is worse than none of it.
   substrate:
     needs: ci
+    if: github.event.inputs.target != 'dispatcher'
     runs-on: ubuntu-latest
     outputs:
       url: ${{ steps.deploy.outputs.url }}
@@ -112,6 +98,22 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # The same operator overlay the deploy job applies, for the substrate's
+      # own config: placeholders committed, the real file stored base64-encoded
+      # and written over them before migrations and deploy. A missing secret
+      # fails the job rather than deploying placeholders.
+      - name: Apply operator overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SUBSTRATE_WRANGLER_OVERLAY_B64:-}" ]; then
+            echo "::error title=overlay missing::Set the SUBSTRATE_WRANGLER_OVERLAY_B64 secret to the base64 of this deploy's apps/substrate/wrangler.jsonc." >&2
+            exit 1
+          fi
+          printf '%s' "$SUBSTRATE_WRANGLER_OVERLAY_B64" | base64 -d > apps/substrate/wrangler.jsonc
+        env:
+          SUBSTRATE_WRANGLER_OVERLAY_B64: ${{ secrets.SUBSTRATE_WRANGLER_OVERLAY_B64 }}
 
       # Schema before code: the deployed worker reads tables this applies, and
       # a hand-run migration is one that the next org's deploy cannot reproduce.
@@ -181,9 +183,18 @@ jobs:
         env:
           SUBSTRATE_URL: ${{ needs.substrate.outputs.url }}
 
+  # `!cancelled()` lets a `dispatcher` deploy run with the substrate jobs
+  # skipped, and still stops this job when the run is cancelled.
+  # Every other target still requires the substrate and its canary to have
+  # passed, so a failed substrate deploy stops this one as before.
   deploy:
-    needs: [substrate, canary]
-    if: github.event.inputs.target != 'substrate'
+    needs: [ci, substrate, canary]
+    if: >-
+      !cancelled() &&
+      needs.ci.result == 'success' &&
+      github.event.inputs.target != 'substrate' &&
+      (github.event.inputs.target == 'dispatcher' ||
+        (needs.substrate.result == 'success' && needs.canary.result == 'success'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -194,21 +205,42 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      # Schema before code — the same rule the substrate job states, which the
-      # dispatcher's own database was never held to. Its five migrations were
-      # applied by hand in a single run on 2026-07-11 and nothing here has ever
-      # applied one since, so a PR that adds a migration ships code querying a
-      # column production does not have. Already-applied migrations are a no-op,
-      # which is what makes this safe to add after the fact.
+      # The committed wrangler.jsonc carries placeholders for every
+      # account-specific value; the real file is the operator overlay, stored
+      # base64-encoded (one line, so log masking covers all of it) and written
+      # over the placeholders here — the same single-file overwrite
+      # actions/deploy-dispatcher-action performs. A missing secret fails the
+      # job rather than deploying placeholders.
+      - name: Apply operator overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${WRANGLER_OVERLAY_B64:-}" ]; then
+            echo "::error title=overlay missing::Set the WRANGLER_OVERLAY_B64 secret to the base64 of this deploy's wrangler.jsonc." >&2
+            exit 1
+          fi
+          cp wrangler.jsonc "$RUNNER_TEMP/wrangler.template.jsonc"
+          printf '%s' "$WRANGLER_OVERLAY_B64" | base64 -d > wrangler.jsonc
+          node infra/overlay-limits.mjs "$RUNNER_TEMP/wrangler.template.jsonc" wrangler.jsonc
+        env:
+          WRANGLER_OVERLAY_B64: ${{ secrets.WRANGLER_OVERLAY_B64 }}
+
+      # Schema before code — the same rule the substrate job states. Without
+      # this step a PR that adds a migration ships code querying a column
+      # production does not have. Already-applied migrations are a no-op.
+      # Addressed by binding, so the overlay's database name never needs
+      # restating here.
       - name: Apply D1 migrations
-        run: pnpm exec wrangler d1 migrations apply flare-dispatch --remote
+        run: pnpm exec wrangler d1 migrations apply RUNS_METADATA --remote
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       # Deploy from the repo root, which wrangler.jsonc points at
       # (main: apps/dispatcher/src/index.ts). Uses the pnpm-pinned wrangler.
-      - run: pnpm exec wrangler deploy
+      # The `dispatcher` target adds `--containers-rollout none`: wrangler then
+      # builds no image and leaves every container application unchanged.
+      - run: pnpm exec wrangler deploy ${{ github.event.inputs.target == 'dispatcher' && '--containers-rollout none' || '' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -2,12 +2,17 @@
   "name": "@fractalboxdev/flare-dispatch-runtime-cf",
   "version": "0.0.1",
   "private": true,
-  "description": "FlareDispatch live runtime \u2014 Cloudflare binding Layers (D1, R2, Containers, Workflows) implementing the @fractalboxdev/flare-dispatch-core service Tags.",
+  "description": "FlareDispatch live runtime — Cloudflare binding Layers (D1, R2, Containers, Workflows) implementing the @fractalboxdev/flare-dispatch-core service Tags.",
   "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./model-gateway": "./src/model-gateway-cf.ts"
+    "./model-gateway": "./src/model-gateway-cf.ts",
+    "./log-names": "./src/log-names.ts",
+    "./admission-cap": "./src/run-admission-d1.ts",
+    "./spend": "./src/spend-d1.ts",
+    "./run-supersede": "./src/run-supersede-d1.ts",
+    "./checks-github": "./src/checks-github.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

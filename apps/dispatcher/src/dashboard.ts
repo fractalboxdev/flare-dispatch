@@ -11,6 +11,8 @@
 // I/O, so it stays trivially testable (dashboard.test.ts). The route that feeds
 // it (query-param parsing, the D1 reads, the Access gate) is wired in http-app.ts.
 
+import { isCloseMarker } from "./pr-close";
+
 /** One execution row, pre-resolved with its tokened viewer links. */
 export interface DashboardRow {
   readonly id: string;
@@ -38,6 +40,12 @@ export interface DashboardRow {
    * — a non-null value means flare-dispatch drove a PR to fix a bug here.
    */
   readonly selfHealPrUrl: string | null;
+  /**
+   * The execution that superseded this one, or a pull-request close marker,
+   * from `run_supersessions.superseded_by`; `null` when nothing superseded it.
+   * A `cancelled` row with a value is labelled with it.
+   */
+  readonly supersededBy: string | null;
 }
 
 export interface DashboardData {
@@ -52,6 +60,8 @@ export interface DashboardData {
   readonly nowMs: number;
   /** `owner/repo` slug for the source link. */
   readonly repoSlug: string;
+  /** The spend guard's month-to-date line (`GET /api/spend`); absent when unreadable. */
+  readonly spendLine?: string;
 }
 
 /** Server-side filters, parsed from the `run`/`repo`/`status` query params. */
@@ -196,6 +206,7 @@ const STYLE = `
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .75rem; margin-bottom: .25rem; }
   h1 { font-size: 1.4rem; margin: 0; letter-spacing: -0.01em; }
   .tagline { color: #9aa3b2; margin: 0 0 1.75rem; }
+  .spend { color: #9aa3b2; margin: -1.25rem 0 1.75rem; font-size: 0.9rem; }
   h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .08em; color: #9aa3b2; margin: 2rem 0 .6rem; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   th { text-align: left; font-weight: 600; color: #9aa3b2; padding: .4rem .5rem; border-bottom: 1px solid #232838; }
@@ -241,6 +252,15 @@ const STYLE = `
   footer a { margin-right: 1rem; }
 `;
 
+/** "superseded by <id>" (or "pull request closed") under a cancelled row's badge. */
+const supersededLabel = (row: DashboardRow): string => {
+  if (row.status !== "cancelled" || row.supersededBy === null) return "";
+  const text = isCloseMarker(row.supersededBy)
+    ? "pull request closed"
+    : `superseded by <span class="sha">${esc(row.supersededBy)}</span>`;
+  return ` <span class="when superseded">${text}</span>`;
+};
+
 const renderRow = (row: DashboardRow, nowMs: number): string => {
   const links: string[] = [];
   if (row.logsUrl !== null) {
@@ -264,7 +284,7 @@ const renderRow = (row: DashboardRow, nowMs: number): string => {
       ? ` <a class="badge selfheal" href="${esc(row.selfHealPrUrl)}" title="View flare-dispatch self-heal fix PRs">🩹 self-heal</a>`
       : "";
   return `<tr${clickable ? ' class="rowlink"' : ""}>
-    <td><span class="badge ${badgeClass(row.status)}">${esc(row.status)}</span></td>
+    <td><span class="badge ${badgeClass(row.status)}">${esc(row.status)}</span>${supersededLabel(row)}</td>
     <td class="run">${runCell}${selfHealPill}</td>
     <td><span class="repo">${esc(row.repo)}</span> <span class="sha">${esc(shortSha(row.sha))}</span></td>
     <td class="when">${esc(relativeTime(row.startedAt, nowMs))}</td>
@@ -375,7 +395,7 @@ export const renderDashboard = (data: DashboardData): string => {
   <h1>FlareDispatch</h1>
 </header>
 <p class="tagline">Dispatch CI/CD runs to Cloudflare — inspect logs, executions, and product demos.</p>
-
+${data.spendLine !== undefined ? `<p class="spend">${esc(data.spendLine)}</p>\n` : ""}
 <main>
   <h2>Latest executions</h2>
   ${renderFilters(data.filters)}

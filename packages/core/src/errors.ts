@@ -125,6 +125,53 @@ export class AdmissionTimedOut extends Schema.TaggedError<AdmissionTimedOut>()(
 }
 
 /**
+ * A run's body outlived `limits.maxDurationSec` (issue #42). The clock starts
+ * at a checkpointed time when the body begins, so a Workflow replay resumes
+ * the countdown rather than restarting it; admission and serialization waits
+ * have their own ceilings and do not count.
+ */
+export class RunDurationExceeded extends Schema.TaggedError<RunDurationExceeded>()(
+  "RunDurationExceeded",
+  {
+    /** The declared ceiling, seconds. */
+    maxDurationSec: Schema.Number,
+    /** Body wall time when the ceiling fired, seconds. */
+    elapsedSec: Schema.Number,
+  },
+) {
+  // The Workflows attempt record persists only error.name + error.message (#88).
+  override get message(): string {
+    return (
+      `run exceeded its ${Math.round(this.maxDurationSec / 60)} min ceiling ` +
+      `(limits.maxDurationSec = ${this.maxDurationSec})`
+    );
+  }
+}
+
+/**
+ * A long command's process vanished on every launch — the sandbox lost
+ * it, the command never reported. A recycled container answers for a process
+ * it never started with "not found"; a supervisor killed with its container
+ * publishes no terminal record. Either way no exit status exists, so this is
+ * an infrastructure loss with no verdict, distinct from `AcceptanceFailed`.
+ */
+export class SandboxProcessLost extends Schema.TaggedError<SandboxProcessLost>()(
+  "SandboxProcessLost",
+  {
+    /** Launches whose process the sandbox lost, the first included. */
+    launches: Schema.Number,
+  },
+) {
+  // The Workflows attempt record persists only error.name + error.message (#88).
+  override get message(): string {
+    return (
+      `the sandbox lost the command process on each of ${this.launches} launches ` +
+      `(container recycled or supervisor gone) — no verdict was produced`
+    );
+  }
+}
+
+/**
  * A run declaring `serialize` waited its whole ceiling behind an in-flight
  * execution of the same group, which kept heartbeating the entire time. The
  * run **never started**. Distinct from `AdmissionTimedOut`: the pool may have
@@ -262,6 +309,8 @@ export class GitHubApiError extends Schema.TaggedError<GitHubApiError>()("GitHub
   status: Schema.Number,
   reason: Schema.Literal("rate-limited", "unauthorized", "transient", "other"),
   retryAfterMs: Schema.optional(Schema.Number),
+  /** The failing operation, when the source names it. */
+  detail: Schema.optional(Schema.String),
 }) {}
 
 export class CloudflareApiError extends Schema.TaggedError<CloudflareApiError>()(
@@ -330,6 +379,8 @@ export type RunError =
   | ContainerBusy
   | AdmissionTimedOut
   | SerialQueueTimedOut
+  | RunDurationExceeded
+  | SandboxProcessLost
   | PortNeverOpened
   | ExposePortFailed
   | BrowserUnavailable
