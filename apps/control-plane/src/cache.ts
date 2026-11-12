@@ -2,7 +2,8 @@
 // reads the router serves behind the link surface (FD-IFC-017), and the minute tick's steps (cache-retention.ts). The
 // compile-cache route checks its own token (FD-CACHE-057). A private repository's artifact is read only by its link
 // token's holder, an operator or the identity that dispatched its execution (FD-CACHE-076), and the listing writes
-// each artifact it shows with a link token for that artifact (FD-CACHE-077).
+// each artifact it shows with a link token for that artifact (FD-CACHE-077). Each compile-cache GET is recorded as a
+// cache lookup of its execution, under the executor kind of the execution's placement (FD-CACHE-090).
 import {
   ApiConfig,
   apiError,
@@ -18,12 +19,15 @@ import {
   ARTIFACT_PAGE_SIZE,
   artifactPage,
   artifactVisible,
+  compileCacheLookupRow,
   findArtifact,
   handleCompileCache,
   ledgersOf,
+  recordCacheLookups,
   serveArtifact,
   serveLogs,
   type ArtifactReader,
+  type CompileCacheLookup,
 } from "@fractalboxdev/flare-dispatch-cache";
 import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
@@ -93,6 +97,35 @@ const executionStatus = (db: D1Like, id: string) =>
 const isTerminal = (s: { readonly status: string }) =>
   s.status !== "pending" && s.status !== "running";
 
+/** The kind of the executor an execution is placed on, or `unregistered` when its executor has no row. */
+const executorKindOf = async (db: D1Like, executionId: string) =>
+  (
+    await first<{ kind: string | null }>(
+      db,
+      `select x.kind from placements p left join executors x on x.executor_id = p.executor_id
+       where p.execution_id = ?`,
+      executionId,
+    )
+  )?.kind ?? "unregistered";
+
+/**
+ * Records one compile-cache GET as a `compile-cache` lookup of its execution (FD-CACHE-090). It runs after the response
+ * and logs a failure instead of throwing, so a metrics write never turns a cache hit into a miss.
+ */
+export const recordCompileCacheLookup = async (
+  db: D1Like,
+  lookup: CompileCacheLookup,
+  at: number,
+): Promise<void> => {
+  try {
+    await migrateCache(db);
+    const kind = await executorKindOf(db, lookup.executionId);
+    await recordCacheLookups(db, [compileCacheLookupRow(lookup, kind, at)]);
+  } catch (e) {
+    console.error(`compile-cache lookup of ${lookup.executionId} not recorded: ${String(e)}`);
+  }
+};
+
 /** Serves a compile-cache route, or answers null for a path this area does not serve. */
 export const cacheFetch = async (
   request: Request,
@@ -110,6 +143,7 @@ export const cacheFetch = async (
     secret: env.COMPILE_CACHE_SECRET,
     now: Date.now,
     waitUntil,
+    onLookup: (lookup) => waitUntil(recordCompileCacheLookup(env.DB, lookup, Date.now())),
     lease: async (id) => {
       const s = await executionStatus(env.DB, id);
       return s === undefined || s.epoch === null

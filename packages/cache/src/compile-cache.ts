@@ -10,6 +10,7 @@ import type { CacheLedgers } from "./ledger.ts";
 import { DEFAULT_LEDGER_BOUNDS, MiB, type LedgerBounds } from "./ledger.ts";
 import { verifyCompileCacheToken } from "./compile-cache-token.ts";
 import type { Bucket } from "./manifest.ts";
+import type { CompileCacheLookup } from "./metrics.ts";
 import { CONTENT_NAMESPACE } from "./namespaces.ts";
 
 export const COMPILE_CACHE_ROUTE = "/v1/compile-cache";
@@ -73,14 +74,6 @@ export interface CompileCacheDeps {
   readonly ttlMs?: number;
   /** Each GET's hit or miss, for the per-execution cache columns and the hit rate (FD-CACHE-090). */
   readonly onLookup?: (lookup: CompileCacheLookup) => void;
-}
-
-export interface CompileCacheLookup {
-  readonly executionId: string;
-  /** The namespace that answered, or `null` on a miss. */
-  readonly namespace: string | null;
-  readonly hit: boolean;
-  readonly bytes: number;
 }
 
 /** The response header naming the namespace that answered a GET or HEAD. */
