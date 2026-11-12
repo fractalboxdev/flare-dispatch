@@ -5,8 +5,10 @@
 import {
   ImprovePrParams,
   improvePrRequest,
+  PrReviewInput,
   PrReviewParams,
   prReviewRequest,
+  withRequiredCheck,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import {
   CheckStep,
@@ -46,10 +48,14 @@ type CatalogDecoder = (event: CatalogEvent) => Option.Option<unknown>;
 /** A run's input for an event intake received, or none when the run does not answer it. */
 type RequestDecoder = (event: DispatchEvent, context: TriggerContext) => Option.Option<unknown>;
 
-/** What intake reads of one manifest key: the entry's parameter schema and the decoder its parameters bind. */
+/**
+ * What intake reads of one manifest key: the entry's parameter schema, the decoder its parameters bind and, for a run
+ * whose body reads it, how the target branch's required set enters its input.
+ */
 interface ManifestRecipe {
   readonly params: Schema.Decoder<unknown>;
   readonly decoder: (params: unknown, view: EntryView) => Option.Option<RequestDecoder>;
+  readonly requiredCheck?: IntakeRun["requiredCheck"];
 }
 
 const recipe = <A>(
@@ -81,6 +87,16 @@ const prReviewDecoder =
       ),
       Match.orElse(() => Option.none()),
     );
+
+/**
+ * The `pr-review` input with whether its check is in the target branch's required set, which decides the
+ * `skip-ai-review` label and a `[bot]` author outside `reviewBots` (FD-AGT-092, FD-AGT-093).
+ */
+const prReviewRequiredCheck = (inputs: unknown, required: boolean): unknown =>
+  Option.match(Schema.decodeUnknownOption(PrReviewInput)(inputs), {
+    onNone: () => inputs,
+    onSome: (input) => withRequiredCheck(input, required),
+  });
 
 /**
  * `improve-pr` on its schedule: one execution for the entry's dimension, whose pull request targets the branch the
@@ -129,7 +145,10 @@ const MANIFEST_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
   ),
   deploySmoke: gateRecipe(DeploySmokeEntrySchema, (p) => deploymentStatusDecoder(p)),
   sandboxImage: gateRecipe(SandboxImageEntrySchema, (p) => sandboxImageDecoder(p)),
-  "pr-review": recipe(PrReviewParams, prReviewDecoder),
+  "pr-review": {
+    ...recipe(PrReviewParams, prReviewDecoder),
+    requiredCheck: prReviewRequiredCheck,
+  },
   "improve-pr": recipe(ImprovePrParams, improvePrDecoder),
 };
 
@@ -162,6 +181,11 @@ const serialKeyOf = (entry: CatalogEntry): Pick<IntakeRun, "serialKey"> =>
       }
     : {};
 
+const requiredCheckOf = (entry: CatalogEntry): Pick<IntakeRun, "requiredCheck"> => {
+  const requiredCheck = manifestRecipeOf(entry)?.requiredCheck;
+  return requiredCheck === undefined ? {} : { requiredCheck };
+};
+
 /** The deployment's runs; a run the deployment refuses to execute is not in its catalogue. */
 export const catalogRuns =
   (deployment: Deployment): RunCatalog =>
@@ -182,6 +206,7 @@ export const catalogRuns =
         grants: { setup: [...entry.spec.grants.setup], agent: [...entry.spec.grants.agent] },
         placement: (inputs) => requestPlacement(entry.spec, inputs),
         ...serialKeyOf(entry),
+        ...requiredCheckOf(entry),
       })),
       Match.orElse(() => undefined),
     );

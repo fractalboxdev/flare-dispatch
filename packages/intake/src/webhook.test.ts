@@ -500,7 +500,9 @@ describe("check re-runs", () => {
   it("FD-INT-054 a re-run keeps the labels and the placement constraint of the attempt it re-runs", async () => {
     const h = await harness({
       repos: {
-        [REPO]: repoWithManifest(manifest([{ recipe: "check", label: "ci", triggers: ["pull_request"] }])),
+        [REPO]: repoWithManifest(
+          manifest([{ recipe: "check", label: "ci", triggers: ["pull_request"] }]),
+        ),
       },
       resolve: () => ({ _tag: "Class", class: "batch", labels: ["gpu"], alarm: null }),
     });
@@ -518,7 +520,9 @@ describe("check re-runs", () => {
   it("[FD-INT-056] a rerequested check suite skips a local family, which posted no check run", async () => {
     const { h, id } = await firstRun();
     settle(h, "failure");
-    h.db.sqlite.exec(`update intake_records set trigger = 'local', placement_constraint = 'local-only'`);
+    h.db.sqlite.exec(
+      `update intake_records set trigger = 'local', placement_constraint = 'local-only'`,
+    );
     const r = await bodyOf(await deliver(h, "check_suite", checkSuiteRerequested(), "d-2"));
     expect(r.executions).toEqual([]);
     expect(h.records().map((x) => x.family_root)).toEqual([id]);
@@ -1167,9 +1171,9 @@ describe("the catalogue's request decoders through the webhook route", () => {
       maxDiffChars: 60_000,
     });
     expect(inputsOf(h)).toEqual([
-      ["pr-review", input(heads[0]!, false)],
-      ["pr-review", input(heads[1]!, false)],
-      ["pr-review", input(heads[2]!, true)],
+      ["pr-review", { ...input(heads[0]!, false), requiredCheck: false }],
+      ["pr-review", { ...input(heads[1]!, false), requiredCheck: false }],
+      ["pr-review", { ...input(heads[2]!, true), requiredCheck: false }],
     ]);
     expect(h.records().map((r) => [r.trigger, r.sha])).toEqual([
       ["webhook", heads[0]],
@@ -1188,6 +1192,74 @@ describe("the catalogue's request decoders through the webhook route", () => {
     );
     expect(dispatched.duplicate).toBe(false);
     expect(h.records().at(-1)).toMatchObject({ run: "pr-review", trigger: "dispatch", sha: HEAD });
+  });
+
+  describe("pr-review and the target branch's required set", () => {
+    const botPullRequest = (head: string) => {
+      const payload = pullRequestPayload({ action: "opened", head });
+      return {
+        ...payload,
+        pull_request: {
+          ...payload.pull_request,
+          draft: false,
+          labels: [{ name: "skip-ai-review" }],
+          user: { login: "dependabot[bot]" },
+        },
+      };
+    };
+    const reviewHarness = (label?: string) =>
+      catalogHarness([
+        {
+          recipe: "pr-review",
+          ...(label === undefined ? {} : { label }),
+          triggers: ["pull_request"],
+          params: { maxDiffChars: 60_000, reviewBots: ["renovate[bot]"] },
+        },
+      ]);
+    const factsOf = (h: Harness) =>
+      inputsOf(h).map(([, i]) => ({
+        requiredCheck: i.requiredCheck,
+        reviewBots: i.reviewBots,
+        labels: i.labels,
+        authorLogin: i.authorLogin,
+      }));
+
+    it("[FD-AGT-092] [FD-AGT-093] gives pr-review whether its check name is in the target branch's required set", async () => {
+      const required = await reviewHarness();
+      required.reads.repos[REPO]!.required = { main: ["flare-dispatch/pr-review"] };
+      await deliver(required, "pull_request", botPullRequest("1".repeat(40)));
+      expect(factsOf(required)).toEqual([
+        {
+          requiredCheck: true,
+          reviewBots: ["renovate[bot]"],
+          labels: ["skip-ai-review"],
+          authorLogin: "dependabot[bot]",
+        },
+      ]);
+      expect(required.reads.calls).toContain(`requiredChecks ${REPO}`);
+
+      const otherCheck = await reviewHarness();
+      otherCheck.reads.repos[REPO]!.required = { main: ["flare-dispatch/check:unit"] };
+      await deliver(otherCheck, "pull_request", botPullRequest("2".repeat(40)));
+      expect(factsOf(otherCheck).map((f) => f.requiredCheck)).toEqual([false]);
+
+      const labelled = await reviewHarness("deep");
+      labelled.reads.repos[REPO]!.required = {
+        main: ["flare-dispatch/pr-review:deep"],
+      };
+      await deliver(labelled, "pull_request", botPullRequest("3".repeat(40)));
+      expect(factsOf(labelled).map((f) => f.requiredCheck)).toEqual([true]);
+    });
+
+    it("[FD-AGT-092] [FD-AGT-093] an unreadable required set counts pr-review's check as required", async () => {
+      const h = await reviewHarness();
+      h.reads.failures.set(
+        `requiredChecks ${REPO}`,
+        new GithubHttpError({ status: 502, message: "Bad Gateway", rateLimited: false }),
+      );
+      await deliver(h, "pull_request", botPullRequest("4".repeat(40)));
+      expect(factsOf(h).map((f) => f.requiredCheck)).toEqual([true]);
+    });
   });
 
   it("[FD-AGT-045] a pr-review entry without maxDiffChars makes the manifest invalid", async () => {

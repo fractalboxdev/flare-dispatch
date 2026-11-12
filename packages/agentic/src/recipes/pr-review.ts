@@ -70,6 +70,13 @@ export const PrReviewInput = Schema.Struct({
   /** The repo manifest's `pr-review` mode, `advisory` by default (FD-AGT-055, FD-AGT-056). */
   mode: Schema.optionalKey(Schema.Literals(["advisory", "gating"])),
   maxDiffChars: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+  /** The repo manifest's `prReview.reviewBots`: the `[bot]` authors `pr-review` reviews (FD-AGT-091, FD-AGT-093). */
+  reviewBots: Schema.optionalKey(Schema.Array(Schema.String)),
+  /**
+   * Whether `pr-review`'s check name is in the target branch's required set, as intake read it; absent is not
+   * (FD-AGT-092, FD-AGT-093).
+   */
+  requiredCheck: Schema.optionalKey(Schema.Boolean),
 });
 export type PrReviewInput = typeof PrReviewInput.Type;
 
@@ -100,12 +107,13 @@ export const prReviewTrigger = (event: PrReviewEvent) =>
   );
 
 /**
- * A `pr-review` manifest entry's parameters: the review diff's cap (FD-AGT-049) and the mode, `advisory` when absent
- * (FD-AGT-055, FD-AGT-056).
+ * A `pr-review` manifest entry's parameters: the review diff's cap (FD-AGT-049), the mode, `advisory` when absent
+ * (FD-AGT-055, FD-AGT-056), and `reviewBots`, the `[bot]` author logins it reviews (FD-AGT-091, FD-AGT-093).
  */
 export const PrReviewParams = Schema.Struct({
   mode: Schema.optionalKey(Schema.Literals(["advisory", "gating"])),
   maxDiffChars: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+  reviewBots: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type PrReviewParams = typeof PrReviewParams.Type;
 
@@ -161,18 +169,38 @@ export const prReviewRequest = (
         (pr.head.repo?.full_name ?? "").toLowerCase() !== p.repository.full_name.toLowerCase(),
       ...(params.mode === undefined ? {} : { mode: params.mode }),
       maxDiffChars: params.maxDiffChars,
+      ...(params.reviewBots === undefined ? {} : { reviewBots: params.reviewBots }),
     });
   });
 
+/** The input with the fact intake read: whether `pr-review`'s check is in the target branch's required set. */
+export const withRequiredCheck = (input: PrReviewInput, required: boolean): PrReviewInput => ({
+  ...input,
+  requiredCheck: required,
+});
+
+/** The failure reason of a required `pr-review` whose `[bot]` author `reviewBots` does not list (FD-AGT-093). */
+export const BOT_NOT_LISTED = "review: bot author not in reviewBots";
+
 /**
- * The skip rules: a draft without `request-ai-review`, the `skip-ai-review` label, or a `[bot]` author (FD-AGT-046).
+ * The applicability rules, as the verdict that ends the run before any reviewer starts, or null to review: a draft
+ * without `request-ai-review`, the `skip-ai-review` label, or a `[bot]` author skips (FD-AGT-046). A `[bot]` author
+ * that `reviewBots` lists is reviewed (FD-AGT-091). While the check is in the target branch's required set, the label
+ * `skip-ai-review` has no effect (FD-AGT-092), and an unlisted `[bot]` author fails (FD-AGT-093), since a skipped
+ * required check lets the merge through.
  */
 export const prReviewSkip = (
-  input: Pick<PrReviewInput, "draft" | "labels" | "authorLogin">,
-): string | null => {
-  if (input.draft && !input.labels.includes("request-ai-review")) return "draft-pr";
-  if (input.labels.includes("skip-ai-review")) return "not-configured";
-  if (input.authorLogin.endsWith("[bot]")) return "author-excluded";
+  input: Pick<PrReviewInput, "draft" | "labels" | "authorLogin" | "reviewBots" | "requiredCheck">,
+): RunResult | null => {
+  const required = input.requiredCheck === true;
+  if (input.draft && !input.labels.includes("request-ai-review"))
+    return { _tag: "skipped", detail: "draft-pr" };
+  if (!required && input.labels.includes("skip-ai-review"))
+    return { _tag: "skipped", detail: "not-configured" };
+  if (input.authorLogin.endsWith("[bot]") && !(input.reviewBots ?? []).includes(input.authorLogin))
+    return required
+      ? { _tag: "failure", reason: BOT_NOT_LISTED }
+      : { _tag: "skipped", detail: "author-excluded" };
   return null;
 };
 
@@ -496,7 +524,7 @@ const REVIEWER_RETRIES = 1;
 export const runPrReview = (input: PrReviewInput) =>
   Effect.gen(function* () {
     const skip = prReviewSkip(input);
-    if (skip !== null) return { _tag: "skipped", detail: skip } satisfies RunResult;
+    if (skip !== null) return skip;
 
     const { diff, lint } = yield* buildReviewDiff(input);
     const artifacts = yield* Artifacts;

@@ -16,7 +16,7 @@ import {
 import { ManifestSource, type ManifestEntry, type RepoManifest } from "./manifest.ts";
 import { ManifestReporter } from "./ports.ts";
 import { isUnavailable, ProtectionSnapshots } from "./protection.ts";
-import type { EntryView, IntakeRun } from "./runs.ts";
+import { checkName, type EntryView, type IntakeRun } from "./runs.ts";
 import { shed, submission, submit, type Admitted, type Submission } from "./submit.ts";
 
 /** Where the manifest is read: a branch's head, or one commit (FD-INT-016). */
@@ -180,6 +180,12 @@ export const webhookSubmissions = (e: RepositoryEvent) =>
       });
     });
     if (answering.length === 0) return [];
+    const targetBranch = targetBranchOf(e.event.event, e.fields);
+    const withFacts = yield* Effect.forEach(answering, (a) =>
+      requiredCheckFact(e.repo, targetBranch, a.run, a.entry, a.inputs).pipe(
+        Effect.map((inputs) => ({ ...a, inputs })),
+      ),
+    );
     // A push's protection decides whether it is a protected trigger and a release trigger. Off the default branch an
     // unreadable answer submits nothing rather than record the push as unprotected; on the default branch, which is a
     // protected trigger regardless, it leaves the protection unknown.
@@ -201,8 +207,7 @@ export const webhookSubmissions = (e: RepositoryEvent) =>
       defaultBranch,
       refProtection === true,
     );
-    const targetBranch = targetBranchOf(e.event.event, e.fields);
-    return answering.map(({ entry, run, inputs }) =>
+    return withFacts.map(({ entry, run, inputs }) =>
       submission({
         run,
         trigger: e.trigger,
@@ -230,6 +235,35 @@ export const webhookSubmissions = (e: RepositoryEvent) =>
       GithubUnexpected: () => unreadable(e.repo),
     }),
   );
+
+/**
+ * A run that reads the required set gets whether its check name is in the target branch's, read through the 10 min
+ * protection cache (FD-AGT-092, FD-AGT-093). An unreadable set counts as required: off the required set a run may skip,
+ * and a skipped required check lets the merge through.
+ */
+const requiredCheckFact = (
+  repo: string,
+  targetBranch: string | null,
+  run: IntakeRun,
+  entry: ManifestEntry,
+  inputs: unknown,
+) =>
+  Effect.gen(function* () {
+    const fact = run.requiredCheck;
+    if (fact === undefined || targetBranch === null) return inputs;
+    const read = yield* (yield* ProtectionSnapshots).requiredSet(repo, targetBranch);
+    const name = checkName(run.name, entry.label ?? null);
+    if (isUnavailable(read)) {
+      yield* Effect.logWarning("required set unreadable; the check counts as required", {
+        repo,
+        branch: targetBranch,
+        check: name,
+        reason: read.reason,
+      });
+      return fact(inputs, true);
+    }
+    return fact(inputs, read.requiredChecks.includes(name));
+  });
 
 const unreadable = (repo: string) =>
   Effect.as(shed(repo, null, "manifest: unreadable"), [] as readonly Submission[]);
