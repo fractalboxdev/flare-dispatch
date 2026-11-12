@@ -36,6 +36,18 @@ const post = (h: Harness, request: Request) => h.run(handleIntake(request, "webh
 const deliver = async (h: Harness, event: string, payload: unknown, delivery = "d-1") =>
   post(h, await signedWebhook(event, payload, { delivery }));
 
+/** Lets the route's fiber run until it suspends: a few macrotask turns of the event loop. */
+const yieldTurns = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+};
+
+/** Waits until the route has issued the read `key`, so its sleep and the 10 s timeout are on the test clock. */
+const readStarted = async (h: Harness, key: string) => {
+  for (let i = 0; i < 10_000 && !h.reads.calls.includes(key); i++)
+    await new Promise((r) => setTimeout(r, 0));
+  await yieldTurns();
+};
+
 describe("webhook authentication", () => {
   it("[FD-INT-022] with no webhook secret every webhook answers 503 webhook_unconfigured and submits nothing", async () => {
     const h = await harness({ settings: { webhookSecret: undefined } });
@@ -77,6 +89,14 @@ describe("webhook authentication", () => {
     const r = await post(h, await signedWebhook("push", pushPayload(), { delivery: null }));
     expect(r!.status).toBe(400);
     expect(h.executions()).toEqual([]);
+  });
+
+  it("[FD-INT-026] a signed webhook without X-GitHub-Event answers 400 and submits nothing", async () => {
+    const h = await harness();
+    const r = await post(h, await signedWebhook(null, pullRequestPayload()));
+    expect(r!.status).toBe(400);
+    expect(h.executions()).toEqual([]);
+    expect(h.reads.calls).toEqual([]);
   });
 
   it("[FD-INT-027] an event outside intake.webhookEvents is ignored after the signature check; an empty list admits none", async () => {
@@ -228,6 +248,26 @@ describe("webhook to admission", () => {
       new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false }),
     );
     await deliver(h, "pull_request", pullRequestPayload());
+    expect(h.executions()).toEqual([]);
+    expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: unreadable" }]);
+  });
+
+  it("[FD-INT-019] a manifest read that stalls gives up at 10 s, submits nothing and sheds manifest: unreadable", async () => {
+    const h = await harness();
+    const fileKey = `file ${REPO}`;
+    h.reads.delays.set(fileKey, 60_000);
+    let done = false;
+    const answer = deliver(h, "pull_request", pullRequestPayload()).then((r) => {
+      done = true;
+      return r;
+    });
+    await readStarted(h, fileKey);
+    await h.adjust(9_999);
+    await yieldTurns();
+    expect(done).toBe(false);
+    await h.adjust(1);
+    const r = await answer;
+    expect(r!.status).toBe(202);
     expect(h.executions()).toEqual([]);
     expect(h.sheds()).toEqual([{ scope_id: REPO, run: null, reason: "manifest: unreadable" }]);
   });

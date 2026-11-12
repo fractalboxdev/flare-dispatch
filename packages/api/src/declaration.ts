@@ -18,7 +18,9 @@ export const Signal = Schema.Struct({
   url: Schema.optionalKey(capped(1000)),
   count: Schema.optionalKey(Schema.Number),
 });
-export const SignalsV1 = Schema.Array(Signal).check(Schema.isMaxLength(50));
+/** The most entries a `signals/v1` array holds (FD-IFC-030). */
+export const SIGNALS_MAX_ENTRIES = 50;
+export const SignalsV1 = Schema.Array(Signal).check(Schema.isMaxLength(SIGNALS_MAX_ENTRIES));
 export type SignalsV1 = typeof SignalsV1.Type;
 
 /** The caps of an `incident/v1` pack (FD-IFC-042). */
