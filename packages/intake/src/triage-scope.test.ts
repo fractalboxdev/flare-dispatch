@@ -68,3 +68,41 @@ describe("triage issue scope", () => {
     expect(h.records()).toEqual([]);
   });
 });
+
+describe("triage pull-request scope", () => {
+  const setup = () =>
+    harness({
+      settings: { catalog: catalogRuns("production") },
+      repos: {
+        [REPO]: repoWithManifest(manifest([{ recipe: "triage-prs", triggers: ["dispatch"] }])),
+      },
+    });
+
+  it("refuses a production dispatch that reads a different repository's pull requests before admission", async () => {
+    const h = await setup();
+    expect(
+      await refusal(
+        h,
+        authenticated({
+          run: "triage-prs",
+          label: null,
+          inputs: { repo: { owner: "unrelated", name: "public" }, baseBranch: "main" },
+        }),
+      ),
+    ).toEqual({ status: 400, code: "invalid_inputs" });
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+    expect(h.rows("select * from dedup_keys")).toEqual([]);
+    expect(h.rows("select * from placements")).toEqual([]);
+  });
+
+  it("admits a pull-request digest for the same repository with case-insensitive owner and name", async () => {
+    const h = await setup();
+    const inputs = { repo: { owner: "ACME", name: "App" }, baseBranch: "main" };
+    const answer = await admit(h, authenticated({ run: "triage-prs", label: null, inputs }));
+    expect(
+      h.rows("select scope_id from executions where id = ?", answer.executionId)[0]!.scope_id,
+    ).toBe(REPO);
+    expect(JSON.parse(String(h.records()[0]!.inputs_json))).toEqual(inputs);
+  });
+});
