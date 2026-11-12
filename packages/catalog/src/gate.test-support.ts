@@ -1,7 +1,13 @@
 // Test doubles of the gate recipes' services: each records what a recipe asked for and answers from a script.
 import { intentList } from "@fractalboxdev/mameko-run";
 import { Effect, Layer, Ref } from "effect";
-import { CommandExit, GateExec, WorkspaceReadFailed, type CommandOptions } from "./command.ts";
+import {
+  CommandExit,
+  GateExec,
+  WorkspaceReadFailed,
+  WorkspaceWriteFailed,
+  type CommandOptions,
+} from "./command.ts";
 import { GithubRead, GithubReadFailed } from "./github-read.ts";
 import {
   ArtifactUploadFailed,
@@ -56,6 +62,7 @@ export const fakeExec = (
         ? Effect.fail(new WorkspaceReadFailed({ path, detail: "absent" }))
         : Effect.succeed(encoder.encode(files[key]!));
     },
+    writeFile: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
   });
   return { layer, ran, workspaces: () => workspaces };
 };

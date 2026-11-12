@@ -14,7 +14,12 @@ import {
   type SimScenario,
   type SimViolation,
 } from "../../../ops/src/verification/harness.ts";
-import { CommandExit, GateExec, WorkspaceReadFailed } from "../../src/command.ts";
+import {
+  CommandExit,
+  GateExec,
+  WorkspaceReadFailed,
+  WorkspaceWriteFailed,
+} from "../../src/command.ts";
 import { fakeArtifacts, fakeIntents, memoryLedger } from "../../src/gate.test-support.ts";
 import { GithubRead } from "../../src/github-read.ts";
 import type { WorkerDeployInput } from "../../src/inputs.ts";
@@ -134,6 +139,7 @@ export const runScenario = async (seed: number): Promise<Observation> => {
           };
         }),
       readFile: (path) => Effect.fail(new WorkspaceReadFailed({ path, detail: "absent" })),
+      writeFile: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
     });
     const instance = Layer.succeed(
       WorkflowEngine.WorkflowInstance,

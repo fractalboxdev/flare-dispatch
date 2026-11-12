@@ -6,7 +6,7 @@
 // or a stopped runner kills everything the command started. Its output reaches the runner's stderr: the runner's
 // stdout carries only the result line, and any other line there loses the result (MAMEKO-EXEC-132).
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Context, Data, Effect, Layer, Schema, type Scope } from "effect";
@@ -52,6 +52,12 @@ export class WorkspaceReadFailed extends Schema.TaggedError<WorkspaceReadFailed>
   { path: Schema.String, detail: Schema.String },
 ) {}
 
+/** A workspace file could not be written. */
+export class WorkspaceWriteFailed extends Schema.TaggedError<WorkspaceWriteFailed>()(
+  "WorkspaceWriteFailed",
+  { path: Schema.String, detail: Schema.String },
+) {}
+
 export class GateExec extends Context.Service<
   GateExec,
   {
@@ -59,6 +65,8 @@ export class GateExec extends Context.Service<
     readonly workspace: Effect.Effect<string, never, Scope.Scope>;
     readonly run: (options: CommandOptions) => Effect.Effect<CommandRun>;
     readonly readFile: (path: string) => Effect.Effect<Uint8Array, WorkspaceReadFailed>;
+    /** Replaces an existing file's bytes and keeps its mode. */
+    readonly writeFile: (path: string, bytes: Uint8Array) => Effect.Effect<void, WorkspaceWriteFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-catalog/GateExec") {}
 
@@ -171,5 +179,10 @@ export const processGateExec: Layer.Layer<GateExec> = Layer.succeed(GateExec, {
     Effect.tryPromise({
       try: async () => new Uint8Array(await readFile(path)),
       catch: (cause) => new WorkspaceReadFailed({ path, detail: String(cause) }),
+    }),
+  writeFile: (path, bytes) =>
+    Effect.tryPromise({
+      try: () => writeFile(path, bytes),
+      catch: (cause) => new WorkspaceWriteFailed({ path, detail: String(cause) }),
     }),
 });
