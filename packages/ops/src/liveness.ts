@@ -21,6 +21,11 @@ export const OPS_MIGRATIONS: readonly string[] = [
     ok integer not null check (ok in (0, 1)),
     detail_json text not null,
     at integer not null)`,
+  `create table if not exists fd_canary_push (
+    slot integer primary key check (slot = 1),
+    pushed_at integer not null,
+    fixture_repo text not null,
+    fixture_installation text not null)`,
   `create table if not exists fd_install_states (
     state text primary key,
     session text not null,
@@ -68,6 +73,29 @@ export const recordVerifiedDelivery = (
          enrolled = max(fd_installations.enrolled, excluded.enrolled)`,
     )
     .bind(installation.id, installation.accountLogin, installation.enrolled === true ? 1 : 0, now)
+    .run();
+
+/** Registers an installation the App lists, as `active`; a registered installation keeps its row (FD-OPS-041). */
+export const registerInstallation = (db: D1Like, id: string, accountLogin: string) =>
+  db
+    .prepare(
+      `insert into fd_installations (installation_id, account_login, status) values (?, ?, 'active')
+       on conflict (installation_id) do nothing`,
+    )
+    .bind(id, accountLogin)
+    .run();
+
+/**
+ * Records a verified webhook delivery's time on a registered installation, which the canary's stage read and
+ * `webhook-silent` take (FD-OPS-040, FD-OPS-089); an installation not yet registered records nothing.
+ */
+export const recordDeliveryTime = (db: D1Like, id: string, at: number) =>
+  db
+    .prepare(
+      `update fd_installations set last_verified_delivery_at = max(coalesce(last_verified_delivery_at, 0), ?)
+       where installation_id = ?`,
+    )
+    .bind(at, id)
     .run();
 
 /** One installation as the probes and the report see it. */

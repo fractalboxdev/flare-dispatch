@@ -212,7 +212,7 @@ The dispatch action (`actions/flare-dispatch-action`) is specified in [interface
 
 ### Cron
 
-- **FD-INT-050** · phase 0 · `V-UNIT` `V-DEPLOY` — The committed template must declare exactly one cron trigger, `* * * * *`, and the drift check must fail a rendered configuration or a deployed Worker whose cron set differs from it.
+- **FD-INT-050** · phase 0 · `V-UNIT` `V-DEPLOY` — The dispatcher Worker's committed template must declare exactly one cron trigger, `* * * * *`, and the drift check must fail a rendered configuration or a deployed Worker whose cron set differs from it. A static-assets Worker's committed template (`assets` and no `main`), such as the documentation site's, must declare no cron trigger, and the drift check must fail one that declares any.
 - **FD-INT-067** · phase 0 · `V-UNIT` `V-SIM` — When the minute tick fires, the dispatcher Worker must only enqueue work: each installation's missed-webhook scan and each probe of [operability.md](operability.md) must run in its own Durable Object alarm or Queue message, and each such unit must stay within 500 D1 queries and 1,000 subrequests, carrying a cursor to the next unit when it stops.
 - **FD-INT-051** · phase 0 · `V-UNIT` — When the minute tick fires, the dispatcher Worker must submit every run whose `schedules[].cron` expression matches the tick's scheduled minute in UTC, once for each repository whose manifest lists that schedule.
 - **FD-INT-052** · phase 0 · `V-UNIT` — When the dispatcher Worker submits a scheduled run, it must pin the head SHA of the branch the schedule names, or of the default branch when it names none, at intake.

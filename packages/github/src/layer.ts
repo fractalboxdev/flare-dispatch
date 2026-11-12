@@ -14,7 +14,11 @@ import {
 } from "./app.ts";
 import { CheckRunApplierLive } from "./applier.ts";
 import { githubClientLayer, type GithubClientOptions } from "./client.ts";
-import { ActuatorRateLimitLive, type InstallationQuota, installationQuotaLayer } from "./rate-limit.ts";
+import {
+  ActuatorRateLimitLive,
+  type InstallationQuota,
+  installationQuotaLayer,
+} from "./rate-limit.ts";
 import { githubReadLayer } from "./read.ts";
 import { GithubApplierLive } from "./github-applier.ts";
 import { githubWritesLayer } from "./writes.ts";

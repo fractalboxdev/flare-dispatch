@@ -21,6 +21,8 @@
     "ACCESS_AUD": "{{access.aud}}",
     "OPERATORS": "{{operators}}",
     "GITHUB_APP_ID": "{{github.appId}}",
+    // The repository the 15-minute synthetic webhook canary pushes to; with the App's key, the tick also runs the
+    // installation and delivery probes (FD-OPS-038, FD-OPS-041, FD-OPS-044).
     "GITHUB_FIXTURE_REPO": "{{github.fixtureRepo}}",
     // The overlay's spend values in USD, each it leaves out at its default: `B`, `F`, the release reserve, `R_ops`,
     // `R_m,min`, `D` and the overhead factor the spend view reads (FD-PROF-054).

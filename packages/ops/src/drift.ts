@@ -59,7 +59,7 @@ const accountSpecific = (c: WorkerConfig): readonly { path: string; value: unkno
   ...arr(c["routes"]).map((r, i) => ({ path: `routes[${i}].pattern`, value: r["pattern"] })),
 ];
 
-/** The cron set every template declares: the single minute tick (FD-INT-050). */
+/** The cron set every template with a Worker script declares: the single minute tick (FD-INT-050). */
 export const MINUTE_TICK = "* * * * *";
 
 const cronsOf = (c: WorkerConfig): readonly string[] => {
@@ -71,7 +71,11 @@ const cronsOf = (c: WorkerConfig): readonly string[] => {
     : [];
 };
 
-/** The template's own invariants (FD-OPS-001, FD-OPS-012, FD-INT-050). */
+/**
+ * The template's own invariants (FD-OPS-001, FD-OPS-012, FD-INT-050). The minute-tick check applies to every template
+ * but a static-assets one (`assets` and no `main`): that Worker, such as the documentation site, runs no scheduled
+ * handler, so any cron trigger on it fails the check.
+ */
 export const templateInvariants = (worker: string, template: WorkerConfig): readonly Finding[] => [
   ...accountSpecific(template)
     .filter((f) => !isPlaceholder(f.value))
@@ -81,8 +85,26 @@ export const templateInvariants = (worker: string, template: WorkerConfig): read
   ...(template["keep_vars"] === false
     ? []
     : [fail("keep_vars", `${worker}.keep_vars`, "every template sets keep_vars to false")]),
-  ...cronCheck(worker, cronsOf(template)),
+  ...(isStaticAssets(template)
+    ? staticCronCheck(worker, cronsOf(template))
+    : cronCheck(worker, cronsOf(template))),
 ];
+
+/** A Worker that serves static assets with no Worker script. */
+const isStaticAssets = (c: WorkerConfig): boolean =>
+  c["main"] === undefined && c["assets"] !== undefined;
+
+/** A cron trigger on a Worker with no script, which has no scheduled handler to run. */
+const staticCronCheck = (worker: string, crons: readonly string[]): readonly Finding[] =>
+  crons.length === 0
+    ? []
+    : [
+        fail(
+          "cron",
+          `${worker}.triggers.crons`,
+          `cron set ${JSON.stringify(crons)} on a Worker with no script`,
+        ),
+      ];
 
 /** A cron set other than the single minute tick (FD-INT-050). */
 export const cronCheck = (worker: string, crons: readonly string[]): readonly Finding[] =>
