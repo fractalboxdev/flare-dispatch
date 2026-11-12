@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { compileObjectKey, handleCompileCache, type CompileCacheLookup } from "./compile-cache.ts";
+import { compileObjectKey, handleCompileCache } from "./compile-cache.ts";
 import { signCompileCacheToken } from "./compile-cache-token.ts";
 import { memoryLedgers } from "./ledger.ts";
 import {
@@ -10,6 +10,7 @@ import {
   HIT_RATE_WINDOW_MS,
   recordCacheLookups,
   type CacheLookup,
+  type CompileCacheLookup,
 } from "./metrics.ts";
 import { protectedCloud, pullRequestNamespace } from "./namespaces.ts";
 import { REPO, SECRET, startMiniflare } from "./support.test-support.ts";

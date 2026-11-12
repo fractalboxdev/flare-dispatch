@@ -1,4 +1,10 @@
 import { refusalReason } from "@fractalboxdev/flare-dispatch-agentic";
+import {
+  CACHE_LOOKUP_SCHEMA,
+  HIT_RATE_WINDOW_MS,
+  recordCacheLookups,
+  type CacheLookup,
+} from "@fractalboxdev/flare-dispatch-cache/metrics";
 import { DASHBOARD_LINK_LIFETIME_S } from "@fractalboxdev/flare-dispatch-api/config";
 import { checkLinkToken, mintLinkToken } from "@fractalboxdev/flare-dispatch-api/link-token";
 import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
@@ -27,6 +33,8 @@ import {
 let t: TestDb;
 beforeEach(async () => {
   t = await sqliteDb();
+  // The dashboard route creates the cache lookups' table before it reads the overview.
+  for (const sql of CACHE_LOOKUP_SCHEMA) await t.db.prepare(sql).run();
 });
 afterEach(() => t.dispose());
 
@@ -297,6 +305,70 @@ describe("overview", () => {
     const html = renderOverview(o);
     expect(html).toContain("placement-stalled");
     expect(html).toContain("R6");
+  });
+});
+
+describe("cache hit rate", () => {
+  const lookup = (over: Partial<CacheLookup>): CacheLookup => ({
+    executionId: "e1",
+    executorKind: "device",
+    level: "L1",
+    tier: "protected-device",
+    hit: true,
+    bytes: 10,
+    at: NOW - 1000,
+    ...over,
+  });
+
+  it("[FD-CACHE-090] the overview reports the 28-day hit rate per cache tier and executor kind", async () => {
+    expect(renderOverview(await overview(t.db, ["batch"], NOW))).toContain(
+      "No cache lookup in the last 28 days.",
+    );
+    await recordCacheLookups(t.db, [
+      lookup({}),
+      lookup({}),
+      lookup({}),
+      lookup({ tier: null, hit: false }),
+      lookup({
+        executionId: "e2",
+        executorKind: "cloudflare",
+        level: "L2",
+        tier: "protected-cloud",
+        bytes: 500,
+      }),
+      lookup({
+        executionId: "e2",
+        executorKind: "cloudflare",
+        level: "L2",
+        tier: null,
+        hit: false,
+      }),
+      // Older than 28 days: outside the window.
+      lookup({
+        executorKind: "aws",
+        level: "L2",
+        tier: "protected-cloud",
+        at: NOW - HIT_RATE_WINDOW_MS - 1,
+      }),
+    ]);
+    const o = await overview(t.db, ["batch"], NOW);
+    expect(
+      o.cacheHitRates.map((r) => [r.executor_kind, r.level, r.tier, r.hits, r.lookups, r.hit_rate]),
+    ).toEqual([
+      ["cloudflare", "L2", null, 0, 2, 0],
+      ["cloudflare", "L2", "protected-cloud", 1, 2, 0.5],
+      ["device", "L1", null, 0, 4, 0],
+      ["device", "L1", "protected-device", 3, 4, 0.75],
+    ]);
+    const html = renderOverview(o);
+    expect(html).toContain("Cache hit rate, last 28 days");
+    expect(html).toContain(
+      "<tr><td>device</td><td>L1</td><td>protected-device</td><td>3 / 4</td><td>75.0%</td><td>30</td></tr>",
+    );
+    expect(html).toContain(
+      "<tr><td>cloudflare</td><td>L2</td><td>miss</td><td>0 / 2</td><td>0.0%</td><td>0</td></tr>",
+    );
+    expect(html).not.toContain("aws");
   });
 });
 

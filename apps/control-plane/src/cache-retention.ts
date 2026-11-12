@@ -2,6 +2,7 @@
 // the cache, artifact and log retention sweeps. It imports nothing from the Workers runtime, so it runs outside it.
 import {
   ARTIFACT_SCHEMA,
+  CACHE_LOOKUP_SCHEMA,
   ledgersOf,
   sweepArtifacts,
   sweepCache,
@@ -41,12 +42,16 @@ export const LEDGER_END_SCHEMA = [
 
 const migrated = new WeakMap<D1Like, Promise<unknown>>();
 
-/** The artifact rows' table (FD-CACHE-073) and the ledger-end step's record of ended executions. */
+/**
+ * The artifact rows' table (FD-CACHE-073), the cache lookups' table (FD-CACHE-090) and the ledger-end step's record of
+ * ended executions.
+ */
 export const migrateCache = (db: D1Like) => {
   const existing = migrated.get(db);
   if (existing !== undefined) return existing;
   const run = (async () => {
-    for (const sql of [...ARTIFACT_SCHEMA, ...LEDGER_END_SCHEMA]) await db.prepare(sql).run();
+    for (const sql of [...ARTIFACT_SCHEMA, ...CACHE_LOOKUP_SCHEMA, ...LEDGER_END_SCHEMA])
+      await db.prepare(sql).run();
   })().catch((e: unknown) => {
     migrated.delete(db);
     throw e;

@@ -2,6 +2,7 @@
 // page at `/executions/:id`, behind the Access gate. The router serves the `/v1/` routes, the operability ones through
 // `OperabilityHandlers`. The operator routes of `operator-routes.ts` answer here when the composition supplies
 // `OperatorOperations`; a composition without it leaves them to the router.
+import { CACHE_LOOKUP_SCHEMA } from "@fractalboxdev/flare-dispatch-cache/metrics";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Cause, Effect, Layer } from "effect";
 import {
@@ -39,6 +40,10 @@ export interface OpsRouteDeps {
 
 /** The bindings the pages read: the D1 database and the runtime configuration's vars and secrets. */
 export type OpsRouteEnv = { readonly DB: D1Like } & Readonly<Record<string, unknown>>;
+
+const migrateCacheLookups = async (db: D1Like) => {
+  for (const sql of CACHE_LOOKUP_SCHEMA) await db.prepare(sql).run();
+};
 
 /** One JWKS cache per fetch function and issuer for the isolate's lifetime, so requests share fetched keys. */
 const jwksCaches = new WeakMap<typeof fetch, Map<string, JwksCache>>();
@@ -98,6 +103,9 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
     }
     yield* requireAccess(request, access);
     yield* Effect.promise(() => runOpsMigrations(env.DB));
+    // The cache area's lookups table, so the overview reads an empty table, not a missing one, on a deploy that has
+    // served no compile-cache request (FD-CACHE-090).
+    yield* Effect.promise(() => migrateCacheLookups(env.DB));
     const linkConfig = yield* linkConfigFrom(env, url.origin);
     const linkFor = (id: string) => dashboardLogLink(linkConfig, id, Math.floor(now / 1000));
     const executionPage = EXECUTION_PAGE.exec(pathname);

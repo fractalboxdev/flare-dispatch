@@ -1,6 +1,8 @@
 import {
+  cacheHitRates,
   cacheNamespaces,
   compileObjectKey,
+  executionCacheColumns,
   logObjectName,
   executionNamespace,
   manifestPath,
@@ -8,6 +10,7 @@ import {
   objectPrefix,
   protectedCloud,
   pullRequestNamespace,
+  signCompileCacheToken,
   type CacheLedgerApi,
 } from "@fractalboxdev/flare-dispatch-cache";
 import {
@@ -18,7 +21,7 @@ import {
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { CacheReads, cacheReads, type CacheEnv } from "../src/cache.ts";
+import { cacheFetch, CacheReads, cacheReads, type CacheEnv } from "../src/cache.ts";
 import {
   cacheSweeps,
   LEDGER_END_BATCH,
@@ -386,5 +389,68 @@ describe("the log route under the repository's confidentiality mode", () => {
     }
     // A repository of any other mode reads the segment the executor wrote.
     expect(await readLogs("non-confidential", "text")).toBe("the build's private output");
+  });
+});
+
+describe("the compile-cache route's lookups", () => {
+  it("[FD-CACHE-090] each compile-cache GET is recorded under its execution and the executor kind of its placement", async () => {
+    const p = await plane({ COMPILE_CACHE_SECRET: "cc-secret" } as Partial<ControlPlaneEnv>);
+    await p.execution("e-cc", "running", null);
+    await p.db
+      .prepare(
+        "insert into executors (executor_id, kind, posture_tier, labels_json, slots_json, last_heartbeat_at, drain, quarantine) values ('dev-1', 'device', 'unmanaged', '[]', '{}', ?, 0, 0)",
+      )
+      .bind(NOW)
+      .run();
+    await p.db
+      .prepare(
+        "insert into placements (execution_id, state, epoch, executor_id) values ('e-cc', 'leased', 1, 'dev-1')",
+      )
+      .run();
+    const stored = compileObjectKey(protectedCloud("acme/app"), "obj-hit");
+    const bucket = {
+      get: async (key: string) =>
+        key === stored
+          ? { size: 3, httpEtag: '"e"', uploaded: new Date(), body: new Response("abc").body }
+          : null,
+    };
+    const token = await signCompileCacheToken("cc-secret", {
+      repo: "acme/app",
+      executionId: "e-cc",
+      epoch: 1,
+      read: [pullRequestNamespace("acme/app", 7), protectedCloud("acme/app")],
+      write: pullRequestNamespace("acme/app", 7),
+      expiresAt: Date.now() + 60_000,
+    });
+    const pending: Promise<unknown>[] = [];
+    const get = async (key: string) => {
+      const response = await cacheFetch(
+        new Request(`https://cp.example/v1/compile-cache/acme/app/${key}`, {
+          headers: { authorization: `Bearer ${token}` },
+        }),
+        { ...p.env, CACHE: bucket } as unknown as ControlPlaneEnv & CacheEnv,
+        (promise) => void pending.push(promise),
+      );
+      await response?.text();
+      return response?.status;
+    };
+    expect(await get("obj-hit")).toBe(200);
+    expect(await get("obj-miss")).toBe(404);
+    expect(await get("obj-miss")).toBe(404);
+    await Promise.all(pending);
+    const db = p.db;
+    expect(await executionCacheColumns(db, "e-cc")).toEqual([
+      { level: "compile-cache", tier: null, lookups: 2, hits: 0, bytes_restored: 0 },
+      { level: "compile-cache", tier: "protected-cloud", lookups: 1, hits: 1, bytes_restored: 3 },
+    ]);
+    expect(await cacheHitRates(db, Date.now() + 1000)).toContainEqual({
+      executor_kind: "device",
+      level: "compile-cache",
+      tier: "protected-cloud",
+      lookups: 3,
+      hits: 1,
+      hit_rate: 1 / 3,
+      bytes_restored: 3,
+    });
   });
 });

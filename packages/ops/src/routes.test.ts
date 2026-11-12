@@ -1,3 +1,4 @@
+import { recordCacheLookups } from "@fractalboxdev/flare-dispatch-cache/metrics";
 import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { accessTeam, AUD, requestWith, TEAM } from "./access.test-support.ts";
@@ -83,6 +84,28 @@ describe("operability routes", () => {
       "/v1/github/install/new",
     ])
       expect(await opsFetch(requestWith(s.operator, path), s.env, s.deps), path).toBeNull();
+  });
+
+  it("[FD-CACHE-090] GET / reports the 28-day cache hit rate per tier and executor kind on a deploy with no lookup yet", async () => {
+    const now = 1_800_000_000_000;
+    const s = await setup({}, now);
+    const empty = await s.call(s.viewer, "/");
+    expect(empty.status).toBe(200);
+    expect(await empty.text()).toContain("No cache lookup in the last 28 days.");
+    await recordCacheLookups(t.db, [
+      {
+        executionId: "e1",
+        executorKind: "aws",
+        level: "compile-cache",
+        tier: "pull-request",
+        hit: true,
+        bytes: 7,
+        at: now - 1000,
+      },
+    ]);
+    expect(await (await s.call(s.viewer, "/")).text()).toContain(
+      "<tr><td>aws</td><td>compile-cache</td><td>pull-request</td><td>1 / 1</td><td>100.0%</td><td>7</td></tr>",
+    );
   });
 
   it("[FD-AGT-018] GET /executions/:id serves the execution page with every reason of its refused pr.propose row", async () => {
