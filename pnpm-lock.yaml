@@ -415,6 +415,9 @@ importers:
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../catalog
+      '@fractalboxdev/flare-dispatch-fd':
+        specifier: workspace:*
+        version: link:../fd
       '@fractalboxdev/flare-dispatch-github':
         specifier: workspace:*
         version: link:../github
@@ -556,6 +559,9 @@ importers:
       '@fractalboxdev/flare-dispatch-api':
         specifier: workspace:*
         version: link:../api
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../cache
       '@fractalboxdev/flare-dispatch-ops':
         specifier: workspace:*
         version: link:../ops
@@ -563,6 +569,9 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 5.20261012.1
+        version: 5.20261012.1
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1

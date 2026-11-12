@@ -63,6 +63,7 @@ describe("fd-<subcommand> executables", () => {
       "deploy",
       "doctor",
       "mcp",
+      "verify",
     ];
     for (const name of table) {
       const file = pkg.bin[`fd-${name}`];

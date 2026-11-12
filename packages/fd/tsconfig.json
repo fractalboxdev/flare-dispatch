@@ -1,10 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // Node's type stripping runs these files directly.
+    // Node's type stripping runs these files directly. The verifier imports the cache package's provenance modules,
+    // whose stores type R2 and D1 from the Workers types.
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
-    "types": ["node"]
+    "types": ["@cloudflare/workers-types", "node"]
   },
   "include": ["src/**/*.ts"]
 }
