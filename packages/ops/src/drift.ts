@@ -1,7 +1,8 @@
 // The drift check: a rendered configuration against the template's invariants, the environment schema, the pool
 // caps and mameko's profile validator; the deployed Workers against the record of the last deploy; the GitHub App's
 // registration against the committed manifest (specs/operability.md § Drift check); and, for a deploy that carries
-// the `aws` kind, the AWS account's Budgets actions against the AWS limit (FD-EXEC-083). Every check here is a pure
+// the `aws` kind, the AWS account's Budgets actions against the AWS limit (FD-EXEC-083); and the object-store
+// presigner's R2 API token against the cache and artifact buckets (FD-CACHE-091). Every check here is a pure
 // function of what it compares; `fd deploy` and `fd doctor` read the inputs through the ports of deploy.ts.
 import {
   checkRegistry,
@@ -841,6 +842,163 @@ export const awsBudgetCheck = (
       `AWS account ${read.account} carries no Budgets action that denies new task launches when actual spend reaches aws.budgetUsd ${limitUsd} USD: ${why}`,
     ),
   ];
+};
+
+/** The Worker secrets that hold the object-store presigner's R2 API token: its Access Key ID and Secret Access Key. */
+export const PRESIGN_SECRETS = [
+  "R2_PRESIGN_ACCESS_KEY_ID",
+  "R2_PRESIGN_SECRET_ACCESS_KEY",
+] as const;
+
+/**
+ * The Cloudflare permission groups of an R2 API token's Object Read & Write permission: read, write and list objects
+ * in the buckets the token names.
+ */
+export const OBJECT_READ_WRITE = [
+  "Workers R2 Storage Bucket Item Read",
+  "Workers R2 Storage Bucket Item Write",
+] as const;
+
+/** One policy of a Cloudflare API token: its effect, its permission groups by name and its resources. */
+export const ApiTokenPolicy = Schema.Struct({
+  /** `allow` or `deny`. */
+  effect: Schema.String,
+  permissionGroups: Schema.Array(Schema.String),
+  /** Resource key to `"*"`, or to a nested resource map for an account or zone wildcard. */
+  resources: Schema.Record(Schema.String, Schema.Unknown),
+});
+export type ApiTokenPolicy = typeof ApiTokenPolicy.Type;
+
+/** A Cloudflare API token as `GET /accounts/{account_id}/tokens/{token_id}` reports it; never its value. */
+export const ApiToken = Schema.Struct({
+  id: Schema.String,
+  /** `active`, `disabled` or `expired`. */
+  status: Schema.String,
+  policies: Schema.Array(ApiTokenPolicy),
+});
+export type ApiToken = typeof ApiToken.Type;
+
+/** The failure of a deploy that carries the presigner and whose overlay names no presign token. */
+export const presignTokenUnset: Finding = fail(
+  "presign",
+  "presign.tokenId",
+  "the overlay names no presign token: set presign.tokenId to the id of the R2 API token whose Access Key ID R2_PRESIGN_ACCESS_KEY_ID holds",
+);
+
+/** Each presign token secret the Worker that carries the presigner lacks (FD-CACHE-091); secrets by name only. */
+export const presignSecretsCheck = (
+  worker: string,
+  secrets: readonly string[],
+): readonly Finding[] =>
+  PRESIGN_SECRETS.filter((name) => !secrets.includes(name)).map((name) =>
+    fail(
+      "presign",
+      `${worker}.secrets.${name}`,
+      `the Worker secret ${name} is absent: the object-store presigner signs with the presign token and nothing else`,
+    ),
+  );
+
+/** An R2 bucket resource key: `com.cloudflare.edge.r2.bucket.<account id>_<jurisdiction>_<bucket name>`. */
+const R2_BUCKET_RESOURCE = /^com\.cloudflare\.edge\.r2\.bucket\.([0-9a-f]+)_([a-z]+)_([a-z0-9-]+)$/;
+
+/** The resource key an API token policy names one R2 bucket by; `default` is the bucket without a jurisdiction. */
+export const r2BucketResource = (
+  accountId: string,
+  bucket: string,
+  jurisdiction = "default",
+): string => `com.cloudflare.edge.r2.bucket.${accountId}_${jurisdiction}_${bucket}`;
+
+/** The one policy of the token FD-CACHE-091 requires: Object Read & Write on each of `buckets` of the account. */
+export const objectReadWritePolicy = (
+  accountId: string,
+  buckets: readonly string[],
+): ApiTokenPolicy => ({
+  effect: "allow",
+  permissionGroups: [...OBJECT_READ_WRITE],
+  resources: Object.fromEntries(buckets.map((b) => [r2BucketResource(accountId, b), "*"])),
+});
+
+/**
+ * The presign token against FD-CACHE-091: an active token whose policies grant Object Read & Write on exactly the cache
+ * and artifact buckets of the account, and nothing else. One failure per gap: an inactive token, a policy that is not
+ * `allow`, a permission group outside Object Read & Write, a resource that is not one of the two buckets (another
+ * bucket, another account's bucket, an account or zone wildcard), and each of the two buckets the token does not grant
+ * both read and write on. `null` is a token the account does not own.
+ */
+export const presignTokenCheck = (
+  tokenId: string,
+  token: ApiToken | null,
+  accountId: string,
+  buckets: readonly string[],
+): readonly Finding[] => {
+  if (token === null)
+    return [
+      fail(
+        "presign",
+        "presign.tokenId",
+        `the account owns no API token ${tokenId}: create the presign token as an account R2 API token with Object Read & Write on ${buckets.join(" and ")}`,
+      ),
+    ];
+  const out: Finding[] = [];
+  if (token.status !== "active")
+    out.push(
+      fail(
+        "presign",
+        "presign.token.status",
+        `presign token ${tokenId} is ${token.status || "of unknown status"}, not active`,
+      ),
+    );
+  const granted = new Map<string, Set<string>>(buckets.map((b) => [b, new Set<string>()]));
+  token.policies.forEach((policy, i) => {
+    const at = `presign.token.policies[${i}]`;
+    if (policy.effect !== "allow")
+      out.push(
+        fail("presign", `${at}.effect`, `the policy's effect is ${policy.effect}, not allow`),
+      );
+    for (const group of policy.permissionGroups)
+      if (!(OBJECT_READ_WRITE as readonly string[]).includes(group))
+        out.push(
+          fail(
+            "presign",
+            `${at}.permission_groups`,
+            `grants ${group}, outside Object Read & Write`,
+          ),
+        );
+    for (const [key, value] of Object.entries(policy.resources)) {
+      const m = R2_BUCKET_RESOURCE.exec(key);
+      const bucket = m?.[3];
+      if (
+        m === null ||
+        m[1] !== accountId ||
+        bucket === undefined ||
+        !granted.has(bucket) ||
+        value !== "*"
+      ) {
+        out.push(
+          fail(
+            "presign",
+            `${at}.resources`,
+            `covers ${key}, which is not the cache or the artifact bucket of account ${accountId}`,
+          ),
+        );
+        continue;
+      }
+      if (policy.effect === "allow")
+        for (const group of policy.permissionGroups) granted.get(bucket)!.add(group);
+    }
+  });
+  for (const [bucket, groups] of granted) {
+    const missing = OBJECT_READ_WRITE.filter((g) => !groups.has(g));
+    if (missing.length > 0)
+      out.push(
+        fail(
+          "presign",
+          `presign.token.${bucket}`,
+          `presign token ${tokenId} does not grant ${missing.join(" or ")} on bucket ${bucket}`,
+        ),
+      );
+  }
+  return out;
 };
 
 /** Whether any finding fails the check; warnings alone pass. */

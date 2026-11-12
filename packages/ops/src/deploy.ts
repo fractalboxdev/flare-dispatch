@@ -23,11 +23,15 @@ import {
   modelRegistryCheck,
   policyRootKeyCheck,
   policyRulesCheck,
+  presignSecretsCheck,
+  presignTokenCheck,
+  presignTokenUnset,
   rulesetCheck,
   settingsDrift,
   templateInvariants,
   unrenderedCheck,
   withProfileStep,
+  type ApiToken,
   type AppPermissions,
   type AwsBudgets,
   type DeployedSettings,
@@ -112,6 +116,11 @@ export class DeployTarget extends Context.Service<
     readonly appRegistration: Effect.Effect<AppPermissions, TargetFailed>;
     /** The status checks the default branch's ruleset requires (FD-VER-023, FD-OPS-028). */
     readonly requiredChecks: Effect.Effect<readonly string[], TargetFailed>;
+    /**
+     * The account API token `tokenId` names, with its policies, or `null` when the account owns no such token: the
+     * object-store presigner's R2 API token (FD-CACHE-091).
+     */
+    readonly apiToken: (tokenId: string) => Effect.Effect<ApiToken | null, TargetFailed>;
     /** The deploying organization's AWS account's budgets and Budgets actions (FD-EXEC-083). */
     readonly awsBudgets: Effect.Effect<AwsBudgets, TargetFailed>;
     /**
@@ -278,9 +287,44 @@ export type ProfileStep = (overlay: OverlayValues) => Effect.Effect<readonly Fin
 /** The Access applications a deploy carries, from its decoded overlay; none for a deploy without the dispatcher. */
 export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
 
+/** The bucket names a rendered configuration binds `CACHE` and `ARTIFACTS` to, in that order, each one it binds. */
+const presignBuckets = (config: WorkerConfig): readonly string[] => {
+  const buckets = Array.isArray(config["r2_buckets"])
+    ? (config["r2_buckets"] as { binding?: unknown; bucket_name?: unknown }[])
+    : [];
+  return ["CACHE", "ARTIFACTS"].flatMap((binding) => {
+    const name = buckets.find((b) => b.binding === binding)?.bucket_name;
+    return typeof name === "string" ? [name] : [];
+  });
+};
+
+/**
+ * The presign check over the Worker that carries the object-store presigner (FD-CACHE-091): the Worker holds both
+ * presign token secrets, the overlay names the token, and the token, read through the Cloudflare API, grants Object
+ * Read & Write on exactly the buckets the Worker binds as `CACHE` and `ARTIFACTS`. The secrets are write-only, so the
+ * token is the one `presign.tokenId` names.
+ */
+const presignFindings = (
+  overlay: OverlayValues,
+  rendered: RenderedWorker,
+  deployed: DeployedSettings | null,
+) =>
+  Effect.gen(function* () {
+    const target = yield* DeployTarget;
+    const findings = [...presignSecretsCheck(rendered.worker, deployed?.secrets ?? [])];
+    const tokenId = overlay.presign?.tokenId;
+    if (tokenId === undefined) return [...findings, presignTokenUnset];
+    const token = yield* target.apiToken(tokenId);
+    return [
+      ...findings,
+      ...presignTokenCheck(tokenId, token, overlay.accountId, presignBuckets(rendered.config)),
+    ];
+  });
+
 /**
  * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
- * policy rules (FD-PROF-025), the templates' invariants, the
+ * policy rules (FD-PROF-025), the templates' invariants, the presign token of the Worker `presigner` names
+ * (FD-CACHE-091), the
  * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the
  * last deploy, the GitHub App's registration, the default branch's ruleset, the AWS account's Budgets actions where the
  * overlay carries the `aws` kind, the runner workflow's permissions and timeout where it carries the `gha` kind, and, given
@@ -298,6 +342,7 @@ export const driftFindings = (
   extra: ExtraCheck = () => [],
   more: ProfileStep = () => Effect.succeed([]),
   access: CommittedAccess | null = null,
+  presigner: string | null = null,
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
@@ -310,6 +355,7 @@ export const driftFindings = (
       const deployed = yield* target.deployedSettings(r);
       findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config, deployed));
       findings.push(...policyRootKeyCheck(r.worker, r.config, deployed));
+      if (r.worker === presigner) findings.push(...(yield* presignFindings(overlay, r, deployed)));
       if (deployed !== null && !holdsOnlySecrets(deployed))
         findings.push(...deployedCronCheck(r.worker, r.config, deployed.crons));
       const record = yield* target.lastRecord(r);
@@ -334,7 +380,9 @@ export const driftFindings = (
         if (invalid !== undefined) findings.push(invalid);
         else {
           const text = yield* target.runnerWorkflow(runnerRepo, workflow);
-          findings.push(...(yield* Effect.promise(() => runnerWorkflowCheck(runnerRepo, workflow, text))));
+          findings.push(
+            ...(yield* Effect.promise(() => runnerWorkflowCheck(runnerRepo, workflow, text))),
+          );
         }
       }
     }
@@ -342,7 +390,10 @@ export const driftFindings = (
     return yield* withProfileStep(findings, more(overlay));
   }).pipe(Effect.mapError(stageFailed("drift")));
 
-/** `fd doctor`: every drift check, no Cloudflare or GitHub write (FD-OPS-024). */
+/**
+ * `fd doctor`: every drift check, no Cloudflare or GitHub write (FD-OPS-024). `presigner` names the Worker that carries
+ * the object-store presigner, whose presign token the drift check reads (FD-CACHE-091).
+ */
 export const fdDoctor = (
   overlayText: string,
   workers: readonly WorkerTemplate[],
@@ -350,6 +401,7 @@ export const fdDoctor = (
   extra?: ExtraCheck,
   more?: ProfileStep,
   access?: AccessFor,
+  presigner?: string,
 ) =>
   Effect.gen(function* () {
     const { overlay, rendered } = yield* renderAll(overlayText, workers);
@@ -361,6 +413,7 @@ export const fdDoctor = (
       extra,
       more,
       access?.(overlay) ?? null,
+      presigner ?? null,
     );
   });
 
@@ -388,7 +441,7 @@ export const applyAccess = (committed: CommittedAccess) =>
  * stops the deploy before any write, and fails on a hostname application whose AUD tag is not the overlay's
  * `access.aud`. Cloudflare gives a created application a new AUD tag, so a deploy that creates the hostname
  * application fails the deploy stage with that tag: the dispatcher checks Access JWTs against `access.aud`, and would
- * reject every one.
+ * reject every one. `presigner` names the Worker whose presign token the drift stage reads (FD-CACHE-091).
  */
 export const fdDeploy = (
   overlayText: string,
@@ -397,12 +450,24 @@ export const fdDeploy = (
   extra?: ExtraCheck,
   more?: ProfileStep,
   access?: AccessFor,
+  presigner?: string,
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
     const { overlay, rendered } = yield* renderAll(overlayText, workers);
     const committed = access?.(overlay) ?? null;
-    const drift = [...(yield* driftFindings(overlay, workers, rendered, manifest, extra, more))];
+    const drift = [
+      ...(yield* driftFindings(
+        overlay,
+        workers,
+        rendered,
+        manifest,
+        extra,
+        more,
+        null,
+        presigner ?? null,
+      )),
+    ];
     if (committed !== null)
       drift.push(
         ...accessAudCheck(
