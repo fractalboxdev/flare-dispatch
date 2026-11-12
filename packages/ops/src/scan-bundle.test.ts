@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import {
@@ -18,7 +20,12 @@ import {
   type DeployedSettings,
   type OverlayValues,
 } from "./index.ts";
-import { scanBundleFindings } from "./scan-bundle.ts";
+import {
+  declaredScannerVersions,
+  renderedImages,
+  scanBundleFindings,
+  versionArg,
+} from "./scan-bundle.ts";
 
 const HOUR = 3_600_000;
 const FILE = "deploy/scan-bundle.dsse.json";
@@ -45,7 +52,7 @@ const settings: DeployedSettings = {
 const target = (files: ReadonlyMap<string, Uint8Array>) => {
   const calls: string[] = [];
   const layer = Layer.succeed(DeployTarget, {
-    readScanBundle: (path) => Effect.sync(() => (calls.push(`bundle:${path}`), files.get(path) ?? null)),
+    readLocalFile: (path) => Effect.sync(() => (calls.push(`bundle:${path}`), files.get(path) ?? null)),
     writeScanBundle: (digest) => Effect.sync(() => void calls.push(`cas:${digest}`)),
     deployedSettings: ({ worker: w }) => Effect.sync(() => (calls.push(`read:${w}`), settings)),
     lastRecord: () => Effect.succeed(settings),
@@ -89,7 +96,7 @@ const signed = async (payload: unknown = validPayload(), signer?: SigningKey) =>
 };
 
 const findingsAt = (scan: OverlayValues["scan"], bytes: Uint8Array | null, at: number) =>
-  Effect.runPromise(scanBundleFindings(scan, bytes, at));
+  Effect.runPromise(scanBundleFindings(scan, bytes, at, [], () => Effect.succeed(null)));
 
 describe("the drift check's scan bundle step", () => {
   it("[FD-OPS-094] verifies the envelope at scan.bundleFile before any deploy step changes Cloudflare state, and reads none where the overlay pins no digest", async () => {
@@ -233,5 +240,162 @@ describe("the drift check's scan bundle step", () => {
       });
       expect(run.calls.filter(isWrite)).toEqual([]);
     }
+  });
+});
+
+const GATE_DOCKERFILE = readFileSync(
+  join(import.meta.dirname, "../../../infra/v2/Dockerfile.gate"),
+  "utf8",
+);
+const IMAGE = "infra/v2/Dockerfile.gate";
+const IMAGE_WORKERS = [
+  {
+    worker: "control-plane",
+    template: `{ "name": "control-plane", "account_id": "{{accountId}}", "keep_vars": false, "triggers": { "crons": ["* * * * *"] }, "containers": [{ "class_name": "LeanPool", "image": "${IMAGE}" }, { "class_name": "AgentPool", "image": "${IMAGE}" }] }`,
+  },
+];
+
+/** A valid payload whose version ranges are `versions` by scanner. */
+const rangedPayload = (versions: Readonly<Record<"gitleaks" | "zizmor" | "osv-scanner", string>>) => {
+  const base = validPayload();
+  return {
+    ...base,
+    scanners: {
+      gitleaks: { ...base.scanners.gitleaks, versions: versions.gitleaks },
+      zizmor: { ...base.scanners.zizmor, versions: versions.zizmor },
+      "osv-scanner": { ...base.scanners["osv-scanner"], versions: versions["osv-scanner"] },
+    },
+  };
+};
+const ACCEPTING = { gitleaks: "^8.30.0", zizmor: ">=1.32.0 <2.0.0", "osv-scanner": "~2.7.0" } as const;
+
+/** `fd deploy` over the Workers that name the gate image, with the envelope of `payload` and `dockerfile` on the host. */
+const imageDeploy = async (payload: unknown, dockerfile: string | null) => {
+  const { bytes, digest, entry } = await signed(payload);
+  const files = new Map([[FILE, bytes]]);
+  if (dockerfile !== null) files.set(IMAGE, new TextEncoder().encode(dockerfile));
+  const t = target(files);
+  const overlay = JSON.stringify({
+    ...placeholderOverlay,
+    scan: { bundleDigest: digest, bundleFile: FILE, bundleKeys: [entry] },
+  });
+  const result = await Effect.runPromise(
+    Effect.result(fdDeploy(overlay, IMAGE_WORKERS, APP_PERMISSIONS).pipe(Effect.provide(t.layer))),
+  );
+  return { result, calls: t.calls };
+};
+
+describe("the drift check's scanner versions of the rendered image", () => {
+  it("[FD-OPS-098] the gate image declares each scanner's version as the build argument its download and version check take", () => {
+    expect(declaredScannerVersions(GATE_DOCKERFILE)).toEqual({
+      gitleaks: "8.30.1",
+      zizmor: "1.32.0",
+      "osv-scanner": "2.7.0",
+    });
+    for (const scanner of ["gitleaks", "zizmor", "osv-scanner"] as const) {
+      const arg = versionArg(scanner);
+      expect(GATE_DOCKERFILE).toMatch(new RegExp(`releases/download/v\\$\\{${arg}\\}/`));
+      expect(GATE_DOCKERFILE).toContain(`grep -F "\${${arg}}"`);
+    }
+    // The last declaration wins, quotes are stripped, and an empty default declares nothing.
+    expect(
+      declaredScannerVersions(
+        'ARG GITLEAKS_VERSION=8.1.0\nARG GITLEAKS_VERSION="8.2.0"\nARG ZIZMOR_VERSION=\nARG OSV_SCANNER_VERSION\n',
+      ),
+    ).toEqual({ gitleaks: "8.2.0" });
+  });
+
+  it("[FD-OPS-098] resolves each container image beside its Worker's template, once per image", () => {
+    expect(
+      renderedImages([
+        {
+          worker: "control-plane",
+          templatePath: "apps/control-plane/wrangler.jsonc",
+          config: {
+            containers: [
+              { class_name: "LeanPool", image: "../../infra/v2/Dockerfile.gate" },
+              { class_name: "AgentPool", image: "../../infra/v2/Dockerfile.gate" },
+              { class_name: "Other", image: "./Dockerfile" },
+            ],
+          },
+        },
+        { worker: "docs", templatePath: "apps/docs/wrangler.jsonc", config: {} },
+      ]),
+    ).toEqual([
+      {
+        image: "infra/v2/Dockerfile.gate",
+        containers: ["control-plane.containers.LeanPool", "control-plane.containers.AgentPool"],
+      },
+      { image: "apps/control-plane/Dockerfile", containers: ["control-plane.containers.Other"] },
+    ]);
+  });
+
+  it("[FD-OPS-098] deploys where every scanner version the rendered image declares lies inside scanners.<name>.versions, reading the image after the verified envelope and before any write", async () => {
+    const run = await imageDeploy(rangedPayload(ACCEPTING), GATE_DOCKERFILE);
+    expect(run.result).toMatchObject({ _tag: "Success" });
+    expect(run.calls.slice(0, 2)).toEqual([`bundle:${FILE}`, `bundle:${IMAGE}`]);
+    expect(run.calls.filter((c) => c === `bundle:${IMAGE}`)).toHaveLength(1);
+  });
+
+  it("[FD-OPS-098] fails the drift check, naming the scanner, where a scanner version in the rendered image falls outside scanners.<name>.versions", async () => {
+    const cases: readonly [Record<"gitleaks" | "zizmor" | "osv-scanner", string>, string, string][] = [
+      [{ ...ACCEPTING, "osv-scanner": "~1.9.0" }, "osv-scanner", "holds osv-scanner 2.7.0, outside scanners.osv-scanner.versions ~1.9.0"],
+      [{ ...ACCEPTING, gitleaks: ">=9.0.0" }, "gitleaks", "holds gitleaks 8.30.1, outside scanners.gitleaks.versions >=9.0.0"],
+      [{ ...ACCEPTING, zizmor: "1.31.x" }, "zizmor", "holds zizmor 1.32.0, outside scanners.zizmor.versions 1.31.x"],
+    ];
+    for (const [versions, scanner, detail] of cases) {
+      const run = await imageDeploy(rangedPayload(versions), GATE_DOCKERFILE);
+      expect(run.result, scanner).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          stage: "drift",
+          findings: [
+            {
+              path: `scanners.${scanner}.versions`,
+              detail: `the image ${IMAGE} (control-plane.containers.LeanPool, control-plane.containers.AgentPool) ${detail}`,
+            },
+          ],
+        },
+      });
+      expect(run.calls.filter(isWrite)).toEqual([]);
+    }
+  });
+
+  it("[FD-OPS-098] fails the drift check for each scanner the rendered image declares no version of, and for every scanner where the deploy host holds no such Dockerfile", async () => {
+    const undeclared = GATE_DOCKERFILE.replace(/^ARG ZIZMOR_VERSION=.*$/m, "");
+    const missing = await imageDeploy(rangedPayload(ACCEPTING), undeclared);
+    expect(missing.result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        stage: "drift",
+        findings: [{ path: "scanners.zizmor.versions", detail: expect.stringContaining("declares no zizmor version (ARG ZIZMOR_VERSION)") }],
+      },
+    });
+    const absent = await imageDeploy(rangedPayload(ACCEPTING), null);
+    expect(absent.result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        stage: "drift",
+        findings: ["gitleaks", "zizmor", "osv-scanner"].map((s) => ({
+          path: `scanners.${s}.versions`,
+          detail: expect.stringContaining("the deploy host holds no Dockerfile there"),
+        })),
+      },
+    });
+    for (const run of [missing, absent]) expect(run.calls.filter(isWrite)).toEqual([]);
+  });
+
+  it("[FD-OPS-098] reads no image where the envelope fails verification", async () => {
+    const { bytes, entry } = await signed(rangedPayload(ACCEPTING));
+    const run = await Effect.runPromise(
+      scanBundleFindings(
+        { bundleDigest: "0".repeat(64), bundleFile: FILE, bundleKeys: [entry] },
+        bytes,
+        Date.now(),
+        [{ image: IMAGE, containers: ["control-plane.containers.LeanPool"] }],
+        () => Effect.die("read an image of an unverified envelope"),
+      ),
+    );
+    expect(run).toMatchObject([{ path: "scan.bundleDigest" }]);
   });
 });

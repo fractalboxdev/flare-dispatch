@@ -48,7 +48,7 @@ import {
   type OverlayValues,
 } from "./overlay.ts";
 import { parseJsonc, renderTemplate, type RenderFailed, type WorkerConfig } from "./render.ts";
-import { scanBundleFindings } from "./scan-bundle.ts";
+import { renderedImages, scanBundleFindings } from "./scan-bundle.ts";
 
 /** One Worker the deploy carries: its name, committed template and the overlay hostname key it serves on. */
 export interface WorkerTemplate {
@@ -136,10 +136,11 @@ export class DeployTarget extends Context.Service<
       workflow: string,
     ) => Effect.Effect<string | null, TargetFailed>;
     /**
-     * The bytes of the scan bundle envelope at `path`, relative to the repository root, or `null` where no such file
-     * exists (FD-OPS-094). A local read: it changes no Cloudflare state.
+     * The bytes of the deploy host's file at `path`, relative to the repository root, or `null` where no such file
+     * exists: the scan bundle envelope (FD-OPS-094) and the Dockerfile of each rendered container image
+     * (FD-OPS-098). A local read: it changes no Cloudflare state.
      */
-    readonly readScanBundle: (path: string) => Effect.Effect<Uint8Array | null, TargetFailed>;
+    readonly readLocalFile: (path: string) => Effect.Effect<Uint8Array | null, TargetFailed>;
     /**
      * Writes the verified scan bundle envelope's bytes to `cas/<digest>` in the account's cache bucket, where every
      * scan reads it (FD-OPS-099, FD-GATE-100).
@@ -365,8 +366,14 @@ const driftCheck = (
       // One verification time, sampled as verification starts, for every key window (FD-OPS-095).
       const at = yield* Clock.currentTimeMillis;
       const bytes =
-        scan.bundleFile === undefined ? null : yield* target.readScanBundle(scan.bundleFile);
-      const bundleFindings = yield* scanBundleFindings(scan, bytes, at);
+        scan.bundleFile === undefined ? null : yield* target.readLocalFile(scan.bundleFile);
+      const bundleFindings = yield* scanBundleFindings(
+        scan,
+        bytes,
+        at,
+        renderedImages(rendered),
+        target.readLocalFile,
+      );
       findings.push(...bundleFindings);
       if (bytes !== null && !failed(bundleFindings)) bundle = { digest: scan.bundleDigest, bytes };
     }
@@ -416,7 +423,7 @@ const driftCheck = (
 /**
  * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
  * policy rules (FD-PROF-025), the overlay's identity lists against each other and its scoped entries against
- * `readOnlyScanRuns`, the catalogue's read-only scan runs by default (FD-OPS-090 to FD-OPS-093), the scan bundle envelope where the overlay pins one (FD-OPS-094 to FD-OPS-097), the
+ * `readOnlyScanRuns`, the catalogue's read-only scan runs by default (FD-OPS-090 to FD-OPS-093), the scan bundle envelope where the overlay pins one and each rendered container image's scanner versions against it (FD-OPS-094 to FD-OPS-098), the
  * templates' invariants, the presign token of the Worker `presigner` names
  * (FD-CACHE-091), the
  * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the

@@ -696,7 +696,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
     });
 
   return Layer.succeed(DeployTarget, {
-    readScanBundle: (path) =>
+    readLocalFile: (path) =>
       Effect.try({
         try: () => readLocal(resolve(c.root, path)),
         catch: (e) => new TargetFailed({ operation: `read ${path}`, message: String(e) }),

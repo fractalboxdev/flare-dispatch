@@ -289,7 +289,7 @@ const deployedBy = async (argv: readonly string[]) => {
   const received = new Map<string, string>();
   const target = () =>
     Layer.succeed(DeployTarget, {
-    readScanBundle: () => Effect.succeed(null),
+    readLocalFile: () => Effect.succeed(null),
     writeScanBundle: () => Effect.void,
       // Each Worker holds the secrets the control plane's composition reads, as the operator sets them before the
       // first deploy (FD-ARCH-039).
