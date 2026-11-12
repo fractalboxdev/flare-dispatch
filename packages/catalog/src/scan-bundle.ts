@@ -155,6 +155,13 @@ const termComparators = (term: string): readonly Comparator[] | undefined => {
       { op: "<", version: { ...high, prerelease: ["0"] }, implied: true },
     ];
   }
+  if ((op === ">" || op === "<=") && (n === 1 || n === 2)) {
+    // A partial bound covers its whole unnamed tail: `>1.2` excludes every 1.2.x, `<=1.2` includes it.
+    const next = n === 1 ? v(major! + 1) : v(major!, minor! + 1);
+    return op === ">"
+      ? [{ op: ">=", version: next }]
+      : [{ op: "<", version: { ...next, prerelease: ["0"] }, implied: true }];
+  }
   return n === 0 ? (op === "<" || op === ">" ? undefined : []) : [{ op: op as Op, version: low }];
 };
 
