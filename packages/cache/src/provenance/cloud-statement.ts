@@ -38,6 +38,17 @@ export const CloudStatementInput = Schema.Struct({
 });
 export type CloudStatementInput = typeof CloudStatementInput.Type;
 
+/**
+ * The attestation a cloud executor attaches to its `exec.result` as `statement`, bound to the lease nonce: the lease
+ * it was granted and the run's evidence. It names no artifact and no digest of one; the control plane reads those from
+ * its own artifact rows and R2 when it writes the statement.
+ */
+export const CloudAttestation = Schema.Struct({
+  lease: StatementLease,
+  ...StatementEvidenceFields,
+});
+export type CloudAttestation = typeof CloudAttestation.Type;
+
 export class CloudStatementFailed extends Schema.TaggedError<CloudStatementFailed>()(
   "CloudStatementFailed",
   {

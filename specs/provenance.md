@@ -86,6 +86,8 @@ sequenceDiagram
 
 *Statement flow · one lease, one nonce, one statement; the verifier trusts only the policy root key it pinned.*
 
+A cloud executor holds no device key. It attaches the lease it was granted and the run's evidence to its `exec.result` as the result's `statement`, the attestation bound to the lease nonce. After the accept compare-and-set accepts the result, the control plane checks that the placement row accepted it at its current epoch from that executor, that the executor's registry row names a kind other than `device`, and that the attestation's execution, epoch, nonce, executor and executor kind equal its records. It then writes the statement, with the repository, run, class, ref, commit and confidentiality mode from its own records and one subject per artifact it stored for the execution at that epoch, digested from the bytes in R2. It signs the statement with the provenance key as the cloud builder, once per execution and epoch, and records its log-append intent; the minute tick appends each due intent to Rekor or the private log (`apps/control-plane/src/provenance.ts`).
+
 ### Acceptance
 
 FlareDispatch's result-acceptance check runs the checks below on every statement, in order, inside the accept compare-and-set, and stops at the first failure ([MAMEKO-LEASE-093](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/placement-leases.md)). A failure concludes the execution `failure` with the reason `provenance: <reason>`, the reason kind the profile declares in category `policy`. Each check has a negative conformance test (FD-PROV-072).
