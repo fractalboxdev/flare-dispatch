@@ -241,6 +241,42 @@ describe("executions", () => {
     expect(pack.ciFailures[0]!.logTail.length).toBeLessThanOrEqual(INCIDENT_CAPS.logTail);
   });
 
+  it("[FD-IFC-045]: a confidential-compute repository's failure summary carries only the reason and the failing step names", async () => {
+    h.doubles.executions.set(
+      "01JSECRET",
+      record({ execution_id: "01JSECRET", repository: "acme/secret" }),
+    );
+    const summaryOf = async () =>
+      JSON.parse(
+        await (
+          await h.fetch("/v1/executions/01JSECRET/failure-summary", await h.asAccess(MEMBER))
+        ).text(),
+      ) as Record<string, unknown>;
+    // Any other mode serves the whole bounded pack.
+    for (const mode of ["non-confidential", "unclassified", "confidential-model"] as const) {
+      h.doubles.confidentiality.set("acme/secret", mode);
+      const full = await summaryOf();
+      expect(full).toHaveProperty("suspectFiles");
+      expect(full["ciFailures"]).toEqual([
+        expect.objectContaining({ logTail: expect.any(String) }),
+      ]);
+    }
+    h.doubles.confidentiality.set("acme/secret", "confidential-compute");
+    try {
+      const pack = await summaryOf();
+      expect(pack).toEqual({
+        contractVersion: "v1",
+        incidentId: "01JSECRET",
+        class: "ci",
+        repo: "acme/secret",
+        ciFailures: [{ kind: "run-step", name: "test", conclusion: "failure" }],
+      });
+      expect(JSON.stringify(pack)).not.toContain("src/secret");
+    } finally {
+      h.doubles.confidentiality.delete("acme/secret");
+    }
+  });
+
   it("[FD-IFC-043]: a failure summary of an execution that did not fail answers 409 not_failed", async () => {
     h.doubles.executions.set("01JOK", record({ execution_id: "01JOK", verdict: "success" }));
     const response = await h.fetch(

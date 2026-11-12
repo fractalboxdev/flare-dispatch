@@ -2,6 +2,7 @@
 // in-memory ports. The router runs through `toFetchHandler`, the way the Worker calls it.
 import type { webcrypto } from "node:crypto";
 import type { OidcKeys } from "@fractalboxdev/flare-dispatch-cache/oidc";
+import type { ConfidentialityMode } from "@fractalboxdev/flare-dispatch-profile";
 import { Context, Effect, Layer } from "effect";
 import { ApiConfig, type ApiConfigShape } from "./config.ts";
 import { base64urlEncode, utf8 } from "./crypto.ts";
@@ -162,6 +163,8 @@ export interface Doubles {
   oidcKeys: OidcKeys | undefined;
   /** The error the next operator operation fails with, as the coordinator would answer. */
   opsFailure: ReturnType<typeof apiError> | undefined;
+  /** Each repository's confidentiality mode; a repository absent here is `unclassified`. */
+  readonly confidentiality: Map<string, ConfidentialityMode>;
 }
 
 export const makeDoubles = (): Doubles => {
@@ -176,6 +179,7 @@ export const makeDoubles = (): Doubles => {
       }),
     oidcKeys: undefined,
     opsFailure: undefined,
+    confidentiality: new Map(),
   };
   return doubles;
 };
@@ -224,15 +228,29 @@ export const portsContext = (doubles: Doubles) =>
           incidentId: r.execution_id,
           class: "ci" as const,
           repo: r.repository,
+          suspectRef: { base: "refs/heads/main", head: "refs/pull/7/head" },
+          diagnosis: {
+            title: "test fails",
+            area: "src/secret.ts",
+            diagnosis: "const key = readKey()",
+            suggestedFix: "edit src/secret.ts",
+          },
+          signals: [{ source: "sentry", title: "crash", detail: "at src/secret.ts:4" }],
           ciFailures: [
             {
               kind: "run-step" as const,
               name: "test",
               conclusion: "failure",
+              command: "pnpm test src/secret.test.ts",
               logTail: "x".repeat(50_000),
+              url: "https://ci.example/logs/1",
             },
           ],
+          suspectFiles: ["src/secret.ts"],
+          repro: { kind: "command" as const, command: "pnpm test", note: "see src/secret.ts" },
         }),
+      confidentiality: (repository) =>
+        Effect.sync(() => doubles.confidentiality.get(repository) ?? "unclassified"),
     }),
     Context.add(Operations, {
       apply: (operation, call) =>

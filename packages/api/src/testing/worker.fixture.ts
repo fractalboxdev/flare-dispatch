@@ -154,7 +154,10 @@ export default {
       }),
       oidcKeyFromSecret(env.OIDC_SIGNING_JWK),
       Layer.succeed(Cancellation)({ cancel: () => Effect.fail(unbacked) }),
-      Layer.succeed(FailureSummaries)({ pack: () => Effect.fail(unbacked) }),
+      Layer.succeed(FailureSummaries)({
+        pack: () => Effect.fail(unbacked),
+        confidentiality: () => Effect.succeed("unclassified"),
+      }),
       Layer.succeed(Operations)({
         apply: () => Effect.fail(unbacked),
         health: Effect.fail(unbacked),
