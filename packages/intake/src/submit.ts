@@ -12,6 +12,7 @@ import {
 import {
   computeDataClasses,
   TriageIssuesInput,
+  TriagePrsInput,
   trifectaAdmission,
   type DataClasses,
 } from "@fractalboxdev/flare-dispatch-agentic";
@@ -304,18 +305,19 @@ export const submit = (
     const now = yield* Clock.currentTimeMillis;
     const name = checkName(s.run.name, s.label);
 
-    // Triage reads issue numbers from its input repository; the applier writes those numbers in this admission's
-    // scope. Bind the two before any trigger can admit work based on another repository's reports.
-    if (s.run.name === "triage-issues") {
-      const inputs = yield* Schema.decodeUnknownEffect(TriageIssuesInput)(s.inputs).pipe(
-        Effect.mapError(() => intakeError(400, "invalid_inputs", "invalid triage-issues inputs")),
+    // Triage reads its input repository; issue intents and staged digests are applied in this admission's scope.
+    // Bind the two before any trigger can admit work based on another repository's reports or suppression key.
+    if (s.run.name === "triage-issues" || s.run.name === "triage-prs") {
+      const schema = s.run.name === "triage-issues" ? TriageIssuesInput : TriagePrsInput;
+      const inputs = yield* Schema.decodeUnknownEffect(schema)(s.inputs).pipe(
+        Effect.mapError(() => intakeError(400, "invalid_inputs", `invalid ${s.run.name} inputs`)),
       );
       if (`${inputs.repo.owner}/${inputs.repo.name}`.toLowerCase() !== s.repo.toLowerCase())
         return yield* Effect.fail(
           intakeError(
             400,
             "invalid_inputs",
-            "triage-issues inputs.repo must match the execution repository",
+            `${s.run.name} inputs.repo must match the execution repository`,
           ),
         );
     }
