@@ -2,6 +2,7 @@ import { dedupKey, resolveRequestClass } from "@fractalboxdev/mameko-coordinator
 import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import {
+  checkOpenPayload,
   commitRecipe,
   confidentialityOf,
   dedupRecipes,
@@ -18,6 +19,7 @@ import {
   type ClassRequest,
   type PolicyRule,
 } from "./index.ts";
+import { LOCAL_ONLY } from "./bindings.ts";
 
 const pr: ClassRequest = {
   run: "check",
@@ -462,5 +464,30 @@ describe("policy sync", () => {
     expect(
       resolveClass(pr, { ...notRequired, ...rules(mode, { match: {}, class: "batch" }) }).class,
     ).toBe("batch");
+  });
+});
+
+describe("check runs of capacity-lease work", () => {
+  const check = { name: "flare-dispatch/check:ci", headSha: "e".repeat(40) };
+
+  it("[FD-ARCH-018] checkOpenPayload opens no check run for work carrying local-only, whatever its check or other labels", () => {
+    expect(LOCAL_ONLY).toBe("local-only");
+    for (const name of [
+      "flare-dispatch/check:ci",
+      "flare-dispatch/lint",
+      "flare-dispatch/nightly",
+    ]) {
+      const owned = { ...check, name };
+      expect(checkOpenPayload({ check: owned, labels: ["untrusted-input"] })).toEqual({
+        name,
+        head_sha: check.headSha,
+      });
+      for (const labels of [
+        [LOCAL_ONLY],
+        ["untrusted-input", LOCAL_ONLY],
+        [LOCAL_ONLY, "untrusted-input"],
+      ])
+        expect(checkOpenPayload({ check: owned, labels })).toBeNull();
+    }
   });
 });
