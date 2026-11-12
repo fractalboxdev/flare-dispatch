@@ -1,0 +1,49 @@
+name: ci
+
+# Lint, typecheck, the Worker bundle dry runs and the test suite, for every
+# pull request into main and as the first job of every deploy (deploy.yml calls
+# this workflow). A pull request gets the same gate its merge commit will meet,
+# so a red suite fails the PR rather than the deploy after it.
+#
+# The same commands also run on Cloudflare: the `offload-test` run executes
+# `pnpm lint`, `pnpm typecheck` and `pnpm test` in a container and posts the
+# `flare-dispatch/offload-test` check-run on the same commit.
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      # wrangler.jsonc names code that no TypeScript gate checks: entrypoints,
+      # and Durable Object classes the entrypoint must export. Rename a class
+      # without its binding and lint, typecheck and test all stay green — the
+      # first failure is the deploy, after migrations have been applied.
+      # `--containers-rollout none` keeps this to the bundle: without it a dry
+      # run still builds every container image, which the deploy jobs then
+      # build again. BEFORE `pnpm test`, deliberately: these cost seconds and
+      # the suite costs minutes, so a config that names missing code reds this
+      # job without waiting out the suite. After `typecheck`, also
+      # deliberately: a real code error should fail with the typechecker's
+      # message, not esbuild's.
+      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none
+      - run: pnpm exec wrangler deploy --dry-run --containers-rollout none -c apps/substrate/wrangler.jsonc
+      - run: pnpm test

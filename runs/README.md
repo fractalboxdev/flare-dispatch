@@ -99,13 +99,14 @@ flowchart TB
 Three layers, closest first:
 
 1. **The check-run summary** (PR → Checks tab). Every check-run — in-progress
-   and completed, green and red, on every dispatch path — carries up to two
-   links: **"view full logs ↗"** opens the readable log viewer
+   and completed, green and red, on every dispatch path — carries
+   **"view full logs ↗"**, which opens the readable log viewer
    (`<origin>/logs/<instance-id>?t=<token>`; the token is signed with
    `LOG_LINK_SECRET`, falling back to `HMAC_SECRET`, and the link is omitted
-   when neither secret is set), and **"view step logs in Cloudflare ↗"** opens
-   the Workflows instance page (present only when `CLOUDFLARE_ACCOUNT_ID` is
-   set, and needs dashboard access to your account). The dispatcher's own
+   when neither secret is set). A check-run is as public as its repository, so
+   it never links the Cloudflare Workflows instance page, whose URL carries
+   your account id; the Access-gated viewer and executions API link it
+   instead. The dispatcher's own
    dashboard at `GET /` (Cloudflare Access-gated) lists recent executions with
    the same tokened viewer links — the browse path when you don't have the PR
    open. Cron-scheduled runs have no request to infer an origin from, so their
@@ -661,10 +662,21 @@ wrangler kv key put --binding=CONFIG_KV \
 
 `timeoutSec` precedence is dispatch value → `worker-deploy.timeoutSec:<repo>` → 900. A malformed value degrades to 900.
 
-**A deploy is never step-retried.** The `exec` step runs with `retries: 0` and a
-Workflow step timeout of the exec timeout + 120s, so the sandbox's deadline —
-not the platform's 600s step default — ends a slow deploy, and a failure is
-reported once instead of re-publishing every Worker on a second attempt.
+**A deploy launches once.** The deploy command runs as one process the sandbox
+owns (`durableExec`), watched by short `exec-start` / `exec-observe-<i>` /
+`exec-finalize` steps. Those steps retry platform failures — a restarted
+Workflow instance, a dropped sandbox connection — and `exec-start` claims the
+launch once, so a retry never starts a second deploy. A process the sandbox
+loses (its container recycled) fails `SandboxProcessLost`, since the deploy may
+already have published; a dispatch whose command may safely run twice — a
+preview publish of one commit — sets `"relaunchOnProcessLoss": true` to
+relaunch it once in a fresh container. The relaunch happens only if the command's
+timeout, plus 300s to rebuild the container, still fits inside the run's 1800s
+`maxDurationSec`; otherwise the run fails `SandboxProcessLost` rather than have
+the ceiling interrupt a half-run publish. The durable form applies at every exec
+timeout, short ones included.
+Only without a durable process owner does the command run as a single `exec`
+step, with `retries: 0` and a Workflow step timeout of the exec timeout + 120s.
 
 ```mermaid
 flowchart TB
@@ -675,7 +687,7 @@ flowchart TB
   head --> is{"head is<br/>the dispatched sha?"}
   is -->|"no, requireHead"| skip["**neutral**<br/>superseded by the head"]
   is -->|"yes, or unknown"| checkout["**checkout**<br/>clone the sha"]
-  checkout --> exec["**exec**<br/>secrets loaded inline<br/>retries 0, step timeout +120s"]
+  checkout --> exec["**exec**<br/>secrets loaded inline<br/>one durable process, launched once"]
   exec --> upload["**upload-log**<br/>step.log"]
   upload --> code{"exit code"}
   code -->|0| ok["**success**<br/>deployed"]

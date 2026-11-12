@@ -1,8 +1,12 @@
 // `compileCacheCommand` runs under `/bin/sh` against stub `rustc` and `sccache`
-// binaries, so the fallback and the statistics are the shell's real behavior.
+// commands, so the fallback and the statistics are the shell's real behavior.
+//
+// The stubs are shell functions, which `command -v` finds as it finds a binary
+// on `PATH`. macOS assesses an executable file the first time it runs, and
+// under load that assessment queues for seconds; a function is never assessed.
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,18 +17,20 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const RUSTC = `#!/bin/sh
-printf 'rustc 1.90.0 (1159e78c4 2025-09-14)\\nbinary: rustc\\nhost: x86_64-unknown-linux-gnu\\nrelease: 1.90.0\\n'
+const RUSTC = `rustc() {
+  printf 'rustc 1.90.0 (1159e78c4 2025-09-14)\\nbinary: rustc\\nhost: x86_64-unknown-linux-gnu\\nrelease: 1.90.0\\n'
+}
 `;
 
-/** A stub `sccache` that logs each invocation and its cache env; `--start-server` exits `startExit`. */
-const sccacheStub = (log: string, startExit: number): string => `#!/bin/sh
-echo "$* prefix=$SCCACHE_WEBDAV_KEY_PREFIX incr=$CARGO_INCREMENTAL ignore=$SCCACHE_IGNORE_SERVER_IO_ERROR idle=$SCCACHE_IDLE_TIMEOUT" >> ${log}
-case "$1" in
-  --start-server) exit ${startExit} ;;
-  --show-stats) echo "Compile requests 12" ;;
-esac
-exit 0
+/** A stub `sccache` that logs each invocation and its cache env; `--start-server` returns `startExit`. */
+const sccacheStub = (log: string, startExit: number): string => `sccache() {
+  echo "$* prefix=$SCCACHE_WEBDAV_KEY_PREFIX incr=$CARGO_INCREMENTAL ignore=$SCCACHE_IGNORE_SERVER_IO_ERROR idle=$SCCACHE_IDLE_TIMEOUT" >> ${log}
+  case "$1" in
+    --start-server) return ${startExit} ;;
+    --show-stats) echo "Compile requests 12" ;;
+  esac
+  return 0
+}
 `;
 
 const sandbox = (opts: { readonly sccache?: { readonly startExit: number } }) => {
@@ -32,17 +38,10 @@ const sandbox = (opts: { readonly sccache?: { readonly startExit: number } }) =>
   dirs.push(dir);
   const log = join(dir, "sccache.log");
   writeFileSync(log, "");
-  const rustc = join(dir, "rustc");
-  writeFileSync(rustc, RUSTC);
-  chmodSync(rustc, 0o755);
-  if (opts.sccache !== undefined) {
-    const sccache = join(dir, "sccache");
-    writeFileSync(sccache, sccacheStub(log, opts.sccache.startExit));
-    chmodSync(sccache, 0o755);
-  }
+  const stubs = RUSTC + (opts.sccache === undefined ? "" : sccacheStub(log, opts.sccache.startExit));
   const run = (command: string, env: Record<string, string> = compileCacheEnv({ endpoint: "https://d.example/v1/compile-cache", token: "t" })) =>
-    spawnSync("/bin/sh", ["-c", compileCacheCommand(command, "owner/name")], {
-      env: { PATH: `${dir}:/usr/bin:/bin`, ...env },
+    spawnSync("/bin/sh", ["-c", stubs + compileCacheCommand(command, "owner/name")], {
+      env: { PATH: "/usr/bin:/bin", ...env },
       encoding: "utf8",
     });
   return { run, log: () => readFileSync(log, "utf8") };
