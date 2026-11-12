@@ -186,6 +186,39 @@ describe("the identity gate", () => {
     expect(await r.json()).toMatchObject({ error: "forbidden" });
   });
 
+  it("[FD-IFC-089], [FD-IFC-090] holds a dispatch.scoped identity from the rendered DISPATCH_SCOPED var to its entry's runs and repositories", async () => {
+    const scanner = "scan-bot@example.com";
+    // The rendered var holds the overlay's array itself, as wrangler delivers it.
+    const scoped = miniflare("development", true, DEV_REPOSITORY, {
+      DISPATCH_SCOPED: [
+        {
+          identity: scanner,
+          runs: ["check"],
+          repositories: ["fractalboxdev/flare-dispatch"],
+          classCeiling: "batch",
+        },
+      ],
+    });
+    try {
+      await scoped.ready;
+      const outsideRun = await post(scoped, "/v1/dispatch/no-such-run", dispatchBody(SHA), scanner);
+      expect(outsideRun.status).toBe(403);
+      expect(await outsideRun.json()).toMatchObject({ error: "forbidden" });
+      const outsideRepository = await post(
+        scoped,
+        "/v1/dispatch/check",
+        { ...dispatchBody(SHA), repository: "fractalboxdev/other" },
+        scanner,
+      );
+      expect(outsideRepository.status).toBe(403);
+      expect(await outsideRepository.json()).toMatchObject({ error: "forbidden" });
+      const within = await post(scoped, "/v1/dispatch/check", dispatchBody(SHA), scanner);
+      expect(within.status).toBe(202);
+    } finally {
+      await scoped.dispose();
+    }
+  });
+
   it("serves health without identity and names the deployment", async () => {
     const r = await unconfigured.dispatchFetch("http://x/health");
     expect(await r.json()).toEqual({ status: "ok", deployment: "production", plane_id: PLANE });
@@ -464,7 +497,10 @@ describe("the cache, artifact and log routes", () => {
       .run();
     await artifact(PRIVATE_ARTIFACT, PRIVATE_EXECUTION, "acme/private", true);
     await bucket.put(`artifacts/${PRIVATE_EXECUTION}/1/report.txt`, "private body");
-    await bucket.put(`artifacts/${PRIVATE_EXECUTION}/1/report.txt.browse/a/b.txt`, "private browse");
+    await bucket.put(
+      `artifacts/${PRIVATE_EXECUTION}/1/report.txt.browse/a/b.txt`,
+      "private browse",
+    );
   });
 
   const logsPath = () => `/v1/executions/${EXECUTION}/logs/${encodeURIComponent(logFile)}`;

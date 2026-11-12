@@ -196,6 +196,27 @@ describe("renderer", () => {
     ).toEqual({ DISPATCHERS: ["ci@example.com"], AUD: "https://dispatch.example.com" });
   });
 
+  it("[FD-IFC-089] renders dispatch.scoped into DISPATCH_SCOPED, none where the overlay names none", () => {
+    const template = `{"vars": {"DISPATCH_SCOPED": "{{dispatch.scoped}}"}}`;
+    const varsOf = (o: typeof placeholderOverlay) =>
+      parseJsonc(Effect.runSync(renderTemplate("cp", template, o)))["vars"];
+    expect(varsOf(placeholderOverlay)).toEqual({ DISPATCH_SCOPED: [] });
+    expect(varsOf({ ...placeholderOverlay, dispatch: { oidcAudience: "aud" } })).toEqual({
+      DISPATCH_SCOPED: [],
+    });
+    const scoped = [
+      {
+        identity: "scan-bot.access",
+        runs: ["security-rescan"],
+        repositories: ["acme/widgets"],
+        classCeiling: "batch",
+      },
+    ];
+    expect(varsOf({ ...placeholderOverlay, dispatch: { scoped } })).toEqual({
+      DISPATCH_SCOPED: scoped,
+    });
+  });
+
   it("[FD-GH-093] holds records.url as an HTTPS URL and renders it into RECORDS_URL, empty where the overlay sets none", () => {
     const url = "https://records.example.com/hook";
     expect(Effect.runSync(decodeOverlay(overlay({ records: { url } }))).records).toEqual({ url });

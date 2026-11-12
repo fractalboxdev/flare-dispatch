@@ -10,6 +10,21 @@ export const MAX_LINK_LIFETIME_S = 604_800;
 /** The longest lifetime of a link the dashboard writes: 3600 s (FD-OPS-067). */
 export const DASHBOARD_LINK_LIFETIME_S = 3_600;
 
+/** The class ceilings a `dispatch.scoped` entry may name (specs/operability.md FD-OPS-092). */
+export const ScopedClassCeiling = Schema.Literals(["interactive", "batch"]);
+export type ScopedClassCeiling = typeof ScopedClassCeiling.Type;
+
+/**
+ * One `dispatch.scoped` entry: an automated caller of read-only scan runs, the runs and repositories it may name and
+ * the class ceiling its dispatches resolve under (specs/interfaces.md FD-IFC-089 to FD-IFC-093).
+ */
+export interface ScopedDispatch {
+  readonly identity: string;
+  readonly runs: readonly string[];
+  readonly repositories: readonly string[];
+  readonly classCeiling: ScopedClassCeiling;
+}
+
 export interface ApiConfigShape {
   /** `access.teamDomain` and `access.aud`; absent while the overlay sets either one to nothing (FD-IFC-014). */
   readonly access: { readonly teamDomain: string; readonly aud: string } | undefined;
@@ -17,6 +32,8 @@ export interface ApiConfigShape {
   readonly operators: readonly string[];
   /** `dispatchers`: the Access identities allowed to dispatch (FD-IFC-027). */
   readonly dispatchers: readonly string[];
+  /** `dispatch.scoped`: the Access identities allowed to dispatch only the runs and repositories their entry names. */
+  readonly scoped: readonly ScopedDispatch[];
   /** `dispatch.oidcAudience`, the audience an Actions OIDC token must carry (FD-IFC-024). */
   readonly oidcAudience: string | undefined;
   /** `executors.planeId`, the plane id every `connect` signature binds (FD-IFC-085). */
@@ -44,6 +61,8 @@ export interface ApiEnv {
   /** A JSON array of Access identities. */
   readonly DISPATCHERS?: string;
   readonly DISPATCH_OIDC_AUDIENCE?: string;
+  /** A JSON array of `dispatch.scoped` entries `{ identity, runs, repositories, classCeiling }`. */
+  readonly DISPATCH_SCOPED?: string;
   readonly PLANE_ID?: string;
   readonly PUBLIC_ORIGIN?: string;
   readonly LINK_LIFETIME_S?: string;
@@ -81,6 +100,43 @@ const identityList = (path: string, raw: string | undefined): readonly string[] 
     return identities(value).map((id) => id.trim().toLowerCase());
   } catch {
     return new ConfigInvalid({ path, message: `${path} is not a JSON array of identities` });
+  }
+};
+
+const NonEmpty = Schema.String.check(Schema.isMinLength(1));
+
+const scopedEntries = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        identity: NonEmpty,
+        runs: Schema.Array(NonEmpty),
+        repositories: Schema.Array(NonEmpty),
+        classCeiling: ScopedClassCeiling,
+      }),
+    ),
+  ),
+);
+
+/**
+ * The `dispatch.scoped` entries, each identity lowercased as Access reports it. A value that does not decode, or a
+ * class ceiling other than `interactive` or `batch`, answers `ConfigInvalid`, so no scoped caller dispatches under an
+ * entry the API cannot honor.
+ */
+const scopedList = (raw: string | undefined): readonly ScopedDispatch[] | ConfigInvalid => {
+  const value = present(raw);
+  if (value === undefined) return [];
+  try {
+    return scopedEntries(value).map((entry) => ({
+      ...entry,
+      identity: entry.identity.trim().toLowerCase(),
+    }));
+  } catch {
+    return new ConfigInvalid({
+      path: "DISPATCH_SCOPED",
+      message:
+        "DISPATCH_SCOPED is not a JSON array of { identity, runs, repositories, classCeiling } entries",
+    });
   }
 };
 
@@ -195,6 +251,8 @@ export const apiConfigFromEnv = (
   if (operators instanceof ConfigInvalid) return operators;
   const dispatchers = identityList("DISPATCHERS", env.DISPATCHERS);
   if (dispatchers instanceof ConfigInvalid) return dispatchers;
+  const scoped = scopedList(env.DISPATCH_SCOPED);
+  if (scoped instanceof ConfigInvalid) return scoped;
   const distinct = distinctLinkKey(env);
   if (distinct !== undefined) return distinct;
   const provenance = distinctProvenanceKey(env);
@@ -216,6 +274,7 @@ export const apiConfigFromEnv = (
     access: teamDomain !== undefined && aud !== undefined ? { teamDomain, aud } : undefined,
     operators,
     dispatchers,
+    scoped,
     oidcAudience: present(env.DISPATCH_OIDC_AUDIENCE),
     planeId: present(env.PLANE_ID),
     publicOrigin: (present(env.PUBLIC_ORIGIN) ?? requestOrigin).replace(/\/+$/, ""),

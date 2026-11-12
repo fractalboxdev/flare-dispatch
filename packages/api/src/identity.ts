@@ -2,7 +2,7 @@
 // Actions OIDC token and the link token. Each answers an identity or an error from the error model; none has a mode
 // that passes a request without one (FD-IFC-015).
 import { Context, Effect, Match } from "effect";
-import { ApiConfig } from "./config.ts";
+import { ApiConfig, type ScopedDispatch } from "./config.ts";
 import { apiError, type ApiError } from "./errors.ts";
 import { ACTIONS_ISSUER, ACTIONS_JWKS } from "@fractalboxdev/flare-dispatch-github/jwks";
 import { JwksSource, verifyWithJwks, type Claims } from "./jwt.ts";
@@ -198,9 +198,15 @@ export const inGroup = (
   group === "any" ||
   (group === "operators" ? config.operators : config.dispatchers).includes(id.toLowerCase());
 
+/** The `dispatch.scoped` entry of an Access identity, or undefined where the overlay names it in none. */
+export const scopedEntryOf = (
+  config: { readonly scoped: readonly ScopedDispatch[] },
+  id: string,
+): ScopedDispatch | undefined => config.scoped.find((entry) => entry.identity === id.toLowerCase());
+
 /**
- * A dispatch carries an Actions OIDC token as its bearer, or an Access JWT of an identity in `dispatchers`; anything
- * else answers `unauthenticated` before the route looks up the run (FD-IFC-027).
+ * A dispatch carries an Actions OIDC token as its bearer, or an Access JWT of an identity in `dispatchers` or
+ * `dispatch.scoped`; anything else answers `unauthenticated` before the route looks up the run (FD-IFC-027).
  */
 export const authenticateDispatch = (
   request: Request,
@@ -211,7 +217,7 @@ export const authenticateDispatch = (
     const config = yield* ApiConfig;
     const unauthenticated = apiError(
       "unauthenticated",
-      "a dispatch needs an Actions OIDC token or the Access identity of a dispatcher",
+      "a dispatch needs an Actions OIDC token or the Access identity of a dispatcher or scoped caller",
     );
     const access = yield* authenticateAccess(request, { redirectBrowser: false }).pipe(
       Effect.catch((error) =>
@@ -224,7 +230,8 @@ export const authenticateDispatch = (
     );
     return yield* Match.value(access).pipe(
       Match.tag("Access", (identity) =>
-        inGroup(config, "dispatchers", identity.id)
+        inGroup(config, "dispatchers", identity.id) ||
+        scopedEntryOf(config, identity.id) !== undefined
           ? Effect.succeed(identity)
           : Effect.fail(unauthenticated),
       ),

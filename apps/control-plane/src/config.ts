@@ -97,6 +97,8 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly WEBHOOK_SECRET?: string;
   /** `dispatch.oidcAudience`; unset refuses every Actions token. */
   readonly DISPATCH_OIDC_AUDIENCE?: string;
+  /** The rendered `{{dispatch.scoped}}`: the scoped callers and the runs and repositories each may name (FD-IFC-089). */
+  readonly DISPATCH_SCOPED?: unknown;
   /**
    * The rendered `{{records.url}}`: the HTTPS URL that receives job and verdict records, empty where the overlay sets
    * none (FD-GH-093).
@@ -185,6 +187,7 @@ export const apiEnvOf = (env: ControlPlaneEnv): ApiEnv => {
     ...(raw as ApiEnv),
     OPERATORS: textVar(raw["OPERATORS"]),
     DISPATCHERS: textVar(raw["DISPATCHERS"]),
+    DISPATCH_SCOPED: textVar(raw["DISPATCH_SCOPED"]),
   } as ApiEnv;
 };
 
