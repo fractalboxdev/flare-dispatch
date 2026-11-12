@@ -4,7 +4,8 @@
 // Cloudflare account keeps each deployed Worker's settings, versions and Container applications and its Access
 // applications between runs, so a suite deploys, changes the account out of band and deploys again. Access sits in
 // front of the dispatcher's hostname as the account's applications configure it. AWS STS, AWS Budgets, IAM and AWS
-// Organizations answer for one AWS account, and only requests whose SigV4 signature verifies.
+// Organizations answer for one AWS account, and only requests whose SigV4 signature verifies. The runner repository
+// `acme/runner` serves its workflow files to a contents-scoped token of the App's installation there.
 import type { AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -116,6 +117,11 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     app: AppPermissions;
     /** The status checks the default branch's ruleset requires; the merge gate and `check:ci` by default. */
     required: string[];
+    /**
+     * The files under `.github/workflows/` of the runner repository `acme/runner`, by file name, which the App's
+     * installation there reads with a token scoped to contents.
+     */
+    runnerWorkflows: Record<string, string>;
     /** Whether the deploy job's environment carries the AWS credentials. */
     awsCredentials: boolean;
     /** The AWS account's budgets and actions, as `DescribeBudgets` and `DescribeBudgetActionsForAccount` list them. */
@@ -137,6 +143,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     accessReadFails: false,
     app: APP_PERMISSIONS,
     required: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"],
+    runnerWorkflows: {},
     awsCredentials: true,
     awsBudgets: [],
     awsActions: [],
@@ -349,6 +356,29 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     return ok({ deployments: [{ versions: [{ version_id: s.versions.at(-1) }] }] });
   };
 
+  /** The runner repository's installation answers only a token it issued, scoped to contents. */
+  const runnerRepository = (method: string, path: string, headers: Headers, body: string) => {
+    if (path === "/repos/acme/runner/installation") return Response.json({ id: 11 });
+    if (path === "/app/installations/11/access_tokens") {
+      const asked = JSON.parse(body) as { repositories?: unknown; permissions?: unknown };
+      return JSON.stringify(asked) ===
+        JSON.stringify({
+          repositories: ["runner"],
+          permissions: { contents: "read", metadata: "read" },
+        })
+        ? Response.json({ token: "ghs_runner" })
+        : new Response(null, { status: 422 });
+    }
+    const m = /^\/repos\/acme\/runner\/contents\/\.github\/workflows\/([^/]+)$/.exec(path);
+    if (m === null) return null;
+    if (method !== "GET" || headers.get("authorization") !== "Bearer ghs_runner")
+      return new Response(null, { status: 401 });
+    const text = state.runnerWorkflows[decodeURIComponent(m[1]!)];
+    return text === undefined
+      ? new Response(null, { status: 404 })
+      : Response.json({ content: Buffer.from(text).toString("base64"), encoding: "base64" });
+  };
+
   const github = (path: string): Response => {
     if (path === "/app")
       return Response.json({
@@ -534,7 +564,11 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     if (AWS_SERVICES[url.host] !== undefined)
       return aws(url.host, new Headers(init?.headers), body);
     if (url.host === "api.cloudflare.com") return cloudflare(method, url, body);
-    if (url.host === "api.github.com") return github(url.pathname);
+    if (url.host === "api.github.com")
+      return (
+        runnerRepository(method, url.pathname, new Headers(init?.headers), body) ??
+        github(url.pathname)
+      );
     if (url.host === "alerts.example.com") {
       alarms.push(JSON.parse(body) as Record<string, unknown>);
       return new Response(null, { status: 204 });
