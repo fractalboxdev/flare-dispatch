@@ -4,7 +4,14 @@ import { testCommentWrites } from "./comment-writes.test-support.ts";
 import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { Actuators, AlarmPort, type Alarm, type IntentRow } from "@fractalboxdev/mameko-ports";
+import { deliveryLimitKey, RECORD_KINDS } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  ActuatorRateLimit,
+  Actuators,
+  AlarmPort,
+  type Alarm,
+  type IntentRow,
+} from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { GithubApp } from "./app.ts";
@@ -19,7 +26,9 @@ import {
 } from "./fake-writes.test-support.ts";
 import { fakeConcludeFacts, fakeGithub } from "./fake.test-support.ts";
 import { GithubApplierLive } from "./github-applier.ts";
-import { intentMarker, ISSUE_PAGES } from "./side-applier.ts";
+import { ActuatorRateLimitLive, InstallationQuota, RECORDS_LIMIT_KEY } from "./rate-limit.ts";
+import { JOB_RECORD_SCHEMA, VERDICT_RECORD_SCHEMA } from "./records.ts";
+import { intentMarker, ISSUE_PAGES, recordDeliveryId } from "./side-applier.ts";
 import {
   BlobStore,
   EmailSender,
@@ -32,11 +41,24 @@ import {
 import { GithubClient } from "./client.ts";
 
 const REPO = "acme/app";
+const RECORDS_URL = "https://records.example.com/hook";
+const RECORDS_SECRET = "records-secret";
 
 interface World {
   readonly side: FakeSide;
   readonly alarms: Alarm[];
   readonly slackPosts: { headers: Headers; body: string }[];
+  /** Each `POST` to `records.url`, with its URL and redirect mode. */
+  readonly recordPosts: {
+    url: string;
+    redirect: string | undefined;
+    headers: Headers;
+    body: string;
+  }[];
+  /** What the records endpoint answers each `POST`, in order: a status, or `lost` for a dropped answer; then `200`. */
+  readonly recordAnswers: (number | "lost")[];
+  /** Whether the deploy names a records endpoint. */
+  records: boolean;
   readonly emails: unknown[];
   readonly notices: unknown[];
   readonly followOns: unknown[];
@@ -51,6 +73,9 @@ const world = (): World => ({
   side: fakeSide(),
   alarms: [],
   slackPosts: [],
+  recordPosts: [],
+  recordAnswers: [],
+  records: true,
   emails: [],
   notices: [],
   followOns: [],
@@ -77,7 +102,19 @@ const layers = (w: World, installations: Record<string, number> = { [REPO]: 7 },
       commentWrites: testCommentWrites(w),
       appBot: BOT,
       slack: { url: "https://hooks.example.com/verdicts", secret: "slack-secret" },
-      fetch: (async (_: unknown, init?: RequestInit) => {
+      ...(w.records ? { records: { url: RECORDS_URL, secret: RECORDS_SECRET } } : {}),
+      fetch: (async (url: unknown, init?: RequestInit) => {
+        if (String(url) === RECORDS_URL) {
+          w.recordPosts.push({
+            url: String(url),
+            redirect: init?.redirect,
+            headers: new Headers(init?.headers),
+            body: String(init?.body),
+          });
+          const answer = w.recordAnswers.shift() ?? 200;
+          if (answer === "lost") throw new TypeError("connection reset");
+          return new Response(null, { status: answer });
+        }
         w.slackPosts.push({ headers: new Headers(init?.headers), body: String(init?.body) });
         return new Response("ok");
       }) as typeof fetch,
@@ -158,6 +195,8 @@ const BINDING: Readonly<Record<string, string>> = {
   "dispatch.followOn": "followOn",
   "notice.publish": "notice",
   "notify.slack": "notifySlack",
+  "job.record": "verdictRecord",
+  "verdict.record": "verdictRecord",
 };
 const actuatorFor = (r: IntentRow) =>
   Actuators.use((registry) => Effect.succeed(registry.get(BINDING[r.kind] ?? "pullRequest")!));
@@ -790,6 +829,199 @@ describe("notifications and follow-ons", () => {
       },
     ]);
     expect(w.side.calls).toEqual([]);
+  });
+});
+
+describe("job and verdict records", () => {
+  const jobRecord = {
+    schema: JOB_RECORD_SCHEMA,
+    execution_id: "exec-1",
+    epoch: 2,
+    run: "ci",
+    repository: REPO,
+    commit_sha: "a".repeat(40),
+    class: "required",
+    executor_kind: "cloudflare",
+  };
+  const verdictRecord = {
+    schema: VERDICT_RECORD_SCHEMA,
+    execution_id: "exec-1",
+    epoch: 2,
+    run: "ci",
+    repository: REPO,
+    commit_sha: "a".repeat(40),
+    ref: "refs/heads/main",
+    class: "required",
+    trigger: "webhook",
+    verdict: "failure",
+    reason: "tests failed",
+    conclusion: "failure",
+    check_name: "flare-dispatch/ci",
+  };
+  const jobRow = row("job.record", jobRecord, {
+    intentKey: "cp:job:record:2",
+    effectClass: "replay-safe",
+  });
+  const verdictRow = row("verdict.record", verdictRecord, {
+    executionId: null,
+    intentKey: "ops:verdict-record:exec-1",
+    effectClass: "replay-safe",
+  });
+  const hmac = (timestamp: string, body: string) =>
+    `v1=${createHmac("sha256", RECORDS_SECRET).update(`${timestamp}.${body}`).digest("hex")}`;
+
+  it("[FD-GH-098] each job and verdict record POST to records.url carries a timestamp, the delivery id and an HMAC-SHA256 over the timestamp, a dot and the body", async () => {
+    const w = world();
+    expect(await apply(w, jobRow)).toEqual({
+      _tag: "applied",
+      externalRef: "exec-1/cp:job:record:2",
+    });
+    expect(await apply(w, verdictRow)).toEqual({
+      _tag: "applied",
+      externalRef: "ops/ops:verdict-record:exec-1",
+    });
+    expect(w.recordPosts.map((p) => JSON.parse(p.body))).toEqual([jobRecord, verdictRecord]);
+    for (const [post, delivery] of [
+      [w.recordPosts[0]!, "exec-1/cp:job:record:2"],
+      [w.recordPosts[1]!, "ops/ops:verdict-record:exec-1"],
+    ] as const) {
+      expect(post.url).toBe(RECORDS_URL);
+      expect(post.redirect).toBe("manual");
+      const timestamp = post.headers.get("x-flare-dispatch-timestamp")!;
+      expect(timestamp).toMatch(/^\d+$/);
+      expect(post.headers.get("x-flare-dispatch-signature")).toBe(hmac(timestamp, post.body));
+      expect(post.headers.get("x-flare-dispatch-delivery")).toBe(delivery);
+    }
+    // A signature under another key, or over the body alone, does not match.
+    const first = w.recordPosts[0]!;
+    const ts = first.headers.get("x-flare-dispatch-timestamp")!;
+    expect(first.headers.get("x-flare-dispatch-signature")).not.toBe(
+      `v1=${createHmac("sha256", RECORDS_SECRET).update(first.body).digest("hex")}`,
+    );
+    expect(first.headers.get("x-flare-dispatch-signature")).not.toBe(
+      `v1=${createHmac("sha256", "slack-secret").update(`${ts}.${first.body}`).digest("hex")}`,
+    );
+    expect(w.slackPosts).toEqual([]);
+  });
+
+  it("[FD-GH-098] a deploy with no records endpoint refuses each record row and sends nothing", async () => {
+    const w = world();
+    w.records = false;
+    expect(await apply(w, verdictRow)).toEqual({
+      _tag: "refused",
+      reason: "verdict.record: no records endpoint is configured",
+    });
+    expect(w.recordPosts).toEqual([]);
+  });
+
+  it("[FD-GH-098] a 2xx applies a record, a 429 or 5xx retries it, another status refuses it, and a lost answer is unknown", async () => {
+    const w = world();
+    w.recordAnswers.push(503, 429, 400, "lost");
+    expect(await apply(w, verdictRow)).toEqual({
+      _tag: "retryable",
+      reason: "verdict.record: records 503",
+    });
+    expect(await apply(w, verdictRow)).toEqual({
+      _tag: "retryable",
+      reason: "verdict.record: records 429",
+    });
+    expect(await apply(w, verdictRow)).toEqual({
+      _tag: "refused",
+      reason: "verdict.record: records 400",
+    });
+    expect(await apply(w, verdictRow)).toMatchObject({ _tag: "unknown" });
+    // No receiver status reads as an installation's: a records 401 raises no installation alarm.
+    w.recordAnswers.push(401);
+    expect(await apply(w, verdictRow)).toMatchObject({ _tag: "refused" });
+    expect(w.alarms).toEqual([]);
+  });
+
+  it("[FD-GH-100] a repeated delivery of a record sends the first attempt's delivery id", async () => {
+    const w = world();
+    w.recordAnswers.push("lost", 503);
+    expect(await apply(w, verdictRow)).toMatchObject({ _tag: "unknown" });
+    expect(await apply(w, { ...verdictRow, attempts: 1 })).toMatchObject({ _tag: "retryable" });
+    expect(await apply(w, { ...verdictRow, attempts: 2 })).toEqual({
+      _tag: "applied",
+      externalRef: "ops/ops:verdict-record:exec-1",
+    });
+    expect(w.recordPosts.map((p) => p.headers.get("x-flare-dispatch-delivery"))).toEqual([
+      "ops/ops:verdict-record:exec-1",
+      "ops/ops:verdict-record:exec-1",
+      "ops/ops:verdict-record:exec-1",
+    ]);
+    // The id is the row's own: another execution's record carries another id.
+    await apply(w, { ...verdictRow, intentKey: "ops:verdict-record:exec-2" });
+    expect(w.recordPosts.at(-1)!.headers.get("x-flare-dispatch-delivery")).toBe(
+      "ops/ops:verdict-record:exec-2",
+    );
+    expect(recordDeliveryId(jobRow)).toBe("exec-1/cp:job:record:2");
+  });
+
+  it("[FD-GH-101] a record row's permit, apply and release take nothing from InstallationQuota and call no GitHub API", async () => {
+    const w = world();
+    const quotaCalls: string[] = [];
+    const spy = Layer.succeed(InstallationQuota, {
+      observe: (key) => Effect.sync(() => void quotaCalls.push(`observe ${key}`)),
+      acquire: (r) =>
+        Effect.sync(() => {
+          quotaCalls.push(`acquire ${r.limitKey}`);
+          return { _tag: "granted" as const, permitId: `${r.limitKey}:1` };
+        }),
+      release: (id) => Effect.sync(() => void quotaCalls.push(`release ${id}`)),
+      remainingShare: (key) => Effect.sync(() => (quotaCalls.push(`share ${key}`), 1)),
+    });
+    const directoryReads: string[] = [];
+    const directory = Layer.succeed(InstallationDirectory, {
+      installationFor: (scope) => Effect.sync(() => (directoryReads.push(scope), 7)),
+    });
+    // The key the profile's `delivery.limit_key` binding gives both record kinds (FD-PROF-068).
+    expect(RECORD_KINDS.map((k) => deliveryLimitKey(k, "7"))).toEqual([
+      RECORDS_LIMIT_KEY,
+      RECORDS_LIMIT_KEY,
+    ]);
+    const request = (kind: string) => ({
+      limitKey: RECORDS_LIMIT_KEY,
+      call: "apply" as const,
+      kind,
+      tier: "effect",
+      priority: 2,
+      drawsReserve: false,
+      classRank: 1,
+      insertedAt: 0,
+    });
+    const answers = await Effect.runPromise(
+      Effect.gen(function* () {
+        const limit = yield* ActuatorRateLimit;
+        const out = [];
+        for (const r of [jobRow, verdictRow]) {
+          const permit = yield* limit.acquire(request(r.kind));
+          const actuator = yield* actuatorFor(r);
+          out.push({ permit: permit._tag, answer: (yield* actuator.apply(r))._tag });
+          if (permit._tag === "granted") yield* limit.release(permit.permitId);
+        }
+        return out;
+      }).pipe(
+        Effect.provide(Layer.merge(GithubApplierLive, ActuatorRateLimitLive)),
+        Effect.provide(Layer.mergeAll(layers(w), spy, directory)),
+      ),
+    );
+    expect(answers).toEqual([
+      { permit: "granted", answer: "applied" },
+      { permit: "granted", answer: "applied" },
+    ]);
+    expect(quotaCalls).toEqual([]);
+    expect(directoryReads).toEqual([]);
+    expect(w.side.calls).toEqual([]);
+    expect(w.recordPosts).toHaveLength(2);
+    // An installation's key still draws its permit from the quota.
+    await Effect.runPromise(
+      ActuatorRateLimit.use((l) => l.acquire({ ...request("comment"), limitKey: "7" })).pipe(
+        Effect.provide(ActuatorRateLimitLive),
+        Effect.provide(Layer.merge(spy, directory)),
+      ),
+    );
+    expect(quotaCalls).toEqual(["acquire 7"]);
   });
 });
 

@@ -1,6 +1,6 @@
 // What the side-output appliers call beyond GitHub: the staged-write gate, the
 // blob store, admission for a follow-on, email, the notice channel, and the
-// configuration the appliers read.
+// configuration the appliers read, the Slack and records endpoints included.
 import { Context, Schema, type Effect } from "effect";
 import type { CommentWriteStore } from "./comment-writes.ts";
 
@@ -83,6 +83,11 @@ export interface SideOutputSettings {
   readonly appBot: { readonly login: string; readonly name: string; readonly email: string };
   /** The Slack verdict endpoint and its signing secret; unset refuses every `notify.slack` row. */
   readonly slack: { readonly url: string; readonly secret: string } | undefined;
+  /**
+   * `records.url` and the verdict record signing key, which `job.record` and `verdict.record` rows are delivered to and
+   * signed with (specs/github-output.md § Job and verdict records); unset refuses every record row.
+   */
+  readonly records?: { readonly url: string; readonly secret: string } | undefined;
   readonly fetch: typeof globalThis.fetch;
 }
 

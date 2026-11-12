@@ -929,15 +929,8 @@ describe("phases", () => {
 });
 
 describe("record kinds", () => {
-  /** The phase-2 context of a control plane whose actuator registry serves `verdictRecord`. */
-  const recordsContext: ValidationContext = {
-    ...validationContext,
-    phase: 2,
-    bindings: {
-      ...bindings,
-      actuators: { ...bindings.actuators, verdictRecord: ["apply"] },
-    },
-  };
+  /** The phase-2 context of the shipped control plane, whose actuator registry serves `verdictRecord`. */
+  const recordsContext: ValidationContext = { ...validationContext, phase: 2 };
   const withRecords = buildProfile("production", 2, { records: true });
 
   it("[FD-GH-093] where the overlay sets records.url, the phase 2 profile generates job.record on lease-granted through jobRecordPayload, on the records delivery key", () => {
@@ -980,11 +973,11 @@ describe("record kinds", () => {
     ).toBe("lease-granted");
   });
 
-  it("[FD-GH-093] the shipped registry serves no verdictRecord actuator, so it rejects the phase 2 records profile on the two actuator paths", () => {
-    // FD-GH-098 registers `verdictRecord`; that package flips this to an empty list.
+  it("[FD-GH-098] the shipped registry serves the verdictRecord actuator, so it accepts the phase 2 records profile", () => {
+    expect(bindings.actuators.verdictRecord).toEqual(["apply"]);
     expect(
       validateProfile(withRecords, { ...validationContext, phase: 2 }).map((r) => r.path),
-    ).toEqual(["intent_kinds.job.record.actuator", "intent_kinds.verdict.record.actuator"]);
+    ).toEqual([]);
   });
 
   it("[FD-GH-093] the validator rejects a record kind before phase 2", () => {

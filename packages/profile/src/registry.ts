@@ -21,6 +21,7 @@ export const bindings: ValidationContext["bindings"] = {
     notifyEmail: ["apply"],
     notifySlack: ["apply"],
     notice: ["apply"],
+    verdictRecord: ["apply"],
   },
   functions: [
     "resolveClass",

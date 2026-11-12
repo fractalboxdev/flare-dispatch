@@ -392,12 +392,20 @@ export const installationQuotaObjectLayer = (
 const isRepository = (limitKey: string) => limitKey.includes("/");
 
 /**
+ * The limit key of `job.record` and `verdict.record` rows, the profile's `delivery.limit_key` answer for both kinds
+ * (FD-PROF-068). Their applier calls no GitHub API, so their permits are never drawn from an installation's quota.
+ */
+export const RECORDS_LIMIT_KEY = "records";
+const RECORDS_PERMIT = `${RECORDS_LIMIT_KEY}-permit:`;
+
+/**
  * mameko's actuator rate limit, served by the installation quota under the installation id, the key the client observes
  * each response under (FD-GH-056). A row keyed by its repository, as mameko keys a row when the binding is not applied
  * (MAMEKO-OUT-057), takes its permit from the quota of the installation that serves the repository. Any other key, an
  * installation id or the App's own key, is the quota key as it stands. A repository no installation serves keeps its
  * own key, since the applier refuses its row without a call; a directory read that fails answers `wait`, so no call
- * goes out under a quota it was not counted against.
+ * goes out under a quota it was not counted against. The `records` key is granted without the quota: its
+ * `verdictRecord` applier takes no `InstallationQuota` permit (FD-GH-101).
  */
 export const ActuatorRateLimitLive = Layer.effect(
   ActuatorRateLimit,
@@ -405,28 +413,37 @@ export const ActuatorRateLimitLive = Layer.effect(
     const quota = yield* InstallationQuota;
     const directory = yield* InstallationDirectory;
     const retryMs = quotaOptionsDefault.concurrentRetryMs;
+    let records = 0;
     return {
       acquire: (request) =>
-        isRepository(request.limitKey)
-          ? directory.installationFor(request.limitKey).pipe(
-              Effect.flatMap((installation) =>
-                quota.acquire(
-                  installation === null ? request : { ...request, limitKey: String(installation) },
+        request.limitKey === RECORDS_LIMIT_KEY
+          ? Effect.sync((): PermitAnswer => ({
+              _tag: "granted",
+              permitId: `${RECORDS_PERMIT}${++records}`,
+            }))
+          : isRepository(request.limitKey)
+            ? directory.installationFor(request.limitKey).pipe(
+                Effect.flatMap((installation) =>
+                  quota.acquire(
+                    installation === null
+                      ? request
+                      : { ...request, limitKey: String(installation) },
+                  ),
                 ),
-              ),
-              Effect.catch((e) =>
-                Effect.gen(function* () {
-                  const now = yield* Clock.currentTimeMillis;
-                  yield* Effect.logWarning("installation read failed; permit deferred", {
-                    limitKey: request.limitKey,
-                    reason: e.message,
-                  });
-                  return { _tag: "wait", retryAt: now + retryMs } as const;
-                }),
-              ),
-            )
-          : quota.acquire(request),
-      release: quota.release,
+                Effect.catch((e) =>
+                  Effect.gen(function* () {
+                    const now = yield* Clock.currentTimeMillis;
+                    yield* Effect.logWarning("installation read failed; permit deferred", {
+                      limitKey: request.limitKey,
+                      reason: e.message,
+                    });
+                    return { _tag: "wait", retryAt: now + retryMs } as const;
+                  }),
+                ),
+              )
+            : quota.acquire(request),
+      release: (permitId) =>
+        permitId.startsWith(RECORDS_PERMIT) ? Effect.void : quota.release(permitId),
     };
   }),
 );
