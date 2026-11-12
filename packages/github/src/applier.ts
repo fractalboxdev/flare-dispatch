@@ -158,7 +158,7 @@ const update = (
   });
 
 // Under `confidential-compute` each output states only what FD-GH-019 lists: the outcome, the conclusion reason, the
-// class, the executor id and the log pointer.
+// class, the executor id, the log pointer and the FD-GH-008 attempt suffix.
 
 const startOutput = (ctx: Ctx, p: PayloadOf<"check.start">) =>
   ctx.confidential
