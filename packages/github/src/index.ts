@@ -144,3 +144,4 @@ export {
   type SideOutputSettings,
 } from "./side-ports.ts";
 export { GithubWrites, githubWritesLayer, type WritesOptions } from "./writes.ts";
+export { d1CommentWrites } from "./comment-writes.ts";

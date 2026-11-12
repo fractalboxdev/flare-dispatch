@@ -1,3 +1,4 @@
+import { testCommentWrites } from "./comment-writes.test-support.ts";
 // The side-output appliers over an in-memory repository: each kind's write, its idempotency marker, its refusals
 // and its lookup.
 import { createHmac } from "node:crypto";
@@ -59,6 +60,9 @@ const world = (): World => ({
   deliveries: [{ id: 10, guid: "g-1", redelivery: false }],
 });
 
+const withoutWriteReceipt = (body: string | undefined) =>
+  body?.replace(/<!-- flare-dispatch:comment-write [a-f0-9-]+ -->\n\n/g, "");
+
 const unused = () => Effect.die("not used by the side-output applier");
 
 const layers = (w: World, installations: Record<string, number> = { [REPO]: 7 }, withGate = true) =>
@@ -70,6 +74,7 @@ const layers = (w: World, installations: Record<string, number> = { [REPO]: 7 },
     Layer.succeed(AlarmPort, { deliver: (a) => Effect.sync(() => void w.alarms.push(a)) }),
     fakeConcludeFacts(fakeGithub()),
     Layer.succeed(SideOutputConfig, {
+      commentWrites: testCommentWrites(w),
       appBot: BOT,
       slack: { url: "https://hooks.example.com/verdicts", secret: "slack-secret" },
       fetch: (async (_: unknown, init?: RequestInit) => {
@@ -292,7 +297,9 @@ describe("comment, review and issue", () => {
     );
     const updated = await apply(w, second);
     expect(updated).toEqual(created);
-    expect(w.side.comments.get(7)).toEqual([
+    expect(
+      w.side.comments.get(7)?.map((c) => ({ ...c, body: withoutWriteReceipt(c.body) })),
+    ).toEqual([
       { id: 1, body: "a human comment" },
       {
         id: Number((created as { externalRef: string }).externalRef),
@@ -344,7 +351,9 @@ describe("comment, review and issue", () => {
     expect(writes(w)).toEqual(["createComment"]);
     const comments = w.side.comments.get(7) ?? [];
     expect(comments).toHaveLength(1);
-    expect(comments[0]?.body).toBe(`review of exec-2\n\n${MARK}\n\n${intentMarker(newer)}`);
+    expect(withoutWriteReceipt(comments[0]?.body)).toBe(
+      `review of exec-2\n\n${MARK}\n\n${intentMarker(newer)}`,
+    );
   });
 
   it("[FD-AGT-053] a quoted marker in review content cannot pin the comment against future reviews", async () => {
@@ -369,7 +378,7 @@ describe("comment, review and issue", () => {
     const first = await apply(w, older);
     expect(await apply(w, newer)).toEqual(first);
     expect(w.side.comments.get(7)).toHaveLength(1);
-    expect(w.side.comments.get(7)?.[0]?.body).toBe(
+    expect(withoutWriteReceipt(w.side.comments.get(7)?.[0]?.body)).toBe(
       `current review\n\n${MARK}\n\n${intentMarker(newer)}`,
     );
     expect(writes(w)).toEqual(["createComment", "updateComment"]);

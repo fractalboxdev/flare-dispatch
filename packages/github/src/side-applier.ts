@@ -12,6 +12,7 @@ import { Clock, Context, Effect, Match, Option, Schema } from "effect";
 import { GithubApp } from "./app.ts";
 import { classify, InstallationDirectory } from "./applier.ts";
 import { GithubHttpError, GithubNetworkError, type GithubError } from "./client.ts";
+import { commentWriteReceipt, commentWriteResource } from "./comment-writes.ts";
 import {
   BlobStore,
   EmailSender,
@@ -249,11 +250,97 @@ const issuesWithMarker = (ctx: Ctx, marker: string) =>
 
 const owner = (repo: string) => repo.slice(0, repo.indexOf("/"));
 
+/** Serialization covers the external object, independently of the drainer's expiring per-row claim. */
+const orderedComment = (ctx: Ctx, p: PayloadOf<"comment"> & { readonly marker: string }) =>
+  Effect.gen(function* () {
+    const w = yield* writes;
+    const { appBot, commentWrites: store } = yield* SideOutputConfig;
+    if (store === undefined)
+      return yield* refuse("comment: durable write ownership is not configured");
+    const resource = commentWriteResource(ctx.repo, p.issue_number);
+    const pending = yield* store.read(resource);
+    if (pending !== null) {
+      const comments = yield* w.listComments({ ...ctx, issue: p.issue_number });
+      const receipts = comments.filter(
+        (c) => c.user?.login === appBot.login && c.body?.trimEnd().endsWith(pending.receipt),
+      );
+      if (receipts.length !== 1)
+        return yield* Effect.fail(
+          new Retry({ reason: "comment: an earlier external write is unresolved" }),
+        );
+      // This unpredictable attempt receipt could only appear after the sole authorized mutation took effect.
+      yield* store.release(resource, pending.token);
+    }
+    const token = crypto.randomUUID();
+    const receipt = commentWriteReceipt(token, intentMarker(ctx.row));
+    if (!(yield* store.claim(resource, { token, receipt })))
+      return yield* Effect.fail(
+        new Retry({ reason: "comment: another external write owns this pull request" }),
+      );
+    let dispatched = false;
+    return yield* Effect.gen(function* () {
+      // Re-read under durable ownership: a pre-claim snapshot cannot authorize an older PATCH.
+      const comments = yield* w.listComments({ ...ctx, issue: p.issue_number });
+      const existing = yield* single(
+        comments.filter(
+          (c) => c.user?.login === appBot.login && c.body?.includes(intentMarker(ctx.row)),
+        ),
+        (c) => c.id,
+      );
+      if (Option.isSome(existing)) return applied(existing.value);
+      const kept = comments.find(
+        (c) => c.user?.login === appBot.login && c.body?.includes(p.marker),
+      );
+      if (kept !== undefined) {
+        const holder = markedExecution(kept.body);
+        if (holder !== null && ctx.row.executionId !== null && holder > ctx.row.executionId)
+          return applied(kept.id);
+      }
+      const body = withMarker(
+        p.body.includes(p.marker) ? p.body : withMarker(p.body, p.marker),
+        receipt,
+      );
+      const mutation =
+        kept === undefined
+          ? w.createComment({ ...ctx, issue: p.issue_number, body })
+          : w.updateComment({ ...ctx, comment: kept.id, body });
+      dispatched = true;
+      const written = yield* mutation.pipe(
+        Effect.catchTags({
+          GithubHttpError: (e) =>
+            [401, 403, 404, 422, 429].includes(e.status)
+              ? Effect.andThen(store.release(resource, token), Effect.fail(e))
+              : Effect.fail(e),
+          GithubNetworkError: (e) =>
+            e.sent
+              ? Effect.fail(e)
+              : Effect.andThen(store.release(resource, token), Effect.fail(e)),
+        }),
+      );
+      // An acknowledged mutation has settled; an ambiguous/erroring mutation retains ownership without a TTL.
+      yield* store.release(resource, token);
+      return applied(written.id);
+    }).pipe(
+      Effect.onExit(() =>
+        dispatched
+          ? Effect.void
+          : store
+              .release(resource, token)
+              .pipe(
+                Effect.catchTag("GithubNetworkError", () =>
+                  Effect.logWarning("comment presend ownership release unavailable"),
+                ),
+              ),
+      ),
+    );
+  });
+
 const handlers: { readonly [K in SideKind]: Handler<K> } = {
   comment: {
     github: true,
     apply: (ctx, p) =>
       Effect.gen(function* () {
+        if (p.marker !== undefined) return yield* orderedComment(ctx, { ...p, marker: p.marker });
         const w = yield* writes;
         const marker = intentMarker(ctx.row);
         const comments = yield* w.listComments({ ...ctx, issue: p.issue_number });
@@ -262,27 +349,6 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
           (c) => c.id,
         );
         if (Option.isSome(existing)) return applied(existing.value);
-        if (p.marker !== undefined) {
-          const runMarker = p.marker;
-          const body = withMarker(
-            p.body.includes(runMarker) ? p.body : withMarker(p.body, runMarker),
-            marker,
-          );
-          // The earliest comment the App wrote carrying the run's marker is the one kept (FD-AGT-053); a marker in
-          // anyone else's comment is ignored, since the marker is public and the App can edit others' comments.
-          const { appBot } = yield* SideOutputConfig.use((s) => Effect.succeed(s));
-          const kept = comments.find(
-            (c) => c.user?.login === appBot.login && c.body?.includes(runMarker),
-          );
-          if (kept !== undefined) {
-            // Execution ids sort by time: a newer execution's write stays, and an older row adopts it.
-            const holder = markedExecution(kept.body);
-            const self = ctx.row.executionId;
-            if (holder !== null && self !== null && holder > self) return applied(kept.id);
-            return applied((yield* w.updateComment({ ...ctx, comment: kept.id, body })).id);
-          }
-          return applied((yield* w.createComment({ ...ctx, issue: p.issue_number, body })).id);
-        }
         return applied(
           (yield* w.createComment({
             ...ctx,

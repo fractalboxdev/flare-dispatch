@@ -1,3 +1,4 @@
+import { testCommentWrites } from "../../src/comment-writes.test-support.ts";
 // The `Execution` workflow's GitHub and side outputs as a `V-REPLAY` workflow (specs/github-output.md FD-GH-009,
 // FD-GH-078). One run over a SQLite D1 admits two executions with their `cp:check:open` rows, takes the first one's
 // `exec.intents` batch (an email, a Slack verdict post and a notice), accepts both epochs, writes both terminal outcomes
@@ -149,6 +150,7 @@ export const plane = async () => {
       rest: unused,
     }),
     Layer.succeed(SideOutputConfig, {
+      commentWrites: testCommentWrites(side),
       appBot: {
         login: "flare-dispatch[bot]",
         name: "flare-dispatch[bot]",

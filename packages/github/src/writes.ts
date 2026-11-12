@@ -222,6 +222,22 @@ export const githubWritesLayer = (options: WritesOptions) =>
                 "GET",
                 `/repos/${repo}/issues/${issue}/comments?per_page=100&page=${page}`,
               );
+              if (
+                !Array.isArray(batch) ||
+                batch.some(
+                  (c) =>
+                    c === null ||
+                    typeof c !== "object" ||
+                    !Number.isSafeInteger(c.id) ||
+                    c.id <= 0 ||
+                    (c.body !== null && typeof c.body !== "string") ||
+                    (c.user !== undefined && c.user !== null && typeof c.user.login !== "string"),
+                )
+              )
+                return yield* new GithubNetworkError({
+                  sent: false,
+                  message: "comment: malformed comment thread",
+                });
               comments.push(...batch);
               if (batch.length < 100) return comments;
             }

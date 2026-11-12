@@ -254,6 +254,13 @@ Every call, `lookup` included, spends budget; only `apply` calls count against t
 
 ## Open items
 
+- Marked review-comment writes use a durable per-PR slot independently of the outbox row claim. A unique attempt footer
+  permits recovery after a lost acknowledgement only when a complete bot-owned comment read observes that exact footer.
+  An absent, malformed or unreadable receipt never releases an uncertain write: newer reviews remain pending, including
+  after claim expiry or an isolate restart. A crash between reserving the slot and sending can therefore block that PR's
+  marked comments indefinitely. There is no timed unlock; operational recovery requires proving the old request cannot
+  still write. Availability is sacrificed rather than letting a late older PATCH overwrite a newer review.
+
 - TODO(maintainer): confirm GitHub's current secondary rate limits for content-creating requests and set the defaults of FD-GH-062 from them.
 - TODO(operator): decide whether a `check.conclude` row that reaches `expired` on a `release` or `required` execution also opens a tracking issue in an operator repository.
 - TODO(maintainer): bound `check.progress` to one row per 60 s and per bucket change; mameko generates an `on: progress` kind at every step and placement-state change, and its payload binding sees no earlier row.
