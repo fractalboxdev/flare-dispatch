@@ -159,7 +159,7 @@ export {
 export { browser, Browser, type BrowserService, type CDPSession } from "./services/browser";
 export { cache, Cache, type CacheService } from "./services/cache";
 export { artifact, Artifact, type ArtifactService, type ArtifactInfo } from "./services/artifact";
-export { NativeExecution, NativeExecutionUnavailable, NativeReleaseInput, NativeReleaseHandle, NativeReleaseObservation, nativeExecution, type NativeExecutionService } from "./services/native-execution";
+export { NativeExecution, NativeExecutionUnavailable, NativeReleaseInput, NativeReleaseHandle, NativeReleaseObservation, NativeGateInput, NativeGateHandle, nativeExecution, type NativeExecutionService } from "./services/native-execution";
 export {
   DEPLOYED_VERSION_ENV,
   EXECUTION_CREATED_AT_ENV,
