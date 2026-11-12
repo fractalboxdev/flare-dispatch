@@ -594,6 +594,12 @@ describe("the registry validator over read-only scan declarations", () => {
     expect(readOnlyScanCheck({ check }).map((f) => f.detail)).toEqual([
       "readOnlyScan: command input steps[].command",
     ]);
+    const image = RUN_CATALOG["sandbox-image"]!;
+    expect(
+      readOnlyScanCheck({
+        "sandbox-image": { ...image, spec: { ...image.spec, readOnlyScan: true } },
+      }).map((f) => f.detail),
+    ).toEqual(["readOnlyScan: command input entry.images[].smoke"]);
     const review = RUN_CATALOG["pr-review"]!;
     expect(
       readOnlyScanCheck({

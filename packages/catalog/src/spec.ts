@@ -163,7 +163,10 @@ export interface ReadOnlyScanRejection {
   readonly reason: string;
 }
 
-/** The input field names that carry a command a job would run: a shell line, an install or discovery line, an argv. */
+/**
+ * The input field names that carry a command a job would run: a shell line, an install or discovery line, an argv,
+ * an image's smoke commands.
+ */
 export const COMMAND_INPUT_FIELDS: ReadonlySet<string> = new Set([
   "command",
   "commands",
@@ -171,6 +174,7 @@ export const COMMAND_INPUT_FIELDS: ReadonlySet<string> = new Set([
   "discover",
   "script",
   "argv",
+  "smoke",
 ]);
 
 /** The dotted path of every input field whose name is a command field, at any depth of the input schema. */
