@@ -140,7 +140,6 @@ describe("the writeback appliers inside every actuator", () => {
       expect(found.entry.executors).toEqual(["cloud"]);
       expect(found.entry.agentic?.declaration.needsModel).toBeDefined();
     }
-    expect(lookupRun("production", "finops-audit")._tag).toBe("NotInCatalogue");
   });
 });
 

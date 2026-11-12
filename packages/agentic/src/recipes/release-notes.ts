@@ -7,11 +7,7 @@ import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import { sanitizeModelText } from "../boundary.ts";
-import {
-  checkSuppression,
-  suppressionKey,
-  suppressionReadFailed,
-} from "../suppression/ledger.ts";
+import { checkSuppression, suppressionKey, suppressionReadFailed } from "../suppression/ledger.ts";
 import { ReadFailed } from "./spec-drift-pr.ts";
 import {
   Checkout,
@@ -33,10 +29,9 @@ export type ReleaseNotesInput = typeof ReleaseNotesInput.Type;
 /** The release pull request's branch, which the catalogue's writeback block names (FD-AGT-084). */
 export const RELEASE_NOTES_BRANCH = "flare-dispatch/release";
 /** The notes file of a version, inside the writeback allowlist. */
-export const releaseNotesPath = (version: string) =>
-  `.flare-dispatch/release/${version}.md`;
+export const releaseNotesPath = (version: string) => `.flare-dispatch/release/${version}.md`;
 /** The detail of the verdict on an empty commit range (FD-AGT-082). */
-export const EMPTY_RANGE_DETAIL = "not-applicable: empty-range";
+export const EMPTY_RANGE_DETAIL = "empty-range";
 /** Commits listed in the model prompt; the notes file lists every commit. */
 export const PROMPT_MAX_COMMITS = 400;
 /** Characters of a commit description in the notes. */
@@ -58,13 +53,10 @@ const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 /** The version a `v<major>.<minor>.<patch>` tag names, or null for any other tag, a pre-release among them. */
 export const parseReleaseTag = (tag: string): ReleaseVersion | null => {
   const m = RELEASE_TAG.exec(tag);
-  return m === null
-    ? null
-    : { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
+  return m === null ? null : { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
 };
 
-export const formatVersion = (v: ReleaseVersion) =>
-  `v${v.major}.${v.minor}.${v.patch}`;
+export const formatVersion = (v: ReleaseVersion) => `v${v.major}.${v.minor}.${v.patch}`;
 
 const compareVersions = (a: ReleaseVersion, b: ReleaseVersion) =>
   a.major - b.major || a.minor - b.minor || a.patch - b.patch;
@@ -78,10 +70,7 @@ export const newestReleaseTag = (tags: readonly string[]): string | null => {
   let newest: { tag: string; version: ReleaseVersion } | null = null;
   for (const tag of tags) {
     const version = parseReleaseTag(tag.trim());
-    if (
-      version !== null &&
-      (newest === null || compareVersions(version, newest.version) > 0)
-    )
+    if (version !== null && (newest === null || compareVersions(version, newest.version) > 0))
       newest = { tag: tag.trim(), version };
   }
   return newest?.tag ?? null;
@@ -123,9 +112,7 @@ export const parseConventionalCommit = (c: RangeCommit): ConventionalCommit => {
 };
 
 /** A breaking commit bumps major, else a `feat` bumps minor, else any other type bumps patch (FD-AGT-083). */
-export const releaseBump = (
-  commits: readonly ConventionalCommit[],
-): ReleaseBump =>
+export const releaseBump = (commits: readonly ConventionalCommit[]): ReleaseBump =>
   commits.some((c) => c.breaking)
     ? "major"
     : commits.some((c) => c.type === "feat")
@@ -133,10 +120,7 @@ export const releaseBump = (
       : "patch";
 
 /** The next version after the base tag; a repository with no release tag counts from `v0.0.0` (FD-AGT-083). */
-export const nextReleaseVersion = (
-  baseTag: string | null,
-  bump: ReleaseBump,
-): string => {
+export const nextReleaseVersion = (baseTag: string | null, bump: ReleaseBump): string => {
   const base = (baseTag === null ? null : parseReleaseTag(baseTag)) ?? {
     major: 0,
     minor: 0,
@@ -215,12 +199,8 @@ export const commitRangeActivity = Activity.make({
   success: CommitRange,
   error: ReadFailed,
   execute: Effect.gen(function* () {
-    const shallow = yield* git(
-      "git rev-parse --is-shallow-repository",
-      "history",
-    );
-    if (shallow.trim() === "true")
-      yield* git("git fetch -q --unshallow --tags origin", "history");
+    const shallow = yield* git("git rev-parse --is-shallow-repository", "history");
+    if (shallow.trim() === "true") yield* git("git fetch -q --unshallow --tags origin", "history");
     const head = (yield* git("git rev-parse HEAD", "head")).trim();
     if (!SHA.test(head))
       return yield* new ReadFailed({
@@ -230,10 +210,7 @@ export const commitRangeActivity = Activity.make({
     const tags = yield* git(`git tag --merged ${head} --list 'v*'`, "tags");
     const baseTag = newestReleaseTag(tags.split("\n"));
     const range = baseTag === null ? head : `${baseTag}..${head}`;
-    const log = yield* git(
-      `git log --no-merges --format=${COMMIT_LOG_FORMAT} ${range}`,
-      "log",
-    );
+    const log = yield* git(`git log --no-merges --format=${COMMIT_LOG_FORMAT} ${range}`, "log");
     return { baseTag, head, commits: parseCommitLog(log) };
   }),
 });
@@ -249,15 +226,14 @@ export const releaseNotesMarker = (m: {
 }) =>
   `<!-- flare-dispatch:release-notes execution=${m.executionId} version=${m.version} head=${m.head} -->`;
 
+/** Anchored to the body's end, so a marker-shaped comment earlier in the body is never read. */
 const MARKER =
-  /<!-- flare-dispatch:release-notes execution=(\S+) version=(v\d+\.\d+\.\d+) head=([0-9a-f]{40}) -->/;
+  /<!-- flare-dispatch:release-notes execution=(\S+) version=(v\d+\.\d+\.\d+) head=([0-9a-f]{40}) -->\s*$/;
 
-/** The marker a pull-request body carries, or null when it carries none. */
+/** The marker that ends a pull-request body, or null when the body does not end with one. */
 export const parseReleaseNotesMarker = (body: string | null) => {
   const m = body === null ? null : MARKER.exec(body);
-  return m === null
-    ? null
-    : { executionId: m[1] ?? "", version: m[2] ?? "", head: m[3] ?? "" };
+  return m === null ? null : { executionId: m[1] ?? "", version: m[2] ?? "", head: m[3] ?? "" };
 };
 
 const SECTIONS: readonly {
@@ -291,22 +267,14 @@ export const renderReleaseNotes = (args: {
     `# ${args.version}`,
     "",
     `${count} change${count === 1 ? "" : "s"} since ${
-      args.range.baseTag === null
-        ? "the first commit"
-        : `\`${args.range.baseTag}\``
+      args.range.baseTag === null ? "the first commit" : `\`${args.range.baseTag}\``
     }, up to \`${args.range.head.slice(0, 12)}\`.`,
     "",
   ];
-  if (args.highlights.trim() !== "")
-    out.push("## Highlights", "", args.highlights.trim(), "");
+  if (args.highlights.trim() !== "") out.push("## Highlights", "", args.highlights.trim(), "");
   const section = (heading: string, rows: typeof parsed) => {
     if (rows.length === 0) return;
-    out.push(
-      `## ${heading}`,
-      "",
-      ...rows.map((p) => entryLine(p.conv, p.sha)),
-      "",
-    );
+    out.push(`## ${heading}`, "", ...rows.map((p) => entryLine(p.conv, p.sha)), "");
   };
   section(
     "Breaking changes",
@@ -348,14 +316,13 @@ const SYSTEM = [
 ].join("\n");
 
 const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/\S*/gi;
+const HTML_COMMENT = /<!--[\s\S]*?(-->|$)/g;
 
 /** The highlights from one `judgment` call over the range's commit subjects, made safe for the notes. */
 const highlightsOf = (version: string, range: CommitRange) =>
   Effect.gen(function* () {
     const model = yield* ModelClient;
-    const subjects = range.commits
-      .slice(0, PROMPT_MAX_COMMITS)
-      .map((c) => `- ${c.subject}`);
+    const subjects = range.commits.slice(0, PROMPT_MAX_COMMITS).map((c) => `- ${c.subject}`);
     const text = yield* model.complete({
       callSite: "notes",
       tier: "judgment",
@@ -368,7 +335,8 @@ const highlightsOf = (version: string, range: CommitRange) =>
         },
       ],
     });
-    return sanitizeModelText(text).replace(URL_IN_TEXT, "[link]");
+    // HTML comments go too, fenced ones included, so the highlights cannot carry a marker-shaped comment.
+    return sanitizeModelText(text).replace(URL_IN_TEXT, "[link]").replace(HTML_COMMENT, "");
   });
 
 /**
@@ -380,9 +348,7 @@ const highlightsOf = (version: string, range: CommitRange) =>
  */
 export const runReleaseNotes = (input: ReleaseNotesInput) =>
   Effect.gen(function* () {
-    const suppressed = yield* checkSuppression(
-      suppressionKey(input.repo, RELEASE_NOTES_BRANCH),
-    );
+    const suppressed = yield* checkSuppression(suppressionKey(input.repo, RELEASE_NOTES_BRANCH));
     if (suppressed) return { _tag: "success" } satisfies RunResult;
     const range = yield* commitRangeActivity;
     if (range.commits.length === 0)
@@ -428,8 +394,7 @@ export const runReleaseNotes = (input: ReleaseNotesInput) =>
           _tag: "failure",
           reason: `infra: read ${e.source}: ${e.detail}`,
         } satisfies RunResult),
-      ModelCallError: (e) =>
-        Effect.succeed(modelFailureVerdict(e) satisfies RunResult),
+      ModelCallError: (e) => Effect.succeed(modelFailureVerdict(e) satisfies RunResult),
       StageFailed: (e) =>
         Effect.succeed({
           _tag: "failure",
