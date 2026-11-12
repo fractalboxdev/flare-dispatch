@@ -1,6 +1,6 @@
 // The mameko application ports the composition supplies a Layer for, by port id, which configuration validation reads
 // (MAMEKO-HOST-046). Each entry names the Layer `composition.ts` builds for it.
-import type { ControlPlaneEnv } from "./config.ts";
+import { presignerConfigOf, type ControlPlaneEnv } from "./config.ts";
 
 const hasApp = (env: ControlPlaneEnv) =>
   env.GITHUB_APP_ID !== undefined &&
@@ -17,6 +17,9 @@ export const suppliedPorts = (env: ControlPlaneEnv): readonly string[] => [
   // `githubLiveLayer`'s applier of every GitHub kind and its rate limit over the `InstallationQuota` objects.
   // CredentialMinter remains absent until mameko calls it and the complete grant/expiry/revocation contract is served.
   ...(hasApp(env) ? ["actuator", "actuator-rate-limit"] : []),
+  // `presignerLayer`: the cache package's `R2PresignerLive` under `ObjectStorePresignerLive`, on a deploy holding the
+  // presign token (FD-CACHE-091).
+  ...(presignerConfigOf(env) === undefined ? [] : ["object-store-presigner"]),
   // `PostureSource` and the agentic package's `localPortsLayer` (`agentic.ts`).
   "posture-source",
   "local-registration",
