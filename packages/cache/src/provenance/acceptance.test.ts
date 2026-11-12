@@ -16,7 +16,6 @@ import {
   StatementRecords,
   type AcceptanceReason,
   type DeviceKeyRecord,
-  type IssuedExecution,
 } from "./acceptance.ts";
 import {
   DSSE_PAYLOAD_TYPE,
@@ -105,7 +104,9 @@ const submission = (over: Record<string, unknown> = {}) => ({
 
 interface World {
   devices: Map<string, DeviceKeyRecord>;
-  issued: IssuedExecution | null;
+  /** The executor each epoch's lease or registration was issued to. */
+  leases: Map<number, string>;
+  epoch: number;
   nonce: string | null;
   consumed: boolean;
   models: string[];
@@ -118,7 +119,11 @@ const harness = (world: World) => {
   const alarms: Alarm[] = [];
   const records = Layer.succeed(StatementRecords, {
     deviceKey: (keyid) => Effect.succeed(world.devices.get(keyid) ?? null),
-    issued: () => Effect.succeed(world.issued),
+    issued: (_, epoch) => {
+      const executorId = world.leases.get(epoch);
+      return Effect.succeed(executorId === undefined ? null : { executorId });
+    },
+    currentEpoch: () => Effect.succeed(world.epoch),
     issuedNonce: () => Effect.succeed(world.nonce),
     nonceConsumed: () => Effect.succeed(world.consumed),
     meteredModels: () => Effect.succeed(world.models),
@@ -181,7 +186,8 @@ const world = async () => {
         },
       ],
     ]),
-    issued: { executorId: "mac-1", epoch: 3 },
+    leases: new Map([[3, "mac-1"]]),
+    epoch: 3,
     nonce: NONCE,
     consumed: false,
     models: ["claude-x"],
@@ -233,7 +239,7 @@ describe("result-acceptance check", () => {
         // mac-1's key signed a statement for an execution leased to mac-2: mac-1 is quarantined, not mac-2.
         reason: "wrong-executor",
         arrange: async ({ device, state }) => {
-          state.issued = { executorId: "mac-2", epoch: 3 };
+          state.leases.set(3, "mac-2");
           return { result: submission(), envelope: await signed(device.private) };
         },
         signer: "mac-1",
@@ -307,14 +313,15 @@ describe("result-acceptance check", () => {
       {
         expected: "unissued-lease",
         arrange: async ({ device, state }) => {
-          state.issued = null;
+          state.leases.clear();
           return { result: submission(), envelope: await signed(device.private) };
         },
       },
       {
         expected: "stale-epoch",
         arrange: async ({ device, state }) => {
-          state.issued = { executorId: "mac-1", epoch: 4 };
+          state.leases.set(4, "mac-1");
+          state.epoch = 4;
           return { result: submission(), envelope: await signed(device.private) };
         },
       },
@@ -384,6 +391,19 @@ describe("result-acceptance check", () => {
     expect(h.alarms).toEqual([]);
   });
 
+  it("[FD-PROV-019] after a reclaim, the previous holder's statement for its own epoch is stale, not another executor's", async () => {
+    // Reclaimed from mac-1 at epoch 3 to mac-2 at epoch 4; mac-1 then submits the statement it signed for epoch 3.
+    const w = await world();
+    w.state.leases.set(4, "mac-2");
+    w.state.epoch = 4;
+    const h = harness(w.state);
+    expect(await h.check(submission(), await signed(w.device.private))).toEqual(
+      rejected("stale-epoch"),
+    );
+    expect(h.flags).toEqual([]);
+    expect(h.alarms).toEqual([]);
+  });
+
   it("runs the checks in table order and stops at the first that fails", async () => {
     // Revoked, stale and with a foreign code hash: the revocation, check 3, is the reason.
     const w = await world();
@@ -392,7 +412,8 @@ describe("result-acceptance check", () => {
       revokedAt: NOW - 1,
       codeHash: sha(99),
     });
-    w.state.issued = { executorId: "mac-1", epoch: 9 };
+    w.state.leases.set(9, "mac-1");
+    w.state.epoch = 9;
     const h = harness(w.state);
     expect(await h.check(submission(), await signed(w.device.private))).toEqual(
       rejected("revoked-key"),

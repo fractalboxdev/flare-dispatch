@@ -1,4 +1,4 @@
-// FlareDispatch's result-acceptance check (specs/provenance.md § Acceptance): the application port mameko calls inside
+// FlareDispatch's result-acceptance check (specs/provenance.md § Acceptance): the application port mameko calls before
 // the accept compare-and-set (MAMEKO-LEASE-093). It runs the twelve checks of the acceptance table on the device
 // statement a result submission carries, in table order, and stops at the first failure; a rejection concludes the
 // execution `failure` with the reason `provenance: <reason>`. A rejection that shows the signing executor or its key
@@ -49,10 +49,9 @@ export interface DeviceKeyRecord {
   readonly revokedAt: number | null;
 }
 
-/** The lease or registration the control plane issued for an execution, at the execution's current epoch. */
+/** The lease or registration the control plane issued for an execution at one epoch. */
 export interface IssuedExecution {
   readonly executorId: string;
-  readonly epoch: number;
 }
 
 /** The control plane's records each check compares a statement against. */
@@ -61,8 +60,13 @@ export class StatementRecords extends Context.Service<
   {
     /** The registry entry of the device key a signature's `keyid` names, revoked or not; null when none does. */
     readonly deviceKey: (keyid: string) => Effect.Effect<DeviceKeyRecord | null>;
-    /** The lease or registration issued for the execution; null when the control plane issued none. */
-    readonly issued: (executionId: string) => Effect.Effect<IssuedExecution | null>;
+    /**
+     * The lease or registration issued for the execution at `epoch`, whether or not a reclaim has since moved the
+     * execution to a later epoch; null when the control plane issued none at that epoch.
+     */
+    readonly issued: (executionId: string, epoch: number) => Effect.Effect<IssuedExecution | null>;
+    /** The execution's current epoch: the epoch of the lease or registration most recently issued for it. */
+    readonly currentEpoch: (executionId: string) => Effect.Effect<number>;
     /** The nonce issued for the execution at `epoch` and not invalidated since; null when none is. */
     readonly issuedNonce: (executionId: string, epoch: number) => Effect.Effect<string | null>;
     /** Whether an accepted statement already consumed the nonce. */
@@ -241,16 +245,19 @@ export const evaluateStatement = (
     if (device.attestedAt === null || now - device.attestedAt >= settings.attestationMaxAgeMs)
       return reject("attestation-expired", signer);
 
-    // 5–9. The lease or registration, its executor, its epoch and its nonce.
+    // 5–9. The lease or registration at the statement's epoch, its executor, the execution's current epoch and the
+    // nonce. Check 6 compares the signer against the lease the statement names, not the execution's current one: after
+    // a reclaim, the previous holder's statement for its own epoch is stale (check 7), not another executor's forgery.
     const payload = fromBase64(envelope.payload);
     const claims = payload === undefined ? undefined : claimsOf(payload);
     if (claims === undefined || claims.lease.execution_id !== executionId)
       return reject("unissued-lease", signer);
-    const issued = yield* records.issued(executionId);
+    const epoch = claims.lease.epoch;
+    const issued = yield* records.issued(executionId, epoch);
     if (issued === null) return reject("unissued-lease", signer);
     if (issued.executorId !== signer) return reject("wrong-executor", signer);
-    if (claims.lease.epoch !== issued.epoch) return reject("stale-epoch", signer);
-    const nonce = yield* records.issuedNonce(executionId, issued.epoch);
+    if (epoch !== (yield* records.currentEpoch(executionId))) return reject("stale-epoch", signer);
+    const nonce = yield* records.issuedNonce(executionId, epoch);
     if (nonce === null || nonce !== claims.lease.nonce) return reject("nonce-mismatch", signer);
     if (yield* records.nonceConsumed(nonce)) return reject("nonce-reused", signer);
 
@@ -264,7 +271,7 @@ export const evaluateStatement = (
       return reject("digest-mismatch", signer);
     if (device.codeHash === null || claims.codeHash !== device.codeHash)
       return reject("code-hash-mismatch", signer);
-    const metered = yield* records.meteredModels(executionId, issued.epoch);
+    const metered = yield* records.meteredModels(executionId, epoch);
     if (!sameSet(claims.models, metered)) return reject("model-mismatch", signer);
 
     return AcceptanceVerdict.Accepted({ signer, executionId });
