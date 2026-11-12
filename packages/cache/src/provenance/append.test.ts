@@ -558,6 +558,24 @@ describe("the transparency-log append of a countersigned statement", () => {
         "$.payload.predicate.runDetails.byproducts[0].prompt",
       ],
       [
+        "source as an object key",
+        (id) =>
+          signedBytes(
+            device.private,
+            utf8(JSON.stringify(statement(id, { [source]: "x" }))),
+          ) as Promise<DsseEnvelope>,
+        `$.payload.predicate.runDetails.byproducts[0].${JSON.stringify(source)}`,
+      ],
+      [
+        "a log line as an object key",
+        (id) =>
+          signedBytes(
+            device.private,
+            utf8(JSON.stringify(statement(id, { [log]: "x" }))),
+          ) as Promise<DsseEnvelope>,
+        `$.payload.predicate.runDetails.byproducts[0].${JSON.stringify(log)}`,
+      ],
+      [
         "file contents as the payload",
         (id) => signedBytes(device.private, utf8(`${source} // ${id}`)) as Promise<DsseEnvelope>,
         "$.payload",

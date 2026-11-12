@@ -308,5 +308,8 @@ describe("statement builder", () => {
       "$.a[1].c",
     );
     expect(disallowedContent({ completion: prompt })).toBe("$.completion");
+    expect(disallowedContent({ predicate: { [diff]: "x" } })).toBe(
+      `$.predicate.${JSON.stringify(diff)}`,
+    );
   });
 });

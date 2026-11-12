@@ -262,8 +262,9 @@ export const statementOf = (
 const LEAF = /^[\x21-\x7e]{1,2400}$/;
 
 /**
- * The path of the first value that is not a digest, id, name, timestamp, verdict or count — such as source, file
- * contents, a diff, a log, a prompt or a completion — or `null` when every value is one (FD-PROV-043). A statement's
+ * The path of the first value or object key that is not a digest, id, name, timestamp, verdict or count — such as
+ * source, file contents, a diff, a log, a prompt or a completion — or `null` when every one is (FD-PROV-043). A key
+ * that fails is named by its JSON-quoted form. A statement's
  * schemas admit only such values; this check holds every statement, reproduction record and log entry the control
  * plane writes to the same rule, whoever built it.
  */
@@ -279,6 +280,7 @@ export const disallowedContent = (value: unknown, path = "$"): string | null => 
   }
   if (value !== null && typeof value === "object") {
     for (const [k, v] of Object.entries(value)) {
+      if (!LEAF.test(k)) return `${path}.${JSON.stringify(k)}`;
       const bad = disallowedContent(v, `${path}.${k}`);
       if (bad !== null) return bad;
     }
