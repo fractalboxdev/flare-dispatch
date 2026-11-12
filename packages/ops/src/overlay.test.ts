@@ -158,4 +158,23 @@ describe("template invariants", () => {
     expect(cronCheck("cp", [])).toHaveLength(1);
     expect(cronCheck("cp", ["* * * * *", "0 * * * *"])).toHaveLength(1);
   });
+
+  it("[FD-INT-050] a template with a Worker script carries the minute tick, and a static-assets template carries no cron trigger", () => {
+    const script = { main: "src/worker.ts", keep_vars: false };
+    expect(templateInvariants("cp", { keep_vars: false }).map((f) => f.path)).toEqual([
+      "cp.triggers.crons",
+    ]);
+    expect(
+      templateInvariants("cp", { ...script, assets: { directory: "./public" } }).map((f) => f.path),
+    ).toEqual(["cp.triggers.crons"]);
+    expect(templateInvariants("cp", script).map((f) => f.path)).toEqual(["cp.triggers.crons"]);
+    expect(templateInvariants("cp", { ...script, triggers: { crons: ["* * * * *"] } })).toEqual([]);
+    const assets = { assets: { directory: "./dist" }, keep_vars: false };
+    expect(templateInvariants("docs", assets)).toEqual([]);
+    expect(
+      templateInvariants("docs", { ...assets, triggers: { crons: ["* * * * *"] } }).map(
+        (f) => `${f.check} ${f.path}`,
+      ),
+    ).toEqual(["cron docs.triggers.crons"]);
+  });
 });

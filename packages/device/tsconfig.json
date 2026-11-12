@@ -2,9 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     // mameko exports its TypeScript sources with `.ts` import specifiers and
-    // reaches for Node globals, so its packages typecheck here under these two.
+    // reaches for Node globals, so its packages typecheck here under these two;
+    // the cache package's L1 shares modules that name the Workers types.
     "allowImportingTsExtensions": true,
-    "types": ["node"]
+    "types": ["@cloudflare/workers-types", "node"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

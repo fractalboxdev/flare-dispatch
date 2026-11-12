@@ -15,6 +15,8 @@ import {
   accessAudCheck,
   accessDrift,
   appRegistrationCheck,
+  awsBudgetCheck,
+  awsBudgetUnset,
   failed,
   modelRegistryCheck,
   rulesetCheck,
@@ -23,6 +25,7 @@ import {
   unrenderedCheck,
   withProfileStep,
   type AppPermissions,
+  type AwsBudgets,
   type DeployedSettings,
   type Finding,
 } from "./drift.ts";
@@ -103,6 +106,8 @@ export class DeployTarget extends Context.Service<
     readonly appRegistration: Effect.Effect<AppPermissions, TargetFailed>;
     /** The status checks the default branch's ruleset requires (FD-VER-023, FD-OPS-028). */
     readonly requiredChecks: Effect.Effect<readonly string[], TargetFailed>;
+    /** The deploying organization's AWS account's budgets and Budgets actions (FD-EXEC-083). */
+    readonly awsBudgets: Effect.Effect<AwsBudgets, TargetFailed>;
     /** Applies each Worker's pending D1 migrations, in order; answers the migrations applied. */
     readonly applyD1Migrations: (
       rendered: readonly RenderedWorker[],
@@ -252,7 +257,8 @@ export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
 /**
  * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), the templates' invariants, the
  * rendered configuration, the deployed Workers against the record of the last deploy, the GitHub App's registration,
- * the default branch's ruleset and, given `access`, the Access applications on the dispatcher's hostname, then the
+ * the default branch's ruleset, the AWS account's Budgets actions where the overlay carries the `aws` kind, and, given
+ * `access`, the Access applications on the dispatcher's hostname, then the
  * profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
  * drift check shares). `fd deploy` passes no `access`: it checks only the hostname
  * application's AUD tag, then applies the committed applications and reports each one it changed, where `fd doctor`
@@ -280,6 +286,14 @@ export const driftFindings = (
     }
     findings.push(...appRegistrationCheck(manifest, yield* target.appRegistration));
     findings.push(...rulesetCheck(yield* target.requiredChecks));
+    if (overlay.aws !== undefined) {
+      const limitUsd = overlay.aws.budgetUsd;
+      if (limitUsd === undefined) findings.push(awsBudgetUnset);
+      else
+        findings.push(
+          ...awsBudgetCheck(limitUsd, yield* target.awsBudgets, overlay.aws.launcherRoleArn),
+        );
+    }
     if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));
     return yield* withProfileStep(findings, more(overlay));
   }).pipe(Effect.mapError(stageFailed("drift")));

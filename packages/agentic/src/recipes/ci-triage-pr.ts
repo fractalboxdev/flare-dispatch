@@ -4,6 +4,7 @@
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Clock, Context, Effect, Schema } from "effect";
 import { sanitizeModelText } from "../boundary.ts";
+import { checkSuppression, suppressionReadFailed, suppressionKey } from "../suppression/ledger.ts";
 import { ReadFailed } from "./spec-drift-pr.ts";
 import {
   Checkout,
@@ -71,9 +72,11 @@ const classify = (f: FailedExecution, log: string) =>
     return (CLASSES as readonly string[]).includes(word) ? word : "unknown";
   });
 
-/** The `ci-triage-pr` body. */
+/** The `ci-triage-pr` body; a suppressed key reads nothing and opens nothing (FD-AGT-043). */
 export const runCiTriage = (input: CiTriageInput) =>
   Effect.gen(function* () {
+    const suppressed = yield* checkSuppression(suppressionKey(input.repo, CI_TRIAGE_BRANCH));
+    if (suppressed) return { _tag: "success" } satisfies RunResult;
     const now = yield* Clock.currentTimeMillis;
     const executions = yield* ExecutionsRead;
     const intents = yield* RecipeIntents;
@@ -143,6 +146,7 @@ export const runCiTriage = (input: CiTriageInput) =>
     return { _tag: "success" } satisfies RunResult;
   }).pipe(
     Effect.catchTags({
+      SuppressionReadFailed: suppressionReadFailed,
       ReadFailed: (e) =>
         Effect.succeed({
           _tag: "failure",

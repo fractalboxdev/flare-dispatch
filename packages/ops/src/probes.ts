@@ -3,8 +3,13 @@
 // reads go through `GithubAppReads`, which the GitHub App package supplies.
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { Context, Effect } from "effect";
-import { installations, recordProbe, setInstallationStatus } from "./liveness.ts";
+import { Context, Effect, Schema } from "effect";
+import {
+  installations,
+  recordProbe,
+  registerInstallation,
+  setInstallationStatus,
+} from "./liveness.ts";
 import { insertOpsIntent } from "./ops-intents.ts";
 import { raiseOnce, track } from "./raise.ts";
 
@@ -16,7 +21,8 @@ export type InstallationRead =
 
 /** One webhook delivery as `GET /app/hook/deliveries` lists it. */
 export interface Delivery {
-  readonly id: string;
+  /** GitHub's numeric delivery id, which `POST /app/hook/deliveries/{delivery_id}/attempts` takes. */
+  readonly id: number;
   /** The webhook's GUID, shared by a delivery and its redeliveries. */
   readonly guid: string;
   readonly statusCode: number;
@@ -24,12 +30,25 @@ export interface Delivery {
   readonly redelivery: boolean;
 }
 
-/** The App-JWT reads the probes make; the GitHub App package supplies the live Layer. */
+/** An App-JWT read did not answer: a network failure, a non-2xx other than an installation's `404`, or a bad key. */
+export class GithubAppReadFailed extends Schema.TaggedError<GithubAppReadFailed>()(
+  "GithubAppReadFailed",
+  { message: Schema.String },
+) {}
+
+/** The App-JWT reads the probes make; the control plane composes the live Layer over the GitHub App. */
 export class GithubAppReads extends Context.Service<
   GithubAppReads,
   {
-    readonly installation: (installationId: string) => Effect.Effect<InstallationRead>;
-    readonly deliveries: (since: number) => Effect.Effect<readonly Delivery[]>;
+    /** The App's installations, which the installation probe registers before it reads each. */
+    readonly installations: Effect.Effect<
+      readonly { readonly installationId: string; readonly accountLogin: string }[],
+      GithubAppReadFailed
+    >;
+    readonly installation: (
+      installationId: string,
+    ) => Effect.Effect<InstallationRead, GithubAppReadFailed>;
+    readonly deliveries: (since: number) => Effect.Effect<readonly Delivery[], GithubAppReadFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-ops/GithubAppReads") {}
 
@@ -52,7 +71,84 @@ export interface ProbeConfig {
   readonly webhookSilentHours: number;
 }
 
-/** Inserts the `canary.push` ops intent under the key `canary:<tick time>` (FD-OPS-038). */
+/** The fixture repository names no installation of the App, so no canary can be pushed or read (FD-OPS-038). */
+export class FixtureInstallationMissing extends Schema.TaggedError<FixtureInstallationMissing>()(
+  "FixtureInstallationMissing",
+  { repository: Schema.String },
+) {}
+
+/** The fixture repository and installation a canary's stage read takes. */
+export type CanaryTarget = Pick<ProbeConfig, "fixtureRepo" | "fixtureInstallation">;
+
+/** The latest canary push: its tick time and the fixture repository and installation the push resolved. */
+export interface CanaryPush extends CanaryTarget {
+  readonly pushedAt: number;
+}
+
+/** Records the latest canary push, which the check 5 min later reads instead of resolving the fixture again. */
+export const recordCanaryPush = (db: D1Like, target: CanaryTarget, pushedAt: number) =>
+  Effect.promise(() =>
+    db
+      .prepare(
+        `insert into fd_canary_push (slot, pushed_at, fixture_repo, fixture_installation) values (1, ?, ?, ?)
+         on conflict (slot) do update set pushed_at = excluded.pushed_at, fixture_repo = excluded.fixture_repo,
+           fixture_installation = excluded.fixture_installation`,
+      )
+      .bind(pushedAt, target.fixtureRepo, target.fixtureInstallation)
+      .run(),
+  );
+
+/** The latest canary push, or null before the first. */
+export const lastCanaryPush = (db: D1Like) =>
+  Effect.promise(async (): Promise<CanaryPush | null> => {
+    const { results } = await db
+      .prepare(
+        "select pushed_at, fixture_repo, fixture_installation from fd_canary_push where slot = 1",
+      )
+      .all();
+    const row = results[0] as
+      | { pushed_at: number; fixture_repo: string; fixture_installation: string }
+      | undefined;
+    return row === undefined
+      ? null
+      : {
+          pushedAt: row.pushed_at,
+          fixtureRepo: row.fixture_repo,
+          fixtureInstallation: row.fixture_installation,
+        };
+  });
+
+/**
+ * A fixture repository no installation covers: the canary probe reads not ok and `canary-missed` names the push stage
+ * and the repository, since no canary can be pushed until the fixture is installed (FD-OPS-038, FD-OPS-040).
+ */
+export const canaryUncovered = (db: D1Like, repository: string, now: number) =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() =>
+      recordProbe(
+        db,
+        "canary",
+        false,
+        { stage: "push", reason: `no installation covers ${repository}` },
+        now,
+      ),
+    );
+    yield* raiseOnce(
+      db,
+      {
+        name: "canary-missed",
+        severity: "page",
+        dedupeKey: "canary-missed",
+        detail: { last_stage: "push", repository },
+      },
+      now,
+    );
+  });
+
+/**
+ * Inserts the `canary.push` ops intent under the key `canary:<tick time>` (FD-OPS-038). Its payload is the one the
+ * GitHub applier decodes: the branch, and the tick time as ISO 8601 text, which the commit message carries.
+ */
 export const pushCanary = (db: D1Like, profile: Profile, config: ProbeConfig, tick: number) =>
   insertOpsIntent(
     db,
@@ -61,7 +157,7 @@ export const pushCanary = (db: D1Like, profile: Profile, config: ProbeConfig, ti
       scopeId: config.fixtureRepo,
       intentKey: `canary:${tick}`,
       kind: "canary.push",
-      payload: { repository: config.fixtureRepo, branch: CANARY_BRANCH, tick },
+      payload: { branch: CANARY_BRANCH, tick_time: new Date(tick).toISOString() },
       limitKey: config.fixtureInstallation,
     },
     tick,
@@ -74,7 +170,7 @@ export type CanaryStage = (typeof CANARY_STAGES)[number] | "push";
 /** The last stage the canary pushed at `pushedAt` reached, read from the control plane's tables. */
 export const canaryStage = async (
   db: D1Like,
-  config: ProbeConfig,
+  config: CanaryTarget,
   pushedAt: number,
 ): Promise<CanaryStage> => {
   const { results: delivered } = await db
@@ -102,7 +198,7 @@ export const canaryStage = async (
 };
 
 /** Raises `canary-missed` naming the last stage when the canary has not concluded its check (FD-OPS-040). */
-export const checkCanary = (db: D1Like, config: ProbeConfig, pushedAt: number, now: number) =>
+export const checkCanary = (db: D1Like, config: CanaryTarget, pushedAt: number, now: number) =>
   Effect.gen(function* () {
     const stage = yield* Effect.promise(() => canaryStage(db, config, pushedAt));
     const ok = stage === "check";
@@ -121,10 +217,16 @@ export const checkCanary = (db: D1Like, config: ProbeConfig, pushedAt: number, n
     return stage;
   });
 
-/** Reads each registered installation and raises `installation-lost` for a 404 or a suspension (FD-OPS-041, FD-OPS-042). */
+/**
+ * Registers each installation the App lists, then reads each registered installation and raises `installation-lost`
+ * for a 404 or a suspension (FD-OPS-041, FD-OPS-042). A registered installation stays registered once the App no
+ * longer lists it, so its read answers the `404` that names it lost.
+ */
 export const probeInstallations = (db: D1Like, now: number) =>
   Effect.gen(function* () {
     const reads = yield* GithubAppReads;
+    for (const i of yield* reads.installations)
+      yield* Effect.promise(() => registerInstallation(db, i.installationId, i.accountLogin));
     const lost: string[] = [];
     for (const i of yield* Effect.promise(() => installations(db))) {
       const read = yield* reads.installation(i.installationId);

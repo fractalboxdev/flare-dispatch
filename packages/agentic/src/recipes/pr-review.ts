@@ -1,7 +1,7 @@
 // `pr-review`: the review diff, the risk tier, one reviewer per persona in its own Activity, the deterministic
 // coordination, one review comment updated in place and the check-run annotations (specs/runs/agentic.md § `pr-review`).
 import type { RunResult } from "@fractalboxdev/mameko-run";
-import { Effect, Exit, Match, Schema } from "effect";
+import { Effect, Exit, Match, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import { promptMessages, sanitizeModelText } from "../boundary.ts";
 import { TRUSTED_ASSOCIATIONS } from "../declaration.ts";
@@ -10,6 +10,8 @@ import { Artifacts, ModelClient, RecipeIntents, Shell, type ModelCallError } fro
 export const PR_REVIEW_MARKER = "<!-- flare-dispatch: pr-review -->";
 export const MAX_COMMENT_FINDINGS = 25;
 export const MAX_ANNOTATIONS = 50;
+/** The check run `pr-review` reports on; the run declares no `checkLabel` (FD-GH-006). */
+export const PR_REVIEW_CHECK_NAME = "flare-dispatch/pr-review";
 export const LINT_MAX_FILES = 60;
 export const LINT_MAX_CHARS = 8000;
 /** The run ceiling the repo manifest sets for `pr-review` (FD-AGT-047). */
@@ -66,6 +68,71 @@ export const prReviewTrigger = (event: PrReviewEvent) =>
     ),
     Match.exhaustive,
   );
+
+/**
+ * A `pr-review` manifest entry's parameters: the review diff's cap (FD-AGT-049) and the mode, `advisory` when absent
+ * (FD-AGT-055, FD-AGT-056).
+ */
+export const PrReviewParams = Schema.Struct({
+  mode: Schema.optionalKey(Schema.Literals(["advisory", "gating"])),
+  maxDiffChars: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+});
+export type PrReviewParams = typeof PrReviewParams.Type;
+
+/** What `pr-review` reads of a `pull_request` webhook payload. */
+const PullRequestWebhook = Schema.Struct({
+  repository: Schema.Struct({ full_name: Schema.String }),
+  pull_request: Schema.Struct({
+    number: Schema.Number,
+    draft: Schema.optionalKey(Schema.Boolean),
+    labels: Schema.optionalKey(Schema.Array(Schema.Struct({ name: Schema.String }))),
+    user: Schema.optionalKey(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
+    author_association: Schema.optionalKey(Schema.String),
+    head: Schema.Struct({
+      sha: Schema.String,
+      repo: Schema.optionalKey(Schema.NullOr(Schema.Struct({ full_name: Schema.String }))),
+    }),
+    base: Schema.Struct({ sha: Schema.String }),
+  }),
+});
+
+/**
+ * The `pr-review` input for a `pull_request` webhook that starts it (FD-AGT-045), from the payload and the manifest
+ * entry's parameters; none for any other action or a payload that does not decode. A head whose repository is not
+ * the base repository, or is gone, is a fork head, and an absent `author_association` is `NONE`.
+ */
+export const prReviewRequest = (
+  action: string | null,
+  payload: unknown,
+  params: PrReviewParams,
+): Option.Option<PrReviewInput> =>
+  Option.flatMap(Schema.decodeUnknownOption(PullRequestWebhook)(payload), (p) => {
+    const pr = p.pull_request;
+    const started = prReviewTrigger({
+      _tag: "pull_request",
+      action: action ?? "",
+      headSha: pr.head.sha,
+    });
+    const slash = p.repository.full_name.indexOf("/");
+    if (started._tag === "ignore" || slash <= 0) return Option.none();
+    return Option.some({
+      repo: {
+        owner: p.repository.full_name.slice(0, slash),
+        name: p.repository.full_name.slice(slash + 1),
+      },
+      number: pr.number,
+      baseSha: pr.base.sha,
+      headSha: started.headSha,
+      draft: pr.draft ?? false,
+      labels: (pr.labels ?? []).map((l) => l.name),
+      authorLogin: pr.user?.login ?? "",
+      authorAssociation: pr.author_association ?? "NONE",
+      forkHead:
+        (pr.head.repo?.full_name ?? "").toLowerCase() !== p.repository.full_name.toLowerCase(),
+      ...(params.mode === undefined ? {} : { mode: params.mode }),
+      maxDiffChars: params.maxDiffChars,
+    });
+  });
 
 /**
  * The skip rules: a draft without `request-ai-review`, the `skip-ai-review` label, or a `[bot]` author (FD-AGT-046).
@@ -427,6 +494,8 @@ export const runPrReview = (input: PrReviewInput) =>
     const annotations = reviewAnnotations(merged);
     if (annotations.length > 0)
       yield* intents.append("annotate", "check.annotations", {
+        name: PR_REVIEW_CHECK_NAME,
+        head_sha: input.headSha,
         title: `pr-review: ${outcome}`,
         summary: `${merged.length} findings`,
         annotations,

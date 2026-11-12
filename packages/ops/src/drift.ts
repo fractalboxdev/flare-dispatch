@@ -1,6 +1,7 @@
 // The drift check: a rendered configuration against the template's invariants, the environment schema, the pool
-// caps and mameko's profile validator; the deployed Workers against the record of the last deploy; and the GitHub
-// App's registration against the committed manifest (specs/operability.md § Drift check). Every check here is a pure
+// caps and mameko's profile validator; the deployed Workers against the record of the last deploy; the GitHub App's
+// registration against the committed manifest (specs/operability.md § Drift check); and, for a deploy that carries
+// the `aws` kind, the AWS account's Budgets actions against the AWS limit (FD-EXEC-083). Every check here is a pure
 // function of what it compares; `fd deploy` and `fd doctor` read the inputs through the ports of deploy.ts.
 import {
   checkRegistry,
@@ -59,7 +60,7 @@ const accountSpecific = (c: WorkerConfig): readonly { path: string; value: unkno
   ...arr(c["routes"]).map((r, i) => ({ path: `routes[${i}].pattern`, value: r["pattern"] })),
 ];
 
-/** The cron set every template declares: the single minute tick (FD-INT-050). */
+/** The cron set every template with a Worker script declares: the single minute tick (FD-INT-050). */
 export const MINUTE_TICK = "* * * * *";
 
 const cronsOf = (c: WorkerConfig): readonly string[] => {
@@ -71,7 +72,11 @@ const cronsOf = (c: WorkerConfig): readonly string[] => {
     : [];
 };
 
-/** The template's own invariants (FD-OPS-001, FD-OPS-012, FD-INT-050). */
+/**
+ * The template's own invariants (FD-OPS-001, FD-OPS-012, FD-INT-050). The minute-tick check applies to every template
+ * but a static-assets one (`assets` and no `main`): that Worker, such as the documentation site, runs no scheduled
+ * handler, so any cron trigger on it fails the check.
+ */
 export const templateInvariants = (worker: string, template: WorkerConfig): readonly Finding[] => [
   ...accountSpecific(template)
     .filter((f) => !isPlaceholder(f.value))
@@ -81,8 +86,26 @@ export const templateInvariants = (worker: string, template: WorkerConfig): read
   ...(template["keep_vars"] === false
     ? []
     : [fail("keep_vars", `${worker}.keep_vars`, "every template sets keep_vars to false")]),
-  ...cronCheck(worker, cronsOf(template)),
+  ...(isStaticAssets(template)
+    ? staticCronCheck(worker, cronsOf(template))
+    : cronCheck(worker, cronsOf(template))),
 ];
+
+/** A Worker that serves static assets with no Worker script. */
+const isStaticAssets = (c: WorkerConfig): boolean =>
+  c["main"] === undefined && c["assets"] !== undefined;
+
+/** A cron trigger on a Worker with no script, which has no scheduled handler to run. */
+const staticCronCheck = (worker: string, crons: readonly string[]): readonly Finding[] =>
+  crons.length === 0
+    ? []
+    : [
+        fail(
+          "cron",
+          `${worker}.triggers.crons`,
+          `cron set ${JSON.stringify(crons)} on a Worker with no script`,
+        ),
+      ];
 
 /** A cron set other than the single minute tick (FD-INT-050). */
 export const cronCheck = (worker: string, crons: readonly string[]): readonly Finding[] =>
@@ -419,6 +442,329 @@ export const accessDrift = (
       ),
     ),
     ...accessAudCheck(committed, deployed),
+  ];
+};
+
+/** One budget of the deploying organization's AWS account, as AWS Budgets `DescribeBudgets` reports it. */
+export const AwsBudget = Schema.Struct({
+  name: Schema.String,
+  /** `COST`, `USAGE` and the reservation and savings-plan types. */
+  type: Schema.String,
+  limitAmount: Schema.Number,
+  limitUnit: Schema.String,
+  /** The period the budget's spend resets on: `DAILY`, `MONTHLY`, `QUARTERLY`, `ANNUALLY` or `CUSTOM`. */
+  timeUnit: Schema.String,
+  /** The budget's cost filters, by dimension; empty for a budget that measures the account's whole spend. */
+  costFilters: Schema.Record(Schema.String, Schema.Array(Schema.String)),
+  /** Modern Budgets scope, preserved verbatim so unsupported expressions cannot look unfiltered. */
+  filterExpression: Schema.optionalKey(Schema.Unknown),
+  /** The view's scope must be read before a view-backed budget can prove coverage. */
+  billingViewArn: Schema.optionalKey(Schema.Unknown),
+  /** Raw Start/End timestamps in epoch seconds; a missing read cannot prove the active window. */
+  timePeriod: Schema.optionalKey(Schema.Unknown),
+});
+export type AwsBudget = typeof AwsBudget.Type;
+
+/** One statement of an IAM policy or SCP document. */
+export const AwsPolicyStatement = Schema.Struct({
+  /** `Allow` or `Deny`. */
+  effect: Schema.String,
+  /** The `Action` patterns; empty for a statement written with `NotAction`. */
+  actions: Schema.Array(Schema.String),
+  /** The `Resource` patterns; empty for a statement written with `NotResource`. */
+  resources: Schema.Array(Schema.String),
+  /** Whether the statement carries a `Condition`. */
+  conditional: Schema.Boolean,
+});
+export type AwsPolicyStatement = typeof AwsPolicyStatement.Type;
+
+/** The policy a Budgets action applies, with the principals or the organization targets it applies the policy to. */
+export const AwsActionPolicy = Schema.Struct({
+  /** The IAM policy's ARN, or the SCP's policy id. */
+  id: Schema.String,
+  /** The IAM roles, users and groups; or the SCP's target ids: accounts, organizational units and the root. */
+  targets: Schema.Array(Schema.String),
+  /** IAM role names, kept separate so a same-named user or group cannot stand in for the launcher. */
+  roles: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** Organizations' actual policy type; an SCP action must reference SERVICE_CONTROL_POLICY. */
+  policyType: Schema.optionalKey(Schema.String),
+  /** The statements of the policy's document: the IAM policy's default version, or the SCP's content. */
+  statements: Schema.Array(AwsPolicyStatement),
+});
+export type AwsActionPolicy = typeof AwsActionPolicy.Type;
+
+/** One Budgets action of the account, as `DescribeBudgetActionsForAccount` reports it. */
+export const AwsBudgetAction = Schema.Struct({
+  id: Schema.String,
+  budgetName: Schema.String,
+  /** Only a standing-by or successfully enforced action proves the safeguard remains active. */
+  status: Schema.String,
+  /** `ACTUAL` or `FORECASTED`. */
+  notificationType: Schema.String,
+  /** `APPLY_IAM_POLICY`, `APPLY_SCP_POLICY` or `RUN_SSM_DOCUMENTS`. */
+  actionType: Schema.String,
+  /** `AUTOMATIC` or `MANUAL`. */
+  approvalModel: Schema.String,
+  /** `ABSOLUTE_VALUE`, in the budget's unit, or `PERCENTAGE` of the budget's limit. */
+  thresholdType: Schema.String,
+  thresholdValue: Schema.Number,
+  /** The policy the action's `Definition` applies; null when it names none, as a `RUN_SSM_DOCUMENTS` action does. */
+  policy: Schema.NullOr(AwsActionPolicy),
+});
+export type AwsBudgetAction = typeof AwsBudgetAction.Type;
+
+/** The account the AWS credentials belong to, with its budgets and Budgets actions. */
+export const AwsBudgets = Schema.Struct({
+  account: Schema.String,
+  /** Epoch milliseconds at completion of this authoritative read. */
+  observedAt: Schema.Number,
+  budgets: Schema.Array(AwsBudget),
+  actions: Schema.Array(AwsBudgetAction),
+  /** Authoritative Organizations membership, read when an action applies an SCP. */
+  organization: Schema.optionalKey(
+    Schema.Struct({
+      managementAccount: Schema.String,
+      /** The account's parents, up to and including its organization root. */
+      ancestors: Schema.Array(Schema.String),
+      /** ListRoots proved the account's root has the SCP policy type enabled. */
+      scpEnabled: Schema.Boolean,
+    }),
+  ),
+});
+export type AwsBudgets = typeof AwsBudgets.Type;
+
+/** The Budgets action types that apply a policy, the form a denial of new task launches takes. */
+export const POLICY_ACTION_TYPES: ReadonlySet<string> = new Set([
+  "APPLY_IAM_POLICY",
+  "APPLY_SCP_POLICY",
+]);
+
+/** The ECS calls that start a task: the launches a Budgets action must deny. */
+const LAUNCH_CALLS = ["ecs:RunTask", "ecs:StartTask"] as const;
+
+/** The Cost Explorer service the AWS kind's Fargate tasks bill under. */
+const ECS_SERVICE = "Amazon Elastic Container Service";
+
+/** Proves coverage of every ECS charge, independent of its region, account, tags or other dimensions. */
+const expressionCoversEcs = (expression: unknown, depth = 0): boolean => {
+  if (
+    depth > 32 ||
+    typeof expression !== "object" ||
+    expression === null ||
+    Array.isArray(expression)
+  )
+    return false;
+  const fields = Object.entries(expression);
+  if (fields.length === 0) return true;
+  if (fields.length !== 1) return false;
+  const [operator, value] = fields[0]!;
+  if (operator === "And" || operator === "Or") {
+    if (!Array.isArray(value) || value.length === 0) return false;
+    return operator === "And"
+      ? value.every((operand) => expressionCoversEcs(operand, depth + 1))
+      : value.some((operand) => expressionCoversEcs(operand, depth + 1));
+  }
+  if (
+    operator !== "Dimensions" ||
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  )
+    return false;
+  const dimension = value as Record<string, unknown>;
+  if (Object.keys(dimension).some((key) => !["Key", "Values", "MatchOptions"].includes(key)))
+    return false;
+  const values = dimension["Values"];
+  const match = dimension["MatchOptions"];
+  return (
+    dimension["Key"] === "SERVICE" &&
+    Array.isArray(values) &&
+    values.every((v) => typeof v === "string") &&
+    values.includes(ECS_SERVICE) &&
+    (match === undefined ||
+      (Array.isArray(match) &&
+        (match.length === 0 || (match.length === 1 && match[0] === "EQUALS"))))
+  );
+};
+
+/** Whether an IAM action pattern, with its `*` and `?` wildcards, matches `call`; action names ignore case. */
+const actionMatches = (pattern: string, call: string): boolean =>
+  new RegExp(
+    `^${pattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".")}$`,
+    "i",
+  ).test(call);
+
+/** Whether the statements deny every launch call on every resource, under no condition. */
+const deniesLaunches = (statements: readonly AwsPolicyStatement[]): boolean => {
+  const denying = statements.filter(
+    (s) => s.effect === "Deny" && !s.conditional && s.resources.includes("*"),
+  );
+  return LAUNCH_CALLS.every((call) =>
+    denying.some((s) => s.actions.some((p) => actionMatches(p, call))),
+  );
+};
+
+/** Why a budget does not measure the AWS kind's spend over the period `aws.budgetUsd` caps; null when it does. */
+const budgetGap = (budget: AwsBudget, observedAt: number): string | null => {
+  if (budget.type !== "COST" || budget.limitUnit !== "USD")
+    return `belongs to budget ${budget.name}, which is not a USD cost budget`;
+  if (budget.timeUnit === "DAILY")
+    return `belongs to budget ${budget.name}, which resets daily and lets a month's spend run past its limit`;
+  if (!["MONTHLY", "QUARTERLY", "ANNUALLY", "CUSTOM"].includes(budget.timeUnit))
+    return `belongs to budget ${budget.name}, whose spend period is unknown`;
+  if (!Number.isFinite(budget.limitAmount) || budget.limitAmount < 0)
+    return `belongs to budget ${budget.name}, whose limit is not a finite nonnegative amount`;
+  const period = budget.timePeriod;
+  if (
+    !Number.isFinite(observedAt) ||
+    observedAt < 0 ||
+    period === null ||
+    typeof period !== "object" ||
+    Array.isArray(period) ||
+    Object.keys(period).some((k) => k !== "Start" && k !== "End")
+  )
+    return `belongs to budget ${budget.name}, whose current active time window cannot be proven`;
+  const { Start: start, End: end } = period as Record<string, unknown>;
+  if (
+    typeof start !== "number" ||
+    !Number.isFinite(start) ||
+    typeof end !== "number" ||
+    !Number.isFinite(end)
+  )
+    return `belongs to budget ${budget.name}, whose current active time window cannot be proven`;
+  // Creation defaults do not prove the contents of an incomplete DescribeBudgets response.
+  const begins = start;
+  const ends = end;
+  if (begins >= ends || observedAt / 1000 < begins || observedAt / 1000 >= ends)
+    return `belongs to budget ${budget.name}, which is not active at the time of the AWS read`;
+  if (budget.billingViewArn !== undefined)
+    return `belongs to budget ${budget.name}, whose billing view scope has not been read`;
+  if (budget.filterExpression !== undefined && !expressionCoversEcs(budget.filterExpression))
+    return `belongs to budget ${budget.name}, whose FilterExpression does not prove coverage of all ECS spend`;
+  for (const [dimension, values] of Object.entries(budget.costFilters)) {
+    if (values.length === 0)
+      return `belongs to budget ${budget.name}, whose ${dimension} cost filter names no values`;
+    if (dimension !== "Service")
+      return `belongs to budget ${budget.name}, whose ${dimension} cost filter measures only part of the account's spend`;
+    if (!values.includes(ECS_SERVICE))
+      return `belongs to budget ${budget.name}, whose Service cost filter leaves out ${ECS_SERVICE}`;
+  }
+  return null;
+};
+
+/** Why an action's policy does not deny the account's launches; null when it does. */
+const policyGap = (
+  action: AwsBudgetAction,
+  read: AwsBudgets,
+  launcherRoleArn: string | undefined,
+): string | null => {
+  const { account } = read;
+  const policy = action.policy;
+  if (policy === null) return "names no policy to apply";
+  if (!deniesLaunches(policy.statements))
+    return `applies policy ${policy.id}, which does not deny ${LAUNCH_CALLS.join(" and ")} on every resource under no condition`;
+  const role =
+    launcherRoleArn === undefined
+      ? undefined
+      : /^arn:aws:iam::(\d{12}):role\/((?:[^/]+\/)*([\w+=,.@-]+))$/.exec(launcherRoleArn);
+  if (role === null || (role !== undefined && role[1] !== account))
+    return `cannot prove the ${action.actionType === "APPLY_SCP_POLICY" ? "SCP" : "IAM policy"} affects the launcher: aws.launcherRoleArn must name a role in account ${account}`;
+  if (action.actionType === "APPLY_SCP_POLICY") {
+    if (policy.policyType !== "SERVICE_CONTROL_POLICY")
+      return `applies policy ${policy.id}, which is not a verified SERVICE_CONTROL_POLICY`;
+    if (read.organization === undefined)
+      return "cannot prove the SCP affects the account: organization membership was not read";
+    if (read.organization.managementAccount === account)
+      return `cannot deny launches in organization management account ${account}: SCPs do not affect it`;
+    if (!read.organization.scpEnabled)
+      return "cannot deny launches through an SCP: the account's organization root has no enabled SCP policy type";
+    return policy.targets.some((t) => t === account || read.organization!.ancestors.includes(t))
+      ? null
+      : `attaches policy ${policy.id} to neither account ${account} nor one of its organization ancestors`;
+  }
+  if (launcherRoleArn === undefined)
+    return "cannot prove the IAM policy affects the launcher: aws.launcherRoleArn is not set";
+  // Budgets accepts role paths as well as bare names; IAM role names are unique within the account.
+  return policy.roles?.some((target) => target === role?.[2] || target === role?.[3]) === true
+    ? null
+    : `attaches policy ${policy.id} to no launcher role ${launcherRoleArn}`;
+};
+
+/** Why one Budgets action does not deny new task launches when actual spend reaches `limitUsd`; null when it does. */
+const budgetActionGap = (
+  action: AwsBudgetAction,
+  read: AwsBudgets,
+  limitUsd: number,
+  launcherRoleArn: string | undefined,
+): string | null => {
+  if (action.notificationType !== "ACTUAL") return "runs on forecast spend, not actual spend";
+  if (!POLICY_ACTION_TYPES.has(action.actionType))
+    return `is ${action.actionType}, which applies no deny policy`;
+  if (action.approvalModel !== "AUTOMATIC") return "waits for manual approval";
+  if (action.status !== "STANDBY" && action.status !== "EXECUTION_SUCCESS")
+    return `has status ${action.status || "unknown"}, which does not prove an active budget safeguard`;
+  if (
+    !["PERCENTAGE", "ABSOLUTE_VALUE"].includes(action.thresholdType) ||
+    !Number.isFinite(action.thresholdValue) ||
+    action.thresholdValue < 0
+  )
+    return "has no known finite nonnegative spend threshold";
+  const budget = read.budgets.find((b) => b.name === action.budgetName);
+  if (budget === undefined) return `names budget ${action.budgetName}, which the account lacks`;
+  const measured = budgetGap(budget, read.observedAt);
+  if (measured !== null) return measured;
+  const atUsd =
+    action.thresholdType === "PERCENTAGE"
+      ? (budget.limitAmount * action.thresholdValue) / 100
+      : action.thresholdValue;
+  // A cent of tolerance absorbs the decimal strings AWS reports amounts in.
+  if (!Number.isFinite(atUsd) || atUsd > limitUsd + 0.005)
+    return `runs at ${atUsd} USD, above aws.budgetUsd ${limitUsd} USD`;
+  return policyGap(action, read, launcherRoleArn);
+};
+
+/** The failure of a deploy that carries the `aws` kind and sets no `aws.budgetUsd`; the check reads nothing from AWS. */
+export const awsBudgetUnset: Finding = fail(
+  "aws-budget",
+  "aws.budgetUsd",
+  "the overlay carries the aws kind and sets no AWS limit for the Budgets action to enforce",
+);
+
+/**
+ * The AWS Budgets action MAMEKO-EXEC-087 requires where a deploy carries the `aws` kind (FD-EXEC-083): the account
+ * must carry an action that, with no approval step, applies a policy denying `ecs:RunTask` and `ecs:StartTask` on
+ * every resource once actual spend reaches the overlay's `aws.budgetUsd`. Only STANDBY or EXECUTION_SUCCESS actions
+ * qualify. The USD cost budget must be active at read completion, reset no more often than monthly, and cover all ECS
+ * spend through both legacy CostFilters and the requested modern FilterExpression. An unread billing view's scope
+ * does not qualify. An SCP must target a member account or a proven ancestor; SCPs do not constrain an organization's
+ * management account. An IAM policy must target the role named by
+ * `aws.launcherRoleArn` in the authenticated account. An action that runs below the limit
+ * qualifies: launches are denied by the time spend reaches it. One failure when no action qualifies, listing why each
+ * action read falls short.
+ */
+export const awsBudgetCheck = (
+  limitUsd: number,
+  read: AwsBudgets,
+  launcherRoleArn?: string,
+): readonly Finding[] => {
+  const gaps = read.actions.map((a) => ({
+    a,
+    gap: budgetActionGap(a, read, limitUsd, launcherRoleArn),
+  }));
+  if (gaps.some((g) => g.gap === null)) return [];
+  const why =
+    gaps.length === 0
+      ? "it carries no Budgets action"
+      : gaps.map((g) => `action ${g.a.id} ${g.gap!}`).join("; ");
+  return [
+    fail(
+      "aws-budget",
+      "aws.budgetAction",
+      `AWS account ${read.account} carries no Budgets action that denies new task launches when actual spend reaches aws.budgetUsd ${limitUsd} USD: ${why}`,
+    ),
   ];
 };
 

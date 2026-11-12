@@ -5,7 +5,10 @@ import {
   CiTriageInput,
   ImprovePrInput,
   PrReviewInput,
+  SelfHealPrInput,
   SpecDriftInput,
+  TriageIssuesInput,
+  TriagePrsInput,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { buildProfile, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import type { Capability } from "@fractalboxdev/mameko-run";
@@ -273,8 +276,11 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
 const AGENTIC_INPUTS: Readonly<Record<string, Schema.Decoder<unknown>>> = {
   "pr-review": PrReviewInput,
   "improve-pr": ImprovePrInput,
+  "self-heal-pr": SelfHealPrInput,
   "spec-drift-pr": SpecDriftInput,
   "ci-triage-pr": CiTriageInput,
+  "triage-issues": TriageIssuesInput,
+  "triage-prs": TriagePrsInput,
 };
 
 /**

@@ -29,9 +29,9 @@ The profile declares every kind the control plane accepts ([profile.md](profile.
 | `check.conclude` | control plane, the outcome mapping's `surface_kind` | `cp:check:conclude` | Update to `completed` with conclusion; create completed when no check run exists | `external_id` = execution id |
 | `check.summary` | run | `run:<step name>:<index>` | Title and Markdown on the check run | The check run found by `external_id` |
 | `check.annotations` | run | `run:<step name>:<index>` | Annotations on the check run, at most 50 per request | Annotations read back by check-run id |
-| `comment` | run | `run:<step name>:<index>` | Create issue or pull-request comment | Hidden marker `<!-- flare-dispatch:intent <execution_id>/<intent_key> -->` |
+| `comment` | run | `run:<step name>:<index>` | Create issue or pull-request comment; when the payload names a `marker`, update in place the earliest comment the App wrote carrying it, unless a later execution's intent marker is on it | Hidden marker `<!-- flare-dispatch:intent <execution_id>/<intent_key> -->` |
 | `review` | run | `run:<step name>:<index>` | Create pull-request review, event `COMMENT` | Hidden marker in the body |
-| `issue` | run | `run:<step name>:<index>` | Create or update an issue | Hidden marker in the body |
+| `issue` | run | `run:<step name>:<index>` | Create or update an issue; when the payload names `close_as_duplicate_of`, close the issue `number` names with the state reason `duplicate` | Hidden marker in the body; a close is idempotent |
 | `label` | run | `run:<step name>:<index>` | Add or remove labels | Set semantics |
 | `pr.propose` | control plane, `on: accepted` for `success` | `cp:pr:propose` | The staged-write gate, then Git Data API commit and a pull request, a draft unless the manifest sets `draft` to false | Head branch name |
 | `pr.close` | run | `run:<step name>:<index>` | Close a pull request whose head branch is under `flare-dispatch/` | Update is idempotent |
@@ -270,6 +270,13 @@ A deploying organization that sets `records.url` receives one `job.record` per l
 - **FD-GH-102** · phase 2 · `V-UNIT` `V-SIM` — If a `job.record` or `verdict.record` row reaches `refused` or `expired`, then the control plane must raise the page alarm `record-undelivered` naming the execution, and must leave the verdict unchanged.
 
 ## Open items
+
+- Marked review-comment writes use a durable per-PR slot independently of the outbox row claim. A unique attempt footer
+  permits recovery after a lost acknowledgement only when a complete bot-owned comment read observes that exact footer.
+  An absent, malformed or unreadable receipt never releases an uncertain write: newer reviews remain pending, including
+  after claim expiry or an isolate restart. A crash between reserving the slot and sending can therefore block that PR's
+  marked comments indefinitely. There is no timed unlock; operational recovery requires proving the old request cannot
+  still write. Availability is sacrificed rather than letting a late older PATCH overwrite a newer review.
 
 - TODO(maintainer): move `verdict.record` into the terminal transaction when mameko generates a row for every `on: terminal` kind; the pinned commit generates only the outcome mapping's `surface_kind`.
 - TODO(maintainer): confirm GitHub's current secondary rate limits for content-creating requests and set the defaults of FD-GH-062 from them.

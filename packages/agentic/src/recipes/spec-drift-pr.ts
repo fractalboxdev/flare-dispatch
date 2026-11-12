@@ -3,6 +3,7 @@
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Exit, Schema } from "effect";
 import { sanitizeModelText } from "../boundary.ts";
+import { checkSuppression, suppressionReadFailed, suppressionKey } from "../suppression/ledger.ts";
 import { inAllowlist } from "../staged-write/gate.ts";
 import { extractJson } from "./pr-review.ts";
 import {
@@ -70,9 +71,14 @@ const SYSTEM = [
   "Each file is a full replacement of a path under specs/. When the specs match the code, answer inSync true and no files.",
 ].join("\n");
 
-/** The `spec-drift-pr` body for one enrolled repository. */
+/**
+ * The `spec-drift-pr` body for one enrolled repository; a suppressed key reads nothing and opens nothing
+ * (FD-AGT-043).
+ */
 export const runSpecDrift = (input: SpecDriftInput) =>
   Effect.gen(function* () {
+    const suppressed = yield* checkSuppression(suppressionKey(input.repo, SPEC_DRIFT_BRANCH));
+    if (suppressed) return { _tag: "success" } satisfies RunResult;
     const context = yield* readContext;
     const model = yield* ModelClient;
     const text = yield* model.complete({
@@ -117,6 +123,7 @@ export const runSpecDrift = (input: SpecDriftInput) =>
     return { _tag: "success" } satisfies RunResult;
   }).pipe(
     Effect.catchTags({
+      SuppressionReadFailed: suppressionReadFailed,
       ReadFailed: (e) =>
         Effect.succeed({
           _tag: "failure",

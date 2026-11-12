@@ -51,7 +51,8 @@ interface Entry {
   lastReadAt: number;
 }
 
-const NAMESPACE = /^[a-z0-9._/-]{1,300}$/;
+/** A namespace path: lowercase repository slugs, decimal numbers, and the uppercase ULID of an `exec/` namespace. */
+const NAMESPACE = /^[A-Za-z0-9._/-]{1,300}$/;
 const KEY = /^[0-9a-f]{64}$/;
 const safe = (namespace: string, key: string) =>
   NAMESPACE.test(namespace) && !namespace.split("/").some((s) => s === "" || s === "." || s === "..") && KEY.test(key);
@@ -87,7 +88,9 @@ const verified = async (entry: L2Entry, keys: VerificationKeys): Promise<Uint8Ar
  * the files present.
  */
 export const openL1 = async (options: L1Options): Promise<L1Cache> => {
-  const now = options.now ?? Date.now;
+  // Strictly increasing, so two reads in the same millisecond keep their order for eviction.
+  let last = 0;
+  const now = options.now ?? (() => (last = Math.max(Date.now(), last + 1)));
   const cap = Math.floor((await options.disk.freeBytes()) * (options.share ?? 0.2));
   const index = new Map<string, Entry>();
   for (const f of await options.disk.list()) {
@@ -108,6 +111,11 @@ export const openL1 = async (options: L1Options): Promise<L1Cache> => {
     return freed;
   };
   const store = async (namespace: string, key: string, bytes: Uint8Array) => {
+    // The entry this write replaces leaves first, so its bytes never count against the cap (FD-CACHE-009).
+    if (index.has(pathOf(namespace, key))) {
+      await options.disk.remove(pathOf(namespace, key));
+      index.delete(pathOf(namespace, key));
+    }
     if (bytes.byteLength > cap) return false;
     const over = total() + bytes.byteLength - cap;
     if (over > 0) await evictLru(over);

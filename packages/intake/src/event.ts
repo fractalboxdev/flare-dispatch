@@ -37,6 +37,8 @@ export const CronTrigger = Schema.TaggedStruct("cron", {
   scheduledAt: Schema.Number,
   repo: Schema.String,
   schedule: Schema.String,
+  /** The branch whose head the execution is pinned to: the schedule's branch, or the default branch (FD-INT-052). */
+  branch: Schema.String,
 });
 export const LocalTrigger = Schema.TaggedStruct("local", {
   leaseId: Schema.String,
@@ -70,18 +72,25 @@ export type WebhookEvent = typeof WebhookEvent.Type;
 
 const Sha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/));
 const Repo = Schema.Struct({ full_name: Schema.String });
+/** The event's repository, with its visibility. */
+const EventRepo = Schema.Struct({
+  full_name: Schema.String,
+  private: Schema.optionalKey(Schema.Boolean),
+});
 
 /** The fields intake reads off any webhook payload; every one is optional. */
 export const WebhookFields = Schema.Struct({
   action: Schema.optionalKey(Schema.String),
   ref: Schema.optionalKey(Schema.String),
   after: Schema.optionalKey(Schema.String),
-  repository: Schema.optionalKey(Repo),
+  repository: Schema.optionalKey(EventRepo),
   installation: Schema.optionalKey(Schema.Struct({ id: Schema.Number })),
   deployment: Schema.optionalKey(Schema.Struct({ sha: Schema.optionalKey(Schema.String) })),
   pull_request: Schema.optionalKey(
     Schema.Struct({
       number: Schema.Number,
+      /** The pull request author's relation to the repository, e.g. `MEMBER` or `NONE`. */
+      author_association: Schema.optionalKey(Schema.String),
       closed_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
       updated_at: Schema.optionalKey(Schema.String),
       head: Schema.Struct({
@@ -155,6 +164,14 @@ export const isForkPr = (f: WebhookFields): boolean => {
   const base = pr.base.repo?.full_name ?? f.repository?.full_name ?? null;
   return head === null || base === null || head !== base;
 };
+
+/** A repository the payload states is not private is public; a payload that does not say leaves it unknown (null). */
+export const repositoryPublicOf = (f: WebhookFields): boolean | null =>
+  f.repository?.private === undefined ? null : !f.repository.private;
+
+/** The `author_association` of each principal whose text the payload carries: the pull request's author. */
+export const inputAssociationsOf = (f: WebhookFields): readonly string[] =>
+  f.pull_request?.author_association === undefined ? [] : [f.pull_request.author_association];
 
 /**
  * What started an execution as its cache namespaces read it (specs/cache-artifacts.md § Cache namespaces and cache

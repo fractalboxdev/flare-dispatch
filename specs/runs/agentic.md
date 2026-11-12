@@ -218,6 +218,8 @@ flowchart LR
 
 ### Suppression ledger
 
+A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the repository and the head branch of the pull request the recipe opens or refreshes, for example `acme/app:flare-dispatch/improve-bundle-size`. The **suppression ledger** is the `fd_suppressions` table in the control plane's D1 database, one row per key, holding whether a maintainer declined the key and the `closed_at` of the matching pull request that closed unmerged. The ledger compares keys as exact strings, letter case included. `improve-pr`, `spec-drift-pr` and `ci-triage-pr` read the ledger before any other step, so a suppressed key spends no measurement, edit loop or model call and concludes `success`.
+
 - **FD-AGT-043** · phase 3 · `V-UNIT` — Before a recipe opens a pull request or an issue, the run must look up the proposal's exact suppression key in the suppression ledger, and must open nothing while the key is declined or within the cooldown, default 30 days from the matching pull request's `closed_at`.
 - **FD-AGT-044** · phase 3 · `V-UNIT` — If the suppression ledger read fails, then the run must open no pull request or issue and must conclude `failure` with the reason `suppression: read failed`.
 
@@ -276,12 +278,22 @@ flowchart LR
 
 ### `triage-issues`
 
-- **FD-AGT-074** · phase 3 · `V-UNIT` — `triage-issues` must classify each open issue with one `transform` call into exactly one of `duplicate`, `needs-repro`, `feature`, `question`, `bug-with-repro`, `bug-without-repro` and `unclassified`, considering at most 40 duplicate candidates.
-- **FD-AGT-075** · phase 3 · `V-UNIT` — `triage-issues` must map verdicts to intents: `duplicate` to a templated comment naming the original and a close as duplicate; `needs-repro` to the label `triage:needs-repro` and a templated request; `feature` and `question` to `triage:not-actionable`; `bug-with-repro` to `triage:fix-pending` with the repro and the reporter's `author_association`; `bug-without-repro` to `triage:needs-human`; `unclassified` to no intent.
+- **FD-AGT-074** · phase 3 · `V-UNIT` — `triage-issues` must classify each open issue that carries none of the labels FD-AGT-075 names with one `transform` call into exactly one of `duplicate`, `needs-repro`, `feature`, `question`, `bug-with-repro`, `bug-without-repro` and `unclassified`, considering at most 40 duplicate candidates.
+- **FD-AGT-075** · phase 3 · `V-UNIT` — `triage-issues` must map verdicts to intents: `duplicate` to a templated comment naming the original and a close as duplicate; `needs-repro` to the label `triage:needs-repro` and a templated request; `feature` and `question` to `triage:not-actionable`; `bug-with-repro` whose body holds a command block to `triage:fix-pending` with that repro and the reporter's `author_association`, and one whose body holds none to `triage:needs-human`; `bug-without-repro` to `triage:needs-human`; `unclassified` to no intent.
 - **FD-AGT-076** · phase 3 · `V-UNIT` — `triage-issues` must build every comment from a template, taking from model output only the verdict and the original issue number.
-- **FD-AGT-077** · phase 3 · `V-UNIT` — `triage-issues` must close an issue only for the verdict `duplicate`.
+- **FD-AGT-077** · phase 3 · `V-UNIT` — `triage-issues` must close an issue only for the verdict `duplicate` whose original stays open after every close of the same execution, and never an issue whose `state_reason` is `reopened`.
 
 ### `triage-prs`
+
+`triage-prs` reads check health from the head commit's check runs and the review state from each reviewer's latest approval or change request. It takes the first route that matches:
+
+| Order | State | Route |
+| --- | --- | --- |
+| 1 | Draft, or a label `do-not-merge`, `wip`, `blocked` or `on-hold` | `ask` |
+| 2 | A check failed, or a check is still pending 1 day or more after the last update | `unstick` |
+| 3 | At least one check passed, none failed or is pending, a reviewer approved, and no reviewer's latest review requests changes | `auto-merge` |
+| 4 | No standing approval (none, or a change request), and 3 days or more since the last update | `nudge` |
+| 5 | Any other state | `ask` |
 
 - **FD-AGT-078** · phase 3 · `V-UNIT` — `triage-prs` must derive each open pull request's state (check health, review state, days since last update, labels) without a model call, and route it to exactly one of `auto-merge`, `nudge`, `unstick` and `ask`.
 - **FD-AGT-079** · phase 3 · `V-UNIT` — `triage-prs` may write each pull request's digest line with one `transform` call, and the route must not depend on that call's output.

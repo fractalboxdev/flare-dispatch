@@ -11,19 +11,18 @@ import { applyPrClose, applyPrPropose, lookupPrPropose } from "./writeback/appli
 
 export interface LocalPortsConfig {
   readonly db: D1Binding;
-  /** Whether a run is in the catalogue the control plane serves. */
-  readonly runKnown: (run: string) => boolean;
   readonly localWritebackRate?: number;
 }
 
 /**
  * `LocalRegistration`, `ReusePolicy` and `WritebackGate` over the control plane's D1 database. The Layer still needs
- * `ReuseInputs`, `PostureSource`, `GitData`, `WritebackRecords` and `CapacityUsage` from the control plane.
+ * `LocalSubmit` (intake's local submit), `ReuseInputs`, `PostureSource`, `GitData`, `WritebackRecords` and
+ * `CapacityUsage` from the control plane.
  */
 export const localPortsLayer = (config: LocalPortsConfig) => {
   const store = localStoreD1(config.db);
   return Layer.mergeAll(
-    localRegistrationLayer({ runKnown: config.runKnown }),
+    localRegistrationLayer,
     reusePolicyLayer,
     writebackGateLayer({
       writebackFor: (run) => agenticWriteback(run)?.writeback,

@@ -21,13 +21,14 @@ import {
 } from "./spec-tags.ts";
 
 const ROOT = join(import.meta.dirname, "../../../..");
-const tree = (dir: string): Map<string, string> => {
+const tree = (dir: string, keep: (p: string) => boolean = (p) => p.endsWith(".md")): Map<string, string> => {
   const out = new Map<string, string>();
   const walk = (d: string) => {
     for (const n of readdirSync(d)) {
       const p = join(d, n);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith(".md")) out.set(relative(dir, p), readFileSync(p, "utf8"));
+      if (statSync(p).isDirectory()) {
+        if (!n.startsWith(".")) walk(p);
+      } else if (keep(p)) out.set(relative(dir, p), readFileSync(p, "utf8"));
     }
   };
   walk(dir);
@@ -39,7 +40,7 @@ const input: SpecTagsInput = {
   moved: readFileSync(join(ROOT, "specs/ids.moved.tsv"), "utf8"),
   baseSpecs: specs,
   mamekoSpecs: [...tree(join(ROOT, "vendor/mameko/specs")).values()],
-  formal: new Map(),
+  formal: tree(join(ROOT, "formal"), (p) => p.endsWith(".lean") || p.endsWith(".spthy")),
 };
 const withSpec = (file: string, edit: (text: string) => string): SpecTagsInput => ({
   ...input,
@@ -203,7 +204,7 @@ describe("spec-tags", () => {
       specs
         .get("verification.md")!
         .replace(
-          "`StagedWrite.model_authored_protected_paths`, `StagedWrite.reject_whole_manifest` *planned*",
+          "`StagedWrite.model_authored_protected_paths` *proved*; `StagedWrite.reject_whole_manifest` *proved*",
           "`StagedWrite.reject_whole_manifest` *proved*",
         ),
     );

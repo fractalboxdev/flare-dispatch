@@ -26,7 +26,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -50,6 +50,7 @@ import {
   operabilityCommand,
   repositoryRoot,
   V2_WORKERS,
+  type WorkerSpec,
 } from "../../src/cli/index.ts";
 import { accessStore } from "../../src/access-application.test-support.ts";
 import {
@@ -66,7 +67,6 @@ const ROOT = repositoryRoot(import.meta.dirname);
 const SCRIPT = "packages/ops/scripts/fd-operability.ts";
 const FD_DEPLOY = ["--experimental-strip-types", "--no-warnings", SCRIPT, "deploy", "--overlay"];
 const SHA = "0123456789abcdef0123456789abcdef01234567";
-const CONTROL_PLANE = V2_WORKERS.find((w) => w.worker === "control-plane")!;
 
 /** An operator's overlay whose values differ from the placeholder overlay, so a render shows which overlay it read. */
 const OVERLAY: OverlayValues = {
@@ -96,6 +96,7 @@ type Job = {
   name?: string;
   needs?: string | string[];
   if?: string;
+  permissions?: Record<string, string>;
   uses?: string;
   steps?: Step[];
   concurrency?: unknown;
@@ -184,7 +185,8 @@ const evaluate = (text: string, context: ReadonlyMap<string, string>) =>
 /**
  * Runs the steps the way a GitHub-hosted runner does: in order, each `run:` in bash with its `env:` and
  * `working-directory`, `$GITHUB_OUTPUT` read back into `steps.<id>.outputs`, stopping at the first failure; a step under
- * `if: success()` runs only when every step before it passed. `uses` plays each `uses:` step.
+ * `if: success()` runs only when every step before it passed, and one under `if: vars.<NAME> != ''` only when `values`
+ * sets that variable. `uses` plays each `uses:` step.
  */
 const runSteps = (
   steps: readonly Step[],
@@ -203,9 +205,11 @@ const runSteps = (
   for (const [n, step] of steps.entries()) {
     const name = step.name ?? step.uses ?? `step ${n}`;
     const failedBefore = results.some((s) => !s.ok);
-    if (step.if !== undefined && step.if !== "success()")
+    const variable = /^vars\.(\w+) != ''$/.exec(step.if ?? "")?.[1];
+    if (step.if !== undefined && step.if !== "success()" && variable === undefined)
       throw new Error(`${name}: no evaluator for if: ${step.if}`);
     if (failedBefore) break;
+    if (variable !== undefined && (context.get(`vars.${variable}`) ?? "") === "") continue;
     if (step.uses !== undefined) {
       uses(step, context);
       results.push({ name, ok: true, stderr: "", output: "" });
@@ -283,6 +287,7 @@ const deployedBy = async (argv: readonly string[]) => {
       lastRecord: () => Effect.succeed(null),
       appRegistration: Effect.succeed(APP_PERMISSIONS),
       requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
+      awsBudgets: Effect.succeed({ account: "", observedAt: 0, budgets: [], actions: [] }),
       applyD1Migrations: () => Effect.succeed([]),
       deployWorker: (w) =>
         Effect.sync(() => {
@@ -306,17 +311,31 @@ const deployedBy = async (argv: readonly string[]) => {
   const service = makeOperability({
     fail: (m) => new Error(m),
     root: ROOT,
-    workers: [CONTROL_PLANE],
+    workers: builtWorkers(),
     target,
   });
   const report = await Effect.runPromise(operabilityCommand(service, argv, (m) => new Error(m)));
   return { report, received };
 };
 
+/**
+ * The Workers of the deploy with the docs Worker's committed template copied beside a site build, as the deploy
+ * workflow's build step leaves it: `fd deploy` stops at its drift stage without one.
+ */
+const builtWorkers = (): readonly WorkerSpec[] => {
+  const app = join(scratch, "docs-built");
+  mkdirSync(join(app, "dist"), { recursive: true });
+  return V2_WORKERS.map((w) => {
+    if (w.worker !== "docs") return w;
+    copyFileSync(join(ROOT, w.templatePath), join(app, "wrangler.jsonc"));
+    return { ...w, templatePath: relative(ROOT, join(app, "wrangler.jsonc")) };
+  });
+};
+
 /** Each Worker's configuration as the one renderer produces it from its committed template and `overlay`. */
 const rendered = (overlay: OverlayValues) =>
   new Map(
-    [CONTROL_PLANE].map((w) => [
+    V2_WORKERS.map((w) => [
       w.worker,
       Effect.runSync(
         renderTemplate(w.worker, readFileSync(join(ROOT, w.templatePath), "utf8"), overlay),
@@ -588,8 +607,10 @@ const CI_COMMANDS: Readonly<Record<string, RegExp>> = {
   typecheck: /^pnpm typecheck$/,
   "unit tests": /^pnpm test$/,
   "formal build gate": /packages\/ops\/scripts\/formal-gate\.ts/,
-  "wrangler deploy --dry-run on the configuration rendered from the placeholder overlay":
+  "wrangler deploy --dry-run on the control plane's configuration rendered from the placeholder overlay":
     /^pnpm exec wrangler deploy --dry-run -c apps\/control-plane\/control-plane\.jsonc$/,
+  "wrangler deploy --dry-run on the docs Worker's configuration rendered from the placeholder overlay":
+    /^mkdir -p apps\/docs\/dist && pnpm exec wrangler deploy --dry-run -c apps\/docs\/docs\.jsonc$/,
   "the render, cron and drift checks": /packages\/ops\/scripts\/drift-check\.ts/,
   "documentation site build": /^pnpm --filter @fractalboxdev\/flare-dispatch-docs run build$/,
 };
@@ -753,17 +774,29 @@ const pnpmStandIn = (repository: string) => {
   ].join("\n");
 };
 
-/** Runs `job` of `v2-ci` in `workspace`, which already holds the checkout and the install its `uses:` steps make. */
-const runCiJob = (job: string, name: string, workspace: string) => {
+/**
+ * Runs `job` of `v2-ci` in `workspace`, which already holds the checkout and the install its `uses:` steps make: the
+ * job's steps up to `until` (all by default), with `pnpm` played by `pnpm`'s text (`pnpmStandIn` by default).
+ */
+const runCiJob = (
+  job: string,
+  name: string,
+  workspace: string,
+  opts: { readonly until?: (step: Step) => boolean; readonly pnpm?: string } = {},
+) => {
   const r = runner(name, []);
   rmSync(r.workspace, { recursive: true, force: true });
   symlinkSync(workspace, r.workspace);
-  writeFileSync(join(r.bin, "pnpm"), pnpmStandIn(workspace));
+  writeFileSync(join(r.bin, "pnpm"), opts.pnpm ?? pnpmStandIn(workspace));
   chmodSync(join(r.bin, "pnpm"), 0o755);
   const played: string[] = [];
+  const steps = ciWorkflow.jobs[job]!.steps!;
+  const until = opts.until ?? (() => true);
+  const last = steps.reduce((at, step, i) => (until(step) ? i : at), -1);
+  expect(last, `${job}: no step to run until`).toBeGreaterThanOrEqual(0);
   // `node` runs under the real home, as on the hosted runner.
   const results = runSteps(
-    ciWorkflow.jobs[job]!.steps!,
+    steps.slice(0, last + 1),
     r,
     {},
     (step) => {
@@ -885,7 +918,7 @@ describe("the deploy workflow over GitHub's rules", () => {
     );
     expect(results.filter((s) => !s.ok)).toEqual([]);
     expect(fdDeployOf(r.ran()).call.args.slice(FD_DEPLOY.length)).toHaveLength(1);
-  });
+  }, 30_000);
 
   it("[FD-OPS-025] runs fd doctor once every 24 h, and a failed check raises the notify alarm drift at the overlay's sink", async () => {
     const schedule = deployWorkflow.on["schedule"] as unknown as { cron: string }[];
@@ -957,6 +990,55 @@ describe("the deploy workflow over GitHub's rules", () => {
   });
 });
 
+describe("the deploy workflow's AWS credentials", () => {
+  const ROLE = "arn:aws:iam::111122223333:role/fd-deploy";
+  const secrets = {
+    "secrets.FD_OPERATOR_OVERLAY": OVERLAY_TEXT,
+    "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
+    "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+    "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
+  };
+
+  it("[FD-EXEC-083] the deploy and doctor jobs assume the role FD_AWS_ROLE_ARN names before the drift check reads AWS, and skip it where the variable is unset", () => {
+    for (const job of ["deploy", "doctor"]) {
+      const j = deployWorkflow.jobs[job]!;
+      // GitHub's OIDC provider issues the job a token only under `id-token: write`.
+      expect(j.permissions).toEqual({ contents: "read", "id-token": "write" });
+      const steps = j.steps!;
+      const assume = steps.findIndex((s) => s.uses === "aws-actions/configure-aws-credentials@v4");
+      const fdStep = steps.findIndex((s) => s.name === `fd ${job}`);
+      expect(assume).toBeGreaterThanOrEqual(0);
+      expect(assume).toBeLessThan(fdStep);
+
+      for (const role of [ROLE, ""]) {
+        const r = runner(`aws-${job}-${role === "" ? "unset" : "set"}`);
+        checkout(r.workspace);
+        const assumed: Record<string, string>[] = [];
+        const results = runSteps(
+          steps,
+          r,
+          { ...secrets, "vars.FD_AWS_ROLE_ARN": role },
+          (step, context) => {
+            if (step.uses !== "aws-actions/configure-aws-credentials@v4") return;
+            assumed.push(
+              Object.fromEntries(
+                Object.entries(step.with ?? {}).map(([k, v]) => [k, evaluate(String(v), context)]),
+              ),
+            );
+          },
+        );
+        expect(results.filter((s) => !s.ok)).toEqual([]);
+        expect(assumed).toEqual(
+          role === "" ? [] : [{ "role-to-assume": ROLE, "aws-region": "us-east-1" }],
+        );
+        expect(r.ran().filter((c) => c.command === "node" && c.args.includes(SCRIPT))).toHaveLength(
+          1,
+        );
+      }
+    }
+  }, 60_000);
+});
+
 describe("the CI jobs the merge gate and the deploy rest on", () => {
   it("[FD-OPS-027] every pull request runs the CI commands under fallback-ci, which passes only when all pass and which the ruleset does not require", () => {
     expect(triggers(ciWorkflow, PULL_REQUEST)).toBe(true);
@@ -1011,6 +1093,85 @@ describe("the CI jobs the merge gate and the deploy rest on", () => {
     const w = world();
     expect((await deployOn(w)).ok).toBe(true);
   }, 30_000);
+
+  it("[FD-OPS-026] every pull request runs wrangler deploy --dry-run for every Worker on its configuration rendered from the placeholder overlay", () => {
+    expect(conclusions(ciWorkflow, PULL_REQUEST, allPass).get("deploy-dry-run")).toBe("success");
+    const isDryRun = (s: Step) => /wrangler deploy --dry-run/.test(s.run ?? "");
+    /** A `pnpm` that records each `pnpm exec wrangler` with the configuration its `-c` names, as the call saw it. */
+    const recorder = (name: string) => {
+      const dir = join(scratch, name, "dry-runs");
+      mkdirSync(dir, { recursive: true });
+      const pnpm = [
+        "#!/bin/sh",
+        'if [ "$1" != "exec" ] || [ "$2" != "wrangler" ]; then echo "pnpm stand-in: no $*" >&2; exit 2; fi',
+        'config=""; prev=""',
+        'for a in "$@"; do if [ "$prev" = "-c" ]; then config="$a"; fi; prev="$a"; done',
+        `n=$(ls "${dir}" | wc -l | tr -d ' ')`,
+        `mkdir "${dir}/$n" && cp "$config" "${dir}/$n/config.jsonc" || exit 2`,
+        `printf '%s' "$*" > "${dir}/$n/args"`,
+        "",
+      ].join("\n");
+      const dryRuns = () =>
+        readdirSync(dir)
+          .sort((a, b) => Number(a) - Number(b))
+          .map((n) => ({
+            args: readFileSync(join(dir, n, "args"), "utf8"),
+            config: readFileSync(join(dir, n, "config.jsonc"), "utf8"),
+          }));
+      return { pnpm, dryRuns };
+    };
+
+    // The drift check writes each Worker's rendered configuration beside its template, and each is dry-run.
+    const repository = mirror("dry-run");
+    const clean = recorder("dry-run");
+    const ran = runCiJob("deploy-dry-run", "dry-run", repository, {
+      until: isDryRun,
+      pnpm: clean.pnpm,
+    });
+    expect(ran.results.filter((s) => !s.ok)).toEqual([]);
+    expect(ran.results.map((s) => s.output).join("\n")).toContain(
+      "drift-check: 0 failure(s), 0 warning(s)",
+    );
+    expect(clean.dryRuns()).toEqual(
+      V2_WORKERS.map((w) => ({
+        args: `exec wrangler deploy --dry-run -c ${dirname(w.templatePath)}/${w.worker}.jsonc`,
+        config: Effect.runSync(
+          renderTemplate(
+            w.worker,
+            readFileSync(join(ROOT, w.templatePath), "utf8"),
+            placeholderOverlay,
+          ),
+        ),
+      })),
+    );
+    // The docs Worker's rendered configuration passes wrangler's own dry-run where the job left it.
+    const docsDryRun = spawnSync(
+      join(ROOT, "node_modules/.bin/wrangler"),
+      ["deploy", "--dry-run", "-c", "apps/docs/docs.jsonc"],
+      {
+        cwd: repository,
+        encoding: "utf8",
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "true" },
+      },
+    );
+    expect(docsDryRun.status, `${docsDryRun.stdout}${docsDryRun.stderr}`).toBe(0);
+    expect(docsDryRun.stdout).toContain("--dry-run: exiting now.");
+
+    // A docs template that names its hostname fails the job at the drift check, before any dry-run.
+    const hardCoded = mirror("dry-run-hostname");
+    const template = join(hardCoded, "apps/docs/wrangler.jsonc");
+    const text = readFileSync(template, "utf8");
+    writeFileSync(template, text.replace('"{{hostnames.docs}}"', '"docs.acme.test"'));
+    expect(readFileSync(template, "utf8")).not.toBe(text);
+    const bad = recorder("dry-run-hostname");
+    const failed = runCiJob("deploy-dry-run", "dry-run-hostname", hardCoded, {
+      until: isDryRun,
+      pnpm: bad.pnpm,
+    });
+    expect(failed.results.map((s) => s.ok)).toEqual([true, true, false]);
+    expect(failed.results.at(-1)!.output).toContain("failure placeholder docs.routes[0].pattern");
+    expect(bad.dryRuns()).toEqual([]);
+  }, 120_000);
 
   it("[FD-OPS-031] the docs job builds the site from the Markdown under specs/, and fails on a broken local link or a diagram the check rejects", () => {
     expect(conclusions(ciWorkflow, PULL_REQUEST, allPass).get("docs")).toBe("success");

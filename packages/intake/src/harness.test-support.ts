@@ -36,7 +36,6 @@ import {
   type IntakeSettings,
 } from "./config.ts";
 import { admitDispatch, type AuthenticatedDispatch } from "./dispatch.ts";
-import { AccessIdentity } from "./mcp.ts";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
 import { manifestSourceLayer } from "./manifest.ts";
 import { profileClassResolver } from "./layer.ts";
@@ -206,9 +205,6 @@ export const harness = async (options: HarnessOptions = {}) => {
       repositories: (repos) =>
         Effect.sync(() => void recorded.evicted.push(...repos.map((r) => `repo ${r}`))),
     }),
-    Layer.succeed(AccessIdentity, {
-      identity: (r) => Effect.succeed(r.headers.get("x-test-identity")),
-    }),
   ).pipe(Layer.provideMerge(readLayer), Layer.provideMerge(TestClock.layer()));
   const runtime = ManagedRuntime.make(layer);
   await runtime.runPromise(TestClock.setTime(NOW));
@@ -314,7 +310,7 @@ export const refusal = (h: Harness, d: AuthenticatedDispatch) =>
 // Webhook fixtures
 
 export const signedWebhook = async (
-  event: string,
+  event: string | null,
   payload: unknown,
   options: {
     secret?: string;
@@ -330,10 +326,8 @@ export const signedWebhook = async (
       : await Effect.runPromise(signBody(options.secret ?? SECRET, body));
   const sent =
     options.tamper === true ? new TextEncoder().encode(JSON.stringify(payload) + " ") : body;
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    "x-github-event": event,
-  };
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (event !== null) headers["x-github-event"] = event;
   if (signature !== null) headers["x-hub-signature-256"] = signature;
   if (options.delivery !== null) headers["x-github-delivery"] = options.delivery ?? "d-1";
   return new Request("https://control-plane.example.com/v1/webhooks/github", {

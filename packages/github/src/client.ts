@@ -135,6 +135,7 @@ export const restRequest =
         try: (signal) =>
           options.fetch(`${base}${path}`, {
             method,
+            redirect: "manual",
             signal,
             headers: {
               accept: "application/vnd.github+json",

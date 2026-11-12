@@ -18,7 +18,9 @@ export const Signal = Schema.Struct({
   url: Schema.optionalKey(capped(1000)),
   count: Schema.optionalKey(Schema.Number),
 });
-export const SignalsV1 = Schema.Array(Signal).check(Schema.isMaxLength(50));
+/** The most entries a `signals/v1` array holds (FD-IFC-030). */
+export const SIGNALS_MAX_ENTRIES = 50;
+export const SignalsV1 = Schema.Array(Signal).check(Schema.isMaxLength(SIGNALS_MAX_ENTRIES));
 export type SignalsV1 = typeof SignalsV1.Type;
 
 /** The caps of an `incident/v1` pack (FD-IFC-042). */
@@ -108,6 +110,8 @@ export const ExecutionView = Schema.Struct({
   reserved_micro_usd: Schema.NullOr(Schema.Number),
   settled_micro_usd: Schema.NullOr(Schema.Number),
   enqueued_at: Schema.Number,
+  /** `null` until the execution is `done`. */
+  finished_at: Schema.NullOr(Schema.Number),
 });
 export type ExecutionView = typeof ExecutionView.Type;
 
@@ -115,6 +119,9 @@ const Limit = Schema.NumberFromString.check(
   Schema.isInt(),
   Schema.isBetween({ minimum: 1, maximum: 200 }),
 );
+
+/** Epoch milliseconds. */
+const Millis = Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
 
 export const ExecutionsPage = Schema.Struct({
   executions: Schema.Array(ExecutionView),
@@ -321,6 +328,7 @@ export class ExecutionsGroup extends HttpApiGroup.make("executions")
         class: Schema.optionalKey(Schema.String),
         executor_kind: Schema.optionalKey(Schema.String),
         before: Schema.optionalKey(Schema.String),
+        finished_since: Schema.optionalKey(Millis),
         limit: Schema.optionalKey(Limit),
       },
       success: ExecutionsPage,

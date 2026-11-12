@@ -1,4 +1,5 @@
 export {
+  APP_LIST_MAX_PAGES,
   AppKeyInvalid,
   GithubApp,
   githubAppLayer,
@@ -6,11 +7,17 @@ export {
   JWT_BACKDATE_SEC,
   JWT_LIFETIME_SEC,
   LEASE_READ_PERMISSIONS,
+  listAppDeliveries,
+  listAppInstallations,
+  nextPagePath,
   pkcs1ToPkcs8,
   privateKeyDer,
+  readAppInstallation,
   signAppJwt,
   TOKEN_MARGIN_MS,
   tokenFromApp,
+  type AppDelivery,
+  type AppInstallationRead,
   type AppOptions,
   type InstallationToken,
   type TokenScope,
@@ -137,3 +144,4 @@ export {
   type SideOutputSettings,
 } from "./side-ports.ts";
 export { GithubWrites, githubWritesLayer, type WritesOptions } from "./writes.ts";
+export { d1CommentWrites } from "./comment-writes.ts";

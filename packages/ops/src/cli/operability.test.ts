@@ -9,7 +9,7 @@ import {
   placeholderOverlay,
   type DeployedSettings,
 } from "../index.ts";
-import { makeOperability, repositoryRoot, V2_WORKERS } from "./index.ts";
+import { awsCredentialsOf, makeOperability, repositoryRoot, V2_WORKERS } from "./index.ts";
 import { accessStore } from "../access-application.test-support.ts";
 
 const ROOT = repositoryRoot(import.meta.dirname);
@@ -42,6 +42,7 @@ const fakeTarget = (calls: string[], opts: { probe?: boolean } = {}) =>
     lastRecord: () => Effect.succeed(settings),
     appRegistration: Effect.succeed(APP_PERMISSIONS),
     requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
+    awsBudgets: Effect.succeed({ account: "", observedAt: 0, budgets: [], actions: [] }),
     applyD1Migrations: () => Effect.sync(() => (calls.push("migrate"), [])),
     deployWorker: (r) =>
       Effect.sync(() => {
@@ -135,9 +136,31 @@ describe("Operability service", () => {
     });
     const report = await Effect.runPromise(live.doctor(overlay));
     const drift = report.stages.find((s) => s.stage === "drift")!;
-    // The control-plane template passes every check; the documentation Worker's template still fails its own.
-    expect(drift.ok).toBe(false);
+    // Both committed templates pass every check of their own.
     expect(drift.detail).not.toContain("control-plane.");
-    expect(drift.detail).toContain("docs.keep_vars");
+    expect(drift.detail).not.toContain("docs.");
+  });
+});
+
+describe("the AWS credentials of the drift check", () => {
+  it("[FD-EXEC-083] reads the AWS key, secret and session token from the deploy job's environment, and none without both key and secret", () => {
+    expect(
+      awsCredentialsOf({
+        AWS_ACCESS_KEY_ID: "ASIAKEY",
+        AWS_SECRET_ACCESS_KEY: "secret",
+        AWS_SESSION_TOKEN: "token",
+      }),
+    ).toEqual({
+      aws: { accessKeyId: "ASIAKEY", secretAccessKey: "secret", sessionToken: "token" },
+    });
+    expect(
+      awsCredentialsOf({ AWS_ACCESS_KEY_ID: "AKIAKEY", AWS_SECRET_ACCESS_KEY: "secret" }),
+    ).toEqual({
+      aws: { accessKeyId: "AKIAKEY", secretAccessKey: "secret" },
+    });
+    expect(awsCredentialsOf({ AWS_ACCESS_KEY_ID: "AKIAKEY" })).toEqual({});
+    expect(awsCredentialsOf({ AWS_ACCESS_KEY_ID: "", AWS_SECRET_ACCESS_KEY: "secret" })).toEqual(
+      {},
+    );
   });
 });

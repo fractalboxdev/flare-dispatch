@@ -78,7 +78,7 @@ sequenceDiagram
 
 ### Rehearsal reuse
 
-The reuse policy names a registered rehearsal only for a check outside the base branch's required set, and only where the repository's policy turns reuse on. It reads the required set through the 10 min cache of [profile.md](profile.md) FD-PROF-014 and names no rehearsal when that read fails.
+The reuse policy names a registered rehearsal only for a check outside the base branch's required set, and only where the repository's policy turns reuse on. The repository's policy is the `reuse` block of its repo manifest ([intake.md](intake.md) § Model) at the run's base commit, read through intake's manifest cache; a repository with no manifest or no `reuse` block has reuse off, and an invalid or unreadable manifest names no rehearsal. It reads the required set through the 10 min cache of [profile.md](profile.md) FD-PROF-014 and names no rehearsal when that read fails.
 
 ### Writeback from local work
 

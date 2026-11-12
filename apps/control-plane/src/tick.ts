@@ -1,9 +1,23 @@
 // The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, the
-// admission of held requests, the enqueue of intake's sweep and schedule units for every installation of the App, and
-// the conclusions of ended fan-out parents' children.
-import { GithubApp, insertChildConclusions } from "@fractalboxdev/flare-dispatch-github";
+// GitHub probes under the App, the admission of held requests, the enqueue of intake's sweep and schedule units for
+// every installation of the App, and the conclusions of ended fan-out parents' children.
+import {
+  GithubApp,
+  insertChildConclusions,
+  listAppDeliveries,
+  listAppInstallations,
+  readAppInstallation,
+} from "@fractalboxdev/flare-dispatch-github";
 import { planTick, releaseHeld } from "@fractalboxdev/flare-dispatch-intake";
-import { tickDepsFromEnv, type TickDeps, type TickStep } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  FixtureInstallationMissing,
+  GithubAppReadFailed,
+  GithubAppReads,
+  tickDepsFromEnv,
+  type ProbeConfig,
+  type TickDeps,
+  type TickStep,
+} from "@fractalboxdev/flare-dispatch-ops";
 import {
   startStaleExecutions,
   startUnstartedExecutions,
@@ -61,6 +75,47 @@ export const intakeUnits = (env: Pick<ControlPlaneEnv, "INTAKE_UNITS">, now: num
   });
 
 /**
+ * The probes' App-JWT reads over the isolate's GitHub App: the App's installations, each installation's
+ * `GET /app/installations/{installation_id}` and the webhook deliveries (FD-OPS-041, FD-OPS-044). A GitHub or key
+ * failure fails the read, so the probe's step fails for that tick and no answer is invented.
+ */
+export const githubAppReadsLayer = Layer.effect(
+  GithubAppReads,
+  Effect.gen(function* () {
+    const app = yield* GithubApp;
+    const failed = <A, E extends { readonly message: string }>(read: Effect.Effect<A, E>) =>
+      read.pipe(Effect.mapError((e) => new GithubAppReadFailed({ message: e.message })));
+    return {
+      installations: failed(listAppInstallations(app)),
+      installation: (installationId) => failed(readAppInstallation(app, installationId)),
+      deliveries: (since) => failed(listAppDeliveries(app, since)),
+    };
+  }),
+);
+
+/**
+ * The limit key of the App-JWT `delivery.redeliver` row: its own `InstallationQuota` object, apart from every
+ * installation's (FD-ARCH-003, FD-OPS-045).
+ */
+export const APP_LIMIT_KEY = "app";
+
+/**
+ * The canary's configuration: the operator overlay's `github.fixtureRepo`, and the installation the App maps it to,
+ * whose `InstallationQuota` permit the push takes (FD-OPS-038, FD-ARCH-003).
+ */
+export const probeConfigOf = (fixtureRepo: string, webhookSilentHours: number) =>
+  Effect.gen(function* () {
+    const installation = yield* (yield* GithubApp).installationFor(fixtureRepo);
+    if (installation === null)
+      return yield* new FixtureInstallationMissing({ repository: fixtureRepo });
+    return {
+      fixtureRepo,
+      fixtureInstallation: String(installation),
+      webhookSilentHours,
+    } satisfies ProbeConfig;
+  });
+
+/**
  * mameko's two start sweeps: an execution past its `stale_at` with no engine execution (MAMEKO-ARCH-038), and an
  * admitted execution whose workflow start failed (the admission sweep). Each starts the `Execution` workflow in its
  * `ExecutionEngine` object, as admission and the executor channel do.
@@ -107,10 +162,29 @@ export const tickDeps = (
 ): TickDeps => {
   const services = Layer.effectContext(Effect.promise(() => isolateServices(env)));
   const withApp = appOptionsOf(env) !== undefined;
-  return tickDepsFromEnv(env as unknown as Parameters<typeof tickDepsFromEnv>[0], {
+  const fixtureRepo = env.GITHUB_FIXTURE_REPO?.trim() ?? "";
+  const base = tickDepsFromEnv(env as unknown as Parameters<typeof tickDepsFromEnv>[0], {
     profile: profileOf(env),
+  });
+  return {
+    ...base,
     ...(withApp
-      ? { appliers: services as unknown as Layer.Layer<Actuators | ActuatorRateLimit> }
+      ? {
+          appliers: services as unknown as Layer.Layer<Actuators | ActuatorRateLimit>,
+          // The installation and delivery probes, every 15 min under the App JWT (FD-OPS-041, FD-OPS-044).
+          githubReads: githubAppReadsLayer.pipe(
+            Layer.provide(services as never),
+          ) as Layer.Layer<GithubAppReads>,
+          appLimitKey: APP_LIMIT_KEY,
+        }
+      : {}),
+    ...(withApp && fixtureRepo !== ""
+      ? {
+          // The synthetic webhook canary and its check (FD-OPS-038, FD-OPS-040).
+          probes: probeConfigOf(fixtureRepo, base.webhookSilentHours).pipe(
+            Effect.provide(services as never),
+          ) as Effect.Effect<ProbeConfig, unknown>,
+        }
       : {}),
     units: (now) => [
       // Held requests whose cooldown window ended are admitted on every tick, whatever triggered them (FD-INT-057).
@@ -135,5 +209,5 @@ export const tickDeps = (
       childConclusionsStep(env, now),
       ...steps(now),
     ],
-  });
+  };
 };

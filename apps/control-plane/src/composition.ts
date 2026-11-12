@@ -1,5 +1,11 @@
 // The services one isolate builds once and every request and tick reads: the GitHub services, intake's Layers and the
 // application ports mameko's validation counts (MAMEKO-HOST-046). A cache or token held here outlives one request.
+import {
+  CacheClock,
+  ObjectStorePresignerLive,
+  R2Presigner,
+  R2PresignerLive,
+} from "@fractalboxdev/flare-dispatch-cache";
 import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
 import { catalogRuns, followOnSubmitterLayer } from "@fractalboxdev/flare-dispatch-intake";
 import {
@@ -11,6 +17,7 @@ import {
   InstallationEviction,
   IntakeConfig,
   intakeLayer,
+  IntakeStore,
   ManifestReporter,
   manifestSourceLayer,
   profileClassResolver,
@@ -18,8 +25,13 @@ import {
   type AdmissionPorts,
   type IntakeSettings,
 } from "@fractalboxdev/flare-dispatch-intake";
-import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
-import { type Actuator, Actuators, actuatorRegistry } from "@fractalboxdev/mameko-ports";
+import { alarmPortFromEnv, recordDeliveryTime } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  type Actuator,
+  Actuators,
+  actuatorRegistry,
+  ObjectStorePresigner,
+} from "@fractalboxdev/mameko-ports";
 import {
   ConfigurationSourceLive,
   GateDecisionSourceLive,
@@ -29,8 +41,8 @@ import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { d1Sql } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { cancelledLease } from "@fractalboxdev/mameko-store-sqlite";
 import { Context, Effect, Layer, Scope } from "effect";
-import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
-import { devRepositoryOf } from "./dev-repository.ts";
+import { deployment, presignerConfigOf, presignerMissingOf, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { repositoryConfidentiality } from "./dev-repository.ts";
 import {
   gitData,
   gitDataWithoutApp,
@@ -56,7 +68,6 @@ const listOf = (value: unknown): readonly string[] => {
 export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
   const raw = env as unknown as Readonly<Record<string, unknown>>;
   const events = listOf(raw["WEBHOOK_EVENTS"]);
-  const dev = devRepositoryOf(env);
   return {
     catalog: catalogRuns(deployment(env)),
     profile: profileOf(env),
@@ -64,10 +75,7 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     webhookSecret: env.WEBHOOK_SECRET === "" ? undefined : env.WEBHOOK_SECRET,
     webhookEvents: events.length === 0 ? undefined : events,
     allows: () => true,
-    // No policy rule classifies a repository yet; a development deployment's captured repository carries its own mode.
-    confidentiality: (repo) =>
-      (dev !== undefined && dev.repository === repo ? dev.confidentiality : undefined) ??
-      "unclassified",
+    confidentiality: repositoryConfidentiality(env),
     writeCredentialIn: writeCredentialIn(env),
   };
 };
@@ -187,7 +195,70 @@ export const followOnActuators = Layer.effect(
   }),
 ).pipe(Layer.provide(followOnSubmitterLayer));
 
-const isolateLayer = (env: ControlPlaneEnv) => {
+/**
+ * Intake's record of a verified webhook delivery reaches the operability record of a registered installation too,
+ * which the canary's stage read and `webhook-silent` take (FD-INT-031, FD-OPS-040). A write that fails is logged, and
+ * the webhook still answers.
+ */
+export const withDeliveryTimes = (env: Pick<ControlPlaneEnv, "DB">) =>
+  Layer.effect(
+    IntakeStore,
+    Effect.gen(function* () {
+      const store = yield* IntakeStore;
+      return {
+        ...store,
+        recordDelivery: (installation: number, at: number) =>
+          store.recordDelivery(installation, at).pipe(
+            Effect.andThen(
+              Effect.tryPromise(() => recordDeliveryTime(env.DB, String(installation), at)).pipe(
+                Effect.asVoid,
+                Effect.catch((cause) =>
+                  Effect.logWarning("delivery time not recorded on the installation", {
+                    installation,
+                    cause: String(cause),
+                  }),
+                ),
+              ),
+            ),
+          ),
+      };
+    }),
+  );
+
+/**
+ * The presigner on a deploy missing the presign token, the account id or the bucket name: it signs no URL. `suppliedPorts`
+ * leaves `object-store-presigner` out for such a deploy, and nothing in phase 0 presigns yet, so a presign that reaches
+ * this Layer dies naming the values the deploy leaves unset.
+ */
+const presignerUnconfigured = (missing: ReadonlyArray<string>) => {
+  const refuse = () =>
+    Effect.die(`object-store presigner: this deploy leaves ${missing.join(", ")} unset, so it signs no URL`);
+  return Layer.mergeAll(
+    Layer.succeed(R2Presigner, { presign: refuse }),
+    Layer.succeed(ObjectStorePresigner, { presign: refuse }),
+  );
+};
+
+/**
+ * The object-store presigner (MAMEKO-HOST-051): the cache package's signer over the presign token, on the bucket's S3
+ * endpoint `<account_id>.r2.cloudflarestorage.com` and never a custom domain (FD-CACHE-091).
+ */
+export const presignerLayer = (env: ControlPlaneEnv) => {
+  const config = presignerConfigOf(env);
+  if (config === undefined) return presignerUnconfigured(presignerMissingOf(env));
+  return ObjectStorePresignerLive.pipe(
+    Layer.provideMerge(R2PresignerLive(config)),
+    Layer.provide(Layer.succeed(CacheClock, { now: () => Date.now() })),
+  );
+};
+
+const isolateLayer = (env: ControlPlaneEnv) =>
+  Layer.merge(
+    withDeliveryTimes(env).pipe(Layer.provideMerge(servicesLayer(env))),
+    presignerLayer(env),
+  );
+
+const servicesLayer = (env: ControlPlaneEnv) => {
   const settings = intakeSettings(env);
   const alarms = alarmPortFromEnv(env);
   const app = appOptionsOf(env);
@@ -197,16 +268,20 @@ const isolateLayer = (env: ControlPlaneEnv) => {
     // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.
     const support = Layer.mergeAll(gitData, writebackRecords(env)).pipe(Layer.provideMerge(github));
     const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
-    const services = Layer.mergeAll(
-      profileClassResolver.pipe(
-        Layer.provideMerge(intakeLayer({ db: env.DB, settings, ...admissionPorts(env, alarms) })),
+    // The local registration port submits through intake, so it sits over intake's services.
+    const services = localPorts(env).pipe(
+      Layer.provideMerge(
+        profileClassResolver.pipe(
+          Layer.provideMerge(intakeLayer({ db: env.DB, settings, ...admissionPorts(env, alarms) })),
+        ),
       ),
-      localPorts(env),
-    ).pipe(Layer.provideMerge(applier), Layer.provideMerge(common));
+      Layer.provideMerge(applier),
+      Layer.provideMerge(common),
+    );
     // The follow-on wrapper wins the `Actuators` tag over the agentic appliers underneath.
     return followOnActuators.pipe(Layer.provideMerge(services));
   }
-  return Layer.mergeAll(
+  const intake = Layer.mergeAll(
     Layer.succeed(IntakeConfig, settings),
     d1Admission(env.DB, settings.profile, admissionPorts(env, alarms)),
     d1IntakeStore(env.DB),
@@ -219,8 +294,9 @@ const isolateLayer = (env: ControlPlaneEnv) => {
       Layer.provideMerge(protectionSnapshotsLayer),
       Layer.provide(Layer.succeed(IntakeConfig, settings)),
     ),
-    localPorts(env),
-  ).pipe(
+  );
+  return localPorts(env).pipe(
+    Layer.provideMerge(intake),
     Layer.provideMerge(Layer.merge(readsWithoutApp(env), gitDataWithoutApp)),
     Layer.provideMerge(common),
   );

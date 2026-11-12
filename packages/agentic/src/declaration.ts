@@ -112,28 +112,33 @@ export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set([
   "COLLABORATOR",
 ]);
 
+/**
+ * The grants of the `agent` egress profile that reach only the model gateway and the execution repository's git remote
+ * (specs/profile.md § Approval floor, egress profiles and signing purposes). Any other grant admits another host.
+ */
+export const CONTAINED_AGENT_GRANTS: ReadonlySet<string> = new Set(["model-gateway", "git-remote"]);
+
+/** What the control plane knows of an execution at admission, from which it computes the three data classes. */
 export interface AdmissionFacts {
   readonly repositoryPublic: boolean;
   readonly confidentiality: string;
   /** The `author_association` of every principal whose text the input holds. */
   readonly inputAssociations: readonly string[];
   readonly forkHead: boolean;
-  /** Hosts the execution's egress profile admits. */
-  readonly egressHosts: readonly string[];
-  readonly modelGatewayHost: string;
-  readonly gitRemoteHost: string;
+  /** The grants of the execution's `agent` egress profile: the profile's base grants and the run's own. */
+  readonly egressGrants: readonly string[];
   /** The repositories the run's intents target, as `owner/name`. */
   readonly intentRepositories: readonly string[];
   readonly repository: string;
 }
 
-/** The control plane's three data classes of an execution, computed at admission. */
+/** The control plane's three data classes of an execution, computed at admission (specs/runs/agentic.md § Data classes). */
 export const computeDataClasses = (facts: AdmissionFacts): DataClasses => ({
   privateData: !facts.repositoryPublic || facts.confidentiality !== "non-confidential",
   untrustedInput:
     facts.forkHead || facts.inputAssociations.some((a) => !TRUSTED_ASSOCIATIONS.has(a)),
   outbound:
-    facts.egressHosts.some((h) => h !== facts.modelGatewayHost && h !== facts.gitRemoteHost) ||
+    facts.egressGrants.some((g) => !CONTAINED_AGENT_GRANTS.has(g)) ||
     facts.intentRepositories.some((r) => r !== facts.repository),
 });
 

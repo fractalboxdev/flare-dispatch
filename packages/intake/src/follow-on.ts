@@ -82,6 +82,9 @@ export const followOnSubmitterLayer = Layer.effect(
               ref: parent.ref,
               inputs: inputs.success,
               installation: parent.installation,
+              // A follow-on reads its parent's input, so it keeps the parent's data classes (FD-AGT-005).
+              repositoryPublic: parent.repositoryPublic,
+              inputAssociations: parent.inputAssociations,
               followOn: { executionId: intent.executionId, intentKey: intent.intentKey },
             }),
           );

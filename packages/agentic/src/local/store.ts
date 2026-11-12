@@ -71,6 +71,10 @@ export class LocalStore extends Context.Service<
       at: number,
       since: number,
     ) => Effect.Effect<{ readonly count: number; readonly oldest: number }, LocalStoreFailed>;
+    /** The intent keys mameko's outbox holds as rows of the execution (MAMEKO-PROTO-083). */
+    readonly heldIntents: (
+      executionId: string,
+    ) => Effect.Effect<ReadonlySet<string>, LocalStoreFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-agentic/LocalStore") {}
 
@@ -84,7 +88,7 @@ export interface D1Binding {
   };
 }
 
-/** The store's tables, forward-only. */
+/** The store's tables and the suppression ledger's, forward-only. */
 export const LOCAL_STORE_MIGRATIONS: readonly {
   readonly name: string;
   readonly sql: readonly string[];
@@ -125,6 +129,17 @@ export const LOCAL_STORE_MIGRATIONS: readonly {
       `create index if not exists fd_local_writebacks_lease on fd_local_writebacks (lease_id, at)`,
     ],
   },
+  {
+    // The suppression ledger, read by `suppressionLedgerD1` (specs/runs/agentic.md § Suppression ledger).
+    name: "fd_suppressions",
+    sql: [
+      `create table if not exists fd_suppressions (
+        key text primary key,
+        declined integer not null default 0,
+        closed_at integer
+      )`,
+    ],
+  },
 ];
 
 interface Row {
@@ -158,7 +173,7 @@ const recordOf = (r: Row): RegistrationRecord => ({
   statementAccepted: Number(r["statement_accepted"]) === 1,
 });
 
-/** `LocalStore` over the control plane's D1 database, after `LOCAL_STORE_MIGRATIONS`. */
+/** `LocalStore` over the control plane's D1 database, after mameko's store migrations and `LOCAL_STORE_MIGRATIONS`. */
 export const localStoreD1 = (db: D1Binding): Layer.Layer<LocalStore> => {
   const run = (operation: string, query: string, ...values: unknown[]) =>
     Effect.tryPromise({
@@ -273,5 +288,10 @@ export const localStoreD1 = (db: D1Binding): Layer.Layer<LocalStore> => {
         );
         return { count: Number(rows[0]?.["n"] ?? 0), oldest: Number(rows[0]?.["oldest"] ?? at) };
       }),
+    heldIntents: (executionId) =>
+      Effect.map(
+        all("heldIntents", "select intent_key from outbox where execution_id = ?", executionId),
+        (rows) => new Set(rows.map((r) => r["intent_key"] as string)),
+      ),
   });
 };

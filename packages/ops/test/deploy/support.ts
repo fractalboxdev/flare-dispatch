@@ -3,8 +3,10 @@
 // `DeployTarget` on fakes of the Cloudflare API, the GitHub API, `wrangler` and the Workers' hostnames. The fake
 // Cloudflare account keeps each deployed Worker's settings, versions and Container applications and its Access
 // applications between runs, so a suite deploys, changes the account out of band and deploys again. Access sits in
-// front of the dispatcher's hostname as the account's applications configure it.
-import { generateKeyPairSync } from "node:crypto";
+// front of the dispatcher's hostname as the account's applications configure it. AWS STS, AWS Budgets, IAM and AWS
+// Organizations answer for one AWS account, and only requests whose SigV4 signature verifies.
+import type { AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
+import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
@@ -54,6 +56,22 @@ const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 })
   .privateKey.export({ type: "pkcs1", format: "pem" })
   .toString();
 
+/** The AWS account the fake AWS endpoints answer for, and the credentials they accept. */
+export const AWS_ACCOUNT = "111122223333";
+export const AWS_CREDENTIALS: AwsCredentials = {
+  accessKeyId: "ASIAFAKEKEYID",
+  secretAccessKey: "fake-secret-key",
+  sessionToken: "fake-session-token",
+};
+
+/** The AWS endpoints the fakes answer on, with the service each signs for. */
+const AWS_SERVICES: Readonly<Record<string, string>> = {
+  "sts.amazonaws.com": "sts",
+  "budgets.amazonaws.com": "budgets",
+  "iam.amazonaws.com": "iam",
+  "organizations.us-east-1.amazonaws.com": "organizations",
+};
+
 /** The version id the fake `wrangler deploy` prints for the account's n-th deploy. */
 export const version = (n: number) => `${String(n).padStart(8, "0")}-0000-4000-8000-000000000000`;
 
@@ -98,6 +116,19 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     app: AppPermissions;
     /** The status checks the default branch's ruleset requires; the merge gate and `check:ci` by default. */
     required: string[];
+    /** Whether the deploy job's environment carries the AWS credentials. */
+    awsCredentials: boolean;
+    /** The AWS account's budgets and actions, as `DescribeBudgets` and `DescribeBudgetActionsForAccount` list them. */
+    awsBudgets: Record<string, unknown>[];
+    awsActions: Record<string, unknown>[];
+    /** The documents of the account's IAM managed policies, by ARN, and of its SCPs, by policy id. */
+    awsPolicies: Record<string, unknown>;
+    awsManagementAccount: string;
+    awsRoots: Record<string, unknown>[];
+    awsRootsReadFails: boolean;
+    awsPolicyTypes: Record<string, string>;
+    /** ListParents answers, keyed by child; tests can inject incomplete or cyclic ancestry. */
+    awsParents: Record<string, Record<string, unknown>>;
   } = {
     health: 200,
     deploys: 0,
@@ -106,6 +137,17 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     accessReadFails: false,
     app: APP_PERMISSIONS,
     required: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"],
+    awsCredentials: true,
+    awsBudgets: [],
+    awsActions: [],
+    awsPolicies: {},
+    awsManagementAccount: "999900001111",
+    awsRoots: [
+      { Id: "r-abcd", PolicyTypes: [{ Type: "SERVICE_CONTROL_POLICY", Status: "ENABLED" }] },
+    ],
+    awsRootsReadFails: false,
+    awsPolicyTypes: {},
+    awsParents: { [AWS_ACCOUNT]: { Parents: [{ Id: "r-abcd", Type: "ROOT" }] } },
   };
 
   /**
@@ -328,11 +370,169 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     return new Response(null, { status: 404 });
   };
 
+  /** Independent Node-crypto SigV4 verification, including every sent x-amz-* header and content type. */
+  const awsSigned = async (host: string, service: string, headers: Headers, body: string) => {
+    const date = headers.get("x-amz-date");
+    if (date === null) return false;
+    if (
+      headers.get("host") !== host ||
+      headers.get("x-amz-security-token") !== AWS_CREDENTIALS.sessionToken
+    )
+      return false;
+    const payloadHash = createHash("sha256").update(body).digest("hex");
+    if (headers.get("x-amz-content-sha256") !== payloadHash) return false;
+    const signed = [...headers.keys()]
+      .filter((k) => k === "host" || k === "content-type" || k.startsWith("x-amz-"))
+      .sort();
+    const canonical = [
+      "POST",
+      "/",
+      "",
+      ...signed.map((k) => `${k}:${headers.get(k)!.trim().replace(/\s+/g, " ")}`),
+      "",
+      signed.join(";"),
+      payloadHash,
+    ].join("\n");
+    const day = date.slice(0, 8);
+    const scope = `${day}/us-east-1/${service}/aws4_request`;
+    const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      date,
+      scope,
+      createHash("sha256").update(canonical).digest("hex"),
+    ].join("\n");
+    const h = (key: Buffer | string, value: string) =>
+      createHmac("sha256", key).update(value).digest();
+    const key = h(
+      h(h(h(`AWS4${AWS_CREDENTIALS.secretAccessKey}`, day), "us-east-1"), service),
+      "aws4_request",
+    );
+    const signature = createHmac("sha256", key).update(stringToSign).digest("hex");
+    return (
+      headers.get("authorization") ===
+      `AWS4-HMAC-SHA256 Credential=${AWS_CREDENTIALS.accessKeyId}/${scope}, SignedHeaders=${signed.join(";")}, Signature=${signature}`
+    );
+  };
+
+  /** AWS Budgets' JSON 1.1 operations, paged one item at a time so a reader must follow `NextToken`. */
+  const budgetsApi = (headers: Headers, body: string): Response => {
+    const target = headers.get("x-amz-target") ?? "";
+    const request = JSON.parse(body) as {
+      AccountId?: string;
+      MaxResults?: number;
+      NextToken?: string;
+      ShowFilterExpression?: boolean;
+    };
+    const reject = (message: string) =>
+      Response.json({ __type: "ValidationException", Message: message }, { status: 400 });
+    if (request.AccountId !== AWS_ACCOUNT) return reject("AccountId is not the caller's account");
+    if (request.MaxResults !== undefined && request.MaxResults > 100)
+      return reject("MaxResults must be at most 100");
+    if (
+      target === "AWSBudgetServiceGateway.DescribeBudgets" &&
+      request.ShowFilterExpression !== true
+    )
+      return reject("DescribeBudgets must request ShowFilterExpression to prove scope");
+    const listed =
+      target === "AWSBudgetServiceGateway.DescribeBudgets"
+        ? { key: "Budgets", items: state.awsBudgets }
+        : target === "AWSBudgetServiceGateway.DescribeBudgetActionsForAccount"
+          ? { key: "Actions", items: state.awsActions }
+          : null;
+    if (listed === null) return reject(`unknown operation ${target}`);
+    const at = Number(request.NextToken ?? "0");
+    return Response.json({
+      [listed.key]: listed.items.slice(at, at + 1),
+      ...(at + 1 < listed.items.length ? { NextToken: String(at + 1) } : {}),
+    });
+  };
+
+  /** IAM's Query operations `GetPolicy` and `GetPolicyVersion`: each policy has the one version `v1`. */
+  const iamApi = (body: string): Response => {
+    const params = new URLSearchParams(body);
+    const arn = params.get("PolicyArn") ?? "";
+    const document = state.awsPolicies[arn];
+    if (document === undefined)
+      return new Response(
+        "<ErrorResponse><Error><Code>NoSuchEntity</Code></Error></ErrorResponse>",
+        {
+          status: 404,
+        },
+      );
+    const action = params.get("Action");
+    if (action === "GetPolicy")
+      return new Response(
+        `<GetPolicyResponse><GetPolicyResult><Policy><Arn>${arn}</Arn><DefaultVersionId>v1</DefaultVersionId></Policy></GetPolicyResult></GetPolicyResponse>`,
+      );
+    if (action === "GetPolicyVersion" && params.get("VersionId") === "v1")
+      return new Response(
+        `<GetPolicyVersionResponse><GetPolicyVersionResult><PolicyVersion><Document>${encodeURIComponent(JSON.stringify(document))}</Document><VersionId>v1</VersionId></PolicyVersion></GetPolicyVersionResult></GetPolicyVersionResponse>`,
+      );
+    return new Response(
+      "<ErrorResponse><Error><Code>InvalidAction</Code></Error></ErrorResponse>",
+      {
+        status: 400,
+      },
+    );
+  };
+
+  /** AWS Organizations' `DescribePolicy`: an SCP's content as a JSON string. */
+  const organizationsApi = (headers: Headers, body: string): Response => {
+    const target = headers.get("x-amz-target");
+    if (target === "AWSOrganizationsV20161128.DescribeOrganization")
+      return Response.json({
+        Organization: { MasterAccountId: state.awsManagementAccount, FeatureSet: "ALL" },
+      });
+    if (target === "AWSOrganizationsV20161128.ListParents") {
+      const { ChildId = "" } = JSON.parse(body) as { ChildId?: string };
+      return Response.json(state.awsParents[ChildId] ?? { Parents: [] });
+    }
+    if (target === "AWSOrganizationsV20161128.ListRoots") {
+      if (state.awsRootsReadFails)
+        return Response.json({ __type: "AccessDeniedException" }, { status: 403 });
+      const { NextToken = "0" } = JSON.parse(body) as { NextToken?: string };
+      const at = Number(NextToken);
+      return Response.json({
+        Roots: state.awsRoots.slice(at, at + 1),
+        ...(at + 1 < state.awsRoots.length ? { NextToken: String(at + 1) } : {}),
+      });
+    }
+    const { PolicyId: id = "" } = JSON.parse(body) as { PolicyId?: string };
+    const document = state.awsPolicies[id];
+    if (target !== "AWSOrganizationsV20161128.DescribePolicy")
+      return Response.json({ __type: "InvalidInputException" }, { status: 400 });
+    if (document === undefined)
+      return Response.json({ __type: "PolicyNotFoundException" }, { status: 400 });
+    return Response.json({
+      Policy: {
+        PolicySummary: { Id: id, Type: state.awsPolicyTypes[id] ?? "SERVICE_CONTROL_POLICY" },
+        Content: JSON.stringify(document),
+      },
+    });
+  };
+
+  const aws = async (host: string, headers: Headers, body: string): Promise<Response> => {
+    const service = AWS_SERVICES[host]!;
+    if (!(await awsSigned(host, service, headers, body)))
+      return new Response("<Error><Code>SignatureDoesNotMatch</Code></Error>", { status: 403 });
+    if (service === "budgets") return budgetsApi(headers, body);
+    if (service === "iam") return iamApi(body);
+    if (service === "organizations") return organizationsApi(headers, body);
+    if (body !== "Action=GetCallerIdentity&Version=2011-06-15")
+      return new Response("<Error><Code>InvalidAction</Code></Error>", { status: 400 });
+    return new Response(
+      `<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult><Arn>arn:aws:sts::${AWS_ACCOUNT}:assumed-role/fd-deploy/ci</Arn><UserId>AROAFAKE:ci</UserId><Account>${AWS_ACCOUNT}</Account></GetCallerIdentityResult></GetCallerIdentityResponse>`,
+      { headers: { "content-type": "text/xml" } },
+    );
+  };
+
   const fetcher = (async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? init.body : "";
     calls.push(`${method} ${url.host}${url.pathname}${url.search}`);
+    if (AWS_SERVICES[url.host] !== undefined)
+      return aws(url.host, new Headers(init?.headers), body);
     if (url.host === "api.cloudflare.com") return cloudflare(method, url, body);
     if (url.host === "api.github.com") return github(url.pathname);
     if (url.host === "alerts.example.com") {
@@ -397,6 +597,7 @@ export const targetOn =
       apiToken: "cf-token",
       appPrivateKey: PEM,
       repository: "acme/fd",
+      ...(w.state.awsCredentials ? { aws: AWS_CREDENTIALS } : {}),
       fetch: w.fetcher,
       writeFile: (path, text) => void w.files.set(path, text),
       removeFile: (path) => void w.files.delete(path),

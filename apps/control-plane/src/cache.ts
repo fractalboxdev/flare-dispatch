@@ -33,6 +33,7 @@ import { HttpApiBuilder } from "effect/http-api";
 import type { ControlPlaneEnv } from "./config.ts";
 import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
 import { migrateCache } from "./cache-retention.ts";
+import { confidentialCompute } from "./dev-repository.ts";
 
 export { cacheSweeps, migrateCache } from "./cache-retention.ts";
 
@@ -78,10 +79,13 @@ export const leaseCache = async (
 const unavailable = (what: string) =>
   Response.json(errorBody(apiError("unavailable", what), crypto.randomUUID()), { status: 503 });
 
+/** An execution's status, its placement's epoch and executor, and the repository intake recorded it under. */
 const executionStatus = (db: D1Like, id: string) =>
-  first<{ status: string; epoch: number | null; executor_id: string | null }>(
+  first<{ status: string; epoch: number | null; executor_id: string | null; repo: string | null }>(
     db,
-    `select e.status, p.epoch, p.executor_id from executions e left join placements p on p.execution_id = e.id
+    `select e.status, p.epoch, p.executor_id, i.repo from executions e
+       left join placements p on p.execution_id = e.id
+       left join intake_records i on i.execution_id = e.id
      where e.id = ?`,
     id,
   );
@@ -214,6 +218,9 @@ export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheRe
                   : {
                       terminal: isTerminal(s),
                       ...(s.executor_id === null ? {} : { executorId: s.executor_id }),
+                      // A `confidential-compute` repository's logs stay on the device: the viewer shows a pointer
+                      // and fetches no log content (FD-CACHE-088).
+                      confidential: s.repo !== null && confidentialCompute(env, s.repo),
                     };
               },
             },

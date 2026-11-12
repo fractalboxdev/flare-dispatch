@@ -1,6 +1,7 @@
 import {
   cacheNamespaces,
   compileObjectKey,
+  logObjectName,
   executionNamespace,
   manifestPath,
   memoryLedgers,
@@ -17,14 +18,14 @@ import {
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import type { CacheEnv } from "../src/cache.ts";
+import { CacheReads, cacheReads, type CacheEnv } from "../src/cache.ts";
 import {
   cacheSweeps,
   LEDGER_END_BATCH,
   migrateCache,
   NEWLY_TERMINAL,
 } from "../src/cache-retention.ts";
-import { cacheExecutionOf } from "../src/cache-execution.ts";
+import { cacheExecutionOf, leaseCacheAt } from "../src/cache-execution.ts";
 import type { ControlPlaneEnv } from "../src/config.ts";
 
 const record = (cacheTrigger: IntakeRecord["cacheTrigger"]): IntakeRecord => ({
@@ -47,6 +48,8 @@ const record = (cacheTrigger: IntakeRecord["cacheTrigger"]): IntakeRecord => ({
   placementConstraint: null,
   cacheTrigger,
   eligibleKinds: null,
+  repositoryPublic: null,
+  inputAssociations: [],
   createdAt: 0,
 });
 
@@ -66,6 +69,46 @@ describe("the cache execution of an intake record", () => {
     expect(cacheNamespaces(push, "cloudflare").write).toBe(protectedCloud("acme/app"));
     const other = cacheExecutionOf(record({ _tag: "Other" }));
     expect(cacheNamespaces(other, "cloudflare").write).toBeNull();
+  });
+});
+
+/** A development deployment whose captured repository, `Acme/App`, has the given confidentiality mode. */
+const developmentOf = (confidentiality: string) => ({
+  DEPLOYMENT: "development",
+  FD_DEV_REPOSITORY: JSON.stringify({
+    repository: "Acme/App",
+    installation: 1,
+    default_branch: "main",
+    head: "a".repeat(40),
+    files: {},
+    confidentiality,
+  }),
+});
+
+describe("a lease's cache fields under the repository's confidentiality mode", () => {
+  const leaseOn = (confidentiality: string) =>
+    leaseCacheAt(
+      {
+        PUBLIC_ORIGIN: "https://cp.example",
+        COMPILE_CACHE_SECRET: "secret",
+        ...developmentOf(confidentiality),
+      },
+      record({ _tag: "PullRequest", number: 41 }),
+      { epoch: 1, kind: "device" },
+      1_900_000_000_000,
+    );
+
+  it("[FD-CACHE-008] a confidential-compute repository's lease names no L2 namespace and carries no compile-cache token", async () => {
+    const confidential = await leaseOn("confidential-compute");
+    expect(confidential.cache_namespaces).toEqual({ read: [], write: null });
+    expect(confidential.upload_grant.cache_prefix).toBeNull();
+    expect(confidential.upload_grant.compile_cache).toBeNull();
+    // The same execution on a repository of any other mode reads and writes L2.
+    for (const mode of ["non-confidential", "unclassified", "confidential-model"]) {
+      const open = await leaseOn(mode);
+      expect(open.cache_namespaces.write).toBe(pullRequestNamespace("acme/app", 41));
+      expect(open.upload_grant.compile_cache?.token).toMatch(/^cc3\./);
+    }
   });
 });
 
@@ -110,7 +153,7 @@ const memoryBucket = () => {
 };
 
 /** The control plane's D1 with an execution per id, recorded by intake under `acme/app`. */
-const plane = async () => {
+const plane = async (deploy: Partial<ControlPlaneEnv> = {}) => {
   const db = await migratedD1();
   const ledgers = memoryLedgers();
   const ends: string[] = [];
@@ -138,6 +181,7 @@ const plane = async () => {
     DB: db,
     CACHE: bucket,
     CACHE_LEDGER: namespace,
+    ...deploy,
   } as unknown as ControlPlaneEnv & CacheEnv;
   const execution = async (id: string, status: string, finishedAt: number | null) => {
     await db
@@ -162,6 +206,7 @@ const plane = async () => {
     return Effect.runPromise(found.effect);
   };
   return {
+    env,
     db,
     bucket,
     ends,
@@ -296,5 +341,50 @@ describe("the cache's minute-tick steps", () => {
     expect([...p.bucket.objects.keys()].sort()).toEqual([log("e-recent"), log("e-running")]);
     expect(await p.step("log-sweep", NOW + 2 * DAY)).toMatchObject({ deleted: 1 });
     expect([...p.bucket.objects.keys()]).toEqual([log("e-running")]);
+  });
+});
+
+describe("the log route under the repository's confidentiality mode", () => {
+  /** Reads an execution's aggregate logs through the router's `CacheReads`, after its executor wrote one segment. */
+  const readLogs = async (confidentiality: string, format: string) => {
+    const p = await plane(developmentOf(confidentiality) as Partial<ControlPlaneEnv>);
+    await p.execution("e-logs", "success", NOW);
+    await p.db
+      .prepare(
+        "insert into placements (execution_id, state, epoch, executor_id) values ('e-logs', 'accepted', 1, 'dev-7')",
+      )
+      .run();
+    const name = await logObjectName({
+      executionId: "e-logs",
+      epoch: 1,
+      journalName: "step:build",
+      stream: "stdout",
+      start: 0,
+      end: 1,
+    });
+    await p.bucket.put(name!, `${JSON.stringify({ line: "the build's private output" })}\n`, {
+      customMetadata: { executor_id: "dev-7", executor_kind: "device" },
+    });
+    const response = await Effect.runPromise(
+      CacheReads.use((reads) =>
+        reads.logs(
+          new Request(`http://x/v1/executions/e-logs/logs?format=${format}`),
+          "e-logs",
+          undefined,
+        ),
+      ).pipe(Effect.provide(cacheReads(p.env))),
+    );
+    return response.text();
+  };
+
+  it("[FD-CACHE-088] a confidential-compute repository's log viewer shows the executor and execution as a pointer and fetches no log content", async () => {
+    for (const format of ["html", "ndjson", "text"]) {
+      const body = await readLogs("confidential-compute", format);
+      expect(body).toContain('"executionId":"e-logs"');
+      expect(body).toContain('"executorId":"dev-7"');
+      expect(body).not.toContain("private output");
+    }
+    // A repository of any other mode reads the segment the executor wrote.
+    expect(await readLogs("non-confidential", "text")).toBe("the build's private output");
   });
 });

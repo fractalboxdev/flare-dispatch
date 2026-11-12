@@ -12,6 +12,7 @@ import { Clock, Context, Effect, Match, Option, Schema } from "effect";
 import { GithubApp } from "./app.ts";
 import { classify, InstallationDirectory } from "./applier.ts";
 import { GithubHttpError, GithubNetworkError, type GithubError } from "./client.ts";
+import { commentWriteReceipt, commentWriteResource } from "./comment-writes.ts";
 import {
   BlobStore,
   EmailSender,
@@ -29,18 +30,30 @@ export const WRITE_BRANCH_PREFIX = "flare-dispatch/";
 const Mode = Schema.Literals(["100644", "100755"]);
 
 export const SidePayloads = {
-  comment: Schema.Struct({ issue_number: Schema.Number, body: Schema.String }),
+  comment: Schema.Struct({
+    issue_number: Schema.Number,
+    body: Schema.String,
+    /**
+     * A marker the run keeps on one comment per issue or pull request: the comment carrying it is updated in place
+     * instead of a new one being created (FD-AGT-053).
+     */
+    marker: Schema.optionalKey(Schema.NonEmptyString),
+  }),
   review: Schema.Struct({
     pull_number: Schema.Number,
     body: Schema.String,
     commit_id: Schema.optionalKey(Schema.String),
   }),
   issue: Schema.Struct({
-    title: Schema.String,
-    body: Schema.String,
+    repo: Schema.optionalKey(Schema.Struct({ owner: Schema.String, name: Schema.String })),
+    /** Required to create or update an issue; a close carries neither. */
+    title: Schema.optionalKey(Schema.String),
+    body: Schema.optionalKey(Schema.String),
     labels: Schema.optionalKey(Schema.Array(Schema.String)),
     /** Updates this issue instead of creating one. */
     number: Schema.optionalKey(Schema.Number),
+    /** Closes the issue `number` names with the state reason `duplicate`, in favour of this issue. */
+    close_as_duplicate_of: Schema.optionalKey(Schema.Number),
   }),
   label: Schema.Struct({
     issue_number: Schema.Number,
@@ -112,6 +125,12 @@ export const intentMarker = (row: Pick<IntentRow, "executionId" | "intentKey">) 
   `<!-- flare-dispatch:intent ${row.executionId ?? "ops"}/${row.intentKey} -->`;
 
 const withMarker = (body: string, marker: string) => `${body}\n\n${marker}`;
+
+/** The execution id in the footer we append; quoted markers in the run's body carry no ordering authority. */
+const markedExecution = (body: string | null) => {
+  const id = body?.match(/<!-- flare-dispatch:intent ([^\s/]+)\/[^\r\n]* -->\s*$/)?.[1];
+  return id === undefined || id === "ops" ? null : id;
+};
 
 /** The row ends `refused` with this reason and no further GitHub call. */
 export class Refusal extends Schema.TaggedError<Refusal>()("Refusal", { reason: Schema.String }) {}
@@ -235,17 +254,102 @@ const issuesWithMarker = (ctx: Ctx, marker: string) =>
 
 const owner = (repo: string) => repo.slice(0, repo.indexOf("/"));
 
+/** Serialization covers the external object, independently of the drainer's expiring per-row claim. */
+const orderedComment = (ctx: Ctx, p: PayloadOf<"comment"> & { readonly marker: string }) =>
+  Effect.gen(function* () {
+    const w = yield* writes;
+    const { appBot, commentWrites: store } = yield* SideOutputConfig;
+    if (store === undefined)
+      return yield* refuse("comment: durable write ownership is not configured");
+    const resource = commentWriteResource(ctx.repo, p.issue_number);
+    const pending = yield* store.read(resource);
+    if (pending !== null) {
+      const comments = yield* w.listComments({ ...ctx, issue: p.issue_number });
+      const receipts = comments.filter(
+        (c) => c.user?.login === appBot.login && c.body?.trimEnd().endsWith(pending.receipt),
+      );
+      if (receipts.length !== 1)
+        return yield* Effect.fail(
+          new Retry({ reason: "comment: an earlier external write is unresolved" }),
+        );
+      // This unpredictable attempt receipt could only appear after the sole authorized mutation took effect.
+      yield* store.release(resource, pending.token);
+    }
+    const token = crypto.randomUUID();
+    const receipt = commentWriteReceipt(token, intentMarker(ctx.row));
+    if (!(yield* store.claim(resource, { token, receipt })))
+      return yield* Effect.fail(
+        new Retry({ reason: "comment: another external write owns this pull request" }),
+      );
+    let dispatched = false;
+    return yield* Effect.gen(function* () {
+      // Re-read under durable ownership: a pre-claim snapshot cannot authorize an older PATCH.
+      const comments = yield* w.listComments({ ...ctx, issue: p.issue_number });
+      const existing = yield* single(
+        comments.filter(
+          (c) => c.user?.login === appBot.login && c.body?.includes(intentMarker(ctx.row)),
+        ),
+        (c) => c.id,
+      );
+      if (Option.isSome(existing)) return applied(existing.value);
+      const kept = comments.find(
+        (c) => c.user?.login === appBot.login && c.body?.includes(p.marker),
+      );
+      if (kept !== undefined) {
+        const holder = markedExecution(kept.body);
+        if (holder !== null && ctx.row.executionId !== null && holder > ctx.row.executionId)
+          return applied(kept.id);
+      }
+      const body = withMarker(
+        p.body.includes(p.marker) ? p.body : withMarker(p.body, p.marker),
+        receipt,
+      );
+      const mutation =
+        kept === undefined
+          ? w.createComment({ ...ctx, issue: p.issue_number, body })
+          : w.updateComment({ ...ctx, comment: kept.id, body });
+      dispatched = true;
+      const written = yield* mutation.pipe(
+        Effect.catchTags({
+          GithubHttpError: (e) =>
+            [401, 403, 404, 422, 429].includes(e.status)
+              ? Effect.andThen(store.release(resource, token), Effect.fail(e))
+              : Effect.fail(e),
+          GithubNetworkError: (e) =>
+            e.sent
+              ? Effect.fail(e)
+              : Effect.andThen(store.release(resource, token), Effect.fail(e)),
+        }),
+      );
+      // An acknowledged mutation has settled; an ambiguous/erroring mutation retains ownership without a TTL.
+      yield* store.release(resource, token);
+      return applied(written.id);
+    }).pipe(
+      Effect.onExit(() =>
+        dispatched
+          ? Effect.void
+          : store
+              .release(resource, token)
+              .pipe(
+                Effect.catchTag("GithubNetworkError", () =>
+                  Effect.logWarning("comment presend ownership release unavailable"),
+                ),
+              ),
+      ),
+    );
+  });
+
 const handlers: { readonly [K in SideKind]: Handler<K> } = {
   comment: {
     github: true,
     apply: (ctx, p) =>
       Effect.gen(function* () {
+        if (p.marker !== undefined) return yield* orderedComment(ctx, { ...p, marker: p.marker });
         const w = yield* writes;
         const marker = intentMarker(ctx.row);
+        const comments = yield* w.listComments({ ...ctx, issue: p.issue_number });
         const existing = yield* single(
-          (yield* w.listComments({ ...ctx, issue: p.issue_number })).filter((c) =>
-            c.body?.includes(marker),
-          ),
+          comments.filter((c) => c.body?.includes(marker)),
           (c) => c.id,
         );
         if (Option.isSome(existing)) return applied(existing.value);
@@ -303,6 +407,30 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
     apply: (ctx, p) =>
       Effect.gen(function* () {
         const w = yield* writes;
+        if (p.close_as_duplicate_of !== undefined) {
+          if (
+            p.repo !== undefined &&
+            `${p.repo.owner}/${p.repo.name}`.toLowerCase() !== ctx.repo.toLowerCase()
+          )
+            return yield* refuse("issue: close repository does not match execution scope");
+          if (p.number === undefined) return yield* refuse("issue: a close names no issue");
+          const issue = yield* w.issue({ ...ctx, issue: p.number });
+          if (issue.pull_request !== undefined)
+            return yield* refuse("issue: a close names a pull request");
+          if (issue.state_reason === "reopened")
+            return yield* refuse("issue: a maintainer reopened it");
+          if (issue.state === "closed") return applied(issue.id);
+          if (p.close_as_duplicate_of === p.number)
+            return yield* refuse("issue: a duplicate names itself");
+          const original = yield* w.issue({ ...ctx, issue: p.close_as_duplicate_of });
+          if (original.pull_request !== undefined || original.state !== "open")
+            return yield* refuse("issue: the original is not an open issue");
+          return applied(
+            (yield* w.closeIssue({ ...ctx, issue: p.number, duplicateIssueId: original.id })).id,
+          );
+        }
+        if (p.title === undefined || p.body === undefined)
+          return yield* refuse("issue: a title and a body are required");
         const marker = intentMarker(ctx.row);
         const body = withMarker(p.body, marker);
         if (p.number !== undefined)
@@ -315,8 +443,25 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
           (yield* w.createIssue({ ...ctx, title: p.title, body, labels: p.labels ?? [] })).id,
         );
       }),
-    lookup: (ctx) =>
-      Effect.flatMap(issuesWithMarker(ctx, intentMarker(ctx.row)), (is) => single(is, (i) => i.id)),
+    // A close carries no body marker. Read its current state to adopt a lost answer; an open issue needs an apply
+    // whose fresh read respects a maintainer's reopen. A failed read proves neither presence nor absence.
+    lookup: (ctx, p) =>
+      p.close_as_duplicate_of !== undefined
+        ? Effect.gen(function* () {
+            if (
+              p.repo !== undefined &&
+              `${p.repo.owner}/${p.repo.name}`.toLowerCase() !== ctx.repo.toLowerCase()
+            )
+              return yield* refuse("issue: close repository does not match execution scope");
+            if (p.number === undefined) return yield* refuse("issue: a close names no issue");
+            const issue = yield* (yield* writes).issue({ ...ctx, issue: p.number });
+            return issue.pull_request === undefined && issue.state === "closed"
+              ? Option.some(String(issue.id))
+              : Option.none<string>();
+          })
+        : Effect.flatMap(issuesWithMarker(ctx, intentMarker(ctx.row)), (is) =>
+            single(is, (i) => i.id),
+          ),
   },
   label: {
     github: true,

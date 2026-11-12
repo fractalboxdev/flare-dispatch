@@ -4,7 +4,10 @@ import { AGENTIC_CATALOG, agenticClassRanks, type AgenticSpec } from "./catalog.
 import { CiTriageInput, runCiTriage } from "./ci-triage-pr.ts";
 import { ImprovePrInput, runImprovePr } from "./improve-pr.ts";
 import { PrReviewInput, runPrReview } from "./pr-review.ts";
+import { runSelfHealPr, SelfHealPrInput } from "./self-heal-pr.ts";
 import { runSpecDrift, SpecDriftInput } from "./spec-drift-pr.ts";
+import { runTriageIssues, TriageIssuesInput } from "./triage-issues.ts";
+import { runTriagePrs, TriagePrsInput } from "./triage-prs.ts";
 
 const specOf = (name: string): AgenticSpec => {
   const entry = AGENTIC_CATALOG[name];
@@ -35,6 +38,11 @@ export const improvePrRun = defineRun(
   runImprovePr,
   catalogue,
 );
+export const selfHealPrRun = defineRun(
+  { ...asRunSpec(specOf("self-heal-pr")), input: SelfHealPrInput },
+  runSelfHealPr,
+  catalogue,
+);
 export const specDriftRun = defineRun(
   { ...asRunSpec(specOf("spec-drift-pr")), input: SpecDriftInput },
   runSpecDrift,
@@ -46,5 +54,25 @@ export const ciTriageRun = defineRun(
   catalogue,
 );
 
-/** The agentic runs whose bodies ship at this phase. */
-export const agenticRuns = [prReviewRun, improvePrRun, specDriftRun, ciTriageRun] as const;
+export const triageIssuesRun = defineRun(
+  { ...asRunSpec(specOf("triage-issues")), input: TriageIssuesInput },
+  runTriageIssues,
+  catalogue,
+);
+
+export const triagePrsRun = defineRun(
+  { ...asRunSpec(specOf("triage-prs")), input: TriagePrsInput },
+  runTriagePrs,
+  catalogue,
+);
+
+/** The agentic runs whose bodies ship at this phase, in catalogue order. */
+export const agenticRuns = [
+  prReviewRun,
+  improvePrRun,
+  selfHealPrRun,
+  specDriftRun,
+  triageIssuesRun,
+  triagePrsRun,
+  ciTriageRun,
+] as const;

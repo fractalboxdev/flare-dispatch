@@ -119,6 +119,21 @@ describe("L1 on the device", async () => {
     expect(half.usage().cap).toBe(50);
   });
 
+  it("[FD-CACHE-009] re-putting a resident key within the cap keeps every other entry, and an over-cap put drops the stale one", async () => {
+    const disk = memoryDisk(150);
+    const l1 = await openL1({ disk, l2: memoryL2().client, keys: verification });
+    expect(l1.usage().cap).toBe(30);
+    await run(l1.put(NS, key(1), new Uint8Array(10)));
+    await run(l1.put(NS, key(2), new Uint8Array(15)));
+    await run(l1.put(NS, key(2), new Uint8Array(15)));
+    expect(l1.usage()).toMatchObject({ bytes: 25, entries: 2 });
+    expect([...disk.files.keys()].sort()).toEqual([`${NS}/${key(1)}`, `${NS}/${key(2)}`]);
+    // Bytes larger than the cap are not stored, and the entry they replace no longer answers for the key.
+    await run(l1.put(NS, key(2), new Uint8Array(31)));
+    expect(await run(l1.peek(NS, key(2)))).toBeNull();
+    expect(l1.usage()).toMatchObject({ bytes: 10, entries: 1 });
+  });
+
   it("[FD-CACHE-010] cache.evict frees least recently read entries until the target or empty and returns the bytes freed", async () => {
     let t = 0;
     const disk = memoryDisk(1000);

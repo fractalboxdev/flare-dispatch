@@ -4,6 +4,7 @@ import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { localPlane, MANIFEST, registrationPayload } from "../../test/local-plane.test-support.ts";
 import type { Manifest, WritebackSpec } from "../staged-write/manifest.ts";
 import { WritebackRecords, StagedWriteReadFailed, type LoadedBlob } from "../writeback/applier.ts";
 import { BASE_SHA, fakeGitLayer, fakeRepo } from "../writeback/fake-git.test-support.ts";
@@ -15,6 +16,7 @@ import {
   reusePolicyLayer,
   type RepoReusePolicy,
 } from "./reuse.ts";
+import type { WritebackIntent } from "./run-context.ts";
 import { LocalStore, localStoreD1, type RegistrationRecord } from "./store.ts";
 import {
   CapacityUsage,
@@ -171,11 +173,12 @@ describe("reuse policy", () => {
     expect(await reuse([record()], { required: "fail" })).toBeNull();
   });
 
-  it("[FD-LOCAL-081] reads the required set again once the cached set is older than 10 min", async () => {
-    const h = await reuseHarness([record()]);
+  it("[FD-LOCAL-081] reads the required set again once the cached set is older than 10 min, and names none when that read fails", async () => {
+    const knobs: Knobs = {};
+    const h = await reuseHarness([record()], knobs);
     await Effect.runPromise(
       Effect.gen(function* () {
-        yield* h.ask();
+        expect(yield* h.ask()).toBe("01HREHEARSAL00000000000000");
         yield* h.ask();
         expect(h.reads.required).toBe(1);
         yield* TestClock.adjust("599 seconds");
@@ -184,6 +187,12 @@ describe("reuse policy", () => {
         yield* TestClock.adjust("2 seconds");
         yield* h.ask();
         expect(h.reads.required).toBe(2);
+        // Past the TTL a failed read names none: the stale cached set does not stand in for it.
+        knobs.required = "fail";
+        expect(yield* h.ask()).toBe("01HREHEARSAL00000000000000");
+        yield* TestClock.adjust("601 seconds");
+        expect(yield* h.ask()).toBeNull();
+        expect(h.reads.required).toBe(3);
       }).pipe(Effect.provide(h.layer), Effect.provide(TestClock.layer())),
     );
   });
@@ -331,6 +340,64 @@ describe("writeback gate", () => {
       _tag: "rejected",
       reason: "verdict-not-success",
     });
+  });
+
+  it("[FD-LOCAL-055] the gate port absorbs an intent whose execution id and run:<step>:<index> the outbox holds, and gates only the fresh ones", async () => {
+    const plane = await localPlane();
+    try {
+      const answer = await plane.register(
+        true,
+        registrationPayload("rk", { reuse: false, writeback: true }),
+      );
+      if (!("execution_id" in answer)) throw new Error("registration rejected");
+      const execution_id = answer.execution_id;
+      await plane.conclude(execution_id, "success");
+      const proposeIntent = {
+        intent_key: "run:propose:0",
+        kind: "pr.propose",
+        payload: { manifest: MANIFEST },
+      };
+      const second = { intent_key: "run:review:1", kind: "review", payload: { body: "b" } };
+      const receive = async (intents: readonly WritebackIntent[]) => {
+        const fromEffect = plane.effects.length;
+        const fromCall = plane.repo.calls.length;
+        const ack = await plane.receive({ execution_id, intents });
+        return {
+          status: ack.status,
+          effects: [...plane.effects.slice(fromEffect), ...plane.githubFrom(fromCall)].map(
+            (e) => `${e.kind} ${e.key.split(" ").slice(0, 2).join(" ")}`,
+          ),
+        };
+      };
+      // A fresh pr.propose reads the branch's protection, counts a rate-window entry and inserts its intent.
+      expect(await receive([proposeIntent])).toEqual({
+        status: "accepted",
+        effects: [
+          "d1 insert fd_local_writebacks",
+          "d1 insert outbox",
+          `intent ${execution_id}/run:propose:0`,
+          "github branchProtected",
+        ],
+      });
+      // The same request again: no GitHub read, no rate-window entry, no outbox row.
+      expect(await receive([proposeIntent])).toEqual({ status: "accepted", effects: [] });
+      // A held intent beside a fresh one: only the fresh one is gated and inserted.
+      expect(await receive([proposeIntent, second])).toEqual({
+        status: "accepted",
+        effects: [
+          "d1 insert fd_local_writebacks",
+          "d1 insert outbox",
+          `intent ${execution_id}/run:review:1`,
+        ],
+      });
+      // A held key absorbs only its own intent: a fresh intent the gate rejects inserts nothing.
+      expect(
+        await receive([proposeIntent, { intent_key: "run:issue:0", kind: "issue", payload: {} }]),
+      ).toEqual({ status: "rejected", effects: ["d1 insert fd_local_writebacks"] });
+      expect(plane.outbox().map((o) => o.intentKey)).toEqual(["run:propose:0", "run:review:1"]);
+    } finally {
+      plane.close();
+    }
   });
 
   it("[FD-LOCAL-088] rejects an intent that opens an issue or pushes to a protected branch", async () => {

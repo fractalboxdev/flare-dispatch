@@ -2,7 +2,7 @@
 // issues, labels, git objects and branches, pull requests and releases, with a
 // scripted failure queue and a record of every call.
 import { Effect, Layer } from "effect";
-import type { GithubError } from "./client.ts";
+import { GithubHttpError, type GithubError } from "./client.ts";
 import {
   GithubWrites,
   type CommitAuthor,
@@ -20,9 +20,15 @@ interface FakeCommit {
 }
 
 export interface FakeSide {
-  readonly comments: Map<number, { id: number; body: string }[]>;
+  readonly comments: Map<number, { id: number; body: string; user?: { login: string } }[]>;
   readonly reviews: Map<number, { id: number; body: string }[]>;
-  readonly issues: (IssueRef & { title: string; labels: string[] })[];
+  readonly issues: (IssueRef & {
+    title: string;
+    labels: string[];
+    state?: "open" | "closed";
+    stateReason?: string;
+    duplicateIssueId?: number;
+  })[];
   readonly labels: Map<number, Set<string>>;
   readonly branches: Map<string, { sha: string; protected: boolean }>;
   readonly commits: Map<string, FakeCommit>;
@@ -116,9 +122,24 @@ export const fakeWritesLayer = (s: FakeSide) => {
       call(
         "createComment",
         () => {
-          const c = { id: id(), body };
+          const c = { id: id(), body, user: { login: BOT.login } };
           s.comments.set(issue, [...(s.comments.get(issue) ?? []), c]);
           return c;
+        },
+        true,
+      ),
+    updateComment: ({ comment, body }) =>
+      call(
+        "updateComment",
+        () => {
+          for (const list of s.comments.values()) {
+            const c = list.find((x) => x.id === comment);
+            if (c !== undefined) {
+              c.body = body;
+              return { ...c };
+            }
+          }
+          throw new Error(`no comment ${comment}`);
         },
         true,
       ),
@@ -151,6 +172,27 @@ export const fakeWritesLayer = (s: FakeSide) => {
         () => {
           const i = s.issues.find((x) => x.number === issue)!;
           Object.assign(i, { title, body });
+          return i;
+        },
+        true,
+      ),
+    issue: ({ issue }) =>
+      Effect.gen(function* () {
+        const i = yield* call("issue", () => s.issues.find((x) => x.number === issue));
+        if (i === undefined)
+          return yield* new GithubHttpError({
+            status: 404,
+            message: "Not Found",
+            rateLimited: false,
+          });
+        return { ...i, state: i.state ?? "open", state_reason: i.stateReason ?? null };
+      }),
+    closeIssue: ({ issue, duplicateIssueId }) =>
+      call(
+        "closeIssue",
+        () => {
+          const i = s.issues.find((x) => x.number === issue)!;
+          Object.assign(i, { state: "closed", stateReason: "duplicate", duplicateIssueId });
           return i;
         },
         true,

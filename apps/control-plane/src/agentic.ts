@@ -10,6 +10,8 @@ import {
   gitDataLayer,
   LOCAL_STORE_MIGRATIONS,
   localPortsLayer,
+  LocalSubmit,
+  type RepoReusePolicy,
   ReuseInputs,
   ReuseReadFailed,
   StagedWriteReadFailed,
@@ -19,8 +21,14 @@ import {
   type WriteCredentials,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { artifactPath } from "@fractalboxdev/flare-dispatch-cache";
-import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
-import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
+import {
+  d1IntakeStore,
+  IntakeConfig,
+  IntakeStore,
+  localSubmitter,
+  ManifestSource,
+  type ManifestRead,
+} from "@fractalboxdev/flare-dispatch-intake";
 import { GithubApp, GithubRead, tokenFromApp } from "@fractalboxdev/flare-dispatch-github";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
 import {
@@ -31,14 +39,14 @@ import {
   type IntentRow,
   type LookupAnswer,
 } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Match } from "effect";
 import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
-import { deployment, type ControlPlaneEnv } from "./config.ts";
+import type { ControlPlaneEnv } from "./config.ts";
 import { boundFetch } from "./github.ts";
 
 let migrated: Promise<unknown> | undefined;
 
-/** The local-work tables (FD-LOCAL-018). */
+/** The local-work tables (FD-LOCAL-018) and the suppression ledger (FD-AGT-043). */
 export const migrateLocalStore = (db: D1Like) =>
   (migrated ??= (async () => {
     for (const m of LOCAL_STORE_MIGRATIONS) for (const sql of m.sql) await db.prepare(sql).run();
@@ -84,22 +92,56 @@ export const postureLayer = Layer.succeed(PostureSource, {
   posture: () => Effect.succeed("unmanaged" as const),
 });
 
+const REUSE_OFF: RepoReusePolicy = { reuse: false, equivalentPlatforms: [] };
+
 /**
- * The reuse policy's reads. The required set comes from GitHub; no repository's manifest declares a reuse block and
- * mameko issues no capacity lease, so those two reads fail and the policy names no rehearsal (FD-LOCAL-080).
+ * The repository's reuse policy from its manifest read: the manifest's `reuse` block, off where the manifest has none
+ * or the repository has no manifest (FD-LOCAL-077). An invalid or unreadable manifest fails the read, so the policy
+ * names no rehearsal on a policy it never read.
+ */
+export const repoReusePolicy = (
+  repository: string,
+  read: ManifestRead,
+): Effect.Effect<RepoReusePolicy, ReuseReadFailed> =>
+  Match.value(read).pipe(
+    Match.tag("Absent", () => Effect.succeed(REUSE_OFF)),
+    Match.tag("Valid", ({ manifest }) =>
+      Effect.succeed(
+        manifest.reuse?.enabled === true
+          ? { reuse: true, equivalentPlatforms: manifest.reuse.equivalentPlatforms ?? [] }
+          : REUSE_OFF,
+      ),
+    ),
+    Match.tag("Invalid", ({ errors }) =>
+      Effect.fail(
+        new ReuseReadFailed({
+          source: "manifest",
+          detail: `${repository}: invalid manifest: ${errors[0] ?? "no error listed"}`,
+        }),
+      ),
+    ),
+    Match.tag("Unreadable", ({ reason }) =>
+      Effect.fail(new ReuseReadFailed({ source: "manifest", detail: `${repository}: ${reason}` })),
+    ),
+    Match.exhaustive,
+  );
+
+/**
+ * The reuse policy's reads. The repository's policy comes from its manifest at the run's base commit through intake's
+ * manifest source, and the required set from GitHub. mameko issues no capacity lease, so the epoch read fails and the
+ * policy names no rehearsal.
  */
 export const reuseInputsLayer = Layer.effect(
   ReuseInputs,
   Effect.gen(function* () {
     const github = yield* GithubRead;
+    const manifests = yield* ManifestSource;
+    const { catalog } = yield* IntakeConfig;
     return {
-      repoPolicy: (repository: string) =>
-        Effect.fail(
-          new ReuseReadFailed({
-            source: "manifest",
-            detail: `no reuse block is read for ${repository}`,
-          }),
-        ),
+      repoPolicy: (repository: string, baseCommit: string) =>
+        manifests
+          .read(repository, baseCommit, catalog)
+          .pipe(Effect.flatMap((read) => repoReusePolicy(repository, read))),
       readRequiredSet: (repository: string, branch: string) =>
         github
           .requiredChecks(repository, branch)
@@ -206,14 +248,26 @@ export const gitDataWithoutApp = gitDataLayer({
     ),
 });
 
-/** The local-work ports: `LocalRegistration`, `ReusePolicy` and `WritebackGate`, with every read they take. */
+/**
+ * The local registration port's submit: intake's local submit over the intake services the control plane builds, so
+ * every accepted `local.register` is one admission of trigger kind `local` under `local-only` (FD-INT-061).
+ */
+export const localSubmitLayer = Layer.effect(LocalSubmit, localSubmitter);
+
+/**
+ * The local-work ports: `LocalRegistration`, `ReusePolicy` and `WritebackGate`, with every read they take. The Layer
+ * needs intake's services for the local submit.
+ */
 export const localPorts = (env: ControlPlaneEnv) =>
-  localPortsLayer({
-    db: env.DB,
-    runKnown: (run) => lookupRun(deployment(env), run)._tag === "Available",
-  }).pipe(
+  localPortsLayer({ db: env.DB }).pipe(
     Layer.provide(
-      Layer.mergeAll(reuseInputsLayer, postureLayer, writebackRecords(env), capacityUsageDeferred),
+      Layer.mergeAll(
+        localSubmitLayer,
+        reuseInputsLayer,
+        postureLayer,
+        writebackRecords(env),
+        capacityUsageDeferred,
+      ),
     ),
   );
 

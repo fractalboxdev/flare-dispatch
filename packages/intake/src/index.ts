@@ -55,7 +55,14 @@ export {
   type IntakeLayerOptions,
 } from "./layer.ts";
 export { followOnSubmitterLayer } from "./follow-on.ts";
-export { LOCAL_CLASS, LOCAL_ONLY, LocalRegistrationBody, localRegistrationLayer } from "./local.ts";
+export {
+  LOCAL_CLASS,
+  LOCAL_ONLY,
+  LocalSubmitBody,
+  localSubmitter,
+  submitLocal,
+  type LocalSubmitAnswer,
+} from "./local.ts";
 export {
   MANIFEST_CACHE_MS,
   MANIFEST_MAX_BYTES,
@@ -65,10 +72,10 @@ export {
   ManifestSource,
   manifestSourceLayer,
   RepoManifest,
+  ReuseBlock,
   validateManifest,
   type ManifestRead,
 } from "./manifest.ts";
-export { AccessIdentity, mcpDispatch, McpDispatchArgs } from "./mcp.ts";
 export {
   heldCheckOf,
   HeldCheckReporter,
