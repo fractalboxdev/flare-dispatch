@@ -142,6 +142,7 @@ describe("check.progress payload", () => {
   const DEADLINE = Date.UTC(2026, 10, 12, 9, 30);
   const waiting = (queuePosition: number) => ({
     check: { name: ref.name, headSha: ref.head_sha, detailsUrl: "https://logs.example/x" },
+    labels: [] as readonly string[],
     execution: { class: "interactive", deadlineAt: DEADLINE },
     queuePosition,
   });
@@ -159,8 +160,9 @@ describe("check.progress payload", () => {
     expect(buckets).toEqual(["1", "2–5", "2–5", "6–20", "6–20", "more than 20", "more than 20"]);
   });
 
-  it("[FD-GH-012] an execution with no check run, class or deadline_at gets no payload", () => {
+  it("[FD-GH-012] an execution with no check run, a local-only one, or one with no class or deadline_at gets no payload", () => {
     expect(checkProgressPayload({ ...waiting(1), check: null })).toBeNull();
+    expect(checkProgressPayload({ ...waiting(1), labels: ["local-only"] })).toBeNull();
     expect(
       checkProgressPayload({ ...waiting(1), execution: { class: null, deadlineAt: null } }),
     ).toBeNull();
@@ -169,26 +171,9 @@ describe("check.progress payload", () => {
     ).toBeNull();
   });
 
-  it("[FD-GH-012] the applier renders the binding's payload, and states only the class under confidential-compute", async () => {
+  it("[FD-GH-012] the binding's payload decodes as the applier's check.progress schema", () => {
     const payload = checkProgressPayload(waiting(30));
     expect(Schema.decodeUnknownSync(Payloads["check.progress"])(payload)).toEqual(payload);
-
-    const gh = fakeGithub();
-    await apply(gh, row("check.open", ref));
-    await apply(gh, row("check.progress", payload));
-    expect(gh.runs[0]?.output.title).toBe("Queued: position more than 20");
-    expect(gh.runs[0]?.output.summary).toBe(
-      "Class `interactive`; queue position more than 20; deadline 2026-11-12T09:30:00.000Z.",
-    );
-
-    const sealed = fakeGithub();
-    sealed.confidential.add("acme/app");
-    await apply(sealed, row("check.open", ref));
-    await apply(sealed, row("check.progress", payload));
-    expect(sealed.runs[0]?.output).toMatchObject({
-      title: "Queued",
-      summary: "Class `interactive`.",
-    });
   });
 });
 

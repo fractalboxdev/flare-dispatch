@@ -4,6 +4,7 @@
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow } from "@fractalboxdev/mameko-kernel";
+import { checkOpenPayload } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Schema } from "effect";
 import { InstallationDirectory, type Payloads } from "./applier.ts";
 import { GithubNetworkError } from "./client.ts";
@@ -62,6 +63,8 @@ export interface CheckProgressRequest {
     readonly headSha: string;
     readonly detailsUrl?: string;
   } | null;
+  /** The labels class resolution returned for the execution; `local-only` suppresses its check run (FD-PROF-043). */
+  readonly labels: readonly string[];
   /** The execution row's `class` and `deadline_at`; both null for a request rejected before class resolution. */
   readonly execution: { readonly class: string | null; readonly deadlineAt: number | null };
   /** The placement row's 1-based position in its queue. */
@@ -70,12 +73,16 @@ export interface CheckProgressRequest {
 
 /**
  * The profile's `checkProgressPayload` binding: the execution's class, its queue-position bucket and its `deadline_at`
- * (FD-GH-012), and none (null) for an execution that owns no check run or has no class or `deadline_at` to state. The
+ * (FD-GH-012), and none (null) for an execution that owns no check run or has no class or `deadline_at` to state. An
+ * execution owns a check run exactly when `checkOpenPayload` opens one, so a `local-only` execution gets none. The
  * payload carries every field in every confidentiality mode; under `confidential-compute` the applier renders the class
  * alone, reading the repository's mode at delivery (FD-GH-019).
  */
 export const checkProgressPayload = (r: CheckProgressRequest): CheckProgressPayload | null =>
-  r.check === null || r.execution.class === null || r.execution.deadlineAt === null
+  r.check === null ||
+  checkOpenPayload({ check: r.check, labels: r.labels }) === null ||
+  r.execution.class === null ||
+  r.execution.deadlineAt === null
     ? null
     : {
         name: r.check.name,
