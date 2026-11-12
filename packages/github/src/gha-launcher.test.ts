@@ -62,7 +62,7 @@ describe("gha launcher start", () => {
     expect(await h.verify({ executionId: "exec-r", epoch: 1, token })).toBe(false);
   });
 
-  it("cancel cancels the workflow run of that (execution, epoch) through the Actions API", async () => {
+  it("[FD-EXEC-092] cancel cancels the workflow run of that (execution, epoch) through the Actions API", async () => {
     const h = await launcherHarness();
     const runId = await launched(h, "exec-c", 2);
     await h.cancel("exec-c", 2);
