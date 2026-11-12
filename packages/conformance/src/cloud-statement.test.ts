@@ -44,6 +44,7 @@ import { migrateCache } from "../../../apps/control-plane/src/cache-retention.ts
 import type { ControlPlaneEnv } from "../../../apps/control-plane/src/config.ts";
 import { invalidateLeaseNonce, leaseNonce } from "../../../apps/control-plane/src/lease.ts";
 import {
+  cloudStatementOnFrame,
   cloudStatementOnResult,
   logAppendStep,
   repositoryVisibilityLayer,
@@ -54,6 +55,8 @@ import { migrateStatementRecords } from "../../../apps/control-plane/src/provena
 const sha = (n: number) => `sha256:${n.toString(16).padStart(64, "0")}`;
 const COMMIT = "c".repeat(40);
 const REPO = "acme/widgets";
+/** The gate image digest the deploy pins, which a cloud lease names. */
+const GATE_IMAGE = sha(0xa11);
 const ARTIFACTS: Readonly<Record<string, string>> = {
   "dist/app.tgz": "the built application",
   "sbom.json": '{"packages":[]}',
@@ -149,6 +152,7 @@ const attestation = (lease: {
 }) => ({
   lease: {
     executor_kind: "cloudflare",
+    // `check` is a gate recipe: the control plane writes its run kind and the image digest, never these.
     run: { name: "check", kind: "build", definition_digest: sha(1), inputs_digest: sha(2) },
     // The control plane writes the repository, ref and commit from its own records, never these.
     repository: "mallory/elsewhere",
@@ -212,6 +216,7 @@ const world = async () => {
     DB: db,
     CACHE: bucket,
     PROVENANCE_KEY: provenance.secret,
+    GATE_IMAGE_DIGEST: GATE_IMAGE,
   } as unknown as ControlPlaneEnv;
   const services = (await isolateServices(env)) as Context.Context<GithubRead>;
   const visibility = repositoryVisibilityLayer.pipe(Layer.provide(Layer.succeedContext(services)));
@@ -336,6 +341,8 @@ const world = async () => {
     intents,
     logAppends,
     run,
+    visibility,
+    register: (executorId: string, kind: string) => run(register(executorId, kind)),
   };
 };
 
@@ -345,13 +352,17 @@ const payloadOf = (envelope: DsseEnvelope) =>
     subject: { name: string; digest: Record<string, string> }[];
     predicateType: string;
     predicate: {
-      buildDefinition: {
-        externalParameters: Record<string, unknown>;
-        internalParameters: { lease: Record<string, unknown> };
-      };
-      runDetails: { builder: { id: string } };
+      result: string;
+      configuration: {
+        name: string;
+        uri?: string;
+        digest?: Record<string, string>;
+        annotations?: Record<string, unknown>;
+      }[];
     };
   };
+const configurationOf = (envelope: DsseEnvelope, name: string) =>
+  payloadOf(envelope).predicate.configuration.find((d) => d.name === name);
 
 describe("the cloud builder's statement of an accepted cloud execution", () => {
   it("[FD-PROV-008] writes the statement with subject digests from the artifact bytes in R2, signs it with the provenance key as the cloud builder and logs it", async () => {
@@ -385,9 +396,10 @@ describe("the cloud builder's statement of an accepted cloud execution", () => {
       { name: "dist/app.tgz", digest: { sha256: await hexOf(ARTIFACTS["dist/app.tgz"]!) } },
       { name: "sbom.json", digest: { sha256: await hexOf(ARTIFACTS["sbom.json"]!) } },
     ]);
-    expect(statement.predicateType).toBe("https://slsa.dev/provenance/v1");
-    expect(statement.predicate.runDetails.builder.id).toBe("cloudflare:cf-1");
-    expect(statement.predicate.buildDefinition.internalParameters.lease).toEqual({
+    // `check` is a gate recipe, so its statement is a test result whatever run kind the attestation names.
+    expect(statement.predicateType).toBe("https://in-toto.io/attestation/test-result/v0.1");
+    expect(statement.predicate.result).toBe("PASSED");
+    expect(configurationOf(envelope, "lease")?.annotations).toEqual({
       execution_id: "EXEC-CLOUD",
       epoch: 1,
       nonce,
@@ -395,11 +407,13 @@ describe("the cloud builder's statement of an accepted cloud execution", () => {
       binding_kind: "execution-lease",
     });
     // The repository, ref and commit are the ones intake recorded, not the attestation's.
-    expect(statement.predicate.buildDefinition.externalParameters).toMatchObject({
-      repository: REPO,
-      ref: "refs/heads/main",
-      commit_sha: COMMIT,
+    expect(configurationOf(envelope, "commit")).toEqual({
+      name: "commit",
+      uri: `git+https://github.com/${REPO}@refs/heads/main`,
+      digest: { gitCommit: COMMIT },
     });
+    // The image is the gate image the lease named for a cloud executor, not the digest the attestation forged.
+    expect(configurationOf(envelope, "image")?.digest).toEqual({ sha256: GATE_IMAGE.slice(7) });
 
     // A repeated result for the same epoch signs nothing more.
     await w.onResult(w.frame("EXEC-CLOUD", 1, submitted), "cf-1");
@@ -441,6 +455,98 @@ describe("the cloud builder's statement of an accepted cloud execution", () => {
       w.logAppends.get(intent!.envelopeDigest).pipe(Effect.orDie),
     );
     expect(LogAppendStatus.$is("Logged")(done!.status)).toBe(true);
+  });
+
+  it("[FD-PROV-008] signs once when the same result arrives twice concurrently", async () => {
+    const w = await world();
+    const nonce = await w.leased("EXEC-TWICE", "cf-1");
+    await w.commitArtifacts("EXEC-TWICE", 1, "cf-1");
+    expect(await w.accept("EXEC-TWICE", 1, "cf-1")).not.toBeNull();
+    const submitted = attestation({
+      execution_id: "EXEC-TWICE",
+      epoch: 1,
+      nonce,
+      executor_id: "cf-1",
+    });
+    const accepted = {
+      executionId: "EXEC-TWICE",
+      epoch: 1,
+      executorId: "cf-1",
+      attestation: submitted,
+    };
+    const both = await Promise.all(
+      [0, 1].map(() =>
+        Effect.runPromise(
+          writeAcceptedCloudStatement(w.env, accepted, Date.now()).pipe(
+            Effect.provide(w.visibility),
+          ),
+        ),
+      ),
+    );
+    expect(both.map((b) => b.inserted).sort()).toEqual([false, true]);
+    const intents = await w.intents("EXEC-TWICE");
+    expect(intents.map((i) => i.envelopeDigest)).toEqual([
+      both.find((b) => b.inserted)!.envelopeDigest,
+    ]);
+  });
+
+  it("[FD-PROV-008] releases the claim when the write fails, so a later result signs", async () => {
+    const w = await world();
+    const nonce = await w.leased("EXEC-RETRY", "cf-1");
+    await w.commitArtifacts("EXEC-RETRY", 1, "cf-1");
+    expect(await w.accept("EXEC-RETRY", 1, "cf-1")).not.toBeNull();
+    const submitted = attestation({
+      execution_id: "EXEC-RETRY",
+      epoch: 1,
+      nonce,
+      executor_id: "cf-1",
+    });
+    // R2 loses an artifact the control plane stored: the statement cannot be written, and nothing is logged.
+    const moved = await bucket.get("artifacts/EXEC-RETRY/1/sbom.json");
+    const bytes = new Uint8Array(await moved!.arrayBuffer());
+    await bucket.delete("artifacts/EXEC-RETRY/1/sbom.json");
+    expect(
+      await w.write({
+        executionId: "EXEC-RETRY",
+        epoch: 1,
+        executorId: "cf-1",
+        attestation: submitted,
+      }),
+    ).toMatchObject({ _tag: "CloudStatementFailed", reason: "artifact-missing" });
+    expect(await w.intents("EXEC-RETRY")).toEqual([]);
+    await bucket.put("artifacts/EXEC-RETRY/1/sbom.json", bytes);
+    await w.onResult(w.frame("EXEC-RETRY", 1, submitted), "cf-1");
+    expect(await w.intents("EXEC-RETRY")).toHaveLength(1);
+  });
+
+  it("[FD-PROV-008] the executor channel's frame step reads the executor from the socket and logs one statement", async () => {
+    const w = await world();
+    const nonce = await w.leased("EXEC-FRAME", "cf-1");
+    await w.commitArtifacts("EXEC-FRAME", 1, "cf-1");
+    expect(await w.accept("EXEC-FRAME", 1, "cf-1")).not.toBeNull();
+    const socket = (executorId: string) => ({ deserializeAttachment: () => ({ executorId }) });
+    const submitted = attestation({
+      execution_id: "EXEC-FRAME",
+      epoch: 1,
+      nonce,
+      executor_id: "cf-1",
+    });
+    // A frame of another type writes nothing, and so does the result arriving on another executor's socket.
+    await cloudStatementOnFrame(w.env, socket("cf-1"), '{"type":"exec.progress"}', Date.now());
+    await cloudStatementOnFrame(
+      w.env,
+      socket("cf-2"),
+      w.frame("EXEC-FRAME", 1, submitted),
+      Date.now(),
+    );
+    expect(await w.intents("EXEC-FRAME")).toEqual([]);
+    await cloudStatementOnFrame(
+      w.env,
+      socket("cf-1"),
+      new TextEncoder().encode(w.frame("EXEC-FRAME", 1, submitted)).buffer as ArrayBuffer,
+      Date.now(),
+    );
+    expect(await w.intents("EXEC-FRAME")).toHaveLength(1);
   });
 
   it("[FD-PROV-008] signs nothing when the deploy holds no provenance key", async () => {
@@ -499,6 +605,28 @@ describe("the cloud builder signs only for the current cloud placement at its ep
     // Through the channel's step too: the device signs its own statement, and the control plane signs none.
     await w.onResult(w.frame("EXEC-DEVICE", 1, submitted), "mac-1");
     expect(await w.intents("EXEC-DEVICE")).toEqual([]);
+  });
+
+  it("[FD-PROV-009] refuses a device-leased result after the executor id re-registers as a cloud executor", async () => {
+    const w = await world();
+    const nonce = await w.leased("EXEC-REKIND", "mac-1");
+    await w.register("mac-1", "cloudflare");
+    expect(await w.accept("EXEC-REKIND", 1, "mac-1")).not.toBeNull();
+    const submitted = attestation({
+      execution_id: "EXEC-REKIND",
+      epoch: 1,
+      nonce,
+      executor_id: "mac-1",
+    });
+    expect(
+      await w.write({
+        executionId: "EXEC-REKIND",
+        epoch: 1,
+        executorId: "mac-1",
+        attestation: submitted,
+      }),
+    ).toMatchObject({ _tag: "CloudBuilderRefused", reason: "device-executor" });
+    expect(await w.intents("EXEC-REKIND")).toEqual([]);
   });
 
   it("[FD-PROV-009] refuses a result from a stale epoch after a reclaim, and signs for the current epoch's executor", async () => {
@@ -575,9 +703,7 @@ describe("the cloud builder signs only for the current cloud placement at its ep
     });
     await w.onResult(w.frame("EXEC-STALE", 2, current), "cf-2");
     const [intent] = await w.intents("EXEC-STALE");
-    expect(
-      payloadOf(envelopeOf(intent!)).predicate.buildDefinition.internalParameters.lease,
-    ).toMatchObject({
+    expect(configurationOf(envelopeOf(intent!), "lease")?.annotations).toMatchObject({
       epoch: 2,
       nonce: second,
       executor_id: "cf-2",

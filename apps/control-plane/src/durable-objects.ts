@@ -19,7 +19,6 @@ import {
   TransparencyLog as PrivateLogObject,
   type TransparencyLogConfig,
 } from "@fractalboxdev/flare-dispatch-cache/transparency-log";
-import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
 import { FlareDispatchLivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/worker";
 import {
@@ -28,11 +27,11 @@ import {
   type ClaimedLease,
 } from "@fractalboxdev/mameko-host-cloudflare";
 import { DurableObject } from "cloudflare:workers";
-import { Context, Effect, Layer, Match } from "effect";
+import { Context, Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
 import { isolateServices } from "./composition.ts";
 import { leaseCache } from "./cache.ts";
-import { cloudStatementOnResult, repositoryVisibilityLayer } from "./provenance.ts";
+import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
 import {
   channelConfig,
@@ -77,26 +76,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
    */
   override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
     await super.webSocketMessage(ws, message);
-    const frame = String(message);
-    if (!frame.includes('"exec.result"')) return;
-    try {
-      const { executorId } = (
-        ws as { deserializeAttachment(): { readonly executorId: string } }
-      ).deserializeAttachment();
-      const services = await isolateServices(this.bindings);
-      await Effect.runPromise(
-        cloudStatementOnResult(this.bindings, frame, executorId, Date.now()).pipe(
-          Effect.provide(
-            repositoryVisibilityLayer.pipe(
-              Layer.provide(Layer.succeedContext(services as Context.Context<GithubRead>)),
-            ),
-          ),
-        ),
-      );
-    } catch (error) {
-      // The result stays accepted; the statement's absence is what a release's publish step refuses on (FD-PROV-062).
-      console.error(JSON.stringify({ cloudBuilderStatement: String(error) }));
-    }
+    await cloudStatementOnFrame(this.bindings, ws as ChannelSocket, message, Date.now());
   }
 
   /**

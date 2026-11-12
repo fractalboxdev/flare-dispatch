@@ -26,17 +26,19 @@ import {
   VisibilityUnreadable,
   writeCloudStatement,
 } from "@fractalboxdev/flare-dispatch-cache";
+import { type CatalogEntry, RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
 import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { Effect, Layer, Option, Schema } from "effect";
+import { type Context, Effect, Layer, Option, Schema } from "effect";
 import { migrateCache } from "./cache-retention.ts";
 import type { CacheEnv } from "./cache.ts";
+import { isolateServices } from "./composition.ts";
 import { apiEnvOf, type ControlPlaneEnv } from "./config.ts";
 import { repositoryConfidentiality } from "./dev-repository.ts";
 import { boundFetch, statementLoggedLayer } from "./github.ts";
-import { issuedLeaseNonce } from "./lease.ts";
+import { imageDigestOf, issuedLeaseNonce } from "./lease.ts";
 
 /**
  * Why the control plane signs no statement as the cloud builder for an accepted result (FD-PROV-009):
@@ -45,10 +47,11 @@ import { issuedLeaseNonce } from "./lease.ts";
  * - `stale-epoch`: the placement accepted a result at another epoch, its epoch moved past the result's, or the
  *   result's epoch nonce is invalidated.
  * - `other-executor`: the placement is leased to an executor other than the one the result arrived from.
- * - `device-executor`: the placement's executor is a device, which signs its own statement.
- * - `unregistered-executor`: the placement's executor has no registry row, so its kind is unknown.
+ * - `device-executor`: the placement leased and accepted its result as a device's, which signs its own statement.
+ * - `unregistered-executor`: the placement recorded no executor kind, as for an executor leased with no registry row.
  * - `binding-mismatch`: the attestation's lease binding differs from the control plane's records.
  * - `inputs-missing`: intake recorded no inputs for the execution.
+ * - `unknown-run`: the execution's run is not in the catalogue, so its image and run kind are unknown.
  */
 export const CloudBuilderRefusal = Schema.Literals([
   "no-placement",
@@ -59,6 +62,7 @@ export const CloudBuilderRefusal = Schema.Literals([
   "unregistered-executor",
   "binding-mismatch",
   "inputs-missing",
+  "unknown-run",
 ]);
 export type CloudBuilderRefusal = typeof CloudBuilderRefusal.Type;
 
@@ -85,7 +89,7 @@ export interface AcceptedResult {
   readonly executorId: string;
 }
 
-/** The placement a cloud-builder statement binds: the cloud executor, its kind and the epoch's lease nonce. */
+/** The placement a cloud-builder statement binds: the cloud executor, the kind it was leased as and the epoch's nonce. */
 export interface CloudPlacement {
   readonly executorId: string;
   readonly executorKind: string;
@@ -108,9 +112,10 @@ interface PlacementRow {
 
 /**
  * The guard on every cloud-builder signature (FD-PROV-009): the execution's placement row accepted a result at
- * `epoch`, its epoch is still `epoch`, it is leased to the executor the result arrived from, that executor's registry
- * row names a kind other than `device`, and the epoch's lease nonce is still valid. Answers the placement, or the
- * first check that fails.
+ * `epoch`, its epoch is still `epoch`, it is leased to the executor the result arrived from, the kind the placement
+ * recorded for that executor when it leased and accepted is not `device`, and the epoch's lease nonce is still valid.
+ * The kind is the placement's own record, so re-registering the executor id under another kind changes nothing here.
+ * Answers the placement, or the first check that fails.
  */
 export const cloudBuilderPlacement = (
   db: D1Like,
@@ -129,9 +134,9 @@ export const cloudBuilderPlacement = (
     const { results } = yield* Effect.promise(() =>
       db
         .prepare(
-          `select p.state, p.epoch, p.accepted_epoch, p.executor_id, x.kind as executor_kind, e.scope_id, e.run, e.class
+          `select p.state, p.epoch, p.accepted_epoch, p.executor_id, p.accepted_kind as executor_kind, e.scope_id, e.run,
+             e.class
            from placements p join executions e on e.id = p.execution_id
-           left join executors x on x.executor_id = p.executor_id
            where p.execution_id = ?`,
         )
         .bind(accepted.executionId)
@@ -154,7 +159,10 @@ export const cloudBuilderPlacement = (
         `the placement is leased to ${row.executor_id ?? "no executor"}`,
       );
     if (row.executor_kind === null)
-      return yield* refuse("unregistered-executor", `${row.executor_id} has no registry row`);
+      return yield* refuse(
+        "unregistered-executor",
+        `the placement recorded no kind for ${row.executor_id}`,
+      );
     if (row.executor_kind === "device")
       return yield* refuse("device-executor", `${row.executor_id} is a device executor`);
     const nonce = yield* issuedLeaseNonce(db, accepted.executionId, accepted.epoch);
@@ -170,7 +178,10 @@ export const cloudBuilderPlacement = (
     };
   });
 
-/** One row per (execution, epoch) the cloud builder signed for: the envelope digest of its logged statement. */
+/**
+ * One row per (execution, epoch) the cloud builder signs for. The write claims the row with an empty envelope digest
+ * before it signs and fills the digest in once the statement's log-append intent is recorded.
+ */
 export const CLOUD_STATEMENT_SCHEMA = [
   `create table if not exists fd_cloud_statements (
      execution_id text not null,
@@ -196,14 +207,18 @@ const migrateCloudStatements = (db: D1Like): Promise<unknown> => {
   return run;
 };
 
-/** What the cloud builder recorded for an accepted result: the statement's envelope digest and the log it goes to. */
+/** What the cloud builder recorded for an accepted result: the envelope digest of its statement. */
 export interface CloudStatementWritten {
+  /** Empty when another write for this execution and epoch holds the claim and has not recorded its intent yet. */
   readonly envelopeDigest: string;
   /** False when the cloud builder had already signed for this execution and epoch, which it does once. */
   readonly inserted: boolean;
 }
 
-export type CloudBuilderEnv = Pick<ControlPlaneEnv, "DB" | "POLICY_RULES" | "DEPLOYMENT"> &
+export type CloudBuilderEnv = Pick<
+  ControlPlaneEnv,
+  "DB" | "POLICY_RULES" | "DEPLOYMENT" | "GATE_IMAGE_DIGEST"
+> &
   Pick<CacheEnv, "CACHE"> & {
     readonly PROVENANCE_KEY?: string;
     readonly FD_DEV_REPOSITORY?: string;
@@ -220,12 +235,23 @@ const bindingOf = (accepted: AcceptedResult, placement: CloudPlacement) =>
   }) as const;
 
 /**
+ * The statement kind of a catalogue run: a gate recipe's statement is a test result (FD-PROV-007). An agentic recipe
+ * declares no statement kind in the catalogue, so its run kind stays the attestation's.
+ */
+const catalogRunKind = (entry: CatalogEntry): "gate" | undefined =>
+  entry.agentic === undefined ? "gate" : undefined;
+
+/**
  * Writes and logs the cloud-builder statement of an accepted result (FD-PROV-008), once per execution and epoch. The
  * placement guard runs first (FD-PROV-009). The attestation's lease binding must equal the records: the execution,
- * the epoch, the epoch's nonce, the executor and its kind. The repository, run, class, commit, ref and confidentiality
- * mode come from the control plane's records, not the attestation; the subjects are the artifacts the control plane
- * stored for the execution at that epoch, each digested from its bytes in R2. The provenance key signs the statement,
- * and its log-append intent names the log the repository's visibility picks (FD-PROV-034, FD-PROV-035).
+ * the epoch, the epoch's nonce, the executor and the kind the placement leased it as. The repository, run name, class,
+ * commit, ref and confidentiality mode come from the control plane's records, the image digest is the one the lease
+ * names for the run on that executor kind, and a gate recipe's run kind is `gate`; the subjects are the artifacts the
+ * control plane stored for the execution at that epoch, each digested from its bytes in R2. The write claims the
+ * execution and epoch before it signs, so of two concurrent writes one signs and the other answers `inserted: false`;
+ * a failure before the log-append intent is recorded releases the claim for a later result. The provenance key signs
+ * the statement, and its log-append intent names the log the repository's visibility picks (FD-PROV-034,
+ * FD-PROV-035).
  */
 export const writeAcceptedCloudStatement = (
   env: CloudBuilderEnv,
@@ -239,6 +265,13 @@ export const writeAcceptedCloudStatement = (
     const bucket = env.CACHE;
     if (bucket === undefined) return yield* new CloudBuilderUnconfigured({ missing: "CACHE" });
     const db = env.DB;
+    const refuse = (reason: CloudBuilderRefusal, detail: string) =>
+      new CloudBuilderRefused({
+        executionId: accepted.executionId,
+        epoch: accepted.epoch,
+        reason,
+        detail,
+      });
     const placement = yield* cloudBuilderPlacement(db, accepted);
     const query = <Row>(sql: string, ...values: unknown[]) =>
       Effect.promise(async () => {
@@ -249,16 +282,6 @@ export const writeAcceptedCloudStatement = (
           .all();
         return results as readonly Row[];
       });
-    const [signed] = yield* query<{ readonly envelope_digest: string }>(
-      "select envelope_digest from fd_cloud_statements where execution_id = ? and epoch = ?",
-      accepted.executionId,
-      accepted.epoch,
-    );
-    if (signed !== undefined)
-      return {
-        envelopeDigest: signed.envelope_digest,
-        inserted: false,
-      } satisfies CloudStatementWritten;
     const attestation = yield* Schema.decodeUnknownEffect(CloudAttestation)(
       accepted.attestation,
     ).pipe(
@@ -269,61 +292,88 @@ export const writeAcceptedCloudStatement = (
     const binding = bindingOf(accepted, placement);
     for (const field of Object.keys(binding) as (keyof typeof binding)[])
       if (attestation.lease[field] !== binding[field])
-        return yield* new CloudBuilderRefused({
-          executionId: accepted.executionId,
-          epoch: accepted.epoch,
-          reason: "binding-mismatch",
-          detail: `lease.${field}`,
-        });
+        return yield* refuse("binding-mismatch", `lease.${field}`);
+    const entry = Object.hasOwn(RUN_CATALOG, placement.run)
+      ? RUN_CATALOG[placement.run]
+      : undefined;
+    if (entry === undefined)
+      return yield* refuse("unknown-run", `${placement.run} is not in the catalogue`);
+    const imageDigest = yield* imageDigestOf(entry, placement.executorKind, env.GATE_IMAGE_DIGEST);
     const record = yield* IntakeStore.use((s) => s.get(accepted.executionId)).pipe(
       Effect.provide(d1IntakeStore(db)),
     );
     if (record === null)
-      return yield* new CloudBuilderRefused({
-        executionId: accepted.executionId,
-        epoch: accepted.epoch,
-        reason: "inputs-missing",
-        detail: "intake recorded no inputs for the execution",
-      });
+      return yield* refuse("inputs-missing", "intake recorded no inputs for the execution");
     const artifacts = yield* query<{ readonly name: string }>(
       `select name from artifacts where execution_id = ? and epoch = ? and r2_path is not null order by name`,
       accepted.executionId,
       accepted.epoch,
     );
-    const { envelope } = yield* writeCloudStatement(
-      {
-        ...attestation,
-        lease: {
-          ...attestation.lease,
-          run: { ...attestation.lease.run, name: placement.run },
-          repository: placement.repository,
-          ref: record.ref,
-          commit_sha: record.sha,
-          class: placement.className,
-          confidentiality: repositoryConfidentiality(env as unknown as ControlPlaneEnv)(
-            placement.repository,
-          ),
-        },
-        artifacts: artifacts.map(({ name }) => ({ name })),
-      },
-      key,
-    ).pipe(Effect.provideService(CacheBucket, bucket as unknown as Bucket));
-    const intent = yield* enqueueLogAppend(
-      {
-        envelope,
-        executionId: accepted.executionId,
-        repository: placement.repository,
-        verifiers: [publicJwkOf(key)],
-      },
-      now,
-    ).pipe(Effect.provideService(LogAppendStore, d1LogAppendStore(db as unknown as D1Database)));
-    yield* query(
-      `insert into fd_cloud_statements (execution_id, epoch, envelope_digest, written_at) values (?, ?, ?, ?)
-       on conflict (execution_id, epoch) do nothing`,
+    const claimed = yield* query(
+      `insert into fd_cloud_statements (execution_id, epoch, envelope_digest, written_at) values (?, ?, '', ?)
+       on conflict (execution_id, epoch) do nothing returning execution_id`,
       accepted.executionId,
       accepted.epoch,
-      intent.digest,
       now,
+    );
+    if (claimed.length === 0) {
+      const [signed] = yield* query<{ readonly envelope_digest: string }>(
+        "select envelope_digest from fd_cloud_statements where execution_id = ? and epoch = ?",
+        accepted.executionId,
+        accepted.epoch,
+      );
+      return {
+        envelopeDigest: signed?.envelope_digest ?? "",
+        inserted: false,
+      } satisfies CloudStatementWritten;
+    }
+    const intent = yield* Effect.gen(function* () {
+      const { envelope } = yield* writeCloudStatement(
+        {
+          ...attestation,
+          lease: {
+            ...attestation.lease,
+            run: {
+              ...attestation.lease.run,
+              name: placement.run,
+              kind: catalogRunKind(entry) ?? attestation.lease.run.kind,
+            },
+            repository: placement.repository,
+            ref: record.ref,
+            commit_sha: record.sha,
+            image_digest: imageDigest,
+            class: placement.className,
+            confidentiality: repositoryConfidentiality(env as unknown as ControlPlaneEnv)(
+              placement.repository,
+            ),
+          },
+          artifacts: artifacts.map(({ name }) => ({ name })),
+        },
+        key,
+      ).pipe(Effect.provideService(CacheBucket, bucket as unknown as Bucket));
+      return yield* enqueueLogAppend(
+        {
+          envelope,
+          executionId: accepted.executionId,
+          repository: placement.repository,
+          verifiers: [publicJwkOf(key)],
+        },
+        now,
+      ).pipe(Effect.provideService(LogAppendStore, d1LogAppendStore(db as unknown as D1Database)));
+    }).pipe(
+      Effect.onError(() =>
+        query(
+          "delete from fd_cloud_statements where execution_id = ? and epoch = ? and envelope_digest = ''",
+          accepted.executionId,
+          accepted.epoch,
+        ).pipe(Effect.catchCause(() => Effect.void)),
+      ),
+    );
+    yield* query(
+      "update fd_cloud_statements set envelope_digest = ? where execution_id = ? and epoch = ?",
+      intent.digest,
+      accepted.executionId,
+      accepted.epoch,
     );
     return { envelopeDigest: intent.digest, inserted: true } satisfies CloudStatementWritten;
   });
@@ -401,6 +451,40 @@ export const cloudStatementOnResult = (
         ),
       ),
   });
+
+/** The socket a channel frame arrived on: its attachment names the executor the channel admitted. */
+export interface ChannelSocket {
+  deserializeAttachment(): { readonly executorId: string };
+}
+
+/**
+ * What the `ExecutorChannel` object runs after mameko's channel handled a frame: for an `exec.result`, the
+ * cloud-builder statement step over the isolate's services, the executor read from the socket's attachment. It never
+ * fails: the result stays accepted, and the statement's absence is what a release's publish step refuses on
+ * (FD-PROV-062).
+ */
+export const cloudStatementOnFrame = async (
+  env: ControlPlaneEnv,
+  ws: ChannelSocket,
+  message: string | ArrayBuffer,
+  now: number,
+): Promise<void> => {
+  const frame = typeof message === "string" ? message : new TextDecoder().decode(message);
+  if (!frame.includes('"exec.result"')) return;
+  try {
+    const { executorId } = ws.deserializeAttachment();
+    const services = (await isolateServices(env)) as Context.Context<GithubRead>;
+    await Effect.runPromise(
+      cloudStatementOnResult(env, frame, executorId, now).pipe(
+        Effect.provide(
+          repositoryVisibilityLayer.pipe(Layer.provide(Layer.succeedContext(services))),
+        ),
+      ),
+    );
+  } catch (error) {
+    console.error(JSON.stringify({ cloudBuilderStatement: String(error) }));
+  }
+};
 
 /**
  * What the log-append drain reads: the intents in D1, Rekor and the private log's `TransparencyLog` object, the
