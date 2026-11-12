@@ -9,7 +9,13 @@ import {
   type Harness,
 } from "./api.test-support.ts";
 import { FlareDispatchApi } from "./declaration.ts";
-import { artifactsGroup, declaredGroups, logsGroup, operabilityGroup } from "./groups.ts";
+import {
+  artifactsGroup,
+  declaredGroups,
+  logsGroup,
+  operabilityGroup,
+  provenanceGroup,
+} from "./groups.ts";
 import { DuplicateRoute, matchPath, mount, routerGroup } from "./router.ts";
 import { Effect, Layer } from "effect";
 
@@ -73,9 +79,13 @@ describe("declaration and router", () => {
           .handle("installCallback", () => Effect.succeed("")),
       ),
     );
-    const mounted = mount(...declaredGroups, operability, logs, artifacts).routes.map(
-      (r) => `${r.method} ${r.path}`,
-    );
+    const mounted = mount(
+      ...declaredGroups,
+      operability,
+      logs,
+      artifacts,
+      provenanceGroup,
+    ).routes.map((r) => `${r.method} ${r.path}`);
     expect(mounted.sort()).toEqual(declared.sort());
   });
 

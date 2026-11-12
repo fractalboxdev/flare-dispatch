@@ -12,6 +12,7 @@
     "./log-names": "./src/log-names.ts",
     "./oidc": "./src/oidc.ts",
     "./provenance": "./src/provenance/index.ts",
+    "./provenance-subjects": "./src/provenance/subjects.ts",
     "./transparency-log": "./src/provenance/log-object.ts",
     "./provenance-policy": "./src/provenance/policy.ts",
     "./provenance-policy-test-support": "./src/provenance/policy.test-support.ts"

@@ -2,8 +2,16 @@
 // an insert keyed by envelope digest that leaves an existing intent as it is, and updates that touch only a pending
 // intent. The sim and replay harnesses run in Node without workerd, so they keep the intents here; the unit suite
 // checks the D1 store itself. `writes` counts every insert and update that changed an intent.
-import { Effect } from "effect";
-import { LogAppendStatus, type LogAppendIntent, type LogAppendStore } from "./append.ts";
+import { Effect, Layer } from "effect";
+import {
+  LogAppendStatus,
+  StatementLogged,
+  StatementLoggedFailed,
+  SubjectRetention,
+  type LogAppendIntent,
+  type LogAppendStore,
+} from "./append.ts";
+import { statementSubjects } from "./subjects.ts";
 
 export type MemoryLogAppendStore = LogAppendStore["Service"] & {
   readonly intents: Map<string, LogAppendIntent>;
@@ -60,9 +68,42 @@ export const memoryLogAppendStore = (
       }),
     forExecution: (executionId) =>
       Effect.sync(() => [...intents.values()].filter((i) => i.executionId === executionId)),
+    forSubject: (digest) =>
+      Effect.sync(() =>
+        [...intents.values()].filter((i) =>
+          statementSubjects(i.envelope).some((subject) => subject.digest === digest),
+        ),
+      ),
     logged: (digest, attempts, entry) =>
       update(digest, LogAppendStatus.Logged({ attempts, entry })),
     failed: (digest, attempts, nextAttemptAt, error) =>
       update(digest, LogAppendStatus.Pending({ attempts, nextAttemptAt, lastError: error })),
   };
 };
+
+/** What a statement's logging asked the artifact store to retain (FD-PROV-075). */
+export type RetainCall = Parameters<SubjectRetention["Service"]["retain"]>[0];
+
+/** A subject retention that records each call and keeps nothing, for suites that check the log append alone. */
+export const recordedSubjectRetention = (calls: RetainCall[] = []) =>
+  Layer.succeed(SubjectRetention, {
+    retain: (statement) => Effect.sync(() => void calls.push(statement)),
+  });
+
+/** What a statement's logging told the control plane (FD-PROV-042). */
+export type LoggedCall = Parameters<StatementLogged["Service"]["notify"]>[0];
+
+/**
+ * A `StatementLogged` that records each notice; while `failing()` answers true each notice fails, as an outbox insert
+ * that could not be written.
+ */
+export const recordedStatementLogged = (
+  calls: LoggedCall[] = [],
+  failing: () => boolean = () => false,
+) =>
+  Layer.succeed(StatementLogged, {
+    notify: (statement) =>
+      failing()
+        ? Effect.fail(new StatementLoggedFailed({ message: "outbox insert: D1 unavailable" }))
+        : Effect.sync(() => void calls.push(statement)),
+  });

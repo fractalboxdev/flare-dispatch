@@ -20,6 +20,8 @@ import {
   LogAppendFailed,
   LogAppendStatus,
   LogAppendStore,
+  StatementLogged,
+  SubjectRetention,
   RepositoryVisibility,
   statementSummaryLine,
   TransparencyLogs,
@@ -28,7 +30,11 @@ import {
   type LogEntry,
   type LogKind,
 } from "../../src/provenance/append.ts";
-import { memoryLogAppendStore } from "../../src/provenance/append.test-support.ts";
+import {
+  memoryLogAppendStore,
+  recordedStatementLogged,
+  recordedSubjectRetention,
+} from "../../src/provenance/append.test-support.ts";
 import { unsignedEnvelope } from "../../src/provenance/dsse.ts";
 import { utf8 } from "../../src/crypto.ts";
 
@@ -105,9 +111,15 @@ export const simulateLogAppend = async (seed: number): Promise<SimOutcome> => {
       rekor: (json: string) => attempt("rekor", json),
       private: (json: string) => attempt("private", json),
     }),
+    recordedSubjectRetention(),
+    recordedStatementLogged(),
   );
   const run = <A, E>(
-    effect: Effect.Effect<A, E, LogAppendStore | RepositoryVisibility | TransparencyLogs>,
+    effect: Effect.Effect<
+      A,
+      E,
+      LogAppendStore | RepositoryVisibility | TransparencyLogs | SubjectRetention | StatementLogged
+    >,
   ) => Effect.runPromise(Effect.provide(effect, Layer.merge(layer, Logless)));
 
   const statements = 1 + Math.floor(random() * 4);

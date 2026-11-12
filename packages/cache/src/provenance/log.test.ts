@@ -14,6 +14,7 @@ import {
   PRIVATE_LOG_REFUSED_ALARM,
   type AppendOutcome,
   type CheckpointOutcome,
+  type PrivateLogInclusionProof,
 } from "./log.ts";
 import {
   CHECKPOINT_PATH,
@@ -177,6 +178,7 @@ interface LogStub {
   append(entry: Uint8Array): Promise<AppendOutcome>;
   checkpoint(): Promise<CheckpointOutcome>;
   checkpointDueAt(): Promise<number | null>;
+  inclusionProof(index: number): Promise<PrivateLogInclusionProof | null>;
   size(): Promise<number>;
   usePrefix(prefix: string): Promise<void>;
   failLeafWrites(n: number): Promise<void>;
@@ -278,6 +280,24 @@ describe("the TransparencyLog Durable Object", () => {
         hex(await leafHash(entry)),
       );
     expect(await log.checkpoint()).toMatchObject({ _tag: "Unchanged", size: 5 });
+  });
+
+  it("answers each leaf's RFC 9162 inclusion proof against the published checkpoint, and none for a leaf it does not cover", async () => {
+    const { log, prefix } = await freshLog();
+    expect(await log.inclusionProof(0)).toBeNull();
+    const entries = ["p", "q", "r"].map((e) => utf8(`proved-${e}`));
+    for (const entry of entries) await log.append(entry);
+    const checkpoint = (await checkpointOf(prefix, entries.length))!;
+    const fromBase64 = (text: string) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+    for (const [index, entry] of entries.entries()) {
+      const proof = (await log.inclusionProof(index))!;
+      expect(proof).toMatchObject({ leafIndex: index, treeSize: 3 });
+      expect(parseCheckpoint(proof.checkpoint)).toEqual(checkpoint);
+      const hashes = proof.hashes.map(fromBase64);
+      expect(await verifyInclusion(index, 3, await leafHash(entry), hashes, checkpoint.root)).toBe(true);
+    }
+    expect(await log.inclusionProof(3)).toBeNull();
+    expect(await log.inclusionProof(-1)).toBeNull();
   });
 
   it("[FD-PROV-074] writes full and partial tiles once each: growth adds new partial tiles beside the earlier ones and the checkpoint advances", async () => {

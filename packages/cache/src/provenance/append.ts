@@ -17,6 +17,7 @@ import { canonicalJson, sha256Hex, utf8 } from "../crypto.ts";
 import { countersignAccepted, CountersignOutcome, type StatementBinding } from "./countersign.ts";
 import type { DsseEnvelope, ProvenanceKey } from "./dsse.ts";
 import { AppendOutcome } from "./log.ts";
+import { sha256Subjects, statementSubjects } from "./subjects.ts";
 
 /** The log a statement is appended to: the public Rekor log, or the control plane's private log in R2. */
 export const LogKind = Schema.Literals(["rekor", "private"]);
@@ -64,6 +65,47 @@ export class LogAppendStoreFailed extends Schema.TaggedError<LogAppendStoreFaile
   "LogAppendStoreFailed",
   { message: Schema.String },
 ) {}
+
+export class SubjectRetentionFailed extends Schema.TaggedError<SubjectRetentionFailed>()(
+  "SubjectRetentionFailed",
+  { message: Schema.String },
+) {}
+
+/**
+ * Keeps the artifacts a logged statement names as subjects until the statement retention after its integrated time
+ * (FD-PROV-075). The artifact store implements it (artifacts.ts `artifactSubjectRetention`).
+ */
+export class SubjectRetention extends Context.Service<
+  SubjectRetention,
+  {
+    readonly retain: (statement: {
+      readonly executionId: string;
+      /** The statement's `sha256:<hex>` subject digests. */
+      readonly subjects: readonly string[];
+      readonly integratedTime: number;
+    }) => Effect.Effect<void, SubjectRetentionFailed>;
+  }
+>()("@fractalboxdev/flare-dispatch-cache/SubjectRetention") {}
+
+export class StatementLoggedFailed extends Schema.TaggedError<StatementLoggedFailed>()(
+  "StatementLoggedFailed",
+  { message: Schema.String },
+) {}
+
+/**
+ * Told that a statement's append succeeded, before the store records it: an execution whose check run concluded while
+ * the statement was `log-pending` gets its summary rendered again with the statement's links (FD-PROV-042). The control
+ * plane implements it as a check-run intent (packages/github/src/provenance-refresh.ts); a failure retries the append.
+ */
+export class StatementLogged extends Context.Service<
+  StatementLogged,
+  {
+    readonly notify: (
+      statement: { readonly executionId: string; readonly envelopeDigest: string },
+      now: number,
+    ) => Effect.Effect<void, StatementLoggedFailed>;
+  }
+>()("@fractalboxdev/flare-dispatch-cache/StatementLogged") {}
 
 /** The repository's GitHub visibility (`public`, `private` or `internal`), as GitHub reports it. */
 export class RepositoryVisibility extends Context.Service<
@@ -127,6 +169,10 @@ export class LogAppendStore extends Context.Service<
     /** The intents of an execution's statements. */
     readonly forExecution: (
       executionId: string,
+    ) => Effect.Effect<readonly LogAppendIntent[], LogAppendStoreFailed>;
+    /** The intents of the statements that name `digest`, `<algorithm>:<value>`, as a subject. */
+    readonly forSubject: (
+      digest: string,
     ) => Effect.Effect<readonly LogAppendIntent[], LogAppendStoreFailed>;
     /** Records the entry of a pending intent; a logged intent keeps its first entry. */
     readonly logged: (
@@ -249,9 +295,12 @@ export const countersignAndAppend = (
   });
 
 /**
- * Attempts the append of one intent when it is pending and due at `now`. Success records the log's entry; failure
- * records the attempt and sets the next one `retryDelayMs` later (FD-PROV-041). Answers the intent as it now stands, or
- * `null` when no intent has the digest.
+ * Attempts the append of one intent when it is pending and due at `now`. Success extends the retention of the
+ * artifacts the statement names to its integrated time plus the statement retention (FD-PROV-075), tells
+ * `StatementLogged` so a concluded check run's summary links the statement (FD-PROV-042), then records the log's entry;
+ * a failed append, retention or notice records the attempt and sets the next one `retryDelayMs` later
+ * (FD-PROV-041), and the retried append answers the entry the log already holds. Answers the intent as it now stands,
+ * or `null` when no intent has the digest.
  */
 export const applyLogAppend = (digest: string, now: number) =>
   Effect.gen(function* () {
@@ -268,28 +317,54 @@ export const applyLogAppend = (digest: string, now: number) =>
       intent.log === "rekor"
         ? logs.rekor(intent.envelope, intent.verifiers)
         : logs.private(intent.envelope);
+    const retention = yield* SubjectRetention;
+    const subjects = sha256Subjects(statementSubjects(intent.envelope));
     const attempts = pending.attempts + 1;
+    const retry = (warning: string, message: string) => {
+      const nextAttemptAt = now + retryDelayMs(attempts);
+      return store.failed(digest, attempts, nextAttemptAt, message).pipe(
+        Effect.andThen(
+          Effect.logWarning(warning, {
+            digest,
+            log: intent.log,
+            attempts,
+            nextAttemptAt,
+            message,
+          }),
+        ),
+        Effect.as(LogAppendStatus.Pending({ attempts, nextAttemptAt, lastError: message })),
+      );
+    };
+    const notified = yield* StatementLogged;
     const status = yield* append.pipe(
+      Effect.tap((entry) =>
+        retention.retain({
+          executionId: intent.executionId,
+          subjects,
+          integratedTime: entry.integratedTime,
+        }),
+      ),
+      Effect.tap(() =>
+        notified.notify({ executionId: intent.executionId, envelopeDigest: digest }, now),
+      ),
       Effect.flatMap((entry) =>
         Effect.as(
           store.logged(digest, attempts, entry),
           LogAppendStatus.Logged({ attempts, entry }),
         ),
       ),
-      Effect.catchTag("LogAppendFailed", (e) => {
-        const nextAttemptAt = now + retryDelayMs(attempts);
-        return store.failed(digest, attempts, nextAttemptAt, e.message).pipe(
-          Effect.andThen(
-            Effect.logWarning("log append failed; retrying", {
-              digest,
-              log: e.log,
-              attempts,
-              nextAttemptAt,
-              message: e.message,
-            }),
+      Effect.catchTags({
+        LogAppendFailed: (e) => retry("log append failed; retrying", e.message),
+        SubjectRetentionFailed: (e) =>
+          retry(
+            "subject retention failed; retrying the logged append",
+            `subject retention: ${e.message}`,
           ),
-          Effect.as(LogAppendStatus.Pending({ attempts, nextAttemptAt, lastError: e.message })),
-        );
+        StatementLoggedFailed: (e) =>
+          retry(
+            "the logged statement's summary update was not recorded; retrying the logged append",
+            `summary update: ${e.message}`,
+          ),
       }),
     );
     return { ...intent, status } satisfies LogAppendIntent;
@@ -349,6 +424,11 @@ export const LOG_APPEND_SCHEMA = [
   `create index if not exists provenance_log_appends_due on provenance_log_appends (next_attempt_at)
      where integrated_time is null`,
   "create index if not exists provenance_log_appends_execution on provenance_log_appends (execution_id)",
+  // Each subject digest of an intent's statement, so a statement is found by the artifact it names (FD-PROV-071).
+  `create table if not exists provenance_statement_subjects (
+     subject_digest text not null,
+     envelope_digest text not null,
+     primary key (subject_digest, envelope_digest))`,
 ];
 
 interface Row {
@@ -415,24 +495,36 @@ export const d1LogAppendStore = (db: D1Database): LogAppendStore["Service"] => {
           Pending: (p) => p,
           Logged: () => undefined,
         });
-        const result = await db
-          .prepare(
-            `insert into provenance_log_appends (envelope_digest, execution_id, repository, log, envelope, verifiers,
-               attempts, next_attempt_at, inserted_at) values (?, ?, ?, ?, ?, ?, 0, ?, ?)
-             on conflict (envelope_digest) do nothing`,
-          )
-          .bind(
-            intent.envelopeDigest,
-            intent.executionId,
-            intent.repository,
-            intent.log,
-            intent.envelope,
-            JSON.stringify(intent.verifiers),
-            pending?.nextAttemptAt ?? now,
-            now,
-          )
-          .run();
-        return result.meta.changes > 0;
+        const subjects = [
+          ...new Set(statementSubjects(intent.envelope).map((subject) => subject.digest)),
+        ];
+        const [result] = await db.batch([
+          db
+            .prepare(
+              `insert into provenance_log_appends (envelope_digest, execution_id, repository, log, envelope, verifiers,
+                 attempts, next_attempt_at, inserted_at) values (?, ?, ?, ?, ?, ?, 0, ?, ?)
+               on conflict (envelope_digest) do nothing`,
+            )
+            .bind(
+              intent.envelopeDigest,
+              intent.executionId,
+              intent.repository,
+              intent.log,
+              intent.envelope,
+              JSON.stringify(intent.verifiers),
+              pending?.nextAttemptAt ?? now,
+              now,
+            ),
+          ...subjects.map((subject) =>
+            db
+              .prepare(
+                `insert into provenance_statement_subjects (subject_digest, envelope_digest) values (?, ?)
+                 on conflict do nothing`,
+              )
+              .bind(subject, intent.envelopeDigest),
+          ),
+        ]);
+        return (result?.meta.changes ?? 0) > 0;
       }),
     get: (digest) =>
       run(async () => {
@@ -467,6 +559,18 @@ export const d1LogAppendStore = (db: D1Database): LogAppendStore["Service"] => {
             "select * from provenance_log_appends where execution_id = ? order by inserted_at, envelope_digest",
           )
           .bind(executionId)
+          .all<Row>();
+        return results.map(intentOf);
+      }),
+    forSubject: (digest) =>
+      run(async () => {
+        const { results } = await db
+          .prepare(
+            `select a.* from provenance_statement_subjects s
+               join provenance_log_appends a on a.envelope_digest = s.envelope_digest
+             where s.subject_digest = ? order by a.inserted_at, a.envelope_digest`,
+          )
+          .bind(digest)
           .all<Row>();
         return results.map(intentOf);
       }),

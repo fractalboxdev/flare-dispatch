@@ -8,6 +8,7 @@ import { CacheClock, CacheLeases, DEFAULT_BYTE_BOUNDS, type ByteBounds } from ".
 import { CacheBucket } from "./manifest.ts";
 import { MAX_URL_LIFETIME_MS, R2Presigner } from "./presign.ts";
 import { MiB } from "./ledger.ts";
+import { SubjectRetentionFailed, type SubjectRetention } from "./provenance/append.ts";
 
 export const ARTIFACT_SCHEMA = [
   `create table if not exists artifacts (
@@ -306,6 +307,55 @@ export const commitArtifact = (
     );
     return { status: "accepted", artifact_id: artifactId } as ArtifactAck;
   });
+
+/** The statement retention where the operator overlay sets none: 400 days (FD-PROV-075). */
+export const DEFAULT_STATEMENT_RETENTION_DAYS = 400;
+
+const DAY_MS = 24 * 3600 * 1000;
+
+/**
+ * Keeps each artifact of the statement's execution whose digest the statement names as a subject until no earlier than
+ * the statement's integrated time plus the statement retention (FD-PROV-075). A row whose `expires_at` is already later
+ * keeps it, so the extension only lengthens the artifact retention of FD-CACHE-079. Answers how many rows it extended.
+ */
+export const retainStatementSubjects = async (
+  db: D1Database,
+  statement: {
+    readonly executionId: string;
+    /** `sha256:<hex>` subject digests. */
+    readonly subjects: readonly string[];
+    readonly integratedTime: number;
+  },
+  retentionDays: number = DEFAULT_STATEMENT_RETENTION_DAYS,
+): Promise<number> => {
+  const hexes = statement.subjects.flatMap((d) => {
+    const m = /^sha256:([0-9a-f]{64})$/.exec(d);
+    return m === null ? [] : [m[1]!];
+  });
+  if (hexes.length === 0) return 0;
+  const keepUntil = statement.integratedTime + retentionDays * DAY_MS;
+  const result = await db
+    .prepare(
+      `update artifacts set expires_at = ?1
+       where execution_id = ?2 and expires_at < ?1 and sha256 in (${hexes.map((_, i) => `?${i + 3}`).join(", ")})`,
+    )
+    .bind(keepUntil, statement.executionId, ...hexes)
+    .run();
+  return result.meta.changes;
+};
+
+/** The subject retention of the log append (append.ts `SubjectRetention`) over the artifact rows in D1. */
+export const artifactSubjectRetention = (
+  db: D1Database,
+  retentionDays: number = DEFAULT_STATEMENT_RETENTION_DAYS,
+): SubjectRetention["Service"] => ({
+  retain: (statement) =>
+    Effect.tryPromise({
+      try: () => retainStatementSubjects(db, statement, retentionDays),
+      catch: (e) =>
+        new SubjectRetentionFailed({ message: e instanceof Error ? e.message : String(e) }),
+    }).pipe(Effect.asVoid),
+});
 
 /**
  * Records an artifact a `confidential-compute` execution keeps on its device (FD-CACHE-080): the row names the
