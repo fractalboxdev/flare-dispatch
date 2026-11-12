@@ -3,6 +3,7 @@
 import {
   checkOpenPayload,
   classNamed,
+  deliveryLimitKey,
   type ConfidentialityMode,
   type PolicyRule,
   type Profile,
@@ -87,7 +88,7 @@ export interface IntakeAdmitInput {
   readonly scopeId: string;
   readonly run: string;
   readonly className: string;
-  /** The labels class resolution returned; `untrusted-input` and `local-only` are the only ones (FD-PROF-018). */
+  /** The labels class resolution returned: `untrusted-input`, `local-only` and `security-scan` (FD-PROF-018, FD-PROF-066). */
   readonly labels: readonly string[];
   readonly enqueuedAtMs: number;
   readonly dedup: {
@@ -196,8 +197,9 @@ export interface AdmissionPorts {
    */
   readonly quarantined?: (scopeId: string) => Effect.Effect<boolean>;
   /**
-   * The profile's `delivery.limit_key` binding for the request's repository, the installation that serves it
-   * (FD-GH-056); every row admission inserts carries it. Absent, a row's limit key is its scope (MAMEKO-OUT-057).
+   * The installation key of the request's repository, the installation that serves it (FD-GH-056); every row admission
+   * inserts carries `deliveryLimitKey` of its kind over it (FD-PROF-068). Absent, a row's limit key is its scope
+   * (MAMEKO-OUT-057).
    */
   readonly limitKey?: (scopeId: string) => Effect.Effect<string>;
 }
@@ -343,7 +345,9 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
           grants: input.grants,
           intents: {
             ...admittedIntents(profile, input),
-            ...(limitKey === undefined ? {} : { limitKey: () => limitKey }),
+            ...(limitKey === undefined
+              ? {}
+              : { limitKey: (intent) => deliveryLimitKey(intent.kind, limitKey) }),
           },
           supersessionKey: input.supersessionKey ?? null,
           serialKey: input.serialKey ?? null,

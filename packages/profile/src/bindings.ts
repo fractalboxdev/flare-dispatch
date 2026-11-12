@@ -22,6 +22,12 @@ export const GATING_RUNS: readonly string[] = ["check", "oxlint", "offload-test"
 /** The recipes that declare `supersede` (FD-PROF-028). */
 export const SUPERSEDING_RUNS: readonly string[] = ["check", "oxlint", "offload-test", "pr-review"];
 
+/** The runs that carry `security-scan`, for which `cloud-only` holds from phase 2 (FD-PROF-066). */
+export const SECURITY_SCAN_RUNS: readonly string[] = ["security-gate", "security-rescan"];
+
+/** The label `resolveClass` attaches to a security scan run; the profile's `cloud_only` holds for it from phase 2. */
+export const SECURITY_SCAN = "security-scan";
+
 /** The in-code `release` allowlist of step 1; `sandbox-image` publishes on its release trigger (FD-GATE-080). */
 export const RELEASE_ALLOWLIST: readonly string[] = [
   "release",
@@ -75,6 +81,8 @@ export interface ClassRequest {
   readonly parentClass?: ClassName;
   /** A dispatch's `class` input. */
   readonly classInput?: ClassName;
+  /** The `classCeiling` of the caller's `dispatch.scoped` entry, the cap of step 7. */
+  readonly classCeiling?: ClassName;
   readonly caller?: Caller;
   /** Pull-request labels. */
   readonly labels?: readonly string[];
@@ -196,13 +204,29 @@ const ruleMatches = (rule: PolicyRule, r: ClassRequest): boolean =>
   (rule.match.label === undefined || (r.labels ?? []).includes(rule.match.label));
 
 /**
- * The six steps of § Class resolution, in order (FD-PROF-011 to FD-PROF-024). A re-run takes its family's first
- * class before any step (FD-PROF-022).
+ * The seven steps of § Class resolution, in order (FD-PROF-011 to FD-PROF-024, FD-PROF-067). Step 7 caps every
+ * earlier answer at the request's `classCeiling`, a release or a re-run's class included, and a security scan run
+ * carries `security-scan` (FD-PROF-066).
  */
 export const resolveClassDetailed = (
   r: ClassRequest,
   inputs: Readonly<Record<string, unknown>>,
 ): Resolved => {
+  const earlier = resolveSteps(r, inputs);
+  const labels = SECURITY_SCAN_RUNS.includes(r.run)
+    ? [...earlier.labels, SECURITY_SCAN]
+    : earlier.labels;
+  return {
+    ...earlier,
+    labels,
+    ...(r.classCeiling === undefined ? {} : { class: capAt(earlier.class, r.classCeiling) }),
+  };
+};
+
+/**
+ * Steps 1 to 6 of § Class resolution. A re-run takes its family's first class before any step (FD-PROF-022).
+ */
+const resolveSteps = (r: ClassRequest, inputs: Readonly<Record<string, unknown>>): Resolved => {
   const labels = r.trigger.kind === "fork-pr" ? ["untrusted-input"] : [];
   if (r.rerun !== undefined) return { class: r.rerun.firstAttemptClass, labels, alarm: null };
 
@@ -305,6 +329,19 @@ export const resolveClass = (
   const { class: cls, labels, alarm } = resolveClassDetailed(r, inputs);
   return { class: cls, labels, alarm };
 };
+
+/** The intent kinds whose rows share the applier rate limit key `records` (FD-PROF-068). */
+export const RECORD_KINDS: readonly string[] = ["job.record", "verdict.record"];
+
+/** The limit key of the record kinds, which deliver to no installation. */
+export const RECORDS_LIMIT_KEY = "records";
+
+/**
+ * The profile's `delivery.limit_key` binding for one row: `records` for `job.record` and `verdict.record`, and the
+ * installation key of the row's repository for every other kind (FD-PROF-068, FD-PROF-047, FD-GH-056).
+ */
+export const deliveryLimitKey = (kind: string, installationKey: string): string =>
+  RECORD_KINDS.includes(kind) ? RECORDS_LIMIT_KEY : installationKey;
 
 /** An `Idempotency-Key` header of 1 to 128 characters from `[A-Za-z0-9._:-]`. */
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,128}$/;

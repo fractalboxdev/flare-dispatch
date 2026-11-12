@@ -7,6 +7,7 @@ import {
   CLASS_ORDER,
   GATING_RUNS,
   resolveClassDetailed,
+  SECURITY_SCAN,
   type ClassName,
   type ClassRequest as ProfileRequest,
   type PolicyRule,
@@ -48,8 +49,8 @@ export interface IntakeLayerOptions {
 }
 
 /**
- * The profile's `delivery.limit_key` binding over the deployment's installation directory: the id of the installation
- * that serves the repository (FD-GH-056). A repository no installation serves, or one the directory cannot read, keeps
+ * The installation key the profile's `delivery.limit_key` binding gives every kind but the record kinds: the id of the
+ * installation that serves the repository (FD-GH-056); admission applies `deliveryLimitKey` per row (FD-PROF-068). A repository no installation serves, or one the directory cannot read, keeps
  * its scope as the key; the actuator rate limit resolves that key to the same installation's quota when it is due.
  */
 export const installationLimitKey = Effect.gen(function* () {
@@ -98,8 +99,8 @@ export const intakeLayer = (options: IntakeLayerOptions) =>
     protectionSnapshotsLayer,
   );
 
-/** The labels `resolveClass` may return (FD-PROF-018, FD-PROF-024). */
-const BINDING_LABELS: readonly string[] = ["untrusted-input", "local-only"];
+/** The labels `resolveClass` may return (FD-PROF-018, FD-PROF-024, FD-PROF-066). */
+const BINDING_LABELS: readonly string[] = ["untrusted-input", "local-only", SECURITY_SCAN];
 
 const NO_POLICY_RULES: readonly PolicyRule[] = [];
 

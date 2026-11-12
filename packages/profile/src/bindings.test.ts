@@ -6,6 +6,7 @@ import {
   commitRecipe,
   confidentialityOf,
   dedupRecipes,
+  deliveryLimitKey,
   followOnRecipe,
   idempotencyKeyRecipe,
   profile,
@@ -13,6 +14,8 @@ import {
   ProtectionSnapshotCache,
   resolveClass,
   resolveClassDetailed,
+  SECURITY_SCAN,
+  SECURITY_SCAN_RUNS,
   supersessionKey,
   syncPolicyRules,
   validatePolicyRules,
@@ -282,6 +285,72 @@ describe("resolveClass", () => {
       labels: ["untrusted-input"],
       alarm: null,
     });
+  });
+
+  it("[FD-PROF-067] a classCeiling caps the class whatever the earlier steps resolved, and never raises it", () => {
+    // Step 2's verified required, under each ceiling.
+    expect(resolveClass({ ...pr, classCeiling: "interactive" }, required).class).toBe(
+      "interactive",
+    );
+    expect(resolveClass({ ...pr, classCeiling: "batch" }, required).class).toBe("batch");
+    // Step 1's release, a re-run's first class and a class input a rule allows the caller to raise.
+    const release: ClassRequest = {
+      run: "release",
+      repository: "acme/app",
+      sha: "abc123",
+      trigger: { kind: "tag-push", protectedTag: true },
+    };
+    expect(resolveClass(release, {}).class).toBe("release");
+    expect(resolveClass({ ...release, classCeiling: "interactive" }, {}).class).toBe("interactive");
+    expect(
+      resolveClass(
+        { ...pr, rerun: { firstAttemptClass: "required" }, classCeiling: "batch" },
+        required,
+      ).class,
+    ).toBe("batch");
+    const caller = {
+      identity: "repo:acme/app:ref:refs/heads/main",
+      repository: "acme/app",
+      workflowRef: "acme/app/.github/workflows/ci.yml@refs/heads/main",
+      protectedBranch: true,
+    };
+    const raising = rules({ match: { run: "nightly" }, class: "required", callers: [caller] });
+    const nightly: ClassRequest = {
+      run: "nightly",
+      repository: "acme/app",
+      sha: "abc123",
+      trigger: { kind: "actions-dispatch", oidcRef: "refs/heads/main", protectedBranch: true },
+      qosClass: "batch",
+      classInput: "required",
+      caller,
+    };
+    expect(resolveClass(nightly, raising).class).toBe("required");
+    expect(resolveClass({ ...nightly, classCeiling: "interactive" }, raising).class).toBe(
+      "interactive",
+    );
+    // A ceiling above the resolved class leaves it.
+    expect(resolveClass({ ...pr, classCeiling: "required" }, notRequired).class).toBe(
+      "interactive",
+    );
+  });
+
+  it("[FD-PROF-066] security-gate and security-rescan carry security-scan, and no other run does", () => {
+    for (const run of SECURITY_SCAN_RUNS)
+      expect(resolveClass({ ...pr, run }, {}).labels).toEqual([SECURITY_SCAN]);
+    expect(SECURITY_SCAN_RUNS).toEqual(["security-gate", "security-rescan"]);
+    expect(
+      resolveClass({ ...pr, run: "security-gate", trigger: { kind: "fork-pr" } }, {}).labels,
+    ).toEqual(["untrusted-input", SECURITY_SCAN]);
+    expect(resolveClass(pr, required).labels).toEqual([]);
+  });
+});
+
+describe("the delivery.limit_key binding", () => {
+  it("[FD-PROF-068] returns records for job.record and verdict.record, and the installation key for every other kind", () => {
+    expect(deliveryLimitKey("job.record", "7")).toBe("records");
+    expect(deliveryLimitKey("verdict.record", "7")).toBe("records");
+    for (const kind of Object.keys(profile.intent_kinds))
+      expect(deliveryLimitKey(kind, "7")).toBe("7");
   });
 });
 

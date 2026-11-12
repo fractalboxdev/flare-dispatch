@@ -13,6 +13,7 @@ import {
   type ProfileDocument,
 } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
+import { SECURITY_SCAN } from "./bindings.ts";
 import { DEPLOYMENT_SECRET_GRANT } from "./placement.ts";
 import type { Predicate, Profile } from "./schema.ts";
 
@@ -379,10 +380,16 @@ const ghaPlacement = {
   ],
 } satisfies Partial<Profile["placement"]>;
 
-/** The generic constraints' parameters in every phase; before phase 4 no launcher and no declared constraint. */
+const tagPush: Predicate = { trigger: "tag-push" };
+
+/**
+ * The generic constraints' parameters in every phase; before phase 4 no launcher and no declared constraint. From
+ * phase 2 `cloud-only` also holds for `security-scan`, the label of the runs `security-gate` and `security-rescan`
+ * (FD-PROF-066).
+ */
 const placementFor = (phase: Phase): Profile["placement"] => ({
   cloud_pinned: all(isClass("release"), not(label("release-matrix"))),
-  cloud_only: { trigger: "tag-push" },
+  cloud_only: phase >= 2 ? { any: [tagPush, label(SECURITY_SCAN)] } : tagPush,
   local_only: { undeclared_class: true },
   cloud_pinned_kinds: ["cloudflare"],
   ...(phase >= 4
