@@ -328,6 +328,23 @@ describe("resolveClass", () => {
     expect(resolveClass({ ...nightly, classCeiling: "interactive" }, raising).class).toBe(
       "interactive",
     );
+    // The clamp names the capped class: a raise the rule allows, and a raise no rule allows.
+    expect(resolveClassDetailed(nightly, raising).clamped).toBeUndefined();
+    expect(
+      resolveClassDetailed({ ...nightly, classCeiling: "interactive" }, raising),
+    ).toMatchObject({
+      class: "interactive",
+      clamped: { requested: "required", assigned: "interactive" },
+    });
+    const unallowed: ClassRequest = { ...nightly, qosClass: "interactive" };
+    expect(resolveClassDetailed(unallowed, {}).clamped).toEqual({
+      requested: "required",
+      assigned: "interactive",
+    });
+    expect(resolveClassDetailed({ ...unallowed, classCeiling: "batch" }, {})).toMatchObject({
+      class: "batch",
+      clamped: { requested: "required", assigned: "batch" },
+    });
     // A ceiling above the resolved class leaves it.
     expect(resolveClass({ ...pr, classCeiling: "required" }, notRequired).class).toBe(
       "interactive",

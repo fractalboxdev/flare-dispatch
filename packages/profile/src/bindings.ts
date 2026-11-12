@@ -163,7 +163,7 @@ export interface Resolved {
   readonly class: ClassName;
   readonly labels: readonly string[];
   readonly alarm: string | null;
-  /** Present when the class input asked for more than step 6 allows. */
+  /** Present when the final class differs from the class input: step 6 refused the raise, or step 7 capped it. */
   readonly clamped?: { readonly requested: ClassName; readonly assigned: ClassName };
 }
 
@@ -212,27 +212,33 @@ export const resolveClassDetailed = (
   r: ClassRequest,
   inputs: Readonly<Record<string, unknown>>,
 ): Resolved => {
-  const earlier = resolveSteps(r, inputs);
+  const { classInputApplied, ...earlier } = resolveSteps(r, inputs);
   const labels = SECURITY_SCAN_RUNS.includes(r.run)
     ? [...earlier.labels, SECURITY_SCAN]
     : earlier.labels;
-  return {
-    ...earlier,
-    labels,
-    ...(r.classCeiling === undefined ? {} : { class: capAt(earlier.class, r.classCeiling) }),
-  };
+  const cls = r.classCeiling === undefined ? earlier.class : capAt(earlier.class, r.classCeiling);
+  // The clamp names the final class, so a class input step 6 allows and step 7 caps is a clamp too.
+  const clamped =
+    classInputApplied && r.classInput !== undefined && cls !== r.classInput
+      ? { requested: r.classInput, assigned: cls }
+      : undefined;
+  return { ...earlier, class: cls, labels, ...(clamped === undefined ? {} : { clamped }) };
 };
+
+/** Steps 1 to 6's answer; `classInputApplied` is false when a re-run or step 1 decides before step 6. */
+type Steps = Omit<Resolved, "clamped"> & { readonly classInputApplied: boolean };
 
 /**
  * Steps 1 to 6 of § Class resolution. A re-run takes its family's first class before any step (FD-PROF-022).
  */
-const resolveSteps = (r: ClassRequest, inputs: Readonly<Record<string, unknown>>): Resolved => {
+const resolveSteps = (r: ClassRequest, inputs: Readonly<Record<string, unknown>>): Steps => {
   const labels = r.trigger.kind === "fork-pr" ? ["untrusted-input"] : [];
-  if (r.rerun !== undefined) return { class: r.rerun.firstAttemptClass, labels, alarm: null };
+  if (r.rerun !== undefined)
+    return { class: r.rerun.firstAttemptClass, labels, alarm: null, classInputApplied: false };
 
   // Step 1: the only path to `release` (FD-PROF-012).
   if (RELEASE_ALLOWLIST.includes(r.run) && isReleaseTrigger(r))
-    return { class: "release", labels, alarm: null };
+    return { class: "release", labels, alarm: null, classInputApplied: false };
 
   let alarm: string | null = null;
   const ceiling: ClassName = r.qosCeiling ?? "required";
@@ -287,18 +293,15 @@ const resolveSteps = (r: ClassRequest, inputs: Readonly<Record<string, unknown>>
   if (r.parentClass !== undefined) out = lower(out, r.parentClass);
 
   // Step 6: the class input lowers freely and raises only as a policy rule allows for the caller (FD-PROF-020).
-  let clamped: Resolved["clamped"];
   if (r.classInput !== undefined) {
     if (rank(r.classInput) >= rank(out)) out = r.classInput;
     else {
       const allowed = isRules(rules) ? callerAllowance(rules, r) : undefined;
       const assigned = allowed === undefined ? out : lower(r.classInput, allowed);
-      const next = rank(assigned) < rank(out) ? assigned : out;
-      if (next !== r.classInput) clamped = { requested: r.classInput, assigned: next };
-      out = next;
+      out = rank(assigned) < rank(out) ? assigned : out;
     }
   }
-  return { class: out, labels: outLabels, alarm, ...(clamped === undefined ? {} : { clamped }) };
+  return { class: out, labels: outLabels, alarm, classInputApplied: true };
 };
 
 /** The highest class a policy rule lets this caller's class input reach, on a protected branch only; never `release`. */
