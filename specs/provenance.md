@@ -141,6 +141,10 @@ A verifier assigns the highest tier whose conditions all hold.
 
 The `TransparencyLog` Durable Object writes the private log to the `CACHE` bucket under `tlog/private/`: each leaf's entry at `leaf/<N>`, the C2SP tlog-tiles hash tiles of height 8 at `tile/<L>/<N>` and `tile/<L>/<N>.p/<W>`, and the latest checkpoint at `checkpoint`. `<N>` in a leaf path uses the tlog-tiles index encoding of tile paths: 3-digit groups, each group but the last prefixed `x` (leaf 1000 is `leaf/x001/000`). A checkpoint is a C2SP tlog-checkpoint body (the origin `<plane id>/private-log`, the tree size and the base64 root hash, one per line), a blank line, and the line `— <kid> <signature>`, where the signature is the log key's ES256 signature over the body's bytes in IEEE P1363 form, standard base64. Each leaf and tile object is written once; only the checkpoint is replaced.
 
+### Log append
+
+A log-append intent is a row of the control plane's `provenance_log_appends` table in D1, keyed by the digest of the countersigned envelope's canonical JSON and inserted with `on conflict do nothing`. The intent names its log when it is recorded, from the repository's GitHub visibility, and holds the envelope and its signers' public keys. A Rekor append proposes a `dsse` entry (apiVersion `0.0.1`) with the base64 PEM key of each signer as a verifier; Rekor's `409` names the entry the envelope already has. The intent is not an outbox row: the outbox drainer's back-off starts at 1 s under an installation's applier permit, and a log append writes nothing to GitHub. `packages/cache/src/provenance/append.ts` holds the intent, its retry and the check-summary line; `rekor.ts` holds the Rekor append.
+
 ### Verification policy
 
 The verification policy is a JSON document in a DSSE envelope signed by the policy root key. Each version holds:
