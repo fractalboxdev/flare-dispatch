@@ -47,8 +47,8 @@ describe("sandbox-image", () => {
     expect(outcome).toEqual({ _tag: "success" });
     expect(commands.filter((c) => c.includes("buildx build --platform linux/"))).toHaveLength(2);
     expect(commands.filter((c) => c.startsWith("docker run"))).toEqual([
-      "docker run --rm --platform linux/arm64 fd-image-gate:arm64 sh -c 'node --version'",
-      "docker run --rm --platform linux/amd64 fd-image-gate:amd64 sh -c 'node --version'",
+      "docker run --rm --platform linux/arm64 --entrypoint sh fd-image-gate:arm64 -c 'node --version'",
+      "docker run --rm --platform linux/amd64 --entrypoint sh fd-image-gate:amd64 -c 'node --version'",
     ]);
     expect(commands.some((c) => c.includes("--push"))).toBe(false);
     expect(artifacts.uploads.has("image-digests.json")).toBe(false);
@@ -146,7 +146,10 @@ describe("sandbox-image", () => {
         "image: gate linux/amd64 build",
       ],
       [
-        { match: "--platform linux/arm64 fd-image", exit: CommandExit.Exited({ code: 1 }) },
+        {
+          match: "--platform linux/arm64 --entrypoint sh fd-image",
+          exit: CommandExit.Exited({ code: 1 }),
+        },
         "image: gate linux/arm64 smoke",
       ],
     ] as const;

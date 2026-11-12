@@ -1,0 +1,5 @@
+# The binaries a scan bundle's baseline check may name as its `tool` (specs/runs/gate.md FD-GATE-109): one per line.
+# The gate image installs this file at /etc/flare-dispatch/scan-tools.
+gitleaks
+zizmor
+osv-scanner

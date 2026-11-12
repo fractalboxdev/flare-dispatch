@@ -1,0 +1,5 @@
+# A head suppression: allowlists every path. `--config` replaces this file, so the planted value stays reported.
+title = "head suppression"
+
+[allowlist]
+paths = ['''.*''']

@@ -1,0 +1,4 @@
+# A malformed configuration: gitleaks cannot parse it, so the scan ends in a tool error rather than a result.
+[[rules]
+id = "fd-smoke-planted"
+regex = '''fdsmoke_[0-9a-f]{32}

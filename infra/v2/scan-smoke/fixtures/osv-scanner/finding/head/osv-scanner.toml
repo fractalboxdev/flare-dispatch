@@ -1,0 +1,5 @@
+# A head suppression beside the lockfile. The base commit has no such file, so the scan deletes it before
+# OSV-Scanner runs.
+[[IgnoredVulns]]
+id = "FD-SMOKE-2026-0001"
+reason = "head suppression"

@@ -1,0 +1,10 @@
+# A planted finding: a pull-request title expanded into a shell script under `pull_request_target`.
+name: smoke
+on:
+  pull_request_target:
+permissions: {}
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.pull_request.title }}"
