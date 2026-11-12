@@ -1,7 +1,7 @@
 // The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, the
 // GitHub probes under the App, the admission of held requests, the enqueue of intake's sweep and schedule units for
-// every installation of the App, the conclusions of ended fan-out parents' children, the daily advisory refresh and the
-// advisory snapshot staleness alarm.
+// every installation of the App, the conclusions of ended fan-out parents' children, the daily advisory refresh, the
+// advisory snapshot staleness alarm and the drain of the transparency-log appends.
 import {
   GithubApp,
   insertChildConclusions,
@@ -32,6 +32,7 @@ import { advisoryRefreshStep, advisoryWatchOf } from "./advisory-snapshots.ts";
 import { isolateServices } from "./composition.ts";
 import { channelConfig, concludeKindOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { appOptionsOf } from "./github.ts";
+import { logAppendStep } from "./provenance.ts";
 
 /** Installations whose `IntakeUnits` object refused the minute's enqueue; every other installation's units are queued. */
 export class IntakeEnqueueFailed extends Schema.TaggedError<IntakeEnqueueFailed>()(
@@ -213,6 +214,8 @@ export const tickDeps = (
       childConclusionsStep(env, now),
       // Each `scan.advisoryEcosystems` archive into `cas/<sha256>`, once per UTC day (FD-OPS-100).
       advisoryRefreshStep(env, now),
+      // Each log-append intent due now goes to Rekor or the private log (FD-PROV-034, FD-PROV-041).
+      logAppendStep(env, now),
       ...steps(now),
     ],
   };

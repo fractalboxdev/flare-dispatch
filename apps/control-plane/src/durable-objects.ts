@@ -31,6 +31,7 @@ import { Context, Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
 import { isolateServices } from "./composition.ts";
 import { leaseCache } from "./cache.ts";
+import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
 import {
   channelConfig,
@@ -57,11 +58,25 @@ const sha256 = async (text: string) =>
 const PROGRESS_TIMEOUT_MS = 300_000;
 
 export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
+  /** The Worker's bindings as the isolate received them, which its services are built over once. */
+  private readonly bindings: ControlPlaneEnv;
+
   constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
     super(ctx, {
       ...env,
       MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)),
     });
+    this.bindings = env;
+  }
+
+  /**
+   * Each frame goes through mameko's channel first. An `exec.result` that the accept compare-and-set accepted from a
+   * cloud executor then gets its cloud-builder statement, signed with the provenance key and queued for the
+   * transparency log (FD-PROV-008, FD-PROV-009); the placement row, not the frame, decides whether it was accepted.
+   */
+  override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
+    await super.webSocketMessage(ws, message);
+    await cloudStatementOnFrame(this.bindings, ws as ChannelSocket, message, Date.now());
   }
 
   /**
