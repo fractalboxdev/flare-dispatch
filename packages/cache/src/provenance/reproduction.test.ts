@@ -36,8 +36,11 @@ import {
   REPRODUCTION_RECORD_V1,
   reproductionGuardedActuators,
   reproductionRequestFor,
+  ReproductionSubmitter,
   settleReproduction,
+  startReproduction,
   type ReleaseExecution,
+  type ReproductionRequest,
 } from "./reproduction.ts";
 import { statementOf, type StatementBody } from "./statement.ts";
 
@@ -183,7 +186,7 @@ const row = (executionId: string | null, kind = "check.conclude"): IntentRow => 
 });
 
 describe("reproduction", () => {
-  it("[FD-PROV-064] a reproduce: true rule yields an interactive reproduction of the release's recipe, commit, definition and image, with caches off", async () => {
+  it("[FD-PROV-064] a reproduce: true rule yields an interactive reproduction request naming the release's recipe, commit and digests, and the reproduction constraint turns caches off", async () => {
     expect(reproductionRequestFor({ reproduce: true }, release)).toEqual({
       reproduces: RELEASE_ID,
       repository: "acme/widgets",
@@ -221,6 +224,25 @@ describe("reproduction", () => {
     expect(fields.cache_namespaces).toEqual({ read: [], write: null });
     expect(fields.upload_grant.cache_prefix).toBeNull();
     expect(fields.upload_grant.compile_cache).toBeNull();
+  });
+
+  it("[FD-PROV-064] startReproduction submits one reproduction request for a reproduce: true rule and none otherwise", async () => {
+    const submitted: ReproductionRequest[] = [];
+    const submitter = Layer.succeed(ReproductionSubmitter, {
+      submit: (request) =>
+        Effect.sync(() => {
+          submitted.push(request);
+          return { _tag: "admitted" as const, executionId: REPRO_ID };
+        }),
+    });
+    const start = (rule: Parameters<typeof startReproduction>[0]) =>
+      Effect.runPromise(startReproduction(rule, release).pipe(Effect.provide(submitter)));
+
+    expect(await start({ reproduce: true })).toEqual({ _tag: "admitted", executionId: REPRO_ID });
+    expect(submitted).toEqual([reproductionRequestFor({ reproduce: true }, release)]);
+    expect(await start({})).toBeNull();
+    expect(await start({ reproduce: false })).toBeNull();
+    expect(submitted).toHaveLength(1);
   });
 
   it("[FD-PROV-065] every outbox row of a reproduction execution is refused, and other executions' rows apply", async () => {

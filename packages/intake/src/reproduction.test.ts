@@ -8,7 +8,8 @@ import {
 import { buildProfile, eligibleKinds } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { harness, HEAD, REPO, type Harness } from "./harness.test-support.ts";
+import { catalogRuns } from "./catalog.ts";
+import { CATALOG, harness, HEAD, REPO, type Harness } from "./harness.test-support.ts";
 import { reproductionSubmitterLayer } from "./reproduction.ts";
 import { IntakeStore, type IntakeRecord } from "./store.ts";
 import { OTHER_CACHE_TRIGGER } from "./event.ts";
@@ -107,5 +108,37 @@ describe("the reproduction submitter", () => {
     expect(h.rows("select count(*) as n from intake_records where placement_constraint = 'reproduction'")).toEqual([
       { n: 1 },
     ]);
+  });
+
+  it("[FD-PROV-064] the reproduction of a cloud-pinned release run is placed on a device: the reproduction constraint supersedes the run's cloud-pinned", async () => {
+    const profile = buildProfile("production", 4);
+    const production = catalogRuns("production");
+    const h = await harness({
+      settings: { profile, catalog: (name) => (name === "sandbox-image" ? production(name) : CATALOG[name]) },
+    });
+    const inputs = {
+      repo: `https://github.com/${REPO}`,
+      sha: HEAD,
+      ref: "refs/heads/main",
+      entry: {
+        images: [{ name: "gate", dockerfile: "infra/Dockerfile.gate", smoke: ["node --version"] }],
+        registry: "ghcr.io/acme/app",
+      },
+      publish: true,
+      executorLabels: ["linux-arm64"],
+    };
+    await h.run(
+      IntakeStore.use((s) =>
+        s.put({ ...releaseRecord, run: "sandbox-image", ref: "refs/heads/main", inputs, eligibleKinds: ["cloudflare"] }),
+      ),
+    );
+    // The release run declares cloud-pinned, which alone would leave the reproduction no kind.
+    expect(production("sandbox-image")!.placement!(inputs).constraints).toContain("cloud-pinned");
+
+    const admitted = await submitReproduction(h, { run: "sandbox-image", ref: "refs/heads/main", inputs });
+    expect(admitted).toMatchObject({ _tag: "admitted" });
+    const id = (admitted as { executionId: string }).executionId;
+    const [placement] = h.rows("select eligible_kinds from placements where execution_id = ?", id);
+    expect(JSON.parse(placement!["eligible_kinds"] as string)).toEqual(["device"]);
   });
 });

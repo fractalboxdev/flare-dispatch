@@ -42,6 +42,10 @@ export interface ReproductionRequest {
   readonly ref: string;
   readonly run: string;
   readonly commit: string;
+  /**
+   * The release's run-definition and image digests. Admission does not pin the execution to them: no lease field
+   * carries a run-definition digest. The comparison counts only a reproduction statement that names both.
+   */
   readonly definitionDigest: string;
   readonly imageDigest: string;
   readonly inputs: unknown;

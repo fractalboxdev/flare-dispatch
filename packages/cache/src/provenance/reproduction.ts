@@ -1,9 +1,8 @@
 // The reproduction of a release (specs/provenance.md § Reproduction). Where a release rule sets `reproduce: true`, the
-// control plane creates a second execution of the release's recipe on the release's commit, run definition and image:
-// caches off, class `interactive`, under the `reproduction` placement constraint, which keeps it off `cloudflare`, `aws`
-// and `gha` and on a device of the `attested-dedicated` posture tier (FD-PROV-064). The reproduction publishes nothing:
-// the only intent of it the control plane applies is the log append of its statement, which is no outbox row
-// (FD-PROV-065).
+// control plane creates a second execution of the release's recipe on the release's commit and inputs: caches off,
+// class `interactive`, under the `reproduction` placement constraint, which keeps it off `cloudflare`, `aws` and `gha`
+// and on a device of the `attested-dedicated` posture tier (FD-PROV-064). The reproduction publishes nothing: the only
+// intent of it the control plane applies is the log append of its statement, which is no outbox row (FD-PROV-065).
 //
 // Once both statements are logged, the control plane compares their subject digests. Equal digests yield a
 // reproduction record, signed by the provenance key, naming both envelope digests and appended to the transparency log

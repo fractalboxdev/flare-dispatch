@@ -9,7 +9,7 @@
 //
 // `scenarios` is what the `sim` job runs (packages/ops/scripts/harness.ts): each seed fails on any violation.
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
-import { Effect, Exit, Layer, Logger } from "effect";
+import { Cause, Effect, Exit, Layer, Logger, Option } from "effect";
 import {
   seededRandom,
   throwOnViolations,
@@ -39,6 +39,7 @@ import type { ProvenancePublicKey } from "../../src/provenance/release.ts";
 import {
   REPRODUCTION_UNAVAILABLE,
   ReproductionOutcome,
+  ReproductionRefused,
   settleReproduction,
   type ReleaseExecution,
 } from "../../src/provenance/reproduction.ts";
@@ -189,9 +190,11 @@ export const simulateReproductionDeadline = async (seed: number): Promise<SimOut
       ).pipe(Effect.provide(layer)),
     );
     const outcome = Exit.isSuccess(exit) ? exit.value : undefined;
-    const reason = Exit.isFailure(exit)
-      ? (exit.cause.reasons.find((r) => r._tag === "Fail") as { error?: { reason?: string } } | undefined)?.error?.reason
-      : undefined;
+    const error = Exit.match(exit, {
+      onSuccess: () => undefined,
+      onFailure: (cause) => Option.getOrUndefined(Cause.findErrorOption(cause)),
+    });
+    const reason = error instanceof ReproductionRefused ? error.reason : undefined;
     const loggedByDeadline = loggedAt !== undefined && loggedAt <= deadlineAt && loggedAt <= now;
     if (loggedByDeadline) {
       if (outcome === undefined || !ReproductionOutcome.$is("Reproduced")(outcome))

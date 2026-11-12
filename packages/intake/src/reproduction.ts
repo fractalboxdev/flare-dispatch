@@ -1,7 +1,9 @@
 // The reproduction submitter (specs/provenance.md FD-PROV-064): one request for the release's recipe on the release's
 // commit, ref and inputs, through intake, at class `interactive` under the `reproduction` placement constraint. The
 // request carries `reproduction` as a run label, which the profile's `reproduction` constraint holds for, and as its
-// recorded placement constraint, which the cache namespaces read to turn caches off. The request is keyed
+// recorded placement constraint, which the cache namespaces read to turn caches off. That constraint supersedes the
+// `cloud-pinned` a release run declares (`worker-deploy`, a publishing `sandbox-image`), which would otherwise leave
+// the reproduction no executor kind at all. The request is keyed
 // `<release execution id>/reproduction`, so a repeated submit starts no second reproduction of one release.
 import {
   REPRODUCTION_CLASS,
@@ -16,11 +18,12 @@ import { IntakeStore, type IntakeRecord, type ShedRecorder } from "./store.ts";
 import { submission, submit, type Submission } from "./submit.ts";
 
 /** The intent key a reproduction request is keyed by under its release execution. */
-export const REPRODUCTION_INTENT_KEY = "reproduction";
+const REPRODUCTION_INTENT_KEY = "reproduction";
 
 /**
  * The submission of a reproduction request over the release's intake record: the release's run, commit, ref and inputs,
- * `interactive`, the `reproduction` constraint, a control-plane dispatch that waits out no cooldown.
+ * `interactive`, the `reproduction` constraint in place of the run's `cloud-pinned`, a control-plane dispatch that waits
+ * out no cooldown.
  */
 export const reproductionSubmission = (
   release: IntakeRecord,
@@ -40,6 +43,7 @@ export const reproductionSubmission = (
     caller: { kind: "control-plane", id: `reproduction:${request.reproduces}` },
     forcedClass: REPRODUCTION_CLASS,
     placementConstraint: REPRODUCTION_CONSTRAINT,
+    supersededConstraints: ["cloud-pinned"],
     extraLabels: [REPRODUCTION_CONSTRAINT],
     applyCooldown: false,
     repositoryPublic: release.repositoryPublic,

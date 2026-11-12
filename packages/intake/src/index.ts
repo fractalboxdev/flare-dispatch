@@ -56,7 +56,6 @@ export {
 } from "./layer.ts";
 export { followOnSubmitterLayer } from "./follow-on.ts";
 export {
-  REPRODUCTION_INTENT_KEY,
   reproductionSubmission,
   reproductionSubmitterLayer,
 } from "./reproduction.ts";
