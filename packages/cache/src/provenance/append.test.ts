@@ -1,7 +1,9 @@
 // The transparency-log append of a countersigned statement: the log-append intent keyed by the envelope digest, the
 // visibility routing between Rekor and the private log, and the statement's time from its log entry. The private log
 // is the `TransparencyLog` Durable Object under Miniflare, the intents live in its D1 database, and Rekor is a recorded
-// fake of its `/api/v1/log/entries` API.
+// fake of its `/api/v1/log/entries` API that, as Rekor's `dsse` type does, verifies every envelope signature against
+// the proposed PEM verifiers with a DER ECDSA verifier and answers 400 when one does not verify.
+import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { Effect, Layer, Option } from "effect";
 import type { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -34,6 +36,7 @@ import {
   type DsseEnvelope,
   type ProvenanceKey,
 } from "./dsse.ts";
+import type { AppendOutcome } from "./log.ts";
 import { leafPath } from "./merkle.ts";
 import { publicKeyPem, rekorAppend } from "./rekor.ts";
 
@@ -70,6 +73,31 @@ const deviceEnvelope = async (
 
 const REKOR_URL = "https://rekor.test";
 
+/**
+ * Whether every signature of a proposed envelope verifies, as an ASN.1 DER ECDSA signature over the envelope's
+ * pre-authentication encoding, against one of the proposed base64 PEM verifiers: Rekor's `dsse` check (sigstore's
+ * ECDSAVerifier, `ecdsa.VerifyASN1`).
+ */
+const rekorVerifies = (envelopeJson: string, verifiers: readonly string[]): boolean => {
+  let envelope: DsseEnvelope;
+  try {
+    envelope = JSON.parse(envelopeJson) as DsseEnvelope;
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(envelope.signatures) || typeof envelope.payload !== "string") return false;
+  const pae = dssePae(envelope.payloadType, Buffer.from(envelope.payload, "base64"));
+  const keys = verifiers.map((v) => createPublicKey(Buffer.from(v, "base64").toString("utf8")));
+  return (
+    envelope.signatures.length > 0 &&
+    envelope.signatures.every((sig) =>
+      keys.some((key) =>
+        verifySignature("sha256", pae, { key, dsaEncoding: "der" }, Buffer.from(sig.sig, "base64")),
+      ),
+    )
+  );
+};
+
 interface RekorCall {
   readonly method: string;
   readonly url: string;
@@ -97,8 +125,14 @@ const fakeRekor = (integratedTime = 1_700_000_000) => {
         state.failNext--;
         return new Response("unavailable", { status: 503 });
       }
-      const envelope = (body as { spec: { proposedContent: { envelope: string } } }).spec
-        .proposedContent.envelope;
+      const { envelope, verifiers } = (
+        body as { spec: { proposedContent: { envelope: string; verifiers: string[] } } }
+      ).spec.proposedContent;
+      if (!rekorVerifies(envelope, verifiers))
+        return Response.json(
+          { code: 400, message: "verifying signatures: invalid signature when validating ASN.1 encoded signature" },
+          { status: 400 },
+        );
       const existing = entries.get(envelope);
       if (existing !== undefined)
         return new Response("{}", {
@@ -119,9 +153,7 @@ const fakeRekor = (integratedTime = 1_700_000_000) => {
 };
 
 interface LogStub {
-  append(
-    entry: Uint8Array,
-  ): Promise<{ _tag: "Appended"; index: number; leafHash: string; integratedAt: number }>;
+  append(entry: Uint8Array): Promise<AppendOutcome>;
   size(): Promise<number>;
   usePrefix(prefix: string): Promise<void>;
 }
@@ -145,8 +177,9 @@ describe("the transparency-log append of a countersigned statement", () => {
   });
 
   /** A private log of its own under a fresh prefix, a fake Rekor, and the visibility each repository reports. */
-  const plane = async (visibility: Readonly<Record<string, string>>) => {
+  const plane = async (visibility: Record<string, string>) => {
     const n = ++logs;
+    const visibilityReads: string[] = [];
     const ns = (await mf.getDurableObjectNamespace(
       "TRANSPARENCY_LOG",
     )) as unknown as DurableObjectNamespace;
@@ -159,7 +192,7 @@ describe("the transparency-log append of a countersigned statement", () => {
       Layer.succeed(LogAppendStore, store),
       Layer.succeed(RepositoryVisibility, {
         of: (repository: string) =>
-          repository in visibility
+          (visibilityReads.push(repository), repository in visibility)
             ? Effect.succeed(visibility[repository]!)
             : Effect.fail(new VisibilityUnreadable({ repository, message: "404 Not Found" })),
       }),
@@ -175,7 +208,7 @@ describe("the transparency-log append of a countersigned statement", () => {
       const got = await bucket.get(`${prefix}${leafPath(index)}`);
       return got === null ? null : await got.text();
     };
-    return { log, rekor, store, run, leaf };
+    return { log, rekor, store, run, leaf, visibility, visibilityReads };
   };
 
   let executions = 0;
@@ -229,7 +262,10 @@ describe("the transparency-log append of a countersigned statement", () => {
       LogAppendStatus.Pending({ attempts: 0, nextAttemptAt: 1_000, lastError: null }),
     );
 
-    // The step again with the same countersigned envelope, as a replay whose journal holds it: no second intent.
+    // The step again with the same countersigned envelope, as a replay whose journal holds it: no second intent, and
+    // the log the intent names, without a second visibility read, even after the repository turned public.
+    expect(p.visibilityReads).toEqual(["acme/widgets"]);
+    p.visibility["acme/widgets"] = "public";
     const again = await p.run(
       enqueueLogAppend(
         { envelope, executionId, repository: "acme/widgets", verifiers: [device.public] },
@@ -237,6 +273,7 @@ describe("the transparency-log append of a countersigned statement", () => {
       ),
     );
     expect(again).toEqual({ digest: intent.digest, log: "private", inserted: false });
+    expect(p.visibilityReads).toEqual(["acme/widgets"]);
     const intents = await p.run(Effect.flatMap(LogAppendStore, (s) => s.forExecution(executionId)));
     expect(intents.map((i) => i.envelopeDigest)).toEqual([intent.digest]);
 
@@ -290,6 +327,22 @@ describe("the transparency-log append of a countersigned statement", () => {
       await publicKeyPem(device.public),
       await publicKeyPem(provenance.public),
     ]);
+    // Each signature of the envelope as sent verifies as ASN.1 DER against its signer's PEM verifier, as Rekor checks
+    // it; the same signature read as IEEE P1363 does not.
+    const [deviceVerifier, provenanceVerifier] = proposed.spec.proposedContent.verifiers.map((v) =>
+      createPublicKey(atob(v)),
+    );
+    const sent = JSON.parse(proposed.spec.proposedContent.envelope) as DsseEnvelope;
+    const pae = dssePae(sent.payloadType, Buffer.from(sent.payload, "base64"));
+    const sigs = sent.signatures.map((s) => Buffer.from(s.sig, "base64"));
+    expect(sent.signatures.map((s) => s.keyid)).toEqual(["device-1", "prov-2026-11"]);
+    for (const [key, sig] of [
+      [deviceVerifier!, sigs[0]!],
+      [provenanceVerifier!, sigs[1]!],
+    ] as const) {
+      expect(verifySignature("sha256", pae, { key, dsaEncoding: "der" }, sig)).toBe(true);
+      expect(verifySignature("sha256", pae, { key, dsaEncoding: "ieee-p1363" }, sig)).toBe(false);
+    }
     expect(await p.log.size()).toBe(0);
 
     const logged = await get(p, intent.digest);
@@ -309,8 +362,9 @@ describe("the transparency-log append of a countersigned statement", () => {
   it("[FD-PROV-035] an append Rekor already holds answers the existing entry it reads back from the 409's location", async () => {
     const rekor = fakeRekor();
     const append = rekorAppend({ url: REKOR_URL, fetch: rekor.fetch });
-    const first = await Effect.runPromise(append('{"a":1}', [device.public]));
-    const second = await Effect.runPromise(append('{"a":1}', [device.public]));
+    const json = canonicalJson(await deviceEnvelope(device.private, "exec-append-409"));
+    const first = await Effect.runPromise(append(json, [device.public]));
+    const second = await Effect.runPromise(append(json, [device.public]));
     expect(second).toEqual(first);
     expect(rekor.calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       `POST ${REKOR_URL}/api/v1/log/entries`,
@@ -359,6 +413,6 @@ describe("the transparency-log append of a countersigned statement", () => {
     expect(time).toBeLessThanOrEqual(after);
     // A later append of the same envelope answers the leaf's first integrated time.
     const repeat = await p.log.append(utf8(canonicalJson(privateStatement.envelope)));
-    expect(repeat.integratedAt).toBe(time);
+    expect(repeat).toMatchObject({ _tag: "Appended", duplicate: true, integratedAt: time });
   });
 });

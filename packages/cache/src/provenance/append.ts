@@ -16,6 +16,7 @@ import { Context, Data, Effect, Option, Schema } from "effect";
 import { canonicalJson, sha256Hex, utf8 } from "../crypto.ts";
 import { countersignAccepted, CountersignOutcome, type StatementBinding } from "./countersign.ts";
 import type { DsseEnvelope, ProvenanceKey } from "./dsse.ts";
+import { AppendOutcome } from "./log.ts";
 
 /** The log a statement is appended to: the public Rekor log, or the control plane's private log in R2. */
 export const LogKind = Schema.Literals(["rekor", "private"]);
@@ -176,11 +177,15 @@ export interface CountersignedStatement {
 /**
  * Records the log-append intent of a countersigned envelope, keyed by its digest (FD-PROV-034), with the log the
  * repository's visibility names (FD-PROV-035, FD-PROV-036). A visibility read that fails sends the statement to the
- * private log. An intent already recorded for the digest stays as it is.
+ * private log. An intent already recorded for the digest stays as it is, and answers the log it names without a
+ * visibility read.
  */
 export const enqueueLogAppend = (statement: CountersignedStatement, now: number) =>
   Effect.gen(function* () {
     const { json, digest } = yield* Effect.promise(() => envelopeEntry(statement.envelope));
+    const store = yield* LogAppendStore;
+    const existing = yield* store.get(digest);
+    if (existing !== null) return { digest, log: existing.log, inserted: false };
     const visibility = yield* RepositoryVisibility;
     const read = yield* visibility.of(statement.repository).pipe(
       Effect.map((v): string | undefined => v),
@@ -206,9 +211,11 @@ export const enqueueLogAppend = (statement: CountersignedStatement, now: number)
       verifiers: statement.verifiers,
       status: LogAppendStatus.Pending({ attempts: 0, nextAttemptAt: now, lastError: null }),
     };
-    const store = yield* LogAppendStore;
     const inserted = yield* store.insert(intent, now);
-    return { digest, log: intent.log, inserted };
+    if (inserted) return { digest, log: intent.log, inserted };
+    // A concurrent insert recorded the intent first; its log stands.
+    const stored = yield* store.get(digest);
+    return { digest, log: stored?.log ?? intent.log, inserted };
   });
 
 /**
@@ -489,22 +496,12 @@ export const d1LogAppendStore = (db: D1Database): LogAppendStore["Service"] => {
 // ---------------------------------------------------------------------------
 // The private log
 
-/** What the `TransparencyLog` object's `append` answers over RPC (log.ts `AppendOutcome`). */
-type PrivateAppendAnswer =
-  | {
-      readonly _tag: "Appended";
-      readonly index: number;
-      readonly leafHash: string;
-      readonly integratedAt: number;
-    }
-  | { readonly _tag: "Refused"; readonly reason: string; readonly path: string };
-
 /**
  * The private log's append over the one `TransparencyLog` object (FD-PROV-074). The entry's integrated time is the
  * object's clock at its first append; an append of bytes already in the log answers that earlier entry.
  */
 export const privateLogAppend =
-  (log: { append(entry: Uint8Array): Promise<PrivateAppendAnswer> }) =>
+  (log: { append(entry: Uint8Array): Promise<AppendOutcome> }) =>
   (envelopeJson: string): Effect.Effect<LogEntry, LogAppendFailed> =>
     Effect.tryPromise({
       try: () => log.append(utf8(envelopeJson)),
@@ -515,18 +512,21 @@ export const privateLogAppend =
         }),
     }).pipe(
       Effect.flatMap((answer) =>
-        "index" in answer
-          ? Effect.succeed<LogEntry>({
+        AppendOutcome.$match(answer, {
+          Appended: (a): Effect.Effect<LogEntry, LogAppendFailed> =>
+            Effect.succeed({
               log: "private",
-              logIndex: answer.index,
-              entryId: answer.leafHash,
-              integratedTime: answer.integratedAt,
-            })
-          : Effect.fail(
+              logIndex: a.index,
+              entryId: a.leafHash,
+              integratedTime: a.integratedAt,
+            }),
+          Refused: (r) =>
+            Effect.fail(
               new LogAppendFailed({
                 log: "private",
-                message: `the private log refused the write: ${answer.reason} at ${answer.path}`,
+                message: `the private log refused the write: ${r.reason} at ${r.path}`,
               }),
             ),
+        }),
       ),
     );
