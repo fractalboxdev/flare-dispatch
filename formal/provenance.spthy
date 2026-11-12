@@ -3,7 +3,9 @@
  * also reveal any device key and any retired provenance key. The `formal` job runs
  * `tamarin-prover --prove formal/provenance.spthy` at the version `formal/tamarin-prover.version` pins and fails
  * unless every lemma below is `verified`; each expected attack is an `exists-trace` lemma whose name ends in
- * `_attack` (FD-PROV-073).
+ * `_attack` (FD-PROV-073). A lemma counts toward the phase gate only while every acceptance check and verifier
+ * rejection its docstring lists as assumed has a passing negative conformance test (FD-PROV-072,
+ * packages/conformance/src/acceptance-ledger.test.ts).
  *
  * The model trusts the policy root key, so the device registry and the provenance key history reach the verifier as
  * persistent facts, and it treats ES256 as an ideal signature. A lease or registration is the linear fact `Current`;
@@ -217,7 +219,8 @@ lemma executable_reproduced:
  * S7a injective agreement (FD-PROV-010, FD-PROV-013, FD-PROV-014, FD-PROV-017, FD-PROV-018, FD-PROV-020,
  * FD-PROV-021, FD-PROV-032): an accepted statement for (execution, epoch, nonce, digest) was signed by the device the
  * lease was issued to, unless that device key was revealed before acceptance; it is countersigned; and no other
- * accepted statement carries its nonce.
+ * accepted statement carries its nonce. Assumed checks (FD-PROV-072): FD-PROV-013, FD-PROV-014, FD-PROV-017,
+ * FD-PROV-018, FD-PROV-020, FD-PROV-021.
  */
 lemma injective_agreement:
   "All x e n dv d #i. Accepted(x, e, n, dv, d) @ i ==>
@@ -229,6 +232,7 @@ lemma injective_agreement:
 /*
  * S7b freshness (FD-PROV-011, FD-PROV-012, FD-PROV-019): no statement for an epoch is accepted after a reclaim of
  * that epoch, and no statement is accepted whose nonce anyone knew before the lease or registration was issued.
+ * Assumed checks (FD-PROV-072): FD-PROV-019.
  */
 lemma freshness:
   "(All x e n dv d #i #j. Accepted(x, e, n, dv, d) @ i & Reclaim(x, e) @ j ==> #i < #j)
@@ -240,6 +244,7 @@ lemma freshness:
  * countersignature exists only for a lease issued to that device while it is registered and not revoked; a verified
  * statement was logged after the device registered and before it was marked compromised; a cloud-builder signature
  * exists only for a current cloud placement; and the `reproduced` tier needs an honest cloud build of the digest.
+ * Assumed checks (FD-PROV-072): FD-PROV-015, FD-PROV-057, FD-PROV-061.
  */
 lemma compromise_scope:
   "(All env x e n dv d #i. Countersigned(env, x, e, n, dv, d) @ i ==>
@@ -253,7 +258,10 @@ lemma compromise_scope:
    & (All x e d #i. CloudSigned(x, e, d) @ i ==> Ex #l. CloudIssued(x, e) @ l & #l < #i)
    & (All d #i. TierReproduced(d) @ i ==> Ex #j. CloudBuilt(d) @ j & #j < #i)"
 
-/* S7d misuse detection (FD-PROV-054): every statement a verifier accepts has a log entry. */
+/*
+ * S7d misuse detection (FD-PROV-054): every statement a verifier accepts has a log entry. Assumed checks
+ * (FD-PROV-072): FD-PROV-054.
+ */
 lemma misuse_detection:
   "All env x e n dv d #i. VerifiedPlatform(env, x, e, n, dv, d) @ i ==>
      Ex li #t. Logged(env, li) @ t & #t < #i"
@@ -265,7 +273,8 @@ lemma skip_inclusion_attack:
 
 /*
  * S7e rotation (FD-PROV-047, FD-PROV-048, FD-PROV-056): with every retired provenance key revealed, a verifier that
- * reads the key history accepts only countersignatures the control plane made.
+ * reads the key history accepts only countersignatures the control plane made. Assumed checks (FD-PROV-072):
+ * FD-PROV-056.
  */
 lemma rotation:
   "All env x e n dv d #i. VerifiedPlatform(env, x, e, n, dv, d) @ i ==>
