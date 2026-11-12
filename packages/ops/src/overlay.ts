@@ -1,7 +1,11 @@
 // The operator overlay: a JSON document of values only, decoded against the value schema with every undeclared key
 // rejected (specs/operability.md § Template, overlay and rendered configuration, FD-OPS-002 to FD-OPS-004, FD-OPS-056).
 import type { RegistryEntry } from "@fractalboxdev/flare-dispatch-agentic";
-import { BundleDigest, ScanBundleKey } from "@fractalboxdev/flare-dispatch-catalog";
+import {
+  ADVISORY_MAX_AGE_DEFAULT_HOURS,
+  BundleDigest,
+  ScanBundleKey,
+} from "@fractalboxdev/flare-dispatch-catalog";
 import {
   PolicyRules,
   spendConfigWith,
@@ -251,9 +255,13 @@ export type RenderValues = Omit<
   OverlayValues,
   "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance" | "scan"
 > & {
-  /** `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive. */
+  /**
+   * `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive, and
+   * `advisoryMaxAgeHours` at its 48 h default where the overlay sets none (FD-OPS-103).
+   */
   readonly scan: NonNullable<OverlayValues["scan"]> & {
     readonly advisoryEcosystems: readonly string[];
+    readonly advisoryMaxAgeHours: number;
   };
   /** `attestationMaxAgeDays` at its 10-day default where the overlay sets none (FD-PROV-016). */
   readonly provenance: NonNullable<OverlayValues["provenance"]> & {
@@ -273,7 +281,8 @@ export type RenderValues = Omit<
  * its policy rules and dispatchers, an empty set where it holds none, its Actions OIDC audience, empty where it sets
  * none, its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
  * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
- * it sets none (FD-PROV-016), and its advisory ecosystems, none where it sets none (FD-OPS-100).
+ * it sets none (FD-PROV-016), its advisory ecosystems, none where it sets none (FD-OPS-100), and its advisory snapshot
+ * age, at its default where it sets none (FD-OPS-103).
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
@@ -282,7 +291,11 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   dispatchers: overlay.dispatchers ?? [],
   intake: { webhookEvents: overlay.intake?.webhookEvents ?? null },
   dispatch: { oidcAudience: overlay.dispatch?.oidcAudience ?? "" },
-  scan: { ...overlay.scan, advisoryEcosystems: overlay.scan?.advisoryEcosystems ?? [] },
+  scan: {
+    ...overlay.scan,
+    advisoryEcosystems: overlay.scan?.advisoryEcosystems ?? [],
+    advisoryMaxAgeHours: overlay.scan?.advisoryMaxAgeHours ?? ADVISORY_MAX_AGE_DEFAULT_HOURS,
+  },
   provenance: {
     ...overlay.provenance,
     attestationMaxAgeDays:

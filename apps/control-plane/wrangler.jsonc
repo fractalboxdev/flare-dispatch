@@ -43,6 +43,9 @@
     // The OSV ecosystems whose `all.zip` archive the tick's `advisory-refresh` step stores in `cas/<sha256>` once per
     // UTC day, none where the overlay sets none (FD-OPS-100).
     "ADVISORY_ECOSYSTEMS": "{{scan.advisoryEcosystems}}",
+    // The advisory snapshot age in hours, 48 where the overlay sets none: the tick pages `advisory-snapshot-stale`
+    // while an ecosystem's snapshot is older or missing (FD-OPS-103).
+    "ADVISORY_MAX_AGE_HOURS": "{{scan.advisoryMaxAgeHours}}",
     // The object-store presigner signs on `<account_id>.r2.cloudflarestorage.com`, never the custom domain, under
     // the `CACHE` bucket's name. Its R2 API token, scoped to the cache and artifact buckets with Object Read & Write
     // and used for nothing else, is the Worker secrets `R2_PRESIGN_ACCESS_KEY_ID` and `R2_PRESIGN_SECRET_ACCESS_KEY`
