@@ -38,7 +38,7 @@ export const ManagedDeviceAttestationEvidence = Schema.Struct({
   format: Schema.Literal("managed-device-attestation"),
   /** The attestation certificate chain, base64 DER, leaf first; the root may be left out. */
   attestation: Schema.Array(Schema.String),
-  /** The value the control plane issued for this attestation. */
+  /** The value the device requested the attestation with; the control plane does not yet issue it at enrollment. */
   freshness: Schema.String,
   /** The key helper's designated code-signing requirement, naming its `cdhash`. */
   code_signing_requirement: Schema.String,
