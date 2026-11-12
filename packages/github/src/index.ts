@@ -125,6 +125,12 @@ export {
   migrateChildConclusions,
   type ConcludeKind,
 } from "./child-intents.ts";
+export {
+  insertProvenanceRefresh,
+  PROVENANCE_REFRESH_KEY,
+  ProvenanceLoggedPayload,
+  ProvenanceRefreshUnavailable,
+} from "./provenance-refresh.ts";
 export { GithubApplierLive, makeGithubActuators, SIDE_OUTPUT_BINDINGS } from "./github-applier.ts";
 export {
   intentMarker,

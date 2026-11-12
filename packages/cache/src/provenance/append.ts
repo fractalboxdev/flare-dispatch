@@ -87,6 +87,26 @@ export class SubjectRetention extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-cache/SubjectRetention") {}
 
+export class StatementLoggedFailed extends Schema.TaggedError<StatementLoggedFailed>()(
+  "StatementLoggedFailed",
+  { message: Schema.String },
+) {}
+
+/**
+ * Told that a statement's append succeeded, before the store records it: an execution whose check run concluded while
+ * the statement was `log-pending` gets its summary rendered again with the statement's links (FD-PROV-042). The control
+ * plane implements it as a check-run intent (packages/github/src/provenance-refresh.ts); a failure retries the append.
+ */
+export class StatementLogged extends Context.Service<
+  StatementLogged,
+  {
+    readonly notify: (
+      statement: { readonly executionId: string; readonly envelopeDigest: string },
+      now: number,
+    ) => Effect.Effect<void, StatementLoggedFailed>;
+  }
+>()("@fractalboxdev/flare-dispatch-cache/StatementLogged") {}
+
 /** The repository's GitHub visibility (`public`, `private` or `internal`), as GitHub reports it. */
 export class RepositoryVisibility extends Context.Service<
   RepositoryVisibility,
@@ -276,8 +296,9 @@ export const countersignAndAppend = (
 
 /**
  * Attempts the append of one intent when it is pending and due at `now`. Success extends the retention of the
- * artifacts the statement names to its integrated time plus the statement retention (FD-PROV-075), then records the
- * log's entry; a failed append or retention records the attempt and sets the next one `retryDelayMs` later
+ * artifacts the statement names to its integrated time plus the statement retention (FD-PROV-075), tells
+ * `StatementLogged` so a concluded check run's summary links the statement (FD-PROV-042), then records the log's entry;
+ * a failed append, retention or notice records the attempt and sets the next one `retryDelayMs` later
  * (FD-PROV-041), and the retried append answers the entry the log already holds. Answers the intent as it now stands,
  * or `null` when no intent has the digest.
  */
@@ -314,6 +335,7 @@ export const applyLogAppend = (digest: string, now: number) =>
         Effect.as(LogAppendStatus.Pending({ attempts, nextAttemptAt, lastError: message })),
       );
     };
+    const notified = yield* StatementLogged;
     const status = yield* append.pipe(
       Effect.tap((entry) =>
         retention.retain({
@@ -321,6 +343,9 @@ export const applyLogAppend = (digest: string, now: number) =>
           subjects,
           integratedTime: entry.integratedTime,
         }),
+      ),
+      Effect.tap(() =>
+        notified.notify({ executionId: intent.executionId, envelopeDigest: digest }, now),
       ),
       Effect.flatMap((entry) =>
         Effect.as(
@@ -334,6 +359,11 @@ export const applyLogAppend = (digest: string, now: number) =>
           retry(
             "subject retention failed; retrying the logged append",
             `subject retention: ${e.message}`,
+          ),
+        StatementLoggedFailed: (e) =>
+          retry(
+            "the logged statement's summary update was not recorded; retrying the logged append",
+            `summary update: ${e.message}`,
           ),
       }),
     );

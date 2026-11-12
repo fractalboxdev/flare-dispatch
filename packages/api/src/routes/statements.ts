@@ -1,18 +1,20 @@
 // `/v1/provenance/*`: the verification surface over statements. A statement is read only by lookup, on its execution
 // id or on a `sha256` subject digest it names; no route searches, lists, exports or streams statements, verdicts or
-// execution history (FD-PROV-071). Each statement answers with its log entry and the URL of its inclusion proof: the
-// Rekor entry, whose answer carries the proof, or the private log's inclusion-proof route for its leaf. The check
-// summary links the same URLs (FD-PROV-042).
+// execution history (FD-PROV-071). A caller without identity reads only the statements of public repositories
+// (FD-IFC-053); every other statement, and the private log's proofs, need an Access JWT (FD-IFC-054). Each statement
+// answers with its log entry and the URL of its inclusion proof: the Rekor entry, whose answer carries the proof, or
+// the private log's inclusion-proof route for its leaf. The check summary links the same URLs (FD-PROV-042).
 import {
   sha256Subjects,
   statementSubjects,
 } from "@fractalboxdev/flare-dispatch-cache/provenance-subjects";
-import { Effect } from "effect";
+import { Effect, Match } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { ApiConfig } from "../config.ts";
 import { FlareDispatchApi, type StatementView } from "../declaration.ts";
 import { apiError } from "../errors.ts";
-import { ProvenanceStatements, type StatementRecord } from "../ports.ts";
+import { CurrentIdentity } from "../identity.ts";
+import { ProvenanceStatements, StatementVisibility, type StatementRecord } from "../ports.ts";
 
 /** The public Rekor instance whose entries the `rekor` log holds. */
 export const REKOR_ORIGIN = "https://rekor.sigstore.dev";
@@ -69,11 +71,36 @@ export const statementView = (origin: string, record: StatementRecord): Statemen
   inclusion_proof_url: inclusionProofUrl(origin, record),
 });
 
+/**
+ * The statements the caller may read. An Access identity reads every one. A caller without identity reads only the
+ * statements of repositories whose visibility is `public` (FD-IFC-053); where none is, it answers 401
+ * `unauthenticated` whether or not a statement of another repository exists, so a lookup without identity cannot learn
+ * that a private repository's statement names a digest (FD-IFC-054).
+ */
+const readable = (records: readonly StatementRecord[]) =>
+  Effect.gen(function* () {
+    const visibility = yield* StatementVisibility;
+    const publicOnly = Effect.gen(function* () {
+      const open = yield* Effect.filter(records, (r) => visibility.isPublic(r.repository));
+      if (open.length === 0)
+        return yield* apiError(
+          "unauthenticated",
+          "an Access identity is required to read the statements of a repository that is not public",
+        );
+      return open;
+    });
+    return yield* Match.value(yield* CurrentIdentity).pipe(
+      Match.tag("Access", () => Effect.succeed(records)),
+      Match.orElse(() => publicOnly),
+    );
+  });
+
 const answer = (records: readonly StatementRecord[], missing: string) =>
   Effect.gen(function* () {
-    if (records.length === 0) return yield* apiError("not_found", missing);
+    const served = yield* readable(records);
+    if (served.length === 0) return yield* apiError("not_found", missing);
     const { publicOrigin } = yield* ApiConfig;
-    return { statements: records.map((r) => statementView(publicOrigin, r)) };
+    return { statements: served.map((r) => statementView(publicOrigin, r)) };
   });
 
 export const ProvenanceHandlers = HttpApiBuilder.group(FlareDispatchApi, "provenance", (handlers) =>

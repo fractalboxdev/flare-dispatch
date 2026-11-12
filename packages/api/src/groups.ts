@@ -82,17 +82,20 @@ export const provenancePolicyGroup = apiGroup({
   handlers: ProvenancePolicyHandlers,
 });
 
+const accessIfPresent: Surface = { _tag: "AccessIfPresent" };
+
 /**
- * The statement lookups and the private log's inclusion proof (FD-PROV-071), mounted under the surface the caller names
- * for `/v1/provenance/*`: which identity it requires turns on the repository's GitHub visibility (FD-IFC-053,
- * FD-IFC-054).
+ * The statement lookups and the private log's inclusion proof (FD-PROV-071). A lookup verifies an Access JWT when the
+ * request carries one and serves a caller without identity the statements of public repositories alone, so one
+ * subject lookup answers a public repository's statements to anyone and a private one's only behind Access
+ * (FD-IFC-053, FD-IFC-054). The private log holds only statements of repositories that are not public (FD-PROV-035),
+ * so its inclusion proofs need Access. The mounting package provides `StatementVisibility`.
  */
-export const provenanceGroup = (surface: Surface) =>
-  apiGroup({
-    group: ProvenanceGroup,
-    surfaces: { byExecution: surface, bySubject: surface, inclusionProof: surface },
-    handlers: ProvenanceHandlers,
-  });
+export const provenanceGroup = apiGroup({
+  group: ProvenanceGroup,
+  surfaces: { byExecution: accessIfPresent, bySubject: accessIfPresent, inclusionProof: member },
+  handlers: ProvenanceHandlers,
+});
 
 const logLink: Surface = { _tag: "Link", purpose: "logs", param: "id" };
 

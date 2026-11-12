@@ -30,6 +30,7 @@ import {
   authenticateLink,
   CurrentIdentity,
   inGroup,
+  readAccessJwt,
   readBearer,
   type AccessGroup,
   type Identity,
@@ -60,6 +61,12 @@ export type Surface =
    * route answers an Actions identity only for its own repository.
    */
   | { readonly _tag: "AccessOrActions" }
+  /**
+   * An Access JWT when the request carries one, verified as `Access` with group `any`; a request without one passes
+   * unidentified, and the route serves it only what needs no identity: the `/v1/provenance/*` lookups, which answer an
+   * unidentified caller the statements of public repositories alone (FD-IFC-053, FD-IFC-054).
+   */
+  | { readonly _tag: "AccessIfPresent" }
   /** An Access JWT, or a link token for the object the path parameter `param` names (FD-IFC-017). */
   | { readonly _tag: "Link"; readonly purpose: LinkPurpose; readonly param: string }
   /** The route verifies its own credential: a webhook HMAC, a connect signature, a cache or per-lease token. */
@@ -247,6 +254,10 @@ const surfaceCheck = (
           ? accessCheck(request, { _tag: "Access", group: "any" })
           : authenticateActions(bearer);
       },
+      AccessIfPresent: () =>
+        readAccessJwt(request) === undefined
+          ? Effect.succeed<Identity>({ _tag: "Unidentified" })
+          : accessCheck(request, { _tag: "Access", group: "any" }),
       Link: (s) => authenticateLink(request, s.purpose, params[s.param] ?? ""),
       OwnCredential: () => Effect.succeed<Identity>({ _tag: "Unidentified" }),
       Public: () => Effect.succeed<Identity>({ _tag: "Unidentified" }),

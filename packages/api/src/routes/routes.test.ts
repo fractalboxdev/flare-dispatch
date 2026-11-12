@@ -715,7 +715,7 @@ describe("verification policy", () => {
 describe("statement lookups", () => {
   let p: Harness;
   beforeAll(async () => {
-    p = await makeHarness([provenanceGroup({ _tag: "Access", group: "any" })]);
+    p = await makeHarness([provenanceGroup]);
   });
 
   const APP = "1".repeat(64);
@@ -723,6 +723,8 @@ describe("statement lookups", () => {
   const COMMIT = "c".repeat(40);
   const EXEC_A = "01JPROVA000000000000000000";
   const EXEC_B = "01JPROVB000000000000000000";
+  const PRIVATE_REPO = "acme/widgets";
+  const PUBLIC_REPO = "acme/lib";
 
   /** A countersigned envelope's canonical JSON whose statement names `subject`. */
   const envelopeNaming = (subject: readonly unknown[]) =>
@@ -738,6 +740,7 @@ describe("statement lookups", () => {
     });
   const digestOf = (n: number) => `sha256:${String(n).repeat(64).slice(0, 64)}`;
   const built: StatementRecord = {
+    repository: PRIVATE_REPO,
     envelopeDigest: digestOf(3),
     executionId: EXEC_A,
     log: "private",
@@ -748,6 +751,7 @@ describe("statement lookups", () => {
     entry: { logIndex: 7, entryId: "leaf-hash-7", integratedTime: 1_700_000_000_000 },
   };
   const gate: StatementRecord = {
+    repository: PRIVATE_REPO,
     envelopeDigest: digestOf(4),
     executionId: EXEC_A,
     log: "private",
@@ -755,6 +759,7 @@ describe("statement lookups", () => {
     entry: null,
   };
   const published: StatementRecord = {
+    repository: PUBLIC_REPO,
     envelopeDigest: digestOf(5),
     executionId: EXEC_B,
     log: "rekor",
@@ -763,6 +768,8 @@ describe("statement lookups", () => {
   };
   beforeEach(() => {
     p.doubles.statements.splice(0, p.doubles.statements.length, built, gate, published);
+    p.doubles.publicRepositories.clear();
+    p.doubles.publicRepositories.add(PUBLIC_REPO);
   });
 
   const read = async (path: string) => p.fetch(path, await p.asAccess(MEMBER));
@@ -815,12 +822,20 @@ describe("statement lookups", () => {
       inclusion_proof_url: "https://rekor.sigstore.dev/api/v1/log/entries/24296fb24b8ad77a",
     });
     expect(
-      (await statementsOf(`/v1/provenance/subjects/sha256:${APP}`)).map((s) => s["envelope_digest"]),
+      (await statementsOf(`/v1/provenance/subjects/sha256:${APP}`)).map(
+        (s) => s["envelope_digest"],
+      ),
     ).toEqual([built.envelopeDigest]);
   });
 
   it("[FD-PROV-071] a lookup is exact: a prefix, a wildcard or another algorithm answers 400, and an unknown id or digest 404", async () => {
-    for (const digest of [`sha256:${APP.slice(0, 32)}`, "sha256:%25", "sha256:*", `sha512:${APP}`, APP]) {
+    for (const digest of [
+      `sha256:${APP.slice(0, 32)}`,
+      "sha256:%25",
+      "sha256:*",
+      `sha512:${APP}`,
+      APP,
+    ]) {
       const response = await read(`/v1/provenance/subjects/${digest}`);
       expect(response.status, digest).toBe(400);
       expect((await json(response))["error"]).toBe("invalid_body");
@@ -842,7 +857,8 @@ describe("statement lookups", () => {
     HttpApi.reflect(FlareDispatchApi, {
       onGroup: () => {},
       onEndpoint: ({ endpoint }) => {
-        if (endpoint.path.startsWith("/v1/provenance/")) declared.push(`${endpoint.method} ${endpoint.path}`);
+        if (endpoint.path.startsWith("/v1/provenance/"))
+          declared.push(`${endpoint.method} ${endpoint.path}`);
       },
     });
     expect(declared.sort()).toEqual([
@@ -869,8 +885,47 @@ describe("statement lookups", () => {
       expect(response.status, path).toBe(404);
     }
     // A query on a lookup narrows nothing and widens nothing: the answer is the execution's statements alone.
-    const filtered = await statementsOf(`/v1/provenance/executions/${EXEC_A}?repository=acme/widgets&limit=200`);
+    const filtered = await statementsOf(
+      `/v1/provenance/executions/${EXEC_A}?repository=acme/widgets&limit=200`,
+    );
     expect(filtered.map((s) => s["execution_id"])).toEqual([EXEC_A, EXEC_A]);
+  });
+
+  it("[FD-IFC-053] [FD-IFC-054] a subject lookup without identity answers a public repository's statements and keeps a private one's behind Access", async () => {
+    const digests = async (response: Response) =>
+      ((await response.json()) as { statements: { envelope_digest: string }[] }).statements.map(
+        (s) => s.envelope_digest,
+      );
+    // LIB is named by a private repository's statement and a public one's: without identity, only the public one.
+    const open = await p.fetch(`/v1/provenance/subjects/sha256:${LIB}`);
+    expect(open.status).toBe(200);
+    expect(await digests(open)).toEqual([published.envelopeDigest]);
+    const member = await read(`/v1/provenance/subjects/sha256:${LIB}`);
+    expect(await digests(member)).toEqual([built.envelopeDigest, published.envelopeDigest]);
+    // The public execution's lookup needs no identity.
+    expect(await digests(await p.fetch(`/v1/provenance/executions/${EXEC_B}`))).toEqual([
+      published.envelopeDigest,
+    ]);
+    // A lookup that finds only private statements, and one that finds none, answer alike without identity: 401.
+    for (const path of [
+      `/v1/provenance/subjects/sha256:${APP}`,
+      `/v1/provenance/executions/${EXEC_A}`,
+      `/v1/provenance/subjects/sha256:${"9".repeat(64)}`,
+    ]) {
+      const response = await p.fetch(path);
+      expect(response.status, path).toBe(401);
+      expect((await json(response))["error"]).toBe("unauthenticated");
+    }
+    // A token that fails verification is refused, never served as no identity.
+    const forged = await p.fetch(`/v1/provenance/subjects/sha256:${LIB}`, {
+      headers: { "cf-access-jwt-assertion": "not.a.jwt" },
+    });
+    expect(forged.status).toBe(403);
+    // The repository turning private closes its statements to a caller without identity.
+    p.doubles.publicRepositories.delete(PUBLIC_REPO);
+    expect((await p.fetch(`/v1/provenance/executions/${EXEC_B}`)).status).toBe(401);
+    // The private log's proofs need Access.
+    expect((await p.fetch("/v1/provenance/log/proof/inclusion?leaf_index=7")).status).toBe(401);
   });
 
   it("serves the private log's inclusion proof of one leaf with its checkpoint, and 404 for a leaf no checkpoint covers", async () => {

@@ -205,6 +205,8 @@ export class ProvenancePolicies extends Context.Service<
 export interface StatementRecord {
   readonly envelopeDigest: string;
   readonly executionId: string;
+  /** The repository the statement's execution ran for, `owner/name`: its visibility decides who reads it. */
+  readonly repository: string;
   readonly log: "rekor" | "private";
   /** The countersigned envelope's canonical JSON: the bytes the log appends. */
   readonly envelope: string;
@@ -240,5 +242,15 @@ export class ProvenanceStatements extends Context.Service<
     ) => Effect.Effect<InclusionProofRecord | null, ApiError>;
   }
 >()("@fractalboxdev/flare-dispatch-api/ProvenanceStatements") {}
+
+/**
+ * Whether a repository's GitHub visibility is `public`, which lets a caller without identity read its statements
+ * (FD-IFC-053); every other visibility requires an Access JWT (FD-IFC-054). The package that mounts `/v1/provenance/*`
+ * provides it. A visibility it cannot read answers `false`, so an unreadable visibility never opens a statement.
+ */
+export class StatementVisibility extends Context.Service<
+  StatementVisibility,
+  { readonly isPublic: (repository: string) => Effect.Effect<boolean> }
+>()("@fractalboxdev/flare-dispatch-api/StatementVisibility") {}
 
 export type { VerdictName };

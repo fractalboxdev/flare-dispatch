@@ -22,6 +22,7 @@ import {
 } from "../../src/provenance/append.ts";
 import {
   memoryLogAppendStore,
+  recordedStatementLogged,
   recordedSubjectRetention,
 } from "../../src/provenance/append.test-support.ts";
 import {
@@ -111,6 +112,7 @@ export const logAppendRun = async (journal: Journal | null): Promise<LogAppendRu
       private: append,
     }),
     recordedSubjectRetention(),
+    recordedStatementLogged(),
     Logger.layer([]),
   );
   const recorded = await Effect.runPromise(

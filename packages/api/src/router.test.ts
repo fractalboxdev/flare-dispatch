@@ -79,10 +79,13 @@ describe("declaration and router", () => {
           .handle("installCallback", () => Effect.succeed("")),
       ),
     );
-    const provenance = provenanceGroup({ _tag: "Public" });
-    const mounted = mount(...declaredGroups, operability, logs, artifacts, provenance).routes.map(
-      (r) => `${r.method} ${r.path}`,
-    );
+    const mounted = mount(
+      ...declaredGroups,
+      operability,
+      logs,
+      artifacts,
+      provenanceGroup,
+    ).routes.map((r) => `${r.method} ${r.path}`);
     expect(mounted.sort()).toEqual(declared.sort());
   });
 

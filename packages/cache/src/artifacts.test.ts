@@ -29,7 +29,10 @@ import {
   SubjectRetentionFailed,
   TransparencyLogs,
 } from "./provenance/append.ts";
-import { memoryLogAppendStore } from "./provenance/append.test-support.ts";
+import {
+  memoryLogAppendStore,
+  recordedStatementLogged,
+} from "./provenance/append.test-support.ts";
 import { unsignedEnvelope } from "./provenance/dsse.ts";
 import type { Bucket } from "./manifest.ts";
 import {
@@ -261,6 +264,7 @@ describe("artifacts", () => {
                   Effect.succeed({ log: "private" as const, logIndex: 0, entryId: "leaf-0", integratedTime }),
               }),
               Layer.succeed(SubjectRetention, retention),
+              recordedStatementLogged(),
             ),
           ),
         ),

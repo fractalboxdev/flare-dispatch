@@ -15,6 +15,7 @@ import { ProvenanceStatements, type StatementRecord } from "../ports.ts";
 export const statementRecordOf = (intent: LogAppendIntent): StatementRecord => ({
   envelopeDigest: intent.envelopeDigest,
   executionId: intent.executionId,
+  repository: intent.repository,
   log: intent.log,
   envelope: intent.envelope,
   entry: LogAppendStatus.$match(intent.status, {

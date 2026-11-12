@@ -5,6 +5,8 @@
 import { Effect, Layer } from "effect";
 import {
   LogAppendStatus,
+  StatementLogged,
+  StatementLoggedFailed,
   SubjectRetention,
   type LogAppendIntent,
   type LogAppendStore,
@@ -86,4 +88,22 @@ export type RetainCall = Parameters<SubjectRetention["Service"]["retain"]>[0];
 export const recordedSubjectRetention = (calls: RetainCall[] = []) =>
   Layer.succeed(SubjectRetention, {
     retain: (statement) => Effect.sync(() => void calls.push(statement)),
+  });
+
+/** What a statement's logging told the control plane (FD-PROV-042). */
+export type LoggedCall = Parameters<StatementLogged["Service"]["notify"]>[0];
+
+/**
+ * A `StatementLogged` that records each notice; while `failing()` answers true each notice fails, as an outbox insert
+ * that could not be written.
+ */
+export const recordedStatementLogged = (
+  calls: LoggedCall[] = [],
+  failing: () => boolean = () => false,
+) =>
+  Layer.succeed(StatementLogged, {
+    notify: (statement) =>
+      failing()
+        ? Effect.fail(new StatementLoggedFailed({ message: "outbox insert: D1 unavailable" }))
+        : Effect.sync(() => void calls.push(statement)),
   });

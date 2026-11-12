@@ -20,6 +20,7 @@ import {
   LogAppendFailed,
   LogAppendStatus,
   LogAppendStore,
+  StatementLogged,
   SubjectRetention,
   RepositoryVisibility,
   statementSummaryLine,
@@ -31,6 +32,7 @@ import {
 } from "../../src/provenance/append.ts";
 import {
   memoryLogAppendStore,
+  recordedStatementLogged,
   recordedSubjectRetention,
 } from "../../src/provenance/append.test-support.ts";
 import { unsignedEnvelope } from "../../src/provenance/dsse.ts";
@@ -110,12 +112,13 @@ export const simulateLogAppend = async (seed: number): Promise<SimOutcome> => {
       private: (json: string) => attempt("private", json),
     }),
     recordedSubjectRetention(),
+    recordedStatementLogged(),
   );
   const run = <A, E>(
     effect: Effect.Effect<
       A,
       E,
-      LogAppendStore | RepositoryVisibility | TransparencyLogs | SubjectRetention
+      LogAppendStore | RepositoryVisibility | TransparencyLogs | SubjectRetention | StatementLogged
     >,
   ) => Effect.runPromise(Effect.provide(effect, Layer.merge(layer, Logless)));
 

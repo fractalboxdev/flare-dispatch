@@ -20,6 +20,8 @@ import {
   LogAppendStore,
   privateLogAppend,
   RepositoryVisibility,
+  RETRY_FLOOR_MS,
+  StatementLogged,
   SubjectRetention,
   statementSummaryLine,
   statementTime,
@@ -40,7 +42,11 @@ import {
 import type { AppendOutcome } from "./log.ts";
 import { leafPath } from "./merkle.ts";
 import { publicKeyPem, rekorAppend } from "./rekor.ts";
-import { recordedSubjectRetention } from "./append.test-support.ts";
+import {
+  recordedStatementLogged,
+  recordedSubjectRetention,
+  type LoggedCall,
+} from "./append.test-support.ts";
 
 const keyPair = async (kid: string) => {
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
@@ -133,7 +139,11 @@ const fakeRekor = (integratedTime = 1_700_000_000) => {
       ).spec.proposedContent;
       if (!rekorVerifies(envelope, verifiers))
         return Response.json(
-          { code: 400, message: "verifying signatures: invalid signature when validating ASN.1 encoded signature" },
+          {
+            code: 400,
+            message:
+              "verifying signatures: invalid signature when validating ASN.1 encoded signature",
+          },
           { status: 400 },
         );
       const existing = entries.get(envelope);
@@ -191,6 +201,8 @@ describe("the transparency-log append of a countersigned statement", () => {
     await log.usePrefix(prefix);
     const rekor = fakeRekor();
     const store = d1LogAppendStore(db);
+    const notices: LoggedCall[] = [];
+    const notice = { fails: false };
     const layer = Layer.mergeAll(
       Layer.succeed(LogAppendStore, store),
       Layer.succeed(RepositoryVisibility, {
@@ -204,19 +216,24 @@ describe("the transparency-log append of a countersigned statement", () => {
         private: privateLogAppend(log),
       }),
       recordedSubjectRetention(),
+      recordedStatementLogged(notices, () => notice.fails),
     );
     const run = <A, E>(
       effect: Effect.Effect<
         A,
         E,
-        LogAppendStore | RepositoryVisibility | TransparencyLogs | SubjectRetention
+        | LogAppendStore
+        | RepositoryVisibility
+        | TransparencyLogs
+        | SubjectRetention
+        | StatementLogged
       >,
     ) => Effect.runPromise(Effect.provide(effect, layer));
     const leaf = async (index: number) => {
       const got = await bucket.get(`${prefix}${leafPath(index)}`);
       return got === null ? null : await got.text();
     };
-    return { log, rekor, store, run, leaf, visibility, visibilityReads };
+    return { log, rekor, store, run, leaf, visibility, visibilityReads, notices, notice };
   };
 
   let executions = 0;
@@ -309,9 +326,9 @@ describe("the transparency-log append of a countersigned statement", () => {
     expect((await bySubject(`sha256:${app}`)).map((i) => i.envelopeDigest)).toEqual([
       both.intent.digest,
     ]);
-    expect(
-      (await bySubject(`sha256:${lib}`)).map((i) => i.envelopeDigest).sort(),
-    ).toEqual([both.intent.digest, libOnly.intent.digest].sort());
+    expect((await bySubject(`sha256:${lib}`)).map((i) => i.envelopeDigest).sort()).toEqual(
+      [both.intent.digest, libOnly.intent.digest].sort(),
+    );
     // A prefix or another algorithm of a named digest finds nothing: the lookup is by the whole digest only.
     expect(await bySubject(`sha256:${app.slice(0, 32)}`)).toEqual([]);
     expect(await bySubject(`sha512:${app}`)).toEqual([]);
@@ -448,5 +465,27 @@ describe("the transparency-log append of a countersigned statement", () => {
     // A later append of the same envelope answers the leaf's first integrated time.
     const repeat = await p.log.append(utf8(canonicalJson(privateStatement.envelope)));
     expect(repeat).toMatchObject({ _tag: "Appended", duplicate: true, integratedAt: time });
+  });
+  it("[FD-PROV-042] a statement's successful append tells the control plane its execution and envelope digest, and a notice that fails leaves the statement log-pending for the next attempt", async () => {
+    const p = await plane({ "acme/closed": "private" });
+    const { executionId, intent } = await countersigned(p, "acme/closed", 1_000);
+    p.notice.fails = true;
+    await p.run(applyLogAppend(intent.digest, 1_000));
+    // The append reached the log, but the summary update was not recorded: the statement stays pending and retries.
+    expect(p.notices).toEqual([]);
+    expect((await get(p, intent.digest)).status).toMatchObject({
+      _tag: "Pending",
+      attempts: 1,
+      nextAttemptAt: 1_000 + RETRY_FLOOR_MS,
+    });
+    p.notice.fails = false;
+    await p.run(applyLogAppend(intent.digest, 1_000 + RETRY_FLOOR_MS));
+    expect(p.notices).toEqual([{ executionId, envelopeDigest: intent.digest }]);
+    expect((await get(p, intent.digest)).status).toMatchObject({ _tag: "Logged", attempts: 2 });
+    // The retried append answered the leaf the first attempt wrote.
+    expect(await p.log.size()).toBe(1);
+    // A logged statement is not attempted again, so it is not noticed again.
+    await p.run(applyLogAppend(intent.digest, 10_000_000));
+    expect(p.notices).toHaveLength(1);
   });
 });

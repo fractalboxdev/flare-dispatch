@@ -21,6 +21,7 @@ import {
   Operations,
   ProvenancePolicies,
   ProvenanceStatements,
+  StatementVisibility,
   type DispatchSubmission,
   type InclusionProofRecord,
   type ExecutionRecord,
@@ -176,6 +177,8 @@ export interface Doubles {
   readonly statements: StatementRecord[];
   /** The private log's inclusion proof of each leaf a published checkpoint covers. */
   readonly inclusionProofs: Map<number, InclusionProofRecord>;
+  /** The repositories whose GitHub visibility is `public`; every other one is not. */
+  readonly publicRepositories: Set<string>;
 }
 
 export const makeDoubles = (): Doubles => {
@@ -198,6 +201,7 @@ export const makeDoubles = (): Doubles => {
     },
     statements: [],
     inclusionProofs: new Map(),
+    publicRepositories: new Set(),
   };
   return doubles;
 };
@@ -301,7 +305,11 @@ export const portsContext = (doubles: Doubles) =>
             statementSubjects(s.envelope).some((subject) => subject.digest === digest),
           ),
         ),
-      inclusionProof: (leafIndex) => Effect.sync(() => doubles.inclusionProofs.get(leafIndex) ?? null),
+      inclusionProof: (leafIndex) =>
+        Effect.sync(() => doubles.inclusionProofs.get(leafIndex) ?? null),
+    }),
+    Context.add(StatementVisibility, {
+      isPublic: (repository) => Effect.sync(() => doubles.publicRepositories.has(repository)),
     }),
   );
 
