@@ -13,9 +13,16 @@ import { statementLinks } from "@fractalboxdev/flare-dispatch-api/statements";
 import { statementRecordOf } from "@fractalboxdev/flare-dispatch-api/statements-live";
 import {
   d1LogAppendStore,
+  gateReleasePublish,
+  LogAppendStore,
+  parseProvenanceKey,
+  publicJwkOf,
+  RELEASE_STATEMENT_MISSING,
   StatementLogged,
   StatementLoggedFailed,
+  type ProvenancePublicKey,
 } from "@fractalboxdev/flare-dispatch-cache";
+import { d1KeyHistoryStore } from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
 import {
   ConcludeFacts,
   ConcludeFactsUnavailable,
@@ -26,7 +33,9 @@ import {
   githubLiveLayer,
   insertProvenanceRefresh,
   installationQuotaObjectLayer,
+  ReleaseProvenance,
   SideOutputConfig,
+  type ReleaseGateAnswer,
   d1CommentWrites,
   type AppOptions,
 } from "@fractalboxdev/flare-dispatch-github";
@@ -185,6 +194,56 @@ export const statementLoggedLayer = (env: ControlPlaneEnv) =>
   });
 
 /**
+ * The provenance keys a release statement may be signed with: the key the `PROVENANCE_KEY` secret holds, which the
+ * cloud builder signs with, and every provenance key in the control plane's key history, retired keys included.
+ */
+const provenanceKeysOf = (env: ControlPlaneEnv, db: D1Database) =>
+  Effect.gen(function* () {
+    const active = parseProvenanceKey(apiEnvOf(env).PROVENANCE_KEY);
+    const recorded = yield* d1KeyHistoryStore(db).entries("provenance");
+    const keys = new Map<string, ProvenancePublicKey>(
+      recorded.map((entry) => [entry.kid, { ...entry.jwk, kid: entry.kid }]),
+    );
+    if (active !== undefined) keys.set(active.kid, publicJwkOf(active));
+    return [...keys.values()];
+  });
+
+/**
+ * The release provenance gate the `release.publish` applier calls before it publishes a draft (FD-PROV-062,
+ * FD-PROV-063): the log-append intents in D1 and the provenance keys. An asset the draft holds that the intent names
+ * as no artifact has no statement naming its digest, so it refuses with `provenance: release statement missing`.
+ */
+export const releaseProvenanceLayer = (env: ControlPlaneEnv) => {
+  const db = env.DB as unknown as D1Database;
+  const statements = d1LogAppendStore(db);
+  return Layer.succeed(ReleaseProvenance, {
+    gate: ({ assets, artifacts }) =>
+      Effect.gen(function* () {
+        const unnamed = assets.find((name) => !artifacts.some((a) => a.name === name));
+        if (unnamed !== undefined)
+          return {
+            _tag: "refused",
+            reason: RELEASE_STATEMENT_MISSING,
+            artifact: unnamed,
+          } satisfies ReleaseGateAnswer;
+        const keys = yield* provenanceKeysOf(env, db);
+        yield* gateReleasePublish(artifacts, keys);
+        return { _tag: "admitted" } satisfies ReleaseGateAnswer;
+      }).pipe(
+        Effect.provideService(LogAppendStore, statements),
+        Effect.catchTags({
+          ReleasePublishRefused: ({ reason, artifact }) =>
+            Effect.succeed<ReleaseGateAnswer>({ _tag: "refused", reason, artifact }),
+          LogAppendStoreFailed: ({ message }) =>
+            Effect.succeed<ReleaseGateAnswer>({ _tag: "unavailable", reason: `statements: ${message}` }),
+          PolicyStoreFailed: ({ message }) =>
+            Effect.succeed<ReleaseGateAnswer>({ _tag: "unavailable", reason: `key history: ${message}` }),
+        }),
+      ),
+  });
+};
+
+/**
  * The quota of every limit key: its `InstallationQuota` object, so each isolate's applier calls for one installation
  * take their permits from one ledger (FD-ARCH-003).
  */
@@ -193,14 +252,24 @@ export const sharedQuota = (env: Pick<ControlPlaneEnv, "INSTALLATION_QUOTA">) =>
     env.INSTALLATION_QUOTA.get(env.INSTALLATION_QUOTA.idFromName(limitKey)),
   );
 
-/** Every GitHub service under the App's authority, over the shared quota; built once per isolate. */
+/**
+ * Every GitHub service under the App's authority, over the shared quota, with the release provenance gate in the
+ * appliers' reach; built once per isolate.
+ */
 export const appServices = (
   env: ControlPlaneEnv,
   app: AppOptions,
   alarms: Layer.Layer<AlarmPort>,
 ) =>
   githubLiveLayer(app, sharedQuota(env)).pipe(
-    Layer.provide(Layer.mergeAll(sideOutputLayer(env, app), alarms, concludeFactsLayer(env))),
+    Layer.provide(
+      Layer.mergeAll(
+        sideOutputLayer(env, app),
+        alarms,
+        concludeFactsLayer(env),
+        releaseProvenanceLayer(env),
+      ),
+    ),
   );
 
 export type AppServices = Layer.Success<ReturnType<typeof appServices>>;

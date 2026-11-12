@@ -83,6 +83,14 @@ export interface TokenOverrides {
   readonly header?: Record<string, unknown>;
 }
 
+/** One release of a repository, as GitHub's releases list answers it. */
+export interface FixtureRelease {
+  readonly id: number;
+  readonly tag_name: string;
+  draft: boolean;
+  readonly assets: readonly { readonly name: string }[];
+}
+
 export interface GithubFixtureServer {
   /** This server's own origin, which the runtime token endpoint is served under. */
   readonly origin: string;
@@ -101,6 +109,10 @@ export interface GithubFixtureServer {
    * answers; an empty list leaves the branch with no rules, as every recorded branch starts.
    */
   readonly requireChecks: (repository: string, branch: string, checks: readonly string[]) => void;
+  /** Creates a draft release of `tag` on `repository` holding assets of these names, and answers its id. */
+  readonly draftRelease: (repository: string, tag: string, assets: readonly string[]) => number;
+  /** The releases of `repository`, as the releases list answers them. */
+  readonly releases: (repository: string) => readonly FixtureRelease[];
   /** Answers one request addressed to GitHub; the stack routes the Worker's outbound requests here. */
   readonly handle: (request: Request) => Promise<Response>;
   /** A recorded webhook delivery with its GitHub headers, the body signed with `secret`. */
@@ -187,6 +199,7 @@ const restApi = (
   writes: GithubWrite[],
   required: ReadonlyMap<string, readonly string[]>,
   minted: MintedToken[],
+  releases: Map<string, FixtureRelease[]>,
 ) => {
   const { state, publicKey } = app;
   /** Each installation token minted, and the installation it acts for. */
@@ -317,6 +330,17 @@ const restApi = (
       checkRuns.push({ repository: fullName, run });
       return json(201, run);
     }
+    if (request.method === "GET" && rest === "/releases")
+      return json(200, releases.get(fullName) ?? []);
+    const release = /^\/releases\/(\d+)$/.exec(rest)?.[1];
+    if (request.method === "PATCH" && release !== undefined) {
+      const found = (releases.get(fullName) ?? []).find((r) => r.id === Number(release));
+      if (found === undefined) return notFound();
+      const body = (await request.json()) as { readonly draft?: boolean };
+      writes.push({ ...call, body });
+      if (body.draft === false) found.draft = false;
+      return json(200, found);
+    }
     // The check runs this state created on a commit, filtered by `check_name` as GitHub filters them.
     const listed = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(rest)?.[1];
     if (request.method === "GET" && listed !== undefined) {
@@ -360,7 +384,8 @@ export const startGithubFixtureServer = async (
   const unrecorded: GithubCall[] = [];
   const required = new Map<string, readonly string[]>();
   const minted: MintedToken[] = [];
-  const rest = app === undefined ? undefined : restApi(app, writes, required, minted);
+  const releases = new Map<string, FixtureRelease[]>();
+  const rest = app === undefined ? undefined : restApi(app, writes, required, minted, releases);
   /** Each request token the runtime handed out, and the job it belongs to. */
   const requestTokens = new Map<string, ActionsJob>();
   let origin = "";
@@ -430,6 +455,14 @@ export const startGithubFixtureServer = async (
     issuerKid: issuer.kid,
     requireChecks: (repository, branch, checks) =>
       void required.set(requiredKey(repository, branch), [...checks]),
+    draftRelease: (repository, tag, assets) => {
+      const list = releases.get(repository) ?? [];
+      releases.set(repository, list);
+      const id = [...releases.values()].flat().length + 1;
+      list.push({ id, tag_name: tag, draft: true, assets: assets.map((name) => ({ name })) });
+      return id;
+    },
+    releases: (repository) => releases.get(repository) ?? [],
     handle,
     delivery: (event, recording, secret, patch = (p) => p) => {
       const body = JSON.stringify(patch(readRecording(recording)));

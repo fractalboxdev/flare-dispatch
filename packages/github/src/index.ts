@@ -154,10 +154,13 @@ export {
   FollowOnSubmitter,
   GateReason,
   NoticeChannel,
+  ReleaseProvenance,
   SideOutputConfig,
   StagedWriteGate,
   type DeliveryAnswer,
   type GateResult,
+  type ReleaseGateAnswer,
+  type ReleasePublishArtifact,
   type SideOutputSettings,
 } from "./side-ports.ts";
 export { GithubWrites, githubWritesLayer, type WritesOptions } from "./writes.ts";

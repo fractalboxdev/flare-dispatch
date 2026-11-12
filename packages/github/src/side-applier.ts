@@ -19,6 +19,7 @@ import {
   EmailSender,
   FollowOnSubmitter,
   NoticeChannel,
+  ReleaseProvenance,
   SideOutputConfig,
   StagedWriteGate,
   type DeliveryAnswer,
@@ -90,7 +91,23 @@ export const SidePayloads = {
       ),
     ),
   }),
-  "release.publish": Schema.Struct({ tag: Schema.String }),
+  "release.publish": Schema.Struct({
+    tag: Schema.String,
+    /**
+     * The artifacts the release publishes, by asset name and the digest of their bytes; the provenance gate looks up
+     * the logged statement of each (FD-PROV-062). `execution_id` names the execution that built one, the row's own
+     * execution where it is absent.
+     */
+    artifacts: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({
+          name: Schema.String,
+          digest: Schema.String,
+          execution_id: Schema.optionalKey(Schema.String),
+        }),
+      ),
+    ),
+  }),
   "dispatch.followOn": Schema.Struct({
     run: Schema.String,
     label: Schema.optionalKey(Schema.String),
@@ -235,6 +252,47 @@ const releaseFor = (ctx: Ctx, tag: string) =>
   Effect.gen(function* () {
     const w = yield* writes;
     return (yield* w.releases(ctx)).find((r) => r.tag_name === tag) ?? null;
+  });
+
+/**
+ * The provenance gate before a draft release is published (FD-PROV-062, FD-PROV-063). A draft that holds no asset and
+ * an intent that names no artifact publish nothing to attest. Otherwise the deploy's gate must admit the publish: its
+ * refusal ends the row `refused` with the gate's `provenance:` reason and publishes nothing, a deploy without the gate
+ * publishes nothing either, and a gate that cannot read its records retries.
+ */
+const gateRelease = (
+  ctx: Ctx,
+  assets: readonly { readonly name: string }[],
+  artifacts: readonly { readonly name: string; readonly digest: string; readonly execution_id?: string }[],
+) =>
+  Effect.gen(function* () {
+    if (assets.length === 0 && artifacts.length === 0) return;
+    const provenance = yield* optional(ReleaseProvenance, "release.publish");
+    const answer = yield* provenance.gate({
+      assets: assets.map((a) => a.name),
+      artifacts: artifacts.map((a) => ({
+        name: a.name,
+        digest: a.digest,
+        // An ops row names no execution, so no statement can admit an artifact it does not attribute.
+        executionId: a.execution_id ?? ctx.row.executionId ?? "",
+      })),
+    });
+    return yield* Match.value(answer).pipe(
+      Match.tag("admitted", () => Effect.void),
+      Match.tag("refused", ({ reason, artifact }) =>
+        Effect.andThen(
+          Effect.logWarning("release publish refused", {
+            repo: ctx.repo,
+            intentKey: ctx.row.intentKey,
+            artifact,
+            reason,
+          }),
+          refuse(reason),
+        ),
+      ),
+      Match.tag("unavailable", ({ reason }) => Effect.fail(new Retry({ reason }))),
+      Match.exhaustive,
+    );
   });
 
 /** Issue list pages the marker search reads before it stops without an answer. */
@@ -670,6 +728,7 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
         if (release === null) return yield* refuse(`release: no draft release for ${p.tag}`);
         // A published release stays as it is (FD-GH-086).
         if (!release.draft) return applied(release.id);
+        yield* gateRelease(ctx, release.assets, p.artifacts ?? []);
         return applied((yield* w.publishRelease({ ...ctx, release: release.id })).id);
       }),
     lookup: (ctx, p) =>

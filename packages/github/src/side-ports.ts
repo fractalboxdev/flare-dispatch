@@ -1,6 +1,7 @@
 // What the side-output appliers call beyond GitHub: the staged-write gate, the
-// blob store, admission for a follow-on, email, the notice channel, and the
-// configuration the appliers read, the Slack and records endpoints included.
+// blob store, the release provenance gate, admission for a follow-on, email, the
+// notice channel, and the configuration the appliers read, the Slack and records
+// endpoints included.
 import { Context, Schema, type Effect } from "effect";
 import type { CommentWriteStore } from "./comment-writes.ts";
 
@@ -45,6 +46,36 @@ export class FollowOnSubmitter extends Context.Service<
     >;
   }
 >()("@fractalboxdev/flare-dispatch-github/FollowOnSubmitter") {}
+
+/** One artifact a `release.publish` intent publishes: its asset name, the digest of its bytes and the execution that built it. */
+export interface ReleasePublishArtifact {
+  readonly name: string;
+  /** `sha256:<hex>`. */
+  readonly digest: string;
+  readonly executionId: string;
+}
+
+export type ReleaseGateAnswer =
+  | { readonly _tag: "admitted" }
+  | { readonly _tag: "refused"; readonly reason: string; readonly artifact: string }
+  | { readonly _tag: "unavailable"; readonly reason: string };
+
+/**
+ * The provenance gate on a release's publish (specs/provenance.md § Releases): over the logged statements and the
+ * provenance key history, it admits the publish only when every asset the draft holds is one of the intent's artifacts
+ * and a logged `platform` statement from a cloud builder names each artifact's digest (FD-PROV-062) without listing a
+ * restored cache entry (FD-PROV-063).
+ */
+export class ReleaseProvenance extends Context.Service<
+  ReleaseProvenance,
+  {
+    readonly gate: (release: {
+      /** The names of the assets the draft release holds. */
+      readonly assets: readonly string[];
+      readonly artifacts: readonly ReleasePublishArtifact[];
+    }) => Effect.Effect<ReleaseGateAnswer>;
+  }
+>()("@fractalboxdev/flare-dispatch-github/ReleaseProvenance") {}
 
 export type DeliveryAnswer =
   | { readonly _tag: "sent"; readonly ref: string }
