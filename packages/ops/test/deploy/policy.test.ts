@@ -1,11 +1,14 @@
 // The deploy suites of `V-DEPLOY` (specs/verification.md § Harness catalog) for policy sync (specs/profile.md
 // § Class resolution): `fd deploy` and `fd doctor` over the committed control-plane template, with the overlay's
 // `policy.rules` checked in the drift stage and delivered in the `POLICY_RULES` var, on the fakes of `support.ts`.
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import type { PolicyRules } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { WorkerSpec } from "../../src/cli/index.ts";
 import { placeholderOverlay } from "../../src/index.ts";
-import { deploy, fd, isWrite, SCRIPT, world, type World } from "./support.ts";
+import { CONTROL_PLANE, deploy, fd, isWrite, ROOT, SCRIPT, world, type World } from "./support.ts";
 
 const withRules = (rules: PolicyRules) =>
   JSON.stringify({ ...placeholderOverlay, policy: { rules } });
@@ -22,6 +25,23 @@ const confidential = (acceptsFailingRequiredCheck?: boolean): PolicyRules => ({
     },
   ],
 });
+
+// The committed control-plane template with its `POLICY_RULES` var removed.
+let dir: string;
+let WITHOUT_POLICY_RULES: WorkerSpec;
+beforeAll(() => {
+  mkdirSync(join(ROOT, ".tmp"), { recursive: true });
+  dir = mkdtempSync(join(ROOT, ".tmp", "deploy-policy-"));
+  const template = readFileSync(join(ROOT, CONTROL_PLANE.templatePath), "utf8");
+  const stripped = template.replace(/\n\s*"POLICY_RULES": "\{\{policy\.rules\}\}",/, "");
+  expect(stripped).not.toBe(template);
+  writeFileSync(join(dir, "wrangler.jsonc"), stripped);
+  WITHOUT_POLICY_RULES = {
+    ...CONTROL_PLANE,
+    templatePath: relative(ROOT, join(dir, "wrangler.jsonc")),
+  };
+});
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("policy sync in the deploy", () => {
   it("[FD-PROF-025] fd deploy fails at the drift stage, before any write, on a rule that sets confidential-compute without acceptsFailingRequiredCheck: true", async () => {
@@ -58,5 +78,22 @@ describe("policy sync in the deploy", () => {
     const none = world();
     expect((await deploy(none)).ok).toBe(true);
     expect(policyVar(none)).toEqual({ type: "json", name: "POLICY_RULES", json: {} });
+  });
+
+  it("[FD-PROF-025] fd deploy and fd doctor fail a control-plane template that carries no POLICY_RULES var in the drift stage, before any write", async () => {
+    const w = world();
+    const report = await deploy(w, withRules(confidential(true)), {
+      workers: [WITHOUT_POLICY_RULES],
+    });
+    expect(report.ok).toBe(false);
+    expect(report.stages.at(-1)).toMatchObject({ stage: "drift", ok: false });
+    expect(report.stages.at(-1)?.detail).toContain("POLICY_RULES");
+    expect(w.calls.filter(isWrite)).toEqual([]);
+
+    const checked = await Effect.runPromise(
+      fd(world(), { workers: [WITHOUT_POLICY_RULES] }).doctor(withRules(confidential(true))),
+    );
+    expect(checked.ok).toBe(false);
+    expect(checked.stages.at(-1)?.detail).toContain("POLICY_RULES");
   });
 });

@@ -408,6 +408,48 @@ describe("policy sync", () => {
     expect(rejectionsOf({ "acme/app": [{ match: {}, confidentiality: "secret" }] })).toEqual([""]);
   });
 
+  it("[FD-PROF-025] rejects a rule that sets neither a class nor a confidentiality mode", () => {
+    expect(rejectionsOf({ "acme/app": [{ match: { run: "check" } }] })).toEqual(["acme/app[0]"]);
+    expect(
+      rejectionsOf({
+        "acme/app": [{ match: {}, class: "batch" }, { match: {} }],
+      }),
+    ).toEqual(["acme/app[1]"]);
+  });
+
+  it("[FD-PROF-025] rejects a rule that sets callers or liftsCeiling without a class", () => {
+    const callers = [{ identity: "ci", repository: "acme/app", workflowRef: "main" }];
+    expect(rejectionsOf({ "acme/app": [{ match: {}, callers }] })).toEqual(["acme/app[0].class"]);
+    expect(rejectionsOf({ "acme/app": [{ match: {}, liftsCeiling: true }] })).toEqual([
+      "acme/app[0].class",
+    ]);
+    expect(
+      rejectionsOf({
+        "acme/app": [
+          { match: {}, confidentiality: "non-confidential", callers },
+          { match: { run: "check" }, class: "required", callers, liftsCeiling: true },
+        ],
+      }),
+    ).toEqual(["acme/app[0].class"]);
+  });
+
+  it("[FD-PROF-025] rejects a second rule that sets a repository's confidentiality mode", () => {
+    expect(
+      rejectionsOf({
+        "acme/app": [
+          { match: {}, confidentiality: "non-confidential" },
+          { match: {}, class: "batch" },
+          {
+            match: {},
+            confidentiality: "confidential-compute",
+            acceptsFailingRequiredCheck: true,
+          },
+        ],
+        "acme/other": [{ match: {}, confidentiality: "non-confidential" }],
+      }),
+    ).toEqual(["acme/app[2].confidentiality"]);
+  });
+
   it("[FD-PROF-025] a repository's mode is its first rule that sets one, and a confidentiality-only rule takes no part in class resolution", () => {
     const mode: PolicyRule = {
       match: {},

@@ -379,41 +379,51 @@ export const PolicyRules = Schema.Record(Schema.String, Schema.Array(PolicyRule)
 export type PolicyRules = typeof PolicyRules.Type;
 
 /**
- * Every rejection policy sync finds in a set of policy rules; empty means accepted. A rule that sets
- * `confidential-compute` must set `acceptsFailingRequiredCheck: true`: such a repository's required checks run only on
- * a device, and fail while none is eligible (FD-PROF-025). mameko's profile validator adds the eligible-device count of
- * MAMEKO-ADM-020. A confidentiality mode belongs to the whole repository, so a rule that sets one matches every request.
+ * Every rejection policy sync finds in a set of policy rules; empty means accepted. A rule sets a class, its
+ * repository's confidentiality mode, or both; `callers` and `liftsCeiling` qualify a class, so a rule that sets either
+ * sets a class. A confidentiality mode belongs to the whole repository, so a rule that sets one matches every request,
+ * and only one of a repository's rules sets one. A rule that sets `confidential-compute` must set
+ * `acceptsFailingRequiredCheck: true`: such a repository's required checks run only on a device, and fail while none
+ * is eligible (FD-PROF-025).
  */
 export const validatePolicyRules = (rules: PolicyRules): readonly Rejection[] =>
-  Object.entries(rules).flatMap(([repository, list]) =>
-    list.flatMap((rule, i): Rejection[] => {
-      if (rule.confidentiality === undefined) return [];
+  Object.entries(rules).flatMap(([repository, list]) => {
+    const firstMode = list.findIndex((r) => r.confidentiality !== undefined);
+    return list.flatMap((rule, i): Rejection[] => {
       const path = `${repository}[${i}]`;
+      const when = (cond: boolean, at: string, reason: string): Rejection[] =>
+        cond ? [{ item: "policy-rules", path: at, reason }] : [];
+      const qualifiesClass = rule.callers !== undefined || rule.liftsCeiling !== undefined;
+      const mode = rule.confidentiality;
       return [
-        ...(rule.match.run === undefined && rule.match.label === undefined
-          ? []
-          : [
-              {
-                item: "policy-rules",
-                path: `${path}.match`,
-                reason:
-                  "a confidentiality mode applies to the whole repository; the rule must match every request",
-              },
-            ]),
-        ...(rule.confidentiality === "confidential-compute" &&
-        rule.acceptsFailingRequiredCheck !== true
-          ? [
-              {
-                item: "policy-rules",
-                path: `${path}.acceptsFailingRequiredCheck`,
-                reason:
-                  "confidential-compute runs required checks on devices only; the rule must set acceptsFailingRequiredCheck: true",
-              },
-            ]
-          : []),
+        ...when(
+          rule.class === undefined && mode === undefined && !qualifiesClass,
+          path,
+          "the rule sets neither a class nor a confidentiality mode",
+        ),
+        ...when(
+          rule.class === undefined && qualifiesClass,
+          `${path}.class`,
+          "callers and liftsCeiling qualify a class; the rule must set one",
+        ),
+        ...when(
+          mode !== undefined && i !== firstMode,
+          `${path}.confidentiality`,
+          `rule ${firstMode} already sets the repository's confidentiality mode`,
+        ),
+        ...when(
+          mode !== undefined && (rule.match.run !== undefined || rule.match.label !== undefined),
+          `${path}.match`,
+          "a confidentiality mode applies to the whole repository; the rule must match every request",
+        ),
+        ...when(
+          mode === "confidential-compute" && rule.acceptsFailingRequiredCheck !== true,
+          `${path}.acceptsFailingRequiredCheck`,
+          "confidential-compute runs required checks on devices only; the rule must set acceptsFailingRequiredCheck: true",
+        ),
       ];
-    }),
-  );
+    });
+  });
 
 const decodeRules = Schema.decodeUnknownExit(PolicyRules, { onExcessProperty: "error" });
 
