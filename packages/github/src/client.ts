@@ -36,6 +36,7 @@ export interface Annotation {
   readonly annotation_level: "notice" | "warning" | "failure";
   readonly message: string;
   readonly title?: string;
+  readonly raw_details?: string;
 }
 
 /** The fields of a check-run create or update this applier sends. */
