@@ -1,4 +1,8 @@
-import { profile } from "@fractalboxdev/flare-dispatch-profile";
+import { VERDICT_RECORD_SCHEMA } from "@fractalboxdev/flare-dispatch-github";
+import { d1IntakeStore, IntakeStore, migrateIntake } from "@fractalboxdev/flare-dispatch-intake";
+import { buildProfile, profile } from "@fractalboxdev/flare-dispatch-profile";
+import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { newRow } from "@fractalboxdev/mameko-kernel";
 import {
   type Actuator,
   ActuatorRateLimit,
@@ -28,6 +32,7 @@ import {
   setInstallationStatus,
   type Delivery,
   type InstallationRead,
+  insertOpsIntent,
   type TickDeps,
   type TickEnv,
 } from "./index.ts";
@@ -350,6 +355,8 @@ describe("minute tick", () => {
       ["record-tick", "ran"],
       ["liveness-monitor", "ran"],
       ["drain", "skipped"],
+      ["verdict-records", "skipped"],
+      ["record-undelivered", "skipped"],
       ["advisory-snapshot-stale", "skipped"],
       ["kill-lines", "ran"],
       ["canary-push", "skipped"],
@@ -616,5 +623,398 @@ describe("the GitHub probes' rows and reads", () => {
     const { deps: d } = deps({ githubReads: reads({}, [failed, healthy]) });
     await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
     expect(await payloadOf("delivery.redeliver")).toEqual([{ delivery_id: 9001 }]);
+  });
+});
+
+describe("the minute tick's job and verdict records", () => {
+  /** The phase 2 profile of a deploy whose overlay sets `records.url`. */
+  const withRecords = buildProfile("production", 2, { records: true });
+  const SHA = "c".repeat(40);
+  const FINISHED = T0 - 120_000;
+
+  /** One admitted execution as the control plane records it: intake's record and mameko's execution row. */
+  const seed = async (
+    id: string,
+    status: string,
+    over: { reason?: string; label?: string | null; trigger?: string } = {},
+  ) => {
+    await Effect.runPromise(
+      IntakeStore.use((s) =>
+        s.put({
+          executionId: id,
+          trigger: (over.trigger ?? "push") as never,
+          run: "ci",
+          label: over.label ?? null,
+          repo: "acme/app",
+          sha: SHA,
+          ref: "refs/heads/main",
+          inputs: { token: "not-recorded" },
+          className: "required",
+          labels: [],
+          attempt: 1,
+          familyRoot: id,
+          installation: 7,
+          caller: null,
+          notBefore: null,
+          spendLine: null,
+          placementConstraint: null,
+          cacheTrigger: { _tag: "Other" },
+          eligibleKinds: ["cloud"],
+          repositoryPublic: null,
+          inputAssociations: [],
+          createdAt: FINISHED - 60_000,
+        }),
+      ).pipe(Effect.provide(d1IntakeStore(t.db))),
+    );
+    const terminal = status !== "pending" && status !== "running";
+    await t.db
+      .prepare(
+        `insert into executions (id, scope_id, run, class, status, reason, enqueued_at, finished_at)
+         values (?, 'acme/app', 'ci', 'required', ?, ?, ?, ?)`,
+      )
+      .bind(id, status, over.reason ?? null, FINISHED - 60_000, terminal ? FINISHED : null)
+      .run();
+  };
+
+  const row = (
+    executionId: string,
+    intentKey: string,
+    kind: string,
+    payload: unknown,
+    state: "pending" | "applied" = "pending",
+  ) => ({
+    id: `${executionId}:${intentKey}`,
+    limitKey: "acme/app",
+    tier: "effect" as const,
+    priority: 0,
+    classRank: 1,
+    drawsReserve: false,
+    intent: {
+      executionId,
+      scopeId: "acme/app",
+      intentKey,
+      kind,
+      payload,
+      payloadDigest: JSON.stringify(payload),
+      effectClass: "adoptable" as const,
+      attempts: 0,
+    },
+    row: {
+      ...newRow({ effectClass: "adoptable", insertedAt: FINISHED }),
+      state,
+      ...(state === "applied" ? { appliedAt: FINISHED + 1 } : {}),
+    },
+  });
+
+  /** Admission's `cp:check:open` row and the applied outcome row of an execution that owns a check run. */
+  const ownsCheck = (id: string, name: string, outcome?: unknown) =>
+    insertOutboxRows(t.db, [
+      row(id, "cp:check:open", "check.open", { name, head_sha: SHA }, "applied"),
+      ...(outcome === undefined
+        ? []
+        : [row(id, "cp:outcome", "check.conclude", { outcome }, "applied")]),
+    ]);
+
+  const records = async () =>
+    (
+      await t.db
+        .prepare(
+          `select id, execution_id, scope_id, intent_key, limit_key, state, payload_json from outbox
+           where kind = 'verdict.record' order by id`,
+        )
+        .all()
+    ).results as {
+      id: string;
+      execution_id: string | null;
+      scope_id: string;
+      intent_key: string;
+      limit_key: string;
+      state: string;
+      payload_json: string;
+    }[];
+
+  const executionRow = async (id: string) =>
+    (
+      await t.db
+        .prepare("select status, reason, finished_at from executions where id = ?")
+        .bind(id)
+        .all()
+    ).results[0];
+
+  beforeEach(async () => {
+    await Effect.runPromise(migrateIntake(t.db));
+  });
+
+  it("[FD-GH-094] where records.url is set, each tick inserts one verdict.record ops intent keyed verdict-record:<execution_id> on the records key for each terminal execution without one", async () => {
+    await seed("e-pass", "success");
+    await t.db
+      .prepare(
+        "insert into placements (execution_id, state, epoch, accepted_epoch) values (?, ?, ?, ?)",
+      )
+      .bind("e-pass", "accepted", 2, 2)
+      .run();
+    await ownsCheck("e-pass", "flare-dispatch/ci:lint", { _tag: "Success", epoch: 2 });
+    // A failure that owns no check run and was never placed.
+    await seed("e-fail", "failure", { reason: "infra: no executor" });
+    // A check run whose conclusion is not applied yet: the record carries no conclusion.
+    await seed("e-halted", "cancelled", { reason: "operator-cancel", label: "e2e" });
+    await ownsCheck("e-halted", "flare-dispatch/ci:e2e");
+    await seed("e-live", "running");
+    // An execution recorded before this tick keeps its one row.
+    await seed("e-known", "success");
+    const known = await Effect.runPromise(
+      insertOpsIntent(
+        t.db,
+        withRecords,
+        {
+          scopeId: "acme/app",
+          intentKey: "verdict-record:e-known",
+          kind: "verdict.record",
+          payload: { earlier: true },
+          limitKey: "records",
+        },
+        FINISHED,
+      ),
+    );
+    expect(known).toBe("ops:verdict-record:e-known");
+
+    const { deps: d } = deps({ profile: withRecords, probes: undefined });
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    expect(report.steps.find((s) => s.step === "verdict-records")).toMatchObject({
+      status: "ran",
+      detail: ["e-fail", "e-halted", "e-pass"],
+    });
+
+    const rows = await records();
+    expect(rows.map((r) => [r.id, r.execution_id, r.intent_key, r.limit_key, r.state])).toEqual([
+      [
+        "acme/app/ops:verdict-record:e-fail",
+        null,
+        "ops:verdict-record:e-fail",
+        "records",
+        "pending",
+      ],
+      [
+        "acme/app/ops:verdict-record:e-halted",
+        null,
+        "ops:verdict-record:e-halted",
+        "records",
+        "pending",
+      ],
+      [
+        "acme/app/ops:verdict-record:e-known",
+        null,
+        "ops:verdict-record:e-known",
+        "records",
+        "pending",
+      ],
+      [
+        "acme/app/ops:verdict-record:e-pass",
+        null,
+        "ops:verdict-record:e-pass",
+        "records",
+        "pending",
+      ],
+    ]);
+    const payload = (id: string) =>
+      JSON.parse(rows.find((r) => r.intent_key === `ops:verdict-record:${id}`)!.payload_json);
+    expect(payload("e-pass")).toEqual({
+      schema: VERDICT_RECORD_SCHEMA,
+      execution_id: "e-pass",
+      epoch: 2,
+      run: "ci",
+      repository: "acme/app",
+      commit_sha: SHA,
+      ref: "refs/heads/main",
+      class: "required",
+      trigger: "push",
+      verdict: "success",
+      reason: null,
+      conclusion: "success",
+      check_name: "flare-dispatch/ci:lint",
+    });
+    expect(payload("e-fail")).toMatchObject({
+      epoch: 0,
+      verdict: "failure",
+      reason: "infra: no executor",
+      conclusion: null,
+      check_name: null,
+    });
+    expect(payload("e-halted")).toMatchObject({
+      verdict: "cancelled",
+      reason: "operator-cancel",
+      conclusion: null,
+      check_name: "flare-dispatch/ci:e2e",
+    });
+    expect(payload("e-known")).toEqual({ earlier: true });
+
+    // The next tick inserts nothing for a recorded execution; one that ends meanwhile gets its own row.
+    const again = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + 60_000);
+    expect(again.steps.find((s) => s.step === "verdict-records")).toMatchObject({ detail: [] });
+    await t.db
+      .prepare("update executions set status = 'success', finished_at = ? where id = 'e-live'")
+      .bind(T0 + 90_000)
+      .run();
+    const later = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + 120_000);
+    expect(later.steps.find((s) => s.step === "verdict-records")).toMatchObject({
+      detail: ["e-live"],
+    });
+    expect((await records()).map((r) => r.intent_key)).toEqual([
+      "ops:verdict-record:e-fail",
+      "ops:verdict-record:e-halted",
+      "ops:verdict-record:e-known",
+      "ops:verdict-record:e-live",
+      "ops:verdict-record:e-pass",
+    ]);
+  });
+
+  it("[FD-GH-094] [FD-GH-102] where the overlay sets no records.url, the tick inserts no verdict.record and pages for no record", async () => {
+    await seed("e-pass", "success");
+    const { deps: d, alarms } = deps({ probes: undefined });
+    expect(d.profile.intent_kinds["verdict.record"]).toBeUndefined();
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    expect(
+      report.steps
+        .filter((s) => ["verdict-records", "record-undelivered"].includes(s.step))
+        .map((s) => [s.step, s.status]),
+    ).toEqual([
+      ["verdict-records", "skipped"],
+      ["record-undelivered", "skipped"],
+    ]);
+    expect(await records()).toEqual([]);
+    expect(alarms.delivered.filter((a) => a.name === "record-undelivered")).toEqual([]);
+  });
+
+  /** The record actuator answering `refused` for every row, with the rate limit granting each permit. */
+  const refusingRecords = (reason: string) => {
+    const calls: IntentRow[] = [];
+    const refusing: Actuator = {
+      apply: (r) => Effect.sync(() => (calls.push(r), { _tag: "refused" as const, reason })),
+      lookup: () => Effect.succeed({ _tag: "absent" as const }),
+      reconcile: () => Effect.succeed({ _tag: "absent" as const }),
+    };
+    const layer = Layer.merge(
+      Layer.succeed(
+        Actuators,
+        actuatorRegistry(
+          Object.fromEntries(
+            Object.values(withRecords.intent_kinds).map((k) => [k.actuator, refusing]),
+          ),
+        ),
+      ),
+      Layer.succeed(ActuatorRateLimit, {
+        acquire: () => Effect.succeed({ _tag: "granted" as const, permitId: "p" }),
+        release: () => Effect.void,
+      }),
+    );
+    return { calls, layer };
+  };
+
+  it("[FD-GH-102] a verdict.record row the applier refuses raises the page alarm record-undelivered naming the execution, once, and leaves the verdict unchanged", async () => {
+    await seed("e-fail", "failure", { reason: "test: 2 failed" });
+    await ownsCheck("e-fail", "flare-dispatch/ci", {
+      _tag: "Failure",
+      reason: "test: 2 failed",
+      epoch: 1,
+    });
+    const before = await executionRow("e-fail");
+    const conclusionRows = async () =>
+      (
+        await t.db
+          .prepare("select id, state, payload_json from outbox where kind = 'check.conclude'")
+          .all()
+      ).results;
+    const concludedBefore = await conclusionRows();
+    const refusing = refusingRecords("verdict.record: records 400");
+    const { deps: d, alarms } = deps({
+      profile: withRecords,
+      probes: undefined,
+      appliers: refusing.layer,
+    });
+    const env = { DB: t.db, MONITOR: monitor().ns };
+    // The first tick inserts the record; the next one's drain sends it and the applier refuses it.
+    await tick(env, d, T0);
+    expect(alarms.delivered.filter((a) => a.name === "record-undelivered")).toEqual([]);
+    await tick(env, d, T0 + 60_000);
+    expect(refusing.calls.map((r) => r.intentKey)).toEqual(["ops:verdict-record:e-fail"]);
+    expect((await records()).map((r) => r.state)).toEqual(["refused"]);
+    const paged = alarms.delivered.filter((a) => a.name === "record-undelivered");
+    expect(paged).toEqual([
+      expect.objectContaining({
+        name: "record-undelivered",
+        severity: "page",
+        state: "raised",
+        detail: {
+          execution_id: "e-fail",
+          kind: "verdict.record",
+          state: "refused",
+          reason: "verdict.record: records 400",
+        },
+      }),
+    ]);
+    // A refused row stays refused, and its alarm is not sent again.
+    await tick(env, d, T0 + 120_000);
+    await tick(env, d, T0 + 86_400_000 + 180_000);
+    expect(alarms.delivered.filter((a) => a.name === "record-undelivered")).toHaveLength(1);
+    // The execution's verdict and its check run's conclusion stay as they were.
+    expect(await executionRow("e-fail")).toEqual(before);
+    expect(await conclusionRows()).toEqual(concludedBefore);
+  });
+
+  it("pages for an expired verdict.record and a refused job.record by execution, and sends a page whose delivery failed again", async () => {
+    await seed("e-old", "success");
+    await seed("e-leased", "running");
+    await Effect.runPromise(
+      insertOpsIntent(
+        t.db,
+        withRecords,
+        {
+          scopeId: "acme/app",
+          intentKey: "verdict-record:e-old",
+          kind: "verdict.record",
+          payload: { execution_id: "e-old" },
+          limitKey: "records",
+        },
+        FINISHED,
+      ),
+    );
+    await insertOutboxRows(t.db, [row("e-leased", "cp:job-record", "job.record", {})]);
+    await t.db
+      .prepare("update outbox set state = 'expired' where intent_key = 'ops:verdict-record:e-old'")
+      .run();
+    await t.db
+      .prepare(
+        "update outbox set state = 'refused', last_error = 'job.record: records 403' where kind = 'job.record'",
+      )
+      .run();
+    let failing = true;
+    const delivered: { dedupeKey: string; detail: unknown }[] = [];
+    const flaky = Layer.succeed(AlarmPort, {
+      deliver: (alarm: Alarm) =>
+        failing && alarm.name === "record-undelivered"
+          ? Effect.fail(new AlarmDeliveryFailed({ reason: "sink down" }))
+          : Effect.sync(() => void delivered.push(alarm)),
+    });
+    const { deps: d } = deps({ profile: withRecords, probes: undefined, alarmPort: flaky });
+    const env = { DB: t.db, MONITOR: monitor().ns };
+    await tick(env, d, T0);
+    expect(delivered.filter((a) => a.dedupeKey.startsWith("record-undelivered"))).toEqual([]);
+    failing = false;
+    await tick(env, d, T0 + 60_000);
+    await tick(env, d, T0 + 120_000);
+    expect(
+      delivered
+        .filter((a) => a.dedupeKey.startsWith("record-undelivered"))
+        .map((a) => a.detail)
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    ).toEqual([
+      {
+        execution_id: "e-leased",
+        kind: "job.record",
+        state: "refused",
+        reason: "job.record: records 403",
+      },
+      { execution_id: "e-old", kind: "verdict.record", state: "expired", reason: null },
+    ]);
   });
 });
