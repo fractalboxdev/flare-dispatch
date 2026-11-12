@@ -43,7 +43,8 @@ export const jobEnv = (
   FD_JOB: job,
 });
 
-const shellQuote = (text: string): string => `'${text.replaceAll("'", `'\\''`)}'`;
+/** `text` as one POSIX shell word. */
+export const shellQuote = (text: string): string => `'${text.replaceAll("'", `'\\''`)}'`;
 
 /**
  * A shallow fetch of the one commit, so a commit no branch reaches still resolves. Submodules resolve over HTTPS,
