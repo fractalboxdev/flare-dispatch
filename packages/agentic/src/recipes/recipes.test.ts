@@ -15,6 +15,7 @@ import {
   type Recorder,
 } from "./fakes.test-support.ts";
 import {
+  BOT_NOT_LISTED,
   buildReviewDiff,
   classifyChange,
   coordinate,
@@ -199,11 +200,13 @@ describe("pr-review", () => {
     const fork = prReviewRequest("synchronize", pr("synchronize", { full_name: "fork/app" }), {
       ...params,
       mode: "gating",
+      reviewBots: ["renovate[bot]"],
     });
     expect(Option.getOrThrow(fork)).toMatchObject({
       forkHead: true,
       authorAssociation: "NONE",
       mode: "gating",
+      reviewBots: ["renovate[bot]"],
     });
     expect(
       Option.getOrThrow(prReviewRequest("ready_for_review", pr("ready_for_review", null), params))
@@ -215,19 +218,89 @@ describe("pr-review", () => {
   });
 
   it("[FD-AGT-046] skips a draft without request-ai-review, skip-ai-review, or a [bot] author", async () => {
-    expect(prReviewSkip({ draft: true, labels: [], authorLogin: "dev" })).toBe("draft-pr");
+    const skipped = (detail: string) => ({ _tag: "skipped", detail });
+    expect(prReviewSkip({ draft: true, labels: [], authorLogin: "dev" })).toEqual(
+      skipped("draft-pr"),
+    );
     expect(
       prReviewSkip({ draft: true, labels: ["request-ai-review"], authorLogin: "dev" }),
     ).toBeNull();
-    expect(prReviewSkip({ draft: false, labels: ["skip-ai-review"], authorLogin: "dev" })).toBe(
-      "not-configured",
+    expect(prReviewSkip({ draft: false, labels: ["skip-ai-review"], authorLogin: "dev" })).toEqual(
+      skipped("not-configured"),
     );
-    expect(prReviewSkip({ draft: false, labels: [], authorLogin: "renovate[bot]" })).toBe(
-      "author-excluded",
+    expect(prReviewSkip({ draft: false, labels: [], authorLogin: "renovate[bot]" })).toEqual(
+      skipped("author-excluded"),
     );
     const { result, rec } = await runReview(prInput({ draft: true }), {});
     expect(result).toEqual({ _tag: "skipped", detail: "draft-pr" });
     expect(rec.modelCalls).toEqual([]);
+  });
+
+  it("[FD-AGT-091] reviews a [bot] author that reviewBots lists, required or not", async () => {
+    for (const requiredCheck of [false, true]) {
+      const listed = prInput({
+        authorLogin: "renovate[bot]",
+        reviewBots: ["renovate[bot]"],
+        requiredCheck,
+      });
+      expect(prReviewSkip(listed)).toBeNull();
+      const { result, rec } = await runReview(listed, { shell: diffShell(section("src/a.ts", 3)) });
+      expect(result).toEqual({ _tag: "success" });
+      expect(rec.modelCalls.map((c) => c.callSite)).toEqual(["reviewer:code-quality"]);
+    }
+    expect(
+      prReviewSkip(prInput({ authorLogin: "dependabot[bot]", reviewBots: ["renovate[bot]"] })),
+    ).toEqual({ _tag: "skipped", detail: "author-excluded" });
+  });
+
+  it("[FD-AGT-092] ignores skip-ai-review while the check is in the target branch's required set", async () => {
+    const labelled = prInput({ labels: ["skip-ai-review"], requiredCheck: true });
+    expect(prReviewSkip(labelled)).toBeNull();
+    const { result, rec } = await runReview(labelled, {
+      shell: diffShell(section("src/a.ts", 3)),
+    });
+    expect(result).toEqual({ _tag: "success" });
+    expect(rec.modelCalls.map((c) => c.callSite)).toEqual(["reviewer:code-quality"]);
+    expect(prReviewSkip({ ...labelled, requiredCheck: false })).toEqual({
+      _tag: "skipped",
+      detail: "not-configured",
+    });
+    expect(
+      prReviewSkip(prInput({ draft: true, labels: ["skip-ai-review"], requiredCheck: true })),
+    ).toEqual({
+      _tag: "skipped",
+      detail: "draft-pr",
+    });
+  });
+
+  it("[FD-AGT-093] fails a required check for a [bot] author outside reviewBots and starts no reviewer", async () => {
+    const bot = prInput({
+      authorLogin: "dependabot[bot]",
+      labels: ["skip-ai-review"],
+      reviewBots: ["renovate[bot]"],
+      requiredCheck: true,
+    });
+    const { result, rec } = await runReview(bot, { shell: diffShell(section("src/a.ts", 3)) });
+    expect(result).toEqual({ _tag: "failure", reason: "review: bot author not in reviewBots" });
+    expect(rec.modelCalls).toEqual([]);
+    expect(rec.commands).toEqual([]);
+    expect(rec.intents).toEqual([]);
+    const offRequired = await runReview({ ...bot, requiredCheck: false }, {});
+    expect(offRequired.result).toEqual({ _tag: "skipped", detail: "not-configured" });
+    expect(prReviewSkip({ ...bot, labels: [], requiredCheck: false })).toEqual({
+      _tag: "skipped",
+      detail: "author-excluded",
+    });
+    const draftBot = prInput({
+      draft: true,
+      authorLogin: "dependabot[bot]",
+      reviewBots: ["renovate[bot]"],
+      requiredCheck: true,
+    });
+    expect(prReviewSkip(draftBot)).toEqual({ _tag: "failure", reason: BOT_NOT_LISTED });
+    const draftRun = await runReview(draftBot, {});
+    expect(draftRun.result).toEqual({ _tag: "failure", reason: BOT_NOT_LISTED });
+    expect(draftRun.rec.modelCalls).toEqual([]);
   });
 
   it("[FD-AGT-049] builds the diff with git diff, drops lockfile, generated and vendored paths, caps it, and grounds on lint", async () => {

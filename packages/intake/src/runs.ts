@@ -60,6 +60,16 @@ export interface IntakeRun {
    * target, `worker-deploy:<repo>@<branch>[:<label>]` (FD-GATE-063). Absent or null joins none (MAMEKO-ADM-068).
    */
   readonly serialKey?: (inputs: unknown) => string | null;
+  /**
+   * The inputs with the fact whether the run's check name is in the target branch's required set, for a run whose
+   * body reads it (FD-AGT-092, FD-AGT-093); a run without it reads no required set at intake.
+   */
+  readonly requiredCheck?: (inputs: unknown, required: boolean) => unknown;
+  /**
+   * The pull request the inputs name, for a run with `requiredCheck`: a dispatch reads its target branch from it, and
+   * null leaves the branch unknown, so the check counts as required.
+   */
+  readonly pullNumber?: (inputs: unknown) => number | null;
 }
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */
