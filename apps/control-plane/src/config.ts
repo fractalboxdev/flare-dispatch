@@ -11,10 +11,12 @@ import {
   type SpendUnreadable,
 } from "@fractalboxdev/flare-dispatch-ops";
 import type { Effect } from "effect";
-import type {
-  AppendOutcome,
-  PrivateLogInclusionProof,
-  R2PresignerConfig,
+import {
+  DEFAULT_ATTESTATION_MAX_AGE_MS,
+  type AcceptanceSettings,
+  type AppendOutcome,
+  type PrivateLogInclusionProof,
+  type R2PresignerConfig,
 } from "@fractalboxdev/flare-dispatch-cache";
 import type { CacheEnv } from "./cache.ts";
 import {
@@ -89,6 +91,11 @@ export interface ControlPlaneEnv extends CacheEnv {
   /** The Slack verdict endpoint and its signing secret. */
   readonly SLACK_URL?: string;
   readonly SLACK_SECRET?: string;
+  /**
+   * The rendered `{{provenance.attestationMaxAgeDays}}`: `attestation_max_age` in days, 10 where the overlay sets none
+   * (FD-PROV-016). Wrangler delivers it as a number, a `.dev.vars` entry as its text.
+   */
+  readonly ATTESTATION_MAX_AGE_DAYS?: unknown;
   /** The gate image's digest, `sha256:<hex>`, which every lease outside a device host execution names. */
   readonly GATE_IMAGE_DIGEST?: string;
   /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */
@@ -173,6 +180,23 @@ export const healthOf = (
 };
 
 export const profileOf = (env: ControlPlaneEnv): Profile => buildProfile(deployment(env));
+
+const DAY_MS = 24 * 3_600_000;
+
+/**
+ * The result-acceptance check's settings from the overlay: `attestation_max_age` from `ATTESTATION_MAX_AGE_DAYS`, the
+ * 10-day default where the var is unset or empty (FD-PROV-016). A value that is not a positive number of days admits
+ * no attestation, so a malformed var never lengthens the window a device's attestation stays valid in.
+ */
+export const acceptanceSettingsOf = (
+  env: Pick<ControlPlaneEnv, "ATTESTATION_MAX_AGE_DAYS">,
+): AcceptanceSettings => {
+  const raw = env.ATTESTATION_MAX_AGE_DAYS;
+  if (raw === undefined || raw === null || raw === "")
+    return { attestationMaxAgeMs: DEFAULT_ATTESTATION_MAX_AGE_MS };
+  const days = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
+  return { attestationMaxAgeMs: Number.isFinite(days) && days > 0 ? days * DAY_MS : 0 };
+};
 
 /**
  * The spend configuration the operator overlay delivers through the `SPEND` var, which the coordinator's spend view
