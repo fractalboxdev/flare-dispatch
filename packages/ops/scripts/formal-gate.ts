@@ -65,7 +65,8 @@ if (base !== undefined)
     ),
   );
 
-// FD-PROV-073. The derivation check runs to completion, so a wellformedness warning is a result, not a timeout.
+// FD-PROV-073. The derivation check runs with a 300 s timeout, well above its runtime on this model; a check that
+// times out prints "wellformedness check failed", so a timeout fails the gate as a wellformedness failure.
 const pin = parseTamarinPin(readFileSync(join(formal, "tamarin-prover.version"), "utf8"));
 if (pin === null)
   findings.push({
@@ -84,7 +85,7 @@ else {
     return `${run.stdout ?? ""}\n${run.stderr ?? ""}`;
   };
   findings.push(...tamarinVersionFindings(pin, prover(["--version"])));
-  const output = prover(["--prove", "--derivcheck-timeout=0", "formal/provenance.spthy"]);
+  const output = prover(["--prove", "--derivcheck-timeout=300", "formal/provenance.spthy"]);
   const at = output.lastIndexOf("summary of summaries:");
   console.log(at === -1 ? output.slice(-4000).trim() : output.slice(at).trim());
   findings.push(
