@@ -568,6 +568,7 @@ export const contextfulRelease = defineRun({
         const spawn = yield* step(`spawn-cells-${spawned}`, () => Effect.gen(function* () {
           const handles = yield* fanOut({
             run: contextfulReleaseCell.name,
+            githubSha: tag.commitSha,
             items: batch,
             concurrency: batch.length,
             toInput: ({ cell, attempt }) => ({ ...cell, repo: input.repo, tag: input.tag, sha: tag.commitSha,
@@ -662,6 +663,7 @@ export const contextfulRelease = defineRun({
       }
     }
     const formulaSpawn = yield* step("spawn-formula", () => fanOut({ run: contextfulReleaseFormula.name,
+      githubSha: tag.commitSha,
       items: [JSON.stringify(manifests)],
       toInput: (manifestJson) => ({ repo: input.repo, tag: input.tag, sha: tag.commitSha,
         releaseId: release.id, dryRun, manifests: manifestJson }),

@@ -139,20 +139,30 @@ const sanitize = (raw: string): string => {
 
 /**
  * Derive the child's deterministic instance id. Explicit `instanceId` wins
- * (sanitized); otherwise hash the input under the parent + run namespace.
+ * (sanitized); an explicit source SHA namespaces either form so another source cannot adopt the same child.
+ * Without a source override, preserve the existing input hash under the parent + run namespace.
  */
 export const deriveChildInstanceId = (opts: {
   run: string;
   parentExecutionId: string;
   input: unknown;
   instanceId?: string;
+  githubSha?: string;
 }): string => {
   if (opts.instanceId !== undefined && opts.instanceId.length > 0) {
-    return sanitize(opts.instanceId);
+    return sanitize(
+      opts.githubSha === undefined ? opts.instanceId : `${opts.instanceId}-${opts.githubSha}`,
+    );
   }
   let inputHash: string;
   try {
-    inputHash = fnv1a(JSON.stringify(opts.input) ?? "null");
+    inputHash = fnv1a(
+      JSON.stringify(
+        opts.githubSha === undefined
+          ? opts.input
+          : { input: opts.input, githubSha: opts.githubSha },
+      ) ?? "null",
+    );
   } catch {
     // Non-serializable input (shouldn't happen for a dispatch payload) — fall
     // back to a stable marker so the id stays deterministic per call site.
@@ -178,11 +188,20 @@ export const makeChildRunsLive = (cfg: ChildRunsLiveConfig): Layer.Layer<ChildRu
           ),
     handoffAdmission: () =>
       makeRunAdmissionD1(cfg.db).release(cfg.parentExecutionId).pipe(Effect.orDie),
-    spawn: ({ run, input, instanceId }) => {
+    spawn: ({ run, input, instanceId, githubSha }) => {
+      if (githubSha !== undefined && !/^[a-f0-9]{40}$/.test(githubSha))
+        return Effect.fail(
+          new ChildSpawnFailed({
+            run,
+            instanceId: instanceId ?? "unallocated",
+            cause: "child source is not a full commit SHA",
+          }),
+        );
       const id = deriveChildInstanceId({
         run,
         parentExecutionId: cfg.parentExecutionId,
         input,
+        ...(githubSha === undefined ? {} : { githubSha }),
         ...(instanceId !== undefined ? { instanceId } : {}),
       });
       // The child `DispatchPayload` — the exact shape `RunWorkflow.run` decodes.
@@ -194,7 +213,7 @@ export const makeChildRunsLive = (cfg: ChildRunsLiveConfig): Layer.Layer<ChildRu
         github: {
           repo: cfg.github.repo,
           ref: cfg.github.ref,
-          sha: cfg.github.sha,
+          sha: githubSha ?? cfg.github.sha,
           ...(cfg.github.installationId !== undefined
             ? { installation_id: cfg.github.installationId }
             : {}),

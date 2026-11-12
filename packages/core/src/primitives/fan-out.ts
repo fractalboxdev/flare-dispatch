@@ -53,6 +53,8 @@ export type FanOutShard<T> = {
  * );
  */
 export const fanOut = <T>(opts: {
+  /** Authenticated source commit resolved by the trusted parent; repository, ref and installation stay inherited. */
+  readonly githubSha?: string;
   /** The child run name (registered on the same deploy). */
   readonly run: string;
   /** The items to fan out over — one child per item. */
@@ -80,6 +82,7 @@ export const fanOut = <T>(opts: {
     ({ item, shard }) =>
       spawnChildRun({
         run: opts.run,
+        ...(opts.githubSha === undefined ? {} : { githubSha: opts.githubSha }),
         input: opts.toInput(item, shard),
         ...(opts.toInstanceId !== undefined ? { instanceId: opts.toInstanceId(item, shard) } : {}),
       }),
