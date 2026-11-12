@@ -16,6 +16,7 @@ import {
   JwksSourceLive,
   logsGroup,
   mount,
+  operabilityGroup,
   oidcKeyFromSecret,
   Operations,
   opsGroup,
@@ -25,7 +26,12 @@ import {
   wellKnownGroup,
 } from "@fractalboxdev/flare-dispatch-api";
 import { handleIntake, WEBHOOK_MAX_BYTES } from "@fractalboxdev/flare-dispatch-intake";
-import { livenessReport, runOpsMigrations } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  livenessReport,
+  OperabilityHandlers,
+  OpsStore,
+  runOpsMigrations,
+} from "@fractalboxdev/flare-dispatch-ops";
 import { Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
@@ -33,6 +39,7 @@ import { isolateServices, type IsolateServices } from "./composition.ts";
 import { apiEnvOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { failureSummaries } from "./failure-summary.ts";
 import { intakeCancellation, intakePort } from "./intake-port.ts";
+import { spendViewOf } from "./spend.ts";
 
 /** Intake's webhook route, below the `/v1/` mount: the request and the path below it, as `handleIntake` takes them. */
 const intakeRoute = Effect.gen(function* () {
@@ -63,7 +70,8 @@ export const intakeGroup = routerGroup(
 
 /**
  * The groups the Worker mounts; `/v1/executors/connect` is answered before the router, since it upgrades. The log and
- * artifact reads pass the link surface's gate like every other route (FD-IFC-017).
+ * artifact reads pass the link surface's gate like every other route (FD-IFC-017); the fleet view, the phase gate's
+ * records, the spend view and the install flow pass the operability group's gates.
  */
 export const router = mount(
   wellKnownGroup,
@@ -71,6 +79,7 @@ export const router = mount(
   intakeGroup,
   executionsGroup,
   opsGroup,
+  operabilityGroup(OperabilityHandlers),
   executorsGroup,
   logsGroup(LogsHandlers),
   artifactsGroup(ArtifactsHandlers),
@@ -114,6 +123,8 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     failureSummaries(env),
     operations(env),
     cacheReads(env),
+    Layer.succeed(OpsStore)({ db: env.DB, now: Date.now }),
+    spendViewOf(env),
   );
 
 /** One request through the router, with the isolate's services and the ones its routes read. */

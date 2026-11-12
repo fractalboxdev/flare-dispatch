@@ -54,6 +54,28 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     cooldown_bucket text not null,
     not_before integer not null)`,
   `create index if not exists intake_held_due on intake_held (not_before)`,
+  // The original close-only table stays as the source of the additive lifecycle migration below (FD-CACHE-064).
+  `create table if not exists intake_pull_request_closes (
+    repo text not null,
+    number integer not null,
+    closed_at integer not null,
+    primary key (repo, number))`,
+  // Keep an open tombstone with its event time after a reopen, so an older close cannot restore expired retention.
+  `create table if not exists intake_pull_request_lifecycle (
+    repo text not null,
+    number integer not null,
+    updated_at integer not null,
+    closed_at integer,
+    primary key (repo, number))`,
+  `insert or ignore into intake_pull_request_lifecycle (repo, number, updated_at, closed_at)
+   select repo, number, closed_at, closed_at from intake_pull_request_closes`,
+  // Remember identities across transitions: GitHub timestamps have second precision, and a replay of a close must
+  // not beat a reopen in that same second. Distinct deliveries in a second are still accepted in arrival order.
+  `create table if not exists intake_pull_request_lifecycle_deliveries (
+    repo text not null,
+    number integer not null,
+    delivery_id text not null,
+    primary key (repo, number, delivery_id))`,
 ];
 
 export const migrateIntake = (db: D1Like): Effect.Effect<void> =>
@@ -226,6 +248,20 @@ export class IntakeStore extends Context.Service<
       at: number,
     ) => Effect.Effect<void, StoreUnavailable>;
     readonly lastDelivery: (installation: number) => Effect.Effect<number | null, StoreUnavailable>;
+    /** Records a close unless its event is older than the latest lifecycle event or its delivery was already seen. */
+    readonly pullRequestClosed: (
+      repo: string,
+      number: number,
+      at: number,
+      event?: { readonly updatedAt: number; readonly deliveryId: string },
+    ) => Effect.Effect<void, StoreUnavailable>;
+    /** Keeps an open tombstone at the event's time, so an older close cannot delete the reopened namespace. */
+    readonly pullRequestReopened: (
+      repo: string,
+      number: number,
+      at: number,
+      deliveryId: string,
+    ) => Effect.Effect<void, StoreUnavailable>;
   }
 >()("@fractalboxdev/flare-dispatch-intake/IntakeStore") {}
 
@@ -398,6 +434,43 @@ const recordValues = (r: IntakeRecord) =>
 const RECORD_PLACEHOLDERS = RECORD_COLUMNS.split(",")
   .map(() => "?")
   .join(", ");
+
+/** Records lifecycle state and its delivery atomically; only a new delivery at least as recent may change state. */
+const recordPullRequestLifecycle = (
+  db: D1Like,
+  repo: string,
+  number: number,
+  updatedAt: number,
+  closedAt: number | null,
+  deliveryId?: string,
+) => {
+  const normalized = repo.toLowerCase();
+  return query(() =>
+    db.batch([
+      db
+        .prepare(
+          `insert into intake_pull_request_lifecycle (repo, number, updated_at, closed_at)
+           select ?1, ?2, ?3, ?4 where ?5 is null or not exists (
+             select 1 from intake_pull_request_lifecycle_deliveries
+             where repo = ?1 and number = ?2 and delivery_id = ?5)
+           on conflict (repo, number) do update set
+             updated_at = excluded.updated_at, closed_at = excluded.closed_at
+           where excluded.updated_at >= intake_pull_request_lifecycle.updated_at`,
+        )
+        .bind(normalized, number, updatedAt, closedAt, deliveryId ?? null),
+      ...(deliveryId === undefined
+        ? []
+        : [
+            db
+              .prepare(
+                `insert or ignore into intake_pull_request_lifecycle_deliveries (repo, number, delivery_id)
+                 values (?, ?, ?)`,
+              )
+              .bind(normalized, number, deliveryId),
+          ]),
+    ]),
+  ).pipe(Effect.asVoid);
+};
 
 export const d1IntakeStore = (db: D1Like) =>
   Layer.succeed(IntakeStore, {
@@ -598,7 +671,29 @@ export const d1IntakeStore = (db: D1Like) =>
           ({ results }) => (results[0] as { verified_at: number } | undefined)?.verified_at ?? null,
         ),
       ),
+    pullRequestClosed: (repo, number, at, event) =>
+      recordPullRequestLifecycle(db, repo, number, event?.updatedAt ?? at, at, event?.deliveryId),
+    pullRequestReopened: (repo, number, at, deliveryId) =>
+      recordPullRequestLifecycle(db, repo, number, at, null, deliveryId),
   });
+
+/**
+ * When pull request `number` of `repo` closed, epoch ms, in its latest lifecycle state; null while it is open or intake
+ * saw no close. The cache sweep reads it for `pr/<repo>/<number>` (FD-CACHE-064).
+ */
+export const pullRequestClosedAt =
+  (db: D1Like) =>
+  async (repo: string, number: number): Promise<number | null> =>
+    (
+      (
+        await db
+          .prepare(
+            "select closed_at from intake_pull_request_lifecycle where repo = ? and number = ?",
+          )
+          .bind(repo.toLowerCase(), number)
+          .all()
+      ).results[0] as { readonly closed_at: number } | undefined
+    )?.closed_at ?? null;
 
 /**
  * A refusal that ends intake for a whole trigger, before any run is known, records a null run (MAMEKO-ADM-043); an

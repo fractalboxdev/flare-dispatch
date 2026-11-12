@@ -17,6 +17,7 @@ import {
   harness,
   HEAD,
   manifest,
+  NOW,
   mergeGroupPayload,
   pullRequestPayload,
   pushPayload,
@@ -28,7 +29,7 @@ import {
 } from "./harness.test-support.ts";
 import { cacheTriggerOf } from "./event.ts";
 import { handleIntake } from "./routes.ts";
-import { HELD_STATUS, IntakeStore } from "./store.ts";
+import { HELD_STATUS, IntakeStore, pullRequestClosedAt } from "./store.ts";
 import { releaseHeld } from "./submit.ts";
 
 const post = (h: Harness, request: Request) => h.run(handleIntake(request, "webhooks/github"));
@@ -804,6 +805,135 @@ describe("other webhook events", () => {
     expect(h.reads.calls.filter((c) => c.startsWith("file"))).toHaveLength(1);
     expect(h.executions().map((e) => e.run)).toEqual(["check"]);
     expect(APP_ID).toBeGreaterThan(0);
+  });
+});
+
+describe("pull request close times", () => {
+  const closedAt = (h: Harness, number = 12) => pullRequestClosedAt(h.db)(REPO, number);
+
+  it("[FD-CACHE-064] a closed pull request records when it closed, which the cache sweep reads for its namespace", async () => {
+    const h = await harness();
+    expect(await closedAt(h)).toBeNull();
+    const at = "2026-11-04T09:30:00Z";
+    const r = await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "closed", closedAt: at }),
+    );
+    expect(r?.status).toBe(202);
+    expect(await closedAt(h)).toBe(Date.parse(at));
+    // The sweep names the repository lower-cased, as the cache namespace does.
+    expect(await pullRequestClosedAt(h.db)(REPO.toUpperCase(), 12)).toBe(Date.parse(at));
+    // A close without `closed_at` counts from the delivery's arrival.
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "closed", number: 13, closedAt: null }),
+      "d-2",
+    );
+    expect(await closedAt(h, 13)).toBe(NOW);
+    // An open pull request has no close time.
+    await deliver(h, "pull_request", pullRequestPayload({ number: 14 }), "d-3");
+    expect(await closedAt(h, 14)).toBeNull();
+  });
+
+  it("[FD-CACHE-064] a reopened pull request forgets its close, and a later close counts from the new time", async () => {
+    const h = await harness();
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "closed", closedAt: "2026-11-01T00:00:00Z" }),
+    );
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "reopened", updatedAt: "2026-11-04T10:00:00Z" }),
+      "d-2",
+    );
+    expect(await closedAt(h)).toBeNull();
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "closed", closedAt: "2026-11-04T11:00:00Z" }),
+      "d-3",
+    );
+    expect(await closedAt(h)).toBe(Date.parse("2026-11-04T11:00:00Z"));
+  });
+
+  it("[FD-CACHE-064] a replayed or older close cannot restore a close time after a reopen", async () => {
+    const h = await harness();
+    const closed = pullRequestPayload({
+      action: "closed",
+      closedAt: "2026-11-01T00:00:00Z",
+      updatedAt: "2026-11-01T00:00:00Z",
+    });
+    await deliver(h, "pull_request", closed, "close-1");
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "reopened", updatedAt: "2026-11-04T10:00:00Z" }),
+      "reopen-1",
+    );
+    await deliver(h, "pull_request", closed, "close-1");
+    expect(await closedAt(h)).toBeNull();
+    // An older close first seen after the reopen also cannot overwrite it.
+    await deliver(h, "pull_request", closed, "late-close");
+    expect(await closedAt(h)).toBeNull();
+    // updated_at, rather than the original closed_at, orders a new lifecycle event.
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({
+        action: "closed",
+        closedAt: "2026-11-04T11:00:00Z",
+        updatedAt: "2026-11-04T11:30:00Z",
+      }),
+      "close-2",
+    );
+    expect(await closedAt(h)).toBe(Date.parse("2026-11-04T11:00:00Z"));
+    // Replaying an old reopen, even under a different delivery id, cannot resurrect the closed namespace.
+    await deliver(
+      h,
+      "pull_request",
+      pullRequestPayload({ action: "reopened", updatedAt: "2026-11-04T11:20:00Z" }),
+      "late-reopen",
+    );
+    expect(await closedAt(h)).toBe(Date.parse("2026-11-04T11:00:00Z"));
+  });
+
+  it("[FD-CACHE-064] distinct lifecycle deliveries in one second apply, while replays cannot undo them", async () => {
+    const h = await harness();
+    const at = "2026-11-04T10:00:00Z";
+    const closed = pullRequestPayload({ action: "closed", closedAt: at, updatedAt: at });
+    const reopened = pullRequestPayload({ action: "reopened", updatedAt: at });
+    await deliver(h, "pull_request", closed, "close-1");
+    await deliver(h, "pull_request", reopened, "reopen-1");
+    expect(await closedAt(h)).toBeNull();
+    await deliver(h, "pull_request", closed, "close-1");
+    expect(await closedAt(h)).toBeNull();
+    // A genuine subsequent close in the same second still takes effect.
+    await deliver(h, "pull_request", closed, "close-2");
+    expect(await closedAt(h)).toBe(Date.parse(at));
+    await deliver(h, "pull_request", reopened, "reopen-1");
+    expect(await closedAt(h)).toBe(Date.parse(at));
+  });
+
+  it("[FD-CACHE-064] timestamp-free replays keep their original state despite a later delivery time", async () => {
+    const h = await harness();
+    const closed = pullRequestPayload({ action: "closed", closedAt: null });
+    await deliver(h, "pull_request", closed, "close-1");
+    expect(await closedAt(h)).toBe(NOW);
+    await h.adjust(1_000);
+    const reopened = pullRequestPayload({ action: "reopened" });
+    await deliver(h, "pull_request", reopened, "reopen-1");
+    await h.adjust(1_000);
+    await deliver(h, "pull_request", closed, "close-1");
+    expect(await closedAt(h)).toBeNull();
+    await deliver(h, "pull_request", closed, "close-2");
+    expect(await closedAt(h)).toBe(NOW + 2_000);
+    await h.adjust(1_000);
+    await deliver(h, "pull_request", reopened, "reopen-1");
+    expect(await closedAt(h)).toBe(NOW + 2_000);
   });
 });
 

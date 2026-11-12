@@ -1,5 +1,5 @@
-// The v2 control plane Worker: mameko's coordinator on host-cloudflare, FlareDispatch's profile, the operability
-// routes and `packages/api`'s router. It shares no code with the v1 dispatcher.
+// The v2 control plane Worker: mameko's coordinator on host-cloudflare, FlareDispatch's profile, the dashboard pages
+// and `packages/api`'s router, which serves the declared `/v1/` routes. It shares no code with the v1 dispatcher.
 import { runApiMigrations } from "@fractalboxdev/flare-dispatch-api";
 import { migrateChildConclusions } from "@fractalboxdev/flare-dispatch-github";
 import { migrateIntake } from "@fractalboxdev/flare-dispatch-intake";
@@ -12,7 +12,6 @@ import { migrateLocalStore } from "./agentic.ts";
 import { cacheFetch, cacheSweeps } from "./cache.ts";
 import { boundFetch } from "./github.ts";
 import { apiFetch } from "./http.ts";
-import { spendViewOf } from "./spend.ts";
 import { tickDeps } from "./tick.ts";
 
 export {
@@ -46,8 +45,8 @@ const migrate = (env: ControlPlaneEnv) =>
     throw e;
   }));
 
-/** The paths `packages/api` declares that the operability routes also match; the API's routes serve them. */
-const API_OWNED = /^\/v1\/executions(\/[^/]+\/cancel)?$/;
+/** The dashboard's pages: the overview and one execution's page. The router serves the `/v1/` routes (FD-IFC-001). */
+const DASHBOARD = /^\/(executions\/[^/]+)?$/;
 
 export default {
   async fetch(
@@ -70,12 +69,11 @@ export default {
     // The compile-cache route checks its own token (FD-CACHE-051); the log and artifact reads are the router's.
     const cached = await cacheFetch(request, env, (p) => ctx.waitUntil(p));
     if (cached !== null) return cached;
-    // The dashboard, `/v1/ops/health`, `/v1/ops/fleet`, the install routes and `/v1/spend`, each behind its own gate.
-    if (!API_OWNED.test(pathname)) {
+    // The dashboard's pages, behind the Access gate.
+    if (DASHBOARD.test(pathname)) {
       const ops = await opsFetch(request, env as unknown as Parameters<typeof opsFetch>[1], {
         classes: CLASS_ORDER,
         fetch: boundFetch,
-        spend: spendViewOf(env),
       });
       if (ops !== null) return ops;
     }

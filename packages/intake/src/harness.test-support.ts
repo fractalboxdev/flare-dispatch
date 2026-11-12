@@ -346,13 +346,22 @@ export const signedWebhook = async (
 const repository = (full_name = REPO) => ({ full_name });
 
 export const pullRequestPayload = (
-  overrides: { action?: string; head?: string; headRepo?: string | null; number?: number } = {},
+  overrides: {
+    action?: string;
+    head?: string;
+    headRepo?: string | null;
+    number?: number;
+    closedAt?: string | null;
+    updatedAt?: string;
+  } = {},
 ) => ({
   action: overrides.action ?? "synchronize",
   repository: repository(),
   installation: { id: 7 },
   pull_request: {
     number: overrides.number ?? 12,
+    ...(overrides.closedAt === undefined ? {} : { closed_at: overrides.closedAt }),
+    ...(overrides.updatedAt === undefined ? {} : { updated_at: overrides.updatedAt }),
     head: {
       sha: overrides.head ?? HEAD,
       ref: "feature",

@@ -6,8 +6,13 @@ import { join } from "node:path";
 import { errorBody } from "@fractalboxdev/flare-dispatch-api/errors";
 import { checkLinkToken } from "@fractalboxdev/flare-dispatch-api/link-token";
 import { intakeError } from "@fractalboxdev/flare-dispatch-intake";
-import { Effect } from "effect";
-import { FlareDispatchApi } from "@fractalboxdev/flare-dispatch-api/declaration";
+import { Effect, Schema } from "effect";
+import {
+  FleetEntry,
+  FlareDispatchApi,
+  PhaseGateRecords,
+  SpendViewBody,
+} from "@fractalboxdev/flare-dispatch-api/declaration";
 import { mintLinkToken, type LinkPurpose } from "@fractalboxdev/flare-dispatch-api/link-token";
 import { ARTIFACT_SCHEMA, logObjectName, stepKey } from "@fractalboxdev/flare-dispatch-cache";
 import { HttpApi } from "effect/http-api";
@@ -200,6 +205,102 @@ describe("the minute tick", () => {
       headers: await headersFor(OPERATOR),
     });
     expect(r.status).toBe(200);
+    expect(Object.keys((await r.json()) as Record<string, unknown>).sort()).toEqual(
+      [
+        "control_state",
+        "executors",
+        "installations",
+        "oldest_open_execution_age_ms",
+        "outbox_depth",
+        "probes",
+        "tick_age_ms",
+      ].sort(),
+    );
+    const member = await development.dispatchFetch("http://x/v1/ops/health", {
+      headers: await headersFor("member@example.com"),
+    });
+    expect(member.status).toBe(403);
+  });
+});
+
+describe("the operability routes", () => {
+  const ROUTES = [
+    "/v1/ops/health",
+    "/v1/ops/fleet",
+    "/v1/ops/phase-gate?gate=0",
+    "/v1/spend",
+    "/v1/github/install/new",
+    "/v1/github/install/callback?state=s&code=c",
+  ];
+  const as = async (identity: string | null, path: string, init: RequestInit = {}) =>
+    development.dispatchFetch(`http://x${path}`, {
+      ...init,
+      headers: await headersFor(identity),
+    } as never);
+  const bodyOf = async (r: { json(): Promise<unknown> }) =>
+    (await r.json()) as Record<string, unknown>;
+
+  it("[FD-IFC-001] serves the fleet view, the phase gate's records, the spend view and the install flow as declared endpoints", async () => {
+    const declared: string[] = [];
+    HttpApi.reflect(FlareDispatchApi, {
+      onGroup: () => {},
+      onEndpoint: ({ endpoint }) => declared.push(`${endpoint.method} ${endpoint.path}`),
+    });
+    for (const path of ROUTES) expect(declared).toContain(`GET ${path.split("?")[0]}`);
+
+    const fleet = await as(OPERATOR, "/v1/ops/fleet");
+    expect(fleet.status).toBe(200);
+    Schema.decodeUnknownSync(Schema.Array(FleetEntry))(await fleet.json());
+    expect((await as("member@example.com", "/v1/ops/fleet")).status).toBe(403);
+
+    const records = await as(OPERATOR, "/v1/ops/phase-gate?gate=0");
+    expect(records.status).toBe(200);
+    expect(Schema.decodeUnknownSync(PhaseGateRecords)(await records.json()).gate).toBe(0);
+    const badGate = await as(OPERATOR, "/v1/ops/phase-gate?gate=4");
+    expect(badGate.status).toBe(400);
+    const badGateBody = await bodyOf(badGate);
+    expect(badGateBody).toMatchObject({ error: "invalid_body" });
+    expect(String(badGateBody["message"])).toContain("query.gate");
+
+    const spend = await as("member@example.com", "/v1/spend");
+    expect(spend.status).toBe(200);
+    expect(Schema.decodeUnknownSync(SpendViewBody)(await spend.json()).month).toBe(
+      new Date().toISOString().slice(0, 7),
+    );
+
+    const start = await as(OPERATOR, "/v1/github/install/new");
+    expect(start.status).toBe(200);
+    expect(start.headers.get("cache-control")).toBe("no-store");
+    const form = await start.text();
+    expect(form).toContain("https://github.com/settings/apps/new?state=");
+    expect((await as("member@example.com", "/v1/github/install/new")).status).toBe(403);
+
+    // A state the deploy never issued is refused before anything else (FD-OPS-074).
+    const unknown = await as(OPERATOR, "/v1/github/install/callback?state=s&code=c");
+    expect(unknown.status).toBe(403);
+    const unknownBody = await bodyOf(unknown);
+    expect(unknownBody).toMatchObject({ error: "forbidden" });
+    expect(typeof unknownBody["request_id"]).toBe("string");
+
+    // An issued state is accepted, and this deploy supplies no manifest conversion to exchange the code.
+    const state = /state=([^"&]+)/.exec(form)![1]!;
+    const issued = await as(OPERATOR, `/v1/github/install/callback?state=${state}&code=c`);
+    expect(issued.status).toBe(503);
+    expect(await bodyOf(issued)).toMatchObject({ error: "not_configured" });
+  });
+
+  it("[FD-IFC-005] [FD-IFC-003] answers another method on each operability route with 405 method_not_allowed, after the identity gate", async () => {
+    for (const path of ROUTES)
+      for (const method of ["POST", "DELETE"]) {
+        const anonymous = await as(null, path, { method });
+        expect(anonymous.status, `${method} ${path}`).toBe(401);
+        expect(await bodyOf(anonymous)).toMatchObject({ error: "unauthenticated" });
+        const refused = await as(OPERATOR, path, { method });
+        expect(refused.status, `${method} ${path}`).toBe(405);
+        const body = await bodyOf(refused);
+        expect(body).toMatchObject({ error: "method_not_allowed" });
+        expect(typeof body["request_id"]).toBe("string");
+      }
   });
 });
 

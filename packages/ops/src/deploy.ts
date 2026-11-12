@@ -16,6 +16,7 @@ import {
   accessDrift,
   appRegistrationCheck,
   failed,
+  modelRegistryCheck,
   rulesetCheck,
   settingsDrift,
   templateInvariants,
@@ -25,7 +26,12 @@ import {
   type DeployedSettings,
   type Finding,
 } from "./drift.ts";
-import { decodeOverlay, type OverlayRejected, type OverlayValues } from "./overlay.ts";
+import {
+  decodeOverlay,
+  modelRegistryOf,
+  type OverlayRejected,
+  type OverlayValues,
+} from "./overlay.ts";
 import { parseJsonc, renderTemplate, type RenderFailed, type WorkerConfig } from "./render.ts";
 
 /** One Worker the deploy carries: its name, committed template and the overlay hostname key it serves on. */
@@ -238,14 +244,15 @@ export const renderAll = (overlayText: string, workers: readonly WorkerTemplate[
 export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
 
 /**
- * Every drift finding: the templates' invariants, the rendered configuration, the deployed Workers against the record
- * of the last deploy, the GitHub App's registration, the default branch's ruleset and, given `access`, the Access
- * applications on the dispatcher's hostname, then the profile step's findings from `more` (`withProfileStep`, the
+ * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), the templates' invariants, the
+ * rendered configuration, the deployed Workers against the record of the last deploy, the GitHub App's registration,
+ * the default branch's ruleset and, given `access`, the Access applications on the dispatcher's hostname, then the profile step's findings from `more` (`withProfileStep`, the
  * composition the pull-request drift check shares). `fd deploy` passes no `access`: it checks only the hostname
  * application's AUD tag, then applies the committed applications and reports each one it changed, where `fd doctor`
  * fails on each difference.
  */
 export const driftFindings = (
+  overlay: OverlayValues,
   workers: readonly WorkerTemplate[],
   rendered: readonly RenderedWorker[],
   manifest: AppPermissions,
@@ -255,7 +262,7 @@ export const driftFindings = (
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
-    const findings: Finding[] = [];
+    const findings: Finding[] = [...modelRegistryCheck(modelRegistryOf(overlay))];
     for (const w of workers) findings.push(...templateInvariants(w.worker, parseJsonc(w.template)));
     for (const r of rendered) {
       findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config));
@@ -282,6 +289,7 @@ export const fdDoctor = (
   Effect.gen(function* () {
     const { overlay, rendered } = yield* renderAll(overlayText, workers);
     return yield* driftFindings(
+      overlay,
       workers,
       rendered,
       manifest,
@@ -329,7 +337,7 @@ export const fdDeploy = (
     const target = yield* DeployTarget;
     const { overlay, rendered } = yield* renderAll(overlayText, workers);
     const committed = access?.(overlay) ?? null;
-    const drift = [...(yield* driftFindings(workers, rendered, manifest, extra, more))];
+    const drift = [...(yield* driftFindings(overlay, workers, rendered, manifest, extra, more))];
     if (committed !== null)
       drift.push(
         ...accessAudCheck(

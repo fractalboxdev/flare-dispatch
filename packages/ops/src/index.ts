@@ -10,6 +10,7 @@ export * from "./install.ts";
 export * from "./kill-lines.ts";
 export * from "./link-token.ts";
 export * from "./liveness.ts";
+export * from "./operability-group.ts";
 export * from "./operator-routes.ts";
 export * from "./ops-intents.ts";
 export * from "./overlay.ts";
