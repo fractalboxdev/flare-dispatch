@@ -41,10 +41,10 @@ import { concludeFactsLayer } from "../../src/github.ts";
 
 import { envOf, NOW, record, type TestD1 } from "../conclude.test-support.ts";
 
-const PARENT = "parent";
+export const PARENT = "parent";
 const RUN = "offload-test";
 const SHA = "b".repeat(40);
-const profile = buildProfile("production");
+export const profile = buildProfile("production");
 
 /** The outcomes a child reaches on its own before the parent ends. */
 const OWN_OUTCOMES: readonly ExecutionOutcome[] = [
@@ -67,7 +67,7 @@ export interface ChildConclusionsOutcome {
   readonly trace: readonly string[];
 }
 
-const terminalWrite = (db: TestD1, executionId: string, outcome: ExecutionOutcome) =>
+export const terminalWrite = (db: TestD1, executionId: string, outcome: ExecutionOutcome) =>
   Effect.runPromise(
     ExecutionSteps.use((steps) => steps.applyOutbox(executionId, outcome, null)).pipe(
       Effect.provide(
@@ -76,7 +76,7 @@ const terminalWrite = (db: TestD1, executionId: string, outcome: ExecutionOutcom
     ),
   );
 
-const drain = (db: TestD1, gh: ReturnType<typeof fakeGithub>, now: number) =>
+export const drain = (db: TestD1, gh: ReturnType<typeof fakeGithub>, now: number) =>
   Effect.runPromise(
     drainOnce({
       now,
@@ -99,7 +99,7 @@ const drain = (db: TestD1, gh: ReturnType<typeof fakeGithub>, now: number) =>
   );
 
 /** One admitted execution: its intake record and mameko's execution row, under the parent for a child. */
-const seed = async (db: TestD1, id: string, label: string, parent: string | null) => {
+export const seed = async (db: TestD1, id: string, label: string, parent: string | null) => {
   await Effect.runPromise(
     IntakeStore.use((s) => s.put(record(id, { run: RUN, label, sha: SHA }))).pipe(
       Effect.provide(d1IntakeStore(db)),
@@ -114,7 +114,7 @@ const seed = async (db: TestD1, id: string, label: string, parent: string | null
 };
 
 /** The `cp:check:open` row admission inserts for an execution that owns a check run (FD-GH-005). */
-const openCheck = async (db: TestD1, id: string, label: string, now: number) => {
+export const openCheck = async (db: TestD1, id: string, label: string, now: number) => {
   const payload = { name: `flare-dispatch/${RUN}:${label}`, head_sha: SHA };
   await insertOutboxRows(db, [
     {
