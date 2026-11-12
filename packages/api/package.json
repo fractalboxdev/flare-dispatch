@@ -7,6 +7,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./attestation": "./src/live/attestation.ts",
+    "./attestation-test-support": "./src/live/attestation.test-support.ts",
     "./config": "./src/config.ts",
     "./declaration": "./src/declaration.ts",
     "./errors": "./src/errors.ts",
