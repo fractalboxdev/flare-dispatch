@@ -199,4 +199,46 @@ export class ProvenancePolicies extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-api/ProvenancePolicies") {}
 
+// --- Provenance statements -------------------------------------------------------------------------------------------
+
+/** A countersigned statement as the control plane records it (specs/provenance.md § Countersignature and log). */
+export interface StatementRecord {
+  readonly envelopeDigest: string;
+  readonly executionId: string;
+  readonly log: "rekor" | "private";
+  /** The countersigned envelope's canonical JSON: the bytes the log appends. */
+  readonly envelope: string;
+  /** The log's entry; `null` while the append is pending (FD-PROV-041). */
+  readonly entry: {
+    readonly logIndex: number;
+    readonly entryId: string;
+    readonly integratedTime: number;
+  } | null;
+}
+
+/** One leaf's inclusion proof in the private log, against the published checkpoint. */
+export interface InclusionProofRecord {
+  readonly leafIndex: number;
+  readonly treeSize: number;
+  readonly hashes: readonly string[];
+  readonly checkpoint: string;
+}
+
+/**
+ * The recorded statements, read only by lookup: an execution's, or those naming one subject digest (FD-PROV-071); and
+ * the private log's inclusion proof of a leaf, `null` while no published checkpoint covers it.
+ */
+export class ProvenanceStatements extends Context.Service<
+  ProvenanceStatements,
+  {
+    readonly byExecution: (
+      executionId: string,
+    ) => Effect.Effect<readonly StatementRecord[], ApiError>;
+    readonly bySubject: (digest: string) => Effect.Effect<readonly StatementRecord[], ApiError>;
+    readonly inclusionProof: (
+      leafIndex: number,
+    ) => Effect.Effect<InclusionProofRecord | null, ApiError>;
+  }
+>()("@fractalboxdev/flare-dispatch-api/ProvenanceStatements") {}
+
 export type { VerdictName };

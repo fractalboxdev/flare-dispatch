@@ -214,7 +214,8 @@ export const tileBytes = (tile: Tile, read: ReadStoredHash): Uint8Array => {
 
 // ---- Checkpoints ----
 
-const toBase64 = (bytes: Uint8Array): string => {
+/** Standard base64, the encoding of a checkpoint's root and of an inclusion proof's hashes. */
+export const toBase64 = (bytes: Uint8Array): string => {
   let binary = "";
   for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary);

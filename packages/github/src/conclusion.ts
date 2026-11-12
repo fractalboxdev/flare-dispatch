@@ -230,6 +230,20 @@ export const QuarantinedFailure = Schema.Struct({
   message: Schema.String,
 });
 
+/**
+ * One provenance statement of the execution as the check summary links it (FD-PROV-042): the statement's lookup, its
+ * inclusion proof in the log that holds it, and a lookup by each `sha256` subject digest. A statement whose log append
+ * has not succeeded is `log-pending` and has no inclusion proof yet (FD-PROV-041).
+ */
+export const StatementLink = Schema.Struct({
+  envelope_digest: Schema.String,
+  status: Schema.Literals(["logged", "log-pending"]),
+  statement_url: Schema.String,
+  inclusion_proof_url: Schema.NullOr(Schema.String),
+  subjects: Schema.Array(Schema.Struct({ digest: Schema.String, url: Schema.String })),
+});
+export type StatementLink = typeof StatementLink.Type;
+
 export const ConcludeDetails = Schema.Struct({
   class: Schema.String,
   executor_kind: Schema.NullOr(Schema.String),
@@ -244,6 +258,8 @@ export const ConcludeDetails = Schema.Struct({
   markdown: Schema.optionalKey(Schema.String),
   /** Test failures a gate run reports as quarantined (FD-GH-077). */
   quarantined: Schema.optionalKey(Schema.Array(QuarantinedFailure)),
+  /** The execution's provenance statements (FD-PROV-042). */
+  provenance: Schema.optionalKey(Schema.Array(StatementLink)),
 });
 export type ConcludeDetails = typeof ConcludeDetails.Type;
 
@@ -261,9 +277,26 @@ export const quarantineAnnotations = (d: ConcludeDetails) =>
 const usd = (micro: number) => `${(micro / 1_000_000).toFixed(6)} USD`;
 
 /**
+ * One line per provenance statement: a logged statement links the statement, its inclusion proof and each subject
+ * digest (FD-PROV-042); a statement whose append has not succeeded shows `log-pending` (FD-PROV-041).
+ */
+export const provenanceLines = (statements: readonly StatementLink[]): readonly string[] =>
+  statements.map((s) => {
+    const statement = `[\`${s.envelope_digest}\`](${s.statement_url})`;
+    if (s.status === "log-pending") return `- Statement ${statement}: log-pending`;
+    const proof = s.inclusion_proof_url === null ? "" : `, [inclusion proof](${s.inclusion_proof_url})`;
+    const subjects =
+      s.subjects.length === 0
+        ? ""
+        : `; subjects ${s.subjects.map((d) => `[\`${d.digest}\`](${d.url})`).join(", ")}`;
+    return `- Statement ${statement}: logged${proof}${subjects}`;
+  });
+
+/**
  * The concluded check run's summary: on a failure the failing step and error tag first, then the class, the
  * executor kind and placement reason, the queue age, the reserved and settled cost and the named reason, then
- * each quarantined failure, then the run's own markdown (FD-GH-015, FD-GH-016, FD-GH-077).
+ * each quarantined failure, then the execution's provenance statements, then the run's own markdown (FD-GH-015,
+ * FD-GH-016, FD-GH-077, FD-PROV-042).
  */
 export const concludeSummary = (verdict: Verdict, d: ConcludeDetails): string => {
   const { conclusion, title } = checkConclusion(verdict);
@@ -284,10 +317,12 @@ export const concludeSummary = (verdict: Verdict, d: ConcludeDetails): string =>
   const quarantined = (d.quarantined ?? []).map(
     (q) => `- \`${q.test}\` (${q.path}:${q.line}): ${q.message}`,
   );
+  const provenance = provenanceLines(d.provenance ?? []);
   return [
     ...lead,
     ...facts,
     ...(quarantined.length === 0 ? [] : ["", "**Quarantined failures:**", ...quarantined]),
+    ...(provenance.length === 0 ? [] : ["", "**Provenance:**", ...provenance]),
     ...(d.markdown === undefined ? [] : ["", d.markdown]),
   ].join("\n");
 };

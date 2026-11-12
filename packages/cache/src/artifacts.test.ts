@@ -1,10 +1,11 @@
 // The artifact store against Miniflare's R2 and D1. Parts go up through the R2 binding here, where an executor
 // would use the presigned UploadPart URLs; the fake presigner records what those URLs sign.
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   artifactPage,
   artifactPath,
+  artifactSubjectRetention,
   beginArtifactUpload,
   commitArtifact,
   findArtifact,
@@ -17,7 +18,19 @@ import {
   type ArtifactRead,
   type BeginArtifact,
 } from "./artifacts.ts";
+import { canonicalJson, utf8 } from "./crypto.ts";
 import { GiB, MiB } from "./ledger.ts";
+import {
+  applyLogAppend,
+  LogAppendStatus,
+  LogAppendStore,
+  RepositoryVisibility,
+  SubjectRetention,
+  SubjectRetentionFailed,
+  TransparencyLogs,
+} from "./provenance/append.ts";
+import { memoryLogAppendStore } from "./provenance/append.test-support.ts";
+import { unsignedEnvelope } from "./provenance/dsse.ts";
 import type { Bucket } from "./manifest.ts";
 import {
   EXEC,
@@ -199,6 +212,116 @@ describe("artifacts", () => {
     expect(await bucket.head(artifactPath(EXEC, 2, "report.html"))).toBeNull();
     expect(await bucket.head(`${artifactPath(EXEC, 2, "report.html")}.browse/index.html`)).toBeNull();
     expect(await bucket.head(artifactPath(EXEC, 2, "kept.txt"))).not.toBeNull();
+  });
+
+  describe("a logged statement's subjects", () => {
+    const DAY = 24 * 3600 * 1000;
+    const NAMED = "b".repeat(64);
+    const OTHER = "c".repeat(64);
+
+    /** A pending log-append intent of `executionId` whose statement names `digests` as its subjects. */
+    const intentNaming = (executionId: string, digests: readonly string[]) => {
+      const envelope = canonicalJson(
+        unsignedEnvelope(
+          utf8(
+            JSON.stringify({
+              _type: "https://in-toto.io/Statement/v1",
+              subject: digests.map((d, i) => ({ name: `out-${i}`, digest: { sha256: d.slice("sha256:".length) } })),
+            }),
+          ),
+        ),
+      );
+      return {
+        envelopeDigest: `sha256:${"e".repeat(64)}`,
+        executionId,
+        repository: "acme/widgets",
+        log: "private" as const,
+        envelope,
+        verifiers: [],
+        status: LogAppendStatus.Pending({ attempts: 0, nextAttemptAt: 0, lastError: null }),
+      };
+    };
+
+    /** Logs the intent into a private log whose integrated time is `integratedTime`, over the artifact rows in D1. */
+    const logAt = (
+      intent: ReturnType<typeof intentNaming>,
+      integratedTime: number,
+      retention: SubjectRetention["Service"],
+      store = memoryLogAppendStore(new Map([[intent.envelopeDigest, intent]])),
+    ) =>
+      Effect.runPromise(
+        applyLogAppend(intent.envelopeDigest, integratedTime).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.succeed(LogAppendStore, store),
+              Layer.succeed(RepositoryVisibility, { of: () => Effect.succeed("private") }),
+              Layer.succeed(TransparencyLogs, {
+                rekor: () => Effect.die("the repository is private"),
+                private: () =>
+                  Effect.succeed({ log: "private" as const, logIndex: 0, entryId: "leaf-0", integratedTime }),
+              }),
+              Layer.succeed(SubjectRetention, retention),
+            ),
+          ),
+        ),
+      );
+
+    const commitDigest = async (w: World, name: string, sha256: string) => {
+      value(await begin(w, { name, sha256 }));
+      await bucket.put(artifactPath(EXEC, 2, name), "12345");
+      return (value(await commit(w, { name })) as { artifact_id: string }).artifact_id;
+    };
+    const expiresAt = async (id: string) =>
+      (await db.prepare("select expires_at from artifacts where artifact_id = ?").bind(id).first<{ expires_at: number }>())!
+        .expires_at;
+
+    it("[FD-PROV-075] logging a statement keeps each artifact it names until its integrated time plus 400 days, and the sweep spares it", async () => {
+      const w = world();
+      const named = await commitDigest(w, "app.tar", NAMED);
+      const unnamed = await commitDigest(w, "notes.txt", OTHER);
+      const integratedTime = w.now + 5 * DAY;
+      const logged = await logAt(intentNaming(EXEC, [`sha256:${NAMED}`]), integratedTime, artifactSubjectRetention(db));
+      expect(LogAppendStatus.$is("Logged")(logged!.status)).toBe(true);
+      expect(await expiresAt(named)).toBe(integratedTime + 400 * DAY);
+      expect(await expiresAt(unnamed)).toBe(w.now + 30 * DAY);
+      expect((await sweepArtifacts(db, bucket, w.now + 31 * DAY)).deleted).toBe(1);
+      expect(await bucket.head(artifactPath(EXEC, 2, "app.tar"))).not.toBeNull();
+      expect(await bucket.head(artifactPath(EXEC, 2, "notes.txt"))).toBeNull();
+      expect((await sweepArtifacts(db, bucket, integratedTime + 400 * DAY - 1)).deleted).toBe(0);
+    });
+
+    it("[FD-PROV-075] the statement retention the overlay sets replaces the default, and a later expires_at stays", async () => {
+      const w = world();
+      const named = await commitDigest(w, "app.tar", NAMED);
+      await logAt(intentNaming(EXEC, [`sha256:${NAMED}`]), w.now, artifactSubjectRetention(db, 90));
+      expect(await expiresAt(named)).toBe(w.now + 90 * DAY);
+      // A shorter retention never shortens what an earlier statement extended.
+      await logAt(intentNaming(EXEC, [`sha256:${NAMED}`]), w.now, artifactSubjectRetention(db, 45));
+      expect(await expiresAt(named)).toBe(w.now + 90 * DAY);
+    });
+
+    it("[FD-PROV-075] another execution's artifact with the same digest keeps its own retention", async () => {
+      const w = world();
+      const named = await commitDigest(w, "app.tar", NAMED);
+      await logAt(intentNaming("01JOTHEREXECUTION00000000", [`sha256:${NAMED}`]), w.now, artifactSubjectRetention(db));
+      expect(await expiresAt(named)).toBe(w.now + 30 * DAY);
+    });
+
+    it("[FD-PROV-075] a failed retention leaves the statement pending, and the retried append extends the artifact", async () => {
+      const w = world();
+      const named = await commitDigest(w, "app.tar", NAMED);
+      const intent = intentNaming(EXEC, [`sha256:${NAMED}`]);
+      const store = memoryLogAppendStore(new Map([[intent.envelopeDigest, intent]]));
+      const failing: SubjectRetention["Service"] = {
+        retain: () => Effect.fail(new SubjectRetentionFailed({ message: "D1 unavailable" })),
+      };
+      const first = await logAt(intent, w.now, failing, store);
+      expect(LogAppendStatus.$is("Pending")(first!.status)).toBe(true);
+      expect(await expiresAt(named)).toBe(w.now + 30 * DAY);
+      const retried = await logAt(intent, w.now + 5_000, artifactSubjectRetention(db), store);
+      expect(LogAppendStatus.$is("Logged")(retried!.status)).toBe(true);
+      expect(await expiresAt(named)).toBe(w.now + 5_000 + 400 * DAY);
+    });
   });
 
   it("[FD-CACHE-080] a confidential-compute execution keeps the artifact on the device and the row holds no R2 path", async () => {

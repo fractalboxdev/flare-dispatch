@@ -22,5 +22,6 @@ export * from "./provenance/merkle.ts";
 export * from "./provenance/log.ts";
 export * from "./provenance/acceptance.ts";
 export * from "./provenance/append.ts";
+export * from "./provenance/subjects.ts";
 export * from "./provenance/rekor.ts";
 export * from "./provenance/release.ts";

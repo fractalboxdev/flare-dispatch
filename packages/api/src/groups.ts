@@ -7,6 +7,7 @@ import {
   LogsGroup,
   OperabilityGroup,
   OpsGroup,
+  ProvenanceGroup,
   ProvenancePolicyGroup,
   WellKnownGroup,
 } from "./declaration.ts";
@@ -18,6 +19,7 @@ import { ExecutionsHandlers } from "./routes/executions.ts";
 import { ExecutorsHandlers } from "./routes/executors.ts";
 import { OpsHandlers } from "./routes/ops.ts";
 import { ProvenancePolicyHandlers } from "./routes/provenance-policy.ts";
+import { ProvenanceHandlers } from "./routes/statements.ts";
 import { WellKnownHandlers } from "./routes/well-known.ts";
 
 const member: Surface = { _tag: "Access", group: "any" };
@@ -79,6 +81,18 @@ export const provenancePolicyGroup = apiGroup({
   surfaces: { publish: operator, keyHistory: operator },
   handlers: ProvenancePolicyHandlers,
 });
+
+/**
+ * The statement lookups and the private log's inclusion proof (FD-PROV-071), mounted under the surface the caller names
+ * for `/v1/provenance/*`: which identity it requires turns on the repository's GitHub visibility (FD-IFC-053,
+ * FD-IFC-054).
+ */
+export const provenanceGroup = (surface: Surface) =>
+  apiGroup({
+    group: ProvenanceGroup,
+    surfaces: { byExecution: surface, bySubject: surface, inclusionProof: surface },
+    handlers: ProvenanceHandlers,
+  });
 
 const logLink: Surface = { _tag: "Link", purpose: "logs", param: "id" };
 

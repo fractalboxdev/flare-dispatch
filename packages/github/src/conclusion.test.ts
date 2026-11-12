@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionOutcome } from "@fractalboxdev/mameko-coordinator";
-import { checkConclusion, NOT_APPLICABLE_DETAILS, verdictOf, type Verdict } from "./conclusion.ts";
+import {
+  checkConclusion,
+  concludeSummary,
+  confidentialSummary,
+  NOT_APPLICABLE_DETAILS,
+  verdictOf,
+  type ConcludeDetails,
+  type Verdict,
+} from "./conclusion.ts";
 
 const CAPACITY = ["budget", "capacity", "deadline", "halt", "placement"] as const;
 const CATEGORIES = ["finding", "infra", ...CAPACITY, "unrecorded", "config", "policy"] as const;
@@ -147,5 +155,74 @@ describe("verdictOf", () => {
   it("Deferred and Expired conclude failure", () => {
     expect(conclude({ _tag: "Deferred" }).title).toBe("capacity: deferred");
     expect(conclude({ _tag: "Expired" }).title).toBe("deadline: expired");
+  });
+});
+
+describe("the check summary's provenance links", () => {
+  const ORIGIN = "https://dispatcher.example.com";
+  const ENVELOPE = `sha256:${"e".repeat(64)}`;
+  const PENDING = `sha256:${"f".repeat(64)}`;
+  const APP = `sha256:${"1".repeat(64)}`;
+  const LIB = `sha256:${"2".repeat(64)}`;
+  const details = (provenance: ConcludeDetails["provenance"]): ConcludeDetails => ({
+    class: "batch",
+    executor_kind: "cloudflare",
+    executor_id: "cf-1",
+    placement_reason: "cloud entry won",
+    queue_age_ms: 1_000,
+    reserved_micro_usd: 10,
+    settled_micro_usd: 8,
+    markdown: "run markdown",
+    ...(provenance === undefined ? {} : { provenance }),
+  });
+  const logged = {
+    envelope_digest: ENVELOPE,
+    status: "logged" as const,
+    statement_url: `${ORIGIN}/v1/provenance/executions/01JEXEC`,
+    inclusion_proof_url: "https://rekor.sigstore.dev/api/v1/log/entries/24296fb24b8ad77a",
+    subjects: [
+      { digest: APP, url: `${ORIGIN}/v1/provenance/subjects/${APP}` },
+      { digest: LIB, url: `${ORIGIN}/v1/provenance/subjects/${LIB}` },
+    ],
+  };
+
+  it("[FD-PROV-042] a logged statement's summary line links the statement, its inclusion proof and each subject digest", () => {
+    const summary = concludeSummary({ _tag: "success" }, details([logged]));
+    const line = summary.split("\n").find((l) => l.includes(ENVELOPE))!;
+    expect(line).toBe(
+      `- Statement [\`${ENVELOPE}\`](${logged.statement_url}): logged, ` +
+        `[inclusion proof](${logged.inclusion_proof_url}); ` +
+        `subjects [\`${APP}\`](${logged.subjects[0]!.url}), [\`${LIB}\`](${logged.subjects[1]!.url})`,
+    );
+    // The links sit under their own heading, before the run's markdown.
+    expect(summary.indexOf("**Provenance:**")).toBeLessThan(summary.indexOf(line));
+    expect(summary.indexOf(line)).toBeLessThan(summary.indexOf("run markdown"));
+  });
+
+  it("[FD-PROV-042] a statement whose append is pending shows log-pending with no inclusion proof, beside a logged one", () => {
+    const summary = concludeSummary(
+      { _tag: "failure", category: "finding", reason: "step test failed" },
+      details([
+        logged,
+        {
+          envelope_digest: PENDING,
+          status: "log-pending",
+          statement_url: `${ORIGIN}/v1/provenance/executions/01JEXEC`,
+          inclusion_proof_url: null,
+          subjects: [],
+        },
+      ]),
+    );
+    expect(summary).toContain(
+      `- Statement [\`${PENDING}\`](${ORIGIN}/v1/provenance/executions/01JEXEC): log-pending`,
+    );
+    expect(summary.match(/inclusion proof/g)).toHaveLength(1);
+  });
+
+  it("[FD-PROV-042] an execution with no statement has no provenance section, and a confidential-compute summary carries none", () => {
+    expect(concludeSummary({ _tag: "success" }, details(undefined))).not.toContain("Provenance");
+    expect(confidentialSummary({ _tag: "success" }, details([logged]), undefined)).not.toContain(
+      ENVELOPE,
+    );
   });
 });

@@ -2,6 +2,7 @@
 // in-memory ports. The router runs through `toFetchHandler`, the way the Worker calls it.
 import type { webcrypto } from "node:crypto";
 import type { OidcKeys } from "@fractalboxdev/flare-dispatch-cache/oidc";
+import { statementSubjects } from "@fractalboxdev/flare-dispatch-cache/provenance-subjects";
 import type { ConfidentialityMode } from "@fractalboxdev/flare-dispatch-profile";
 import { Context, Effect, Layer } from "effect";
 import { ApiConfig, type ApiConfigShape } from "./config.ts";
@@ -19,10 +20,13 @@ import {
   OidcKey,
   Operations,
   ProvenancePolicies,
+  ProvenanceStatements,
   type DispatchSubmission,
+  type InclusionProofRecord,
   type ExecutionRecord,
   type OperatorCall,
   type OperatorOperation,
+  type StatementRecord,
 } from "./ports.ts";
 import { mount, toFetchHandler, type RouteGroup } from "./router.ts";
 
@@ -168,6 +172,10 @@ export interface Doubles {
   readonly confidentiality: Map<string, ConfidentialityMode>;
   /** The verification policy's versions; a suite sets the publisher over in-memory stores. */
   provenancePolicies: ProvenancePolicies["Service"];
+  /** The recorded statements the provenance lookups read; the subject lookup matches any digest a statement names. */
+  readonly statements: StatementRecord[];
+  /** The private log's inclusion proof of each leaf a published checkpoint covers. */
+  readonly inclusionProofs: Map<number, InclusionProofRecord>;
 }
 
 export const makeDoubles = (): Doubles => {
@@ -188,6 +196,8 @@ export const makeDoubles = (): Doubles => {
       publish: () => Effect.fail(apiError("unavailable", "this harness publishes no policy")),
       keyHistory: Effect.fail(apiError("unavailable", "this harness records no key history")),
     },
+    statements: [],
+    inclusionProofs: new Map(),
   };
   return doubles;
 };
@@ -281,6 +291,17 @@ export const portsContext = (doubles: Doubles) =>
       served: (version) => doubles.provenancePolicies.served(version),
       publish: (envelope, now) => doubles.provenancePolicies.publish(envelope, now),
       keyHistory: Effect.suspend(() => doubles.provenancePolicies.keyHistory),
+    }),
+    Context.add(ProvenanceStatements, {
+      byExecution: (executionId) =>
+        Effect.sync(() => doubles.statements.filter((s) => s.executionId === executionId)),
+      bySubject: (digest) =>
+        Effect.sync(() =>
+          doubles.statements.filter((s) =>
+            statementSubjects(s.envelope).some((subject) => subject.digest === digest),
+          ),
+        ),
+      inclusionProof: (leafIndex) => Effect.sync(() => doubles.inclusionProofs.get(leafIndex) ?? null),
     }),
   );
 

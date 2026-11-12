@@ -20,7 +20,10 @@ import {
   type LogAppendIntent,
   type LogEntry,
 } from "../../src/provenance/append.ts";
-import { memoryLogAppendStore } from "../../src/provenance/append.test-support.ts";
+import {
+  memoryLogAppendStore,
+  recordedSubjectRetention,
+} from "../../src/provenance/append.test-support.ts";
 import {
   countersignAccepted,
   CountersignOutcome,
@@ -107,6 +110,7 @@ export const logAppendRun = async (journal: Journal | null): Promise<LogAppendRu
       rekor: () => Effect.die("the replayed repository is private"),
       private: append,
     }),
+    recordedSubjectRetention(),
     Logger.layer([]),
   );
   const recorded = await Effect.runPromise(

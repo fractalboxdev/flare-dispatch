@@ -9,10 +9,12 @@ import {
   CHECKPOINT_DELAY_MS,
   CheckpointOutcome,
   logStore,
+  proveInclusion,
   publishCheckpoint,
   refusedOutcome,
   type AppendOutcome,
   type LogStore,
+  type PrivateLogInclusionProof,
   type TransparencyLogConfig,
 } from "./log.ts";
 
@@ -70,6 +72,16 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
   /** The number of leaves the object has assigned. */
   size(): number {
     return this.store.size();
+  }
+
+  /**
+   * The inclusion proof of leaf `index` against the published checkpoint, or `null` while no checkpoint covers it. A
+   * failed checkpoint read rejects.
+   */
+  inclusionProof(index: number): Promise<PrivateLogInclusionProof | null> {
+    return Effect.runPromise(proveInclusion(this.store, this.config(), index)).then((proof) =>
+      proof === null ? null : { ...proof, hashes: [...proof.hashes] },
+    );
   }
 
   /** When the armed checkpoint alarm fires, or `null` when none is armed. */

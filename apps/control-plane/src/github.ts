@@ -9,6 +9,9 @@ import {
   type ApiConfigShape,
 } from "@fractalboxdev/flare-dispatch-api/config";
 import { executionLinks } from "@fractalboxdev/flare-dispatch-api/links";
+import { statementLinks } from "@fractalboxdev/flare-dispatch-api/statements";
+import { statementRecordOf } from "@fractalboxdev/flare-dispatch-api/statements-live";
+import { d1LogAppendStore } from "@fractalboxdev/flare-dispatch-cache";
 import {
   ConcludeFacts,
   ConcludeFactsUnavailable,
@@ -81,14 +84,16 @@ export const linkConfigOf = (env: ControlPlaneEnv): ApiConfigShape | undefined =
 
 /**
  * The facts of an execution's conclusion: the intake record beside mameko's execution, placement and reservation rows,
- * with the log viewer link carrying a link token minted for a check run (FD-GH-013, FD-GH-015), and a repository's
- * confidentiality mode as `repositoryConfidentiality` reads it (FD-GH-019).
+ * with the log viewer link carrying a link token minted for a check run (FD-GH-013, FD-GH-015), the links of each
+ * provenance statement recorded for the execution (FD-PROV-042), and a repository's confidentiality mode as
+ * `repositoryConfidentiality` reads it (FD-GH-019).
  */
 export const concludeFactsLayer = (env: ControlPlaneEnv) =>
   Layer.effect(
     ConcludeFacts,
     Effect.gen(function* () {
       const store = yield* IntakeStore;
+      const statements = d1LogAppendStore(env.DB as unknown as D1Database);
       const links = linkConfigOf(env);
       const confidentiality = repositoryConfidentiality(env);
       return {
@@ -109,7 +114,26 @@ export const concludeFactsLayer = (env: ControlPlaneEnv) =>
                 : (yield* executionLinks(executionId, "check-run").pipe(
                     Effect.provideService(ApiConfig, links),
                   )).logs_url;
-            return conclusionFactsOf(record, detailsUrl);
+            const facts = conclusionFactsOf(record, detailsUrl);
+            if (links === undefined) return facts;
+            const provenance = yield* statements
+              .forExecution(executionId)
+              .pipe(
+                Effect.catchTag("LogAppendStoreFailed", ({ message }) =>
+                  Effect.fail(new ConcludeFactsUnavailable({ message })),
+                ),
+              );
+            return provenance.length === 0
+              ? facts
+              : {
+                  ...facts,
+                  details: {
+                    ...facts.details,
+                    provenance: provenance.map((intent) =>
+                      statementLinks(links.publicOrigin, statementRecordOf(intent)),
+                    ),
+                  },
+                };
           }),
       };
     }),

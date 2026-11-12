@@ -20,6 +20,7 @@ import {
   LogAppendStore,
   privateLogAppend,
   RepositoryVisibility,
+  SubjectRetention,
   statementSummaryLine,
   statementTime,
   TransparencyLogs,
@@ -39,6 +40,7 @@ import {
 import type { AppendOutcome } from "./log.ts";
 import { leafPath } from "./merkle.ts";
 import { publicKeyPem, rekorAppend } from "./rekor.ts";
+import { recordedSubjectRetention } from "./append.test-support.ts";
 
 const keyPair = async (kid: string) => {
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
@@ -54,11 +56,12 @@ const keyPair = async (kid: string) => {
 const deviceEnvelope = async (
   device: ProvenanceKey,
   executionId: string,
+  subject: readonly unknown[] = [{ name: "commit", digest: { gitCommit: "a".repeat(40) } }],
 ): Promise<DsseEnvelope> => {
   const payload = utf8(
     JSON.stringify({
       _type: "https://in-toto.io/Statement/v1",
-      subject: [{ name: "commit", digest: { gitCommit: "a".repeat(40) } }],
+      subject,
       predicate: {
         buildDefinition: { internalParameters: { lease: { execution_id: executionId } } },
         runDetails: { metadata: { finishedOn: "2031-01-01T00:00:00Z" } },
@@ -200,9 +203,14 @@ describe("the transparency-log append of a countersigned statement", () => {
         rekor: rekorAppend({ url: REKOR_URL, fetch: rekor.fetch }),
         private: privateLogAppend(log),
       }),
+      recordedSubjectRetention(),
     );
     const run = <A, E>(
-      effect: Effect.Effect<A, E, LogAppendStore | RepositoryVisibility | TransparencyLogs>,
+      effect: Effect.Effect<
+        A,
+        E,
+        LogAppendStore | RepositoryVisibility | TransparencyLogs | SubjectRetention
+      >,
     ) => Effect.runPromise(Effect.provide(effect, layer));
     const leaf = async (index: number) => {
       const got = await bucket.get(`${prefix}${leafPath(index)}`);
@@ -217,9 +225,10 @@ describe("the transparency-log append of a countersigned statement", () => {
     p: Awaited<ReturnType<typeof plane>>,
     repository: string,
     now = 1_000,
+    subject?: readonly unknown[],
   ) => {
     const executionId = `exec-append-${++executions}`;
-    const submitted = await deviceEnvelope(device.private, executionId);
+    const submitted = await deviceEnvelope(device.private, executionId, subject);
     const { outcome, intent } = await p.run(
       countersignAndAppend(
         submitted,
@@ -282,6 +291,31 @@ describe("the transparency-log append of a countersigned statement", () => {
     await p.run(applyLogAppend(intent.digest, 5_000));
     expect(await p.log.size()).toBe(1);
     expect(await p.leaf(0)).toBe(json);
+  });
+
+  it("[FD-PROV-071] the store finds a statement by each subject digest it names, exactly, and by no other digest", async () => {
+    const p = await plane({ "acme/widgets": "private" });
+    const app = "1".repeat(64);
+    const lib = "2".repeat(64);
+    const both = await countersigned(p, "acme/widgets", 1_000, [
+      { name: "app.tar", digest: { sha256: app } },
+      { name: "lib.tar", digest: { sha256: lib } },
+    ]);
+    const libOnly = await countersigned(p, "acme/widgets", 1_000, [
+      { name: "lib.tar", digest: { sha256: lib } },
+    ]);
+    const bySubject = (digest: string) =>
+      p.run(Effect.flatMap(LogAppendStore, (s) => s.forSubject(digest)));
+    expect((await bySubject(`sha256:${app}`)).map((i) => i.envelopeDigest)).toEqual([
+      both.intent.digest,
+    ]);
+    expect(
+      (await bySubject(`sha256:${lib}`)).map((i) => i.envelopeDigest).sort(),
+    ).toEqual([both.intent.digest, libOnly.intent.digest].sort());
+    // A prefix or another algorithm of a named digest finds nothing: the lookup is by the whole digest only.
+    expect(await bySubject(`sha256:${app.slice(0, 32)}`)).toEqual([]);
+    expect(await bySubject(`sha512:${app}`)).toEqual([]);
+    expect(await bySubject("sha256:%")).toEqual([]);
   });
 
   it("[FD-PROV-034] a statement left advisory is not countersigned and records no log-append intent", async () => {

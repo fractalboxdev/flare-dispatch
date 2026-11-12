@@ -24,13 +24,16 @@ import {
   opsGroup,
   provenancePolicies,
   provenancePolicyGroup,
+  provenanceStatements,
   RequestId,
   routerGroup,
   toFetchHandler,
   wellKnownGroup,
 } from "@fractalboxdev/flare-dispatch-api";
 import {
+  d1LogAppendStore,
   LogAppendFailed,
+  LogAppendStore,
   parseProvenanceKey,
   PRIVATE_LOG_NAME,
   privateLogAppend,
@@ -163,6 +166,22 @@ const policies = (env: ControlPlaneEnv) => {
   );
 };
 
+/**
+ * The statement lookups' port over the log-append intents in D1 and the private log's `TransparencyLog` object, which
+ * `provenanceGroup`'s routes read (FD-PROV-071). A deploy with no `TRANSPARENCY_LOG` binding answers each inclusion
+ * proof `unavailable`.
+ */
+const statements = (env: ControlPlaneEnv) => {
+  const ns = env.TRANSPARENCY_LOG;
+  return provenanceStatements(
+    ns === undefined ? undefined : ns.get(ns.idFromName(PRIVATE_LOG_NAME)),
+  ).pipe(
+    Layer.provide(
+      Layer.succeed(LogAppendStore)(d1LogAppendStore(env.DB as unknown as D1Database)),
+    ),
+  );
+};
+
 const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateServices>) =>
   Layer.mergeAll(
     Layer.merge(intakePort, intakeCancellation).pipe(Layer.provide(Layer.succeedContext(isolate))),
@@ -183,6 +202,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     Layer.succeed(OpsStore)({ db: env.DB, now: Date.now }),
     spendViewOf(env),
     policies(env),
+    statements(env),
   );
 
 /** One request through the router, with the isolate's services and the ones its routes read. */
