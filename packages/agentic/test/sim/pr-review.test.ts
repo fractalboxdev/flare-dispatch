@@ -17,6 +17,17 @@ const count = Number(process.env["SIM_SEEDS"] ?? 100);
 const kept = readKeptSeeds();
 
 describe("pr-review simulation", () => {
+  it("[FD-AGT-057] seed 37 ends at the same virtual time across workflow scheduler runs", async () => {
+    const endings = new Set<number>();
+    for (let repeat = 0; repeat < 5; repeat++) {
+      const o = await runScenario(37);
+      expect(checkCapacity(37, o)).toEqual([]);
+      expect(o.endedAt).toBeLessThanOrEqual(o.reviewed.deadlineAt);
+      endings.add(o.endedAt);
+    }
+    expect(endings.size).toBe(1);
+  });
+
   it("[FD-AGT-047] every dispatched pr-review is admitted interactive, its cloud entry opens 300 s after admission, and its deadline_at carries the 1500 s run ceiling", async () => {
     let executions = 0;
     for (const seed of seedsOf(PLACEMENT_SCENARIO, count, kept)) {

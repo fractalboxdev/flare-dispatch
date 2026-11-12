@@ -204,7 +204,12 @@ export interface Observation {
  * bound, the class's queue age after admission (MAMEKO-MDL-046), and at once when it starts past the bound; any other
  * call ends after its planned latency.
  */
-const plannedModel = (p: Plan, waitBound: number, callSites: string[]) => {
+const plannedModel = (
+  p: Plan,
+  waitBound: number,
+  callSites: string[],
+  sleeping: Set<{ readonly at: number }>,
+) => {
   const seen = new Map<string, number>();
   return (request: ModelRequest) =>
     Effect.gen(function* () {
@@ -215,7 +220,11 @@ const plannedModel = (p: Plan, waitBound: number, callSites: string[]) => {
       const call = p.calls[reviewer]![Math.min(attempt, 1)]!;
       const now = yield* Clock.currentTimeMillis;
       const until = "latencyMs" in call ? now + call.latencyMs : Math.max(now, waitBound);
-      yield* Effect.sleep(until - now);
+      const timer = { at: until };
+      sleeping.add(timer);
+      yield* Effect.sleep(until - now).pipe(
+        Effect.ensuring(Effect.sync(() => sleeping.delete(timer))),
+      );
       if (call.end._tag === "rate-limited")
         return yield* new ModelCallError({
           kind: "rate-limited",
@@ -292,7 +301,8 @@ export const runScenario = async (seed: number): Promise<Observation> => {
       ? { exitCode: 0, stdout: diffOf(p.lines), stderr: "" }
       : { exitCode: 0, stdout: "", stderr: "" };
   const services = fakeServices(rec, { shell });
-  const complete = plannedModel(p, reviewed.enqueuedAt + QUEUE_AGE_MS, callSites);
+  const sleeping = new Set<{ readonly at: number }>();
+  const complete = plannedModel(p, reviewed.enqueuedAt + QUEUE_AGE_MS, callSites, sleeping);
   const model = Layer.succeed(ModelClient, { complete });
   const startedAt = reviewed.enqueuedAt + p.claimAfterMs;
   const payload = {
@@ -317,10 +327,13 @@ export const runScenario = async (seed: number): Promise<Observation> => {
           Effect.provide(Layer.provideMerge(prReviewRun.layer, Layer.merge(services, model))),
           Effect.forkChild,
         );
-      // Every call ends at the wait bound or within 90 s, and each reviewer makes at most two, so the body ends well
-      // inside one virtual hour after the wait bound; each step wakes the sleeping calls in order.
-      for (let i = 0; i < 240 && fiber.pollUnsafe() === undefined; i++)
-        yield* TestClock.adjust("1 minute");
+      // Only a planned model sleep advances virtual time. Workflow-engine scheduler turns and async bookkeeping
+      // consume no simulated time, so a slow host cannot move the body past its deadline while it polls completion.
+      for (let i = 0; i < 10_000 && fiber.pollUnsafe() === undefined; i++) {
+        const next = Math.min(...[...sleeping].map((timer) => timer.at));
+        if (Number.isFinite(next)) yield* TestClock.setTime(next);
+        else yield* Effect.yieldNow;
+      }
       const exit = fiber.pollUnsafe();
       if (exit === undefined) return yield* Effect.die("the body did not end on the virtual clock");
       const result = yield* exit;
