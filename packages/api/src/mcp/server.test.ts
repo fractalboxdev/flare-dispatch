@@ -182,6 +182,25 @@ describe("/mcp", () => {
     expect(result.bytes).toBeLessThanOrEqual(MAX_TOOL_RESULT_BYTES);
   });
 
+  it("[FD-IFC-045]: get_failure_summary on a confidential-compute repository returns only the reason and the failing step names", async () => {
+    h.doubles.executions.set(
+      "01JSECRETMCP",
+      record({ execution_id: "01JSECRETMCP", repository: "acme/secret-mcp" }),
+    );
+    h.doubles.confidentiality.set("acme/secret-mcp", "confidential-compute");
+    const result = await reply(
+      await call("get_failure_summary", { execution_id: "01JSECRETMCP" }, await as(MEMBER)),
+    );
+    expect(result.isError).toBe(false);
+    expect(result.value).toEqual({
+      contractVersion: "v1",
+      incidentId: "01JSECRETMCP",
+      class: "ci",
+      repo: "acme/secret-mcp",
+      ciFailures: [{ kind: "run-step", name: "test", conclusion: "failure" }],
+    });
+  });
+
   it("[FD-IFC-046]: cancel keeps the route's rule: only the dispatcher or an operator", async () => {
     h.doubles.executions.set("01JC", record({ execution_id: "01JC", status: "running" }));
     const denied = await reply(await call("cancel", { execution_id: "01JC" }, await as(MEMBER)));

@@ -2,6 +2,7 @@
 // one door, mameko's execution record and operator operations, the incident pack, the device registry and the OIDC
 // key. A route names its port; the Worker provides the Layers. Every port fails only with an error of the error model.
 import type { OidcKeys } from "@fractalboxdev/flare-dispatch-cache/oidc";
+import type { ConfidentialityMode } from "@fractalboxdev/flare-dispatch-profile";
 import { Context, type Effect } from "effect";
 import type {
   DispatchBody,
@@ -96,10 +97,17 @@ export class Cancellation extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-api/Cancellation") {}
 
-/** The unbounded `incident/v1` pack of a failed execution; the route bounds it (FD-IFC-042). */
+/**
+ * The unbounded `incident/v1` pack of a failed execution and its repository's confidentiality mode; the route bounds the
+ * pack (FD-IFC-042) and strips it to the reason and the failing step names under `confidential-compute` (FD-IFC-045).
+ */
 export class FailureSummaries extends Context.Service<
   FailureSummaries,
-  { readonly pack: (execution: ExecutionRecord) => Effect.Effect<IncidentV1, ApiError> }
+  {
+    readonly pack: (execution: ExecutionRecord) => Effect.Effect<IncidentV1, ApiError>;
+    /** The repository's confidentiality mode ([profile.md] FD-PROF-025); `unclassified` where nothing sets one. */
+    readonly confidentiality: (repository: string) => Effect.Effect<ConfidentialityMode>;
+  }
 >()("@fractalboxdev/flare-dispatch-api/FailureSummaries") {}
 
 // --- Operator operations ---------------------------------------------------------------------------------------------
