@@ -2,6 +2,7 @@
 // (FD-ARCH-001), the application ports each phase requires a Layer for (FD-ARCH-039, MAMEKO-HOST-046), the credentials
 // no executor holds or receives (FD-ARCH-004, FD-ARCH-005) and when each class's workflow starts (FD-ARCH-019).
 import {
+  deploymentOf,
   poolAdmissionCaps,
   type Deployment,
   type Phase,
@@ -131,15 +132,24 @@ export const PRESIGNER_BINDINGS = [
   "R2_PRESIGN_SECRET_ACCESS_KEY",
 ] as const;
 
-const allSet = (env: Readonly<Record<string, unknown>>, names: readonly string[]) =>
-  names.every((n) => env[n] !== undefined && env[n] !== null && env[n] !== "");
+/**
+ * The bindings of `names` the env leaves unset or empty. The Worker's `appOptionsOf` and `presignerConfigOf` decide
+ * with it over the same constants, so the deploy check and the Worker's composition read one condition.
+ */
+export const unsetBindings = (env: object, names: readonly string[]): readonly string[] =>
+  names.filter((n) => {
+    const value: unknown = (env as Readonly<Record<string, unknown>>)[n];
+    return value === undefined || value === null || value === "";
+  });
+
+const allSet = (env: object, names: readonly string[]) => unsetBindings(env, names).length === 0;
 
 /**
  * The application ports the dispatcher's composition (`apps/control-plane/src/composition.ts`) supplies a Layer for
  * over an env of vars and secrets, by mameko port id, which configuration validation reads (MAMEKO-HOST-046). The
  * Worker reads its own env through it, and the deploy stage reads the rendered vars and the Worker's secrets.
  */
-export const composedPorts = (env: Readonly<Record<string, unknown>>): readonly string[] => [
+export const composedPorts = (env: object): readonly string[] => [
   // `ConfigurationSourceLive` and `GateDecisionSourceLive` from the profile package.
   "configuration-source",
   "gate-decision-source",
@@ -181,14 +191,15 @@ export const deployedCompositionFindings = (
   phase: Phase,
 ): readonly Finding[] => {
   const env = renderedEnv(config, secrets);
-  const deployment: Deployment = env["DEPLOYMENT"] === "development" ? "development" : "production";
+  const rendered = env["DEPLOYMENT"];
+  const deployment = deploymentOf(typeof rendered === "string" ? rendered : undefined);
   const needs: Readonly<Record<string, readonly string[]>> = {
     actuator: APP_BINDINGS,
     "actuator-rate-limit": APP_BINDINGS,
     "object-store-presigner": PRESIGNER_BINDINGS,
   };
   return compositionFindings(phase, composedPorts(env), deployment).map((f) => {
-    const unset = (needs[f.path] ?? []).filter((n) => !allSet(env, [n]));
+    const unset = unsetBindings(env, needs[f.path] ?? []);
     return {
       ...f,
       path: `${worker}.ports.${f.path}`,
