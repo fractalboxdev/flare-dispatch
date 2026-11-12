@@ -26,7 +26,16 @@ import {
   type StoredBundle,
   type StoredSnapshot,
 } from "./scan-bundle.test-support.ts";
-import { runSecurityGate, runSecurityRescan, scanCheckName, ScanSettings } from "./security-gate.ts";
+import { decodeRunReport, type RunReport } from "../../github/src/records.ts";
+import { StepFindings, type ScanFinding } from "./scan-findings.ts";
+import {
+  REPORTED_FINDINGS_MAX,
+  runSecurityGate,
+  runSecurityRescan,
+  scanCheckName,
+  scanReport,
+  ScanSettings,
+} from "./security-gate.ts";
 import {
   commandInputsOf,
   lookupRun,
@@ -514,6 +523,48 @@ describe("the security gate run bodies over a real git remote", () => {
     expect(summary!.markdown).toContain("None: no scanner or baseline check ran.");
   });
 
+  /** The `report` member of a scan's summary payload, as the control plane decodes it for the verdict record. */
+  const reportOf = (summary: unknown): RunReport => {
+    const decoded = decodeRunReport(summary);
+    if (decoded._tag === "None") throw new Error("the summary carries no report");
+    return decoded.value.report;
+  };
+
+  it("[FD-GH-096] reports the bundle digest, each snapshot digest, each scanner's version and result, and its findings", async () => {
+    const { summary } = await run(gate(sha["feature"]!), { exits: { semgrep: 1 } });
+    expect(reportOf(summary)).toEqual({
+      scan: {
+        bundle_digest: `sha256:${PIN.digest}`,
+        advisory_snapshots: [{ ecosystem: "npm", digest: `sha256:${"e".repeat(64)}` }],
+        scanners: [
+          { name: "gitleaks", version: IMAGE_VERSIONS.gitleaks, result: "clean" },
+          { name: "zizmor", version: IMAGE_VERSIONS.zizmor, result: "nothing-in-scope" },
+          { name: "osv-scanner", version: IMAGE_VERSIONS["osv-scanner"], result: "clean" },
+        ],
+      },
+      findings: [],
+      findingsTruncated: false,
+    });
+
+    // A scanner whose report cannot be read found findings the list does not hold.
+    const unread = await run(gate(sha["feature"]!), { exits: { gitleaks: 42 } });
+    expect(reportOf(unread.summary)).toMatchObject({ findings: [], findingsTruncated: true });
+    expect(reportOf(unread.summary).scan?.scanners[0]).toEqual({
+      name: "gitleaks",
+      version: IMAGE_VERSIONS.gitleaks,
+      result: "finding",
+    });
+
+    // Stopped after the bundle and versions held: no scanner result, and no finding list to read as none found.
+    const stopped = reportOf((await run(gate(sha["feature"]!), { snapshots: new Map() })).summary);
+    expect(stopped.scan?.bundle_digest).toBe(`sha256:${PIN.digest}`);
+    expect(stopped.scan?.scanners.map((s) => s.result)).toEqual([null, null, null]);
+    expect(stopped).not.toHaveProperty("findings");
+    expect(stopped).not.toHaveProperty("findingsTruncated");
+    // Stopped before the bundle held: no scan to report.
+    expect(reportOf((await run(gate(sha["feature"]!), { pin: null })).summary)).toEqual({});
+  });
+
   it("[FD-GATE-111] reports security-rescan's summary under flare-dispatch/security-rescan", async () => {
     const { summary } = await run(rescan(sha["feature"]!));
     expect(summary!.name).toBe("flare-dispatch/security-rescan");
@@ -542,5 +593,42 @@ describe("the security gate run bodies over a real git remote", () => {
     } finally {
       git("symbolic-ref", "HEAD", "refs/heads/main");
     }
+  });
+});
+
+describe("the scan's report for the verdict record", () => {
+  const found = (i: number): ScanFinding => ({
+    scanner: "gitleaks",
+    ruleId: "generic-api-key",
+    path: `src/f${i}.ts`,
+    startLine: i + 1,
+    level: "failure",
+    fingerprint: i.toString(16).padStart(64, "0"),
+  });
+
+  it("[FD-GH-096] reports at most 200 findings with ruleId, fingerprint, path, lines and level, and findingsTruncated beyond", () => {
+    const step = (n: number) => ({
+      id: "gitleaks",
+      result: "finding" as const,
+      invocation: undefined,
+      exit: undefined,
+      findings: StepFindings.Read({ findings: Array.from({ length: n }, (_, i) => found(i)) }),
+    });
+    const many = scanReport({ outcome: Outcome.failure("scan: gitleaks"), prepared: undefined, steps: [step(250)] });
+    expect(many.findings).toHaveLength(REPORTED_FINDINGS_MAX);
+    expect(many.findings?.[0]).toEqual({
+      ruleId: "generic-api-key",
+      fingerprint: "0".repeat(64),
+      path: "src/f0.ts",
+      startLine: 1,
+      endLine: 1,
+      level: "failure",
+    });
+    expect(many.findingsTruncated).toBe(true);
+    const exactly = scanReport({ outcome: Outcome.failure("scan: gitleaks"), prepared: undefined, steps: [step(200)] });
+    expect(exactly.findings).toHaveLength(200);
+    expect(exactly.findingsTruncated).toBe(false);
+    // The report decodes as the control plane reads it.
+    expect(decodeRunReport({ report: many })._tag).toBe("Some");
   });
 });

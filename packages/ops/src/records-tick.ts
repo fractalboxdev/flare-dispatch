@@ -1,17 +1,20 @@
 // The minute tick's two record units (specs/github-output.md § Job and verdict records), active where the profile
 // carries the record kinds, which it does where the overlay sets `records.url` from phase 2 (FD-GH-093):
-// `verdict-records` inserts one `verdict.record` ops intent for each terminal execution that has none (FD-GH-094), and
+// `verdict-records` inserts one `verdict.record` ops intent for each terminal execution that has none (FD-GH-094),
+// holding the scan and findings the run reported under the `report` member of its check payloads (FD-GH-096), and
 // `record-undelivered` pages once for each `job.record` or `verdict.record` row that reaches `refused` or `expired`
 // (FD-GH-102). Neither unit writes an execution row or a check-run row, so a record that fails to arrive leaves the
 // execution's verdict and its check run as they are.
 import {
   checkConclusion,
   concludedVerdictOf,
+  decodeRunReport,
   OutcomePayload,
   recordedVerdict,
   Verdict,
   verdictRecordPayload,
   type Conclusion,
+  type RunReport,
 } from "@fractalboxdev/flare-dispatch-github";
 import {
   RECORD_KINDS,
@@ -105,18 +108,60 @@ const conclusionOf = (concludedJson: string | null, recorded: Verdict): Conclusi
   ).conclusion;
 };
 
+/** The kinds whose run-emitted payload may carry the run's `report` of its scan and findings. */
+export const REPORT_KINDS = ["check.summary", "check.annotations"] as const;
+
+/**
+ * The run-emitted rows of the executions a pass records that carry a `report` member: each execution's `check.summary`
+ * rows ahead of its `check.annotations` rows, each kind by intent key. One query reads every execution of the pass.
+ */
+export const REPORTED_RESULTS = `select o.execution_id, o.payload_json from outbox o
+  where o.execution_id in (select value from json_each(?))
+    and o.kind in (${REPORT_KINDS.map((k) => `'${k}'`).join(", ")})
+    and json_extract(o.payload_json, '$.report') is not null
+  order by o.execution_id, case o.kind when 'check.summary' then 0 else 1 end, o.intent_key`;
+
+interface ReportedRow {
+  readonly execution_id: string;
+  readonly payload_json: string;
+}
+
+/** Each execution's reports of its scan and findings, read from its own `check.summary` and `check.annotations` rows. */
+const reportsOf = (db: D1Like, executionIds: readonly string[]) =>
+  Effect.gen(function* () {
+    const byExecution = new Map<string, RunReport[]>();
+    if (executionIds.length === 0) return byExecution;
+    const { results } = yield* attempt("reported results", () =>
+      db.prepare(REPORTED_RESULTS).bind(JSON.stringify(executionIds)).all(),
+    );
+    for (const row of results as readonly ReportedRow[]) {
+      const decoded = decodeRunReport(JSON.parse(row.payload_json));
+      if (Option.isNone(decoded)) continue;
+      const held = byExecution.get(row.execution_id) ?? [];
+      held.push(decoded.value.report);
+      byExecution.set(row.execution_id, held);
+    }
+    return byExecution;
+  });
+
 /**
  * Inserts one `verdict.record` ops intent through `insertOpsIntent`, keyed `verdict-record:<execution_id>` on the
  * `records` delivery key, for each terminal execution that has no such row (FD-GH-094), and answers the executions it
- * inserted for. A repeat inserts nothing for an execution already recorded.
+ * inserted for. Each record holds the scan and findings the execution's run reported (FD-GH-096). A repeat inserts
+ * nothing for an execution already recorded.
  */
 export const insertVerdictRecords = (db: D1Like, profile: Profile, now: number) =>
   Effect.gen(function* () {
     const { results } = yield* attempt("terminal executions", () =>
       db.prepare(TERMINAL_UNRECORDED).bind(now, RECORDS_BATCH).all(),
     );
+    const rows = results as readonly TerminalRow[];
+    const reports = yield* reportsOf(
+      db,
+      rows.map((r) => r.id),
+    );
     const inserted: string[] = [];
-    for (const row of results as readonly TerminalRow[]) {
+    for (const row of rows) {
       const verdict = recordedVerdict(row.status, row.reason);
       if (verdict === null) continue;
       yield* insertOpsIntent(
@@ -138,6 +183,7 @@ export const insertVerdictRecords = (db: D1Like, profile: Profile, now: number) 
             verdict,
             conclusion: conclusionOf(row.concluded_json, verdict),
             checkName: row.check_name,
+            reports: reports.get(row.id) ?? [],
           }),
           limitKey: RECORDS_LIMIT_KEY,
         },

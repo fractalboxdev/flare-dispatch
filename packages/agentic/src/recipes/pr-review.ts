@@ -11,6 +11,8 @@ import { Artifacts, ModelClient, RecipeIntents, Shell, type ModelCallError } fro
 export const PR_REVIEW_MARKER = "<!-- flare-dispatch: pr-review -->";
 export const MAX_COMMENT_FINDINGS = 25;
 export const MAX_ANNOTATIONS = 50;
+/** The most findings the run's `report` lists, the most a `verdict.record` holds. */
+export const MAX_REPORTED_FINDINGS = 200;
 /** The check run `pr-review` reports on; the run declares no `checkLabel` (FD-GH-006). */
 export const PR_REVIEW_CHECK_NAME = "flare-dispatch/pr-review";
 export const LINT_MAX_FILES = 60;
@@ -500,6 +502,24 @@ export const reviewAnnotations = (findings: readonly Finding[]) =>
       raw_details: `ruleId: ${f.ruleId}\nfingerprint: ${f.fingerprint}`,
     }));
 
+/**
+ * The `report` member of the run's `check.annotations` payload, which the control plane copies into the execution's
+ * `verdict.record` (specs/github-output.md FD-GH-096; decoded by `RunReport` in `packages/github/src/records.ts`): at
+ * most 200 findings, each with its identity, lines and level and no model text, and `findingsTruncated` where the
+ * review found more.
+ */
+export const reviewReport = (findings: readonly Finding[]) => ({
+  findings: findings.slice(0, MAX_REPORTED_FINDINGS).map((f) => ({
+    ruleId: f.ruleId,
+    fingerprint: f.fingerprint,
+    path: f.path,
+    startLine: f.startLine,
+    endLine: f.endLine,
+    level: f.level,
+  })),
+  findingsTruncated: findings.length > MAX_REPORTED_FINDINGS,
+});
+
 /** The verdict: `advisory` always succeeds; `gating` fails on `request-changes` (FD-AGT-055, FD-AGT-056). */
 export const reviewVerdict = (mode: "advisory" | "gating", outcome: ReviewOutcome): RunResult =>
   mode === "gating" && outcome === "request-changes"
@@ -553,14 +573,15 @@ export const runPrReview = (input: PrReviewInput) =>
       marker: PR_REVIEW_MARKER,
       body: reviewComment(outcome, merged, changeClass),
     });
-    const annotations = reviewAnnotations(merged);
-    if (annotations.length > 0)
+    // Every finding reaches the run's report, one with no path or line included, though only located ones annotate.
+    if (merged.length > 0)
       yield* intents.append("annotate", "check.annotations", {
         name: PR_REVIEW_CHECK_NAME,
         head_sha: input.headSha,
         title: `pr-review: ${outcome}`,
         summary: `${merged.length} findings`,
-        annotations,
+        annotations: reviewAnnotations(merged),
+        report: reviewReport(merged),
       });
     return reviewVerdict(input.mode ?? "advisory", outcome);
   }).pipe(
