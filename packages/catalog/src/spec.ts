@@ -273,7 +273,7 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
   },
 };
 
-/** The input schema of each agentic recipe whose body ships at this phase (specs/runs/agentic.md § Recipes). */
+/** The input schema of each of the eight agentic recipes (specs/runs/agentic.md § Recipes, FD-AGT-001). */
 const AGENTIC_INPUTS: Readonly<Record<string, Schema.Decoder<unknown>>> = {
   "pr-review": PrReviewInput,
   "improve-pr": ImprovePrInput,
@@ -286,8 +286,8 @@ const AGENTIC_INPUTS: Readonly<Record<string, Schema.Decoder<unknown>>> = {
 };
 
 /**
- * The agentic recipes with a body, each served by a cloud executor through the model gateway. A recipe whose body is
- * a later phase's has no run in the registry, so it has no catalogue entry either (FD-RUN-063).
+ * The agentic recipes, each served by a cloud executor through the model gateway (FD-AGT-001). A declared recipe with
+ * no input schema has no run in the registry, so it has no catalogue entry either (FD-RUN-063).
  */
 const agenticEntries: Readonly<Record<string, CatalogEntry>> = Object.fromEntries(
   Object.entries(AGENTIC_CATALOG).flatMap(([name, entry]) => {

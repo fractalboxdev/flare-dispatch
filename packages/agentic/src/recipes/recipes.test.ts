@@ -28,7 +28,7 @@ import {
   PrReviewInput,
 } from "./pr-review.ts";
 import { ImprovePrParams, improvePrRequest } from "./improve-pr.ts";
-import { ciTriageRun, improvePrRun, prReviewRun, specDriftRun } from "./runs.ts";
+import { agenticRuns, ciTriageRun, improvePrRun, prReviewRun, specDriftRun } from "./runs.ts";
 import { ModelCallError, ModelClient, modelGatewayClientLayer } from "./services.ts";
 import { ReadFailed, SPEC_DRIFT_BRANCH } from "./spec-drift-pr.ts";
 
@@ -93,6 +93,23 @@ describe("catalogue", () => {
       "triage-issues",
       "triage-prs",
     ]);
+  });
+
+  it("[FD-AGT-001] gives each of the eight agentic recipes a run body under its catalogue spec", () => {
+    expect(agenticRuns.map((run) => run.spec.name)).toEqual([
+      "pr-review",
+      "improve-pr",
+      "self-heal-pr",
+      "spec-drift-pr",
+      "triage-issues",
+      "triage-prs",
+      "ci-triage-pr",
+      "release-notes",
+    ]);
+    for (const run of agenticRuns) {
+      expect(run.spec.intentKinds, run.spec.name).toEqual(AGENTIC_CATALOG[run.spec.name]?.spec.intentKinds);
+      expect(run.layer, run.spec.name).toBeDefined();
+    }
   });
 
   it("[FD-AGT-002] [FD-AGT-004] every declaration passes the registry validator", () => {
