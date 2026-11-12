@@ -13,7 +13,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-ops";
 import { makeOperability, repositoryRoot, V2_WORKERS } from "@fractalboxdev/flare-dispatch-ops/cli";
 import { Effect, Layer } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ControlPlaneEnv } from "../../src/config.ts";
 import worker from "../../src/worker.ts";
 
@@ -110,22 +110,24 @@ describe("fd deploy against the control plane's own key check", () => {
       "INSTALL_STATE_KEY",
     ] as const) {
       const clash = account({ ...DISTINCT, [name]: DISTINCT.PROVENANCE_KEY });
-      const failed = await clash.deploy();
+      const logged: unknown[] = [];
+      const log = vi
+        .spyOn(console, "error")
+        .mockImplementation((...args) => void logged.push(...args));
+      const failed = await clash.deploy().finally(() => log.mockRestore());
       expect(failed.ok, name).toBe(false);
       expect(failed.stages.at(-1), name).toMatchObject({ stage: "probes", ok: false });
       expect(failed.stages.at(-1)!.detail).toContain("control-plane: GET /health failed");
-      expect(clash.probes, name).toEqual([
-        {
-          status: 503,
-          body: {
-            status: "misconfigured",
-            path: "PROVENANCE_KEY",
-            message: `the provenance key equals ${name}`,
-          },
-        },
-      ]);
+      expect(clash.probes, name).toEqual([{ status: 503, body: { status: "misconfigured" } }]);
       expect(clash.alarms[0]).toMatch(/^deploy-probe-failed: /);
-      expect(JSON.stringify(clash.probes)).not.toContain(DISTINCT.PROVENANCE_KEY);
+      // `/health` is public: the body names neither binding of the clash nor the shared value.
+      const body = JSON.stringify(clash.probes);
+      for (const leak of ["PROVENANCE_KEY", name, DISTINCT.PROVENANCE_KEY])
+        expect(body, name).not.toContain(leak);
+      // The operator reads the refused binding and the reason in the Worker log.
+      expect(logged.join("\n"), name).toContain(
+        `PROVENANCE_KEY: the provenance key equals ${name}`,
+      );
     }
   });
 });
