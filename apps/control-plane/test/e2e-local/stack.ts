@@ -8,6 +8,7 @@
 // Started with a recorded GitHub state, the stack instead holds an App key of its own and no repository binding, so the
 // Worker reads and writes GitHub through the App, and the fixture server answers from that state. Executors are the
 // test's own signed WebSockets (`../support.ts`); no container runs.
+import { spawn } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
@@ -321,5 +322,232 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
       await github.close();
       await team.close();
     },
+  };
+};
+
+// --- The developer's device ------------------------------------------------------------------------------------------
+//
+// The `fd-<subcommand>` executables as installed, run as `fd` runs them from `PATH`, against the stack's URL. The
+// developer's Access token is in the operating system's credential store (FD-IFC-067): the macOS keychain, or the Secret
+// Service the e2e-local job runs in its own D-Bus session.
+
+const FD_BIN = join(APP, "../../packages/fd/bin");
+const CREDENTIAL_SERVICE = "flare-dispatch";
+
+const storeTool = (
+  command: string,
+  args: readonly string[],
+  stdin: string,
+): Promise<number | null> =>
+  new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["pipe", "ignore", "ignore"] });
+    child.on("error", reject);
+    child.on("close", resolve);
+    child.stdin.end(stdin);
+  });
+
+/** Stores `token` as the Access token `fd` reads for the control plane at `url`, as `fd login` stores it. */
+export const storeAccessToken = async (url: string, token: string): Promise<void> => {
+  const code =
+    process.platform === "darwin"
+      ? await storeTool(
+          "security",
+          ["-i"],
+          `add-generic-password -U -a ${JSON.stringify(url)} -s ${CREDENTIAL_SERVICE} -w ${JSON.stringify(token)}\n`,
+        )
+      : await storeTool(
+          "secret-tool",
+          [
+            "store",
+            `--label=${CREDENTIAL_SERVICE} ${url}`,
+            "service",
+            CREDENTIAL_SERVICE,
+            "account",
+            url,
+          ],
+          token,
+        );
+  if (code !== 0) throw new Error(`the credential store refused the token (exit ${String(code)})`);
+};
+
+/** Removes the Access token stored for `url`. */
+export const forgetAccessToken = async (url: string): Promise<void> => {
+  await (process.platform === "darwin"
+    ? storeTool("security", ["delete-generic-password", "-a", url, "-s", CREDENTIAL_SERVICE], "")
+    : storeTool("secret-tool", ["clear", "service", CREDENTIAL_SERVICE, "account", url], ""));
+};
+
+/** The environment of a developer's shell pointed at the stack: no config file, the stack's URL, and `extra`. */
+export const developerEnv = (
+  stack: Stack,
+  home: string,
+  extra: Readonly<Record<string, string>> = {},
+): Record<string, string> => ({
+  ...Object.fromEntries(
+    ["HOME", "PATH", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"].flatMap((k) =>
+      process.env[k] === undefined ? [] : [[k, process.env[k]!]],
+    ),
+  ),
+  XDG_CONFIG_HOME: join(home, "config"),
+  FD_URL: stack.url,
+  ...extra,
+});
+
+export interface FdRan {
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/** Runs one `fd-<subcommand>` executable to completion. */
+export const runFd = (
+  env: Readonly<Record<string, string>>,
+  subcommand: string,
+  args: readonly string[] = [],
+): Promise<FdRan> =>
+  new Promise((resolve, reject) => {
+    const child = spawn(join(FD_BIN, `fd-${subcommand}.mjs`), args, {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c: Buffer) => (stdout += c.toString("utf8")));
+    child.stderr.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+
+/** A tool call's answer: the tool error flag and the decoded JSON of its text content. */
+export interface ToolAnswer {
+  readonly isError: boolean;
+  readonly value: Record<string, unknown>;
+}
+
+/** An MCP client session with `fd mcp` over its stdin and stdout, initialized on a dated protocol revision. */
+export interface FdMcp {
+  readonly request: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+  readonly call: (tool: string, args?: Record<string, unknown>) => Promise<ToolAnswer>;
+  /** Closes stdin, as a client ends the session, and answers the executable's exit code. */
+  readonly close: () => Promise<number | null>;
+}
+
+export const startFdMcp = async (env: Readonly<Record<string, string>>): Promise<FdMcp> => {
+  const child = spawn(join(FD_BIN, "fd-mcp.mjs"), [], {
+    env,
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  const exited = new Promise<number | null>((resolve) => child.on("close", resolve));
+  const pending = new Map<number, (message: Record<string, unknown>) => void>();
+  let buffered = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffered += chunk.toString("utf8");
+    let newline: number;
+    while ((newline = buffered.indexOf("\n")) >= 0) {
+      const line = buffered.slice(0, newline).trim();
+      buffered = buffered.slice(newline + 1);
+      if (line === "") continue;
+      const message = JSON.parse(line) as Record<string, unknown>;
+      if (typeof message["id"] === "number") pending.get(message["id"])?.(message);
+    }
+  });
+  let ids = 0;
+  const send = (message: Record<string, unknown>) =>
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+  const request = async (method: string, params?: Record<string, unknown>) => {
+    const id = ++ids;
+    const answered = new Promise<Record<string, unknown>>((resolve) => pending.set(id, resolve));
+    send({ id, method, ...(params === undefined ? {} : { params }) });
+    const message = await answered;
+    pending.delete(id);
+    if (message["error"] !== undefined)
+      throw new Error(`protocol error: ${JSON.stringify(message["error"])}`);
+    return message["result"];
+  };
+  await request("initialize", {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "e2e-local", version: "0" },
+  });
+  send({ method: "notifications/initialized" });
+  return {
+    request,
+    call: async (tool, args = {}) => {
+      const result = (await request("tools/call", { name: tool, arguments: args })) as {
+        isError?: boolean;
+        content: { text: string }[];
+      };
+      return {
+        isError: result.isError === true,
+        value: JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>,
+      };
+    },
+    close: () => {
+      child.stdin.end();
+      return exited;
+    },
+  };
+};
+
+/** The sessionless MCP revision an agent calls the dispatcher's `/mcp` with. */
+const MCP_REVISION = "2026-07-28";
+
+/** One JSON-RPC request to the dispatcher's `/mcp` over Streamable HTTP as `identity`, answered by its result. */
+export const dispatcherMcp = async (
+  stack: Stack,
+  identity: string,
+  method: string,
+  params: Record<string, unknown> = {},
+): Promise<unknown> => {
+  const name = typeof params["name"] === "string" ? params["name"] : undefined;
+  const r = await fetch(`${stack.url}/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": MCP_REVISION,
+      "mcp-method": method,
+      ...(name === undefined ? {} : { "mcp-name": name }),
+      ...(await stack.access(identity)),
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": MCP_REVISION,
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    }),
+  });
+  const text = await r.text();
+  if (r.status !== 200) throw new Error(`/mcp answered ${r.status}: ${text}`);
+  const data = text
+    .split("\n")
+    .filter((l) => l.startsWith("data:"))
+    .map((l) => l.slice(5).trim());
+  const message = JSON.parse(data.at(-1) ?? text) as { result?: unknown; error?: unknown };
+  if (message.result === undefined)
+    throw new Error(`protocol error: ${JSON.stringify(message.error)}`);
+  return message.result;
+};
+
+/** A tool call's answer from the dispatcher's `/mcp`. */
+export const dispatcherTool = async (
+  stack: Stack,
+  identity: string,
+  tool: string,
+  args: Record<string, unknown>,
+): Promise<ToolAnswer> => {
+  const result = (await dispatcherMcp(stack, identity, "tools/call", {
+    name: tool,
+    arguments: args,
+  })) as { isError?: boolean; content: { text: string }[] };
+  return {
+    isError: result.isError === true,
+    value: JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>,
   };
 };
