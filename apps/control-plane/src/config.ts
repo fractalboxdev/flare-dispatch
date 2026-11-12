@@ -1,6 +1,6 @@
 // The Worker's bindings, and the two `json` configurations host-cloudflare reads, derived from the profile so one
 // document decides both.
-import { apiConfigFromEnv, ConfigInvalid, type ApiEnv } from "@fractalboxdev/flare-dispatch-api";
+import { apiConfigFromEnv, ConfigInvalid, type ApiEnv } from "@fractalboxdev/flare-dispatch-api/config";
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
 import type { ConcludeKind, QuotaObject } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";

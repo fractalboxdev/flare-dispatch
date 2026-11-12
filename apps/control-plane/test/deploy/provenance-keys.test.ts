@@ -38,6 +38,7 @@ const account = (secrets: Readonly<Record<string, string>>) => {
     awsBudgets: Effect.fail(
       new TargetFailed({ operation: "aws budgets", message: "the account has no AWS budgets" }),
     ),
+    runnerWorkflow: () => Effect.succeed(null),
     applyD1Migrations: () => Effect.succeed([]),
     deployWorker: (r) =>
       Effect.sync(() => {
