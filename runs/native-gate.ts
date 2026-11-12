@@ -4,7 +4,9 @@ import { defineRun, io, nativeExecution, NativeGateInput, NativeReceiptRefused, 
 const EXECUTION_SECONDS = 4 * 3600;
 const FINALIZATION_SECONDS = 600;
 const ADMISSION_SECONDS = 90 * 60;
-export const NATIVE_GATE_JOIN_MILLISECONDS = (EXECUTION_SECONDS + FINALIZATION_SECONDS + ADMISSION_SECONDS + 600) * 1000;
+/** The 600 s container lease before the body, then teardown, terminal-row settlement and the next parent poll. */
+const SETTLE_MARGIN_SECONDS = 1800;
+export const NATIVE_GATE_JOIN_MILLISECONDS = (EXECUTION_SECONDS + FINALIZATION_SECONDS + ADMISSION_SECONDS + SETTLE_MARGIN_SECONDS) * 1000;
 
 export const NativeGateRunInput = Schema.Struct({
   repo: Schema.String, sha: NativeGateInput.fields.head, baseSha: NativeGateInput.fields.base,

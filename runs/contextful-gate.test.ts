@@ -13,6 +13,7 @@ import {
   type StepRunnerService,
 } from "@fractalboxdev/flare-dispatch-core";
 import { check } from "./check";
+import { nativeGate } from "./native-gate";
 import {
   contextfulGate,
   lightLabelsKey,
@@ -87,6 +88,43 @@ describe("contextful-gate", () => {
       expect(handles.childRuns.spawned.map(child => [child.run, (child.input as { checkLabel: string }).checkLabel]))
         .toEqual([["check", "pins"], ["check", "lint"], ["native-gate", "windows.x86_64-msvc"]]);
       expect(handles.childRuns.polls).toBeGreaterThan(3);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("joins a native child still settling after its queue, lease and body ceilings", () => {
+    let now = 0;
+    const leaseWaitMs = 600_000;
+    const settleAfterBodyMs = 300_000;
+    const nativeInput = { ...input, target: "x86_64-pc-windows-msvc", checkLabel: "windows.x86_64-msvc" } as const;
+    const queueLimit = nativeGate.limits.admissionMaxQueueAgeSec;
+    const admissionSeconds = typeof queueLimit === "function" ? queueLimit(nativeInput) : queueLimit ?? 0;
+    const settlesAt = (admissionSeconds + nativeGate.limits.maxDurationSec) * 1000
+      + leaseWaitMs + settleAfterBodyMs;
+    let nativeSpawnedAt = 0;
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "pins\nwindows.x86_64-msvc\n", exitCode: 0 },
+        [DISCOVER]: { stdout: "pins\n", exitCode: 0 },
+      },
+      childRuns: { pollFn: ids => ids.map(executionId => ({ executionId,
+        status: executionId.startsWith("native-gate") && now - nativeSpawnedAt < settlesAt ? "running" : "success" })),
+      },
+    });
+    return Effect.gen(function* () {
+      const io = yield* IO, steps = yield* StepRunner, children = yield* ChildRuns;
+      const result = yield* contextfulGate.run(input).pipe(
+        Effect.provideService(IO, { ...io, now: Effect.sync(() => now) }),
+        Effect.provideService(StepRunner, { ...steps,
+          sleep: (_, milliseconds) => Effect.sync(() => { now += milliseconds; }),
+        }),
+        Effect.provideService(ChildRuns, { ...children, spawn: opts => Effect.gen(function* () {
+          if (opts.run === nativeGate.name) nativeSpawnedAt = now;
+          return yield* children.spawn(opts);
+        }) }),
+      );
+      expect(result).toEqual({ stages: 2, failed: [], notAffected: [] });
+      expect(now - nativeSpawnedAt).toBeGreaterThanOrEqual(settlesAt);
+      expect(handles.childRuns.spawned.map(child => child.run)).toEqual(["check", "native-gate"]);
     }).pipe(Effect.provide(layer));
   });
 
