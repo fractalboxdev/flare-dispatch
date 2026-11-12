@@ -47,7 +47,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `executors.planeId` | This control plane's `plane_id`, which every device's `connect` signature binds ([interfaces.md](interfaces.md) FD-IFC-085) |
 | `alerts.sink` | An HTTPS webhook URL or an email address |
 | `alerts.webhookSilentHours` | The delivery gap that raises `webhook-silent`, default 24 |
-| `spend.*` | The budget and reserve settings [spend.md](spend.md) defines |
+| `spend.*` | The budget and reserve settings [spend.md](spend.md) defines; the control plane's `SPEND` var carries them, each the overlay leaves out at its default of [profile.md](profile.md) § Spend configuration (FD-PROF-054) |
 | `pools.<pool>.maxInstances` | Container `max_instances` per pool, bounded by the account's limits |
 | `aws.budgetUsd`, `aws.launchCap`, `aws.egressProxy`, `aws.imageRegistry` | The AWS limit, launch cap, egress proxy endpoint and image registry endpoint ([executors.md](executors.md) FD-EXEC-083, [MAMEKO-ISO-020](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/isolation-egress.md)) |
 | `gha.concurrencyCap`, `gha.runnerRepo`, `gha.workflow` | The GitHub Actions launcher's concurrency cap, runner repository and runner workflow ([executors.md](executors.md) FD-EXEC-085, FD-EXEC-089) |
@@ -70,7 +70,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 }
 ```
 
-No overlay value is a secret. Secrets, the webhook secret included ([intake.md](intake.md) FD-INT-022), are Worker secrets set with `wrangler secret put` (runbook R14), and the drift check shows each by name only. The renderer replaces each placeholder with its value and changes nothing else. The drift check then compares the rendered configuration with three references: the template's own invariants, the live deployed Worker, and the GitHub App registration.
+No overlay value is a secret. Secrets, the webhook secret included ([intake.md](intake.md) FD-INT-022), are Worker secrets set with `wrangler secret put` (runbook R14), and the drift check shows each by name only. The renderer replaces each placeholder with its value and changes nothing else; a `spend.*` value the overlay leaves out renders at its default. The drift check then compares the rendered configuration with three references: the template's own invariants, the live deployed Worker, and the GitHub App registration.
 
 ```mermaid
 flowchart LR

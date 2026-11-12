@@ -6,8 +6,38 @@ import {
   type IntakeRecord,
 } from "@fractalboxdev/flare-dispatch-intake";
 import type { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
+import {
+  emptyQuotaLedger,
+  quotaObjectOver,
+  quotaOptionsDefault,
+  type QuotaLedger,
+  type QuotaObject,
+} from "@fractalboxdev/flare-dispatch-github";
 import { Effect } from "effect";
 import type { ControlPlaneEnv } from "../src/config.ts";
+
+/** An `INSTALLATION_QUOTA` namespace whose objects hold their ledgers in memory, one per name. */
+export const memoryQuotaNamespace = (): ControlPlaneEnv["INSTALLATION_QUOTA"] => {
+  const objects = new Map<string, QuotaObject>();
+  return {
+    idFromName: (name) => name,
+    get: (id) => {
+      const name = String(id);
+      let object = objects.get(name);
+      if (object === undefined) {
+        let ledger: QuotaLedger = emptyQuotaLedger;
+        object = quotaObjectOver(quotaOptionsDefault, {
+          read: () => ledger,
+          write: async (next) => {
+            ledger = next;
+          },
+        });
+        objects.set(name, object);
+      }
+      return object;
+    },
+  };
+};
 
 export type TestD1 = Awaited<ReturnType<typeof migratedD1>>;
 
@@ -60,5 +90,6 @@ export const envOf = (db: unknown, extra: Record<string, string> = {}) =>
     DB: db,
     PLANE_ID: "flare-dispatch",
     DEPLOYMENT: "production",
+    INSTALLATION_QUOTA: memoryQuotaNamespace(),
     ...extra,
   }) as unknown as ControlPlaneEnv;

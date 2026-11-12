@@ -240,14 +240,21 @@ export const renderAll = (overlayText: string, workers: readonly WorkerTemplate[
     return { overlay, rendered };
   });
 
+/**
+ * The profile step over a decoded overlay (FD-OPS-021): the overlay delivers the spend configuration the profile's
+ * spend lines are validated against (FD-PROF-054).
+ */
+export type ProfileStep = (overlay: OverlayValues) => Effect.Effect<readonly Finding[]>;
+
 /** The Access applications a deploy carries, from its decoded overlay; none for a deploy without the dispatcher. */
 export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
 
 /**
  * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), the templates' invariants, the
  * rendered configuration, the deployed Workers against the record of the last deploy, the GitHub App's registration,
- * the default branch's ruleset and, given `access`, the Access applications on the dispatcher's hostname, then the profile step's findings from `more` (`withProfileStep`, the
- * composition the pull-request drift check shares). `fd deploy` passes no `access`: it checks only the hostname
+ * the default branch's ruleset and, given `access`, the Access applications on the dispatcher's hostname, then the
+ * profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
+ * drift check shares). `fd deploy` passes no `access`: it checks only the hostname
  * application's AUD tag, then applies the committed applications and reports each one it changed, where `fd doctor`
  * fails on each difference.
  */
@@ -257,7 +264,7 @@ export const driftFindings = (
   rendered: readonly RenderedWorker[],
   manifest: AppPermissions,
   extra: (worker: string, config: WorkerConfig) => readonly Finding[] = () => [],
-  more: Effect.Effect<readonly Finding[]> = Effect.succeed([]),
+  more: ProfileStep = () => Effect.succeed([]),
   access: CommittedAccess | null = null,
 ) =>
   Effect.gen(function* () {
@@ -274,7 +281,7 @@ export const driftFindings = (
     findings.push(...appRegistrationCheck(manifest, yield* target.appRegistration));
     findings.push(...rulesetCheck(yield* target.requiredChecks));
     if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));
-    return yield* withProfileStep(findings, more);
+    return yield* withProfileStep(findings, more(overlay));
   }).pipe(Effect.mapError(stageFailed("drift")));
 
 /** `fd doctor`: every drift check, no Cloudflare or GitHub write (FD-OPS-024). */
@@ -283,7 +290,7 @@ export const fdDoctor = (
   workers: readonly WorkerTemplate[],
   manifest: AppPermissions,
   extra?: (worker: string, config: WorkerConfig) => readonly Finding[],
-  more?: Effect.Effect<readonly Finding[]>,
+  more?: ProfileStep,
   access?: AccessFor,
 ) =>
   Effect.gen(function* () {
@@ -330,7 +337,7 @@ export const fdDeploy = (
   workers: readonly WorkerTemplate[],
   manifest: AppPermissions,
   extra?: (worker: string, config: WorkerConfig) => readonly Finding[],
-  more?: Effect.Effect<readonly Finding[]>,
+  more?: ProfileStep,
   access?: AccessFor,
 ) =>
   Effect.gen(function* () {

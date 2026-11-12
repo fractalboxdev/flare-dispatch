@@ -2,7 +2,10 @@
 // FD-SPD-060). The spend view itself is mameko's (MAMEKO-SPD-058); `SpendView` is the coordinator operation the
 // operability group's `spend` handler calls.
 import type { SpendViewBody } from "@fractalboxdev/flare-dispatch-api/declaration";
+import type { SpendConfig } from "@fractalboxdev/flare-dispatch-profile";
 import { Context, Effect, Schema } from "effect";
+import { decodeStrict } from "./decode.ts";
+import { spendConfigFrom, SpendValues } from "./overlay.ts";
 
 /** The spend view of MAMEKO-SPD-058, in micro-USD: the declaration's response schema of `GET /v1/spend`. */
 export { SpendViewBody } from "@fractalboxdev/flare-dispatch-api/declaration";
@@ -42,3 +45,36 @@ export const requesterAttribution = (request: {
     : null,
   member: request.sender ?? request.actor ?? request.accessIdentity ?? null,
 });
+
+/**
+ * The control plane's var that carries the overlay's spend values, each the overlay leaves out at its default; the
+ * template renders it from `{{spend}}` (FD-PROF-054).
+ */
+export const SPEND_VAR = "SPEND";
+
+/**
+ * The spend configuration the `SPEND` var delivers to the coordinator: a rendered JSON var arrives as the object, a
+ * text var as its JSON. With no var every value is at its default; a var that does not decode as the overlay's spend
+ * values is `SpendUnreadable`, so no view reports a budget the operator did not set.
+ */
+export const spendConfigOfVar = (value: unknown): Effect.Effect<SpendConfig, SpendUnreadable> =>
+  value === undefined
+    ? Effect.succeed(spendConfigFrom())
+    : Effect.try({
+        try: () => (typeof value === "string" ? (JSON.parse(value) as unknown) : value),
+        catch: () => new SpendUnreadable({ reason: `${SPEND_VAR} is not JSON` }),
+      }).pipe(
+        Effect.flatMap((parsed) =>
+          decodeStrict(SpendValues, parsed).pipe(
+            Effect.mapError(
+              (issues) =>
+                new SpendUnreadable({
+                  reason: issues
+                    .map((i) => `${SPEND_VAR}.${i.path}: ${i.message}`.replace(/\.:/, ":"))
+                    .join("; "),
+                }),
+            ),
+          ),
+        ),
+        Effect.map(spendConfigFrom),
+      );

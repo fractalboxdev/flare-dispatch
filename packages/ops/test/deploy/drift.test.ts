@@ -8,6 +8,7 @@ import {
   poolAdmissionCaps,
   profileDocumentFor,
   profileLoader,
+  spendDefaults,
   validationContext,
 } from "@fractalboxdev/flare-dispatch-profile";
 import { AlarmPort, type ProfileDocument } from "@fractalboxdev/mameko-ports";
@@ -310,8 +311,12 @@ describe("the drift check over the production profile", () => {
 
   it("[FD-PROF-064] passes the phase 0 production profile and fails a document that lists aws or gha, registers a launcher, declares a constraint or sets attestation before its phase", () => {
     const committed = buildProfile("production");
-    expect(Effect.runSync(profileDriftFindings())).toEqual([]);
-    expect(Effect.runSync(profileDriftFindings(profileDocumentFor("production", 0)))).toEqual([]);
+    expect(
+      Effect.runSync(profileDriftFindings(profileDocumentFor("production"), spendDefaults)),
+    ).toEqual([]);
+    expect(
+      Effect.runSync(profileDriftFindings(profileDocumentFor("production", 0), spendDefaults)),
+    ).toEqual([]);
     for (const c of committed.classes) expect(c.cloud_kinds).toEqual(["cloudflare"]);
     expect(committed.placement.launcher_kinds).toEqual([]);
     expect(committed.placement.constraints).toEqual([]);
@@ -324,9 +329,9 @@ describe("the drift check over the production profile", () => {
     expect(new Set(versions).size).toBe(5);
 
     const pathsAt = (phase: 1 | 3 | 4) =>
-      Effect.runSync(profileDriftFindings(profileDocumentFor("production", phase))).map(
-        (f) => f.path,
-      );
+      Effect.runSync(
+        profileDriftFindings(profileDocumentFor("production", phase), spendDefaults),
+      ).map((f) => f.path);
     expect(pathsAt(1)).toContain("registration.attestation");
     expect(pathsAt(3)).toEqual(
       expect.arrayContaining(["registration.attestation", "classes[required].cloud_kinds"]),

@@ -323,6 +323,7 @@ export const runTickUnit = (unit: TickUnit) =>
         GithubUncredentialed: (e) =>
           Effect.succeed(finished(nothing, `no installation serves ${e.repo}`)),
         GithubUnexpected: (e) => Effect.succeed(finished(nothing, e.message)),
+        QuotaUnavailable: (e) => Effect.succeed(finished(nothing, `quota unavailable: ${e.message}`)),
       }),
     );
 
