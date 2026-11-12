@@ -8,8 +8,9 @@
 //   the server holds no REST state. A stack with one hands the server its recorded state (`intake-github.json`): the
 //   App, the installation that covers each repository, and each repository's branches and files; a test sets a
 //   branch's required checks, which its branch rules answer from then on (`requireChecks`). The server checks
-//   the App JWT and each installation token as GitHub does. Any REST call the state does not answer gets 404 and is
-//   listed in `unrecorded`, so a test can assert it made none.
+//   the App JWT and each installation token as GitHub does, and each answer to an installation token carries the
+//   installation's rate-limit headers, its remaining count one lower per call. Any REST call the state does not answer
+//   gets 404 and is listed in `unrecorded`, so a test can assert it made none.
 import { createHmac, randomBytes, verify, type KeyObject } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -101,6 +102,8 @@ export interface GithubFixtureServer {
   readonly calls: readonly GithubCall[];
   /** Every REST write the recorded state answered, in order. */
   readonly writes: readonly GithubWrite[];
+  /** The remaining count the last answer to `installation`'s token reported. */
+  readonly remaining: (installation: number) => number;
   readonly unrecorded: readonly GithubCall[];
   readonly close: () => Promise<void>;
 }
@@ -133,6 +136,10 @@ const send = async (res: ServerResponse, response: Response) => {
 };
 
 const notFound = () => json(404, { message: "Not Found" });
+
+/** The rate limit each installation's answers report, and the remaining count before its first call. */
+export const RATE_LIMIT = 5000;
+export const RATE_LIMIT_START = 4000;
 
 const requiredKey = (repository: string, branch: string) => `${repository.toLowerCase()}#${branch}`;
 
@@ -178,8 +185,15 @@ const restApi = (
     );
   const isApp = (request: Request) => appJwtIssuer(bearerOf(request), publicKey) === state.app.id;
   const badJwt = () => json(401, { message: "A JSON web token could not be decoded" });
+  /** The calls each installation's token made. */
+  const spent = new Map<number, number>();
+  const remaining = (installation: number) => RATE_LIMIT_START - (spent.get(installation) ?? 0);
 
-  return async (request: Request, url: URL, call: GithubCall): Promise<Response | undefined> => {
+  const answer = async (
+    request: Request,
+    url: URL,
+    call: GithubCall,
+  ): Promise<Response | undefined> => {
     const installationOf = /^\/repos\/([^/]+)\/([^/]+)\/installation$/.exec(url.pathname);
     if (installationOf !== null && request.method === "GET") {
       if (!isApp(request)) return badJwt();
@@ -290,6 +304,25 @@ const restApi = (
     }
     return undefined;
   };
+
+  /** Each answer to an installation token reports the installation's budget, as GitHub's headers do. */
+  const handle = async (
+    request: Request,
+    url: URL,
+    call: GithubCall,
+  ): Promise<Response | undefined> => {
+    const response = await answer(request, url, call);
+    const bearer = bearerOf(request);
+    const installation = bearer === undefined ? undefined : tokens.get(bearer);
+    if (response === undefined || installation === undefined) return response;
+    spent.set(installation, (spent.get(installation) ?? 0) + 1);
+    const headers = new Headers(response.headers);
+    headers.set("x-ratelimit-limit", String(RATE_LIMIT));
+    headers.set("x-ratelimit-remaining", String(remaining(installation)));
+    headers.set("x-ratelimit-reset", String(Math.floor(Date.now() / 1000) + 3600));
+    return new Response(response.body, { status: response.status, headers });
+  };
+  return { handle, remaining };
 };
 
 /** The fixture server; with `app`, it also answers the REST API from the recorded state. */
@@ -344,7 +377,7 @@ export const startGithubFixtureServer = async (
       return json(200, { value: await oidcToken(job, audience) });
     }
     const answer =
-      host === API_HOST && rest !== undefined ? await rest(request, url, call) : undefined;
+      host === API_HOST && rest !== undefined ? await rest.handle(request, url, call) : undefined;
     if (answer !== undefined) return answer;
     unrecorded.push(call);
     return notFound();
@@ -388,6 +421,7 @@ export const startGithubFixtureServer = async (
     },
     calls,
     writes,
+    remaining: (installation) => rest?.remaining(installation) ?? RATE_LIMIT_START,
     unrecorded,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };

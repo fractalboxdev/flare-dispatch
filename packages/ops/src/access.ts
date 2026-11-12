@@ -163,13 +163,20 @@ export class JwksCache {
   #keys: readonly AccessJwk[] | null = null;
   #fetchedAt = 0;
   #lastRefetch = Number.NEGATIVE_INFINITY;
+  private readonly issuer: string;
+  private readonly fetcher: typeof fetch;
 
+  // Fields are declared outside the constructor: `node --experimental-strip-types` (the CI sim job and the deploy
+  // CLI) rejects TypeScript parameter properties.
   constructor(
-    private readonly issuer: string,
+    issuer: string,
     // Workers reject `fetch` called with another `this`; `this.fetcher(...)` would bind the cache, so the default
     // calls the global through a closure.
-    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
-  ) {}
+    fetcher: typeof fetch = (input, init) => fetch(input, init),
+  ) {
+    this.issuer = issuer;
+    this.fetcher = fetcher;
+  }
 
   async #load(): Promise<readonly AccessJwk[] | null> {
     try {

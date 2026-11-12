@@ -16,16 +16,6 @@ export class PoolController extends DurableObject {
   }
 }
 
-/**
- * The applier rate limit per installation (specs/github-output.md § Installation quota). The GitHub package keeps the
- * quota in the isolate; this object holds it once permits are shared across isolates.
- */
-export class InstallationQuota extends DurableObject {
-  override async fetch(): Promise<Response> {
-    return notImplemented("InstallationQuota", "the shared permit ledger");
-  }
-}
-
 /** A Container pool of the `cloudflare` executor kind; its launcher and outbound handler are mameko's. */
 const pool = (name: string) =>
   class extends DurableObject {

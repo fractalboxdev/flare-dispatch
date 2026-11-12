@@ -1,7 +1,8 @@
 // The application ports this package serves, as one Layer beside the runtime
 // adapter's (mameko specs/hosts.md § Application ports). The live client and the
 // actuator rate limit share one installation quota, so every response's headers
-// reach the permit decisions.
+// reach the permit decisions. The application chooses the quota: one isolate's
+// ledger by default, or the shared `InstallationQuota` objects.
 import { drainOnce } from "@fractalboxdev/mameko-coordinator";
 import { Effect, Layer } from "effect";
 import {
@@ -13,12 +14,7 @@ import {
 } from "./app.ts";
 import { CheckRunApplierLive } from "./applier.ts";
 import { githubClientLayer, type GithubClientOptions } from "./client.ts";
-import {
-  ActuatorRateLimitLive,
-  installationQuotaLayer,
-  quotaOptionsDefault,
-  type QuotaOptions,
-} from "./rate-limit.ts";
+import { ActuatorRateLimitLive, type InstallationQuota, installationQuotaLayer } from "./rate-limit.ts";
 import { githubReadLayer } from "./read.ts";
 import { GithubApplierLive } from "./github-applier.ts";
 import { githubWritesLayer } from "./writes.ts";
@@ -29,21 +25,25 @@ import { githubWritesLayer } from "./writes.ts";
  */
 export const githubApplicationLayer = (
   client: GithubClientOptions,
-  quota: QuotaOptions = quotaOptionsDefault,
+  quota: Layer.Layer<InstallationQuota> = installationQuotaLayer(),
 ) =>
   Layer.mergeAll(
     CheckRunApplierLive.pipe(Layer.provide(githubClientLayer(client))),
     ActuatorRateLimitLive,
-  ).pipe(Layer.provide(installationQuotaLayer(quota)));
+  ).pipe(Layer.provide(quota));
 
 /**
  * Every GitHub service of one isolate under the App's own authority: `GithubApp`, `InstallationDirectory`, `GithubClient`,
  * `GithubWrites`, `GithubRead`, `InstallationQuota`, the actuator of every GitHub binding and the actuator rate limit. The
  * application supplies `AlarmPort`, `SideOutputConfig` and `ConcludeFacts`, and, for the kinds it serves, `StagedWriteGate`,
  * `BlobStore`, `FollowOnSubmitter`, `EmailSender` and `NoticeChannel`; a kind whose port is absent is refused.
- * Build it once per isolate, so the token cache, the repository mapping and the quota outlive one request.
+ * Build it once per isolate, so the token cache and the repository mapping outlive one request; `quota` serves every
+ * permit and every response's headers, and a deploy passes the shared `InstallationQuota` objects (FD-ARCH-003).
  */
-export const githubLiveLayer = (app: AppOptions, quota: QuotaOptions = quotaOptionsDefault) => {
+export const githubLiveLayer = (
+  app: AppOptions,
+  quota: Layer.Layer<InstallationQuota> = installationQuotaLayer(),
+) => {
   const services = Layer.unwrap(
     Effect.gen(function* () {
       const options: GithubClientOptions = {
@@ -64,7 +64,7 @@ export const githubLiveLayer = (app: AppOptions, quota: QuotaOptions = quotaOpti
   );
   return services.pipe(
     Layer.provideMerge(InstallationDirectoryFromApp),
-    Layer.provideMerge(Layer.mergeAll(githubAppLayer(app), installationQuotaLayer(quota))),
+    Layer.provideMerge(Layer.mergeAll(githubAppLayer(app), quota)),
   );
 };
 

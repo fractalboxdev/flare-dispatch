@@ -22,6 +22,9 @@
     "OPERATORS": "{{operators}}",
     "GITHUB_APP_ID": "{{github.appId}}",
     "GITHUB_FIXTURE_REPO": "{{github.fixtureRepo}}",
+    // The overlay's spend values in USD, each it leaves out at its default: `B`, `F`, the release reserve, `R_ops`,
+    // `R_m,min`, `D` and the overhead factor the spend view reads (FD-PROF-054).
+    "SPEND": "{{spend}}",
   },
   // The minute tick (FD-INT-050): outbox drain, liveness, the enqueue of intake's units and the retention sweeps.
   "triggers": { "crons": ["* * * * *"] },

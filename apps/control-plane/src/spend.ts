@@ -1,10 +1,9 @@
 // The spend view `GET /v1/spend` answers (FD-SPD-057): mameko's view of MAMEKO-SPD-058 over the D1 read model, the
-// profile and FlareDispatch's spend configuration (specs/profile.md § Spend configuration), in the shape of the
-// operability route's body. A store read that fails is `spend_unreadable` (FD-SPD-058).
+// profile and the spend configuration the operator overlay delivers (specs/profile.md § Spend configuration,
+// FD-PROF-054), in the shape of the operability route's body. A store read that fails is `spend_unreadable` (FD-SPD-058).
 import { SpendUnreadable, SpendView, type SpendViewBody } from "@fractalboxdev/flare-dispatch-ops";
 import {
   reservesOf,
-  spendDefaults,
   spendSettings,
   type Profile,
   type SpendConfig,
@@ -17,7 +16,7 @@ import {
 } from "@fractalboxdev/mameko-coordinator";
 import { d1OperatorReadModel, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Layer } from "effect";
-import { profileOf, type ControlPlaneEnv } from "./config.ts";
+import { profileOf, spendConfigOf, type ControlPlaneEnv } from "./config.ts";
 
 /**
  * The spend settings the view reads. Every executor this deploy leases is a device, which the burn lanes count at 0
@@ -59,11 +58,11 @@ export const spendBodyOf = (view: CoordinatorSpendView): SpendViewBody => ({
 /** The window the other operator views count final rows in; the spend view reads none. */
 const VIEW_WINDOW_MS = 3_600_000;
 
-/** `SpendView` over one D1 database and one profile, at FlareDispatch's spend configuration by default. */
+/** `SpendView` over one D1 database, one profile and the spend configuration the operator overlay delivers. */
 export const spendViewLayer = (
   db: D1Like,
   profile: Profile,
-  spend: SpendConfig = spendDefaults,
+  spend: SpendConfig,
 ): Layer.Layer<SpendView> => {
   const source = Layer.succeed(OperatorViewSource)({
     profile: Effect.succeed(profile),
@@ -83,6 +82,18 @@ export const spendViewLayer = (
   });
 };
 
-/** The Worker's spend view, over its D1 binding and the deployment's profile. */
+/**
+ * The Worker's spend view, over its D1 binding, the deployment's profile and the spend configuration the operator
+ * overlay delivers in the `SPEND` var (FD-PROF-054). A `SPEND` var that does not decode answers `spend_unreadable`.
+ */
 export const spendViewOf = (env: ControlPlaneEnv): Layer.Layer<SpendView> =>
-  spendViewLayer(env.DB, profileOf(env));
+  Layer.succeed(SpendView)({
+    view: (month) =>
+      Effect.gen(function* () {
+        const spend = yield* spendConfigOf(env);
+        const views = yield* SpendView.pipe(
+          Effect.provide(spendViewLayer(env.DB, profileOf(env), spend)),
+        );
+        return yield* views.view(month);
+      }),
+  });

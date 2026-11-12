@@ -67,9 +67,15 @@ export { leaseReadToken, type LeaseCredential } from "./lease-token.ts";
 export {
   ActuatorRateLimitLive,
   decidePermit,
+  emptyQuotaLedger,
   InstallationQuota,
   installationQuotaLayer,
+  installationQuotaObjectLayer,
+  quotaObjectOver,
   quotaOptionsDefault,
+  QuotaUnavailable,
+  type QuotaLedger,
+  type QuotaObject,
   type QuotaObservation,
   type QuotaOptions,
 } from "./rate-limit.ts";
