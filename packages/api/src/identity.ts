@@ -4,11 +4,11 @@
 import { Context, Effect, Match } from "effect";
 import { ApiConfig } from "./config.ts";
 import { apiError, type ApiError } from "./errors.ts";
+import { ACTIONS_ISSUER, ACTIONS_JWKS } from "@fractalboxdev/flare-dispatch-github/jwks";
 import { JwksSource, verifyWithJwks, type Claims } from "./jwt.ts";
 import { checkLinkToken, type LinkPurpose } from "./link-token.ts";
 
-export const ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";
-export const ACTIONS_JWKS = `${ACTIONS_ISSUER}/.well-known/jwks`;
+export { ACTIONS_ISSUER, ACTIONS_JWKS };
 export const CLOCK_SKEW_S = 60;
 
 /** A person or a service token, as Access identifies it: the email, or the service token's common name. */
