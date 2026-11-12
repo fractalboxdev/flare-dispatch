@@ -287,7 +287,25 @@ describe("contextful-release", () => {
       const result = yield* contextfulReleaseFormula.run({ repo, tag: "v0.5.0", sha, releaseId: 0, dryRun: true,
         manifests: formulaManifests });
       expect(result.notes).toBe("## Consumer compatibility\n");
-      expect(result.assets).toHaveLength(6);
+      expect(result.assets).toHaveLength(8);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("the formula child builds the console archive before SHA256SUMS and stages it beside the formulae", () => {
+    const { layer, handles } = makeCFRuntimeTest({ sandboxProgram: formulaFiles,
+      sandboxFiles: { "/workspace/contextful/dist/release-notes.md": "## Consumer compatibility\n" } });
+    return Effect.gen(function* () {
+      const result = yield* contextfulReleaseFormula.run({ repo, tag: "v0.5.0", sha, releaseId: 0, dryRun: true,
+        manifests: formulaManifests });
+      expect(result.assets).toEqual([...FORMULA_ASSETS, "contextful-console-0.5.0.tar.gz", "contextful-console-0.5.0.tar.gz.sha256"]);
+      const commands = handles.sandbox.execs.map((exec) => exec.command);
+      const consoleAt = commands.findIndex((command) => command.includes("contextful-ci -- console --out dist"));
+      expect(consoleAt).toBeGreaterThanOrEqual(0);
+      expect(consoleAt).toBeLessThan(commands.findIndex((command) => command.includes("contextful-ci -- formula")));
+      expect(handles.artifact.uploads.map((upload) => [upload.name, upload.path])).toEqual(expect.arrayContaining([
+        ["contextful-console-0.5.0.tar.gz", "/workspace/contextful/dist/contextful-console-0.5.0.tar.gz"],
+        ["contextful-console-0.5.0.tar.gz.sha256", "/workspace/contextful/dist/contextful-console-0.5.0.tar.gz.sha256"],
+      ]));
     }).pipe(Effect.provide(layer));
   });
 
@@ -298,6 +316,9 @@ describe("contextful-release", () => {
         manifests: formulaManifests });
       expect(result.notes).toBeUndefined();
       expect(handles.sandbox.reads.some((read) => read.path.endsWith("release-notes.md"))).toBe(false);
+      // A tag predating `contextful-ci console` ships no console archive.
+      expect(result.assets).toEqual(FORMULA_ASSETS);
+      expect(handles.sandbox.execs.some((exec) => exec.command.includes("contextful-ci -- console"))).toBe(false);
     }).pipe(Effect.provide(layer));
   });
 

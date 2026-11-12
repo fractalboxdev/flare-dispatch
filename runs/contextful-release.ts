@@ -136,6 +136,11 @@ const FormulaInput = Schema.Struct({
  * keeps the draft body.
  */
 const FormulaOutput = Schema.Struct({ assets: Schema.Array(Schema.String), notes: Schema.optional(Schema.String) });
+/** The formula step's fixed assets: four formulae, `SHA256SUMS` and the install script. */
+const FORMULA_ASSETS = ["contextful-control.rb", "contextful-edge.rb", "contextful-full.rb", "contextful.rb", "SHA256SUMS", "install.sh"] as const;
+/** The built console's archive and checksum, from a tag whose `contextful-ci` carries `console`. */
+const consoleAssets = (version: string): readonly string[] =>
+  [`contextful-console-${version}.tar.gz`, `contextful-console-${version}.tar.gz.sha256`];
 
 const ReleaseOutput = Schema.Struct({
   tag: Schema.String,
@@ -339,7 +344,8 @@ export const contextfulReleaseCell = defineRun({
 
 export const contextfulReleaseFormula = defineRun({
   name: "contextful-release-formula",
-  version: "1.1.0",
+  // 1.2.0 — builds the console archive first, so `SHA256SUMS` lists it.
+  version: "1.2.0",
   sandboxImage: "release",
   inputs: FormulaInput,
   outputs: FormulaOutput,
@@ -349,6 +355,21 @@ export const contextfulReleaseFormula = defineRun({
     const manifests = JSON.parse(input.manifests) as unknown[];
     if (manifests.length !== CELLS.length) return yield* Effect.die(new Error("formula needs ten release manifests"));
     const checkout = yield* workspace({ repo: input.repo, sha: input.sha });
+    // `contextful-ci console` writes the built console and its checksum into `dist`, where
+    // `contextful-ci formula` lists it in `SHA256SUMS`. A tag predating the subcommand
+    // ships no console archive.
+    const hasConsole = yield* sandbox.exec({ container: checkout.container,
+      command: ["test", "-f", `${checkout.dir}/tools/ci/src/console.rs`], timeoutSec: 30 });
+    const built = hasConsole.exitCode === 0 ? consoleAssets(input.tag.slice(1)) : [];
+    if (built.length > 0) {
+      const consoleBuild = yield* sandbox.exec({
+        container: checkout.container, cwd: checkout.dir,
+        command: ["cargo", "run", "--locked", "-q", "-p", "contextful-ci", "--", "console", "--out", "dist"],
+        env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+        timeoutSec: 1800,
+      });
+      if (consoleBuild.exitCode !== 0) return yield* Effect.die(new Error(`console build failed: ${consoleBuild.exitCode}`));
+    }
     const formula = yield* sandbox.exec({
       container: checkout.container, cwd: checkout.dir,
       command: ["sh", "-lc", "mkdir -p dist && printf %s \"$FD_RELEASE_MANIFEST\" > dist/release-manifest.json && cargo run --locked -q -p contextful-ci -- formula --manifest dist/release-manifest.json --dist dist --base-url \"$FD_RELEASE_BASE_URL\""],
@@ -360,7 +381,7 @@ export const contextfulReleaseFormula = defineRun({
     const hasNotes = yield* sandbox.exec({ container: checkout.container, command: ["test", "-f", notesPath], timeoutSec: 30 });
     const notes = hasNotes.exitCode === 0 ? yield* sandbox.readFile({ container: checkout.container, path: notesPath }).pipe(
       Effect.mapError((cause) => new StepFailed({ step: "generate-and-upload", cause }))) : undefined;
-    const assets = ["contextful-control.rb", "contextful-edge.rb", "contextful-full.rb", "contextful.rb", "SHA256SUMS", "install.sh"];
+    const assets = [...FORMULA_ASSETS, ...built];
     for (const name of assets) {
       const path = name.endsWith(".rb") ? `${checkout.dir}/dist/Formula/${name}` : name === "install.sh" ? `${checkout.dir}/install.sh` : `${checkout.dir}/dist/${name}`;
       const digest = yield* sandbox.exec({ container: checkout.container, command: ["sha256sum", path], timeoutSec: 120 });
@@ -368,7 +389,7 @@ export const contextfulReleaseFormula = defineRun({
       if (digest.exitCode !== 0 || sha256 === undefined) return yield* Effect.die(new Error(`missing SHA-256 for ${name}`));
       yield* artifact.upload({ name, path, container: checkout.container });
       if (!input.dryRun) yield* github.publishReleaseAsset({ repo: input.repo, releaseId: input.releaseId, artifactName: name,
-        contentType: "text/plain", sha256 });
+        contentType: contentType(name), sha256 });
     }
     return notes === undefined ? { assets } : { assets, notes };
   })),
@@ -577,7 +598,11 @@ export const contextfulRelease = defineRun({
       return yield* Effect.die(new Error("release formula failed"));
     }
     const { assets: formulaAssets, notes } = JSON.parse(formulaChildren[0].summaryJson ?? "{}") as { assets?: string[]; notes?: string };
-    if (formulaAssets?.length !== 6) return yield* Effect.die(new Error("release formula output is incomplete"));
+    const withConsole = [...FORMULA_ASSETS, ...consoleAssets(input.tag.slice(1))];
+    if (formulaAssets === undefined || ![FORMULA_ASSETS.length, withConsole.length].includes(formulaAssets.length) ||
+      formulaAssets.some((name, index) => name !== withConsole[index])) {
+      return yield* Effect.die(new Error("release formula output is incomplete"));
+    }
     const version = input.tag.slice(1);
     const images = children.flatMap((child) => {
       const output = JSON.parse(child.summaryJson ?? "{}") as {
