@@ -6,13 +6,24 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import {
+  CacheBucket,
+  CacheClock,
+  CacheLeases,
   cacheNamespaces,
+  commitCacheManifest,
   compileObjectKey,
+  entryPrefix,
+  es256Sign,
   grantCarriesNoWorkspace,
+  Ledgers,
   ledgersOf,
   logObjectName,
   lookupEntry,
+  ManifestSigner,
   manifestPath,
+  memoryLeases,
+  memoryLedgers,
+  objectPrefix,
   protectedCloud,
   pullRequestNamespace,
   readManifest,
@@ -21,6 +32,7 @@ import {
   type Bucket,
   type CacheLedgerApi,
   type CacheNamespaces,
+  type LeaseState,
   type UploadGrant,
 } from "@fractalboxdev/flare-dispatch-cache";
 import {
@@ -29,7 +41,7 @@ import {
   openL1,
   type L1Disk,
 } from "@fractalboxdev/flare-dispatch-cache/device";
-import { Effect } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -498,5 +510,173 @@ describe("a confidential-compute repository on the composed control plane", () =
       expect(await viewerOf(plane, await prLeaseForReads())).toContain("confidential build output");
     },
     60_000,
+  );
+});
+
+// ---- FD-CACHE-041: create-only manifests, on the control plane's bucket and on a real R2 bucket ------------------
+
+/**
+ * A real R2 bucket, the second backend of the manifest commit. CI sets these when the operator provides a Cloudflare
+ * API token with Account > Workers Scripts: Edit on the account that holds the bucket. `startRemoteProxySession`
+ * uploads a preview Worker through the Workers API and reaches the bucket through that Worker's R2 binding, and it
+ * registers a workers.dev subdomain when the account has none; an R2 object read/write token has no Workers Scripts
+ * permission and fails in `beforeAll`. Without these the real-R2 leg is skipped and the Miniflare leg still runs.
+ */
+const REAL_R2 = {
+  bucket: process.env["FD_R2_CONFORMANCE_BUCKET"] ?? "",
+  accountId: process.env["FD_R2_CONFORMANCE_ACCOUNT_ID"] ?? "",
+  apiToken: process.env["FD_R2_CONFORMANCE_API_TOKEN"] ?? "",
+};
+const realR2 = REAL_R2.bucket !== "" && REAL_R2.accountId !== "" && REAL_R2.apiToken !== "";
+
+/** The commit's services over `r2`: the leases below, an in-memory ledger and a cache-signing key of the suite's own. */
+const commitLayers = async (r2: Bucket, leases: readonly LeaseState[]) => {
+  const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  return Layer.mergeAll(
+    Layer.succeed(CacheLeases, memoryLeases(new Map(leases.map((l) => [l.executionId, l])))),
+    Layer.succeed(CacheBucket, r2),
+    Layer.succeed(Ledgers, memoryLedgers()),
+    Layer.succeed(ManifestSigner, {
+      sign: (body: string) =>
+        Effect.promise(async () => ({
+          alg: "ES256" as const,
+          key_id: "control-plane",
+          value: await es256Sign(pair.privateKey, body),
+        })),
+      deviceKey: () => Effect.succeed(null),
+    }),
+    Layer.succeed(CacheClock, { now: () => Date.now() }),
+  );
+};
+
+/** Deletes every object of one cache entry, so a run leaves nothing behind in a shared bucket. */
+const removeEntry = async (r2: Bucket, namespace: string, key: string) => {
+  for (;;) {
+    const page = await r2.list({ prefix: entryPrefix(namespace, key), limit: 1000 });
+    if (page.objects.length === 0) return;
+    await r2.delete(page.objects.map((o) => o.key));
+  }
+};
+
+/**
+ * Three executions that may write one pull-request namespace commit the same key: two at once, then one later. The
+ * first committed manifest stays and every other commit is answered `duplicate`.
+ */
+const firstCommitWins = async (r2: Bucket) => {
+  const run = crypto.randomUUID().slice(0, 8);
+  const namespace = pullRequestNamespace(REPO, 41_000 + Math.floor(Math.random() * 1_000_000));
+  const key = createHash("sha256").update(`fd-cache-041:${run}`).digest("hex");
+  const writer = (name: string): LeaseState => ({
+    executionId: `conf-041-${run}-${name}`,
+    repo: REPO,
+    epoch: 1,
+    status: "active",
+    namespaces: { read: [namespace], write: namespace },
+    executorId: `cf-${name}`,
+    executorKind: "cloudflare",
+    class: "batch",
+    deadlineAt: Date.now() + 3_600_000,
+  });
+  const writers = [writer("a"), writer("b"), writer("c")] as const;
+  const layer = await commitLayers(r2, writers);
+  const commit = async (lease: LeaseState) => {
+    const body = `store of ${lease.executionId}`;
+    const path = `${objectPrefix(namespace, key, lease.executionId, lease.epoch)}store.tar`;
+    await r2.put(path, body);
+    const exit = await Effect.runPromiseExit(
+      commitCacheManifest({
+        execution_id: lease.executionId,
+        epoch: lease.epoch,
+        manifest: {
+          key,
+          namespace,
+          objects: [
+            {
+              path,
+              size: new TextEncoder().encode(body).length,
+              sha256: createHash("sha256").update(body).digest("hex"),
+            },
+          ],
+        },
+      }).pipe(Effect.provide(layer)),
+    );
+    if (Exit.isFailure(exit)) throw new Error(String(exit.cause));
+    return exit.value;
+  };
+  const stored = async () => (await Effect.runPromise(readManifest(r2, namespace, key)))?.manifest;
+  try {
+    const [a, b] = await Promise.all([commit(writers[0]), commit(writers[1])]);
+    expect([a, b].sort()).toEqual(["accepted", "duplicate"]);
+    const winner = a === "accepted" ? writers[0] : writers[1];
+    expect((await stored())?.writer).toMatchObject({
+      execution_id: winner.executionId,
+      executor_id: winner.executorId,
+    });
+    const etag = (await r2.head(manifestPath(namespace, key)))?.etag;
+    expect(etag).toBeDefined();
+
+    expect(await commit(writers[2])).toBe("duplicate");
+    expect((await r2.head(manifestPath(namespace, key)))?.etag).toBe(etag);
+    expect((await stored())?.writer.execution_id).toBe(winner.executionId);
+    // The binding's create-only put itself answers null on a key that holds a manifest.
+    expect(
+      await r2.put(manifestPath(namespace, key), "{}", { onlyIf: { etagDoesNotMatch: "*" } }),
+    ).toBeNull();
+    expect((await r2.head(manifestPath(namespace, key)))?.etag).toBe(etag);
+  } finally {
+    await removeEntry(r2, namespace, key);
+  }
+};
+
+describe("the manifest commit on the control plane's bucket", () => {
+  it(
+    "[FD-CACHE-041] keeps the first committed manifest for a key and answers every later commit duplicate (Miniflare R2)",
+    async () => firstCommitWins(await bucket()),
+    60_000,
+  );
+});
+
+describe.skipIf(!realR2)("the manifest commit on a real R2 bucket", () => {
+  let session: { readonly remoteProxyConnectionString: unknown; dispose(): Promise<void> } | undefined;
+  let remote: Miniflare | undefined;
+
+  beforeAll(async () => {
+    const { startRemoteProxySession } = await import("wrangler");
+    const started = await startRemoteProxySession(
+      { CACHE: { type: "r2_bucket", bucket_name: REAL_R2.bucket } },
+      {
+        auth: () => ({
+          accountId: REAL_R2.accountId,
+          apiToken: { apiToken: REAL_R2.apiToken },
+        }),
+      },
+    );
+    session = started;
+    remote = new Miniflare({
+      modules: true,
+      script: "export default { fetch: () => new Response(null, { status: 404 }) };",
+      compatibilityDate: "2026-05-01",
+      r2Buckets: {
+        CACHE: {
+          id: REAL_R2.bucket,
+          remoteProxyConnectionString: started.remoteProxyConnectionString,
+        },
+      },
+    });
+    await remote.ready;
+  }, 120_000);
+
+  afterAll(async () => {
+    await remote?.dispose();
+    await session?.dispose();
+  });
+
+  it(
+    "[FD-CACHE-041] keeps the first committed manifest for a key and answers every later commit duplicate (real R2)",
+    async () => firstCommitWins((await remote!.getR2Bucket("CACHE")) as unknown as Bucket),
+    120_000,
   );
 });
