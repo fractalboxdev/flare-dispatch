@@ -85,7 +85,9 @@ describe("fd deploy over the presign token", () => {
     for (const name of ["R2_PRESIGN_ACCESS_KEY_ID", "R2_PRESIGN_SECRET_ACCESS_KEY"]) {
       const details = await refusedNaming(
         (w) => w.deleteSecret(SCRIPT, name),
-        [`control-plane.secrets.${name}: the Worker secret ${name} is absent`],
+        [
+          `control-plane.ports.object-store-presigner: phase 0 requires a Layer for object-store-presigner; unset: ${name}`,
+        ],
       );
       expect(details.deploy).not.toContain("presign-key-id");
       expect(details.deploy).not.toContain("presign-secret");
@@ -139,13 +141,15 @@ describe("fd deploy over the presign token", () => {
     expect(details.deploy).not.toContain(`on bucket ${CACHE}`);
   });
 
-  it("[FD-CACHE-091] stops in the drift stage where the token covers a resource beyond the two buckets: a third bucket, another account's bucket or every bucket of the account", async () => {
+  it("[FD-CACHE-091] stops in the drift stage where the token covers a resource beyond the two buckets: a third bucket, another account's bucket, the same-named bucket of another jurisdiction or every bucket of the account", async () => {
     const other = bucketKey("flare-dispatch-other");
     const foreign = bucketKey(CACHE, "f".repeat(32));
+    const eu = bucketKey(CACHE).replace("_default_", "_eu_");
     const wildcard = `com.cloudflare.api.account.${placeholderOverlay.accountId}`;
     for (const [key, value] of [
       [other, "*"],
       [foreign, "*"],
+      [eu, "*"],
       [wildcard, { "com.cloudflare.edge.r2.bucket.*": "*" }],
     ] as const)
       await refusedNaming(

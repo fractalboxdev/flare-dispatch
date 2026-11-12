@@ -23,7 +23,6 @@ import {
   modelRegistryCheck,
   policyRootKeyCheck,
   policyRulesCheck,
-  presignSecretsCheck,
   presignTokenCheck,
   presignTokenUnset,
   rulesetCheck,
@@ -299,26 +298,18 @@ const presignBuckets = (config: WorkerConfig): readonly string[] => {
 };
 
 /**
- * The presign check over the Worker that carries the object-store presigner (FD-CACHE-091): the Worker holds both
- * presign token secrets, the overlay names the token, and the token, read through the Cloudflare API, grants Object
- * Read & Write on exactly the buckets the Worker binds as `CACHE` and `ARTIFACTS`. The secrets are write-only, so the
- * token is the one `presign.tokenId` names.
+ * The presign check over the Worker that carries the object-store presigner (FD-CACHE-091): the overlay names the
+ * token, and the token, read through the Cloudflare API, grants Object Read & Write on exactly the buckets the Worker
+ * binds as `CACHE` and `ARTIFACTS`. The secrets are write-only, so the token is the one `presign.tokenId` names; the
+ * composition check of `extra` fails a Worker that lacks either presign token secret.
  */
-const presignFindings = (
-  overlay: OverlayValues,
-  rendered: RenderedWorker,
-  deployed: DeployedSettings | null,
-) =>
+const presignFindings = (overlay: OverlayValues, rendered: RenderedWorker) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
-    const findings = [...presignSecretsCheck(rendered.worker, deployed?.secrets ?? [])];
     const tokenId = overlay.presign?.tokenId;
-    if (tokenId === undefined) return [...findings, presignTokenUnset];
+    if (tokenId === undefined) return [presignTokenUnset];
     const token = yield* target.apiToken(tokenId);
-    return [
-      ...findings,
-      ...presignTokenCheck(tokenId, token, overlay.accountId, presignBuckets(rendered.config)),
-    ];
+    return presignTokenCheck(tokenId, token, overlay.accountId, presignBuckets(rendered.config));
   });
 
 /**
@@ -355,7 +346,7 @@ export const driftFindings = (
       const deployed = yield* target.deployedSettings(r);
       findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config, deployed));
       findings.push(...policyRootKeyCheck(r.worker, r.config, deployed));
-      if (r.worker === presigner) findings.push(...(yield* presignFindings(overlay, r, deployed)));
+      if (r.worker === presigner) findings.push(...(yield* presignFindings(overlay, r)));
       if (deployed !== null && !holdsOnlySecrets(deployed))
         findings.push(...deployedCronCheck(r.worker, r.config, deployed.crons));
       const record = yield* target.lastRecord(r);

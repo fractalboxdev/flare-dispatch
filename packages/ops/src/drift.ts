@@ -844,12 +844,6 @@ export const awsBudgetCheck = (
   ];
 };
 
-/** The Worker secrets that hold the object-store presigner's R2 API token: its Access Key ID and Secret Access Key. */
-export const PRESIGN_SECRETS = [
-  "R2_PRESIGN_ACCESS_KEY_ID",
-  "R2_PRESIGN_SECRET_ACCESS_KEY",
-] as const;
-
 /**
  * The Cloudflare permission groups of an R2 API token's Object Read & Write permission: read, write and list objects
  * in the buckets the token names.
@@ -885,28 +879,13 @@ export const presignTokenUnset: Finding = fail(
   "the overlay names no presign token: set presign.tokenId to the id of the R2 API token whose Access Key ID R2_PRESIGN_ACCESS_KEY_ID holds",
 );
 
-/** Each presign token secret the Worker that carries the presigner lacks (FD-CACHE-091); secrets by name only. */
-export const presignSecretsCheck = (
-  worker: string,
-  secrets: readonly string[],
-): readonly Finding[] =>
-  PRESIGN_SECRETS.filter((name) => !secrets.includes(name)).map((name) =>
-    fail(
-      "presign",
-      `${worker}.secrets.${name}`,
-      `the Worker secret ${name} is absent: the object-store presigner signs with the presign token and nothing else`,
-    ),
-  );
-
-/** An R2 bucket resource key: `com.cloudflare.edge.r2.bucket.<account id>_<jurisdiction>_<bucket name>`. */
-const R2_BUCKET_RESOURCE = /^com\.cloudflare\.edge\.r2\.bucket\.([0-9a-f]+)_([a-z]+)_([a-z0-9-]+)$/;
-
-/** The resource key an API token policy names one R2 bucket by; `default` is the bucket without a jurisdiction. */
-export const r2BucketResource = (
-  accountId: string,
-  bucket: string,
-  jurisdiction = "default",
-): string => `com.cloudflare.edge.r2.bucket.${accountId}_${jurisdiction}_${bucket}`;
+/**
+ * The resource key an API token policy names one R2 bucket of the default jurisdiction by:
+ * `com.cloudflare.edge.r2.bucket.<account id>_default_<bucket name>`. The Worker binds its buckets with no
+ * jurisdiction, so a key of any other jurisdiction names a different bucket.
+ */
+export const r2BucketResource = (accountId: string, bucket: string): string =>
+  `com.cloudflare.edge.r2.bucket.${accountId}_default_${bucket}`;
 
 /** The one policy of the token FD-CACHE-091 requires: Object Read & Write on each of `buckets` of the account. */
 export const objectReadWritePolicy = (
@@ -922,7 +901,7 @@ export const objectReadWritePolicy = (
  * The presign token against FD-CACHE-091: an active token whose policies grant Object Read & Write on exactly the cache
  * and artifact buckets of the account, and nothing else. One failure per gap: an inactive token, a policy that is not
  * `allow`, a permission group outside Object Read & Write, a resource that is not one of the two buckets (another
- * bucket, another account's bucket, an account or zone wildcard), and each of the two buckets the token does not grant
+ * bucket, another account's bucket, a bucket of another jurisdiction, an account or zone wildcard), and each of the two buckets the token does not grant
  * both read and write on. `null` is a token the account does not own.
  */
 export const presignTokenCheck = (
@@ -949,6 +928,7 @@ export const presignTokenCheck = (
       ),
     );
   const granted = new Map<string, Set<string>>(buckets.map((b) => [b, new Set<string>()]));
+  const bucketOf = new Map(buckets.map((b) => [r2BucketResource(accountId, b), b]));
   token.policies.forEach((policy, i) => {
     const at = `presign.token.policies[${i}]`;
     if (policy.effect !== "allow")
@@ -965,15 +945,8 @@ export const presignTokenCheck = (
           ),
         );
     for (const [key, value] of Object.entries(policy.resources)) {
-      const m = R2_BUCKET_RESOURCE.exec(key);
-      const bucket = m?.[3];
-      if (
-        m === null ||
-        m[1] !== accountId ||
-        bucket === undefined ||
-        !granted.has(bucket) ||
-        value !== "*"
-      ) {
+      const bucket = bucketOf.get(key);
+      if (bucket === undefined || value !== "*") {
         out.push(
           fail(
             "presign",
