@@ -8,6 +8,7 @@ import { placeholderOverlay } from "../../src/index.ts";
 import { V2_WORKERS, type WorkerSpec } from "../../src/cli/index.ts";
 import {
   API,
+  COMPOSITION_SECRETS,
   CONTROL_PLANE,
   deploy,
   fd,
@@ -188,7 +189,7 @@ describe("fd deploy over the committed templates and the placeholder overlay", (
     expect((await deploy(w)).ok).toBe(true);
     const record = JSON.parse(w.objects.get(RECORD)!) as { rendered: string; secrets: string[] };
     expect(record.rendered).toBe(RENDERED);
-    expect(record.secrets).toEqual(["GITHUB_APP_PRIVATE_KEY"]);
+    expect(record.secrets).toEqual(COMPOSITION_SECRETS.map(([name]) => name).sort());
     const put = w.calls.findIndex((c) => c.startsWith("PUT ") && c.endsWith(RECORD));
     expect(put).toBeGreaterThan(w.calls.indexOf("GET dispatch.example.com/health"));
   });

@@ -4,6 +4,7 @@ export {
   configurationSourceLayer,
   CURRENT_PHASE,
   ConfigurationSourceLive,
+  deploymentOf,
   deviceSlotDefaults,
   GateDecisionSourceLive,
   poolAdmissionCaps,

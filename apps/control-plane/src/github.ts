@@ -31,6 +31,7 @@ import {
   type AppOptions,
 } from "@fractalboxdev/flare-dispatch-github";
 import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
+import { APP_BINDINGS, unsetBindings } from "@fractalboxdev/flare-dispatch-ops";
 import type { ActuatorRateLimit, Actuators, AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { apiEnvOf, concludeKindOf, profileOf, type ControlPlaneEnv } from "./config.ts";
@@ -46,12 +47,14 @@ export const boundFetch: typeof fetch = (input, init) => fetch(input, init);
 
 /** The App's id and private key, when the deploy holds both. */
 export const appOptionsOf = (env: ControlPlaneEnv): AppOptions | undefined =>
-  env.GITHUB_APP_ID === undefined ||
-  env.GITHUB_APP_ID === "" ||
-  env.GITHUB_APP_PRIVATE_KEY === undefined ||
-  env.GITHUB_APP_PRIVATE_KEY === ""
+  // The ops package's `APP_BINDINGS`, which the deploy stage's composition check reads too (FD-ARCH-039).
+  unsetBindings(env, APP_BINDINGS).length > 0
     ? undefined
-    : { appId: env.GITHUB_APP_ID, privateKeyPem: env.GITHUB_APP_PRIVATE_KEY, fetch: boundFetch };
+    : {
+        appId: env.GITHUB_APP_ID as string,
+        privateKeyPem: env.GITHUB_APP_PRIVATE_KEY as string,
+        fetch: boundFetch,
+      };
 
 /** The App's bot login, `<app slug>[bot]`: the author of every commit the App writes. */
 export const appLoginOf = (env: ControlPlaneEnv) =>

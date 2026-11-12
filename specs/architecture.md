@@ -107,12 +107,14 @@ The dispatcher Worker builds the coordinator's context from two sources. `cloudf
 | Alarm port | The dashboard and the alert sink | Phase 0 | [operability.md](operability.md) FD-OPS-053 |
 | Applier rate limit | `InstallationQuota` | Phase 0 | [github-output.md](github-output.md) § Installation quota |
 | Object-store presigner | R2 presigned URLs | Phase 0 | [cache-artifacts.md](cache-artifacts.md) |
-| Credential minter | Read-only per-lease installation tokens | Phase 0 | [github-output.md](github-output.md) FD-GH-002 |
+| Credential minter | Read-only per-lease installation tokens | Where a grant names an application credential; no grant of the profile does | [github-output.md](github-output.md) FD-GH-002 |
 | Posture source | Open; see § Open items | Phase 1 | — |
 | Attestation verifier | Managed Device Attestation; a `development` deployment supplies none | Phase 1 | [provenance.md](provenance.md) FD-PROV-028 |
 | Local registration port, reuse policy, writeback gate | Rehearsal registration, rehearsal reuse, local writeback | Phase 1 and phase 2 | [local-scheduler.md](local-scheduler.md) |
 | Launcher, kind `gha` | The GitHub Actions launcher | Phase 4 | [executors.md](executors.md) |
 | Result-acceptance check | The acceptance table | Phase 4 | [provenance.md](provenance.md) § Acceptance |
+
+The drift stage of `fd deploy` and `fd doctor` reads which of these Layers the dispatcher composes from its rendered vars and the Worker secrets the account holds, and fails on each port the current phase requires with no Layer.
 
 ## Requirements
 

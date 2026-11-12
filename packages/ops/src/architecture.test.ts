@@ -1,4 +1,4 @@
-import { buildProfile, profile } from "@fractalboxdev/flare-dispatch-profile";
+import { buildProfile, portUses, profile } from "@fractalboxdev/flare-dispatch-profile";
 import { missingApplicationPorts } from "@fractalboxdev/mameko-ports";
 import { Message } from "@fractalboxdev/mameko-protocol";
 import { Schema } from "effect";
@@ -6,11 +6,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  APP_BINDINGS,
   architectureFindings,
+  composedPorts,
   compositionFindings,
+  deployedCompositionFindings,
   durableObjectClasses,
   leaseTokenRequestIsReadOnly,
   parseJsonc,
+  PRESIGNER_BINDINGS,
   propertyNames,
   requiredPorts,
   secretWireFields,
@@ -55,7 +59,7 @@ describe("components", () => {
 });
 
 describe("composition", () => {
-  it("[FD-ARCH-039] phase 0 needs a Layer per always-port plus the presigner and the credential minter", () => {
+  it("[FD-ARCH-039] phase 0 needs a Layer per always-port plus the presigner, and no credential minter while no grant names an application credential", () => {
     expect(requiredPorts(0)).toEqual([
       "actuator",
       "gate-decision-source",
@@ -63,8 +67,13 @@ describe("composition", () => {
       "alarm-port",
       "actuator-rate-limit",
       "object-store-presigner",
-      "credential-minter",
     ]);
+    // mameko requires the minter only of a profile whose grants name an application credential.
+    for (const deployment of ["production", "development"] as const) {
+      expect(portUses(buildProfile(deployment)).applicationCredentials).not.toBe(true);
+      for (const phase of [0, 1, 2, 3, 4] as const)
+        expect(requiredPorts(phase, deployment)).not.toContain("credential-minter");
+    }
     expect(requiredPorts(1, "development")).not.toContain("attestation-verifier");
     expect(requiredPorts(4)).toEqual(
       expect.arrayContaining(["launcher:gha", "result-acceptance-check"]),
@@ -91,9 +100,77 @@ describe("composition", () => {
       "actuator",
       "actuator-rate-limit",
       "object-store-presigner",
-      "credential-minter",
     ]);
     expect(compositionFindings(0, requiredPorts(0))).toEqual([]);
+  });
+
+  const APP_AND_PRESIGNER = {
+    GITHUB_APP_ID: "1",
+    GITHUB_APP_PRIVATE_KEY: "key",
+    R2_ACCOUNT_ID: "acct",
+    CACHE_BUCKET_NAME: "fd-cache",
+    R2_PRESIGN_ACCESS_KEY_ID: "id",
+    R2_PRESIGN_SECRET_ACCESS_KEY: "secret",
+  };
+
+  it("[FD-ARCH-039] an env with the App and the presign token composes every port phase 0 requires, and one without either lacks its ports", () => {
+    expect(compositionFindings(0, composedPorts(APP_AND_PRESIGNER))).toEqual([]);
+    expect(composedPorts(APP_AND_PRESIGNER)).not.toContain("credential-minter");
+    for (const name of APP_BINDINGS)
+      expect(
+        compositionFindings(0, composedPorts({ ...APP_AND_PRESIGNER, [name]: "" })).map(
+          (f) => f.path,
+        ),
+      ).toEqual(["actuator", "actuator-rate-limit"]);
+    for (const name of PRESIGNER_BINDINGS)
+      expect(
+        compositionFindings(0, composedPorts({ ...APP_AND_PRESIGNER, [name]: undefined })).map(
+          (f) => f.path,
+        ),
+      ).toEqual(["object-store-presigner"]);
+  });
+
+  it("[FD-ARCH-039] the deploy's composition check reads the rendered vars and the Worker's secret names", () => {
+    const config = {
+      vars: {
+        DEPLOYMENT: "production",
+        GITHUB_APP_ID: "1",
+        R2_ACCOUNT_ID: "acct",
+        CACHE_BUCKET_NAME: "fd-cache",
+      },
+    };
+    const secrets = [
+      "GITHUB_APP_PRIVATE_KEY",
+      "R2_PRESIGN_ACCESS_KEY_ID",
+      "R2_PRESIGN_SECRET_ACCESS_KEY",
+    ];
+    expect(deployedCompositionFindings("control-plane", config, secrets, 0)).toEqual([]);
+    expect(deployedCompositionFindings("control-plane", config, [], 0)).toEqual([
+      expect.objectContaining({
+        check: "composition",
+        path: "control-plane.ports.actuator",
+        detail: "phase 0 requires a Layer for actuator; unset: GITHUB_APP_PRIVATE_KEY",
+      }),
+      expect.objectContaining({ path: "control-plane.ports.actuator-rate-limit" }),
+      expect.objectContaining({
+        path: "control-plane.ports.object-store-presigner",
+        detail:
+          "phase 0 requires a Layer for object-store-presigner; unset: R2_PRESIGN_ACCESS_KEY_ID, R2_PRESIGN_SECRET_ACCESS_KEY",
+      }),
+    ]);
+    // Phase 1 adds the attestation verifier, which a production deploy composes no Layer for, and a development one
+    // does not need.
+    expect(
+      deployedCompositionFindings("control-plane", config, secrets, 1).map((f) => f.path),
+    ).toEqual(["control-plane.ports.attestation-verifier"]);
+    expect(
+      deployedCompositionFindings(
+        "control-plane",
+        { vars: { ...config.vars, DEPLOYMENT: "development" } },
+        secrets,
+        1,
+      ),
+    ).toEqual([]);
   });
 });
 

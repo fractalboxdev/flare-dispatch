@@ -14,7 +14,7 @@ import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Layer } from "effect";
 import { committedAccess, type AccessChanges } from "../access-application.ts";
 import { APP_PERMISSIONS } from "../app-manifest.ts";
-import { architectureFindings } from "../architecture.ts";
+import { architectureFindings, deployedCompositionFindings } from "../architecture.ts";
 import {
   DeployFailed,
   DeployTarget,
@@ -33,6 +33,7 @@ import {
   templateInvariants,
   unrenderedCheck,
   type AgenticRegistry,
+  type DeployedSettings,
   type Finding,
 } from "../drift.ts";
 import { decodeOverlay, spendConfigOf, type OverlayValues } from "../overlay.ts";
@@ -132,11 +133,17 @@ export const repositoryRoot = (from: string = process.cwd()): string => {
 /**
  * The checks over one rendered configuration: the bindings its env declares (FD-OPS-019) and, on the dispatcher, the
  * pool caps (FD-OPS-020, FD-PROF-033), the components (FD-ARCH-001) and the registry validator over the agentic
- * recipes of the run catalogue it serves (FD-AGT-002, FD-AGT-004).
+ * recipes of the run catalogue it serves (FD-AGT-002, FD-AGT-004). Given the account's view of the Worker, the
+ * dispatcher's checks add the composition check over the rendered vars and the Worker's secrets (FD-ARCH-039); a
+ * Worker the account does not hold has no secrets. The pull-request drift check has no account view and leaves it out.
  */
 export const renderedChecks =
   (specs: readonly WorkerSpec[], registry: AgenticRegistry = AGENTIC_CATALOG) =>
-  (worker: string, config: WorkerConfig): readonly Finding[] => {
+  (
+    worker: string,
+    config: WorkerConfig,
+    deployed?: DeployedSettings | null,
+  ): readonly Finding[] => {
     const spec = specs.find((s) => s.worker === worker);
     if (spec === undefined) return [];
     return [
@@ -146,6 +153,14 @@ export const renderedChecks =
             ...admissionCapCheck(worker, config),
             ...architectureFindings(worker, config, CURRENT_PHASE),
             ...agenticRegistryCheck(registry),
+            ...(deployed === undefined
+              ? []
+              : deployedCompositionFindings(
+                  worker,
+                  config,
+                  deployed?.secrets ?? [],
+                  CURRENT_PHASE,
+                )),
           ]
         : []),
     ];
@@ -340,7 +355,10 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
               request.overlay,
               workers(),
               APP_PERMISSIONS,
-              (worker, config) => [...checks(worker, config), ...assetsBuilt(worker, config)],
+              (worker, config, deployed) => [
+                ...checks(worker, config, deployed),
+                ...assetsBuilt(worker, config),
+              ],
               profileFindings,
               access,
             ),
