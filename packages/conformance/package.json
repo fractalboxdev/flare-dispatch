@@ -2,7 +2,7 @@
   "name": "@fractalboxdev/flare-dispatch-conformance",
   "version": "0.0.1",
   "private": true,
-  "description": "mameko's coordinator conformance suite on FlareDispatch's composed control plane (host-cloudflare under workerd with FlareDispatch's profile and application ports), FlareDispatch's cache suite on the control plane Worker under Miniflare and on a real R2 bucket when CI provides one, the workspace rule on the catalogue's runner entry, and its enrollment and executor connect routes checked against mameko's registerDevice and connect verifier.",
+  "description": "mameko's coordinator conformance suite on FlareDispatch's composed control plane (host-cloudflare under workerd with FlareDispatch's profile and application ports), FlareDispatch's cache suite on the control plane Worker under Miniflare and on a real R2 bucket when CI provides one, the workspace rule on the catalogue's runner entry, its enrollment and executor connect routes checked against mameko's registerDevice and connect verifier, and FlareDispatch's device extension process driven over mameko's extension interface on file descriptor 3.",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -22,6 +22,7 @@
     "@fractalboxdev/mameko-coordinator": "workspace:*",
     "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
     "@fractalboxdev/mameko-ports": "workspace:*",
+    "@fractalboxdev/mameko-protocol": "workspace:*",
     "effect": "4.0.6"
   },
   "devDependencies": {

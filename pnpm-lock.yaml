@@ -445,6 +445,9 @@ importers:
       '@fractalboxdev/mameko-ports':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/ports
+      '@fractalboxdev/mameko-protocol':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/protocol
       effect:
         specifier: 4.0.6
         version: 4.0.6
