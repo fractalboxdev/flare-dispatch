@@ -39,8 +39,8 @@
 - Every GitHub call honours `Retry-After` and the rate-limit reset header. The
   checks client keeps a per-installation reserve of 10% of the hourly quota
   for create and conclude calls; position updates stop first.
-- A check-run that failed to open is created at conclusion, with the
-  verdict, instead of left absent.
+- A check-run that failed to open is created at conclusion, with the verdict,
+  instead of left absent.
 - `executions.delivered_at` records when the concluding check-run write
   succeeded. A cron reconcile sweep re-sends the conclusion of every finished
   execution without `delivered_at`, oldest first, inside the reserve.
@@ -52,8 +52,10 @@
   heavy, which keeps today's behaviour.
 - On a pull-request event the gate runs light parts only, as interactive
   runs. On a push to the default branch it runs the heavy parts once per head
-  under a serialization group (ADR-0004), so a newer head supersedes an older
-  one.
+  under a serialization group (ADR-0004). A newer current head replaces older
+  waiting heads; an already running gate finishes before the next one starts.
+  Pull-request gates use supersession groups (ADR-0005), so a newer revision
+  cancels the older live gate and its children.
 - Branch protection on the light tier is the repository owner's setting, not
   the dispatcher's.
 - The compile cache's `@base` lane does not wait on this opt-in: every
@@ -91,11 +93,11 @@
 
 ## Rationale
 
-A class costs nothing when the pool is free and removes the one wait a
-developer feels most. Delivery is the product: a computed verdict that never
-reaches GitHub costs the same as one that does and reads as a hang. A two-tier
-gate puts the minutes-scale check where the merge decision is made and runs
-the slow matrix where it can still catch regressions.
+A class costs nothing when the pool is free and removes the one wait a developer
+feels most. Delivery is the product: a computed verdict that never reaches
+GitHub costs the same as one that does and reads as a hang. A two-tier gate puts
+the minutes-scale check where the merge decision is made and runs the slow matrix
+where it can still catch regressions.
 
 ## Consequences
 

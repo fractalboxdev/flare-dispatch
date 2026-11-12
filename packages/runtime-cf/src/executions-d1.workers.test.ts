@@ -5,7 +5,7 @@
 // `executions` + `steps` rows the service writes, and pins the per-step D1
 // write count (plan § 6 flags D1 hot-path writes — PR4 keeps it bounded).
 
-import { Effect } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Executions } from "@fractalboxdev/flare-dispatch-core";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
@@ -29,6 +29,70 @@ describe("D1ExecutionsLive", () => {
   afterEach(async () => {
     await bindings.dispose();
   });
+  it("preserves a real D1 finalization defect and leaves the execution unfinished", async () => {
+    const layer = makeD1ExecutionsLive(bindings.db, CTX);
+    await Effect.runPromise(Effect.gen(function* () {
+      const executions = yield* Executions;
+      yield* executions.startExecution({ id: EXECUTION_ID, run: "fixture-command", startedAt: 1000 });
+    }).pipe(Effect.provide(layer)));
+    await bindings.db.prepare(`CREATE TRIGGER fixture_refuse_execution_finish BEFORE UPDATE OF completed_at ON executions
+      BEGIN SELECT RAISE(ABORT, 'SQLITE_TOOBIG: fixture-private-canary'); END;`).run();
+    const summaryJson = JSON.stringify({ exitCode: 0, durationMs: 10, logUri: "/v1/artifacts/fixture/check.log" });
+    const exit = await Effect.runPromiseExit(Effect.gen(function* () {
+      const executions = yield* Executions;
+      yield* executions.finishExecution({ id: EXECUTION_ID, completedAt: 2000, status: "success", summaryJson });
+    }).pipe(Effect.provide(layer)));
+    const defect = Exit.match(exit, { onSuccess: () => undefined,
+      onFailure: cause => Option.getOrUndefined(Cause.dieOption(cause)) });
+    expect(defect).toBeInstanceOf(Error);
+    const wrapper = defect as Error;
+    expect(wrapper.message).toContain('"operation":"finishExecution"');
+    expect(wrapper.message).toContain('"errorClass":"Error"');
+    expect(wrapper.message).toContain('"d1PrefixHint":"D1_ERROR"');
+    expect(wrapper.message).toContain('"sqliteCodeHint":"SQLITE_CONSTRAINT"');
+    expect(wrapper.message).toContain('"summaryUtf8Bytes":73');
+    for (const forbidden of ["fixture-private-canary", "SQLITE_TOOBIG", "UPDATE", "owner/name", "check.log"])
+      expect(wrapper.message).not.toContain(forbidden);
+    expect(wrapper.cause).toBeInstanceOf(Error);
+    const cause = wrapper.cause as Error;
+    console.log(JSON.stringify({ operation: "finishExecution", errorClass: cause instanceof Error ? "Error" : "Other",
+      ownPropertyNames: Object.getOwnPropertyNames(cause).filter(name => ["name","message","stack","cause","code"].includes(name)),
+      codeFieldPresent: Object.hasOwn(cause, "code"), sqliteConstraint: cause.message.includes("SQLITE_CONSTRAINT"),
+      summaryUtf8Bytes: new TextEncoder().encode(summaryJson).byteLength }));
+    expect(await bindings.db.prepare("SELECT status,completed_at,summary_json FROM executions WHERE id=?")
+      .bind(EXECUTION_ID).first()).toEqual({ status: "running", completed_at: null, summary_json: null });
+  }, 20_000);
+  it.each([{ summaryJson: "é💥\ud800", bytes: 9 }, { summaryJson: `${"a".repeat(4095)}💥é`, bytes: 4101 }])
+    ("keeps diagnostic metadata generic without invoking hostile provider getters (%$)", async ({ summaryJson, bytes }) => {
+    let getterCalls = 0;
+    const provider = new Error("fixture-private-canary");
+    for (const property of ["name", "message", "code", "cause"])
+      Object.defineProperty(provider, property, { get: () => { getterCalls++; throw new Error("fixture getter forbidden"); } });
+    const db = new Proxy(bindings.db, { get(target, key) {
+      if (key === "prepare") return (sql: string) => {
+        const wrap = (statement: D1PreparedStatement): D1PreparedStatement => new Proxy(statement, { get(inner, method) {
+          if (method === "bind") return (...values: Parameters<D1PreparedStatement["bind"]>) => wrap(inner.bind(...values));
+          if (method === "run" && sql.startsWith("UPDATE executions")) return async () => { throw provider; };
+          const value = Reflect.get(inner, method); return typeof value === "function" ? value.bind(inner) : value;
+        } });
+        return wrap(target.prepare(sql));
+      };
+      const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const exit = await Effect.runPromiseExit(Effect.gen(function* () {
+      const executions = yield* Executions;
+      yield* executions.startExecution({ id: EXECUTION_ID, run: "fixture-command", startedAt: 1000 });
+      yield* executions.finishExecution({ id: EXECUTION_ID, completedAt: 2000, status: "failure", summaryJson });
+    }).pipe(Effect.provide(makeD1ExecutionsLive(db, CTX))));
+    const defect = Exit.match(exit, { onSuccess: () => undefined, onFailure: cause => Option.getOrUndefined(Cause.dieOption(cause)) });
+    expect(defect).toBeInstanceOf(Error);
+    const message = (defect as Error).message;
+    expect(message).toContain('"errorClass":"Error"');
+    expect(message).toContain('"d1PrefixHint":"unknown"');
+    expect(message).toContain('"sqliteCodeHint":"unknown"');
+    expect(message).toContain(`"summaryUtf8Bytes":${bytes}`);
+    expect(message).not.toContain("fixture-private-canary"); expect(getterCalls).toBe(0);
+  }, 20_000);
 
   it("writes one executions row spanning start → finish", async () => {
     const layer = makeD1ExecutionsLive(bindings.db, CTX);
@@ -73,20 +137,20 @@ describe("D1ExecutionsLive", () => {
     expect(JSON.parse(String(row?.input_json))).toEqual({ command: "pnpm test" });
   });
 
-  it("does not overwrite cancellation with a late run verdict", async () => {
+  it.each([undefined, JSON.stringify({ exitCode: 0 })])("does not overwrite cancellation with a late run verdict (summary=%s)", async summaryJson => {
     const executions = await Effect.runPromise(Executions.pipe(Effect.provide(makeD1ExecutionsLive(bindings.db, CTX))));
     const supersessions = makeRunSupersedeD1(bindings.db, () => 1_500);
     await Effect.runPromise(executions.startExecution({ id: EXECUTION_ID, run: "offload-test", startedAt: 1_000 }));
     await Effect.runPromise(supersessions.markCancelled(EXECUTION_ID));
-    expect(await Effect.runPromise(executions.finishExecution({ id: EXECUTION_ID, completedAt: 2_000, status: "success" }))).toBe(false);
+    expect(await Effect.runPromise(executions.finishExecution({ id: EXECUTION_ID, completedAt: 2_000, status: "success", summaryJson }))).toBe(false);
     expect(await Effect.runPromise(supersessions.status(EXECUTION_ID))).toBe("cancelled");
   });
 
-  it("keeps a finished verdict when cancellation arrives later", async () => {
+  it.each([undefined, JSON.stringify({ exitCode: 0 })])("keeps a finished verdict when cancellation arrives later (summary=%s)", async summaryJson => {
     const executions = await Effect.runPromise(Executions.pipe(Effect.provide(makeD1ExecutionsLive(bindings.db, CTX))));
     const supersessions = makeRunSupersedeD1(bindings.db, () => 2_000);
     await Effect.runPromise(executions.startExecution({ id: EXECUTION_ID, run: "offload-test", startedAt: 1_000 }));
-    expect(await Effect.runPromise(executions.finishExecution({ id: EXECUTION_ID, completedAt: 1_500, status: "success" }))).toBe(true);
+    expect(await Effect.runPromise(executions.finishExecution({ id: EXECUTION_ID, completedAt: 1_500, status: "success", summaryJson }))).toBe(true);
     await Effect.runPromise(supersessions.markCancelled(EXECUTION_ID));
     expect(await Effect.runPromise(supersessions.status(EXECUTION_ID))).toBe("success");
   });
