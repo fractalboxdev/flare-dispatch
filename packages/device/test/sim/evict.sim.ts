@@ -13,8 +13,9 @@ import {
   type SimScenario,
   type SimViolation,
 } from "../../../ops/src/verification/harness.ts";
-import { answerLine, type ExtensionState } from "../../src/extension.ts";
-import { L1 } from "../../src/l1.ts";
+import { nodeDisk, openL1 } from "@fractalboxdev/flare-dispatch-cache/device";
+import { Effect } from "effect";
+import { absentL2, answerLine, type ExtensionState } from "../../src/extension.ts";
 
 /**
  * The simulated device's disk, scaled down so L1's files stay small: the floor plays the role of the 20 GiB default
@@ -35,22 +36,27 @@ export interface EvictOutcome {
   readonly trace: readonly string[];
 }
 
-/** The bytes of L1's files on disk, read from the directory rather than from L1's own count. */
+/** The bytes of L1's files on disk, `<namespace>/<key>`, read from the directory rather than from L1's own count. */
 const filesOnDisk = (root: string): Map<string, number> => {
   const files = new Map<string, number>();
-  for (const dir of readdirSync(root))
-    for (const file of readdirSync(join(root, dir)))
-      files.set(`${decodeURIComponent(dir)}/${file}`, statSync(join(root, dir, file)).size);
+  const walk = (dir: string, prefix: string) => {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      const rel = prefix === "" ? name : `${prefix}/${name}`;
+      if (statSync(full).isDirectory()) walk(full, rel);
+      else files.set(rel, statSync(full).size);
+    }
+  };
+  walk(root, "");
   return files;
 };
 
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
 
-/** L1's file for a key: `<namespace>/<sha256(key)>`, as `filesOnDisk` names it. */
-const fileOf = (namespace: string, key: string) =>
-  `${namespace}/${createHash("sha256").update(key).digest("hex")}`;
+/** The workload's `n`th cache key: a SHA-256, as the cache key is. */
+const cacheKey = (n: number) => createHash("sha256").update(`k-${n}`).digest("hex");
 
-export const simulateEviction = (seed: number): EvictOutcome => {
+export const simulateEviction = async (seed: number): Promise<EvictOutcome> => {
   const random = seededRandom(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(random() * xs.length)]!;
   const root = mkdtempSync(join(tmpdir(), "fd-l1-sim-"));
@@ -58,27 +64,35 @@ export const simulateEviction = (seed: number): EvictOutcome => {
   const trace: string[] = [];
   const reached: Record<string, number> = { evictions: 0, partial: 0, emptied: 0 };
   try {
+    // L1's read order follows a step counter, so a seed replays exactly.
+    let tick = 0;
     const state: ExtensionState = {
       planeId: "plane-sim",
-      l1: new L1(root, DISK.l1CapBytes),
+      l1: await openL1({
+        disk: { ...nodeDisk(root), freeBytes: async () => DISK.l1CapBytes },
+        l2: absentL2,
+        keys: { controlPlane: { kty: "EC" }, device: () => null },
+        share: 1,
+        now: () => ++tick,
+      }),
       content: new Map(),
       readable: new Set(),
       writable: new Set(),
     };
     let id = 0;
-    const send = (message: Record<string, unknown>) =>
-      answerLine(state, JSON.stringify({ id: String(++id), ...message })) as Record<
+    const send = async (message: Record<string, unknown>) =>
+      (await Effect.runPromise(answerLine(state, JSON.stringify({ id: String(++id), ...message })))) as Record<
         string,
         unknown
       > | null;
-    send({
+    await send({
       type: "proxies",
       lease: {
         execution_id: "exec-1",
         cache_namespaces: { read: [...NAMESPACES], write: NAMESPACES[0] },
       },
     });
-    send({
+    await send({
       type: "proxies",
       lease: {
         execution_id: "exec-2",
@@ -98,15 +112,15 @@ export const simulateEviction = (seed: number): EvictOutcome => {
       const roll = random();
       if (roll < 0.6) {
         const namespace = pick(NAMESPACES);
-        const key = `k-${Math.floor(random() * 30)}`;
+        const key = cacheKey(Math.floor(random() * 30));
         const bytes = new Uint8Array(1 + Math.floor(random() * 3 * 1024)).fill(step % 251);
-        const reply = send({ type: "cache.put", namespace, key, bytes: b64(bytes) });
+        const reply = await send({ type: "cache.put", namespace, key, bytes: b64(bytes) });
         trace.push(`put ${namespace} ${key} ${bytes.byteLength} ${String(reply?.type)}`);
         order = order.filter((e) => !(e.namespace === namespace && e.key === key));
-        order.push({ namespace, key, file: fileOf(namespace, key) });
+        order.push({ namespace, key, file: `${namespace}/${key}` });
       } else if (order.length > 0) {
         const e = pick(order);
-        const reply = send({ type: "cache.get", namespace: e.namespace, key: e.key });
+        const reply = await send({ type: "cache.get", namespace: e.namespace, key: e.key });
         trace.push(`get ${e.namespace} ${e.key} ${reply?.bytes === null ? "miss" : "hit"}`);
         if (reply?.bytes !== null) order = [...order.filter((o) => o !== e), e];
       }
@@ -115,7 +129,7 @@ export const simulateEviction = (seed: number): EvictOutcome => {
       const free = DISK.totalBytes - otherBytes - used;
       if (free >= DISK.floorBytes) continue;
       const target = DISK.floorBytes - free;
-      const reply = send({ type: "cache.evict", target_bytes: target });
+      const reply = await send({ type: "cache.evict", target_bytes: target });
       const after = filesOnDisk(root);
       const freedOnDisk = used - [...after.values()].reduce((s, n) => s + n, 0);
       const freed = reply?.freed_bytes;
@@ -161,6 +175,6 @@ export const scenarios: readonly SimScenario[] = [
   {
     name: "evict",
     ids: ["FD-CACHE-010"],
-    run: async (seed) => throwOnViolations(simulateEviction(seed).violations),
+    run: async (seed) => throwOnViolations((await simulateEviction(seed)).violations),
   },
 ];

@@ -121,8 +121,29 @@ export const decideWriteback = (
   );
 
 /**
- * The `WritebackGate` port Layer. The port answers a boolean, so `rate_limited` reaches the device as a rejection;
- * `decideWriteback` carries the `retry_after` for a caller that answers `local.writeback.ack` itself.
+ * Decides one `local.writeback` as the `WritebackGate` port receives it. An intent whose (execution id,
+ * `run:<step>:<index>`) the outbox already holds is absorbed before `decideWriteback`, so a rerun step's request makes
+ * no GitHub read and no rate-window entry: a request of held intents only is accepted, and mameko's outbox insert
+ * leaves each held row as it is, so the rerun step writes nothing twice (FD-LOCAL-055). `decideWriteback` decides the
+ * fresh intents. A failed outbox read rejects the request.
+ */
+export const gateWriteback = (config: WritebackGateConfig, executionId: string, intents: unknown) =>
+  Effect.gen(function* () {
+    const decoded = decodeIntents(intents);
+    if (Exit.isFailure(decoded) || decoded.value.length === 0) return reject("intents-invalid");
+    const held = yield* (yield* LocalStore).heldIntents(executionId);
+    const fresh = decoded.value.filter((i) => !held.has(i.intent_key));
+    if (fresh.length === 0) return { _tag: "accepted" } satisfies WritebackDecision;
+    return yield* decideWriteback(config, executionId, fresh);
+  }).pipe(
+    Effect.catchTag("LocalStoreFailed", (e) =>
+      Effect.succeed(reject(`read-failed: ${e.operation}`)),
+    ),
+  );
+
+/**
+ * The `WritebackGate` port Layer over `gateWriteback`. The port answers a boolean, so `rate_limited` reaches the device
+ * as a rejection; `gateWriteback` carries the `retry_after` for a caller that answers `local.writeback.ack` itself.
  */
 export const writebackGateLayer = (
   config: WritebackGateConfig,
@@ -135,7 +156,7 @@ export const writebackGateLayer = (
       >();
       return {
         decide: (executionId, intents) =>
-          decideWriteback(config, executionId, intents).pipe(
+          gateWriteback(config, executionId, intents).pipe(
             Effect.map((d) => d._tag === "accepted"),
             Effect.provide(context),
           ),

@@ -244,4 +244,68 @@ theorem sandbox_image_publish_placement (branch : String) (later : String) (clas
     by simp [resolveClass, releaseAllowlist, sandboxImagePublish], hp,
     cloud_pinned_only_cloudflare _ _ _ _ f kinds declared hp k hk.1, hk.2 _ (by simp [sandboxImagePublish])⟩
 
+/-- The labels `submit` records (packages/intake/src/submit.ts): class resolution's, then the submission's own, then
+`untrusted-input` for a `fork-pr` trigger, without repeats in first-occurrence order. -/
+def submitLabels (trigger : String) (resolved extra : List String) : List String :=
+  (resolved ++ extra ++ (if trigger == "fork-pr" then ["untrusted-input"] else [])).eraseDups
+
+/-- What `submitLocal` (packages/intake/src/local.ts) submits for an accepted `local.register`: trigger `local`, class
+`batch` forced past class resolution, which then returns no labels, the `local-only` placement constraint and the
+`local-only` label. -/
+structure LocalSubmission where
+  trigger : String
+  cls : String
+  placementConstraint : String
+  labels : List String
+
+def localSubmission : LocalSubmission :=
+  { trigger := "local", cls := "batch", placementConstraint := "local-only",
+    labels := submitLabels "local" [] ["local-only"] }
+
+/-- `checkOpenPayload` (packages/profile/src/bindings.ts): admission opens a check run for an execution that owns one,
+unless it carries `local-only`. -/
+def checkOpens (ownsCheck : Bool) (labels : List String) : Bool := ownsCheck && !labels.contains "local-only"
+
+theorem fold_removes_mem (cs : List Constraint) (l ks : List String) (hc : Constraint.removes ks ∈ cs) :
+    ∀ k ∈ foldConstraints l cs, k ∉ ks := by
+  intro k h
+  obtain ⟨pre, post, rfl⟩ := List.append_of_mem hc
+  unfold foldConstraints at h
+  rw [List.foldl_append, List.foldl_cons] at h
+  have := fold_subset post _ _ h
+  intro hks
+  simp [placementPolicy, List.mem_filter, hks] at this
+
+/--
+When the local registration port accepts a `local.register`, intake submits it with trigger kind `local` and the
+`local-only` constraint and label, so admission opens no GitHub check run for it, and under any profile every
+executor kind placement makes eligible for it is `device`: no cloud executor, and so no cloud spend (FD-INT-061).
+-/
+theorem local_only_never_cloud (p : ProfilePlacement) (trigger : Option String) (declaresClass : Option Bool)
+    (confidentiality : String) (deviceLocalInput needsLocalModel ownsCheck : Bool) (constraints : List String) :
+    let r : Request := { cls := localSubmission.cls, labels := localSubmission.labels, trigger, declaresClass }
+    localSubmission.trigger = "local" ∧ localSubmission.placementConstraint = "local-only" ∧
+      "local-only" ∈ r.labels ∧ checkOpens ownsCheck r.labels = false ∧
+      ∀ k ∈ eligible (p.classKinds r.cls) r.cls r.labels constraints
+        (p.facts r confidentiality deviceLocalInput needsLocalModel) p.kinds (p.held r), k = "device" := by
+  intro r
+  have hl : r.labels = ["local-only"] := by
+    show localSubmission.labels = ["local-only"]
+    decide
+  refine ⟨rfl, rfl, by simp [hl], by simp [hl, checkOpens], ?_⟩
+  intro k hk
+  have hk := (List.mem_filter.mp hk).2
+  simp only [List.contains_iff_mem] at hk
+  have hlo : (p.facts r confidentiality deviceLocalInput needsLocalModel).localOnly = true := by
+    simp [ProfilePlacement.facts, hl]
+  have hmem : Constraint.removes (p.kinds.filter (· != "device")) ∈
+      requestConstraints r.labels { p.facts r confidentiality deviceLocalInput needsLocalModel with
+        cloudPinned := cloudPinnedHolds r.cls r.labels constraints } p.kinds cloudPinnedKinds (p.held r) := by
+    simp [requestConstraints, hlo]
+  have hnot := fold_removes_mem _ p.kinds _ hmem k hk
+  have hin := fold_subset _ p.kinds k hk
+  by_cases hd : k = "device"
+  · exact hd
+  · exact absurd (List.mem_filter.mpr ⟨hin, by simpa using hd⟩) hnot
+
 end FdFormal.Placement

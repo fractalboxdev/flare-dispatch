@@ -2,6 +2,7 @@
 import {
   GitData,
   GitDataError,
+  LOCAL_STORE_MIGRATIONS,
   StagedWriteReadFailed,
   WritebackRecords,
 } from "@fractalboxdev/flare-dispatch-agentic";
@@ -12,8 +13,14 @@ import {
   type IntakeRecord,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
-import { Actuators, actuatorRegistry, type IntentRow } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer } from "effect";
+import {
+  Actuators,
+  actuatorRegistry,
+  type IntentRow,
+  LocalRegistration,
+} from "@fractalboxdev/mameko-ports";
+import { generateKeyPairSync } from "node:crypto";
+import { type Context, Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   guardLease,
@@ -22,7 +29,9 @@ import {
   writeCredentialIn,
 } from "../src/agentic.ts";
 import { leaseCacheAt } from "../src/cache-execution.ts";
+import { isolateServices, type IsolateServices } from "../src/composition.ts";
 import type { ControlPlaneEnv } from "../src/config.ts";
+import { envOf } from "./conclude.test-support.ts";
 
 const row = (kind: string, payload: unknown): IntentRow =>
   ({
@@ -252,5 +261,104 @@ describe("the lease credential guard", () => {
     expect(inputsGuard({ steps: [{ label: "test", command: "pnpm test" }] })).toBeNull();
     expect(inputsGuard({ steps: [{ label: "k", command: APP_KEY }] })).toBe("steps[0].command");
     expect(inputsGuard({ token: `ghs_${"t".repeat(36)}` })).toBe("token");
+  });
+});
+
+describe("the mounted local registration port", () => {
+  /** The intake tables and the local-work tables (FD-LOCAL-018), on a database of this test's own. */
+  const localDb = async () => {
+    const db = await migratedD1();
+    for (const m of LOCAL_STORE_MIGRATIONS) for (const sql of m.sql) db.sqlite.exec(sql);
+    return db;
+  };
+  const SHA = "c".repeat(40);
+  const rehearsal = {
+    treeHash: "tree-1",
+    baseCommit: SHA,
+    runDigest: "sha256:run",
+    imageDigest: "sha256:img",
+    platform: "darwin-arm64",
+    inputsDigest: "sha256:in",
+    reuseKey: "rk1",
+    scopeId: "acme/widgets",
+    executorId: "dev-1",
+    repository: "acme/widgets",
+    ref: "refs/heads/feature",
+    inputs: {
+      repo: "https://github.com/acme/widgets",
+      sha: SHA,
+      ref: "refs/heads/feature",
+      steps: [{ label: "test", command: "pnpm test" }],
+    },
+    environmentNames: ["CI"],
+    wants: { reuse: true, writeback: false },
+  };
+
+  // `check` executes on the host, so only a development deployment's catalogue serves it.
+  const DEVELOPMENT = { DEPLOYMENT: "development" };
+  const deploys = {
+    "without the GitHub App": () => DEVELOPMENT,
+    "with the GitHub App": () => {
+      const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+      return {
+        ...DEVELOPMENT,
+        GITHUB_APP_ID: "4242",
+        GITHUB_APP_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      };
+    },
+  };
+
+  for (const [deploy, app] of Object.entries(deploys))
+    it(`[FD-INT-061] a deploy ${deploy} admits an accepted local.register as trigger local under local-only, with no check run`, async () => {
+      const db = await localDb();
+      const services = (await isolateServices(envOf(db, app()))) as Context.Context<
+        IsolateServices | LocalRegistration
+      >;
+      const answer = await Effect.runPromise(
+        LocalRegistration.use((port) =>
+          port.register({ leaseId: "L1", epoch: 1 }, "check", rehearsal),
+        ).pipe(Effect.provide(services)),
+      );
+      expect(answer).toMatchObject({
+        _tag: "accepted",
+        nonce: expect.stringMatching(/^[0-9a-f]{64}$/),
+      });
+      const { executionId } = answer as { executionId: string };
+      const rows = (sql: string) => db.sqlite.prepare(sql).all(executionId);
+      expect(rows("select * from intake_records where execution_id = ?")).toMatchObject([
+        {
+          trigger: "local",
+          class: "batch",
+          placement_constraint: "local-only",
+          labels_json: '["local-only"]',
+        },
+      ]);
+      // Admission places it under `local-only` and reserves no cloud spend for it.
+      expect(
+        rows("select constraints, estimated_cost_micro_usd from executions where id = ?"),
+      ).toEqual([{ constraints: '["local-only"]', estimated_cost_micro_usd: 0 }]);
+      expect(rows("select intent_key from outbox where execution_id = ?")).toEqual([]);
+      expect(rows("select tree_hash from fd_local_registrations where execution_id = ?")).toEqual([
+        { tree_hash: "tree-1" },
+      ]);
+    });
+
+  it("[FD-INT-061] a registration intake refuses is rejected and admits nothing", async () => {
+    const db = await localDb();
+    const services = (await isolateServices(envOf(db, DEVELOPMENT))) as Context.Context<
+      IsolateServices | LocalRegistration
+    >;
+    const register = (run: string, registration: unknown) =>
+      Effect.runPromise(
+        LocalRegistration.use((port) =>
+          port.register({ leaseId: "L1", epoch: 1 }, run, registration),
+        ).pipe(Effect.provide(services)),
+      );
+    expect(await register("no-such-run", rehearsal)).toEqual({ _tag: "rejected" });
+    expect(await register("check", { ...rehearsal, inputs: { sha: SHA } })).toEqual({
+      _tag: "rejected",
+    });
+    expect(db.sqlite.prepare("select * from intake_records").all()).toEqual([]);
+    expect(db.sqlite.prepare("select * from fd_local_registrations").all()).toEqual([]);
   });
 });

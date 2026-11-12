@@ -1,22 +1,16 @@
-// The local registration port (phase 1) and the MCP dispatch tool (phase 2) through intake.
-import { LocalRegistration } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer } from "effect";
+// The local submit (phase 1) and the MCP dispatch tool (phase 2) through intake.
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { harness, HEAD, REPO, type Harness } from "./harness.test-support.ts";
-import { localRegistrationLayer } from "./local.ts";
+import { submitLocal } from "./local.ts";
 import { mcpDispatch } from "./mcp.ts";
 
-const register = (h: Harness, run: string, registration: unknown) =>
-  h.run(
-    Effect.gen(function* () {
-      const port = yield* LocalRegistration;
-      return yield* port.register({ leaseId: "L1", epoch: 2 }, run, registration);
-    }).pipe(Effect.provide(localRegistrationLayer)),
-  );
+const register = (h: Harness, run: string, body: unknown) =>
+  h.run(submitLocal({ leaseId: "L1", epoch: 2 }, run, body));
 
-const registration = {
-  repo: REPO,
-  sha: HEAD,
+const body = {
+  repository: REPO,
+  baseCommit: HEAD,
   ref: "refs/heads/feature",
   treeHash: "tree-1",
   inputsDigest: "inputs-1",
@@ -24,11 +18,12 @@ const registration = {
 };
 
 describe("FD-INT-061 local submit", () => {
-  it("[FD-INT-061] an accepted local.register records trigger local and the local-only constraint", async () => {
+  it("[FD-INT-061] an accepted local submit records trigger local, class batch and the local-only constraint", async () => {
     const h = await harness();
-    const answer = await register(h, "check", registration);
-    expect(answer).toMatchObject({ _tag: "accepted", executionId: expect.any(String) });
+    const answer = await register(h, "check", body);
+    expect(answer).toMatchObject({ _tag: "admitted", executionId: expect.any(String) });
     expect(h.records()[0]).toMatchObject({
+      execution_id: (answer as { executionId: string }).executionId,
       trigger: "local",
       placement_constraint: "local-only",
       labels_json: '["local-only"]',
@@ -40,14 +35,17 @@ describe("FD-INT-061 local submit", () => {
     expect(h.recorded.resolved).toEqual([]);
   });
 
-  it("[FD-INT-061] an unknown run or undecodable registration is rejected and admits nothing", async () => {
+  it("[FD-INT-061] an unknown run, an undecodable body or inputs the run rejects admit nothing", async () => {
     const h = await harness();
-    expect(await register(h, "no-such-run", registration)).toEqual({ _tag: "rejected" });
-    expect(await register(h, "check", { ...registration, sha: "short" })).toEqual({
+    expect(await register(h, "no-such-run", body)).toEqual({ _tag: "rejected" });
+    expect(await register(h, "check", { ...body, baseCommit: "short" })).toEqual({
+      _tag: "rejected",
+    });
+    expect(await register(h, "check", { ...body, inputs: { sha: 7 } })).toEqual({
       _tag: "rejected",
     });
     expect(h.executions()).toEqual([]);
-    expect(Layer.isLayer(localRegistrationLayer)).toBe(true);
+    expect(h.records()).toEqual([]);
   });
 });
 
