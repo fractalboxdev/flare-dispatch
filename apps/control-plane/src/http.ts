@@ -55,7 +55,7 @@ import {
   OpsStore,
   runOpsMigrations,
 } from "@fractalboxdev/flare-dispatch-ops";
-import { Context, Effect, Layer } from "effect";
+import { Clock, Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
@@ -183,40 +183,55 @@ const statements = (env: ControlPlaneEnv) => {
   return provenanceStatements(
     ns === undefined ? undefined : ns.get(ns.idFromName(PRIVATE_LOG_NAME)),
   ).pipe(
-    Layer.provide(
-      Layer.succeed(LogAppendStore)(d1LogAppendStore(env.DB as unknown as D1Database)),
-    ),
+    Layer.provide(Layer.succeed(LogAppendStore)(d1LogAppendStore(env.DB as unknown as D1Database))),
   );
 };
+
+/** How long a visibility read answers later lookups of the same repository. */
+export const VISIBILITY_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * The visibility reads each `GithubRead` has answered, by repository. The isolate builds its `GithubRead` once, so the
+ * cache lasts the isolate's lifetime rather than one request's.
+ */
+const visibilityReads = new WeakMap<object, Map<string, { open: boolean; at: number }>>();
 
 /**
  * Whether a repository's GitHub visibility is `public`, which opens its statements to a caller without identity
  * (FD-IFC-053); any other visibility keeps them behind an Access JWT (FD-IFC-054). The isolate's `GithubRead` reads it
- * once per repository and request. A read that fails answers not public, so an unreadable visibility never opens a
- * statement.
+ * at most once per repository per `VISIBILITY_TTL_MS`, so lookups without identity cost the installation's rate limit
+ * one read per repository per interval. A read that fails answers not public and is not kept, so an unreadable
+ * visibility never opens a statement and the next lookup reads it again.
  */
 export const statementVisibility = Layer.effect(StatementVisibility)(
   Effect.gen(function* () {
     const read = yield* GithubRead;
-    const known = new Map<string, boolean>();
+    let known = visibilityReads.get(read);
+    if (known === undefined) {
+      known = new Map();
+      visibilityReads.set(read, known);
+    }
+    const cache = known;
     return {
-      isPublic: (repository: string) => {
-        const seen = known.get(repository);
-        if (seen !== undefined) return Effect.succeed(seen);
-        return read.visibility(repository).pipe(
-          Effect.map((visibility) => visibility === "public"),
-          Effect.catch((error) =>
-            Effect.as(
-              Effect.logWarning(
-                "repository visibility unreadable; its statements need an Access identity",
-                { repository, cause: String(error) },
+      isPublic: (repository: string) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const seen = cache.get(repository);
+          if (seen !== undefined && now - seen.at < VISIBILITY_TTL_MS) return seen.open;
+          return yield* read.visibility(repository).pipe(
+            Effect.map((visibility) => visibility === "public"),
+            Effect.tap((open) => Effect.sync(() => cache.set(repository, { open, at: now }))),
+            Effect.catch((error) =>
+              Effect.as(
+                Effect.logWarning(
+                  "repository visibility unreadable; its statements need an Access identity",
+                  { repository, cause: String(error) },
+                ),
+                false,
               ),
-              false,
             ),
-          ),
-          Effect.tap((open) => Effect.sync(() => known.set(repository, open))),
-        );
-      },
+          );
+        }),
     };
   }),
 );

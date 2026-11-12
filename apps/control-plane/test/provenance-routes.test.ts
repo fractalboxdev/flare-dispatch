@@ -1,12 +1,17 @@
 // The statement lookups under `/v1/provenance/*` as the Worker serves them: mounted on its router, with each
 // statement's repository's GitHub visibility read through the isolate's `GithubRead`. A development deployment reads
-// the visibility its captured repository carries, so one deployment captures a public repository and another captures
-// one whose visibility it did not read.
+// the visibility its captured repository carries, so one deployment captures a public repository, two capture it as
+// `internal` and `private`, and another captures it without a visibility it can read.
 import { join } from "node:path";
+import { StatementVisibility } from "@fractalboxdev/flare-dispatch-api";
 import { LOG_APPEND_SCHEMA } from "@fractalboxdev/flare-dispatch-cache";
+import { GithubRead, GithubUncredentialed } from "@fractalboxdev/flare-dispatch-github";
+import { Effect, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { statementVisibility, VISIBILITY_TTL_MS } from "../src/http.ts";
 import { AUD, OPERATOR, PLANE, startAccessTeam, type AccessTeam } from "./support.ts";
 
 const PUBLIC_REPO = "acme/widgets";
@@ -31,6 +36,10 @@ let team: AccessTeam;
 let script: string;
 /** Captures `PUBLIC_REPO` with GitHub visibility `public`. */
 let open: Miniflare;
+/** Captures `PUBLIC_REPO` with GitHub visibility `internal`. */
+let internal: Miniflare;
+/** Captures `PUBLIC_REPO` with GitHub visibility `private`. */
+let closed: Miniflare;
 /** Captures `PUBLIC_REPO` without its visibility, so no read answers it. */
 let unread: Miniflare;
 
@@ -136,13 +145,16 @@ beforeAll(async () => {
   });
   script = bundle.outputFiles[0]!.text;
   open = miniflare(captured("public"));
+  internal = miniflare(captured("internal"));
+  closed = miniflare(captured("private"));
   unread = miniflare(captured());
-  await Promise.all([open.ready, unread.ready]);
-  await Promise.all([seed(open), seed(unread)]);
+  const all = [open, internal, closed, unread];
+  await Promise.all(all.map((mf) => mf.ready));
+  await Promise.all(all.map(seed));
 });
 
 afterAll(async () => {
-  await Promise.all([open?.dispose(), unread?.dispose()]);
+  await Promise.all([open, internal, closed, unread].map((mf) => mf?.dispose()));
   await team?.close();
 });
 
@@ -180,8 +192,13 @@ describe("the provenance routes", () => {
   });
 
   it("[FD-IFC-054] requires an Access JWT for the statements of a repository whose visibility is not public", async () => {
-    // A repository no installation reads, and one whose visibility the deployment did not capture, are not public.
+    // A repository GitHub reports `internal` or `private`, one no installation reads, and one whose visibility the
+    // deployment did not capture, are not public.
     for (const [mf, path] of [
+      [internal, `/v1/provenance/executions/${PUBLIC_EXECUTION}`],
+      [internal, `/v1/provenance/subjects/sha256:${LIB}`],
+      [closed, `/v1/provenance/executions/${PUBLIC_EXECUTION}`],
+      [closed, `/v1/provenance/subjects/sha256:${LIB}`],
       [open, `/v1/provenance/executions/${PRIVATE_EXECUTION}`],
       [open, `/v1/provenance/subjects/sha256:${APP}`],
       [unread, `/v1/provenance/executions/${PUBLIC_EXECUTION}`],
@@ -197,11 +214,14 @@ describe("the provenance routes", () => {
     expect(
       await digestsOf(await lookup(open, `/v1/provenance/executions/${PRIVATE_EXECUTION}`, member)),
     ).toEqual(["sha256:private-statement"]);
-    expect(
-      await digestsOf(
-        await lookup(unread, `/v1/provenance/executions/${PUBLIC_EXECUTION}`, member),
-      ),
-    ).toEqual(["sha256:public-statement"]);
+    for (const mf of [internal, closed, unread])
+      expect(
+        await digestsOf(await lookup(mf, `/v1/provenance/executions/${PUBLIC_EXECUTION}`, member)),
+      ).toEqual(["sha256:public-statement"]);
+    for (const mf of [internal, closed])
+      expect(
+        (await digestsOf(await lookup(mf, `/v1/provenance/subjects/sha256:${LIB}`, member))).sort(),
+      ).toEqual(["sha256:private-statement", "sha256:public-statement"]);
     expect(
       (await digestsOf(await lookup(open, `/v1/provenance/subjects/sha256:${LIB}`, member))).sort(),
     ).toEqual(["sha256:private-statement", "sha256:public-statement"]);
@@ -210,5 +230,64 @@ describe("the provenance routes", () => {
       headers: { "cf-access-jwt-assertion": "e30.e30.c2ln" },
     });
     expect(forged.status).toBe(403);
+  });
+});
+
+describe("the statement visibility", () => {
+  /** A `GithubRead` that counts visibility reads per repository and fails them for the repositories in `failing`. */
+  const counting = () => {
+    const reads = new Map<string, number>();
+    const failing = new Set<string>();
+    const read = new Proxy({} as GithubRead["Service"], {
+      get: (_target, call) =>
+        call === "visibility"
+          ? (repo: string) =>
+              Effect.suspend(() => {
+                reads.set(repo, (reads.get(repo) ?? 0) + 1);
+                return failing.has(repo)
+                  ? Effect.fail(new GithubUncredentialed({ repo }))
+                  : Effect.succeed("public");
+              })
+          : () => Effect.die(`GithubRead.${String(call)} is outside these tests`),
+    });
+    return { read, reads, failing };
+  };
+
+  /** One request's lookup: a fresh `StatementVisibility` over the isolate's `GithubRead`. */
+  const isPublic = (read: GithubRead["Service"], repository: string) =>
+    Effect.gen(function* () {
+      const visibility = yield* StatementVisibility;
+      return yield* visibility.isPublic(repository);
+    }).pipe(
+      Effect.provide(statementVisibility.pipe(Layer.provide(Layer.succeed(GithubRead, read)))),
+    );
+
+  it("[FD-IFC-053] reads a repository's visibility once per interval across requests", async () => {
+    const { read, reads } = counting();
+    const answers = await Effect.runPromise(
+      Effect.gen(function* () {
+        const first = [];
+        for (let i = 0; i < 5; i++) first.push(yield* isPublic(read, PUBLIC_REPO));
+        yield* TestClock.adjust(VISIBILITY_TTL_MS);
+        const later = yield* isPublic(read, PUBLIC_REPO);
+        return [...first, later];
+      }).pipe(Effect.provide(TestClock.layer())),
+    );
+    expect(answers).toEqual([true, true, true, true, true, true]);
+    expect(reads.get(PUBLIC_REPO)).toBe(2);
+  });
+
+  it("[FD-IFC-054] answers a failed read not public and reads the repository again next time", async () => {
+    const { read, reads, failing } = counting();
+    failing.add(PUBLIC_REPO);
+    const answers = await Effect.runPromise(
+      Effect.gen(function* () {
+        const failed = [yield* isPublic(read, PUBLIC_REPO), yield* isPublic(read, PUBLIC_REPO)];
+        failing.delete(PUBLIC_REPO);
+        return [...failed, yield* isPublic(read, PUBLIC_REPO)];
+      }).pipe(Effect.provide(TestClock.layer())),
+    );
+    expect(answers).toEqual([false, false, true]);
+    expect(reads.get(PUBLIC_REPO)).toBe(3);
   });
 });
