@@ -358,3 +358,5 @@ export {
 
 // --- Errors ------------------------------------------------------------------
 export * from "./errors";
+export * from "./native-windows";
+export * from "./native-result";

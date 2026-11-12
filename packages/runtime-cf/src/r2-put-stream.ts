@@ -37,42 +37,58 @@ export const putStream = async (
   size: number,
   httpMetadata: R2HTTPMetadata,
 ): Promise<void> => {
-  if (size <= MULTIPART_THRESHOLD) {
-    // Small enough to hold in the isolate; buffer the stream and PUT once.
-    const buffered = await new Response(body).arrayBuffer();
-    await bucket.put(key, buffered, { httpMetadata });
-    return;
-  }
-  const upload = await bucket.createMultipartUpload(key, { httpMetadata });
+  await putBoundedStream(bucket, key, body, size, httpMetadata, size);
+};
+
+/** Unknown-length downloads share the same bounded writer and report their actual byte count. */
+export const putBoundedStream = async (
+  bucket: R2Bucket, key: string, body: ReadableStream<Uint8Array>, maxBytes: number,
+  httpMetadata: R2HTTPMetadata, expectedBytes?: number,
+): Promise<number> => {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || (expectedBytes !== undefined
+    && (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0 || expectedBytes > maxBytes)))
+    throw new Error("R2 stream byte bound is invalid");
+  const reader = body.getReader();
+  let upload: R2MultipartUpload | undefined;
   try {
-    const reader = body.getReader();
+    const single = (expectedBytes ?? maxBytes) <= MULTIPART_THRESHOLD;
+    const buffer = new Uint8Array(single ? expectedBytes ?? maxBytes : MULTIPART_PART_SIZE);
+    if (!single) upload = await bucket.createMultipartUpload(key, { httpMetadata });
     const parts: R2UploadedPart[] = [];
-    let pending: Uint8Array[] = [];
-    let pendingBytes = 0;
+    let buffered = 0, bytes = 0;
     let partNumber = 1;
     const flush = async (): Promise<void> => {
-      const part = new Uint8Array(pendingBytes);
-      let offset = 0;
-      for (const chunk of pending) {
-        part.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      parts.push(await upload.uploadPart(partNumber++, part));
-      pending = [];
-      pendingBytes = 0;
+      if (buffered === 0 || upload === undefined) return;
+      parts.push(await upload.uploadPart(partNumber++, buffer.subarray(0, buffered)));
+      buffered = 0;
     };
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      pending.push(value);
-      pendingBytes += value.byteLength;
-      if (pendingBytes >= MULTIPART_PART_SIZE) await flush();
+      if (!(value instanceof Uint8Array) || bytes + value.byteLength > (expectedBytes ?? maxBytes))
+        throw new Error("R2 stream exceeds its byte bound");
+      bytes += value.byteLength;
+      for (let offset = 0; offset < value.byteLength;) {
+        const count = Math.min(buffer.length - buffered, value.byteLength - offset);
+        buffer.set(value.subarray(offset, offset + count), buffered);
+        buffered += count; offset += count;
+        if (!single && buffered === buffer.length) await flush();
+      }
     }
-    if (pendingBytes > 0) await flush();
-    await upload.complete(parts);
+    if (expectedBytes !== undefined && bytes !== expectedBytes)
+      throw new Error("R2 stream is shorter than its declared byte count");
+    if (single) await bucket.put(key, buffer.subarray(0, buffered), { httpMetadata });
+    else if (bytes === 0) {
+      await upload!.abort(); upload = undefined;
+      await bucket.put(key, new Uint8Array(), { httpMetadata });
+    } else {
+      await flush(); await upload!.complete(parts);
+    }
+    return bytes;
   } catch (cause) {
-    // Don't leave an orphaned multipart upload (R2 also auto-aborts after 7d).
-    await upload.abort().catch(() => {});
+    await upload?.abort().catch(() => {});
     throw cause;
+  } finally {
+    await reader.cancel().catch(() => {}); reader.releaseLock();
   }
 };
