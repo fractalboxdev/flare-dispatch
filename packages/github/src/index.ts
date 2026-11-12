@@ -103,6 +103,7 @@ export {
 } from "./read.ts";
 export {
   checkNeutralInvariant,
+  checkProgressPayload,
   childConclusions,
   insertOpsIntent,
   installationOf,
@@ -110,9 +111,13 @@ export {
   neutralHolds,
   NoInstallation,
   PARENT_CLOSED,
+  queueBucket,
   validateCheckLabel,
+  type CheckProgressPayload,
+  type CheckProgressRequest,
   type ChildCheck,
   type OpsIntent,
+  type QueueBucket,
 } from "./bindings.ts";
 export { QuarantinedFailure, quarantineAnnotations } from "./conclusion.ts";
 export {

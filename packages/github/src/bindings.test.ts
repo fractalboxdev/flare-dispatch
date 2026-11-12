@@ -7,11 +7,12 @@ import {
   type Alarm,
   type IntentRow,
 } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { CheckRunApplierLive, InstallationDirectory } from "./applier.ts";
+import { CheckRunApplierLive, InstallationDirectory, Payloads } from "./applier.ts";
 import {
   checkNeutralInvariant,
+  checkProgressPayload,
   childConclusions,
   installationOf,
   neutralHolds,
@@ -136,6 +137,60 @@ const withApplier = <A>(gh: FakeGithub, f: (a: Required<Actuator>) => Effect.Eff
   );
 const apply = (gh: FakeGithub, r: IntentRow) => withApplier(gh, (a) => a.apply(r));
 const lookup = (gh: FakeGithub, r: IntentRow) => withApplier(gh, (a) => a.lookup(r));
+
+describe("check.progress payload", () => {
+  const DEADLINE = Date.UTC(2026, 10, 12, 9, 30);
+  const waiting = (queuePosition: number) => ({
+    check: { name: ref.name, headSha: ref.head_sha, detailsUrl: "https://logs.example/x" },
+    execution: { class: "interactive", deadlineAt: DEADLINE },
+    queuePosition,
+  });
+
+  it("[FD-GH-012] the payload states the class, the queue-position bucket and deadline_at", () => {
+    expect(checkProgressPayload(waiting(4))).toEqual({
+      name: "flare-dispatch/check",
+      head_sha: "abc123",
+      details_url: "https://logs.example/x",
+      class: "interactive",
+      bucket: "2–5",
+      deadline_at: DEADLINE,
+    });
+    const buckets = [1, 2, 5, 6, 20, 21, 500].map((p) => checkProgressPayload(waiting(p))?.bucket);
+    expect(buckets).toEqual(["1", "2–5", "2–5", "6–20", "6–20", "more than 20", "more than 20"]);
+  });
+
+  it("[FD-GH-012] an execution with no check run, class or deadline_at gets no payload", () => {
+    expect(checkProgressPayload({ ...waiting(1), check: null })).toBeNull();
+    expect(
+      checkProgressPayload({ ...waiting(1), execution: { class: null, deadlineAt: null } }),
+    ).toBeNull();
+    expect(
+      checkProgressPayload({ ...waiting(1), execution: { class: "required", deadlineAt: null } }),
+    ).toBeNull();
+  });
+
+  it("[FD-GH-012] the applier renders the binding's payload, and states only the class under confidential-compute", async () => {
+    const payload = checkProgressPayload(waiting(30));
+    expect(Schema.decodeUnknownSync(Payloads["check.progress"])(payload)).toEqual(payload);
+
+    const gh = fakeGithub();
+    await apply(gh, row("check.open", ref));
+    await apply(gh, row("check.progress", payload));
+    expect(gh.runs[0]?.output.title).toBe("Queued: position more than 20");
+    expect(gh.runs[0]?.output.summary).toBe(
+      "Class `interactive`; queue position more than 20; deadline 2026-11-12T09:30:00.000Z.",
+    );
+
+    const sealed = fakeGithub();
+    sealed.confidential.add("acme/app");
+    await apply(sealed, row("check.open", ref));
+    await apply(sealed, row("check.progress", payload));
+    expect(sealed.runs[0]?.output).toMatchObject({
+      title: "Queued",
+      summary: "Class `interactive`.",
+    });
+  });
+});
 
 describe("quarantined failures", () => {
   it("[FD-GH-077] each quarantined failure is a warning annotation and a summary line, 50 annotations per request", async () => {
