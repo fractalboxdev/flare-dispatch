@@ -29,18 +29,18 @@ const flakyDb = (failures: number) => {
 
 const CTX = { repo: "o/n", ref: "refs/heads/main", sha: "sha", input: {} };
 
-const finish = (db: D1Database) =>
+const finish = (db: D1Database, summaryJson?: string) =>
   Effect.runPromiseExit(
     Effect.flatMap(Executions, (e) =>
-      e.finishExecution({ id: "exec-1", completedAt: 2000, status: "failure" }),
+      e.finishExecution({ id: "exec-1", completedAt: 2000, status: "failure", summaryJson }),
     ).pipe(Effect.provide(makeD1ExecutionsLive(db, CTX))),
   );
 
 describe("D1ExecutionsLive transient faults", () => {
-  it("retries a rejected terminal write until it lands", async () => {
+  it.each([undefined, JSON.stringify({ exitCode: 1 })])("retries a rejected terminal write until it lands (summary=%s)", async summaryJson => {
     const d1 = flakyDb(3);
-    const exit = await finish(d1.db);
-    expect(Exit.isSuccess(exit)).toBe(true);
+    const exit = await finish(d1.db, summaryJson);
+    expect(exit).toEqual(Exit.succeed(true));
     expect(d1.calls()).toBe(4);
   });
 

@@ -45,13 +45,72 @@
 //
 // Spec: specs/05-byoc.md § D1 schema, specs/pm/plan.md § PR4.
 
-import { Effect, Layer, Schedule } from "effect";
+import { Effect, Layer, Schedule, Schema } from "effect";
 import { Executions, type ExecutionsService } from "@fractalboxdev/flare-dispatch-core";
 
 /** Five retries, 200 ms doubling: about 6 s of D1 unavailability absorbed. */
 const WRITE_RETRY = Schedule.exponential("200 millis").pipe(
   Schedule.intersect(Schedule.recurs(5)),
 );
+
+const Operation = Schema.Literal("startExecution", "finishExecution", "startStep", "finishStep");
+const ErrorClass = Schema.Literal("Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "URIError", "EvalError", "unknown");
+const D1Prefix = Schema.Literal("D1_ERROR", "D1_EXEC_ERROR", "D1_TYPE_ERROR", "D1_COLUMN_NOTFOUND", "unknown");
+const SqliteCode = Schema.Literal("SQLITE_ABORT", "SQLITE_AUTH", "SQLITE_BUSY", "SQLITE_CANTOPEN", "SQLITE_CONSTRAINT",
+  "SQLITE_CORRUPT", "SQLITE_EMPTY", "SQLITE_ERROR", "SQLITE_FORMAT", "SQLITE_FULL", "SQLITE_INTERNAL", "SQLITE_INTERRUPT",
+  "SQLITE_IOERR", "SQLITE_LOCKED", "SQLITE_MISMATCH", "SQLITE_MISUSE", "SQLITE_NOLFS", "SQLITE_NOMEM", "SQLITE_NOTADB",
+  "SQLITE_NOTFOUND", "SQLITE_NOTICE", "SQLITE_PERM", "SQLITE_PROTOCOL", "SQLITE_RANGE", "SQLITE_READONLY", "SQLITE_SCHEMA",
+  "SQLITE_TOOBIG", "SQLITE_WARNING", "unknown");
+const Diagnostic = Schema.Struct({ operation: Operation, errorClass: ErrorClass, d1PrefixHint: D1Prefix,
+  sqliteCodeHint: SqliteCode, summaryUtf8Bytes: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.nonNegative())) });
+const DIAGNOSTIC_TEXT_CHARACTERS = 4096;
+
+/** Error property getters carry no diagnostic authority; only own data strings are inspected. */
+const ownMessage = (cause: unknown): string | undefined => {
+  try {
+    if (!(cause instanceof Error)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(cause, "message");
+    return typeof descriptor?.value === "string" && descriptor.value.length <= DIAGNOSTIC_TEXT_CHARACTERS
+      ? descriptor.value : undefined;
+  } catch { return undefined; }
+};
+const builtinClass = (cause: unknown): typeof ErrorClass.Type => {
+  try {
+    if (cause instanceof TypeError) return "TypeError";
+    if (cause instanceof RangeError) return "RangeError";
+    if (cause instanceof SyntaxError) return "SyntaxError";
+    if (cause instanceof ReferenceError) return "ReferenceError";
+    if (cause instanceof URIError) return "URIError";
+    if (cause instanceof EvalError) return "EvalError";
+    if (cause instanceof Error) return "Error";
+  } catch { /* Hostile prototype access contributes only the generic category. */ }
+  return "unknown";
+};
+/** UTF8 size uses bounded temporary chunks and keeps surrogate pairs in the same chunk. */
+const summaryBytes = (value: string): number => {
+  const encoder = new TextEncoder();
+  let bytes = 0;
+  for (let offset = 0; offset < value.length;) {
+    let end = Math.min(value.length, offset + DIAGNOSTIC_TEXT_CHARACTERS);
+    const last = value.charCodeAt(end - 1);
+    if (end < value.length && last >= 0xd800 && last <= 0xdbff) end--;
+    bytes += encoder.encode(value.slice(offset, end)).byteLength;
+    offset = end;
+  }
+  return bytes;
+};
+/** Prefix/suffix hints are observational, never authenticated provider codes or retry/verdict inputs. */
+const failureError = (operation: typeof Operation.Type, cause: unknown, summaryJson?: string): Error => {
+  const message = ownMessage(cause);
+  const prefix = message?.match(/^(D1_ERROR|D1_EXEC_ERROR|D1_TYPE_ERROR|D1_COLUMN_NOTFOUND): /)?.[1];
+  const suffix = prefix === undefined ? undefined : message?.match(/: (SQLITE_[A-Z]+)$/)?.[1];
+  const diagnostic = Schema.decodeUnknownSync(Diagnostic)({ operation, errorClass: builtinClass(cause),
+    d1PrefixHint: Schema.is(D1Prefix)(prefix) ? prefix : "unknown",
+    sqliteCodeHint: Schema.is(SqliteCode)(suffix) ? suffix : "unknown",
+    ...(typeof summaryJson === "string" ? { summaryUtf8Bytes: summaryBytes(summaryJson) } : {}),
+  });
+  return new Error(`D1ExecutionsLive: ${operation} failed ${JSON.stringify(diagnostic)}`, { cause });
+};
 
 /**
  * The run-invocation context the `executions` row needs but the core
@@ -89,10 +148,10 @@ export const makeD1ExecutionsLive = (
   // rejected write retries before it dies: a transient D1 fault on the
   // terminal `finishExecution` otherwise strands the row in `running`, and
   // the parent join and the check-run wait on a verdict that never lands.
-  const run = (label: string, stmt: () => Promise<D1Result | D1Response>): Effect.Effect<void> =>
+  const run = (label: typeof Operation.Type, stmt: () => Promise<D1Result | D1Response>): Effect.Effect<void> =>
     Effect.tryPromise({
       try: () => stmt().then(() => undefined),
-      catch: (cause) => new Error(`D1ExecutionsLive: ${label} failed`, { cause }),
+      catch: (cause) => failureError(label, cause),
     }).pipe(Effect.retry(WRITE_RETRY), Effect.orDie);
 
   const service: ExecutionsService = {
@@ -146,7 +205,7 @@ export const makeD1ExecutionsLive = (
               )
               .bind(status, completedAt, summaryJson, id)
               .run()).then((result) => result.meta.changes > 0),
-        catch: (cause) => new Error("D1ExecutionsLive: finishExecution failed", { cause }),
+        catch: (cause) => failureError("finishExecution", cause, summaryJson),
       }).pipe(Effect.retry(WRITE_RETRY), Effect.orDie),
 
     startStep: ({ executionId, name, startedAt }) =>
