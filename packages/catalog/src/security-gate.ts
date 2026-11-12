@@ -176,8 +176,8 @@ export interface ScanRunReport {
 /**
  * What a scan reports of itself: from the point its bundle and scanner versions held, the bundle's digest, each
  * advisory snapshot's digest and each scanner's name, version and result, null for a scanner the scan stopped before;
- * and once a scanner ran, at most 200 findings, with `findingsTruncated` true where it found more, or a scanner's
- * report could not be read. A scan that ran no scanner reports no finding list, so none reads as none found.
+ * and once a scanner ran, at most 200 findings, with `findingsTruncated` true where it found more, or a step reported a
+ * finding the list does not hold: a scanner whose report could not be read, or a baseline check. A scan that ran no scanner reports no finding list, so none reads as none found.
  */
 export const scanReport = (facts: ScanFacts): ScanRunReport => {
   const prepared = facts.prepared;
@@ -191,8 +191,9 @@ export const scanReport = (facts: ScanFacts): ScanRunReport => {
           }),
         ),
   );
-  const unreadable = facts.steps.some(
-    (s) => s.findings !== undefined && StepFindings.$is("Unreadable")(s.findings),
+  const unlisted = facts.steps.some(
+    (s) =>
+      s.result === "finding" && (s.findings === undefined || StepFindings.$is("Unreadable")(s.findings)),
   );
   return {
     ...(prepared === undefined
@@ -222,7 +223,7 @@ export const scanReport = (facts: ScanFacts): ScanRunReport => {
             endLine: f.startLine,
             level: f.level,
           })),
-          findingsTruncated: read.length > REPORTED_FINDINGS_MAX || unreadable,
+          findingsTruncated: read.length > REPORTED_FINDINGS_MAX || unlisted,
         }),
   };
 };

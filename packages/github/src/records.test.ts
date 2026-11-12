@@ -1,4 +1,4 @@
-import { Exit } from "effect";
+import { Exit, Option } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   decodeJobRecord,
@@ -219,15 +219,15 @@ describe("verdict.record scan results and findings", () => {
       annotations: [],
       report: { findings: [reviewed], findingsTruncated: false },
     });
-    expect(decoded._tag).toBe("Some");
-    const report = decoded._tag === "Some" ? decoded.value.report : {};
+    expect(Option.isSome(decoded)).toBe(true);
+    const report = Option.getOrThrow(decoded).report;
     const payload = verdictRecordPayload({ ...terminal, reports: [report] });
     expect(payload.findings).toEqual([finding(3, "pr-review/security")]);
     expect(JSON.stringify(payload)).not.toContain("secret-ish text");
     // A payload without a report, or with a finding that has no fingerprint, reports nothing.
-    expect(decodeRunReport({ name: "x", markdown: "" })._tag).toBe("None");
+    expect(Option.isNone(decodeRunReport({ name: "x", markdown: "" }))).toBe(true);
     const { fingerprint: _f, ...unidentified } = finding(4);
-    expect(decodeRunReport({ report: { findings: [unidentified] } })._tag).toBe("None");
+    expect(Option.isNone(decodeRunReport({ report: { findings: [unidentified] } }))).toBe(true);
   });
 });
 

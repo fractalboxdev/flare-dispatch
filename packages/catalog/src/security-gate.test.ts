@@ -526,8 +526,8 @@ describe("the security gate run bodies over a real git remote", () => {
   /** The `report` member of a scan's summary payload, as the control plane decodes it for the verdict record. */
   const reportOf = (summary: unknown): RunReport => {
     const decoded = decodeRunReport(summary);
-    if (decoded._tag === "None") throw new Error("the summary carries no report");
-    return decoded.value.report;
+    if (Option.isNone(decoded)) throw new Error("the summary carries no report");
+    return Option.getOrThrow(decoded).report;
   };
 
   it("[FD-GH-096] reports the bundle digest, each snapshot digest, each scanner's version and result, and its findings", async () => {
@@ -542,8 +542,9 @@ describe("the security gate run bodies over a real git remote", () => {
           { name: "osv-scanner", version: IMAGE_VERSIONS["osv-scanner"], result: "clean" },
         ],
       },
+      // The baseline check's finding is not a listed finding, so the empty list is not the whole of what the run found.
       findings: [],
-      findingsTruncated: false,
+      findingsTruncated: true,
     });
 
     // A scanner whose report cannot be read found findings the list does not hold.
@@ -629,6 +630,6 @@ describe("the scan's report for the verdict record", () => {
     expect(exactly.findings).toHaveLength(200);
     expect(exactly.findingsTruncated).toBe(false);
     // The report decodes as the control plane reads it.
-    expect(decodeRunReport({ report: many })._tag).toBe("Some");
+    expect(Option.isSome(decodeRunReport({ report: many }))).toBe(true);
   });
 });

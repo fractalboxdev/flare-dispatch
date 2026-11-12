@@ -499,8 +499,8 @@ describe("pr-review", () => {
     const reportOf = (rec: Recorder) => {
       const intent = rec.intents.find((i) => i.kind === "check.annotations");
       const decoded = decodeRunReport(intent?.payload);
-      if (decoded._tag === "None") throw new Error("no report");
-      return decoded.value.report;
+      if (Option.isNone(decoded)) throw new Error("no report");
+      return Option.getOrThrow(decoded).report;
     };
 
     // A trivial change has one reviewer: 250 found, 200 reported.
