@@ -127,14 +127,19 @@ describe("the writeback appliers inside every actuator", () => {
   });
 
   it("[FD-AGT-001] lists each agentic recipe with a body in the catalogue, on a cloud executor", () => {
-    for (const name of ["pr-review", "improve-pr", "spec-drift-pr", "ci-triage-pr"]) {
+    for (const name of [
+      "pr-review",
+      "improve-pr",
+      "spec-drift-pr",
+      "ci-triage-pr",
+      "release-notes",
+    ]) {
       const found = lookupRun("production", name);
       expect(found._tag).toBe("Available");
       if (found._tag !== "Available") continue;
       expect(found.entry.executors).toEqual(["cloud"]);
       expect(found.entry.agentic?.declaration.needsModel).toBeDefined();
     }
-    expect(lookupRun("production", "release-notes")._tag).toBe("NotInCatalogue");
   });
 });
 

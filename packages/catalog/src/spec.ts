@@ -5,6 +5,7 @@ import {
   CiTriageInput,
   ImprovePrInput,
   PrReviewInput,
+  ReleaseNotesInput,
   SelfHealPrInput,
   SpecDriftInput,
   TriageIssuesInput,
@@ -281,6 +282,7 @@ const AGENTIC_INPUTS: Readonly<Record<string, Schema.Decoder<unknown>>> = {
   "ci-triage-pr": CiTriageInput,
   "triage-issues": TriageIssuesInput,
   "triage-prs": TriagePrsInput,
+  "release-notes": ReleaseNotesInput,
 };
 
 /**

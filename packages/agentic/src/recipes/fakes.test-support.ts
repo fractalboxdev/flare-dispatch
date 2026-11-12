@@ -6,6 +6,7 @@ import {
   Artifacts,
   Checkout,
   EditLoop,
+  ExecutionIdentity,
   ModelCallError,
   ModelClient,
   RecipeIntents,
@@ -120,10 +121,14 @@ export const fakeServices = (rec: Recorder, options: FakeOptions = {}) =>
             : Effect.succeed(row);
         }),
     }),
+    Layer.succeed(ExecutionIdentity, { executionId: FAKE_EXECUTION_ID }),
     WorkflowEngine.layerMemory,
   );
 
-export const payload = <I>(run: string, input: I, execution = "01HEXEC0000000000000000000") => ({
+/** The execution id `payload` and the fake `ExecutionIdentity` name. */
+export const FAKE_EXECUTION_ID = "01HEXEC0000000000000000000";
+
+export const payload = <I>(run: string, input: I, execution = FAKE_EXECUTION_ID) => ({
   workflow_version: 1,
   execution_id: execution,
   run,
