@@ -1,7 +1,14 @@
 // The control plane's records configuration: the rendered `RECORDS_URL` decides whether the profile it serves declares
 // the record kinds (specs/github-output.md § Job and verdict records).
+import { ConfigurationSource } from "@fractalboxdev/mameko-ports";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { profileOf, recordsUrlOf, type ControlPlaneEnv } from "../src/config.ts";
+import {
+  configurationSourceOf,
+  profileOf,
+  recordsUrlOf,
+  type ControlPlaneEnv,
+} from "../src/config.ts";
 
 const env = (vars: Partial<ControlPlaneEnv>) => vars as ControlPlaneEnv;
 
@@ -23,5 +30,22 @@ describe("records configuration", () => {
     }
     // The committed phase serves no record kind yet.
     expect(profileOf(set).intent_kinds["job.record"]).toBeUndefined();
+  });
+
+  it("[FD-GH-093] mameko's configuration source delivers the document the control plane serves, at its policy version", () => {
+    const loaded = (e: ControlPlaneEnv) =>
+      Effect.runSync(
+        Effect.flatMap(ConfigurationSource, (source) => source.load).pipe(
+          Effect.provide(configurationSourceOf(e, 2)),
+        ),
+      );
+    for (const e of [env({ RECORDS_URL: "https://records.example.com/hook" }), env({})]) {
+      const { document, policyVersion } = loaded(e);
+      expect(policyVersion).toBe(profileOf(e, 2).policy_version);
+      expect(document).toEqual(profileOf(e, 2));
+    }
+    expect(loaded(env({ RECORDS_URL: "https://records.example.com/hook" })).policyVersion).toBe(
+      "flare-dispatch.v2.0-phase2-records",
+    );
   });
 });

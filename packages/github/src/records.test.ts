@@ -95,6 +95,11 @@ describe("verdict.record", () => {
     expect(
       of({ verdict: { _tag: "skipped", reason: "not-applicable", detail: "draft-pr" } }),
     ).toMatchObject({ verdict: "skipped", reason: "not-applicable: draft-pr" });
+    // A skip with no detail states its reason alone, as the execution row does.
+    expect(of({ verdict: { _tag: "skipped", reason: "x", detail: "" } })).toMatchObject({
+      verdict: "skipped",
+      reason: "x",
+    });
     expect(
       of({
         verdict: { _tag: "failure", category: "halt", reason: "halt: operator" },

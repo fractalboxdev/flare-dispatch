@@ -637,9 +637,18 @@ export const profileDocumentFor = (
 
 export const profileDocument: ProfileDocument = profileDocumentFor("production");
 
-/** The configuration source of a deployment: one document at one policy version. */
-export const configurationSourceLayer = (deployment: Deployment) =>
-  Layer.succeed(ConfigurationSource, { load: Effect.succeed(profileDocumentFor(deployment)) });
+/**
+ * The configuration source of a deployment at a phase: one document at one policy version, with the record kinds where
+ * the overlay sets `records.url` (FD-GH-093).
+ */
+export const configurationSourceLayer = (
+  deployment: Deployment,
+  phase: Phase = CURRENT_PHASE,
+  options: ProfileOptions = {},
+) =>
+  Layer.succeed(ConfigurationSource, {
+    load: Effect.succeed(profileDocumentFor(deployment, phase, options)),
+  });
 
 /** FlareDispatch's configuration source: the committed production profile. */
 export const ConfigurationSourceLive = configurationSourceLayer("production");

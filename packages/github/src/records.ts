@@ -105,7 +105,7 @@ const reasonOf = (verdict: Verdict): string | null =>
   Match.value(verdict).pipe(
     Match.tag("failure", ({ reason }) => reason),
     Match.tag("cancelled", ({ cause }) => cause),
-    Match.tag("skipped", ({ reason, detail }) => `${reason}: ${detail}`),
+    Match.tag("skipped", ({ reason, detail }) => (detail === "" ? reason : `${reason}: ${detail}`)),
     Match.orElse(() => null),
   );
 

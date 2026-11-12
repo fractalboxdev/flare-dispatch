@@ -980,6 +980,13 @@ describe("record kinds", () => {
     ).toBe("lease-granted");
   });
 
+  it("[FD-GH-093] the shipped registry serves no verdictRecord actuator, so it rejects the phase 2 records profile on the two actuator paths", () => {
+    // FD-GH-098 registers `verdictRecord`; that package flips this to an empty list.
+    expect(
+      validateProfile(withRecords, { ...validationContext, phase: 2 }).map((r) => r.path),
+    ).toEqual(["intent_kinds.job.record.actuator", "intent_kinds.verdict.record.actuator"]);
+  });
+
   it("[FD-GH-093] the validator rejects a record kind before phase 2", () => {
     const early = {
       ...committed,

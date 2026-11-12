@@ -25,6 +25,7 @@ import {
 import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
+  configurationSourceLayer,
   CURRENT_PHASE,
   deploymentOf,
   deviceSlotDefaults,
@@ -32,6 +33,7 @@ import {
   type Deployment,
   type Phase,
   type Profile,
+  type ProfileOptions,
   type SpendConfig,
 } from "@fractalboxdev/flare-dispatch-profile";
 import type {
@@ -208,9 +210,17 @@ export const recordsUrlOf = (env: Pick<ControlPlaneEnv, "RECORDS_URL">): string 
   return url === undefined || url === "" ? undefined : url;
 };
 
+const profileOptionsOf = (env: Pick<ControlPlaneEnv, "RECORDS_URL">): ProfileOptions => ({
+  records: recordsUrlOf(env) !== undefined,
+});
+
 /** The profile this deploy serves: its deployment at the current phase, with the record kinds where `records.url` is set. */
 export const profileOf = (env: ControlPlaneEnv, phase: Phase = CURRENT_PHASE): Profile =>
-  buildProfile(deployment(env), phase, { records: recordsUrlOf(env) !== undefined });
+  buildProfile(deployment(env), phase, profileOptionsOf(env));
+
+/** mameko's configuration source for this deploy: the document `profileOf` builds, at its policy version. */
+export const configurationSourceOf = (env: ControlPlaneEnv, phase: Phase = CURRENT_PHASE) =>
+  configurationSourceLayer(deployment(env), phase, profileOptionsOf(env));
 
 const DAY_MS = 24 * 3_600_000;
 
