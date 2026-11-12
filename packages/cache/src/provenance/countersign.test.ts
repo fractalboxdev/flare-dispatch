@@ -24,6 +24,7 @@ import {
   type DsseEnvelope,
   type ProvenanceKey,
 } from "./dsse.ts";
+import { disallowedContent, envelopeDisallowedContent } from "./statement.ts";
 
 const keyPair = async (kid: string) => {
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
@@ -307,5 +308,69 @@ describe("cloud-builder statement", () => {
     expect(payloadOf(gate.envelope).predicate.configuration).toEqual(
       expect.arrayContaining(fetched),
     );
+  });
+
+  it("[FD-PROV-043] the cloud builder's statement holds only digests, ids, names, timestamps and verdicts, and a result carrying source, a diff, a log, a prompt or a completion is written into no statement", async () => {
+    await emptyBucket(mf.bucket);
+    const provenance = await keyPair("prov-2026-11");
+    await mf.bucket.put(
+      artifactPath("exec-42", 2, "dist/app.tar.gz"),
+      utf8("export const a = 1;\n"),
+    );
+    const write = (raw: unknown) =>
+      Effect.runPromiseExit(
+        writeCloudStatement(raw, provenance.private).pipe(
+          Effect.provide(Layer.succeed(CacheBucket, mf.bucket)),
+        ),
+      );
+    const full = (kind: "build" | "gate") => ({
+      ...input({
+        kind,
+        artifacts: [{ name: "dist/app.tar.gz" }],
+        fetches: [
+          {
+            host: "registry.npmjs.org",
+            method: "GET",
+            path: "/effect/-/effect-4.0.6.tgz",
+            response_digest: sha("4"),
+          },
+        ],
+      }),
+      commands: [
+        { name: "build", exit_status: 0 },
+        { name: "test", exit_status: 1 },
+      ],
+      restored_cache: [{ namespace: "pnpm", key: "lock-abc", digest: sha("5") }],
+      models: [{ id: "model-a", tokens: 1200 }],
+    });
+
+    // Every value of the statement and of its signed envelope is a digest, id, name, timestamp, verdict or count: the
+    // artifact's bytes are digested, never copied in.
+    for (const kind of ["build", "gate"] as const) {
+      const exit = await write(full(kind));
+      expect(exit._tag).toBe("Success");
+      if (exit._tag !== "Success") continue;
+      expect(disallowedContent(exit.value.statement)).toBeNull();
+      expect(envelopeDisallowedContent(exit.value.envelope)).toBeNull();
+      expect(JSON.stringify(exit.value.statement)).not.toContain("export const a");
+    }
+
+    // A result that would carry content into a field is written into no statement.
+    const log = "npm ERR! code ELIFECYCLE\nnpm ERR! errno 1";
+    const diff = "--- a/src/x.ts\n+++ b/src/x.ts\n@@ -1 +1 @@\n-const a = 1;\n+const a = 2;";
+    const prompt = "Review this pull request and list every bug";
+    const completion = "The change is correct. I found no bugs.";
+    const carrying = [
+      { ...full("build"), artifacts: [{ name: diff }] },
+      { ...full("gate"), commands: [{ name: log, exit_status: 1 }] },
+      { ...full("build"), models: [{ id: prompt, tokens: 1 }] },
+      { ...full("build"), outcome: completion },
+      {
+        ...full("build"),
+        lockfiles: [{ path: "pnpm-lock.yaml", digest: "lockfileVersion: '9.0'" }],
+      },
+    ];
+    for (const raw of carrying)
+      expect(failureOf(await write(raw))).toMatchObject({ _tag: "CloudStatementFailed" });
   });
 });

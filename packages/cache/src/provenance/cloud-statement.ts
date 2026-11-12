@@ -16,6 +16,7 @@ import {
   type ProvenanceKey,
 } from "./dsse.ts";
 import {
+  disallowedContent,
   StatementEvidenceFields,
   StatementLease,
   StatementName,
@@ -40,7 +41,7 @@ export type CloudStatementInput = typeof CloudStatementInput.Type;
 export class CloudStatementFailed extends Schema.TaggedError<CloudStatementFailed>()(
   "CloudStatementFailed",
   {
-    reason: Schema.Literals(["invalid-input", "artifact-missing", "r2"]),
+    reason: Schema.Literals(["invalid-input", "artifact-missing", "r2", "disallowed-content"]),
     detail: Schema.String,
   },
 ) {}
@@ -70,7 +71,9 @@ const objectSha256 = async (bucket: Bucket, path: string): Promise<string | null
  * Writes and signs the statement of an accepted cloud execution (FD-PROV-008): one subject per artifact, digested from
  * the bytes stored in R2 at that execution and epoch, or the commit when it stored none; the SLSA provenance v1
  * predicate for a build recipe and the test-result predicate for a gate recipe; and one signature, by the provenance
- * key, as the cloud builder. An artifact the submission names but R2 does not hold fails the write.
+ * key, as the cloud builder. An artifact the submission names but R2 does not hold fails the write, and so does a
+ * statement holding any value other than a digest, id, name, timestamp or verdict, with that value's path as its
+ * detail (FD-PROV-043).
  */
 export const writeCloudStatement = (
   raw: unknown,
@@ -100,6 +103,11 @@ export const writeCloudStatement = (
       { ...input, lease: { ...input.lease, binding_kind: "execution-lease" } },
       subject,
     );
+    const disallowed = disallowedContent(statement);
+    if (disallowed !== null)
+      return yield* Effect.fail(
+        new CloudStatementFailed({ reason: "disallowed-content", detail: disallowed }),
+      );
     const payload = utf8(JSON.stringify(statement));
     const signature = yield* Effect.tryPromise({
       try: () => signPae(key, dssePae(DSSE_PAYLOAD_TYPE, payload)),
