@@ -1,11 +1,13 @@
 // The minute tick: the Worker's one cron trigger (FD-INT-050). Each tick records its time, starts the liveness
 // monitor, drains the outbox once, once a day reads the kill lines (FD-VER-030), and every 15 min runs the GitHub
-// probes; 5 min after a canary push it reads the canary's check. Each step runs on its own, so one failing step leaves the others running.
+// probes; 5 min after a canary push it reads the canary's check. After the composed units, which hold the
+// `advisory-refresh` step, it raises or resolves `advisory-snapshot-stale` (FD-OPS-103). Each step runs on its own, so one failing step leaves the others running.
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
 import { actuatorBindings, drainOnce } from "@fractalboxdev/mameko-coordinator";
 import { d1OutboxStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import type { ActuatorRateLimit, Actuators, AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Layer } from "effect";
+import { checkAdvisorySnapshotsStale, type AdvisoryWatch } from "./advisory.ts";
 import { KILL_LINE_INTERVAL_MS, killLineMonitor } from "./kill-lines.ts";
 import { lastTick, recordTick, runOpsMigrations } from "./liveness.ts";
 import {
@@ -63,6 +65,11 @@ export interface TickDeps {
    * and log retention sweeps.
    */
   readonly units?: (now: number) => readonly TickStep[];
+  /**
+   * The advisory ecosystems and snapshot age the `advisory-snapshot-stale` check watches, or the read that resolves
+   * them; without them the check does not run. A failed read fails the check's step alone.
+   */
+  readonly advisory?: AdvisoryWatch | Effect.Effect<AdvisoryWatch, unknown>;
 }
 
 /** One unit of work the tick runs as its own step. */
@@ -165,6 +172,19 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
     );
 
     for (const unit of deps.units?.(now) ?? []) steps.push(yield* run(unit.step, unit.effect));
+
+    // Runs after the units, so a snapshot the tick's own `advisory-refresh` recorded counts as fresh.
+    const advisory = deps.advisory;
+    steps.push(
+      advisory === undefined
+        ? yield* skipped("advisory-snapshot-stale", "no advisory ecosystems or snapshot age")
+        : yield* run(
+            "advisory-snapshot-stale",
+            (Effect.isEffect(advisory) ? advisory : Effect.succeed(advisory)).pipe(
+              Effect.flatMap((watch) => checkAdvisorySnapshotsStale(db, watch, now)),
+            ),
+          ),
+    );
 
     // The daily kill-line read. A failed read, or a `kill-line` notification whose delivery failed, records no time, so
     // the next tick reads again and resends it (MAMEKO-OPS-026).

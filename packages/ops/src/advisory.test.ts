@@ -1,13 +1,19 @@
 import { AdvisorySnapshots } from "@fractalboxdev/flare-dispatch-catalog";
+import { profile } from "@fractalboxdev/flare-dispatch-profile";
 import { Cause, Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ADVISORY_ATTEMPT_LEASE_MS,
+  ADVISORY_SNAPSHOT_STALE,
+  checkAdvisorySnapshotsStale,
   d1AdvisorySnapshots,
   osvArchiveUrl,
   readSnapshotRecord,
+  recordSnapshot,
   refreshAdvisorySnapshots,
+  type AdvisoryWatch,
 } from "./advisory.ts";
+import { activeAlarms, alarmMessage, RUNBOOK } from "./alarms.ts";
 import {
   archive,
   casBucket,
@@ -16,7 +22,8 @@ import {
   sha256,
   type Published,
 } from "./advisory.test-support.ts";
-import { sqliteDb, type TestDb } from "./d1.test-support.ts";
+import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
+import { minuteTick, type TickDeps } from "./tick.ts";
 
 let t: TestDb;
 beforeEach(async () => {
@@ -182,5 +189,121 @@ describe("advisory-refresh", () => {
     const retried = await refresh(server, casBucket(), ["npm"], failedAt + ADVISORY_ATTEMPT_LEASE_MS);
     expect(Exit.isSuccess(retried) && retried.value.refreshed).toEqual(["npm"]);
     expect((await readSnapshotRecord(t.db, "npm"))?.digest).toBe(sha256(fresh));
+  });
+});
+
+describe("advisory-snapshot-stale", () => {
+  const NOW = Date.UTC(2026, 10, 12, 12, 0);
+  const snapshot = (ecosystem: string, lastModified: number) =>
+    recordSnapshot(t.db, ecosystem, { digest: sha256(archive(ecosystem)), lastModified, size: 9 }, NOW);
+  const check = (watch: AdvisoryWatch, now: number, alarms: ReturnType<typeof recordingAlarms>) =>
+    Effect.runPromise(checkAdvisorySnapshotsStale(t.db, watch, now).pipe(Effect.provide(alarms.layer)));
+
+  it("[FD-OPS-103] raises the page alarm advisory-snapshot-stale while a scan.advisoryEcosystems entry has no snapshot or one older than scan.advisoryMaxAgeHours, and resolves it once every snapshot is fresh", async () => {
+    const alarms = recordingAlarms();
+    const watch = { ecosystems: ["npm", "PyPI"], maxAgeHours: 48 };
+    await snapshot("npm", NOW - 10 * HOUR);
+
+    // PyPI has no snapshot.
+    const missing = await check(watch, NOW, alarms);
+    expect(missing).toEqual({ stale: [{ ecosystem: "PyPI", lastModified: null }], alarm: "sent" });
+    expect(alarms.delivered).toEqual([
+      {
+        name: ADVISORY_SNAPSHOT_STALE,
+        severity: "page",
+        dedupeKey: ADVISORY_SNAPSHOT_STALE,
+        state: "raised",
+        detail: { max_age_hours: 48, stale: [{ ecosystem: "PyPI", age_ms: null }] },
+      },
+    ]);
+    // A page names its runbook entry, R17.
+    expect(RUNBOOK[ADVISORY_SNAPSHOT_STALE]).toBe("R17");
+    expect(alarmMessage(alarms.delivered[0]!)).toContain("runbook R17");
+    expect(await activeAlarms(t.db)).toMatchObject([
+      { name: ADVISORY_SNAPSHOT_STALE, severity: "page", runbook: "R17" },
+    ]);
+
+    // PyPI's snapshot is older than the allowed age: the alarm holds, sent at most once per 24 h.
+    await snapshot("PyPI", NOW - 49 * HOUR);
+    const old = await check(watch, NOW + 60_000, alarms);
+    expect(old).toEqual({
+      stale: [{ ecosystem: "PyPI", lastModified: NOW - 49 * HOUR }],
+      alarm: "quiet",
+    });
+    expect(alarms.delivered).toHaveLength(1);
+
+    // Age counts from Last-Modified: exactly the allowed age is not stale, and every snapshot fresh resolves it.
+    await snapshot("PyPI", NOW + 120_000 - 48 * HOUR);
+    expect(await check(watch, NOW + 120_000, alarms)).toEqual({ stale: [], alarm: "sent" });
+    expect(alarms.delivered.map((a) => a.state)).toEqual(["raised", "resolved"]);
+    expect(await activeAlarms(t.db)).toEqual([]);
+    await snapshot("PyPI", NOW);
+    expect(await check(watch, NOW + 180_000, alarms)).toEqual({ stale: [], alarm: "quiet" });
+
+    // The setting decides the allowed age: npm's 10 h snapshot is stale under 6 h.
+    const strict = await check({ ...watch, maxAgeHours: 6 }, NOW + 240_000, alarms);
+    expect(strict.stale.map((s) => s.ecosystem)).toEqual(["npm"]);
+    expect(alarms.delivered.at(-1)).toMatchObject({ state: "raised", severity: "page" });
+
+    // An ecosystem the overlay no longer names is not watched: dropping npm resolves the alarm.
+    expect(await check({ ecosystems: ["PyPI"], maxAgeHours: 6 }, NOW + 300_000, alarms)).toEqual({
+      stale: [],
+      alarm: "sent",
+    });
+    expect(alarms.delivered.map((a) => a.state)).toEqual([
+      "raised",
+      "resolved",
+      "raised",
+      "resolved",
+    ]);
+  });
+
+  it("[FD-OPS-103] the minute tick runs the check after its units, so the tick's own advisory-refresh counts, and a failed watch read fails that step alone", async () => {
+    const monitor = {
+      idFromName: (name: string) => name,
+      get: () => ({ start: async () => undefined }),
+    };
+    const env = { DB: t.db, MONITOR: monitor };
+    const alarms = recordingAlarms();
+    const deps = (over: Partial<TickDeps>): TickDeps => ({
+      profile,
+      alarmPort: alarms.layer,
+      webhookSilentHours: 24,
+      ...over,
+    });
+    const stepOf = async (d: TickDeps, now: number) =>
+      (await Effect.runPromise(minuteTick(env, d, now))).steps.find(
+        (s) => s.step === ADVISORY_SNAPSHOT_STALE,
+      );
+    const watch = { ecosystems: ["Go"], maxAgeHours: 48 };
+
+    // Without a watch the check does not run.
+    expect(await stepOf(deps({}), NOW)).toMatchObject({ status: "skipped" });
+    expect(alarms.delivered).toEqual([]);
+
+    // A unit that records the snapshot in the same tick leaves nothing stale.
+    const refresh = {
+      step: "advisory-refresh",
+      effect: Effect.promise(() => snapshot("Go", NOW - HOUR)),
+    };
+    expect(await stepOf(deps({ advisory: watch, units: () => [refresh] }), NOW)).toMatchObject({
+      status: "ran",
+      detail: { stale: [], alarm: "quiet" },
+    });
+    expect(alarms.delivered).toEqual([]);
+
+    // A day later the snapshot is past the allowed age and the tick pages; the watch may be a read.
+    expect(
+      await stepOf(deps({ advisory: Effect.succeed(watch) }), NOW + 48 * HOUR),
+    ).toMatchObject({ status: "ran", detail: { alarm: "sent" } });
+    expect(alarms.delivered).toMatchObject([
+      { name: ADVISORY_SNAPSHOT_STALE, severity: "page", state: "raised" },
+    ]);
+
+    const report = await Effect.runPromise(
+      minuteTick(env, deps({ advisory: Effect.fail("ADVISORY_MAX_AGE_HOURS malformed") }), NOW + 49 * HOUR),
+    );
+    expect(report.steps.find((s) => s.step === ADVISORY_SNAPSHOT_STALE)?.status).toBe("failed");
+    expect(report.steps.find((s) => s.step === "record-tick")?.status).toBe("ran");
   });
 });

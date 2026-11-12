@@ -350,6 +350,7 @@ describe("minute tick", () => {
       ["record-tick", "ran"],
       ["liveness-monitor", "ran"],
       ["drain", "skipped"],
+      ["advisory-snapshot-stale", "skipped"],
       ["kill-lines", "ran"],
       ["canary-push", "skipped"],
       ["installation-probe", "skipped"],

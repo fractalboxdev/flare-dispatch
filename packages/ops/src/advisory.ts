@@ -5,6 +5,10 @@
 // nothing, so the ecosystem keeps the snapshot it had. The security gate reads the record through the catalogue's
 // `AdvisorySnapshots` port (specs/runs/gate.md FD-GATE-106, FD-GATE-107).
 //
+// While an `scan.advisoryEcosystems` entry has no recorded snapshot, or one whose `Last-Modified` time is older than
+// `scan.advisoryMaxAgeHours`, the minute tick raises the page alarm `advisory-snapshot-stale`, and resolves it once
+// every entry's snapshot is fresh (FD-OPS-103).
+//
 // The digest names the object's key, and it is known only once the archive has been read to its end, so the step
 // reads the archive twice: once to hash and count it, and once to store it at `cas/<digest>`, where the store refuses
 // bytes of any other SHA-256 or length. An object already at that key with the archive's length is not stored again.
@@ -12,10 +16,12 @@ import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces
 import {
   AdvisorySnapshots,
   AdvisorySnapshotUnreadable,
+  snapshotStale,
   type AdvisorySnapshot,
 } from "@fractalboxdev/flare-dispatch-catalog";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Layer, Schema } from "effect";
+import { track } from "./raise.ts";
 
 /** Each ecosystem's recorded snapshot; one row per ecosystem, replaced only by a complete refresh. */
 export const ADVISORY_SNAPSHOTS_MIGRATION = `create table if not exists fd_advisory_snapshots (
@@ -289,4 +295,66 @@ export const refreshAdvisorySnapshots = (
     }
     if (failed.length > 0) return yield* new AdvisoryRefreshIncomplete({ failed, refreshed });
     return { refreshed, current, attempting };
+  });
+
+/** The page alarm a missing or stale advisory snapshot raises; runbook R17 handles it (FD-OPS-103). */
+export const ADVISORY_SNAPSHOT_STALE = "advisory-snapshot-stale";
+
+/** What the staleness check watches: `scan.advisoryEcosystems` and `scan.advisoryMaxAgeHours`. */
+export interface AdvisoryWatch {
+  readonly ecosystems: readonly string[];
+  readonly maxAgeHours: number;
+}
+
+/** A watched ecosystem whose snapshot is missing (`lastModified` `null`) or older than the allowed age. */
+export interface StaleSnapshot {
+  readonly ecosystem: string;
+  readonly lastModified: number | null;
+}
+
+/**
+ * The watched ecosystems at `now` that have no recorded snapshot, or one whose `Last-Modified` time is older than
+ * `maxAgeHours`, in the order `watch` names them.
+ */
+export const staleAdvisorySnapshots = async (
+  db: D1Like,
+  watch: AdvisoryWatch,
+  now: number,
+): Promise<readonly StaleSnapshot[]> => {
+  const stale: StaleSnapshot[] = [];
+  for (const ecosystem of new Set(watch.ecosystems)) {
+    const record = await readSnapshotRecord(db, ecosystem);
+    if (record === null) stale.push({ ecosystem, lastModified: null });
+    else if (snapshotStale(record, now, watch.maxAgeHours))
+      stale.push({ ecosystem, lastModified: record.lastModified });
+  }
+  return stale;
+};
+
+/**
+ * The `advisory-snapshot-stale` check at `now` (FD-OPS-103): raises the page alarm while any watched ecosystem's
+ * snapshot is missing or older than `scan.advisoryMaxAgeHours`, naming each such ecosystem, and resolves it once none
+ * is. One dedupe key covers every ecosystem, so the alarm repeats at most once per 24 h while any stays stale.
+ */
+export const checkAdvisorySnapshotsStale = (db: D1Like, watch: AdvisoryWatch, now: number) =>
+  Effect.gen(function* () {
+    const stale = yield* Effect.promise(() => staleAdvisorySnapshots(db, watch, now));
+    const alarm = yield* track(
+      db,
+      {
+        name: ADVISORY_SNAPSHOT_STALE,
+        severity: "page",
+        dedupeKey: ADVISORY_SNAPSHOT_STALE,
+        detail: {
+          max_age_hours: watch.maxAgeHours,
+          stale: stale.map((s) => ({
+            ecosystem: s.ecosystem,
+            age_ms: s.lastModified === null ? null : now - s.lastModified,
+          })),
+        },
+      },
+      stale.length > 0,
+      now,
+    );
+    return { stale, alarm };
   });

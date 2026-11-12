@@ -5,6 +5,7 @@ import {
   ConfigInvalid,
   type ApiEnv,
 } from "@fractalboxdev/flare-dispatch-api/config";
+import { ADVISORY_MAX_AGE_DEFAULT_HOURS } from "@fractalboxdev/flare-dispatch-catalog";
 import type { ConcludeKind, QuotaObject } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import {
@@ -119,6 +120,11 @@ export interface ControlPlaneEnv extends CacheEnv {
    * sets none (FD-OPS-100). Wrangler delivers it as an array, a `.dev.vars` entry as its JSON text.
    */
   readonly ADVISORY_ECOSYSTEMS?: unknown;
+  /**
+   * The rendered `{{scan.advisoryMaxAgeHours}}`: the snapshot age the `advisory-snapshot-stale` alarm allows, 48 where
+   * the overlay sets none (FD-OPS-103). Wrangler delivers it as a number, a `.dev.vars` entry as its text.
+   */
+  readonly ADVISORY_MAX_AGE_HOURS?: unknown;
   /** The gate image's digest, `sha256:<hex>`, which every lease outside a device host execution names. */
   readonly GATE_IMAGE_DIGEST?: string;
   /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */
@@ -260,6 +266,24 @@ export const advisoryEcosystemsOf = (
     : new ConfigInvalid({
         path: "ADVISORY_ECOSYSTEMS",
         message: "not a JSON list of ecosystem names",
+      });
+};
+
+/**
+ * `scan.advisoryMaxAgeHours` from `ADVISORY_MAX_AGE_HOURS`: the default where the var is unset or empty, and
+ * `ConfigInvalid` for a value that is not a whole number of hours of at least 1, so a malformed var widens no window.
+ */
+export const advisoryMaxAgeHoursOf = (
+  env: Pick<ControlPlaneEnv, "ADVISORY_MAX_AGE_HOURS">,
+): number | ConfigInvalid => {
+  const raw = env.ADVISORY_MAX_AGE_HOURS;
+  if (raw === undefined || raw === null || raw === "") return ADVISORY_MAX_AGE_DEFAULT_HOURS;
+  const hours = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
+  return Number.isInteger(hours) && hours >= 1
+    ? hours
+    : new ConfigInvalid({
+        path: "ADVISORY_MAX_AGE_HOURS",
+        message: "not a whole number of hours of at least 1",
       });
 };
 
