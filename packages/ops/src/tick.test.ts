@@ -756,9 +756,15 @@ describe("the minute tick's job and verdict records", () => {
     await ownsCheck("e-pass", "flare-dispatch/ci:lint", { _tag: "Success", epoch: 2 });
     // A failure that owns no check run and was never placed.
     await seed("e-fail", "failure", { reason: "infra: no executor" });
+    // Placed but cancelled while queued, so never granted a lease: the placement's epoch 1 names no grant.
+    await seed("e-queued", "cancelled", { reason: "operator-cancel" });
+    await t.db
+      .prepare("insert into placements (execution_id, state, epoch) values (?, ?, ?)")
+      .bind("e-queued", "queued", 1)
+      .run();
     // A check run whose conclusion is not applied yet: the record carries no conclusion.
-    await seed("e-halted", "cancelled", { reason: "operator-cancel", label: "e2e" });
-    await ownsCheck("e-halted", "flare-dispatch/ci:e2e");
+    await seed("e-unconcluded", "cancelled", { reason: "operator-cancel", label: "e2e" });
+    await ownsCheck("e-unconcluded", "flare-dispatch/ci:e2e");
     await seed("e-live", "running");
     // An execution recorded before this tick keeps its one row.
     await seed("e-known", "success");
@@ -782,7 +788,7 @@ describe("the minute tick's job and verdict records", () => {
     const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
     expect(report.steps.find((s) => s.step === "verdict-records")).toMatchObject({
       status: "ran",
-      detail: ["e-fail", "e-halted", "e-pass"],
+      detail: ["e-fail", "e-pass", "e-queued", "e-unconcluded"],
     });
 
     const rows = await records();
@@ -791,13 +797,6 @@ describe("the minute tick's job and verdict records", () => {
         "acme/app/ops:verdict-record:e-fail",
         null,
         "ops:verdict-record:e-fail",
-        "records",
-        "pending",
-      ],
-      [
-        "acme/app/ops:verdict-record:e-halted",
-        null,
-        "ops:verdict-record:e-halted",
         "records",
         "pending",
       ],
@@ -812,6 +811,20 @@ describe("the minute tick's job and verdict records", () => {
         "acme/app/ops:verdict-record:e-pass",
         null,
         "ops:verdict-record:e-pass",
+        "records",
+        "pending",
+      ],
+      [
+        "acme/app/ops:verdict-record:e-queued",
+        null,
+        "ops:verdict-record:e-queued",
+        "records",
+        "pending",
+      ],
+      [
+        "acme/app/ops:verdict-record:e-unconcluded",
+        null,
+        "ops:verdict-record:e-unconcluded",
         "records",
         "pending",
       ],
@@ -840,7 +853,8 @@ describe("the minute tick's job and verdict records", () => {
       conclusion: null,
       check_name: null,
     });
-    expect(payload("e-halted")).toMatchObject({
+    expect(payload("e-queued")).toMatchObject({ epoch: 0, verdict: "cancelled" });
+    expect(payload("e-unconcluded")).toMatchObject({
       verdict: "cancelled",
       reason: "operator-cancel",
       conclusion: null,
@@ -861,10 +875,11 @@ describe("the minute tick's job and verdict records", () => {
     });
     expect((await records()).map((r) => r.intent_key)).toEqual([
       "ops:verdict-record:e-fail",
-      "ops:verdict-record:e-halted",
       "ops:verdict-record:e-known",
       "ops:verdict-record:e-live",
       "ops:verdict-record:e-pass",
+      "ops:verdict-record:e-queued",
+      "ops:verdict-record:e-unconcluded",
     ]);
   });
 

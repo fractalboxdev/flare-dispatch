@@ -66,13 +66,13 @@ interface TerminalRow {
 /**
  * The oldest terminal executions with no `verdict.record` row, bounded by the pass limit, with no age cutoff, so an
  * outage leaves no execution unrecorded. Each reads its intake record (commit SHA, ref, trigger), the epoch of its
- * accepted lease, else of its latest grant, and 0 for an execution never placed; the check name from its
+ * accepted lease, else of its latest grant, and 0 for an execution never granted a lease; the check name from its
  * `cp:check:open` row, which admission inserts for exactly the executions that own a check run; and its first applied
  * `check.conclude` row, whose verdict is the conclusion the check run carries. An execution without an intake record
  * has no commit or ref to record and is not read.
  */
 export const TERMINAL_UNRECORDED = `select e.id, e.scope_id, e.run, coalesce(e.class, r.class) as class, e.status,
-    e.reason, r.sha, r.ref, r.trigger, coalesce(p.accepted_epoch, p.leased_epoch, p.epoch, 0) as epoch,
+    e.reason, r.sha, r.ref, r.trigger, coalesce(p.accepted_epoch, p.leased_epoch, 0) as epoch,
     (select json_extract(o.payload_json, '$.name') from outbox o
       where o.execution_id = e.id and o.intent_key = 'cp:check:open') as check_name,
     (select o.payload_json from outbox o
