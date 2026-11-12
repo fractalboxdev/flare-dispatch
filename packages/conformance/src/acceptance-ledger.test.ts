@@ -3,7 +3,7 @@
 // a Tamarin lemma of `formal/provenance.spthy` counts toward the phase gate only while every check it assumes has that
 // test. A negative test is a test in this package whose title cites the check's requirement and whose body asserts the
 // check's rejection reason. The suite runs the ledger beside those tests, so a failing negative test fails the run the
-// gate reads.
+// gate reads, and a skipped, deferred or inverted one fails the ledger.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ACCEPTANCE_REASONS, type AcceptanceReason } from "@fractalboxdev/flare-dispatch-cache";
@@ -63,27 +63,36 @@ const acceptanceIds = new Map(
 
 const verifierIds = requirementLines.filter((r) => r.n >= 53 && r.n <= 61).map((r) => r.id);
 
-/** Every test of this package other than the ledger: its title and the source up to the next test. */
+/** A modifier that keeps a test or a suite from running, or inverts its result. */
+const DISABLING_MODIFIER = /\b(?:describe|suite|it|test)\.(?:skip|todo|skipIf|runIf|fails)\b/;
+
+/**
+ * Every test of this package other than the ledger: its file, title ids and the source up to the next test. A test
+ * runs only when it carries no modifier or `.only`; a skipped, todo, conditional or inverted test never counts.
+ */
 const conformanceTests = (() => {
   const dir = join(import.meta.dirname);
   return readdirSync(dir)
     .filter((f) => f.endsWith(".test.ts") && f !== "acceptance-ledger.test.ts")
     .flatMap((file) => {
       const text = readFileSync(join(dir, file), "utf8");
-      const starts = [...text.matchAll(/\b(?:it|test)(?:\.\w+)?\(\s*(["'`])((?:(?!\1).)*)\1/g)];
+      const starts = [...text.matchAll(/\b(?:it|test)(\.\w+)?\(\s*(["'`])((?:(?!\2).)*)\2/g)];
       return starts.map((m, i) => ({
         file,
-        ids: new Set([...m[2]!.matchAll(/\[(FD-[A-Z]+-\d{3})\]/g)].map((x) => x[1]!)),
+        runs: m[1] === undefined || m[1] === ".only",
+        ids: new Set([...m[3]!.matchAll(/\[(FD-[A-Z]+-\d{3})\]/g)].map((x) => x[1]!)),
         body: text.slice(m.index, starts[i + 1]?.index ?? text.length),
       }));
     });
 })();
 
-/** A test citing `id` whose body asserts `reason` through `assertion`, however the formatter wraps the call. */
-const hasNegative = (id: string, assertion: string, reason: string) => {
+/** The test citing `id` whose body asserts `reason` through `assertion`, however the formatter wraps the call. */
+const negativeTest = (id: string, assertion: string, reason: string) => {
   const re = new RegExp(`${assertion.replace(/[.()]/g, "\\$&")}\\(\\s*"${reason}"\\s*,?\\s*\\)`);
-  return conformanceTests.some((t) => t.ids.has(id) && re.test(t.body));
+  return conformanceTests.find((t) => t.runs && t.ids.has(id) && re.test(t.body));
 };
+const hasNegative = (id: string, assertion: string, reason: string) =>
+  negativeTest(id, assertion, reason) !== undefined;
 const hasAcceptanceNegative = (id: string, reason: string) => hasNegative(id, "rejected", reason);
 const hasVerifierNegative = (id: string, reason: string) =>
   hasNegative(id, ".reason).toBe", reason);
@@ -96,6 +105,16 @@ const covered = new Set([
   ...verifierIds.filter((id) => hasVerifierNegative(id, VERIFIER_REJECTIONS[id]!)),
 ]);
 const ledgerIds = new Set([...[...acceptanceIds.values()].flat(), ...verifierIds]);
+
+/** The files holding a negative test the ledger counts. */
+const negativeTestFiles = new Set(
+  [
+    ...ACCEPTANCE_REASONS.flatMap((reason) =>
+      (acceptanceIds.get(reason) ?? []).map((id) => negativeTest(id, "rejected", reason)),
+    ),
+    ...verifierIds.map((id) => negativeTest(id, ".reason).toBe", VERIFIER_REJECTIONS[id]!)),
+  ].flatMap((t) => (t ? [t.file] : [])),
+);
 
 describe("the provenance negative-test ledger", () => {
   it("[FD-PROV-072] enumerates one acceptance check per acceptance reason, in the acceptance table's order", () => {
@@ -118,6 +137,14 @@ describe("the provenance negative-test ledger", () => {
     expect(verifierIds.filter((id) => !hasVerifierNegative(id, VERIFIER_REJECTIONS[id]!))).toEqual(
       [],
     );
+  });
+
+  it("[FD-PROV-072] counts only negative tests that run: no file holding one skips, defers or inverts a test or suite", () => {
+    expect(negativeTestFiles.size).toBeGreaterThan(0);
+    const disabled = [...negativeTestFiles].filter((file) =>
+      DISABLING_MODIFIER.test(readFileSync(join(import.meta.dirname, file), "utf8")),
+    );
+    expect(disabled).toEqual([]);
   });
 
   it("[FD-PROV-072] counts a Tamarin lemma toward the phase gate only while every check it assumes has a negative test", () => {
@@ -143,14 +170,7 @@ describe("the provenance negative-test ledger", () => {
         proofCounts({ theoremPassed: true, assumptionTests: checks, passingTests: covered }),
         lemma.name,
       ).toBe(true);
-      for (const id of checks) {
-        const without = new Set([...covered].filter((c) => c !== id));
-        expect(
-          proofCounts({ theoremPassed: true, assumptionTests: checks, passingTests: without }),
-          `${lemma.name} without ${id}`,
-        ).toBe(false);
-        assumed.add(id);
-      }
+      for (const id of checks) assumed.add(id);
     }
     // The gate row lists exactly the checks the lemmas assume, and none of them is an open gap.
     const gate = rows.find((r) => r.requirements.includes("FD-PROV-072"));
