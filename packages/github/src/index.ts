@@ -190,10 +190,17 @@ export {
 } from "./jwks.ts";
 export {
   decodeJobRecord,
+  decodeRunReport,
   decodeVerdictRecord,
   JOB_RECORD_SCHEMA,
   JobRecordPayload,
   jobRecordPayload,
+  RECORD_FINDINGS_MAX,
+  recordedReport,
+  ReportedFinding,
+  ReportedScan,
+  ReportedScanResult,
+  RunReport,
   VERDICT_RECORD_SCHEMA,
   VerdictRecordPayload,
   verdictRecordPayload,
