@@ -1,6 +1,10 @@
 // The Worker's bindings, and the two `json` configurations host-cloudflare reads, derived from the profile so one
 // document decides both.
-import { apiConfigFromEnv, ConfigInvalid, type ApiEnv } from "@fractalboxdev/flare-dispatch-api/config";
+import {
+  apiConfigFromEnv,
+  ConfigInvalid,
+  type ApiEnv,
+} from "@fractalboxdev/flare-dispatch-api/config";
 import type { ConcludeKind, QuotaObject } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import {
@@ -21,11 +25,15 @@ import {
 import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
+  configurationSourceLayer,
+  CURRENT_PHASE,
   deploymentOf,
   deviceSlotDefaults,
   drawsReserve,
   type Deployment,
+  type Phase,
   type Profile,
+  type ProfileOptions,
   type SpendConfig,
 } from "@fractalboxdev/flare-dispatch-profile";
 import type {
@@ -88,6 +96,16 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly WEBHOOK_SECRET?: string;
   /** `dispatch.oidcAudience`; unset refuses every Actions token. */
   readonly DISPATCH_OIDC_AUDIENCE?: string;
+  /**
+   * The rendered `{{records.url}}`: the HTTPS URL that receives job and verdict records, empty where the overlay sets
+   * none (FD-GH-093).
+   */
+  readonly RECORDS_URL?: string;
+  /**
+   * The verdict record signing key (a Worker secret), distinct from the webhook secret, the link key, the OIDC key and
+   * the provenance key: `/health` answers `misconfigured` on a clash (FD-GH-099).
+   */
+  readonly RECORDS_SIGNING_KEY?: string;
   /** The Slack verdict endpoint and its signing secret. */
   readonly SLACK_URL?: string;
   readonly SLACK_SECRET?: string;
@@ -147,7 +165,8 @@ export const presignerConfigOf = (env: ControlPlaneEnv): R2PresignerConfig | und
       }
     : undefined;
 
-export const deployment = (env: Pick<ControlPlaneEnv, "DEPLOYMENT">): Deployment => deploymentOf(env.DEPLOYMENT);
+export const deployment = (env: Pick<ControlPlaneEnv, "DEPLOYMENT">): Deployment =>
+  deploymentOf(env.DEPLOYMENT);
 
 /** A rendered var holding an array arrives as the array; the API reads each identity list as JSON text. */
 const textVar = (value: unknown): string | undefined =>
@@ -165,7 +184,8 @@ export const apiEnvOf = (env: ControlPlaneEnv): ApiEnv => {
 
 /**
  * What `GET /health` answers: the deployment and plane id, or `503` `misconfigured` when the API refuses a binding,
- * among them a provenance key equal to the OIDC key, the log key or a capability-token key (FD-PROV-033). The
+ * among them a provenance key equal to the OIDC key, the log key or a capability-token key (FD-PROV-033), and a
+ * records signing key equal to the webhook secret, the link key, the OIDC key or the provenance key (FD-GH-099). The
  * post-deploy probe reads anything but `200` as a failed deploy (FD-OPS-013). `/health` is public, so the body names
  * neither the refused binding nor its value; the Worker log carries the binding and the reason for the operator.
  */
@@ -184,7 +204,23 @@ export const healthOf = (
   };
 };
 
-export const profileOf = (env: ControlPlaneEnv): Profile => buildProfile(deployment(env));
+/** `records.url`, or undefined where the overlay sets none and the var renders empty (FD-GH-093). */
+export const recordsUrlOf = (env: Pick<ControlPlaneEnv, "RECORDS_URL">): string | undefined => {
+  const url = env.RECORDS_URL?.trim();
+  return url === undefined || url === "" ? undefined : url;
+};
+
+const profileOptionsOf = (env: Pick<ControlPlaneEnv, "RECORDS_URL">): ProfileOptions => ({
+  records: recordsUrlOf(env) !== undefined,
+});
+
+/** The profile this deploy serves: its deployment at the current phase, with the record kinds where `records.url` is set. */
+export const profileOf = (env: ControlPlaneEnv, phase: Phase = CURRENT_PHASE): Profile =>
+  buildProfile(deployment(env), phase, profileOptionsOf(env));
+
+/** mameko's configuration source for this deploy: the document `profileOf` builds, at its policy version. */
+export const configurationSourceOf = (env: ControlPlaneEnv, phase: Phase = CURRENT_PHASE) =>
+  configurationSourceLayer(deployment(env), phase, profileOptionsOf(env));
 
 const DAY_MS = 24 * 3_600_000;
 

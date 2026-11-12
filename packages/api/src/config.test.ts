@@ -1,11 +1,14 @@
 // The API configuration's key distinctness: the provenance key against the OIDC key, the log key and every
-// capability-token key (specs/provenance.md § Keys).
+// capability-token key (specs/provenance.md § Keys), and the verdict record signing key against the webhook secret,
+// the link key, the OIDC key and the provenance key (specs/github-output.md § Job and verdict records).
 import { describe, expect, it } from "vitest";
 import {
   apiConfigFromEnv,
   ConfigInvalid,
   distinctProvenanceKey,
+  distinctRecordsKey,
   PROVENANCE_KEY_DISTINCT_FROM,
+  RECORDS_KEY_DISTINCT_FROM,
 } from "./config.ts";
 
 const ORIGIN = "https://fd.example.com";
@@ -75,5 +78,50 @@ describe("provenance key distinctness", () => {
         OIDC_SIGNING_JWK: JSON.stringify({ current: jwk("other-scalar", "oidc-3"), retired: [] }),
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("records signing key distinctness", () => {
+  /** Every key distinct; each clash below shares the records key with one of them. */
+  const DISTINCT = {
+    RECORDS_SIGNING_KEY: "records-secret-value",
+    WEBHOOK_SECRET: "webhook",
+    LINK_KEY: "link",
+    OIDC_SIGNING_JWK: "oidc",
+    PROVENANCE_KEY: "prov",
+  };
+
+  it("[FD-GH-099] the API configuration refuses a records signing key equal to the webhook secret, the link key, the OIDC key or the provenance key, naming the binding and never the value", () => {
+    expect(RECORDS_KEY_DISTINCT_FROM).toEqual([
+      "WEBHOOK_SECRET",
+      "LINK_KEY",
+      "OIDC_SIGNING_JWK",
+      "PROVENANCE_KEY",
+    ]);
+    expect(apiConfigFromEnv(DISTINCT, ORIGIN)).not.toBeInstanceOf(ConfigInvalid);
+    for (const name of RECORDS_KEY_DISTINCT_FROM) {
+      const refused = apiConfigFromEnv({ ...DISTINCT, [name]: " records-secret-value " }, ORIGIN);
+      expect(refused, name).toBeInstanceOf(ConfigInvalid);
+      expect((refused as ConfigInvalid).path, name).toBe("RECORDS_SIGNING_KEY");
+      expect((refused as ConfigInvalid).message).toBe(`the records signing key equals ${name}`);
+      expect((refused as ConfigInvalid).message).not.toContain("records-secret-value");
+    }
+    // No records key, nothing to compare; the other keys' own checks are theirs.
+    expect(distinctRecordsKey({ WEBHOOK_SECRET: "k", LINK_KEY: "other" })).toBeUndefined();
+    // The log key and the capability-token keys are outside this rule.
+    expect(
+      distinctRecordsKey({ RECORDS_SIGNING_KEY: "k", LOG_KEY: "k", CACHE_TOKEN_SECRET: "k" }),
+    ).toBeUndefined();
+  });
+
+  it("[FD-GH-099] a records key whose private JWK is the OIDC key set's current key is refused however each secret is written", () => {
+    const records = JSON.stringify(jwk("shared-scalar", "records-1"));
+    const oidc = JSON.stringify({ current: jwk("shared-scalar", "oidc-2"), retired: [] });
+    expect(
+      distinctRecordsKey({ RECORDS_SIGNING_KEY: records, OIDC_SIGNING_JWK: oidc }),
+    ).toMatchObject({
+      path: "RECORDS_SIGNING_KEY",
+      message: "the records signing key equals OIDC_SIGNING_JWK",
+    });
   });
 });

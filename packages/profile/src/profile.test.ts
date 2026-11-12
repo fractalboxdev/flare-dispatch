@@ -34,8 +34,11 @@ import {
   profileDocumentFor,
   profileLoader,
   acceptanceReasonKinds,
+  deliveryLimitKey,
+  RECORD_KINDS,
   spendDefaults,
   staleAt,
+  unlistedDifferences,
   validateProfile,
   type PlacementRequest,
   type Profile,
@@ -922,5 +925,80 @@ describe("phases", () => {
     expect(profile.policy_version).toBe("flare-dispatch.v2.0");
     expect(buildProfile("development").policy_version).toBe("flare-dispatch.v2.0-dev");
     expect(phase4.policy_version).toBe("flare-dispatch.v2.0-phase4");
+  });
+});
+
+describe("record kinds", () => {
+  /** The phase-2 context of a control plane whose actuator registry serves `verdictRecord`. */
+  const recordsContext: ValidationContext = {
+    ...validationContext,
+    phase: 2,
+    bindings: {
+      ...bindings,
+      actuators: { ...bindings.actuators, verdictRecord: ["apply"] },
+    },
+  };
+  const withRecords = buildProfile("production", 2, { records: true });
+
+  it("[FD-GH-093] where the overlay sets records.url, the phase 2 profile generates job.record on lease-granted through jobRecordPayload, on the records delivery key", () => {
+    expect(withRecords.intent_kinds["job.record"]).toEqual({
+      origin: "control-plane",
+      on: "lease-granted",
+      payload: "jobRecordPayload",
+      delivery_tier: "effect",
+      applied_for: "any",
+      priority: 2,
+      effect_class: "replay-safe",
+      actuator: "verdictRecord",
+    });
+    expect(withRecords.intent_kinds["verdict.record"]).toMatchObject({
+      origin: "control-plane",
+      ops: true,
+      effect_class: "replay-safe",
+      actuator: "verdictRecord",
+    });
+    expect(withRecords.intent_kinds["verdict.record"]?.on).toBeUndefined();
+    expect(RECORD_KINDS.map((k) => deliveryLimitKey(k, "7"))).toEqual(["records", "records"]);
+    expect(bindings.functions).toContain("jobRecordPayload");
+
+    // No `records.url`, or a phase before 2: neither kind.
+    for (const p of [
+      buildProfile("production", 2),
+      buildProfile("production", 0, { records: true }),
+      buildProfile("production", 1, { records: true }),
+    ])
+      for (const k of RECORD_KINDS) expect(p.intent_kinds[k]).toBeUndefined();
+
+    // One version carries one content, and the comparison with the reference profile lists the two kinds.
+    expect(withRecords.policy_version).toBe("flare-dispatch.v2.0-phase2-records");
+    expect(buildProfile("production", 2).policy_version).toBe("flare-dispatch.v2.0-phase2");
+    expect(unlistedDifferences(withRecords, 2)).toEqual([]);
+    expect(
+      Effect.runSync(
+        loadProfile(loader(recordsContext), profileDocumentFor("production", 2, { records: true })),
+      ).intent_kinds["job.record"]?.on,
+    ).toBe("lease-granted");
+  });
+
+  it("[FD-GH-093] the shipped registry serves no verdictRecord actuator, so it rejects the phase 2 records profile on the two actuator paths", () => {
+    // FD-GH-098 registers `verdictRecord`; that package flips this to an empty list.
+    expect(
+      validateProfile(withRecords, { ...validationContext, phase: 2 }).map((r) => r.path),
+    ).toEqual(["intent_kinds.job.record.actuator", "intent_kinds.verdict.record.actuator"]);
+  });
+
+  it("[FD-GH-093] the validator rejects a record kind before phase 2", () => {
+    const early = {
+      ...committed,
+      intent_kinds: { ...committed.intent_kinds, ...withRecords.intent_kinds },
+    };
+    expect(
+      validateProfile(early, { ...recordsContext, phase: 1 })
+        .filter((r) => r.item === "intent_kinds")
+        .map((r) => [r.path, r.reason]),
+    ).toEqual([
+      ["intent_kinds.job.record", "job.record enters at phase 2"],
+      ["intent_kinds.verdict.record", "verdict.record enters at phase 2"],
+    ]);
   });
 });
