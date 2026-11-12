@@ -1,7 +1,7 @@
 // FlareDispatch's result-acceptance check (specs/provenance.md § Acceptance): the application port mameko calls before
 // the accept compare-and-set (MAMEKO-LEASE-093). It runs the twelve checks of the acceptance table on the device
 // statement a result submission carries, in table order, and stops at the first failure; a rejection concludes the
-// execution `failure` with the reason `provenance: <reason>`. A rejection that shows the signing executor or its key
+// execution `failure` with the reason `provenance: <reason>`. An accepted statement consumes its nonce. A rejection that shows the signing executor or its key
 // compromised (`bad-signature`, `revoked-key`, `wrong-executor`, `code-hash-mismatch`) also quarantines that executor
 // and raises the `provenance-quarantine` page alarm (FD-PROV-027).
 import { AlarmPort, LeaseStore, ResultAcceptanceCheck } from "@fractalboxdev/mameko-ports";
@@ -49,6 +49,18 @@ export interface DeviceKeyRecord {
   readonly revokedAt: number | null;
 }
 
+/** The reason a result is rejected with while the gateway metering records check 12 compares against are unreadable. */
+export const METERING_UNAVAILABLE = "provenance: metering unavailable";
+
+/**
+ * The gateway metering records of an execution and epoch cannot be read, so check 12 has nothing to compare the
+ * statement's model list with; the check fails closed and rejects the result with `METERING_UNAVAILABLE`.
+ */
+export class MeteringUnavailable extends Schema.TaggedError<MeteringUnavailable>()(
+  "MeteringUnavailable",
+  { executionId: Schema.String, epoch: Schema.Number, detail: Schema.String },
+) {}
+
 /** The lease or registration the control plane issued for an execution at one epoch. */
 export interface IssuedExecution {
   readonly executorId: string;
@@ -71,11 +83,16 @@ export class StatementRecords extends Context.Service<
     readonly issuedNonce: (executionId: string, epoch: number) => Effect.Effect<string | null>;
     /** Whether an accepted statement already consumed the nonce. */
     readonly nonceConsumed: (nonce: string) => Effect.Effect<boolean>;
-    /** The model ids the gateway metered for the execution at `epoch`. */
+    /**
+     * Records the nonce consumed by the accepted statement for the execution at `epoch`; false when another accepted
+     * statement consumed it first, so of two statements that pass check 9 together only one consumes the nonce.
+     */
+    readonly consumeNonce: (nonce: string, executionId: string, epoch: number) => Effect.Effect<boolean>;
+    /** The model ids the gateway metered for the execution at `epoch`; fails while the records cannot be read. */
     readonly meteredModels: (
       executionId: string,
       epoch: number,
-    ) => Effect.Effect<readonly string[]>;
+    ) => Effect.Effect<readonly string[], MeteringUnavailable>;
   }
 >()("@fractalboxdev/flare-dispatch-cache/StatementRecords") {}
 
@@ -214,14 +231,16 @@ export interface AcceptanceSettings {
  * verifies the envelope's one signature with the registered key its `keyid` names; a `keyid` that names no registered
  * key leaves nothing to verify against and fails check 2. A statement whose payload carries no lease binding, or whose
  * lease binding names an execution other than the submission's, names no lease the control plane issued for this
- * result and fails check 5.
+ * result and fails check 5. A statement that passes every check consumes its nonce; one whose nonce another accepted
+ * statement consumed in the meantime fails check 9. Unreadable metering records fail the evaluation with
+ * `MeteringUnavailable`.
  */
 export const evaluateStatement = (
   submission: ResultSubmission,
   envelope: DsseEnvelope,
   now: number,
   settings: AcceptanceSettings,
-): Effect.Effect<AcceptanceVerdict, never, StatementRecords> =>
+): Effect.Effect<AcceptanceVerdict, MeteringUnavailable, StatementRecords> =>
   Effect.gen(function* () {
     const records = yield* StatementRecords;
     const executionId = submission.execution_id;
@@ -274,6 +293,7 @@ export const evaluateStatement = (
     const metered = yield* records.meteredModels(executionId, epoch);
     if (!sameSet(claims.models, metered)) return reject("model-mismatch", signer);
 
+    if (!(yield* records.consumeNonce(nonce, executionId, epoch))) return reject("nonce-reused", signer);
     return AcceptanceVerdict.Accepted({ signer, executionId });
   });
 
@@ -314,6 +334,7 @@ export const reactToRejection = (
 /**
  * The `ResultAcceptanceCheck` port over the control plane's statement records, executor registry and alarm port. A
  * result or statement that does not decode names no lease the control plane issued and is rejected `unissued-lease`.
+ * Where the metering records cannot be read, the check fails closed: the result is rejected `METERING_UNAVAILABLE`.
  */
 export const resultAcceptanceCheckLayer = (
   settings: AcceptanceSettings = { attestationMaxAgeMs: DEFAULT_ATTESTATION_MAX_AGE_MS },
@@ -330,15 +351,28 @@ export const resultAcceptanceCheckLayer = (
             if (submission === undefined || envelope === undefined)
               return { _tag: "rejected", reasonKind: "provenance: unissued-lease" } as const;
             const now = yield* Clock.currentTimeMillis;
-            const verdict = yield* evaluateStatement(submission, envelope, now, settings);
-            return yield* AcceptanceVerdict.$match(verdict, {
-              Accepted: () => Effect.succeed({ _tag: "accepted" } as const),
-              Rejected: (rejection) =>
-                Effect.as(reactToRejection(rejection), {
-                  _tag: "rejected",
-                  reasonKind: `provenance: ${rejection.reason}`,
-                } as const),
-            });
+            return yield* evaluateStatement(submission, envelope, now, settings).pipe(
+              Effect.flatMap((verdict) =>
+                AcceptanceVerdict.$match(verdict, {
+                  Accepted: () => Effect.succeed({ _tag: "accepted" } as const),
+                  Rejected: (rejection) =>
+                    Effect.as(reactToRejection(rejection), {
+                      _tag: "rejected",
+                      reasonKind: `provenance: ${rejection.reason}`,
+                    } as const),
+                }),
+              ),
+              Effect.catchTag("MeteringUnavailable", (e) =>
+                Effect.as(
+                  Effect.logWarning("result rejected: metering records unreadable", {
+                    executionId: e.executionId,
+                    epoch: e.epoch,
+                    detail: e.detail,
+                  }),
+                  { _tag: "rejected", reasonKind: METERING_UNAVAILABLE } as const,
+                ),
+              ),
+            );
           }).pipe(Effect.provide(context)),
       };
     }),

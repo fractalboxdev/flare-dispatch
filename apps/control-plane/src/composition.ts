@@ -46,6 +46,7 @@ import { Context, Effect, Layer, Scope } from "effect";
 import { deployment, presignerConfigOf, presignerMissingOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { repositoryConfidentiality } from "./dev-repository.ts";
 import { policyRulesOf } from "./policy.ts";
+import { resultAcceptanceLayer } from "./provenance-records.ts";
 import {
   gitData,
   gitDataWithoutApp,
@@ -292,9 +293,15 @@ export const presignerLayer = (env: ControlPlaneEnv) => {
   );
 };
 
+/**
+ * The isolate's services: intake's and the GitHub services, the presigner, and the result-acceptance check over the
+ * D1 statement records, which raises its quarantine alarm through the services' alarm port (MAMEKO-LEASE-093).
+ */
 const isolateLayer = (env: ControlPlaneEnv) =>
   Layer.merge(
-    withDeliveryTimes(env).pipe(Layer.provideMerge(servicesLayer(env))),
+    resultAcceptanceLayer(env).pipe(
+      Layer.provideMerge(withDeliveryTimes(env).pipe(Layer.provideMerge(servicesLayer(env)))),
+    ),
     presignerLayer(env),
   );
 

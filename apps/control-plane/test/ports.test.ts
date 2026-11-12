@@ -13,11 +13,11 @@ import {
   renderTemplate,
 } from "@fractalboxdev/flare-dispatch-ops";
 import { buildProfile, missingPorts } from "@fractalboxdev/flare-dispatch-profile";
-import { ObjectStorePresigner } from "@fractalboxdev/mameko-ports";
+import { ObjectStorePresigner, ResultAcceptanceCheck } from "@fractalboxdev/mameko-ports";
 import { type Context, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { isolateServices } from "../src/composition.ts";
-import { presignerConfigOf, type ControlPlaneEnv } from "../src/config.ts";
+import { acceptanceSettingsOf, presignerConfigOf, type ControlPlaneEnv } from "../src/config.ts";
 import { appOptionsOf } from "../src/github.ts";
 import { suppliedPorts } from "../src/ports.ts";
 
@@ -146,5 +146,48 @@ describe("the object-store presigner", () => {
     expect(vars["CACHE_BUCKET_NAME"]).toBe(cache?.bucket_name);
     // The token is a Worker secret, never a var.
     expect(Object.keys(vars).filter((k) => k.startsWith("R2_PRESIGN_"))).toEqual([]);
+  });
+});
+
+describe("the result-acceptance check", () => {
+  it("[FD-ARCH-039] every deploy supplies the result-acceptance-check port, and the isolate's services carry it", async () => {
+    expect(composedPorts(env({}))).toContain("result-acceptance-check");
+    expect(suppliedPorts(env(APP))).toContain("result-acceptance-check");
+    const services = (await isolateServices(
+      env({ DB: await migratedD1(), DEPLOYMENT: "production" }),
+    )) as Context.Context<ResultAcceptanceCheck>;
+    // A submission that does not decode names no lease the control plane issued.
+    const verdict = await Effect.runPromise(
+      ResultAcceptanceCheck.use((p) => p.check({}, {})).pipe(Effect.provide(services)),
+    );
+    expect(verdict).toEqual({ _tag: "rejected", reasonKind: "provenance: unissued-lease" });
+  });
+
+  it("[FD-PROV-016] the committed template renders attestation_max_age in days, 10 where the overlay sets none, and the check's window follows it", async () => {
+    const template = readFileSync(join(import.meta.dirname, "../wrangler.jsonc"), "utf8");
+    const varsOf = async (overlay: typeof placeholderOverlay) =>
+      parseJsonc(await Effect.runPromise(renderTemplate("control-plane", template, overlay)))[
+        "vars"
+      ] as Record<string, unknown>;
+    const DAY = 24 * 3_600_000;
+    const defaults = await varsOf({ ...placeholderOverlay, provenance: {} });
+    expect(defaults["ATTESTATION_MAX_AGE_DAYS"]).toBe(10);
+    expect(acceptanceSettingsOf(defaults)).toEqual({ attestationMaxAgeMs: 10 * DAY });
+    const set = await varsOf({ ...placeholderOverlay, provenance: { attestationMaxAgeDays: 12 } });
+    expect(set["ATTESTATION_MAX_AGE_DAYS"]).toBe(12);
+    expect(acceptanceSettingsOf(set)).toEqual({ attestationMaxAgeMs: 12 * DAY });
+    // A `.dev.vars` entry arrives as text; an unset or empty var is the default.
+    expect(acceptanceSettingsOf({ ATTESTATION_MAX_AGE_DAYS: "3" })).toEqual({
+      attestationMaxAgeMs: 3 * DAY,
+    });
+    expect(acceptanceSettingsOf({})).toEqual({ attestationMaxAgeMs: 10 * DAY });
+    expect(acceptanceSettingsOf({ ATTESTATION_MAX_AGE_DAYS: "" })).toEqual({
+      attestationMaxAgeMs: 10 * DAY,
+    });
+    // A malformed value admits no attestation rather than a longer window.
+    for (const bad of ["ten", -1, 0, {}])
+      expect(acceptanceSettingsOf({ ATTESTATION_MAX_AGE_DAYS: bad })).toEqual({
+        attestationMaxAgeMs: 0,
+      });
   });
 });

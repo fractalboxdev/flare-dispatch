@@ -229,8 +229,12 @@ export const policyRulesOf = (overlay: OverlayValues): PolicyRules => overlay.po
 /** The values a template's placeholders resolve against (`renderValuesOf`). */
 export type RenderValues = Omit<
   OverlayValues,
-  "spend" | "policy" | "dispatchers" | "intake" | "dispatch"
+  "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance"
 > & {
+  /** `attestationMaxAgeDays` at its 10-day default where the overlay sets none (FD-PROV-016). */
+  readonly provenance: NonNullable<OverlayValues["provenance"]> & {
+    readonly attestationMaxAgeDays: number;
+  };
   readonly spend: Required<SpendValues>;
   readonly policy: { readonly rules: PolicyRules };
   readonly dispatchers: readonly string[];
@@ -243,8 +247,9 @@ export type RenderValues = Omit<
 /**
  * The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults,
  * its policy rules and dispatchers, an empty set where it holds none, its Actions OIDC audience, empty where it sets
- * none, and its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
- * supported event) from an empty one (none) (FD-INT-027).
+ * none, its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
+ * supported event) from an empty one (none) (FD-INT-027), and its `attestation_max_age` in days, at its default where
+ * it sets none (FD-PROV-016).
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
@@ -253,6 +258,11 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   dispatchers: overlay.dispatchers ?? [],
   intake: { webhookEvents: overlay.intake?.webhookEvents ?? null },
   dispatch: { oidcAudience: overlay.dispatch?.oidcAudience ?? "" },
+  provenance: {
+    ...overlay.provenance,
+    attestationMaxAgeDays:
+      overlay.provenance?.attestationMaxAgeDays ?? ATTESTATION_MAX_AGE_DEFAULT_DAYS,
+  },
 });
 
 /** The overlay's provider registry as the deploy check reads it, each entry under its key as its id. */
