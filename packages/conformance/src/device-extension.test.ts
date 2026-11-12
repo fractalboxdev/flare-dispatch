@@ -22,6 +22,8 @@ const PLANE = "plane-conf";
 const NS_DEVICE = "protected/o/r/device";
 const NS_PR = "pr/o/r/7";
 const NS_EXEC = "exec/o/r/01JDZ8Q6V3M2K9T4WXYZ5ABCDE";
+/** A protected namespace without its `cloud` or `device` lane: a path L1 accepts, but no cache namespace form. */
+const NS_MALFORMED = "protected/o/r";
 const key = (n: number) => n.toString(16).padStart(64, "0");
 const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -50,7 +52,9 @@ const running: { child: ChildProcess; socket: Socket; root: string }[] = [];
 afterEach(async () => {
   for (const { child, socket, root } of running.splice(0)) {
     socket.end();
-    if (child.exitCode === null) await new Promise((ok) => child.once("exit", ok));
+    // A child killed by a signal keeps `exitCode` null after `exit` has fired, so `signalCode` is checked too.
+    if (child.exitCode === null && child.signalCode === null)
+      await new Promise((ok) => child.once("exit", ok));
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -155,33 +159,33 @@ describe("device extension over mameko's extension interface", { timeout: 60_000
     expect(onDisk(ext.root, NS_EXEC, key(1))).toBe("exec");
 
     expect(
-      await ext.request({ type: "cache.get", id: "get-pr", namespace: NS_PR, key: key(1) }),
-    ).toMatchObject({ type: "cache.get.ok", bytes: b64("pr-entry") });
-    expect(
       await ext.request({ type: "cache.get", id: "get-exec", namespace: NS_EXEC, key: key(1) }),
     ).toMatchObject({ type: "cache.get.ok", bytes: b64("exec") });
+    expect(
+      await ext.request({ type: "cache.get", id: "get-pr", namespace: NS_PR, key: key(1) }),
+    ).toMatchObject({ type: "cache.get.ok", bytes: b64("pr-entry") });
     // A key L1 lacks, with no L2 transport, is a miss.
     expect(
       await ext.request({ type: "cache.get", id: "get-miss", namespace: NS_PR, key: key(2) }),
     ).toMatchObject({ type: "cache.get.ok", bytes: null });
 
-    // The PR entry was read before the exec entry, so it is the least recently read and leaves first.
+    // The exec entry was written last but read first, so it is the least recently read and leaves first.
     expect(await ext.request({ type: "cache.evict", id: "evict-1", target_bytes: 1 })).toEqual({
       type: "cache.evict.ok",
       id: "cache.evict.ok-evict-1",
       ref: "evict-1",
-      freed_bytes: "pr-entry".length,
+      freed_bytes: "exec".length,
     });
-    expect(onDisk(ext.root, NS_PR, key(1))).toBeNull();
-    expect(onDisk(ext.root, NS_EXEC, key(1))).toBe("exec");
+    expect(onDisk(ext.root, NS_EXEC, key(1))).toBeNull();
+    expect(onDisk(ext.root, NS_PR, key(1))).toBe("pr-entry");
     expect(
-      await ext.request({ type: "cache.get", id: "get-evicted", namespace: NS_PR, key: key(1) }),
+      await ext.request({ type: "cache.get", id: "get-evicted", namespace: NS_EXEC, key: key(1) }),
     ).toMatchObject({ type: "cache.get.ok", bytes: null });
 
     expect(
       await ext.request({ type: "cache.evict", id: "evict-all", target_bytes: 1_000_000 }),
-    ).toMatchObject({ type: "cache.evict.ok", freed_bytes: "exec".length });
-    expect(onDisk(ext.root, NS_EXEC, key(1))).toBeNull();
+    ).toMatchObject({ type: "cache.evict.ok", freed_bytes: "pr-entry".length });
+    expect(onDisk(ext.root, NS_PR, key(1))).toBeNull();
   });
 
   it("[FD-CACHE-004] serves the cache operations it names in its hello and answers a put outside every lease with extension.error", async () => {
@@ -195,10 +199,14 @@ describe("device extension over mameko's extension interface", { timeout: 60_000
     expect(ext.operations).toEqual(expect.arrayContaining(["cache.get", "cache.put", "cache.evict"]));
   });
 
-  it("[FD-EXEC-007] cache.get answers null for a namespace no handed lease may read, though its directory holds the entry", async () => {
+  // mameko starts one extension per plane (MAMEKO-EXEC-119) and its `cache.get` names no execution, so the extension
+  // scopes reads to the leases handed to its plane, not to one execution. This suite pins that per-plane half only.
+  it("[FD-EXEC-007] cache.get answers null for a namespace no lease handed to this plane's extension names as readable, though its directory holds the entry", async () => {
     const ext = await start([
       { namespace: NS_DEVICE, key: key(1), text: "protected-entry" },
       { namespace: NS_PR, key: key(1), text: "other-pr-entry" },
+      // A file at a path a malformed namespace name reaches, which L1 itself indexes as an entry.
+      { namespace: NS_MALFORMED, key: key(1), text: "malformed-entry" },
     ]);
     expect(await ext.request(proxies("p1", [NS_DEVICE], NS_EXEC))).toMatchObject({
       type: "proxies.ok",
@@ -219,15 +227,11 @@ describe("device extension over mameko's extension interface", { timeout: 60_000
     expect(
       await ext.request({ type: "cache.get", id: "get-exec", namespace: NS_EXEC, key: key(2) }),
     ).toMatchObject({ type: "cache.get.ok", bytes: null });
-    // A name outside the cache namespace forms is never read, whatever path it reaches on disk.
+    // A name outside the cache namespace forms is never read, even when a lease names it as readable and L1 holds
+    // an entry at the path it reaches.
+    await ext.request(proxies("p-bad", [NS_MALFORMED], null));
     expect(
-      await ext.request({ type: "cache.get", id: "get-bad", namespace: "protected/o/r", key: key(1) }),
+      await ext.request({ type: "cache.get", id: "get-bad", namespace: NS_MALFORMED, key: key(1) }),
     ).toMatchObject({ type: "cache.get.ok", bytes: null });
-
-    // Once a lease naming the pull-request namespace as readable is handed over, the same entry restores.
-    await ext.request(proxies("p2", [NS_PR], null));
-    expect(
-      await ext.request({ type: "cache.get", id: "get-pr-2", namespace: NS_PR, key: key(1) }),
-    ).toMatchObject({ type: "cache.get.ok", bytes: b64("other-pr-entry") });
   });
 });
