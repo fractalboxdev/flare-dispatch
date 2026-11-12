@@ -1,5 +1,6 @@
-// The `formal` job's checks over `formal/` (specs/verification.md FD-VER-014 to FD-VER-016) and the append-only rule
-// of `formal/regressions.jsonl` (FD-VER-022). `scripts/formal-gate.ts` runs `lake build` and `#print axioms`.
+// The `formal` job's checks over `formal/` (specs/verification.md FD-VER-014 to FD-VER-016), the append-only rule of
+// `formal/regressions.jsonl` (FD-VER-022) and the Tamarin result check (FD-PROV-073). `scripts/formal-gate.ts` runs
+// `lake build`, `#print axioms` and `tamarin-prover --prove`.
 import type { SpecFinding } from "./spec-tags.ts";
 
 /** `formal/lean-toolchain` must pin one exact release, `leanprover/lean4:vX.Y.Z` (FD-VER-014). */
@@ -126,3 +127,110 @@ export const proofCounts = (input: {
   readonly assumptionTests: readonly string[];
   readonly passingTests: ReadonlySet<string>;
 }): boolean => input.theoremPassed && input.assumptionTests.every((t) => input.passingTests.has(t));
+
+/** The prover versions `formal/tamarin-prover.version` pins: one `<tool> <x.y.z>` line per tool (FD-PROV-073). */
+export interface TamarinPin {
+  readonly tamarin: string;
+  readonly maude: string;
+}
+
+/** The pin file's versions, or null unless it names exactly one release of each of `tamarin-prover` and `maude`. */
+export const parseTamarinPin = (text: string): TamarinPin | null => {
+  const versions = new Map<string, string>();
+  for (const line of text.split("\n").filter((l) => l.trim() !== "")) {
+    const m = /^(tamarin-prover|maude) (\d+\.\d+(?:\.\d+)?)\s*$/.exec(line);
+    if (m === null || versions.has(m[1]!)) return null;
+    versions.set(m[1]!, m[2]!);
+  }
+  const tamarin = versions.get("tamarin-prover");
+  const maude = versions.get("maude");
+  return tamarin === undefined || maude === undefined ? null : { tamarin, maude };
+};
+
+const TAMARIN_MODEL = "formal/provenance.spthy";
+
+const proverFinding = (line: number, message: string): SpecFinding => ({
+  check: "FD-PROV-073",
+  file: TAMARIN_MODEL,
+  line,
+  message,
+});
+
+/** Each way `tamarin-prover --version` (stdout and stderr together) differs from the pin (FD-PROV-073). */
+export const tamarinVersionFindings = (pin: TamarinPin, output: string): readonly SpecFinding[] => {
+  const tamarin = /^tamarin-prover (\S+),/m.exec(output)?.[1];
+  const maude = /checking version: (\S+?)\. OK\./.exec(output)?.[1];
+  return [
+    ...(tamarin === pin.tamarin
+      ? []
+      : [proverFinding(0, `tamarin-prover is ${tamarin ?? "missing"}; the pin is ${pin.tamarin}`)]),
+    ...(maude === pin.maude
+      ? []
+      : [proverFinding(0, `maude is ${maude ?? "missing or rejected"}; the pin is ${pin.maude}`)]),
+    ...(/checking installation: OK\./.test(output)
+      ? []
+      : [proverFinding(0, "the prover's installation check failed")]),
+  ];
+};
+
+/** One lemma a `.spthy` theory declares: its name, its trace quantifier and its line. */
+export interface SpthyLemma {
+  readonly name: string;
+  readonly kind: "all-traces" | "exists-trace";
+  readonly line: number;
+}
+
+/** `.spthy` source with its comments blanked, line structure kept. */
+const stripSpthyComments = (text: string): string =>
+  text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
+
+/** Every lemma a theory declares, in order; a lemma that names no quantifier is `all-traces`. */
+export const spthyLemmas = (text: string): readonly SpthyLemma[] => {
+  const code = stripSpthyComments(text);
+  return [
+    ...code.matchAll(/\blemma\s+(\w+)\s*(?:\[[^\]]*\])?\s*:\s*(exists-trace|all-traces)?/g),
+  ].map((m) => ({
+    name: m[1]!,
+    kind: (m[2] as SpthyLemma["kind"] | undefined) ?? "all-traces",
+    line: code.slice(0, m.index).split("\n").length,
+  }));
+};
+
+/**
+ * The `formal` job's Tamarin check (FD-PROV-073): every declared lemma has a `verified` result in the prover's summary,
+ * the summary reports no failed wellformedness check, and an expected attack, a lemma named `*_attack`, is
+ * `exists-trace`, so the attack trace the prover finds is the pass.
+ */
+export const tamarinFindings = (
+  lemmas: readonly SpthyLemma[],
+  output: string,
+): readonly SpecFinding[] => {
+  const at = output.lastIndexOf("summary of summaries:");
+  if (at === -1) return [proverFinding(0, "the prover printed no summary")];
+  const summary = output.slice(at);
+  const results = new Map(
+    [...summary.matchAll(/^\s+(\w+) \((all-traces|exists-trace)\): (.+)$/gm)].map((m) => [
+      m[1]!,
+      m[3]!.trim(),
+    ]),
+  );
+  const out: SpecFinding[] = [];
+  if (lemmas.length === 0) out.push(proverFinding(0, "the model declares no lemma"));
+  const wellformedness = /WARNING: (\d+) wellformedness check/.exec(summary);
+  if (wellformedness !== null)
+    out.push(proverFinding(0, `${wellformedness[1]} wellformedness check(s) failed`));
+  for (const lemma of lemmas) {
+    const result = results.get(lemma.name);
+    if (result === undefined) out.push(proverFinding(lemma.line, `${lemma.name} has no result`));
+    else if (!result.startsWith("verified"))
+      out.push(proverFinding(lemma.line, `${lemma.name} is ${result}, not verified`));
+    if (lemma.name.endsWith("_attack") && lemma.kind !== "exists-trace")
+      out.push(
+        proverFinding(
+          lemma.line,
+          `${lemma.name} states an expected attack and is not exists-trace`,
+        ),
+      );
+  }
+  return out;
+};

@@ -8,8 +8,12 @@ import {
   axiomFindings,
   axiomsProgram,
   forbiddenTerms,
+  parseTamarinPin,
   proofCounts,
   regressionsAppendOnly,
+  spthyLemmas,
+  tamarinFindings,
+  tamarinVersionFindings,
   theoremNames,
   toolchainPinned,
 } from "./formal.ts";
@@ -91,6 +95,131 @@ describe("formal gate", () => {
     expect(regressionsAppendOnly(base, `${base}{"seed":3}\n`)).toEqual([]);
     expect(regressionsAppendOnly(base, '{"seed":1}\n')).toHaveLength(1);
     expect(regressionsAppendOnly(base, '{"seed":1}\n{"seed":9}\n')).toHaveLength(1);
+  });
+
+  it("[FD-PROV-073] formal/tamarin-prover.version pins one release of the prover and of Maude, and the gate checks both", () => {
+    const pin = parseTamarinPin(readFileSync(join(ROOT, "formal/tamarin-prover.version"), "utf8"));
+    expect(pin).not.toBeNull();
+    expect(parseTamarinPin("tamarin-prover 1.12.0\nmaude 3.5.1\n")).toEqual({
+      tamarin: "1.12.0",
+      maude: "3.5.1",
+    });
+    expect(parseTamarinPin("tamarin-prover 1.12.0\n")).toBeNull();
+    expect(parseTamarinPin("tamarin-prover latest\nmaude 3.5.1\n")).toBeNull();
+    expect(
+      parseTamarinPin("tamarin-prover 1.12.0\ntamarin-prover 1.10.0\nmaude 3.5.1\n"),
+    ).toBeNull();
+    const version = (tamarin: string, maude: string) =>
+      [
+        `tamarin-prover ${tamarin}, (C) David Basin, Cas Cremers, Jannik Dreier, Simon Meier, Ralf Sasse, Benedikt Schmidt, 2010-2023`,
+        "maude tool: 'maude'",
+        ` checking version: ${maude}. OK.`,
+        " checking installation: OK.",
+      ].join("\n");
+    const pinned = { tamarin: "1.12.0", maude: "3.5.1" };
+    expect(tamarinVersionFindings(pinned, version("1.12.0", "3.5.1"))).toEqual([]);
+    expect(
+      tamarinVersionFindings(pinned, version("1.10.0", "3.5.1")).map((f) => f.message),
+    ).toEqual(["tamarin-prover is 1.10.0; the pin is 1.12.0"]);
+    expect(tamarinVersionFindings(pinned, version("1.12.0", "3.4")).map((f) => f.message)).toEqual([
+      "maude is 3.4; the pin is 3.5.1",
+    ]);
+    expect(tamarinVersionFindings(pinned, "").map((f) => f.check)).toEqual([
+      "FD-PROV-073",
+      "FD-PROV-073",
+      "FD-PROV-073",
+    ]);
+  });
+
+  it("[FD-PROV-073] the gate fails unless every lemma of formal/provenance.spthy is verified and every expected attack is exists-trace", () => {
+    const lemmas = spthyLemmas(readFileSync(join(ROOT, "formal/provenance.spthy"), "utf8"));
+    const names = lemmas.map((l) => l.name);
+    for (const lemma of [
+      "injective_agreement",
+      "freshness",
+      "compromise_scope",
+      "misuse_detection",
+      "skip_inclusion_attack",
+      "rotation",
+      "no_key_history_attack",
+    ])
+      expect(names).toContain(lemma);
+    for (const attack of lemmas.filter((l) => l.name.endsWith("_attack")))
+      expect(attack.kind).toBe("exists-trace");
+    const summary = (result: (name: string) => string, extra = "") =>
+      [
+        "proof output above the summary: falsified - found trace",
+        "==============================================================================",
+        "summary of summaries:",
+        "",
+        "analyzed: formal/provenance.spthy",
+        "",
+        "  processing time: 58.41s",
+        extra,
+        ...lemmas.map((l) => `  ${l.name} (${l.kind}): ${result(l.name)}`),
+        "",
+        "==============================================================================",
+      ].join("\n");
+    expect(
+      tamarinFindings(
+        lemmas,
+        summary(() => "verified (12 steps)"),
+      ),
+    ).toEqual([]);
+    const falsified = tamarinFindings(
+      lemmas,
+      summary((n) =>
+        n === "rotation" ? "falsified - found trace (9 steps)" : "verified (3 steps)",
+      ),
+    );
+    expect(falsified.map((f) => [f.check, f.message])).toEqual([
+      ["FD-PROV-073", "rotation is falsified - found trace (9 steps), not verified"],
+    ]);
+    expect(falsified[0]!.line).toBe(lemmas.find((l) => l.name === "rotation")!.line);
+    expect(
+      tamarinFindings(
+        lemmas,
+        summary((n) =>
+          n === "freshness" ? "analysis incomplete (1 steps)" : "verified (3 steps)",
+        ),
+      ).map((f) => f.message),
+    ).toEqual(["freshness is analysis incomplete (1 steps), not verified"]);
+    expect(
+      tamarinFindings(
+        lemmas,
+        summary(() => "verified (3 steps)", "  WARNING: 1 wellformedness check failed!"),
+      ).map((f) => f.message),
+    ).toEqual(["1 wellformedness check(s) failed"]);
+    expect(
+      tamarinFindings(
+        [...lemmas, { name: "added_later", kind: "all-traces", line: 999 }],
+        summary(() => "verified (3 steps)"),
+      ).map((f) => f.message),
+    ).toEqual(["added_later has no result"]);
+    expect(
+      tamarinFindings(lemmas, "tamarin-prover: maude not found").map((f) => f.message),
+    ).toEqual(["the prover printed no summary"]);
+    expect(
+      tamarinFindings(
+        [],
+        summary(() => "verified"),
+      ).map((f) => f.message),
+    ).toEqual(["the model declares no lemma"]);
+    const allTracesAttack = spthyLemmas(
+      '/* exists-trace in a comment */\nlemma replay_attack:\n  "All x #i. A(x) @ i ==> F"\nlemma ok: exists-trace\n  "Ex #i. B() @ i"',
+    );
+    expect(allTracesAttack).toEqual([
+      { name: "replay_attack", kind: "all-traces", line: 2 },
+      { name: "ok", kind: "exists-trace", line: 4 },
+    ]);
+    const attackSummary = [
+      "summary of summaries:",
+      "  replay_attack (all-traces): verified (2 steps)",
+      "  ok (exists-trace): verified (1 steps)",
+    ].join("\n");
+    expect(tamarinFindings(allTracesAttack, attackSummary).map((f) => f.message)).toEqual([
+      "replay_attack states an expected attack and is not exists-trace",
+    ]);
   });
 });
 
