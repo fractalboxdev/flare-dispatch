@@ -1,7 +1,8 @@
 // The control plane's `WritebackRecords` over its own stores: the staged write's blobs read back from the artifact
 // store at the execution's accepted epoch, each with the SHA-256 digest of the bytes read; whether the model gateway
-// recorded a call for the execution; and the credentials the control plane issued to it (specs/runs/agentic.md
-// § Staged write, FD-AGT-013). Every read that cannot be answered fails; none answers empty.
+// recorded a call for the execution, and the model entries that answered its calls; and the credentials the control
+// plane issued to it (specs/runs/agentic.md § Staged write, FD-AGT-013, FD-AGT-040). Every read that cannot be
+// answered fails; none answers empty.
 import { Effect, Layer } from "effect";
 import type { D1Binding } from "../local/store.ts";
 import { stagedBlobName, type ManifestEntry } from "../staged-write/manifest.ts";
@@ -152,6 +153,34 @@ const readModelCalls = (db: D1Binding) => (executionId: string) =>
     return false;
   });
 
+/**
+ * The model entry ids that answered the execution's calls. A cloud placement with no call on record answers none. A
+ * call on record fails the read, because mameko's `model_calls` rows hold the call's allowance and not the model entry
+ * id that answered it; a device placement fails, because the device executor's local-call report is not read. Neither
+ * answers empty, so a commit a model drafted never goes out without its `Drafted-With:` trailer (FD-AGT-040).
+ */
+const readModelEntries = (db: D1Binding) => (executionId: string) =>
+  Effect.gen(function* () {
+    const [calls] = yield* rows<{ n: number }>(
+      db,
+      "gateway",
+      "select count(*) as n from model_calls where execution_id = ?",
+      executionId,
+    );
+    if ((calls?.n ?? 0) > 0)
+      return yield* new StagedWriteReadFailed({
+        source: "gateway",
+        detail: `the model-call records of ${executionId} name no model entry`,
+      });
+    const { kind } = yield* placementOf(db, executionId);
+    if (kind === null || kind === "device")
+      return yield* new StagedWriteReadFailed({
+        source: "device",
+        detail: `no local-call report is read for ${executionId}`,
+      });
+    return [] as readonly string[];
+  });
+
 /** The live `WritebackRecords` Layer the control plane composes for the `pr.propose` applier and the writeback gate. */
 export const writebackRecordsLayer = (
   config: WritebackRecordsConfig,
@@ -159,5 +188,6 @@ export const writebackRecordsLayer = (
   Layer.succeed(WritebackRecords, {
     blobs: readBlobs(config),
     modelCalls: readModelCalls(config.db),
+    modelEntries: readModelEntries(config.db),
     issuedCredentials: config.issuedCredentials,
   });

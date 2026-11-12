@@ -275,6 +275,7 @@ const gateHarness = async (
         }),
       ),
     modelCalls: () => Effect.succeed(false),
+    modelEntries: () => Effect.succeed([]),
     issuedCredentials: () => Effect.succeed([]),
   });
   const usage = Layer.succeed(CapacityUsage, {

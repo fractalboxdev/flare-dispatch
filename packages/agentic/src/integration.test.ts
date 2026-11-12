@@ -31,6 +31,7 @@ describe("local ports as the control plane mounts them", () => {
       Layer.succeed(WritebackRecords, {
         blobs: () => Effect.succeed([]),
         modelCalls: () => Effect.succeed(false),
+        modelEntries: () => Effect.succeed([]),
         issuedCredentials: () => Effect.succeed([]),
       }),
       Layer.succeed(CapacityUsage, { modelCalls: () => Effect.succeed(false) }),

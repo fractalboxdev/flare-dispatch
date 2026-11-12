@@ -81,6 +81,14 @@ export class WritebackRecords extends Context.Service<
     ) => Effect.Effect<readonly LoadedBlob[], StagedWriteReadFailed>;
     /** Whether the gateway recorded a model call for the execution or the device executor reported a local one. */
     readonly modelCalls: (executionId: string) => Effect.Effect<boolean, StagedWriteReadFailed>;
+    /**
+     * The model entry ids that answered the execution's model calls: those in the gateway's model-call records and
+     * those in the device executor's local-call report. A read that cannot answer both fails, so an empty list means
+     * no model answered a call.
+     */
+    readonly modelEntries: (
+      executionId: string,
+    ) => Effect.Effect<readonly string[], StagedWriteReadFailed>;
     readonly issuedCredentials: (
       executionId: string,
     ) => Effect.Effect<readonly string[], StagedWriteReadFailed>;
@@ -102,6 +110,33 @@ export interface ApplierConfig {
 
 /** The trailer naming the execution in each commit the applier writes, read back by `lookup`. */
 export const executionTrailer = (executionId: string) => `Flare-Dispatch-Execution: ${executionId}`;
+
+/** The trailer naming the model entries that drafted a model-authored commit, each id once, in sorted order. */
+export const draftedWithTrailer = (modelEntryIds: readonly string[]) =>
+  `Drafted-With: ${[...new Set(modelEntryIds)].sort().join(", ")}`;
+
+const DRAFTED_WITH_LINE = /^[ \t]*drafted-with[ \t]*:/i;
+
+/**
+ * The commit message: the manifest's message without any `Drafted-With:` line of its own, then one trailer block. A
+ * commit whose records name a model entry carries `Drafted-With:` with the ids the records hold, so the manifest, which
+ * the run returns, supplies none of them (FD-AGT-040).
+ */
+export const commitMessage = (
+  message: string,
+  executionId: string,
+  modelEntryIds: readonly string[],
+) =>
+  [
+    message
+      .split("\n")
+      .filter((line) => !DRAFTED_WITH_LINE.test(line))
+      .join("\n")
+      .trimEnd(),
+    "",
+    ...(modelEntryIds.length > 0 ? [draftedWithTrailer(modelEntryIds)] : []),
+    executionTrailer(executionId),
+  ].join("\n");
 
 const decodePayload = Schema.decodeUnknownExit(PrProposePayload);
 
@@ -201,7 +236,8 @@ export const gateStagedWrite = (input: {
 /**
  * `apply` on a `pr.propose` row: decode, gate, then blobs, tree and commit on the base commit, the branch ref, and the
  * pull request reused or opened (FD-AGT-016, FD-AGT-018, FD-AGT-035, FD-GH-082 to FD-GH-084). A model-authored
- * pull request's title and body pass through `sanitizeModelText` first (FD-AGT-041).
+ * commit carries the `Drafted-With:` trailer from `WritebackRecords.modelEntries`, read before any GitHub call
+ * (FD-AGT-040), and a model-authored pull request's title and body pass through `sanitizeModelText` first (FD-AGT-041).
  */
 export const applyPrPropose = (config: ApplierConfig) => (row: IntentRow) =>
   Effect.gen(function* () {
@@ -217,6 +253,11 @@ export const applyPrPropose = (config: ApplierConfig) => (row: IntentRow) =>
     const git = yield* GitData;
     const repo = repoOf(row, payload);
     const modelAuthored = yield* modelAuthorship(declaration, payload.executionId);
+    const modelEntries = modelAuthored
+      ? yield* Effect.flatMap(WritebackRecords, (records) =>
+          records.modelEntries(payload.executionId),
+        )
+      : [];
     const { verdict, blobs } = yield* gateStagedWrite({
       executionId: payload.executionId,
       repo,
@@ -256,7 +297,7 @@ export const applyPrPropose = (config: ApplierConfig) => (row: IntentRow) =>
     const baseTree = (yield* git.commit(repo, manifest.baseCommit)).tree;
     const treeSha = yield* git.createTree(repo, baseTree, tree);
     const commitSha = yield* git.createCommit(repo, {
-      message: `${manifest.message}\n\n${executionTrailer(payload.executionId)}`,
+      message: commitMessage(manifest.message, payload.executionId, modelEntries),
       tree: treeSha,
       parents: [manifest.baseCommit],
     });

@@ -84,6 +84,7 @@ const decideAll = async (events: readonly WritebackEvent[]) => {
         })),
       ),
     modelCalls: () => Effect.succeed(false),
+    modelEntries: () => Effect.succeed([]),
     issuedCredentials: () => Effect.sync(() => at.gate.evidence.issuedCredentials),
   });
   const usage = Layer.succeed(CapacityUsage, {
