@@ -337,6 +337,32 @@ describe("comment, review and issue", () => {
     expect(writes(w)).toEqual([]);
   });
 
+  it("refuses a close payload for another repository before reading or writing an issue", async () => {
+    const w = world();
+    w.side.issues.push(
+      { id: 9, number: 9, title: "dup", body: "same crash", labels: [] },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [] },
+    );
+    const wrong = row("issue", {
+      number: 9,
+      close_as_duplicate_of: 3,
+      repo: { owner: "unrelated", name: "public" },
+    });
+    expect(await apply(w, wrong)).toMatchObject({
+      _tag: "refused",
+      reason: "issue: close repository does not match execution scope",
+    });
+    expect(await lookup(w, wrong)).toMatchObject({ _tag: "undetermined" });
+    expect(w.side.calls).toEqual([]);
+    const same = row("issue", {
+      number: 9,
+      close_as_duplicate_of: 3,
+      repo: { owner: "ACME", name: "App" },
+    });
+    expect(await apply(w, same)).toMatchObject({ _tag: "applied", externalRef: "9" });
+    expect(writes(w)).toEqual(["closeIssue"]);
+  });
+
   it("[FD-AGT-077] adopts an already closed issue and refuses a closed original or a pull request", async () => {
     const w = world();
     w.side.issues.push(

@@ -45,6 +45,7 @@ export const SidePayloads = {
     commit_id: Schema.optionalKey(Schema.String),
   }),
   issue: Schema.Struct({
+    repo: Schema.optionalKey(Schema.Struct({ owner: Schema.String, name: Schema.String })),
     /** Required to create or update an issue; a close carries neither. */
     title: Schema.optionalKey(Schema.String),
     body: Schema.optionalKey(Schema.String),
@@ -407,6 +408,11 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
       Effect.gen(function* () {
         const w = yield* writes;
         if (p.close_as_duplicate_of !== undefined) {
+          if (
+            p.repo !== undefined &&
+            `${p.repo.owner}/${p.repo.name}`.toLowerCase() !== ctx.repo.toLowerCase()
+          )
+            return yield* refuse("issue: close repository does not match execution scope");
           if (p.number === undefined) return yield* refuse("issue: a close names no issue");
           const issue = yield* w.issue({ ...ctx, issue: p.number });
           if (issue.pull_request !== undefined)
@@ -442,6 +448,11 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
     lookup: (ctx, p) =>
       p.close_as_duplicate_of !== undefined
         ? Effect.gen(function* () {
+            if (
+              p.repo !== undefined &&
+              `${p.repo.owner}/${p.repo.name}`.toLowerCase() !== ctx.repo.toLowerCase()
+            )
+              return yield* refuse("issue: close repository does not match execution scope");
             if (p.number === undefined) return yield* refuse("issue: a close names no issue");
             const issue = yield* (yield* writes).issue({ ...ctx, issue: p.number });
             return issue.pull_request === undefined && issue.state === "closed"
