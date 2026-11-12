@@ -4,8 +4,9 @@
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow } from "@fractalboxdev/mameko-kernel";
+import { checkOpenPayload } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Schema } from "effect";
-import { InstallationDirectory } from "./applier.ts";
+import { InstallationDirectory, type Payloads } from "./applier.ts";
 import { GithubNetworkError } from "./client.ts";
 import { PARENT_CLOSED, type Verdict } from "./conclusion.ts";
 
@@ -37,6 +38,60 @@ const CHECK_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 /** A run definition's `checkLabel`, rejected at registration when it does not match the pattern (FD-GH-007). */
 export const validateCheckLabel = (label: string) =>
   CHECK_LABEL.test(label) ? Effect.succeed(label) : Effect.fail(new InvalidCheckLabel({ label }));
+
+// ---------------------------------------------------------------------------
+// The `check.progress` payload
+
+/** The `check.progress` payload the check-run applier renders the queued check run from. */
+export type CheckProgressPayload = (typeof Payloads)["check.progress"]["Type"];
+
+/** The queue-position buckets a `check.progress` payload states: `1`, `2–5`, `6–20` and `more than 20` (FD-GH-012). */
+export type QueueBucket = CheckProgressPayload["bucket"];
+
+/** The bucket of a 1-based queue position; a position below 1 reads as the head of the queue. */
+export const queueBucket = (position: number): QueueBucket =>
+  position <= 1 ? "1" : position <= 5 ? "2–5" : position <= 20 ? "6–20" : "more than 20";
+
+/** What the `checkProgressPayload` binding reads of one waiting execution's execution and placement rows. */
+export interface CheckProgressRequest {
+  /**
+   * The check run the execution owns: its name, `flare-dispatch/<run>[:<checkLabel>]`, the commit it reports on and the
+   * log viewer URL; null for an execution of a run that owns no check.
+   */
+  readonly check: {
+    readonly name: string;
+    readonly headSha: string;
+    readonly detailsUrl?: string;
+  } | null;
+  /** The labels class resolution returned for the execution; `local-only` suppresses its check run (FD-PROF-043). */
+  readonly labels: readonly string[];
+  /** The execution row's `class` and `deadline_at`; both null for a request rejected before class resolution. */
+  readonly execution: { readonly class: string | null; readonly deadlineAt: number | null };
+  /** The placement row's 1-based position in its queue. */
+  readonly queuePosition: number;
+}
+
+/**
+ * The profile's `checkProgressPayload` binding: the execution's class, its queue-position bucket and its `deadline_at`
+ * (FD-GH-012), and none (null) for an execution that owns no check run or has no class or `deadline_at` to state. An
+ * execution owns a check run exactly when `checkOpenPayload` opens one, so a `local-only` execution gets none. The
+ * payload carries every field in every confidentiality mode; under `confidential-compute` the applier renders the class
+ * alone, reading the repository's mode at delivery (FD-GH-019).
+ */
+export const checkProgressPayload = (r: CheckProgressRequest): CheckProgressPayload | null =>
+  r.check === null ||
+  checkOpenPayload({ check: r.check, labels: r.labels }) === null ||
+  r.execution.class === null ||
+  r.execution.deadlineAt === null
+    ? null
+    : {
+        name: r.check.name,
+        head_sha: r.check.headSha,
+        ...(r.check.detailsUrl === undefined ? {} : { details_url: r.check.detailsUrl }),
+        class: r.execution.class,
+        bucket: queueBucket(r.queuePosition),
+        deadline_at: r.execution.deadlineAt,
+      };
 
 // ---------------------------------------------------------------------------
 // Ops intents
