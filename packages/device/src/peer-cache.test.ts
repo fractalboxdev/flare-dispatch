@@ -1,9 +1,10 @@
 // The peer endpoint and its HTTP client on the loopback address, with WhoIs replaced by a fixed member map; the
 // two-process path over the extension's own entry point is the e2e-local suite's.
 import { createHash } from "node:crypto";
+import net from "node:net";
 import { es256Sign, signedBody, type Manifest } from "@fractalboxdev/flare-dispatch-cache";
 import { memoryDisk, openL1, type L2Entry } from "@fractalboxdev/flare-dispatch-cache/device";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { absentL2 } from "./extension.ts";
 import {
@@ -106,6 +107,22 @@ describe("peer cache endpoint", async () => {
     await expect(fetch(`${unknown.url}${PEER_CACHE_PATH}?namespace=${encodeURIComponent(NS)}&key=${key(1)}`)).rejects.toThrow();
   });
 
+  it("[FD-CACHE-014] answers a request target that is not a URL 400 and keeps serving", async () => {
+    const a = await serving(async () => "alice");
+    const good = await entry(cp.privateKey, key(1), utf8("compiled"));
+    await Effect.runPromise(a.l1.place(good));
+    const port = Number(new URL(a.url).port);
+    const raw = await new Promise<string>((ok, fail) => {
+      const socket = net.connect(port, "127.0.0.1", () => socket.write("GET http://a:99999/ HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n"));
+      let answer = "";
+      socket.on("data", (chunk) => (answer += chunk.toString()));
+      socket.on("end", () => ok(answer));
+      socket.on("error", fail);
+    });
+    expect(raw.startsWith("HTTP/1.1 400")).toBe(true);
+    expect((await httpPeer("alice", a.url).fetch(NS, key(1)))?.manifest).toEqual(good.manifest);
+  });
+
   it("[FD-CACHE-014] identifies a peer by the login WhoIs names, and a tagged node as no member", async () => {
     const whois = (answer: unknown) =>
       tailscaleWhois([process.execPath, "-e", `process.stdout.write(${JSON.stringify(JSON.stringify(answer))})`]);
@@ -127,7 +144,7 @@ describe("peer cache endpoint", async () => {
       peers: [{ member: "alice", url: "http://100.64.0.2:7491" }],
       keys: { control_plane: { kty: "EC", crv: "P-256", x: "x", y: "y" }, devices: {} },
     };
-    expect(decodePeerCacheConfig(JSON.stringify(setting))._tag).toBe("Some");
-    expect(decodePeerCacheConfig(JSON.stringify({ ...setting, keys: undefined }))._tag).toBe("None");
+    expect(Option.isSome(decodePeerCacheConfig(JSON.stringify(setting)))).toBe(true);
+    expect(Option.isNone(decodePeerCacheConfig(JSON.stringify({ ...setting, keys: undefined })))).toBe(true);
   });
 });

@@ -383,7 +383,12 @@ export const fetchFromPeers = (
       const entry = yield* Effect.tryPromise(() => peer.fetch(namespace, key)).pipe(Effect.orElseSucceed(() => null));
       if (entry === null || entry.manifest.namespace !== namespace || entry.manifest.key !== key) continue;
       if (yield* l1.place(entry)) return true;
-      yield* Effect.logWarning("cache.peer_entry_refused").pipe(Effect.annotateLogs({ key, member: peer.member }));
+      // An entry larger than the L1 cap is not placed whether or not it verifies, so it is not logged as refused.
+      const size = entry.manifest.objects.reduce((sum, object) => sum + object.size, 0);
+      const { cap } = l1.usage();
+      yield* (size > cap
+        ? Effect.logInfo("cache.peer_entry_not_placed").pipe(Effect.annotateLogs({ key, member: peer.member, size, cap }))
+        : Effect.logWarning("cache.peer_entry_refused").pipe(Effect.annotateLogs({ key, member: peer.member })));
     }
     return false;
   });

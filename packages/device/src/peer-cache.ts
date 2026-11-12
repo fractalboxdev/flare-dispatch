@@ -49,7 +49,12 @@ export const peerHandler =
       response.writeHead(403).end();
       return;
     }
-    const url = new URL(request.url ?? "/", "http://peer");
+    // An absolute-form target with an invalid port parses in Node's HTTP parser but not as a URL.
+    const url = URL.parse(request.url ?? "/", "http://peer");
+    if (url === null) {
+      response.writeHead(400).end();
+      return;
+    }
     if (request.method !== "GET" || url.pathname !== PEER_CACHE_PATH) {
       response.writeHead(404).end();
       return;
@@ -87,7 +92,13 @@ export const startPeerServer = (
 ): Promise<PeerServer> =>
   new Promise((ok, fail) => {
     const handle = peerHandler(options);
-    const server = http.createServer((request, response) => void handle(request, response));
+    // A throw in the handler answers 500 on that request; it never reaches the process as an unhandled rejection.
+    const server = http.createServer((request, response) => {
+      handle(request, response).catch(() => {
+        if (!response.headersSent) response.writeHead(500);
+        response.end();
+      });
+    });
     server.once("error", fail);
     server.listen(options.port, options.host, () => {
       server.off("error", fail);
