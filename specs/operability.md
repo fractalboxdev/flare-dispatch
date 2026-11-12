@@ -40,7 +40,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `dispatch.scoped` | Entries `{ identity, runs, repositories, classCeiling }` for automated callers of read-only scan runs ([interfaces.md](interfaces.md) FD-IFC-089 to FD-IFC-093) |
 | `containment` | Access identities allowed the tightening operator routes ([interfaces.md](interfaces.md) FD-IFC-095) |
 | `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256 as 64 lowercase hex digits, the path of its envelope relative to the repository root `fd deploy` runs in, and each public signing key, an ES256 JWK `{ kty, crv, x, y, kid }` under `publicKey`, with its UTC RFC 3339 `notBefore` (inclusive) and `notAfter` (exclusive) deploy-verification window ([runs/gate.md](runs/gate.md) § Security gate) |
-| `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores; the snapshot age a scan accepts, default 48 |
+| `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores, none by default; the snapshot age a scan accepts and the `advisory-snapshot-stale` alarm allows, default 24 |
 | `records.url` | The HTTPS URL that receives job and verdict records ([github-output.md](github-output.md) § Job and verdict records) |
 | `github.appId`, `github.fixtureRepo` | GitHub App id; the repository the synthetic webhook canary pushes to |
 | `intake.webhookEvents` | The webhook events intake admits ([intake.md](intake.md) FD-INT-027); the control plane's `WEBHOOK_EVENTS` var carries the list, `null` where the overlay sets none, so the Worker tells an absent list from an empty one |
@@ -232,7 +232,7 @@ FlareDispatch's alarm port records each alarm for the dashboard and sends it to 
 | `webhook-silent` | notify | An installation with an enrolled repository has had no verified delivery for `alerts.webhookSilentHours` | R1 |
 | `executions-lost` | notify | The settle sweep ends one or more executions ([MAMEKO-OPS-029](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)) | R8 |
 | `operator-control` | notify | The control state is not `run`, or a quarantine, force-admit or top-up is active ([MAMEKO-OPS-037](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)) | R9 |
-| `advisory-snapshot-stale` | page | An advisory snapshot in `scan.advisoryEcosystems` is older than 24 h | R17 |
+| `advisory-snapshot-stale` | page | An advisory snapshot in `scan.advisoryEcosystems` is older than `scan.advisoryMaxAgeHours` | R17 |
 | `record-undelivered` | page | A `job.record` or `verdict.record` row reaches `refused` or `expired` ([github-output.md](github-output.md) FD-GH-102) | R18 |
 | `delivery-key-paused` | notify | A delivery key stays paused for more than 10 min ([MAMEKO-OPS-049](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)) | R15 |
 | `private-log-refused` | page | The `TransparencyLog` object refuses a private-log write that would change an existing leaf or tile or reduce the tree size ([provenance.md](provenance.md) FD-PROV-038) | R17 |
@@ -391,7 +391,7 @@ The scan-bundle verifier samples the deploy host's current time once when verifi
 - **FD-OPS-100** · phase 2 · `V-UNIT` `V-LIVE` — Once per UTC day, the control plane must run the ops run `advisory-refresh`, which streams `https://osv-vulnerabilities.storage.googleapis.com/<ecosystem>/all.zip` for each `scan.advisoryEcosystems` entry into `cas/<sha256>`.
 - **FD-OPS-101** · phase 2 · `V-UNIT` — When `advisory-refresh` has stored every byte the response's `Content-Length` names, the control plane must record the object's digest and `Last-Modified` time as that ecosystem's advisory snapshot.
 - **FD-OPS-102** · phase 2 · `V-UNIT` `V-SIM` — If `advisory-refresh` fails for an ecosystem, then the control plane must keep that ecosystem's recorded snapshot unchanged.
-- **FD-OPS-103** · phase 2 · `V-UNIT` — While an ecosystem in `scan.advisoryEcosystems` has a recorded snapshot older than 24 h, or none, the control plane must raise the page alarm `advisory-snapshot-stale`.
+- **FD-OPS-103** · phase 2 · `V-UNIT` — While an ecosystem in `scan.advisoryEcosystems` has a recorded snapshot older than `scan.advisoryMaxAgeHours`, or none, the control plane must raise the page alarm `advisory-snapshot-stale`.
 
 ## Open items
 

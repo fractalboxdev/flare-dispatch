@@ -1,6 +1,6 @@
 // The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, the
 // GitHub probes under the App, the admission of held requests, the enqueue of intake's sweep and schedule units for
-// every installation of the App, and the conclusions of ended fan-out parents' children.
+// every installation of the App, the conclusions of ended fan-out parents' children and the daily advisory refresh.
 import {
   GithubApp,
   insertChildConclusions,
@@ -27,6 +27,7 @@ import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import type { ActuatorRateLimit, Actuators } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Exit, Layer, Schema } from "effect";
+import { advisoryRefreshStep } from "./advisory-snapshots.ts";
 import { isolateServices } from "./composition.ts";
 import { channelConfig, concludeKindOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { appOptionsOf } from "./github.ts";
@@ -207,6 +208,8 @@ export const tickDeps = (
         : []),
       ...startSweeps(env, now),
       childConclusionsStep(env, now),
+      // Each `scan.advisoryEcosystems` archive into `cas/<sha256>`, once per UTC day (FD-OPS-100).
+      advisoryRefreshStep(env, now),
       ...steps(now),
     ],
   };

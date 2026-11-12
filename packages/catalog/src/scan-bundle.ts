@@ -3,9 +3,10 @@
 // version ranges and exit maps, the suppression files and markers, and the baseline checks. One model serves both
 // sides: `fd deploy`'s drift check verifies the envelope's SHA-256, its signature under a key whose window holds the
 // verification time, and its payload (specs/operability.md FD-OPS-094 to FD-OPS-097); a scan reads the pinned envelope
-// from `cas/<digest>`, checks its SHA-256 and the image's scanner versions and tools, and runs no scanner where any
-// of them fails (FD-GATE-100 to FD-GATE-105, FD-GATE-109). The module is Worker-safe: the deploy side runs in Node
-// and the control plane imports the schema.
+// from `cas/<digest>`, checks its SHA-256, the image's scanner versions and tools and the advisory snapshot of each
+// ecosystem whose lockfile the range changes, and runs no scanner where any of them fails (FD-GATE-100 to
+// FD-GATE-107, FD-GATE-109). The module is Worker-safe: the deploy side runs in Node and the control plane imports
+// the schema.
 import { sha256Hex } from "@fractalboxdev/flare-dispatch-cache/crypto";
 import {
   AnyDsseEnvelope,
@@ -16,7 +17,13 @@ import {
 } from "@fractalboxdev/flare-dispatch-cache/dsse";
 import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces";
 import { Cause, Effect, Exit, Layer, Option, Schema, SchemaIssue } from "effect";
-import { ScanBundleStore, ScanBundleUnreadable, ScanImage } from "./ports.ts";
+import {
+  AdvisorySnapshots,
+  ScanBundleStore,
+  ScanBundleUnreadable,
+  ScanImage,
+  type AdvisorySnapshot,
+} from "./ports.ts";
 import { Outcome, ScanConfigReason, type Reason } from "./reasons.ts";
 
 export const SCAN_BUNDLE_PAYLOAD_TYPE = "application/vnd.flare-dispatch.scan-bundle.v1+json";
@@ -477,10 +484,75 @@ export const verifyScanBundle = (input: {
 
 // ---- Run side ------------------------------------------------------------------------
 
-/** A scan whose preconditions held: the pinned bundle and each scanner's version in the image. */
+/**
+ * The OSV ecosystem of each lockfile base name OSV-Scanner reads, under the name its archive has at
+ * `https://osv-vulnerabilities.storage.googleapis.com/<ecosystem>/all.zip` and in `scan.advisoryEcosystems`.
+ */
+export const LOCKFILE_ECOSYSTEMS: Readonly<Record<string, string>> = {
+  "package-lock.json": "npm",
+  "npm-shrinkwrap.json": "npm",
+  "yarn.lock": "npm",
+  "pnpm-lock.yaml": "npm",
+  "bun.lock": "npm",
+  "requirements.txt": "PyPI",
+  "Pipfile.lock": "PyPI",
+  "poetry.lock": "PyPI",
+  "pdm.lock": "PyPI",
+  "uv.lock": "PyPI",
+  "Cargo.lock": "crates.io",
+  "go.mod": "Go",
+  "Gemfile.lock": "RubyGems",
+  "gems.locked": "RubyGems",
+  "composer.lock": "Packagist",
+  "pom.xml": "Maven",
+  "gradle.lockfile": "Maven",
+  "buildscript-gradle.lockfile": "Maven",
+  "packages.lock.json": "NuGet",
+  "pubspec.lock": "Pub",
+  "mix.lock": "Hex",
+  "renv.lock": "CRAN",
+  "conan.lock": "ConanCenter",
+};
+
+/** The ecosystem of a lockfile at `path`, or `undefined` for a path that is no lockfile OSV-Scanner reads. */
+export const lockfileEcosystem = (path: string): string | undefined => {
+  const base = path.slice(path.lastIndexOf("/") + 1);
+  return Object.hasOwn(LOCKFILE_ECOSYSTEMS, base) ? LOCKFILE_ECOSYSTEMS[base] : undefined;
+};
+
+/** The ecosystems whose lockfiles `paths` change, each once, in sorted order. */
+export const lockfileEcosystems = (paths: readonly string[]): readonly string[] =>
+  [...new Set(paths.flatMap((p) => lockfileEcosystem(p) ?? []))].sort();
+
+/** `scan.advisoryMaxAgeHours` where the overlay sets none. */
+export const ADVISORY_MAX_AGE_DEFAULT_HOURS = 24;
+
+/** Whether a snapshot's `Last-Modified` time is older than `maxAgeHours` at `now` (FD-GATE-107). */
+export const snapshotStale = (
+  snapshot: Pick<AdvisorySnapshot, "lastModified">,
+  now: number,
+  maxAgeHours: number,
+): boolean => now - snapshot.lastModified > maxAgeHours * 3_600_000;
+
+/**
+ * What a scan's preconditions read beside the pin: the paths the scan range changes, the time the scan samples once,
+ * and `scan.advisoryMaxAgeHours`.
+ */
+export interface ScanScope {
+  readonly pin: string | undefined;
+  readonly changedPaths: readonly string[];
+  readonly now: number;
+  readonly advisoryMaxAgeHours: number;
+}
+
+/**
+ * A scan whose preconditions held: the pinned bundle, each scanner's version in the image, and the advisory snapshot
+ * of each ecosystem whose lockfile the range changes, which OSV-Scanner reads offline.
+ */
 export interface PreparedScan {
   readonly bundle: ScanBundle;
   readonly versions: Readonly<Record<Scanner, string>>;
+  readonly snapshots: Readonly<Record<string, AdvisorySnapshot>>;
 }
 
 /** A precondition failed: the scan records `failure` with `reason` and runs no scanner. */
@@ -491,16 +563,45 @@ export class ScanRefused extends Schema.TaggedError<ScanRefused>()("ScanRefused"
 const refuse = (reason: Reason) => Effect.fail(new ScanRefused({ reason }));
 
 /**
+ * The advisory snapshot of each ecosystem whose lockfile the range changes: an ecosystem with no recorded snapshot,
+ * or whose record the store cannot read, refuses the scan as missing (FD-GATE-106); one whose `Last-Modified` time is
+ * older than `scan.advisoryMaxAgeHours` refuses it as stale (FD-GATE-107). Ecosystems are checked in sorted order, so
+ * the reason names the first that fails.
+ */
+export const advisoryPreconditions = (
+  scope: Omit<ScanScope, "pin">,
+): Effect.Effect<Readonly<Record<string, AdvisorySnapshot>>, ScanRefused, AdvisorySnapshots> =>
+  Effect.gen(function* () {
+    const ecosystems = lockfileEcosystems(scope.changedPaths);
+    if (ecosystems.length === 0) return {};
+    const store = yield* AdvisorySnapshots;
+    const snapshots: Record<string, AdvisorySnapshot> = {};
+    for (const ecosystem of ecosystems) {
+      const snapshot = yield* store.read(ecosystem).pipe(
+        Effect.catchTag("AdvisorySnapshotUnreadable", () => Effect.succeed(null)),
+      );
+      if (snapshot === null) return yield* refuse(ScanConfigReason.advisoryMissing(ecosystem));
+      if (snapshotStale(snapshot, scope.now, scope.advisoryMaxAgeHours))
+        return yield* refuse(ScanConfigReason.advisoryStale(ecosystem));
+      snapshots[ecosystem] = snapshot;
+    }
+    return snapshots;
+  });
+
+/**
  * A scan's preconditions, before any scanner runs (specs/runs/gate.md § Security gate, step 1): the deployment pins a
  * bundle (FD-GATE-101); `cas/<pin>` holds it (FD-GATE-100, FD-GATE-102); its bytes' SHA-256 is the pin
  * (FD-GATE-103); its payload passes the schema; each scanner's version in the image lies inside its range
- * (FD-GATE-105); and each baseline check's tool is a binary the image's scan-tools file lists (FD-GATE-109). The
- * deploy verified the envelope's signature when it pinned the digest, so the digest alone binds the bytes here.
+ * (FD-GATE-105); each baseline check's tool is a binary the image's scan-tools file lists (FD-GATE-109); and each
+ * ecosystem whose lockfile the range changes has a recorded advisory snapshot no older than
+ * `scan.advisoryMaxAgeHours` (FD-GATE-106, FD-GATE-107). The deploy verified the envelope's signature when it pinned
+ * the digest, so the digest alone binds the bytes here.
  */
 export const prepareScan = (
-  pin: string | undefined,
-): Effect.Effect<PreparedScan, ScanRefused, ScanBundleStore | ScanImage> =>
+  scope: ScanScope,
+): Effect.Effect<PreparedScan, ScanRefused, ScanBundleStore | ScanImage | AdvisorySnapshots> =>
   Effect.gen(function* () {
+    const pin = scope.pin;
     if (pin === undefined || pin === "") return yield* refuse(ScanConfigReason.notPinned);
     const store = yield* ScanBundleStore;
     const image = yield* ScanImage;
@@ -531,7 +632,8 @@ export const prepareScan = (
     const tools = new Set(yield* image.scanTools);
     for (const check of payload.baselineChecks)
       if (!tools.has(check.tool)) return yield* refuse(ScanConfigReason.baselineCheck(check.controlId));
-    return { bundle: { digest, envelope, payload }, versions };
+    const snapshots = yield* advisoryPreconditions(scope);
+    return { bundle: { digest, envelope, payload }, versions, snapshots };
   });
 
 /**
@@ -539,10 +641,10 @@ export const prepareScan = (
  * `failure` with its `config` reason and never calls `scan`, so no scanner runs.
  */
 export const runScan = <E, R>(
-  pin: string | undefined,
+  scope: ScanScope,
   scan: (prepared: PreparedScan) => Effect.Effect<Outcome, E, R>,
-): Effect.Effect<Outcome, E, R | ScanBundleStore | ScanImage> =>
-  prepareScan(pin).pipe(
+): Effect.Effect<Outcome, E, R | ScanBundleStore | ScanImage | AdvisorySnapshots> =>
+  prepareScan(scope).pipe(
     Effect.matchEffect({
       onFailure: (refused) => Effect.succeed(Outcome.failure(refused.reason as Reason)),
       onSuccess: scan,

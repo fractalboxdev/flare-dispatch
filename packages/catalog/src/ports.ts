@@ -126,6 +126,34 @@ export class ScanBundleStore extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-catalog/ScanBundleStore") {}
 
+export class AdvisorySnapshotUnreadable extends Schema.TaggedError<AdvisorySnapshotUnreadable>()(
+  "AdvisorySnapshotUnreadable",
+  { ecosystem: Schema.String, detail: Schema.String },
+) {}
+
+/**
+ * An ecosystem's advisory snapshot as the control plane recorded it: the SHA-256 of its OSV `all.zip` archive in
+ * `cas/<digest>`, and the archive's `Last-Modified` time in epoch ms (specs/runs/gate.md § Security gate).
+ */
+export interface AdvisorySnapshot {
+  readonly ecosystem: string;
+  readonly digest: string;
+  readonly lastModified: number;
+}
+
+/**
+ * The control-plane store's advisory snapshots: an ecosystem's recorded snapshot, or `null` where none is recorded
+ * (FD-GATE-106, FD-GATE-107).
+ */
+export class AdvisorySnapshots extends Context.Service<
+  AdvisorySnapshots,
+  {
+    readonly read: (
+      ecosystem: string,
+    ) => Effect.Effect<AdvisorySnapshot | null, AdvisorySnapshotUnreadable>;
+  }
+>()("@fractalboxdev/flare-dispatch-catalog/AdvisorySnapshots") {}
+
 export class ScannerVersionUnknown extends Schema.TaggedError<ScannerVersionUnknown>()(
   "ScannerVersionUnknown",
   { scanner: Schema.String, detail: Schema.String },

@@ -16,6 +16,7 @@ import {
   envelopeBytes,
   fakeScanImage,
   IMAGE_VERSIONS,
+  memoryAdvisorySnapshots,
   signingKey,
   validPayload,
 } from "../../catalog/src/scan-bundle.test-support.ts";
@@ -39,11 +40,14 @@ afterAll(async () => {
 const scan = async (pin: string) => {
   const prepared: PreparedScan[] = [];
   const outcome = await Effect.runPromise(
-    runScan(pin, (p) => Effect.sync(() => (prepared.push(p), Outcome.success()))).pipe(
+    runScan({ pin, changedPaths: [], now: Date.now(), advisoryMaxAgeHours: 24 }, (p) =>
+      Effect.sync(() => (prepared.push(p), Outcome.success())),
+    ).pipe(
       Effect.provide(
-        Layer.merge(
+        Layer.mergeAll(
           bucketScanBundleStore(bucket as unknown as ContentBucket),
           fakeScanImage(IMAGE_VERSIONS, ["semgrep"]),
+          memoryAdvisorySnapshots().layer,
         ),
       ),
     ),
