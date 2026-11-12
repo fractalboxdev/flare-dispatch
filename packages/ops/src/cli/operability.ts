@@ -1,7 +1,7 @@
 // The `Operability` service `fd deploy` and `fd doctor` run (specs/interfaces.md FD-IFC-070, specs/operability.md
 // FD-OPS-003 to FD-OPS-025): the deploy pipeline and the drift check over the live Cloudflare and GitHub target, as
 // the stage report `fd` prints. A stage that fails is a report with `ok: false`; only a defect is the caller's error.
-import { AGENTIC_CATALOG } from "@fractalboxdev/flare-dispatch-agentic";
+import { AGENTIC_CATALOG, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import {
   CURRENT_PHASE,
   profileDocumentFor,
@@ -208,6 +208,27 @@ export const staticDrift = (
   );
 
 /**
+ * The AWS credentials of the deploy job's environment, the variables the AWS SDKs and CLI read; none unless both the
+ * key id and the secret key are set.
+ */
+export const awsCredentialsOf = (
+  env: Readonly<Record<string, string | undefined>>,
+): { readonly aws?: AwsCredentials } => {
+  const accessKeyId = env["AWS_ACCESS_KEY_ID"];
+  const secretAccessKey = env["AWS_SECRET_ACCESS_KEY"];
+  const sessionToken = env["AWS_SESSION_TOKEN"];
+  if (accessKeyId === undefined || accessKeyId === "") return {};
+  if (secretAccessKey === undefined || secretAccessKey === "") return {};
+  return {
+    aws: {
+      accessKeyId,
+      secretAccessKey,
+      ...(sessionToken === undefined || sessionToken === "" ? {} : { sessionToken }),
+    },
+  };
+};
+
+/**
  * The `Operability` service's two operations. `fd`'s Layer is
  * `Layer.succeed(Operability)(makeOperability({ fail: (message) => new OperabilityFailed({ message }) }))`.
  */
@@ -246,6 +267,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
               ...(env["GITHUB_REPOSITORY"] === undefined
                 ? {}
                 : { repository: env["GITHUB_REPOSITORY"] }),
+              ...awsCredentialsOf(env),
               ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
             }),
       ),

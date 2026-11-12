@@ -1,4 +1,4 @@
-// AWS Signature Version 4 for one Bedrock `InvokeModel` request, on Web Crypto so it runs in the Worker. The control
+// AWS Signature Version 4 for a POST request, on Web Crypto so it runs in the Worker. The control
 // plane is the only component that signs, so the AWS credentials never leave it (FD-MDL-024).
 
 export interface AwsCredentials {
@@ -17,6 +17,8 @@ export interface SignInput {
   readonly canonicalPath: string;
   readonly body: string;
   readonly now: Date;
+  /** Additional headers sent with the request, including every `x-amz-*` header. */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 const encoder = new TextEncoder();
@@ -38,19 +40,25 @@ const hmac = async (key: ArrayBuffer | Uint8Array, message: string): Promise<Arr
   return crypto.subtle.sign("HMAC", k, encoder.encode(message));
 };
 
-/** The signed headers of a `POST` with a JSON body: `host`, `x-amz-content-sha256`, `x-amz-date` and the token. */
+/** The signed headers of a `POST`: the supplied headers, `host`, the payload hash, the date and the token. */
 export const signRequest = async (input: SignInput): Promise<Record<string, string>> => {
   const amzDate = input.now.toISOString().replace(/[:-]|\.\d{3}/g, "");
   const dateStamp = amzDate.slice(0, 8);
   const scope = `${dateStamp}/${input.region}/${input.service}/aws4_request`;
   const payloadHash = await sha256Hex(input.body);
   const token = input.credentials.sessionToken;
-  const headers: [string, string][] = [
-    ["host", input.host],
-    ["x-amz-content-sha256", payloadHash],
-    ["x-amz-date", amzDate],
-    ...(token === undefined ? [] : ([["x-amz-security-token", token]] as [string, string][])),
-  ];
+  const headers = Object.entries({
+    ...Object.fromEntries(
+      Object.entries(input.headers ?? {}).map(([key, value]) => [
+        key.toLowerCase(),
+        value.trim().replace(/\s+/g, " "),
+      ]),
+    ),
+    host: input.host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+    ...(token === undefined ? {} : { "x-amz-security-token": token }),
+  }).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const signedHeaders = headers.map(([k]) => k).join(";");
   const canonicalRequest = [
     "POST",

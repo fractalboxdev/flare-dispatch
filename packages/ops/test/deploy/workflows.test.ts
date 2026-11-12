@@ -96,6 +96,7 @@ type Job = {
   name?: string;
   needs?: string | string[];
   if?: string;
+  permissions?: Record<string, string>;
   uses?: string;
   steps?: Step[];
   concurrency?: unknown;
@@ -184,7 +185,8 @@ const evaluate = (text: string, context: ReadonlyMap<string, string>) =>
 /**
  * Runs the steps the way a GitHub-hosted runner does: in order, each `run:` in bash with its `env:` and
  * `working-directory`, `$GITHUB_OUTPUT` read back into `steps.<id>.outputs`, stopping at the first failure; a step under
- * `if: success()` runs only when every step before it passed. `uses` plays each `uses:` step.
+ * `if: success()` runs only when every step before it passed, and one under `if: vars.<NAME> != ''` only when `values`
+ * sets that variable. `uses` plays each `uses:` step.
  */
 const runSteps = (
   steps: readonly Step[],
@@ -203,9 +205,11 @@ const runSteps = (
   for (const [n, step] of steps.entries()) {
     const name = step.name ?? step.uses ?? `step ${n}`;
     const failedBefore = results.some((s) => !s.ok);
-    if (step.if !== undefined && step.if !== "success()")
+    const variable = /^vars\.(\w+) != ''$/.exec(step.if ?? "")?.[1];
+    if (step.if !== undefined && step.if !== "success()" && variable === undefined)
       throw new Error(`${name}: no evaluator for if: ${step.if}`);
     if (failedBefore) break;
+    if (variable !== undefined && (context.get(`vars.${variable}`) ?? "") === "") continue;
     if (step.uses !== undefined) {
       uses(step, context);
       results.push({ name, ok: true, stderr: "", output: "" });
@@ -283,6 +287,7 @@ const deployedBy = async (argv: readonly string[]) => {
       lastRecord: () => Effect.succeed(null),
       appRegistration: Effect.succeed(APP_PERMISSIONS),
       requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
+      awsBudgets: Effect.succeed({ account: "", observedAt: 0, budgets: [], actions: [] }),
       applyD1Migrations: () => Effect.succeed([]),
       deployWorker: (w) =>
         Effect.sync(() => {
@@ -983,6 +988,55 @@ describe("the deploy workflow over GitHub's rules", () => {
     expect(quiet.ok).toBe(false);
     expect(w.alarms).toHaveLength(1);
   });
+});
+
+describe("the deploy workflow's AWS credentials", () => {
+  const ROLE = "arn:aws:iam::111122223333:role/fd-deploy";
+  const secrets = {
+    "secrets.FD_OPERATOR_OVERLAY": OVERLAY_TEXT,
+    "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
+    "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+    "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
+  };
+
+  it("[FD-EXEC-083] the deploy and doctor jobs assume the role FD_AWS_ROLE_ARN names before the drift check reads AWS, and skip it where the variable is unset", () => {
+    for (const job of ["deploy", "doctor"]) {
+      const j = deployWorkflow.jobs[job]!;
+      // GitHub's OIDC provider issues the job a token only under `id-token: write`.
+      expect(j.permissions).toEqual({ contents: "read", "id-token": "write" });
+      const steps = j.steps!;
+      const assume = steps.findIndex((s) => s.uses === "aws-actions/configure-aws-credentials@v4");
+      const fdStep = steps.findIndex((s) => s.name === `fd ${job}`);
+      expect(assume).toBeGreaterThanOrEqual(0);
+      expect(assume).toBeLessThan(fdStep);
+
+      for (const role of [ROLE, ""]) {
+        const r = runner(`aws-${job}-${role === "" ? "unset" : "set"}`);
+        checkout(r.workspace);
+        const assumed: Record<string, string>[] = [];
+        const results = runSteps(
+          steps,
+          r,
+          { ...secrets, "vars.FD_AWS_ROLE_ARN": role },
+          (step, context) => {
+            if (step.uses !== "aws-actions/configure-aws-credentials@v4") return;
+            assumed.push(
+              Object.fromEntries(
+                Object.entries(step.with ?? {}).map(([k, v]) => [k, evaluate(String(v), context)]),
+              ),
+            );
+          },
+        );
+        expect(results.filter((s) => !s.ok)).toEqual([]);
+        expect(assumed).toEqual(
+          role === "" ? [] : [{ "role-to-assume": ROLE, "aws-region": "us-east-1" }],
+        );
+        expect(r.ran().filter((c) => c.command === "node" && c.args.includes(SCRIPT))).toHaveLength(
+          1,
+        );
+      }
+    }
+  }, 60_000);
 });
 
 describe("the CI jobs the merge gate and the deploy rest on", () => {

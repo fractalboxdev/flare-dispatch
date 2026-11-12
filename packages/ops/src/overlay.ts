@@ -73,6 +73,8 @@ export const OverlayValues = Schema.Struct({
   aws: opt(
     Schema.Struct({
       budgetUsd: opt(Usd),
+      /** The ECS launcher's IAM role; required to prove an IAM Budgets action stops that launcher. */
+      launcherRoleArn: opt(NonEmpty),
       launchCap: opt(Count),
       egressProxy: opt(NonEmpty),
       imageRegistry: opt(NonEmpty),

@@ -21,11 +21,13 @@ import {
   Checkout,
   EditLoop,
   modelGatewayClientLayer,
+  type EditLoopResult,
   ModelClient,
   RecipeIntents,
   Shell,
   StagedWrites,
   StageFailed,
+  SuppressionLedger,
   type CommandResult,
 } from "./services.ts";
 
@@ -40,8 +42,8 @@ const runProcess = (
     readonly stdin?: string;
     readonly env?: NodeJS.ProcessEnv;
   },
-): Effect.Effect<CommandResult> =>
-  Effect.callback<CommandResult>((resume) => {
+): Effect.Effect<CommandResult & { readonly started: boolean }> =>
+  Effect.callback<CommandResult & { readonly started: boolean }>((resume) => {
     let stdout = "";
     let stderr = "";
     const child = spawn(command, [...args], { cwd: options.cwd, env: options.env ?? process.env });
@@ -54,11 +56,12 @@ const runProcess = (
     });
     child.on("error", (e) => {
       clearTimeout(timer);
-      resume(Effect.succeed({ exitCode: null, stdout, stderr: e.message }));
+      resume(Effect.succeed({ started: false, exitCode: null, stdout, stderr: e.message }));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resume(Effect.succeed({ exitCode: code, stdout, stderr }));
+      // A null code here means a signal ended a process that started, such as the timeout's SIGKILL.
+      resume(Effect.succeed({ started: true, exitCode: code, stdout, stderr }));
     });
     // A started command can close stdin before consuming the prompt (or exit while it is being written).
     // Its close/exit status still owns the result; a late pipe error must not escape into the executor process.
@@ -103,11 +106,14 @@ export const sandboxEnv = (
 export const shellLayer = (checkout: string, env?: NodeJS.ProcessEnv): Layer.Layer<Shell> =>
   Layer.succeed(Shell, {
     run: (command, options) =>
-      runProcess("sh", ["-c", command], {
-        cwd: options?.cwd ?? checkout,
-        timeoutMs: options?.timeoutMs ?? 600_000,
-        ...(env === undefined ? {} : { env }),
-      }),
+      Effect.map(
+        runProcess("sh", ["-c", command], {
+          cwd: options?.cwd ?? checkout,
+          timeoutMs: options?.timeoutMs ?? 600_000,
+          ...(env === undefined ? {} : { env }),
+        }),
+        ({ exitCode, stdout, stderr }): CommandResult => ({ exitCode, stdout, stderr }),
+      ),
   });
 
 const walk = async (root: string, dir: string): Promise<string[]> => {
@@ -157,9 +163,7 @@ export const editLoopLayer = (
           stdin: prompt,
           ...(env === undefined ? {} : { env }),
         }),
-        (r) => ({
-          exitCode: r.exitCode,
-        }),
+        (r): EditLoopResult => ({ started: r.started, exitCode: r.exitCode }),
       ),
   });
 
@@ -242,6 +246,8 @@ export interface CloudAgenticConfig {
   readonly stagingDir: string;
   /** The coding-agent command of the edit loop. */
   readonly editLoop: readonly [string, ...string[]];
+  /** The edit loop's timeout; 30 min when absent. */
+  readonly editLoopTimeoutMs?: number;
   /** The model route's URL; the egress proxy attaches the per-lease token to a request to it (FD-AGT-010). */
   readonly modelGatewayUrl: string;
   /** The control plane's origin, whose executions and log routes `ExecutionsRead` reads through the egress proxy. */
@@ -254,6 +260,8 @@ export interface CloudAgenticConfig {
   readonly env: NodeJS.ProcessEnv;
   /** Credentials the runner holds, such as a clone token; a model request carrying one is refused (FD-AGT-011). */
   readonly credentials: readonly string[];
+  /** The suppression ledger's read; the job holds no binding of the control plane's database (FD-AGT-043). */
+  readonly suppressionLedger: Layer.Layer<SuppressionLedger>;
 }
 
 export type CloudAgenticServices =
@@ -264,14 +272,15 @@ export type CloudAgenticServices =
   | StagedWrites
   | Artifacts
   | RecipeIntents
-  | ExecutionsRead;
+  | ExecutionsRead
+  | SuppressionLedger;
 
 /**
  * The agentic recipes' services on the cloud executor. The model client sends no credential and reaches the model
  * route through the egress proxy, which alone holds the per-lease token; the shell and the edit loop start with the
  * sandbox environment, so no runner variable reaches them (FD-AGT-010). Artifacts go to the execution's artifact store
  * (FD-AGT-059). `ExecutionsRead` reads the control plane's executions and log routes, so the job holds no binding of the
- * executions table or the log store (FD-AGT-071).
+ * executions table or the log store (FD-AGT-071). The suppression ledger is the read the runner entry supplies.
  */
 export const cloudAgenticLayers = (
   config: CloudAgenticConfig,
@@ -285,10 +294,11 @@ export const cloudAgenticLayers = (
     }),
     shellLayer(config.checkout, env),
     checkoutLayer(config.checkout),
-    editLoopLayer(config.checkout, config.editLoop, undefined, env),
+    editLoopLayer(config.checkout, config.editLoop, config.editLoopTimeoutMs, env),
     stagedWritesLayer(config.checkout, config.baseCommit, config.stagingDir, config.artifacts),
     artifactsLayer(config.artifacts),
     runnerIntentsLayer,
     executionsApiReadLayer({ baseUrl: config.controlPlaneUrl, fetch: config.fetch }),
+    config.suppressionLedger,
   );
 };

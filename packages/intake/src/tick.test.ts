@@ -154,13 +154,21 @@ describe("improve-pr schedules", () => {
         "improve-pr",
         "size",
         BASE,
-        { baseBranch: "main", dimension: dimension("size", "node scripts/size.js") },
+        {
+          repo: { owner: "acme", name: "app" },
+          baseBranch: "main",
+          dimension: dimension("size", "node scripts/size.js"),
+        },
       ],
       [
         "improve-pr",
         "lint",
         HEAD,
-        { baseBranch: "develop", dimension: dimension("lint", "pnpm lint --count") },
+        {
+          repo: { owner: "acme", name: "app" },
+          baseBranch: "develop",
+          dimension: dimension("lint", "pnpm lint --count"),
+        },
       ],
     ]);
     expect(h.rows("select canonical from dedup_keys order by canonical")).toEqual([

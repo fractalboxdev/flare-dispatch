@@ -218,6 +218,8 @@ flowchart LR
 
 ### Suppression ledger
 
+A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the repository and the head branch of the pull request the recipe opens or refreshes, for example `acme/app:flare-dispatch/improve-bundle-size`. The **suppression ledger** is the `fd_suppressions` table in the control plane's D1 database, one row per key, holding whether a maintainer declined the key and the `closed_at` of the matching pull request that closed unmerged. The ledger compares keys as exact strings, letter case included. `improve-pr`, `spec-drift-pr` and `ci-triage-pr` read the ledger before any other step, so a suppressed key spends no measurement, edit loop or model call and concludes `success`.
+
 - **FD-AGT-043** · phase 3 · `V-UNIT` — Before a recipe opens a pull request or an issue, the run must look up the proposal's exact suppression key in the suppression ledger, and must open nothing while the key is declined or within the cooldown, default 30 days from the matching pull request's `closed_at`.
 - **FD-AGT-044** · phase 3 · `V-UNIT` — If the suppression ledger read fails, then the run must open no pull request or issue and must conclude `failure` with the reason `suppression: read failed`.
 
