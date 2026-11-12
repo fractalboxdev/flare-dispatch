@@ -99,13 +99,14 @@ flowchart TB
 Three layers, closest first:
 
 1. **The check-run summary** (PR → Checks tab). Every check-run — in-progress
-   and completed, green and red, on every dispatch path — carries up to two
-   links: **"view full logs ↗"** opens the readable log viewer
+   and completed, green and red, on every dispatch path — carries
+   **"view full logs ↗"**, which opens the readable log viewer
    (`<origin>/logs/<instance-id>?t=<token>`; the token is signed with
    `LOG_LINK_SECRET`, falling back to `HMAC_SECRET`, and the link is omitted
-   when neither secret is set), and **"view step logs in Cloudflare ↗"** opens
-   the Workflows instance page (present only when `CLOUDFLARE_ACCOUNT_ID` is
-   set, and needs dashboard access to your account). The dispatcher's own
+   when neither secret is set). A check-run is as public as its repository, so
+   it never links the Cloudflare Workflows instance page, whose URL carries
+   your account id; the Access-gated viewer and executions API link it
+   instead. The dispatcher's own
    dashboard at `GET /` (Cloudflare Access-gated) lists recent executions with
    the same tokened viewer links — the browse path when you don't have the PR
    open. Cron-scheduled runs have no request to infer an origin from, so their
