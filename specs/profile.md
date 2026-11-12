@@ -23,7 +23,7 @@ The decisions behind the mechanisms are mameko's [ADR-0007](https://github.com/f
 
 | Item | Value |
 | --- | --- |
-| `policy_version` | `flare-dispatch.v2.0` in phase 0 and `flare-dispatch.v2.0-phase<n>` in phase n from 1 to 4; `development` inserts `-dev` after `v2.0`, as `flare-dispatch.v2.0-dev` and `flare-dispatch.v2.0-dev-phase<n>`. Each deployment and phase has its own version because mameko's loader rejects one version carrying two contents ([MAMEKO-PROF-007](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)) |
+| `policy_version` | `flare-dispatch.v2.0` in phase 0 and `flare-dispatch.v2.0-phase<n>` in phase n from 1 to 4; `development` inserts `-dev` after `v2.0`, as `flare-dispatch.v2.0-dev` and `flare-dispatch.v2.0-dev-phase<n>`; a document that declares the record kinds, from phase 2 where the overlay sets `records.url`, appends `-records`. Each deployment and phase has its own version because mameko's loader rejects one version carrying two contents ([MAMEKO-PROF-007](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)) |
 | Tenant scope | A GitHub repository, `<owner>/<repo>`; an `exec.lease` names it as the scope id and carries the commit SHA in its inputs, with the lease fields of FD-PROF-063 |
 | `host` | `adapter: host-cloudflare`, `features: [cloudflare-containers, durable-object-alarms]` |
 | `registration` | `key_stores: [software]`, `attestation: none` in phase 0, when no verifier exists, so no key claims a hardware store nothing checks; `key_stores: [secure-enclave]`, `attestation: verifier` from phase 1 (FD-PROF-052); `key_stores: [software]`, `attestation: none` for `development` |
@@ -286,8 +286,9 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc
 | The `gha` launcher kind and `gha` in every class's cloud kinds | From phase 3 | From phase 4 (FD-PROF-064) |
 | `cloud_only` | Trigger `tag-push` | From phase 2: trigger `tag-push` or label `security-scan` (FD-PROF-066) |
 | Constraint `deployment-secret-grant` | None | From phase 4: removes `gha` from a run whose egress profiles hold a grant that attaches a deployment secret ([isolation-egress.md](isolation-egress.md) FD-ISO-022) |
+| `job.record` and `verdict.record` | None | From phase 2, where the overlay sets `records.url`, under a policy version with the suffix `-records` ([github-output.md](github-output.md) § Job and verdict records) |
 
-FlareDispatch's phase n document is compared with the reference profile's form for phase n ([MAMEKO-PROF-023](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)), so `registration.attestation` agrees in every phase and only the last four rows above differ by phase.
+FlareDispatch's phase n document is compared with the reference profile's form for phase n ([MAMEKO-PROF-023](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)), so `registration.attestation` agrees in every phase and only the last five rows above differ by phase.
 
 ## Requirements
 

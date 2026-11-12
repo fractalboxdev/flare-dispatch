@@ -60,6 +60,8 @@ export interface ApiEnv {
   readonly COMPILE_CACHE_SECRET?: string;
   readonly CACHE_TOKEN_SECRET?: string;
   readonly INSTALL_STATE_KEY?: string;
+  /** The verdict record signing key, which signs each job and verdict record (specs/github-output.md FD-GH-099). */
+  readonly RECORDS_SIGNING_KEY?: string;
 }
 
 export class ConfigInvalid extends Schema.TaggedError<ConfigInvalid>()("ConfigInvalid", {
@@ -153,6 +155,35 @@ export const distinctProvenanceKey = (env: ApiEnv): ConfigInvalid | undefined =>
     : new ConfigInvalid({ path: "PROVENANCE_KEY", message: `the provenance key equals ${same}` });
 };
 
+/** The bindings the verdict record signing key must differ from. */
+export const RECORDS_KEY_DISTINCT_FROM = [
+  "WEBHOOK_SECRET",
+  "LINK_KEY",
+  "OIDC_SIGNING_JWK",
+  "PROVENANCE_KEY",
+] as const satisfies ReadonlyArray<keyof ApiEnv>;
+
+/**
+ * The verdict record signing key must differ from the webhook secret, the link key, the OIDC key and the provenance
+ * key (FD-GH-099), so a record receiver that holds the key forges no webhook, link, token or statement. A secret that
+ * holds the same private JWK in another form matches too. The refusal names the binding, never a value.
+ */
+export const distinctRecordsKey = (env: ApiEnv): ConfigInvalid | undefined => {
+  const records = present(env.RECORDS_SIGNING_KEY);
+  if (records === undefined) return undefined;
+  const mine = keyMaterial(records);
+  const same = RECORDS_KEY_DISTINCT_FROM.find((name) => {
+    const other = present(env[name]);
+    return other !== undefined && [...keyMaterial(other)].some((m) => mine.has(m));
+  });
+  return same === undefined
+    ? undefined
+    : new ConfigInvalid({
+        path: "RECORDS_SIGNING_KEY",
+        message: `the records signing key equals ${same}`,
+      });
+};
+
 /** Reads the API's configuration from the Worker's bindings; a value it cannot use answers `ConfigInvalid`. */
 export const apiConfigFromEnv = (
   env: ApiEnv,
@@ -168,6 +199,8 @@ export const apiConfigFromEnv = (
   if (distinct !== undefined) return distinct;
   const provenance = distinctProvenanceKey(env);
   if (provenance !== undefined) return provenance;
+  const records = distinctRecordsKey(env);
+  if (records !== undefined) return records;
   const lifetimeRaw = present(env.LINK_LIFETIME_S);
   const linkLifetimeS = lifetimeRaw === undefined ? DEFAULT_LINK_LIFETIME_S : Number(lifetimeRaw);
   if (!Number.isInteger(linkLifetimeS) || linkLifetimeS < 1 || linkLifetimeS > MAX_LINK_LIFETIME_S)

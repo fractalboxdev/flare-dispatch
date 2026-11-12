@@ -23,11 +23,12 @@ import {
 import { Effect, Exit, Match, Schema } from "effect";
 import {
   acceptanceReasonKinds,
+  RECORDS_PHASE,
   type Deployment,
   type Phase,
   type SpendConfig,
 } from "./document.ts";
-import { CONFIDENTIALITY_MODES, PolicyRule } from "./bindings.ts";
+import { CONFIDENTIALITY_MODES, PolicyRule, RECORD_KINDS } from "./bindings.ts";
 import { eligibleKinds } from "./placement.ts";
 import {
   PolicyRulesRejected,
@@ -234,7 +235,7 @@ const registration = (p: Profile, deployment: Deployment, phase: Phase): Rejecti
   ];
 };
 
-/** No kind, launcher or constraint before the phase whose Layer serves it (FD-PROF-064). */
+/** No kind, launcher or constraint before the phase whose Layer serves it (FD-PROF-064, FD-GH-093). */
 const phased = (p: Profile, phase: Phase): Rejection[] => {
   const out: Rejection[] = [];
   for (const c of p.classes)
@@ -248,6 +249,13 @@ const phased = (p: Profile, phase: Phase): Rejection[] => {
           path: `classes[${c.name}].cloud_kinds`,
           reason: `${kind} enters at phase ${from}`,
         });
+  for (const kind of RECORD_KINDS)
+    if (phase < RECORDS_PHASE && p.intent_kinds[kind] !== undefined)
+      out.push({
+        item: "intent_kinds",
+        path: `intent_kinds.${kind}`,
+        reason: `${kind} enters at phase ${RECORDS_PHASE}`,
+      });
   if (phase < 4 && p.placement.launcher_kinds.length > 0)
     out.push({
       item: "placement",

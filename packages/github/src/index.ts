@@ -182,3 +182,15 @@ export {
   verifyJwt,
   verifyWithJwks,
 } from "./jwks.ts";
+export {
+  decodeJobRecord,
+  decodeVerdictRecord,
+  JOB_RECORD_SCHEMA,
+  JobRecordPayload,
+  jobRecordPayload,
+  VERDICT_RECORD_SCHEMA,
+  VerdictRecordPayload,
+  verdictRecordPayload,
+  type JobRecordRequest,
+  type VerdictRecordRequest,
+} from "./records.ts";

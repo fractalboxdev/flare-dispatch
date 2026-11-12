@@ -25,6 +25,11 @@ export const AlertSink = NonEmpty.check(
   ),
 );
 
+/** An HTTPS URL. */
+const HttpsUrl = NonEmpty.check(
+  Schema.makeFilter((s: string) => (/^https:\/\/[^\s/]+/.test(s) ? undefined : "an HTTPS URL")),
+);
+
 /**
  * One provider registry entry under `models.registry`, keyed by its entry id (MAMEKO-MDL-020). The route kind stays a
  * string here: the drift check names an unregistered one (FD-MDL-020), and a `workers-ai` entry's rate is checked
@@ -145,6 +150,11 @@ export const OverlayValues = Schema.Struct({
       advisoryMaxAgeHours: opt(Count),
     }),
   ),
+  /**
+   * The HTTPS URL that receives job and verdict records; set, the profile declares `job.record` and `verdict.record`
+   * from phase 2 (specs/github-output.md § Job and verdict records, FD-GH-093).
+   */
+  records: opt(Schema.Struct({ url: HttpsUrl })),
   provenance: opt(
     Schema.Struct({
       attestationMaxAgeDays: opt(Count),
@@ -249,8 +259,10 @@ export const policyRulesOf = (overlay: OverlayValues): PolicyRules => overlay.po
 /** The values a template's placeholders resolve against (`renderValuesOf`). */
 export type RenderValues = Omit<
   OverlayValues,
-  "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance" | "scan"
+  "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance" | "scan" | "records"
 > & {
+  /** `records.url`, empty where the overlay sets none, so the control plane declares no record kind. */
+  readonly records: { readonly url: string };
   /** `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive. */
   readonly scan: NonNullable<OverlayValues["scan"]> & {
     readonly advisoryEcosystems: readonly string[];
@@ -273,7 +285,8 @@ export type RenderValues = Omit<
  * its policy rules and dispatchers, an empty set where it holds none, its Actions OIDC audience, empty where it sets
  * none, its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
  * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
- * it sets none (FD-PROV-016), and its advisory ecosystems, none where it sets none (FD-OPS-100).
+ * it sets none (FD-PROV-016), its advisory ecosystems, none where it sets none (FD-OPS-100), and its `records.url`,
+ * empty where it sets none (FD-GH-093).
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
@@ -282,6 +295,7 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   dispatchers: overlay.dispatchers ?? [],
   intake: { webhookEvents: overlay.intake?.webhookEvents ?? null },
   dispatch: { oidcAudience: overlay.dispatch?.oidcAudience ?? "" },
+  records: { url: overlay.records?.url ?? "" },
   scan: { ...overlay.scan, advisoryEcosystems: overlay.scan?.advisoryEcosystems ?? [] },
   provenance: {
     ...overlay.provenance,

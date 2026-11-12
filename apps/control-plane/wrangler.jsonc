@@ -2,7 +2,7 @@
   // The v2 control plane. `DEPLOYMENT` is `production` here, and only the local CI command overrides it, so a
   // deploy of this file refuses host execution and the software key. Every account-specific value is a `{{path}}`
   // placeholder the renderer fills from the operator overlay; secrets (the App key, webhook secret, link key, cache
-  // token secrets, the presigner's R2 API token, the log key) are Worker secrets.
+  // token secrets, the presigner's R2 API token, the log key, the records signing key) are Worker secrets.
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "flare-dispatch-control-plane",
   "main": "src/worker.ts",
@@ -43,6 +43,10 @@
     // The OSV ecosystems whose `all.zip` archive the tick's `advisory-refresh` step stores in `cas/<sha256>` once per
     // UTC day, none where the overlay sets none (FD-OPS-100).
     "ADVISORY_ECOSYSTEMS": "{{scan.advisoryEcosystems}}",
+    // The HTTPS URL that receives job and verdict records, empty where the overlay sets none; set, the profile
+    // declares `job.record` and `verdict.record` from phase 2, signed under the Worker secret `RECORDS_SIGNING_KEY`
+    // (FD-GH-093, FD-GH-099).
+    "RECORDS_URL": "{{records.url}}",
     // The object-store presigner signs on `<account_id>.r2.cloudflarestorage.com`, never the custom domain, under
     // the `CACHE` bucket's name. Its R2 API token, scoped to the cache and artifact buckets with Object Read & Write
     // and used for nothing else, is the Worker secrets `R2_PRESIGN_ACCESS_KEY_ID` and `R2_PRESIGN_SECRET_ACCESS_KEY`

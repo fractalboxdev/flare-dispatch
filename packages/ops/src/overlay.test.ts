@@ -196,6 +196,20 @@ describe("renderer", () => {
     ).toEqual({ DISPATCHERS: ["ci@example.com"], AUD: "https://dispatch.example.com" });
   });
 
+  it("[FD-GH-093] holds records.url as an HTTPS URL and renders it into RECORDS_URL, empty where the overlay sets none", () => {
+    const url = "https://records.example.com/hook";
+    expect(Effect.runSync(decodeOverlay(overlay({ records: { url } }))).records).toEqual({ url });
+    expect(rejected(overlay({ records: { url: "http://records.example.com/hook" } }))).toEqual([
+      "records.url",
+    ]);
+    expect(rejected(overlay({ records: { url, secret: "x" } }))).toEqual(["records.secret"]);
+    const template = `{"vars": {"RECORDS_URL": "{{records.url}}"}}`;
+    const varsOf = (o: typeof placeholderOverlay) =>
+      parseJsonc(Effect.runSync(renderTemplate("cp", template, o)))["vars"];
+    expect(varsOf(placeholderOverlay)).toEqual({ RECORDS_URL: "" });
+    expect(varsOf({ ...placeholderOverlay, records: { url } })).toEqual({ RECORDS_URL: url });
+  });
+
   it("[FD-OPS-004] a placeholder whose value the overlay lacks fails the render, naming it", () => {
     const err = Effect.runSync(
       Effect.flip(renderTemplate("cp", `{"x": "{{kv.SESSIONS}}"}`, placeholderOverlay)),
