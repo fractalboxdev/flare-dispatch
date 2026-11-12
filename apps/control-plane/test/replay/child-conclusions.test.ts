@@ -59,6 +59,19 @@ const CHILDREN: readonly Child[] = [
 
 const PARENT_OUTCOME: ExecutionOutcome = { _tag: "Failure", reason: "jobs: j2", epoch: 1 };
 
+/** The rows the drain after the parent's end sends ahead of child-3's conclusion, one GitHub write each. */
+const DRAINED_AHEAD = [
+  "child-2:outcome",
+  "parent:outcome",
+  "child-3:outcome",
+  "child-4:outcome",
+  "child-5:outcome",
+  "child-2:cp:check:conclude",
+];
+
+/** The parent-closed conclusion whose answer GitHub loses. */
+const LOST_ROW = "child-3:cp:check:conclude";
+
 /** The store and fake GitHub the first run writes, with the clock both runs advance. */
 interface Journal {
   readonly db: TestD1;
@@ -66,8 +79,6 @@ interface Journal {
   clock: number;
   /** The children each tick pass inserted a `cp:check:conclude` row for, in order. */
   readonly passes: (readonly string[])[];
-  /** Whether the first run's drain took the lost answer. */
-  lostConsumed: boolean;
 }
 
 /** Every outbox and execution row, keyed by table and id, with its full content. */
@@ -87,7 +98,7 @@ const admitted = async (): Promise<Journal> => {
   await Effect.runPromise(migrateChildConclusions(db));
   const gh = fakeGithub();
   // The terminal writes stamp rows with the store's clock, so every drain and pass runs after them.
-  const journal: Journal = { db, gh, clock: Date.now() + 1_000, passes: [], lostConsumed: false };
+  const journal: Journal = { db, gh, clock: Date.now() + 1_000, passes: [] };
   await seed(db, PARENT, "matrix", null);
   for (const [i, child] of CHILDREN.entries()) {
     await seed(db, child.id, `j${i + 1}`, PARENT);
@@ -124,12 +135,12 @@ const parentEnds = async (journal: Journal | null) => {
   j.clock += 1_000;
   j.passes.push(await Effect.runPromise(insertChildConclusions(j.db, kind, j.clock)));
   j.passes.push(await Effect.runPromise(insertChildConclusions(j.db, kind, j.clock + MINUTE_MS)));
-  // GitHub applies the first conclusion the drain sends and its answer is lost; the retry finds it applied.
+  // GitHub applies child-3's parent-closed conclusion and its answer is lost; the retry finds it applied.
   j.gh.lostAnswers.push(
+    ...DRAINED_AHEAD.map(() => null),
     new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false }),
   );
   await drainAll(j);
-  if (journal === null) j.lostConsumed = j.gh.lostAnswers.length === 0;
   j.gh.lostAnswers.length = 0;
 
   const after = snapshot(j.db);
@@ -148,23 +159,29 @@ const parentEnds = async (journal: Journal | null) => {
 describe("an ended matrix parent's child conclusions under a replayed tick and drain", () => {
   it("[FD-GATE-047] each open child check gets one conclusion, and the second run makes no extra effect", async () => {
     let first: Journal | null = null;
+    let second: readonly ReplayEffect[] | null = null;
     const extras = await runReplays([
       {
         name: "child-conclusions",
         ids: ["FD-GATE-047"],
         run: async (journal) => {
           const out = await parentEnds(journal as Journal | null);
-          first ??= out.journal;
+          if (journal === null) first = out.journal;
+          else second = out.effects;
           return out;
         },
       },
     ]);
     const j = first! as Journal;
     expect(extras).toEqual([]);
+    expect(second).toEqual([]);
     // The first run's first pass inserts a row for each open child check: child-1 concluded before the parent ended
     // and child-5 owns no check run. Its second pass and both of the second run's passes insert none.
     expect(j.passes).toEqual([["child-2", "child-3", "child-4"], [], [], []]);
-    expect(j.lostConsumed).toBe(true);
+    // Only the conclusion whose answer was lost is retried, and its retry reaches applied.
+    expect(
+      j.db.sqlite.prepare("select id, attempts, state from outbox where attempts > 1").all(),
+    ).toEqual([{ id: LOST_ROW, attempts: 2, state: "applied" }]);
     const rows = j.db.sqlite
       .prepare(
         "select execution_id, kind, payload_json, state from outbox where intent_key = ? order by execution_id",
