@@ -211,15 +211,15 @@ describe("security-gate scan preconditions", () => {
         ...(maxAgeHours === undefined ? {} : { maxAgeHours }),
       });
 
-    // The default accepts a snapshot 24 h old and refuses one a minute older.
-    expect((await scan(24)).scanned).toBe(true);
-    const stale = await scan(24 + 1 / 60);
+    // The default accepts a snapshot 48 h old and refuses one a minute older.
+    expect((await scan(48)).scanned).toBe(true);
+    const stale = await scan(48 + 1 / 60);
     expect(stale.outcome).toEqual(failure("config: advisory snapshot stale PyPI"));
     expect(stale.scanned).toBe(false);
 
-    // The setting, not a fixed 24 h, bounds the age.
-    expect((await scan(30, 48)).scanned).toBe(true);
-    const past = await scan(49, 48);
+    // The setting, not a fixed 48 h, bounds the age.
+    expect((await scan(20, 24)).scanned).toBe(true);
+    const past = await scan(25, 24);
     expect(past.outcome).toEqual(failure("config: advisory snapshot stale PyPI"));
     expect(past.scanned).toBe(false);
     expect((await scan(2, 1)).outcome).toEqual(failure("config: advisory snapshot stale PyPI"));

@@ -40,7 +40,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `dispatch.scoped` | Entries `{ identity, runs, repositories, classCeiling }` for automated callers of read-only scan runs ([interfaces.md](interfaces.md) FD-IFC-089 to FD-IFC-093) |
 | `containment` | Access identities allowed the tightening operator routes ([interfaces.md](interfaces.md) FD-IFC-095) |
 | `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256 as 64 lowercase hex digits, the path of its envelope relative to the repository root `fd deploy` runs in, and each public signing key, an ES256 JWK `{ kty, crv, x, y, kid }` under `publicKey`, with its UTC RFC 3339 `notBefore` (inclusive) and `notAfter` (exclusive) deploy-verification window ([runs/gate.md](runs/gate.md) § Security gate) |
-| `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores, none by default; the snapshot age a scan accepts and the `advisory-snapshot-stale` alarm allows, default 24 |
+| `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores, none by default; the snapshot age, counted from the archive's `Last-Modified` time, that a scan accepts and the `advisory-snapshot-stale` alarm allows, default 48: a daily refresh records an archive OSV published before it, so a snapshot reaches 24 h plus OSV's publish lag before the next refresh replaces it |
 | `records.url` | The HTTPS URL that receives job and verdict records ([github-output.md](github-output.md) § Job and verdict records) |
 | `github.appId`, `github.fixtureRepo` | GitHub App id; the repository the synthetic webhook canary pushes to |
 | `intake.webhookEvents` | The webhook events intake admits ([intake.md](intake.md) FD-INT-027); the control plane's `WEBHOOK_EVENTS` var carries the list, `null` where the overlay sets none, so the Worker tells an absent list from an empty one |
@@ -395,4 +395,5 @@ The scan-bundle verifier samples the deploy host's current time once when verifi
 
 ## Open items
 
+- TODO(maintainer): admit and charge `advisory-refresh` as an ops run ([MAMEKO-SPD-063](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/spend.md)); until then the control plane's minute tick runs it as a step, uncharged.
 - TODO(operator): choose an alert sink that pages when no `ok` heartbeat arrives for 30 min; without one, a control plane that stops serving raises no alarm.

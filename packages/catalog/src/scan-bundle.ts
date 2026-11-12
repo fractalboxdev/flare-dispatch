@@ -524,8 +524,12 @@ export const lockfileEcosystem = (path: string): string | undefined => {
 export const lockfileEcosystems = (paths: readonly string[]): readonly string[] =>
   [...new Set(paths.flatMap((p) => lockfileEcosystem(p) ?? []))].sort();
 
-/** `scan.advisoryMaxAgeHours` where the overlay sets none. */
-export const ADVISORY_MAX_AGE_DEFAULT_HOURS = 24;
+/**
+ * `scan.advisoryMaxAgeHours` where the overlay sets none. Age counts from the archive's `Last-Modified` time, which
+ * precedes the once-per-UTC-day refresh that records it by OSV's publish lag, so a snapshot reaches 24 h plus that lag
+ * before the next refresh replaces it; 48 h holds every snapshot of an unbroken daily schedule within the setting.
+ */
+export const ADVISORY_MAX_AGE_DEFAULT_HOURS = 48;
 
 /** Whether a snapshot's `Last-Modified` time is older than `maxAgeHours` at `now` (FD-GATE-107). */
 export const snapshotStale = (
