@@ -110,3 +110,17 @@ export const categoryOf = (reason: string): ReasonCategory | undefined => {
     return MAMEKO_REASON_KINDS[kind as keyof typeof MAMEKO_REASON_KINDS];
   return undefined;
 };
+
+/**
+ * The `config` reasons of a security-gate scan whose scan bundle or image is unusable, each recorded before any
+ * scanner runs (specs/runs/gate.md FD-GATE-101 to FD-GATE-105, FD-GATE-109).
+ */
+export const ScanConfigReason = {
+  notPinned: "config: scan bundle not pinned",
+  missing: "config: scan bundle missing",
+  digest: "config: scan bundle digest",
+  /** A pinned envelope whose payload fails the scan bundle schema, naming the first failing path. */
+  schema: (path: string): Reason => `config: scan bundle ${path === "" ? "payload" : path}`,
+  scannerVersion: (scanner: string): Reason => `config: scanner version ${scanner}`,
+  baselineCheck: (controlId: string): Reason => `config: baseline check ${controlId}`,
+} as const satisfies Record<string, Reason | ((s: string) => Reason)>;

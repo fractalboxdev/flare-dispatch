@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@fractalboxdev/flare-dispatch-agentic": "workspace:*",
+    "@fractalboxdev/flare-dispatch-cache": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
     "@fractalboxdev/mameko-run": "workspace:*",
     "@fractalboxdev/mameko-runner": "workspace:*",

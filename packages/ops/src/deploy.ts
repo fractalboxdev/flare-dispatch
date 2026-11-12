@@ -3,7 +3,7 @@
 // (specs/operability.md § Deploy pipeline). The stages run in that order and stop at the first that fails
 // (FD-OPS-009); the Cloudflare and GitHub reads and writes go through the `DeployTarget` port, so `fd doctor` runs the
 // same checks with no write (FD-OPS-024).
-import { Context, Effect, Schema } from "effect";
+import { Clock, Context, Effect, Schema } from "effect";
 import {
   accessChanges,
   type AccessApplication,
@@ -45,6 +45,7 @@ import {
   type OverlayValues,
 } from "./overlay.ts";
 import { parseJsonc, renderTemplate, type RenderFailed, type WorkerConfig } from "./render.ts";
+import { scanBundleFindings } from "./scan-bundle.ts";
 
 /** One Worker the deploy carries: its name, committed template and the overlay hostname key it serves on. */
 export interface WorkerTemplate {
@@ -130,6 +131,11 @@ export class DeployTarget extends Context.Service<
       runnerRepo: string,
       workflow: string,
     ) => Effect.Effect<string | null, TargetFailed>;
+    /**
+     * The bytes of the scan bundle envelope at `path`, relative to the repository root, or `null` where no such file
+     * exists (FD-OPS-094). A local read: it changes no Cloudflare state.
+     */
+    readonly readScanBundle: (path: string) => Effect.Effect<Uint8Array | null, TargetFailed>;
     /** Applies each Worker's pending D1 migrations, in order; answers the migrations applied. */
     readonly applyD1Migrations: (
       rendered: readonly RenderedWorker[],
@@ -314,7 +320,8 @@ const presignFindings = (overlay: OverlayValues, rendered: RenderedWorker) =>
 
 /**
  * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
- * policy rules (FD-PROF-025), the templates' invariants, the presign token of the Worker `presigner` names
+ * policy rules (FD-PROF-025), the scan bundle envelope where the overlay pins one (FD-OPS-094 to FD-OPS-097), the
+ * templates' invariants, the presign token of the Worker `presigner` names
  * (FD-CACHE-091), the
  * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the
  * last deploy, the GitHub App's registration, the default branch's ruleset, the AWS account's Budgets actions where the
@@ -341,6 +348,14 @@ export const driftFindings = (
       ...modelRegistryCheck(modelRegistryOf(overlay)),
       ...policyRulesCheck(policyRulesOf(overlay)),
     ];
+    const scan = overlay.scan;
+    if (scan?.bundleDigest !== undefined) {
+      // One verification time, sampled as verification starts, for every key window (FD-OPS-095).
+      const at = yield* Clock.currentTimeMillis;
+      const bytes =
+        scan.bundleFile === undefined ? null : yield* target.readScanBundle(scan.bundleFile);
+      findings.push(...(yield* scanBundleFindings(scan, bytes, at)));
+    }
     for (const w of workers) findings.push(...templateInvariants(w.worker, parseJsonc(w.template)));
     for (const r of rendered) {
       const deployed = yield* target.deployedSettings(r);

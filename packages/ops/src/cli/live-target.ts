@@ -3,11 +3,11 @@
 // deploys; the GitHub API with the App JWT for the App's registration and the default branch's ruleset; the Workers'
 // own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; the account API token
 // the object-store presigner signs with, by its policies (FD-CACHE-091); AWS STS, AWS Budgets, IAM
-// and AWS Organizations, signed with SigV4, for the AWS account's Budgets actions and the policies they apply; and the
-// overlay's alert sink for `deploy-probe-failed`.
+// and AWS Organizations, signed with SigV4, for the AWS account's Budgets actions and the policies they apply; the
+// overlay's alert sink for `deploy-probe-failed`; the local file system for the scan bundle envelope the overlay pins.
 import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
-import { rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { Effect, Layer } from "effect";
 import type { DeployedAccessApplication } from "../access-application.ts";
 import { alarmMessage, RUNBOOK } from "../alarms.ts";
@@ -68,6 +68,8 @@ export interface LiveTargetConfig {
   /** Writes a rendered configuration beside its template, for `wrangler -c`; removed after use. */
   readonly writeFile?: (path: string, text: string) => void;
   readonly removeFile?: (path: string) => void;
+  /** Reads a local file's bytes, or answers `null` where none exists; the scan bundle envelope (FD-OPS-094). */
+  readonly readFile?: (path: string) => Uint8Array | null;
 }
 
 /**
@@ -122,6 +124,16 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
   const now = c.now ?? Date.now;
   const write = c.writeFile ?? ((p: string, t: string) => writeFileSync(p, t));
   const remove = c.removeFile ?? ((p: string) => rmSync(p, { force: true }));
+  const readLocal =
+    c.readFile ??
+    ((p: string): Uint8Array | null => {
+      try {
+        return new Uint8Array(readFileSync(p));
+      } catch (e) {
+        if ((e as { code?: unknown }).code === "ENOENT") return null;
+        throw e;
+      }
+    });
   const bucket = c.overlay.r2[RECORD_BUCKET];
 
   /** Runs `wrangler` with the rendered configuration written beside its template. */
@@ -680,6 +692,11 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
     });
 
   return Layer.succeed(DeployTarget, {
+    readScanBundle: (path) =>
+      Effect.try({
+        try: () => readLocal(resolve(c.root, path)),
+        catch: (e) => new TargetFailed({ operation: `read ${path}`, message: String(e) }),
+      }),
     deployedSettings,
     apiToken,
     runnerWorkflow,

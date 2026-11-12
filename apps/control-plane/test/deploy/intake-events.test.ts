@@ -31,6 +31,7 @@ const { dispatcher: _dispatcher, ...CONTROL_PLANE } = V2_WORKERS.find(
 const deployedVars = async (overlay: OverlayValues): Promise<Record<string, unknown>> => {
   const deployed = new Map<string, RenderedWorker>();
   const target = Layer.succeed(DeployTarget, {
+    readScanBundle: () => Effect.succeed(null),
     deployedSettings: () => Effect.succeed(null),
     lastRecord: () => Effect.succeed(null),
     appRegistration: Effect.succeed(APP_PERMISSIONS),

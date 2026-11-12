@@ -38,3 +38,10 @@ export {
   runDeploySmoke,
   SmokeHttp,
 } from "./deploy-smoke.ts";
+export * from "./scan-bundle.ts";
+export {
+  ScanBundleStore,
+  ScanBundleUnreadable,
+  ScanImage,
+  ScannerVersionUnknown,
+} from "./ports.ts";
