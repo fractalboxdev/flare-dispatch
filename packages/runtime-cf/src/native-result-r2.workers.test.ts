@@ -9,7 +9,7 @@ import { makeNativeFilesR2 } from "./native-files-r2";
 const now = 1_791_417_602;
 const controller = "native-controller[bot]";
 const request: NativeRequest = {
-  repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
+  repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
   nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc", mode: "gate", profile: "",
   command_sha256: "e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da",
 };

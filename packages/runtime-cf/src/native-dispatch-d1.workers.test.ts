@@ -5,10 +5,11 @@ import { NativeReceiptRefused, type NativeRequest } from "@fractalboxdev/flare-d
 import { makeNativeDispatchD1 as makeDispatch } from "./native-dispatch-d1";
 import { makeNativeGithubProvider } from "./native-github-provider";
 import { readNativeControllerIdentity } from "@fractalboxdev/flare-dispatch-github-app";
+import { nativeExecutorResponse } from "./testing/native-executor";
 
 const controller = { appId: 123, actorLogin: "native-controller[bot]" };
 const request: NativeRequest = {
-  repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
+  repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
   nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc", mode: "gate", profile: "",
   command_sha256: "e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da",
 };
@@ -19,11 +20,13 @@ const run = (id = 456) => ({
   createdAt: new Date().toISOString(),
 });
 const runEffect = Effect.runPromise;
-type TestProvider = Omit<Parameters<typeof makeDispatch>[2], "readRun"> & Partial<Pick<Parameters<typeof makeDispatch>[2], "readRun">>;
+type TestProvider = Omit<Parameters<typeof makeDispatch>[2], "readRun" | "prepareDispatch"> & Partial<Pick<Parameters<typeof makeDispatch>[2], "readRun" | "prepareDispatch">>
+  & { dispatch: (request: NativeRequest) => Effect.Effect<void, NativeReceiptRefused> };
 // Existing unbound fixtures return the same authentic exact run unless a test overrides it.
 const makeNativeDispatchD1 = (
   db: Parameters<typeof makeDispatch>[0], owner: Parameters<typeof makeDispatch>[1], provider: TestProvider,
-) => makeDispatch(db, owner, { readRun: () => Effect.succeed(run()), ...provider });
+) => makeDispatch(db, owner, { readRun: () => Effect.succeed(run()),
+  prepareDispatch: value => Effect.succeed(provider.dispatch(value)), ...provider });
 const loseWriteResponse = (matching: string): Pick<D1Database, "prepare"> => {
   const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, {
     get(target, property) {
@@ -40,6 +43,30 @@ const loseWriteResponse = (matching: string): Pick<D1Database, "prepare"> => {
 };
 
 describe("durable native dispatch in workerd", () => {
+  it("persists the dispatch tag before read-only preparation and refuses prerequisites without claiming a POST", async () => {
+    let posts = 0, preparations = 0;
+    const provider = {
+      dispatch: () => Effect.sync(() => { posts++; }),
+      prepareDispatch: () => Effect.gen(function* () {
+        preparations++;
+        const row = yield* Effect.promise(() => env.RUNS_METADATA.prepare(
+          "SELECT state,request_json FROM native_dispatches WHERE repo=? AND nonce=?",
+        ).bind(request.repo,request.nonce).first<{state:string;request_json:string}>());
+        expect(row?.state).toBe("reserved");
+        expect(JSON.parse(row!.request_json).dispatch_ref).toBe(request.dispatch_ref);
+        return yield* Effect.fail(new NativeReceiptRefused({reason:"fixture immutable release unavailable"}));
+      }),
+      listRuns: () => Effect.succeed([]),
+    };
+    const jobs = makeNativeDispatchD1(env.RUNS_METADATA,controller,provider);
+    await expect(runEffect(jobs.start(request))).rejects.toThrow("fixture immutable release unavailable");
+    expect(preparations).toBe(1); expect(posts).toBe(0);
+    await expect(runEffect(jobs.start({...request,dispatch_ref:"refs/tags/different"}))).rejects.toThrow();
+    expect(preparations).toBe(1); expect(posts).toBe(0);
+    expect(await env.RUNS_METADATA.prepare("SELECT state FROM native_dispatches WHERE repo=? AND nonce=?")
+      .bind(request.repo,request.nonce).first("state")).toBe("reserved");
+  });
+
   it("replays a bound identity without redispatch or rescanning growing workflow history", async () => {
     let posts = 0, listings = 0;
     const provider = {
@@ -67,6 +94,8 @@ describe("durable native dispatch in workerd", () => {
     let created: string | null = null;
     const fetchImpl: typeof fetch = async (raw, init) => {
       const url = new URL(String(raw));
+      const executor = nativeExecutorResponse(url, request);
+      if (executor !== undefined) return executor;
       if (init?.method === "POST") { posts++; throw new Error("fixture accepted POST lost its response"); }
       created = url.searchParams.get("created");
       const candidate = { id:456, run_attempt:1, event:"workflow_dispatch", head_sha:request.executor_ref,
@@ -168,8 +197,10 @@ describe("durable native dispatch in workerd", () => {
       let posts = 0, reads = 0;
       const fetchImpl: typeof fetch = async (raw, init) => {
         if (init?.method === "POST") { posts++; return new Response(null, { status:204 }); }
-        reads++;
         const url = new URL(String(raw));
+        const executor = nativeExecutorResponse(url, request);
+        if (executor !== undefined) return executor;
+        reads++;
         expect(url.searchParams.has("created")).toBe(true);
         const page = Number(url.searchParams.get("page") ?? 1);
         const candidate = { id:456, run_attempt:1, event:"workflow_dispatch", head_sha:request.executor_ref,
@@ -328,10 +359,12 @@ describe("durable native dispatch in workerd", () => {
       if (init?.method === "POST") {
         posts++;
         expect(JSON.parse(String(init.body))).toEqual({
-          ref: request.executor_ref, inputs: { request: JSON.stringify(request) },
+          ref: request.dispatch_ref, inputs: { request: JSON.stringify(request) },
         });
         throw new Error("fixture POST response lost after provider accepts request");
       }
+      const executor = nativeExecutorResponse(String(url), request);
+      if (executor !== undefined) return executor;
       reads++;
       return Response.json({ total_count: 1, workflow_runs: [{
         id: 456, run_attempt: 1, event: "workflow_dispatch", head_sha: request.executor_ref,

@@ -5,10 +5,10 @@ import * as native from "./native";
 const now = Date.parse("2026-10-08T00:00:00Z") / 1000;
 const options = { appId:"42", appJwt:"fixture-app-jwt", repo:"owner/context" };
 const installation = () => ({ id:77, app_id:42, account:{login:"owner"},
-  suspended_at:null, permissions:{actions:"write", metadata:"read", checks:"write"} });
+  suspended_at:null, permissions:{actions:"write", contents:"read", metadata:"read", checks:"write"} });
 const grant = () => ({ token:"fixture.ephemeral.token", expires_at:"2026-10-08T01:00:00Z",
   repository_selection:"selected", repositories:[{name:"context",full_name:"owner/context"}],
-  permissions:{actions:"write",metadata:"read"} });
+  permissions:{actions:"write",contents:"read",metadata:"read"} });
 const read = (fetchImpl:typeof fetch, at:number = now, override = {}) =>
   Effect.runPromise((native as unknown as {readNativeGithubContext:(o:unknown,n:number)=>Effect.Effect<{
     token:Redacted.Redacted<string>; controller:{appId:number;actorLogin:string};installationId:number;
@@ -21,7 +21,7 @@ const fixture = (install:unknown = installation(), token:unknown = grant()) => {
     if (String(url).endsWith("/repos/owner/context/installation")) return Response.json(install);
     expect(String(url)).toBe("https://api.github.com/app/installations/77/access_tokens");
     expect(init?.method).toBe("POST");
-    expect(JSON.parse(String(init?.body))).toEqual({repositories:["context"],permissions:{actions:"write",metadata:"read"}});
+    expect(JSON.parse(String(init?.body))).toEqual({repositories:["context"],permissions:{actions:"write",contents:"read",metadata:"read"}});
     return Response.json(token,{status:201});
   });
   return fetchImpl;
@@ -80,17 +80,21 @@ describe("ephemeral native GitHub context", () => {
     {...grant(),repository_selection:"all"}, {...grant(),repositories:[]},
     {...grant(),repositories:[...grant().repositories,{name:"other",full_name:"owner/other"}]},
     {...grant(),repositories:[{name:"context",full_name:"foreign/context"}]},
-    {...grant(),permissions:{actions:"read"}}, {...grant(),permissions:{actions:"write",contents:"read"}},
+    {...grant(),permissions:{actions:"read"}}, {...grant(),permissions:{actions:"write",contents:"write"}}, {...grant(),permissions:{actions:"write",metadata:"read"}},
     {...grant(),expires_at:"2026-10-08T00:00:00Z"}, {...grant(),expires_at:"2026-02-30T00:00:00Z"},
     {...grant(),token:"unsafe\r\nheader"}, {...grant(),token:""},
   ])("refuses broad or malformed minted grants without exposing their token", async (value) => {
     await expect(read(fixture(installation(),value))).rejects.toThrow();
   });
   it("accepts omission of automatic metadata permission from the response", async () => {
-    await expect(read(fixture(installation(),{...grant(),permissions:{actions:"write"}}))).resolves.toBeDefined();
+    await expect(read(fixture(installation(),{...grant(),permissions:{actions:"write",contents:"read"}}))).resolves.toBeDefined();
   });
   it("refuses fractional expiry before returning an ephemeral context", async () => {
     await expect(read(fixture(installation(),{...grant(),expires_at:"2026-10-08T01:00:00.123Z"}))).rejects.toThrow();
+  });
+  it("narrows existing installation contents write authority to the exact read-only grant", async () => {
+    await expect(read(fixture({ ...installation(), permissions: { actions: "write", contents: "write" } }))).resolves.toBeDefined();
+    await expect(read(fixture(installation(), { ...grant(), permissions: { actions: "write", contents: "write" } }))).rejects.toThrow();
   });
   it("rejects oversized and non-UTF8 POST responses through the shared receiver", async () => {
     for (const bytes of [new Uint8Array(65537),new Uint8Array([255])]) {

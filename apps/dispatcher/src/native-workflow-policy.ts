@@ -5,6 +5,7 @@ import { NativeControllerPolicy, NativeReceiptRefused, NativeRequest, admitNativ
 export const NativeWorkflowPolicy = Schema.Struct({
   repo: NativeRequest.fields.repo,
   executor_ref: NativeRequest.fields.executor_ref,
+  dispatch_ref: NativeRequest.fields.dispatch_ref,
   timeoutSec: NativeControllerPolicy.fields.timeoutSec,
   pollIntervalSec: Schema.Number.pipe(Schema.filter((n) => Number.isSafeInteger(n) && n > 0)),
 });
@@ -19,7 +20,7 @@ export const readNativeWorkflowPolicy = (raw: unknown) => Schema.decodeUnknown(S
 
 export const admitNativeWorkflowRequest = (raw: unknown, policy: NativeWorkflowPolicy) => Effect.gen(function* () {
   const request = yield* admitNativeRequest(raw);
-  if (request.repo !== policy.repo || request.executor_ref !== policy.executor_ref)
+  if (request.repo !== policy.repo || request.executor_ref !== policy.executor_ref || request.dispatch_ref !== policy.dispatch_ref)
     return yield* Effect.fail(new NativeReceiptRefused({ reason: "native Workflow configured scope conflicts" }));
   return request;
 });

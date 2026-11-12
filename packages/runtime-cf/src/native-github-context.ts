@@ -7,7 +7,7 @@ const PositiveId = NativeApiEvidence.fields.runId;
 const Permission = Schema.Literal("read","write");
 const Installation = Schema.Struct({ id:PositiveId, app_id:PositiveId,
   account:Schema.Struct({login:Schema.String}), suspended_at:Schema.Null,
-  permissions:Schema.Struct({actions:Schema.Literal("write")}) });
+  permissions:Schema.Struct({actions:Schema.Literal("write"),contents:Permission}) });
 const Grant = Schema.Struct({ token:Schema.String.pipe(Schema.pattern(/^[\x21-\x7e]+$/)),
   expires_at:NativeRunCreatedAt, repository_selection:Schema.Literal("selected"),
   repositories:Schema.Array(Schema.Struct({name:Schema.String,full_name:NativeRequest.fields.repo})),
@@ -33,13 +33,14 @@ export const readNativeGithubContext = (options:Options, now:number) => Effect.g
     return yield* Effect.fail(refusal());
   const grantRaw=yield* Effect.tryPromise({try:()=>readNativeJson(client,
     `/app/installations/${installation.id}/access_tokens`,64*1024,{method:"POST",status:201,
-      body:JSON.stringify({repositories:[name],permissions:{actions:"write",metadata:"read"}})}),catch:refusal});
+      body:JSON.stringify({repositories:[name],permissions:{actions:"write",contents:"read",metadata:"read"}})}),catch:refusal});
   const grant=yield* Schema.decodeUnknown(Grant)(grantRaw.body).pipe(Effect.mapError(refusal));
   const expiresAt=Date.parse(grant.expires_at)/1000;
   if (grant.repositories.length !== 1 || grant.repositories[0]?.full_name !== repo
     || grant.repositories[0]?.name !== name || !Number.isSafeInteger(expiresAt) || expiresAt <= now
-    || grant.permissions.actions !== "write"
-    || Object.entries(grant.permissions).some(([key,value])=>key !== "actions" && !(key === "metadata" && value === "read")))
+    || grant.permissions.actions !== "write" || grant.permissions.contents !== "read"
+    || Object.entries(grant.permissions).some(([key,value])=>key !== "actions"
+      && !((key === "contents" || key === "metadata") && value === "read")))
     return yield* Effect.fail(refusal());
   return {controller,installationId:installation.id,repo,expiresAt,token:Redacted.make(grant.token)};
 });

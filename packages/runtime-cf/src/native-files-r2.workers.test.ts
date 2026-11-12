@@ -10,13 +10,14 @@ const log = new TextEncoder().encode("actual command output\n");
 const controller = "native-controller[bot]";
 const fixture = async (files = [{ path: "command.log", bytes: log }]) => {
   const candidate: NativeRequest = {
-    repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
+    repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
     nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc", mode: "gate", profile: "",
     command_sha256: "0".repeat(64),
   };
   const request = { ...candidate, command_sha256: await Effect.runPromise(nativeCommandDigest(candidate)) };
+  const { dispatch_ref: _dispatchRef, ...receiptRequest } = request;
   return { request, controllerLogin: controller, receipt: {
-    version: 1, ...request, mode: undefined, profile: undefined,
+    version: 1, ...receiptRequest, mode: undefined, profile: undefined,
     command: nativeCommand(request), runner_os: "Windows", runner_arch: "ARM64",
     run_id: "123", run_attempt: "1", job: "aarch64", exit_code: 0, failure: null,
     started_at: "2026-10-08T00:00:00Z", completed_at: "2026-10-08T00:00:01Z",

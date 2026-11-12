@@ -1,10 +1,11 @@
+import { nativeExecutorResponse } from "./testing/native-executor";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { NativeRequest } from "@fractalboxdev/flare-dispatch-core";
 import { makeNativeGithubProvider } from "./native-github-provider";
 
 const request: NativeRequest = {
-  repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
+  repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
   nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc", mode: "gate", profile: "",
   command_sha256: "e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da",
 };
@@ -206,13 +207,13 @@ describe("authenticated native GitHub provider", () => {
   });
 
   it("POSTs one admitted literal request at its fixed executor revision", async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => nativeExecutorResponse(String(url), request) ?? new Response(null, { status: 204 }));
     const provider = makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl });
     await runEffect(provider.dispatch(request));
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0]! as unknown as [string, RequestInit];
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+    const [url, init] = fetchImpl.mock.calls[5]! as unknown as [string, RequestInit];
     expect(url).toBe("https://api.github.com/repos/owner/context/actions/workflows/native-windows.yml/dispatches");
-    expect(JSON.parse(String(init.body))).toEqual({ ref: request.executor_ref, inputs: { request: JSON.stringify(request) } });
+    expect(JSON.parse(String(init.body))).toEqual({ ref: request.dispatch_ref, inputs: { request: JSON.stringify(request) } });
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer fixture-installation");
     expect(init.redirect).toBe("manual");
   });
@@ -243,7 +244,7 @@ describe("authenticated native GitHub provider", () => {
   });
 
   it("refuses cross-repository, invalid command and missing credentials before HTTP", async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => nativeExecutorResponse(String(url), request) ?? new Response(null, { status: 204 }));
     const provider = makeNativeGithubProvider({ repo: request.repo, token: "fixture-installation", fetchImpl });
     for (const invalid of [
       { ...request, repo: "other/context" }, { ...request, command_sha256: "4".repeat(64) },
@@ -271,11 +272,15 @@ describe("authenticated native GitHub provider", () => {
   });
 
   it("sanitizes ambiguous network errors without retrying the POST", async () => {
-    const fetchImpl = vi.fn(async () => { throw new Error("fixture secret network diagnostic"); });
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const prerequisite = nativeExecutorResponse(String(url), request);
+      if (prerequisite !== undefined) return prerequisite;
+      throw new Error("fixture secret network diagnostic");
+    });
     const outcome = await runEffect(makeNativeGithubProvider({ repo: request.repo,
       token: "fixture-installation", fetchImpl }).dispatch(request).pipe(Effect.either));
     expect(outcome).toHaveProperty("left.reason", "native GitHub dispatch outcome uncertain");
     expect(JSON.stringify(outcome)).not.toContain("fixture secret network diagnostic");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
   });
 });

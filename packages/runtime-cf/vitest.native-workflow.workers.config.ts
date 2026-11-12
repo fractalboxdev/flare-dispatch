@@ -1,3 +1,4 @@
+import { nativeExecutorResponse } from "./src/testing/native-executor";
 import { createHash, generateKeyPairSync, verify } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-workers/config";
@@ -10,11 +11,11 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 20
 let calls: { method: string; path: string }[] = [];
 let redirectApp = false;
 let successful = false, lostDispatch = false, exactReads = 0;
-const workload = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
+const workload = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
   nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc" as const, mode: "gate" as const, profile: "" as const,
   command_sha256: "e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da" };
 const log = Buffer.from("verified native Workflow command\n");
-const { mode: _mode, profile: _profile, ...receiptRequest } = workload;
+const { mode: _mode, profile: _profile, dispatch_ref: _dispatchRef, ...receiptRequest } = workload;
 const bytes = nativeTestArchive([{ path: "command.log", bytes: log }, { path: "receipt.json", bytes: Buffer.from(JSON.stringify({
   version: 1, ...receiptRequest, command: nativeCommand(workload), runner_os: "Windows", runner_arch: "ARM64",
   run_id: "123", run_attempt: "1", job: "aarch64", exit_code: 0, failure: null,
@@ -44,10 +45,12 @@ const nativeApi = async (request: Request) => {
     ? new Response(null, { status: 302, headers: { location: "https://redirect.example/secret" } })
     : Response.json({ id: 42, slug: "native-controller" });
   if (url.pathname === "/repos/owner/context/installation") return Response.json({ id: 77, app_id: 42,
-    account: { login: "owner" }, suspended_at: null, permissions: { actions: "write" } });
+    account: { login: "owner" }, suspended_at: null, permissions: { actions: "write", contents: "read" } });
   if (url.pathname === "/app/installations/77/access_tokens") return Response.json({ token: "fixture-native-installation-token",
     expires_at: new Date(Date.now() + 3600_000).toISOString().replace(/\.\d{3}Z$/, "Z"), repository_selection: "selected",
-    repositories: [{ name: "context", full_name: "owner/context" }], permissions: { actions: "write", metadata: "read" } }, { status: 201 });
+    repositories: [{ name: "context", full_name: "owner/context" }], permissions: { actions: "write", contents: "read", metadata: "read" } }, { status: 201 });
+  const executor = nativeExecutorResponse(url, workload);
+  if (executor !== undefined) return executor;
   if (url.pathname.endsWith("/dispatches")) return new Response(null, { status: lostDispatch ? 503 : 204 });
   const run = { id: 123, run_attempt: 1, event: "workflow_dispatch", head_sha: "3".repeat(40),
     path: ".github/workflows/native-windows.yml", display_title: "native-native-0123456789abcdef", repository: { full_name: "owner/context" },
@@ -75,7 +78,7 @@ export default defineWorkersConfig({ test: {
       outboundService: nativeApi,
       serviceBindings: { NATIVE_FIXTURE_CONTROL: fixtureControl },
       bindings: { TEST_MIGRATIONS: migrations, GITHUB_APP_ID: "42", GITHUB_APP_PRIVATE_KEY: privateKey,
-        NATIVE_EXECUTION_POLICY: JSON.stringify({ repo: "owner/context", executor_ref: "3".repeat(40), timeoutSec: 60, pollIntervalSec: 30 }) },
+        NATIVE_EXECUTION_POLICY: JSON.stringify({ repo: "owner/context", executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1", timeoutSec: 60, pollIntervalSec: 30 }) },
     },
   } },
 } });

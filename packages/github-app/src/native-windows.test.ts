@@ -1,7 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { dispatchNativeWindows, readNativeWindowsRuns, readNativeWindowsJobs, readNativeWindowsArtifacts, streamNativeWindowsArchive } from "./native-windows";
 
-const options = { repo: "owner/name", token: "installation-token", executorRef: "a".repeat(40), request: { nonce: "native-0123456789abcdef" } };
+const options = { repo: "owner/name", token: "installation-token", executorRef: "a".repeat(40), dispatchRef: "refs/tags/native-v1",
+  request: { nonce: "native-0123456789abcdef", executor_ref: "a".repeat(40), dispatch_ref: "refs/tags/native-v1" } };
 
 it("refuses native evidence exceeding its byte ceiling before parsing page metadata", async () => {
   await expect(readNativeWindowsRuns({ ...options,
@@ -54,6 +55,16 @@ it("bounds native evidence fetch and body reads even when a provider ignores its
 it("dispatches the fixed native executor exactly once and never retries an ambiguous POST", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];
   const fetchImpl: typeof fetch = async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith("/releases/tags/native-v1")) return Response.json({ id: 42,
+      url: "https://api.github.com/repos/owner/name/releases/42", tag_name: "native-v1", immutable: true, draft: false,
+      published_at: "2026-10-01T00:00:00Z" });
+    if (path.endsWith("/git/ref/tags/native-v1")) return Response.json({ ref: options.dispatchRef,
+      object: { type: "commit", sha: options.executorRef } });
+    if (path.endsWith("/actions/workflows/native-windows.yml")) return Response.json({ id: 7,
+      path: ".github/workflows/native-windows.yml", state: "active" });
+    if (path.endsWith("/contents/.github/workflows/native-windows.yml")) return Response.json({ type: "file",
+      path: ".github/workflows/native-windows.yml", sha: "b".repeat(40), size: 1024 });
     calls.push({ url: String(url), init });
     return new Response("provider unavailable", { status: 500 });
   };
@@ -62,7 +73,7 @@ it("dispatches the fixed native executor exactly once and never retries an ambig
   expect(calls[0]?.url).toBe("https://api.github.com/repos/owner/name/actions/workflows/native-windows.yml/dispatches");
   expect(calls[0]?.init?.method).toBe("POST");
   expect(calls[0]?.init?.redirect).toBe("manual");
-  expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ ref: options.executorRef, inputs: { request: JSON.stringify(options.request) } });
+  expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ ref: options.dispatchRef, inputs: { request: JSON.stringify(options.request) } });
 });
 
 it("reads a finite native-only run page without filtering away active nonce candidates", async () => {

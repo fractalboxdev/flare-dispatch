@@ -1,3 +1,4 @@
+import { nativeExecutorResponse } from "./testing/native-executor";
 import { env } from "cloudflare:test";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -11,12 +12,12 @@ import { nativeTestArchive as archive } from "./testing/native-archive";
 
 const controller = { appId: 42, actorLogin: "native-controller[bot]" };
 const request: NativeRequest = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40),
-  executor_ref: "3".repeat(40), nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc",
+  executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1", nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc",
   mode: "gate", profile: "", command_sha256: "e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da" };
 const log = Buffer.from("verified native command\n");
 const artifact = { path: "command.log", bytes: log.length, sha256: createHash("sha256").update(log).digest("hex") };
 const binding = () => ({ version: 1 as const, ...request, expires_at: Math.floor(Date.now() / 1000) + 600 });
-const readerBinding = () => { const { mode: _mode, profile: _profile, ...value } = binding(); return value; };
+const readerBinding = () => { const { mode: _mode, profile: _profile, dispatch_ref: _dispatchRef, ...value } = binding(); return value; };
 const receipt = (nonce = request.nonce) => ({ version: 1, repo: request.repo, head: request.head, base: request.base,
   executor_ref: request.executor_ref, target: request.target, command_sha256: request.command_sha256, nonce, command: nativeCommand(request),
   runner_os: "Windows", runner_arch: "ARM64", run_id: "123", run_attempt: "1", job: "aarch64",
@@ -39,18 +40,20 @@ const open = (options: { lostDispatch?: boolean; corrupt?: boolean; foreignRecei
     }
     if (target.pathname.endsWith("/installation")) {
       authReads++; expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-app-jwt");
-      return Response.json({id:77,app_id:42,account:{login:"owner"},suspended_at:null,permissions:{actions:"write"}});
+      return Response.json({id:77,app_id:42,account:{login:"owner"},suspended_at:null,permissions:{actions:"write",contents:"read"}});
     }
     if (target.pathname.endsWith("/access_tokens")) {
       grants++; expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-app-jwt");
       expect(init?.method).toBe("POST");
-      expect(JSON.parse(String(init?.body))).toEqual({repositories:["context"],permissions:{actions:"write",metadata:"read"}});
+      expect(JSON.parse(String(init?.body))).toEqual({repositories:["context"],permissions:{actions:"write",contents:"read",metadata:"read"}});
       return Response.json({token:"fixture-installation-token",expires_at:new Date(Date.now()+3600_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
         repository_selection:options.broadGrant ? "all" : "selected",repositories:[{name:"context",full_name:request.repo}],
-        permissions:{actions:"write",metadata:"read"}},{status:201});
+        permissions:{actions:"write",contents:"read",metadata:"read"}},{status:201});
     }
     if (target.hostname !== "archive.example")
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-installation-token");
+    const executor = nativeExecutorResponse(target, request);
+    if (executor !== undefined) return executor;
     if (init?.method === "POST") { posts++; if (options.lostDispatch) throw new Error("accepted response lost"); return new Response(null, { status: 204 }); }
     if (target.pathname.endsWith("/native-windows.yml/runs")) return Response.json({ total_count: options.undiscovered ? 0 : 1,
       workflow_runs: options.undiscovered ? [] : [run()] });
