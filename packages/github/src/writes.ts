@@ -25,6 +25,11 @@ export interface IssueRef {
   readonly body: string | null;
   readonly pull_request?: unknown;
 }
+/** The current state read immediately before an issue close or its adoption. */
+export interface IssueState extends IssueRef {
+  readonly state: "open" | "closed";
+  readonly state_reason: string | null;
+}
 export interface BranchHead {
   readonly sha: string;
   readonly protected: boolean;
@@ -99,9 +104,13 @@ export class GithubWrites extends Context.Service<
     readonly updateIssue: (
       c: Repo & { readonly issue: number; readonly title: string; readonly body: string },
     ) => Effect.Effect<IssueRef, GithubError>;
-    /** Closes the issue with the state reason, such as `duplicate`. */
+    /** Reads an issue's current state; a failed or uncredentialed read fails rather than proving absence. */
+    readonly issue: (
+      c: Repo & { readonly issue: number },
+    ) => Effect.Effect<IssueState, GithubError>;
+    /** Closes a duplicate in favour of the original's global issue ID, rather than its repository-local number. */
     readonly closeIssue: (
-      c: Repo & { readonly issue: number; readonly reason: "duplicate" },
+      c: Repo & { readonly issue: number; readonly duplicateIssueId: number },
     ) => Effect.Effect<IssueRef, GithubError>;
     readonly addLabels: (
       c: Repo & { readonly issue: number; readonly labels: readonly string[] },
@@ -272,10 +281,13 @@ export const githubWritesLayer = (options: WritesOptions) =>
           request(installation, "POST", `/repos/${repo}/issues`, { title, body, labels }),
         updateIssue: ({ installation, repo, issue, title, body }) =>
           request(installation, "PATCH", `/repos/${repo}/issues/${issue}`, { title, body }),
-        closeIssue: ({ installation, repo, issue, reason }) =>
+        issue: ({ installation, repo, issue }) =>
+          request(installation, "GET", `/repos/${repo}/issues/${issue}`),
+        closeIssue: ({ installation, repo, issue, duplicateIssueId }) =>
           request(installation, "PATCH", `/repos/${repo}/issues/${issue}`, {
             state: "closed",
-            state_reason: reason,
+            state_reason: "duplicate",
+            duplicate_issue_id: duplicateIssueId,
           }),
         addLabels: ({ installation, repo, issue, labels }) =>
           Effect.asVoid(

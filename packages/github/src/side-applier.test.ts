@@ -267,7 +267,10 @@ describe("comment, review and issue", () => {
 
   it("[FD-AGT-075] an issue close as a duplicate closes with state reason duplicate and writes nothing else", async () => {
     const w = world();
-    w.side.issues.push({ id: 9, number: 9, title: "dup", body: "same crash", labels: [] });
+    w.side.issues.push(
+      { id: 9, number: 9, title: "dup", body: "same crash", labels: [] },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [] },
+    );
     const r = row("issue", { number: 9, close_as_duplicate_of: 3 }, { intentKey: "run:close:0" });
     expect(await apply(w, r)).toMatchObject({ _tag: "applied", externalRef: "9" });
     expect(writes(w)).toEqual(["closeIssue"]);
@@ -275,8 +278,10 @@ describe("comment, review and issue", () => {
       title: "dup",
       body: "same crash",
       stateReason: "duplicate",
+      duplicateIssueId: 33,
     });
-    expect(await lookup(w, r)).toMatchObject({ _tag: "absent" });
+    expect(await lookup(w, r)).toMatchObject({ _tag: "found", externalRef: "9" });
+    expect(await apply(w, r)).toMatchObject({ _tag: "applied", externalRef: "9" });
     expect(await apply(w, row("issue", { close_as_duplicate_of: 3 }))).toMatchObject({
       _tag: "refused",
       reason: "issue: a close names no issue",
@@ -296,6 +301,70 @@ describe("comment, review and issue", () => {
     expect(await lookup(w, r)).toMatchObject({ _tag: "undetermined" });
     expect(await apply(w, r)).toMatchObject({ _tag: "retryable" });
     expect(w.side.calls.filter((c) => c === "createIssue")).toEqual([]);
+  });
+
+  it("[FD-AGT-077] a lost duplicate-close answer never closes an issue a maintainer reopened before retry", async () => {
+    const w = world();
+    w.side.issues.push(
+      { id: 9, number: 9, title: "dup", body: "same crash", labels: [] },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [] },
+    );
+    const r = row("issue", { number: 9, close_as_duplicate_of: 3 }, { intentKey: "run:close:0" });
+    w.side.lostAnswers.push(new GithubNetworkError({ sent: true, message: "reset after close" }));
+    expect(await apply(w, r)).toMatchObject({ _tag: "unknown" });
+    Object.assign(w.side.issues[0]!, { state: "open", stateReason: "reopened" });
+    expect(await lookup(w, r)).toMatchObject({ _tag: "absent" });
+    expect(await apply(w, r)).toMatchObject({ _tag: "refused" });
+    expect(w.side.issues[0]!.stateReason).toBe("reopened");
+    expect(writes(w)).toEqual(["closeIssue"]);
+  });
+
+  it("[FD-AGT-077] a failed target or original read never permits an issue close", async () => {
+    const w = world();
+    w.side.issues.push(
+      { id: 9, number: 9, title: "dup", body: "same crash", labels: [] },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [] },
+    );
+    const r = row("issue", { number: 9, close_as_duplicate_of: 3 });
+    const unavailable = () =>
+      new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false });
+    w.side.failures.push(unavailable());
+    expect(await lookup(w, r)).toMatchObject({ _tag: "undetermined" });
+    w.side.failures.push(unavailable());
+    expect(await apply(w, r)).toMatchObject({ _tag: "retryable" });
+    w.side.failures.push(null, unavailable());
+    expect(await apply(w, r)).toMatchObject({ _tag: "retryable" });
+    expect(writes(w)).toEqual([]);
+  });
+
+  it("[FD-AGT-077] adopts an already closed issue and refuses a closed original or a pull request", async () => {
+    const w = world();
+    w.side.issues.push(
+      {
+        id: 9,
+        number: 9,
+        title: "dup",
+        body: "same crash",
+        labels: [],
+        state: "closed",
+        stateReason: "completed",
+      },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [], state: "closed" },
+    );
+    const r = row("issue", { number: 9, close_as_duplicate_of: 3 });
+    expect(await apply(w, r)).toMatchObject({ _tag: "applied", externalRef: "9" });
+    expect(await lookup(w, r)).toMatchObject({ _tag: "found", externalRef: "9" });
+    w.side.issues[0]!.state = "open";
+    expect(await apply(w, r)).toMatchObject({
+      _tag: "refused",
+      reason: "issue: the original is not an open issue",
+    });
+    Object.assign(w.side.issues[0]!, { pull_request: { url: "pull" } });
+    expect(await apply(w, r)).toMatchObject({
+      _tag: "refused",
+      reason: "issue: a close names a pull request",
+    });
+    expect(writes(w)).toEqual([]);
   });
 
   it("[FD-GH-046] a lost answer after GitHub made the comment is adopted on the next attempt", async () => {

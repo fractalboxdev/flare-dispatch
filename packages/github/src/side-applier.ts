@@ -406,10 +406,23 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
     apply: (ctx, p) =>
       Effect.gen(function* () {
         const w = yield* writes;
-        if (p.close_as_duplicate_of !== undefined)
-          return p.number === undefined
-            ? yield* refuse("issue: a close names no issue")
-            : applied((yield* w.closeIssue({ ...ctx, issue: p.number, reason: "duplicate" })).id);
+        if (p.close_as_duplicate_of !== undefined) {
+          if (p.number === undefined) return yield* refuse("issue: a close names no issue");
+          const issue = yield* w.issue({ ...ctx, issue: p.number });
+          if (issue.pull_request !== undefined)
+            return yield* refuse("issue: a close names a pull request");
+          if (issue.state_reason === "reopened")
+            return yield* refuse("issue: a maintainer reopened it");
+          if (issue.state === "closed") return applied(issue.id);
+          if (p.close_as_duplicate_of === p.number)
+            return yield* refuse("issue: a duplicate names itself");
+          const original = yield* w.issue({ ...ctx, issue: p.close_as_duplicate_of });
+          if (original.pull_request !== undefined || original.state !== "open")
+            return yield* refuse("issue: the original is not an open issue");
+          return applied(
+            (yield* w.closeIssue({ ...ctx, issue: p.number, duplicateIssueId: original.id })).id,
+          );
+        }
         if (p.title === undefined || p.body === undefined)
           return yield* refuse("issue: a title and a body are required");
         const marker = intentMarker(ctx.row);
@@ -424,10 +437,17 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
           (yield* w.createIssue({ ...ctx, title: p.title, body, labels: p.labels ?? [] })).id,
         );
       }),
-    // A close carries no marker; closing a closed issue again changes nothing, so the drainer applies it again.
+    // A close carries no body marker. Read its current state to adopt a lost answer; an open issue needs an apply
+    // whose fresh read respects a maintainer's reopen. A failed read proves neither presence nor absence.
     lookup: (ctx, p) =>
       p.close_as_duplicate_of !== undefined
-        ? notLooked()
+        ? Effect.gen(function* () {
+            if (p.number === undefined) return yield* refuse("issue: a close names no issue");
+            const issue = yield* (yield* writes).issue({ ...ctx, issue: p.number });
+            return issue.pull_request === undefined && issue.state === "closed"
+              ? Option.some(String(issue.id))
+              : Option.none<string>();
+          })
         : Effect.flatMap(issuesWithMarker(ctx, intentMarker(ctx.row)), (is) =>
             single(is, (i) => i.id),
           ),
