@@ -26,7 +26,6 @@ import {
   io,
   RunSkipped,
   sandbox,
-  spawnChildRun,
   step,
   type ChildStatusRecord,
 } from "@fractalboxdev/flare-dispatch-core";
@@ -37,6 +36,7 @@ import {
   COMPILE_CACHE_TOKEN_KEY,
   durableExec,
   ensureWorkspace,
+  fanOut,
   prebuildCargoBinary,
   restorePrebuilt,
   waitForChildrenDurably,
@@ -176,6 +176,9 @@ export const contextfulCacheWarm = defineRun({
   limits: { maxDurationSec: 6 * 3600, admissionMaxQueueAgeSec: WARM_QUEUE_SEC },
   run: (input) =>
     Effect.gen(function* () {
+      // Setup consumes the same budget as compilation, so the parent's join
+      // bounds the child's entire time after admission, including a cold build.
+      const startedAt = yield* step("warm-started", () => io.now);
       const child = input.groups !== undefined;
       // A configured two-tier gate compiles its heavy parts on this push into
       // `base` already; the parent warms only the light ones.
@@ -232,7 +235,6 @@ export const contextfulCacheWarm = defineRun({
       // still leaves every entry it wrote; the gate gives the verdict.
       const compile = (groups: readonly string[], compileOnly: boolean) =>
         Effect.gen(function* () {
-          const startedAt = yield* step("warm-started", () => io.now);
           let ws: Workspace = { container, dir };
           const parts: { part: string; exitCode: number }[] = [];
           const unstarted: string[] = [];
@@ -311,7 +313,10 @@ export const contextfulCacheWarm = defineRun({
       const width = Math.min(WARM_CHILDREN, groups.length);
       const chunks = Array.from({ length: width }, (_, i) => groups.filter((_, j) => j % width === i));
       const handles = yield* step("spawn-groups", () =>
-        Effect.forEach(chunks, (share) => spawnChildRun({ run: NAME, input: { ...input, groups: share } }), {
+        fanOut({
+          run: NAME,
+          items: chunks,
+          toInput: (share) => ({ ...input, groups: share }),
           concurrency: chunks.length,
         }),
       );

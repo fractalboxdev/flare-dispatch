@@ -3,6 +3,7 @@ import { Cause, Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import { compileCacheCommand } from "@fractalboxdev/flare-dispatch-core/primitives";
+import { Sandbox } from "@fractalboxdev/flare-dispatch-core";
 import { contextfulCacheWarm, WARM_CHILDREN, WARM_PART } from "./contextful-cache-warm";
 import { lightLabelsKey, stageCommand } from "./contextful-gate";
 
@@ -163,6 +164,55 @@ describe("contextful-cache-warm", () => {
       expect(handles.sandbox.execs.some((exec) => exec.command.includes("--compile-groups"))).toBe(false);
       expect(handles.childRuns.spawned).toHaveLength(0);
       expect(handles.sandbox.clones).toEqual([{ repo: REPO, sha: SHA }]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("spawns no children when the parent's monthly spend gate closes", () => {
+    const reason = "spend budget reached: monthly limit";
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { ...keyed, ...listing },
+      config: cacheConfig,
+      github: head,
+      childRuns: { spendClosed: reason },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(contextfulCacheWarm.run(input));
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain(reason);
+      expect(handles.childRuns.spawned).toHaveLength(0);
+      expect(handles.sandbox.destroyed).toHaveLength(1);
+      expect(handles.childRuns.admissionHandoffs).toBe(1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("counts cold setup in the child's two-hour group-start budget and continues after a timeout", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { ...keyed, "--stage workspace.compile ": { fail: "ExecTimeout", timeoutSec: 2700 } },
+      config: cacheConfig,
+      github: head,
+    });
+    return Effect.gen(function* () {
+      const service = yield* Sandbox;
+      const groups = ["workspace.compile", "workspace.cli-1", "features.binary-all"];
+      const slow = {
+        ...service,
+        exec: (opts: Parameters<typeof service.exec>[0]) => {
+          const command = typeof opts.command === "string" ? opts.command : opts.command.join(" ");
+          // A cold prebuild takes 32 minutes; each attempted group then consumes its 45 minute ceiling.
+          const elapsed = command.includes("cargo build --locked") ? 32 * 60_000
+            : command.includes("--compile-only") ? 45 * 60_000 : 0;
+          return service.exec(opts).pipe(Effect.ensuring(Effect.sync(() => {
+            handles.io.nowCursor += elapsed;
+          })));
+        },
+      };
+      const out = yield* contextfulCacheWarm.run({ ...input, groups }).pipe(Effect.provideService(Sandbox, slow));
+      expect(out).toEqual({
+        parts: [{ part: groups[0], exitCode: 124 }, { part: groups[1], exitCode: 0 }],
+        unstarted: [groups[2]],
+      });
+      expect(handles.sandbox.execs.filter((e) => e.command.includes("--compile-only"))).toHaveLength(2);
+      expect(contextfulCacheWarm.limits.maxDurationSec).toBe(6 * 3600);
     }).pipe(Effect.provide(layer));
   });
 
