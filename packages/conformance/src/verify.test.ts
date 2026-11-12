@@ -1,7 +1,7 @@
 // The offline verifier against statements the control plane's own provenance code writes, countersigns and logs: one
 // negative test for each verifier rejection of specs/provenance.md FD-PROV-053 to FD-PROV-061 (FD-PROV-072), and the
 // `fd-verify` executable run as a process with every network path closed (FD-IFC-071).
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -314,7 +314,9 @@ describe("fd-verify executable", { timeout: 120_000 }, () => {
     };
     const artifactPath = join(dir, "widget.tgz");
     writeFileSync(artifactPath, artifact);
-    return spawnSync(
+    // An async spawn keeps the test worker's event loop free while the process runs; a blocking spawn starves its
+    // RPC to the runner under a loaded full-suite run.
+    const child = spawn(
       process.execPath,
       [
         "--experimental-strip-types",
@@ -333,12 +335,24 @@ describe("fd-verify executable", { timeout: 120_000 }, () => {
         input.artifactClass,
         "--json",
       ],
-      { encoding: "utf8", timeout: 60_000 },
+      { timeout: 60_000 },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    return new Promise<{ status: number | null; stdout: string; stderr: string }>(
+      (resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", (status) => resolve({ status, stdout, stderr }));
+      },
     );
   };
 
   it("[FD-IFC-071] runs the verifier procedure with no network access and exits 0 when the artifact passes", async () => {
-    const result = runBin(await f.input(await f.reproducedBundle(), { artifactClass: "release" }));
+    const result = await runBin(
+      await f.input(await f.reproducedBundle(), { artifactClass: "release" }),
+    );
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
@@ -365,7 +379,7 @@ describe("fd-verify executable", { timeout: 120_000 }, () => {
       ["tier", await f.input(bundle, { artifactClass: "release" })],
     ];
     for (const [reason, input, artifact] of cases) {
-      const result = runBin(input, artifact);
+      const result = await runBin(input, artifact);
       expect(result.status, reason).toBe(1);
       expect(JSON.parse(result.stdout), reason).toMatchObject({ error: "rejected", reason });
     }
