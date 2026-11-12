@@ -223,6 +223,7 @@ describe("resolveClass at intake", () => {
       refProtection: null,
       checkName: "flare-dispatch/check:unit",
       classInput: null,
+      classCeiling: null,
       caller: null,
     };
     const snapshot = { "protection-snapshot": { requiredChecks: ["flare-dispatch/check:unit"] } };

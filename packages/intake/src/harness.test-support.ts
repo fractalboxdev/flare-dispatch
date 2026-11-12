@@ -275,6 +275,7 @@ export const authenticated = (
   inputs: { sha: HEAD },
   signals: undefined,
   classInput: null,
+  classCeiling: null,
   caller: {
     kind: "actions-oidc",
     id: `actions:${REPO}:${REPO}/.github/workflows/ci.yml@refs/heads/main`,

@@ -32,6 +32,11 @@ export interface DispatchSubmission {
   readonly label: string | undefined;
   readonly inputs: unknown;
   readonly class: string | undefined;
+  /**
+   * The `classCeiling` of the caller's `dispatch.scoped` entry, which `resolveClass` caps the class at (FD-IFC-091);
+   * undefined for a caller in no entry.
+   */
+  readonly classCeiling: string | undefined;
   readonly signals: DispatchBody["signals"];
   /** The identity the gate verified: an Access identity or `actions:<repository>:<workflow ref>`. */
   readonly caller: string;

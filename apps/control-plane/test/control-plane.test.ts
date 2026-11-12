@@ -1303,6 +1303,7 @@ describe("the intake port", () => {
       label: undefined,
       inputs: {},
       class: undefined,
+      classCeiling: undefined,
       signals: undefined,
       caller: "actions:acme/app:acme/app/.github/workflows/ci.yml@refs/heads/main",
       idempotency: { key: "k", canonicalBody: '{"repository":"acme/app"}' },
@@ -1318,6 +1319,30 @@ describe("the intake port", () => {
       label: null,
       idempotency: { key: "k", body: { repository: "acme/app" } },
     });
+  });
+
+  it("[FD-IFC-091] hands intake a scoped dispatcher's classCeiling, and none for a caller in no entry", () => {
+    const scoped = {
+      trigger: "dispatch",
+      run: "security-rescan",
+      repository: "acme/app",
+      ref: undefined,
+      sha: "a".repeat(40),
+      workflowRef: undefined,
+      vouchedSha: undefined,
+      label: undefined,
+      inputs: {},
+      class: undefined,
+      classCeiling: "batch",
+      signals: undefined,
+      caller: "scan-bot.access",
+      idempotency: { key: "k", canonicalBody: "{}" },
+    } as const;
+    expect(authenticatedOf(scoped)).toMatchObject({
+      caller: { kind: "access", id: "scan-bot.access" },
+      classCeiling: "batch",
+    });
+    expect(authenticatedOf({ ...scoped, classCeiling: undefined }).classCeiling).toBeNull();
   });
 });
 
