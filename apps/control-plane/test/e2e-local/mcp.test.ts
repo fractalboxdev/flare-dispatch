@@ -140,7 +140,7 @@ describe("the MCP server at /mcp", () => {
     expect(stack.requests.filter((r) => r.path === "/mcp" && r.method === "POST").length).toBe(2);
   });
 
-  it("[FD-INT-062] [FD-IFC-072] a dispatch call runs as trigger mcp under the caller's identity, and get_verdict waits for its verdict", async () => {
+  it("[FD-ARCH-002] [FD-INT-062] [FD-IFC-072] a dispatch call runs as trigger mcp under the caller's identity, and get_verdict waits for its verdict", async () => {
     const sha = "6".repeat(40);
     const dispatched = await call("dispatch", {
       run: "check",
@@ -150,6 +150,7 @@ describe("the MCP server at /mcp", () => {
     });
     expect(dispatched.isError).toBe(false);
     const id = String(dispatched.value["execution_id"]);
+    // [FD-ARCH-002] The Worker wrote this intake row, so it admitted the call.
     const record = (
       await (
         await stack.mf.getD1Database("DB")

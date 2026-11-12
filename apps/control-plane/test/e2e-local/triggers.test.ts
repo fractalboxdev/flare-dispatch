@@ -31,7 +31,7 @@ const intakeRecord = async (id: string) => {
 };
 
 describe("triggers reaching the Worker", () => {
-  it("admits a recorded pull request delivery signed with the webhook secret", async () => {
+  it("[FD-ARCH-002] the Worker accepts a recorded pull request delivery signed with the webhook secret", async () => {
     const delivery = stack.github.delivery(
       "pull_request",
       "pull_request.opened.json",
@@ -63,7 +63,7 @@ describe("triggers reaching the Worker", () => {
     expect(refused.status).toBe(401);
   });
 
-  it("admits an Actions dispatch carrying the job's OIDC token", async () => {
+  it("[FD-ARCH-002] the Worker accepts an Actions dispatch carrying the job's OIDC token", async () => {
     const sha = "3".repeat(40);
     const token = await stack.github.oidcToken({ repository: REPOSITORY, sha }, OIDC_AUDIENCE);
     const r = await fetch(`${stack.url}/v1/dispatch/check`, {
@@ -101,7 +101,7 @@ describe("triggers reaching the Worker", () => {
     expect(stack.github.unrecorded).toEqual([]);
   });
 
-  it("records a cron tick", async () => {
+  it("[FD-ARCH-002] the Worker's scheduled handler accepts a cron tick and records it", async () => {
     const worker = await stack.mf.getWorker();
     const at = Date.now();
     await worker.scheduled({ cron: "* * * * *", scheduledTime: new Date(at) });
