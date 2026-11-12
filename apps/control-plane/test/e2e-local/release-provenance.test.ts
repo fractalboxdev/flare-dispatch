@@ -3,7 +3,7 @@
 // `platform` statement from a cloud builder names each artifact's digest. The statement is the cloud builder's own:
 // `writeCloudStatement` digests the artifact bytes the Worker's R2 bucket holds and signs with the `PROVENANCE_KEY`
 // the Worker holds, its log-append intent goes into the Worker's D1, and the tick appends it to the private log. The
-// fixture server answers GitHub's releases list and records each publish.
+// fixture server answers GitHub's releases list, each asset with the digest of its bytes, and records each publish.
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -209,8 +209,8 @@ describe("the release publish gate", () => {
     const unattested = "exec-release-unattested";
     const unattestedArtifact = await storeArtifact(unattested, "unattested tarball");
 
-    const attestedRelease = stack.github.draftRelease(WIDGETS, "v1.0.0", [ASSET]);
-    const unattestedRelease = stack.github.draftRelease(WIDGETS, "v1.0.1", [ASSET]);
+    const attestedRelease = stack.github.draftRelease(WIDGETS, "v1.0.0", [attestedArtifact]);
+    const unattestedRelease = stack.github.draftRelease(WIDGETS, "v1.0.1", [unattestedArtifact]);
     await insertPublish(attested, "v1.0.0", [attestedArtifact]);
     await insertPublish(unattested, "v1.0.1", [unattestedArtifact]);
     await tick();

@@ -88,7 +88,8 @@ export interface FixtureRelease {
   readonly id: number;
   readonly tag_name: string;
   draft: boolean;
-  readonly assets: readonly { readonly name: string }[];
+  /** Each asset with the `sha256:<hex>` digest GitHub answers for its bytes. */
+  readonly assets: readonly { readonly name: string; readonly digest: string }[];
 }
 
 export interface GithubFixtureServer {
@@ -109,8 +110,12 @@ export interface GithubFixtureServer {
    * answers; an empty list leaves the branch with no rules, as every recorded branch starts.
    */
   readonly requireChecks: (repository: string, branch: string, checks: readonly string[]) => void;
-  /** Creates a draft release of `tag` on `repository` holding assets of these names, and answers its id. */
-  readonly draftRelease: (repository: string, tag: string, assets: readonly string[]) => number;
+  /** Creates a draft release of `tag` on `repository` holding these assets, and answers its id. */
+  readonly draftRelease: (
+    repository: string,
+    tag: string,
+    assets: readonly { readonly name: string; readonly digest: string }[],
+  ) => number;
   /** The releases of `repository`, as the releases list answers them. */
   readonly releases: (repository: string) => readonly FixtureRelease[];
   /** Answers one request addressed to GitHub; the stack routes the Worker's outbound requests here. */
@@ -459,7 +464,7 @@ export const startGithubFixtureServer = async (
       const list = releases.get(repository) ?? [];
       releases.set(repository, list);
       const id = [...releases.values()].flat().length + 1;
-      list.push({ id, tag_name: tag, draft: true, assets: assets.map((name) => ({ name })) });
+      list.push({ id, tag_name: tag, draft: true, assets: [...assets] });
       return id;
     },
     releases: (repository) => releases.get(repository) ?? [],

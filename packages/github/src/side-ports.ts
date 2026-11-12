@@ -47,10 +47,18 @@ export class FollowOnSubmitter extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-github/FollowOnSubmitter") {}
 
-/** One artifact a `release.publish` intent publishes: its asset name, the digest of its bytes and the execution that built it. */
+/**
+ * The reason a release publish ends `refused` with when no logged cloud-builder statement names an asset's digest
+ * (specs/provenance.md § Releases); it is the cache package's `RELEASE_STATEMENT_MISSING`.
+ */
+export const RELEASE_STATEMENT_MISSING = "provenance: release statement missing";
+
+/**
+ * One asset a draft release publishes: its name, the `sha256:<hex>` digest GitHub computed over the bytes it stores,
+ * and the release execution whose statements must name that digest.
+ */
 export interface ReleasePublishArtifact {
   readonly name: string;
-  /** `sha256:<hex>`. */
   readonly digest: string;
   readonly executionId: string;
 }
@@ -62,16 +70,13 @@ export type ReleaseGateAnswer =
 
 /**
  * The provenance gate on a release's publish (specs/provenance.md § Releases): over the logged statements and the
- * provenance key history, it admits the publish only when every asset the draft holds is one of the intent's artifacts
- * and a logged `platform` statement from a cloud builder names each artifact's digest (FD-PROV-062) without listing a
- * restored cache entry (FD-PROV-063).
+ * provenance key history, it admits the publish only when a logged `platform` statement from a cloud builder of the
+ * release execution names each artifact's digest (FD-PROV-062) without listing a restored cache entry (FD-PROV-063).
  */
 export class ReleaseProvenance extends Context.Service<
   ReleaseProvenance,
   {
     readonly gate: (release: {
-      /** The names of the assets the draft release holds. */
-      readonly assets: readonly string[];
       readonly artifacts: readonly ReleasePublishArtifact[];
     }) => Effect.Effect<ReleaseGateAnswer>;
   }

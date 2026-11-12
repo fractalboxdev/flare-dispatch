@@ -57,7 +57,11 @@ export interface Release {
   readonly id: number;
   readonly tag_name: string;
   readonly draft: boolean;
-  readonly assets: readonly { readonly name: string }[];
+  /**
+   * The release's assets; `digest` is the `sha256:<hex>` GitHub computed over the bytes it stores, `null` for an asset
+   * GitHub holds no digest of.
+   */
+  readonly assets: readonly { readonly name: string; readonly digest?: string | null }[];
 }
 export interface TreeEntry {
   readonly path: string;

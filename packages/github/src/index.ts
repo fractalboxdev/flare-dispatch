@@ -155,6 +155,7 @@ export {
   GateReason,
   NoticeChannel,
   ReleaseProvenance,
+  RELEASE_STATEMENT_MISSING,
   SideOutputConfig,
   StagedWriteGate,
   type DeliveryAnswer,

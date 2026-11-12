@@ -1,7 +1,7 @@
 import { testCommentWrites } from "./comment-writes.test-support.ts";
 // The side-output appliers over an in-memory repository: each kind's write, its idempotency marker, its refusals
 // and its lookup.
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { deliveryLimitKey, RECORD_KINDS } from "@fractalboxdev/flare-dispatch-profile";
@@ -70,7 +70,7 @@ interface World {
   /** What the release provenance gate answers; absent on a deploy without the gate. */
   releaseGate: ReleaseGateAnswer | undefined;
   /** Each release the provenance gate was asked about. */
-  readonly releaseGated: { assets: readonly string[]; artifacts: readonly ReleasePublishArtifact[] }[];
+  readonly releaseGated: { artifacts: readonly ReleasePublishArtifact[] }[];
   readonly blobs: Map<string, Uint8Array>;
   /** The App's webhook deliveries, for `delivery.redeliver`. */
   readonly deliveries: { id: number; guid: string; redelivery: boolean }[];
@@ -754,7 +754,12 @@ describe("releases", () => {
     await apply(w, r);
     await apply(w, r);
     expect(w.side.releases).toEqual([
-      { id: expect.any(Number), tag_name: "v1.2.0", draft: true, assets: [{ name: "fd.tgz" }] },
+      {
+        id: expect.any(Number),
+        tag_name: "v1.2.0",
+        draft: true,
+        assets: [{ name: "fd.tgz", digest: `sha256:${createHash("sha256").update(new Uint8Array([1, 2])).digest("hex")}` }],
+      },
     ]);
     expect(await lookup(w, r)).toMatchObject({ _tag: "found" });
   });
@@ -790,27 +795,50 @@ describe("releases", () => {
 
 describe("the release provenance gate", () => {
   const ARTIFACT = { name: "fd.tgz", digest: `sha256:${"a".repeat(64)}` };
-  const drafted = (w: World) =>
-    void w.side.releases.push({ id: 1, tag_name: "v1.2.0", draft: true, assets: [{ name: "fd.tgz" }] });
+  const drafted = (w: World, digest: string | null = ARTIFACT.digest) =>
+    void w.side.releases.push({
+      id: 1,
+      tag_name: "v1.2.0",
+      draft: true,
+      assets: [{ name: ARTIFACT.name, digest }],
+    });
   const publish = (artifacts: unknown[] = [ARTIFACT]) => row("release.publish", { tag: "v1.2.0", artifacts });
   const published = (w: World) => w.side.calls.filter((c) => c === "publishRelease").length;
 
-  it("asks the gate about the draft's assets and the intent's artifacts, each attributed to its execution, before it publishes", async () => {
+  it("asks the gate about each asset by the digest GitHub holds, attributed to the row's execution, before it publishes", async () => {
     const w = world();
     drafted(w);
-    expect(
-      await apply(w, publish([ARTIFACT, { name: "fd.cdx.json", digest: ARTIFACT.digest, execution_id: "exec-sbom" }])),
-    ).toEqual({ _tag: "applied", externalRef: "1" });
-    expect(w.releaseGated).toEqual([
-      {
-        assets: ["fd.tgz"],
-        artifacts: [
-          { ...ARTIFACT, executionId: "exec-1" },
-          { name: "fd.cdx.json", digest: ARTIFACT.digest, executionId: "exec-sbom" },
-        ],
-      },
-    ]);
+    expect(await apply(w, publish())).toEqual({ _tag: "applied", externalRef: "1" });
+    expect(w.releaseGated).toEqual([{ artifacts: [{ ...ARTIFACT, executionId: "exec-1" }] }]);
     expect(published(w)).toBe(1);
+  });
+
+  it("refuses an asset whose bytes GitHub digests differently from the intent's artifact, without asking the gate", async () => {
+    const w = world();
+    drafted(w, `sha256:${"b".repeat(64)}`);
+    expect(await apply(w, publish())).toEqual({
+      _tag: "refused",
+      reason: "provenance: release statement missing",
+    });
+    expect(w.releaseGated).toEqual([]);
+    expect(published(w)).toBe(0);
+  });
+
+  it("refuses an asset GitHub holds no digest of, or one the intent names no artifact for", async () => {
+    for (const [digest, artifacts] of [
+      [null, [ARTIFACT]],
+      [ARTIFACT.digest, [{ ...ARTIFACT, name: "other.tgz" }]],
+      [ARTIFACT.digest, []],
+    ] as const) {
+      const w = world();
+      drafted(w, digest);
+      expect(await apply(w, publish([...artifacts]))).toEqual({
+        _tag: "refused",
+        reason: "provenance: release statement missing",
+      });
+      expect(w.releaseGated).toEqual([]);
+      expect(published(w)).toBe(0);
+    }
   });
 
   it("ends the row refused with the gate's provenance reason and leaves the release a draft", async () => {
@@ -832,14 +860,14 @@ describe("the release provenance gate", () => {
     const bare = world();
     drafted(bare);
     bare.releaseGate = undefined;
-    expect(await apply(bare, publish([]))).toEqual({
+    expect(await apply(bare, publish())).toEqual({
       _tag: "refused",
       reason: "applier: release.publish is not configured on this deployment",
     });
     expect(published(w) + published(bare)).toBe(0);
   });
 
-  it("publishes a draft that holds no asset for an intent that names no artifact without asking the gate", async () => {
+  it("publishes a draft that holds no asset without asking the gate", async () => {
     const w = world();
     w.releaseGate = undefined;
     w.side.releases.push({ id: 1, tag_name: "v1.2.0", draft: true, assets: [] });

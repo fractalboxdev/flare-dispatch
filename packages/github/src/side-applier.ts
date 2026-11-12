@@ -20,9 +20,11 @@ import {
   FollowOnSubmitter,
   NoticeChannel,
   ReleaseProvenance,
+  RELEASE_STATEMENT_MISSING,
   SideOutputConfig,
   StagedWriteGate,
   type DeliveryAnswer,
+  type ReleasePublishArtifact,
 } from "./side-ports.ts";
 import { GithubWrites, type CommitAuthor, type IssueRef } from "./writes.ts";
 
@@ -94,18 +96,11 @@ export const SidePayloads = {
   "release.publish": Schema.Struct({
     tag: Schema.String,
     /**
-     * The artifacts the release publishes, by asset name and the digest of their bytes; the provenance gate looks up
-     * the logged statement of each (FD-PROV-062). `execution_id` names the execution that built one, the row's own
-     * execution where it is absent.
+     * The artifacts the release publishes, by asset name and the `sha256:<hex>` digest of their bytes. Each asset the
+     * draft holds must be one of them, with the digest GitHub computed over the asset's bytes (FD-PROV-062).
      */
     artifacts: Schema.optionalKey(
-      Schema.Array(
-        Schema.Struct({
-          name: Schema.String,
-          digest: Schema.String,
-          execution_id: Schema.optionalKey(Schema.String),
-        }),
-      ),
+      Schema.Array(Schema.Struct({ name: Schema.String, digest: Schema.String })),
     ),
   }),
   "dispatch.followOn": Schema.Struct({
@@ -255,41 +250,42 @@ const releaseFor = (ctx: Ctx, tag: string) =>
   });
 
 /**
- * The provenance gate before a draft release is published (FD-PROV-062, FD-PROV-063). A draft that holds no asset and
- * an intent that names no artifact publish nothing to attest. Otherwise the deploy's gate must admit the publish: its
- * refusal ends the row `refused` with the gate's `provenance:` reason and publishes nothing, a deploy without the gate
+ * The provenance gate before a draft release is published (FD-PROV-062, FD-PROV-063). A draft that holds no asset
+ * publishes nothing to attest. Otherwise each asset must be one of the intent's artifacts, and the digest GitHub
+ * computed over the asset's bytes must be the one the intent names; the deploy's gate then checks the release
+ * execution's logged statements against those digests, so the bytes GitHub publishes are the bytes the gate checks.
+ * A refusal ends the row `refused` with its `provenance:` reason and publishes nothing, a deploy without the gate
  * publishes nothing either, and a gate that cannot read its records retries.
  */
 const gateRelease = (
   ctx: Ctx,
-  assets: readonly { readonly name: string }[],
-  artifacts: readonly { readonly name: string; readonly digest: string; readonly execution_id?: string }[],
+  assets: readonly { readonly name: string; readonly digest?: string | null }[],
+  artifacts: readonly { readonly name: string; readonly digest: string }[],
 ) =>
   Effect.gen(function* () {
-    if (assets.length === 0 && artifacts.length === 0) return;
+    if (assets.length === 0) return;
     const provenance = yield* optional(ReleaseProvenance, "release.publish");
-    const answer = yield* provenance.gate({
-      assets: assets.map((a) => a.name),
-      artifacts: artifacts.map((a) => ({
-        name: a.name,
-        digest: a.digest,
-        // An ops row names no execution, so no statement can admit an artifact it does not attribute.
-        executionId: a.execution_id ?? ctx.row.executionId ?? "",
-      })),
-    });
+    const refused = (artifact: string, reason: string) =>
+      Effect.andThen(
+        Effect.logWarning("release publish refused", {
+          repo: ctx.repo,
+          intentKey: ctx.row.intentKey,
+          artifact,
+          reason,
+        }),
+        refuse(reason),
+      );
+    const checked: ReleasePublishArtifact[] = [];
+    for (const { name, digest } of assets) {
+      if (digest == null || !artifacts.some((a) => a.name === name && a.digest === digest))
+        return yield* refused(name, RELEASE_STATEMENT_MISSING);
+      // An ops row names no execution, so no statement can admit an artifact it does not attribute.
+      checked.push({ name, digest, executionId: ctx.row.executionId ?? "" });
+    }
+    const answer = yield* provenance.gate({ artifacts: checked });
     return yield* Match.value(answer).pipe(
       Match.tag("admitted", () => Effect.void),
-      Match.tag("refused", ({ reason, artifact }) =>
-        Effect.andThen(
-          Effect.logWarning("release publish refused", {
-            repo: ctx.repo,
-            intentKey: ctx.row.intentKey,
-            artifact,
-            reason,
-          }),
-          refuse(reason),
-        ),
-      ),
+      Match.tag("refused", ({ reason, artifact }) => refused(artifact, reason)),
       Match.tag("unavailable", ({ reason }) => Effect.fail(new Retry({ reason }))),
       Match.exhaustive,
     );

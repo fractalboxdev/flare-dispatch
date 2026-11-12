@@ -17,7 +17,6 @@ import {
   LogAppendStore,
   parseProvenanceKey,
   publicJwkOf,
-  RELEASE_STATEMENT_MISSING,
   StatementLogged,
   StatementLoggedFailed,
   type ProvenancePublicKey,
@@ -210,22 +209,14 @@ const provenanceKeysOf = (env: ControlPlaneEnv, db: D1Database) =>
 
 /**
  * The release provenance gate the `release.publish` applier calls before it publishes a draft (FD-PROV-062,
- * FD-PROV-063): the log-append intents in D1 and the provenance keys. An asset the draft holds that the intent names
- * as no artifact has no statement naming its digest, so it refuses with `provenance: release statement missing`.
+ * FD-PROV-063): the release execution's log-append intents in D1, checked under the provenance keys.
  */
 export const releaseProvenanceLayer = (env: ControlPlaneEnv) => {
   const db = env.DB as unknown as D1Database;
   const statements = d1LogAppendStore(db);
   return Layer.succeed(ReleaseProvenance, {
-    gate: ({ assets, artifacts }) =>
+    gate: ({ artifacts }) =>
       Effect.gen(function* () {
-        const unnamed = assets.find((name) => !artifacts.some((a) => a.name === name));
-        if (unnamed !== undefined)
-          return {
-            _tag: "refused",
-            reason: RELEASE_STATEMENT_MISSING,
-            artifact: unnamed,
-          } satisfies ReleaseGateAnswer;
         const keys = yield* provenanceKeysOf(env, db);
         yield* gateReleasePublish(artifacts, keys);
         return { _tag: "admitted" } satisfies ReleaseGateAnswer;
