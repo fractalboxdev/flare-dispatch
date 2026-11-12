@@ -6,10 +6,10 @@ const nativeWorkflowId = async (request: unknown) => (await SELF.fetch(new Reque
   method: "POST", body: JSON.stringify(request),
 }))).text();
 
-const request = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
+const request = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
   nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc" as const, mode: "gate" as const, profile: "" as const,
   command_sha256: "e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da" };
-const policy = { repo: request.repo, executor_ref: request.executor_ref, timeoutSec: 60, pollIntervalSec: 30 };
+const policy = { repo: request.repo, executor_ref: request.executor_ref, dispatch_ref: request.dispatch_ref, timeoutSec: 60, pollIntervalSec: 30 };
 const poll = (checkpoint: unknown, pollIntervalSec = 30, now = 1000) => SELF.fetch(new Request("https://fixture.test/fixture/poll", {
   method: "POST", body: JSON.stringify({ checkpoint, pollIntervalSec, now }),
 }));
@@ -85,7 +85,11 @@ describe("production NativeWorkflow with actual local Workflow and D1 bindings",
         expect(JSON.stringify(checkpoint)).not.toContain(forbidden);
       expect((await env.RUNS_STORAGE.list({ prefix: "native-results/" })).objects).toEqual([]);
       expect((await apiCalls()).calls.map(call=>call.path)).toEqual(["/app", "/repos/owner/context/installation",
-        "/app/installations/77/access_tokens", "/repos/owner/context/actions/workflows/native-windows.yml/dispatches",
+        "/app/installations/77/access_tokens", "/repos/owner/context/releases/tags/native-executor-v1",
+        "/repos/owner/context/git/ref/tags/native-executor-v1", "/repos/owner/context/actions/workflows/native-windows.yml",
+        "/repos/owner/context/contents/.github/workflows/native-windows.yml",
+        "/repos/owner/context/contents/.github/workflows/native-windows.yml",
+        "/repos/owner/context/actions/workflows/native-windows.yml/dispatches",
         "/repos/owner/context/actions/workflows/native-windows.yml/runs", "/repos/owner/context/actions/runs/123/attempts/1"]);
     } finally { await inspect.dispose(); }
   });
@@ -93,7 +97,7 @@ describe("production NativeWorkflow with actual local Workflow and D1 bindings",
     const id = await nativeWorkflowId(request);
     const inspect = await introspectWorkflowInstance(env.NATIVE_WORKFLOW, id);
     const reordered = { pollIntervalSec: policy.pollIntervalSec, timeoutSec: policy.timeoutSec,
-      executor_ref: policy.executor_ref, repo: policy.repo };
+      executor_ref: policy.executor_ref, dispatch_ref: policy.dispatch_ref, repo: policy.repo };
     try {
       await env.NATIVE_WORKFLOW.create({ id, params: { request, policy: reordered } });
       await inspect.waitForStatus("errored");
@@ -120,7 +124,7 @@ describe("production NativeWorkflow with actual local Workflow and D1 bindings",
       expect(output.deadlineAt).toBe(output.admittedAt + policy.timeoutSec);
       const manifest = await env.RUNS_STORAGE.get(output.manifestKey);
       expect(await manifest!.json()).toMatchObject({ receipt: { exit_code: 0, run_id: "123", run_attempt: "1" } });
-      const { mode: _mode, profile: _profile, ...readerRequest } = request;
+      const { mode: _mode, profile: _profile, dispatch_ref: _dispatchRef, ...readerRequest } = request;
       const file = await Effect.runPromise(makeNativeResultR2(env.RUNS_STORAGE, "native-controller[bot]")
         .readFile({ version: 1, ...readerRequest, expires_at: Math.floor(Date.now()/1000)+600 }, "command.log", Math.floor(Date.now()/1000)));
       expect(await new Response(file.body).text()).toBe("verified native Workflow command\n");

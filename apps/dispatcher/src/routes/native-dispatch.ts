@@ -31,7 +31,7 @@ export const handleNativeDispatch = (request: Request, env: Env) => Effect.runPr
     Effect.mapError(() => new NativeBodyRefused({ status: 400 })),
   );
   const admitted = yield* admitNativeRequest(raw).pipe(Effect.mapError(() => new NativeBodyRefused({ status: 400 })));
-  if (admitted.repo !== policy.repo || admitted.executor_ref !== policy.executor_ref)
+  if (admitted.repo !== policy.repo || admitted.executor_ref !== policy.executor_ref || admitted.dispatch_ref !== policy.dispatch_ref)
     return json({ error: "native_dispatch_scope_refused" }, 403);
   const id = yield* Effect.promise(() => nativeWorkflowId(admitted));
   const binding = env.NATIVE_WORKFLOW;

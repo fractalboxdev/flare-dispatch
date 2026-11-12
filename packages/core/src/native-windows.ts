@@ -1,6 +1,9 @@
 import { Effect, Schema } from "effect";
 
 const Revision = Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/));
+const DispatchRef = Schema.String.pipe(Schema.filter(ref => ref.startsWith("refs/tags/") && ref.length <= 200
+  && ref.slice(10).split("/").every(segment => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment)
+    && !segment.includes("..") && !segment.endsWith(".") && !segment.endsWith(".lock"))));
 const Digest = Schema.String.pipe(Schema.pattern(/^[0-9a-f]{64}$/));
 const Target = Schema.Literal("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc");
 export const NativeControllerLogin = Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$/));
@@ -17,7 +20,7 @@ const Artifact = Schema.Struct({
 
 export const NativeRequest = Schema.Struct({
   repo: Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)),
-  head: Revision, base: Revision, executor_ref: Revision,
+  head: Revision, base: Revision, executor_ref: Revision, dispatch_ref: DispatchRef,
   nonce: Schema.String.pipe(Schema.pattern(/^[a-z0-9-]{16,64}$/)),
   target: Target, mode: Schema.Literal("gate", "release"),
   profile: Schema.Literal("", "contextful-edge", "contextful-full"), command_sha256: Digest,

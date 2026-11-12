@@ -3,10 +3,10 @@ import { handleRequest } from "../router";
 import { sign } from "../hmac";
 import { makeFakeD1, makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 
-const request = { repo:"owner/context",head:"1".repeat(40),base:"2".repeat(40),executor_ref:"3".repeat(40),
+const request = { repo:"owner/context",head:"1".repeat(40),base:"2".repeat(40),executor_ref:"3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
   nonce:"native-0123456789abcdef",target:"aarch64-pc-windows-msvc",mode:"gate",profile:"",
   command_sha256:"e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da" };
-const policy = {repo:request.repo,executor_ref:request.executor_ref,timeoutSec:3600,pollIntervalSec:30};
+const policy = {repo:request.repo,executor_ref:request.executor_ref,dispatch_ref:request.dispatch_ref,timeoutSec:3600,pollIntervalSec:30};
 const key="fixture-native-dispatch-key";
 const open=()=>{
   const workflow=makeFakeWorkflow();
@@ -29,7 +29,7 @@ describe("authenticated native execution trigger",()=>{
     expect(await response.json()).toEqual({id:created.id,status:"accepted"});
     expect(JSON.stringify(created)).not.toContain(key);expect(JSON.stringify(created)).not.toContain("fixture-key-never-read");
   });
-  it.each([{repo:"other/context"},{executor_ref:"4".repeat(40)}])("refuses configured identity substitution before admission %j",async(fields)=>{
+  it.each([{repo:"other/context"},{executor_ref:"4".repeat(40)},{dispatch_ref:"refs/tags/native-v2"}])("refuses configured identity substitution before admission %j",async(fields)=>{
     const f=open(); const response=await handleRequest(await post({...request,...fields}),f.env);
     expect(response.status).toBe(403);expect(f.workflow.calls).toHaveLength(0);expect(f.db).not.toHaveBeenCalled();
   });

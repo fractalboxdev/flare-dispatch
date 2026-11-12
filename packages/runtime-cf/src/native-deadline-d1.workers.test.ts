@@ -5,11 +5,11 @@ import { NativeReceiptRefused, type NativeRequest } from "@fractalboxdev/flare-d
 import { makeNativeDispatchD1 } from "./native-dispatch-d1";
 
 const controller = { appId: 123, actorLogin: "native-controller[bot]" };
-const request: NativeRequest = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
+const request: NativeRequest = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
   nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc", mode: "gate", profile: "",
   command_sha256: "e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da" };
 const policy = { timeoutSec: 60 };
-const provider = (dispatch: () => Effect.Effect<void, NativeReceiptRefused>) => ({ dispatch,
+const provider = (dispatch: () => Effect.Effect<void, NativeReceiptRefused>) => ({ prepareDispatch: () => Effect.succeed(dispatch()),
   listRuns: () => Effect.succeed([]), readRun: () => Effect.fail(new NativeReceiptRefused({ reason: "fixture has no bound run" })) });
 const row = () => env.RUNS_METADATA.prepare("SELECT * FROM native_dispatches WHERE repo=? AND nonce=?").bind(request.repo, request.nonce)
   .first<{ admitted_at: number; timeout_sec: number | null; deadline_at: number | null; state: string }>();
@@ -23,6 +23,17 @@ const wrapWrite = (sqlMatch: string, intercept: (statement: D1PreparedStatement)
 };
 
 describe("native immutable admission deadline in actual D1", () => {
+  it("counts delayed executor metadata proof inside the original admission deadline", async () => {
+    let posts=0;
+    const backend = { ...provider(() => Effect.sync(() => { posts++; })),
+      prepareDispatch: () => Effect.promise(async () => {
+        await new Promise(resolve => setTimeout(resolve,1100));
+        return Effect.sync(() => { posts++; });
+      }),
+    };
+    await expect(Effect.runPromise(makeNativeDispatchD1(env.RUNS_METADATA,controller,backend,{timeoutSec:1}).start(request))).rejects.toThrow();
+    expect(posts).toBe(0); expect((await row())?.state).toBe("reserved");
+  });
   it("refuses an unrepresentable duration before reserving any durable intent", async () => {
     let posts=0;
     await expect(Effect.runPromise(makeNativeDispatchD1(env.RUNS_METADATA,controller,provider(()=>Effect.sync(()=>{posts++;})),

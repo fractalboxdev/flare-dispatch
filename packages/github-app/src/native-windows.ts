@@ -17,20 +17,79 @@ const positiveId = (id: number): number => {
   return id;
 };
 
-/** A durable controller admission precedes this single POST; ambiguous outcomes require read-only reconciliation. */
-export const dispatchNativeWindows = async (opts: NativeClient & {
-  readonly executorRef: string; readonly request: Readonly<Record<string, unknown>>;
-}): Promise<void> => {
+type DispatchOptions = NativeClient & {
+  readonly executorRef: string; readonly dispatchRef: string; readonly request: Readonly<Record<string, unknown>>;
+};
+const revision = (raw: unknown): raw is string => typeof raw === "string" && /^[0-9a-f]{40}$/.test(raw);
+const object = (raw: unknown): Record<string, unknown> => {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    throw new GithubApiError("native executor prerequisite metadata is malformed", 0, "");
+  return raw as Record<string, unknown>;
+};
+const tagName = (ref: string): string => {
+  if (typeof ref !== "string" || !ref.startsWith("refs/tags/") || ref.length > 200
+    || !ref.slice(10).split("/").every(segment => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment)
+      && !segment.includes("..") && !segment.endsWith(".") && !segment.endsWith(".lock")))
+    throw new GithubApiError("native dispatch reference must be a fully qualified release tag", 0, "");
+  return ref.slice(10);
+};
+
+/**
+ * Read-only proof precedes the durable POST claim. Published immutable releases lock their tag;
+ * deleting a release cannot permit reusing its tag name. A later race can refuse, never select a new SHA.
+ * The returned closure is ephemeral and single-use; only the durable controller owns when to invoke it.
+ */
+export const prepareNativeWindowsDispatch = async (raw: DispatchOptions): Promise<() => Promise<void>> => {
+  const opts = { ...raw };
   if (!/^[0-9a-f]{40}$/.test(opts.executorRef))
     throw new GithubApiError("native executor revision is not immutable", 0, "");
+  const tag = tagName(opts.dispatchRef);
+  if (opts.request.executor_ref !== opts.executorRef || opts.request.dispatch_ref !== opts.dispatchRef)
+    throw new GithubApiError("native dispatch request differs from its executor policy", 0, "");
+  const body = JSON.stringify({ ref: opts.dispatchRef, inputs: { request: JSON.stringify(opts.request) } });
   const url = endpoint(opts, "workflows/native-windows.yml/dispatches");
-  const response = await resolveClient(opts).doFetch(url, {
-    method: "POST", redirect: "manual", headers: ghHeaders(opts.token, { json: true }),
-    body: JSON.stringify({ ref: opts.executorRef, inputs: { request: JSON.stringify(opts.request) } }),
-  });
-  void response.body?.cancel().catch(() => {});
-  if (response.status !== 204) throw new GithubApiError("native executor dispatch has an unexpected response", response.status, "");
+  const base = `${resolveClient(opts).apiBase}/repos/${opts.repo}`;
+  const read = async (suffix: string) => object((await readNativeJson(opts, `${base}/${suffix}`, 64 * 1024)).body);
+  const refused = () => new GithubApiError("native executor release, tag or workflow proof refused", 0, "");
+  const release = await read(`releases/tags/${encodeURIComponent(tag)}`);
+  if (!Number.isSafeInteger(release.id) || (release.id as number) < 1 || release.url !== `${base}/releases/${release.id}`
+    || release.tag_name !== tag || release.immutable !== true || release.draft !== false
+    || typeof release.published_at !== "string" || !Number.isFinite(Date.parse(release.published_at))) throw refused();
+  const ref = await read(`git/ref/tags/${encodeURIComponent(tag)}`);
+  if (ref.ref !== opts.dispatchRef) throw refused();
+  let target = object(ref.object);
+  const seen = new Set<string>();
+  while (target.type === "tag") {
+    if (!revision(target.sha) || seen.has(target.sha) || seen.size >= 8) throw refused();
+    seen.add(target.sha);
+    const annotated = await read(`git/tags/${target.sha}`);
+    if (annotated.sha !== target.sha) throw refused();
+    target = object(annotated.object);
+  }
+  if (target.type !== "commit" || target.sha !== opts.executorRef) throw refused();
+  const workflow = await read("actions/workflows/native-windows.yml");
+  if (!Number.isSafeInteger(workflow.id) || (workflow.id as number) < 1
+    || workflow.path !== ".github/workflows/native-windows.yml" || workflow.state !== "active") throw refused();
+  // Omitting ref is GitHub's default-branch Contents read; workflow metadata alone can outlive a deleted file.
+  for (const suffix of ["", `?ref=${opts.executorRef}`]) {
+    const file = await read(`contents/.github/workflows/native-windows.yml${suffix}`);
+    if (file.type !== "file" || file.path !== ".github/workflows/native-windows.yml" || !revision(file.sha)
+      || !Number.isSafeInteger(file.size) || (file.size as number) < 1 || (file.size as number) > 48 * 1024) throw refused();
+  }
+  let used = false;
+  return async () => {
+    if (used) throw new GithubApiError("native dispatch authority was already consumed", 0, "");
+    used = true;
+    const response = await resolveClient(opts).doFetch(url, {
+      method: "POST", redirect: "manual", headers: ghHeaders(opts.token, { json: true }), body,
+    });
+    void response.body?.cancel().catch(() => {});
+    if (response.status !== 204) throw new GithubApiError("native executor dispatch has an unexpected response", response.status, "");
+  };
 };
+
+/** A durable controller admission precedes this single POST; ambiguous outcomes require read-only reconciliation. */
+export const dispatchNativeWindows = async (opts: DispatchOptions): Promise<void> => (await prepareNativeWindowsDispatch(opts))();
 
 /** Four authenticated pages are complete evidence or a refusal, never a partial absence. */
 const readPages = async (opts: NativeClient, suffix: string, key: string): Promise<readonly unknown[]> => {

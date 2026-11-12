@@ -5,7 +5,7 @@ import {
   admitNativeRunObservation,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
-  dispatchNativeWindows, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs, readNativeWindowsArtifacts,
+  prepareNativeWindowsDispatch, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs, readNativeWindowsArtifacts,
 } from "@fractalboxdev/flare-dispatch-github-app";
 import { NATIVE_ARCHIVE_MAX_BYTES } from "./native-archive-r2";
 
@@ -66,13 +66,18 @@ export const makeNativeGithubProvider = (client: Client) => {
       return yield* Effect.fail(refuse("native run differs from durable binding"));
     return { request, binding, rawRun };
   });
-  const dispatch = (raw: unknown) => Effect.gen(function* () {
+  const prepareDispatch = (raw: unknown) => Effect.gen(function* () {
     const request = yield* scoped(raw);
-    yield* Effect.tryPromise({
-      try: () => dispatchNativeWindows({ ...client, executorRef: request.executor_ref, request }),
+    const post = yield* Effect.tryPromise({
+      try: () => prepareNativeWindowsDispatch({ ...client, executorRef: request.executor_ref, dispatchRef: request.dispatch_ref, request }),
+      catch: () => new NativeReceiptRefused({ reason: "native GitHub executor prerequisites refused" }),
+    });
+    return Effect.tryPromise({
+      try: post,
       catch: () => new NativeReceiptRefused({ reason: "native GitHub dispatch outcome uncertain" }),
     });
   });
+  const dispatch = (raw: unknown) => Effect.gen(function* () { yield* (yield* prepareDispatch(raw)); });
   const listRuns = (raw: unknown, rawAdmission: unknown) => Effect.gen(function* () {
     yield* scoped(raw);
     const window = yield* nativeDiscoveryWindow(rawAdmission);
@@ -132,5 +137,5 @@ export const makeNativeGithubProvider = (client: Client) => {
       return yield* Effect.fail(refuse("native archive expired or run identity mismatch"));
     return { api, artifactId: artifact.id };
   });
-  return { dispatch, listRuns, readRun, observeRun, collect };
+  return { prepareDispatch, dispatch, listRuns, readRun, observeRun, collect };
 };

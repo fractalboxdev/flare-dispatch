@@ -129,7 +129,7 @@ export {
 export { GithubApiError } from "./errors";
 export { parseNativeControllerAppId, readNativeControllerIdentity } from "./native-controller";
 export {
-  dispatchNativeWindows, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs,
+  dispatchNativeWindows, prepareNativeWindowsDispatch, readNativeWindowsRun, readNativeWindowsRuns, readNativeWindowsJobs,
   readNativeWindowsArtifacts, streamNativeWindowsArchive,
 } from "./native-windows";
 export { readNativeJson } from "./native-json";

@@ -28,7 +28,7 @@ const Snapshot = Schema.Struct({
 type Snapshot = typeof Snapshot.Type;
 type Controller = typeof Controller.Type;
 type Provider = {
-  readonly dispatch: (request: NativeRequest) => Effect.Effect<void, NativeReceiptRefused>;
+  readonly prepareDispatch: (request: NativeRequest) => Effect.Effect<Effect.Effect<void, NativeReceiptRefused>, NativeReceiptRefused>;
   /** Complete bounded API evidence; partial pages refuse inside the provider. */
   readonly listRuns: (request: NativeRequest, admittedAt: number) => Effect.Effect<readonly unknown[], NativeReceiptRefused>;
   readonly readRun: (request: NativeRequest, binding: { readonly runId: number; readonly runAttempt: number }) => Effect.Effect<unknown, NativeReceiptRefused>;
@@ -157,6 +157,8 @@ export const makeNativeDispatchD1 = (
       id.policy?.timeoutSec ?? null, id.policy?.timeoutSec ?? null, id.policy?.timeoutSec ?? null).run());
     const prior = yield* read(id);
     if (prior.state !== "reserved") return prior;
+    // The tag is already persisted in request_json. Read-only prerequisite proof cannot spend POST authority.
+    const dispatch = yield* provider.prepareDispatch(id.request);
     const claim = yield* query(() => db.prepare(
       `UPDATE native_dispatches SET state='dispatching'
        WHERE repo=? AND nonce=? AND request_json=? AND controller_app_id=?
@@ -168,7 +170,7 @@ export const makeNativeDispatchD1 = (
     if (claim.meta.changes !== 1) return yield* read(id);
     // A successful claim response can be delayed; immutable admission still precedes the actual POST.
     yield* read(id);
-    return yield* provider.dispatch(id.request).pipe(Effect.matchEffect({
+    return yield* dispatch.pipe(Effect.matchEffect({
       onFailure: () => read(id),
       onSuccess: () => Effect.gen(function* () {
         yield* query(() => db.prepare(

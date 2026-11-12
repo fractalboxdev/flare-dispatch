@@ -11,7 +11,7 @@ import type { Env } from "../env";
 
 const controller = { appId: 42, actorLogin: "native-controller[bot]" };
 const request: NativeRequest = {
-  repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40),
+  repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40), executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1",
   nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc", mode: "gate", profile: "",
   command_sha256: "e964c83ffcc2427c138b484a6fc61f7ebcf70b59186899176e48da89516bb2da",
 };
@@ -35,7 +35,7 @@ const open = async () => {
     executorRef: request.executor_ref, workflowPath: ".github/workflows/native-windows.yml",
     runName: `native-${request.nonce}`, actorLogin: controller.actorLogin, actorType: "Bot", createdAt: new Date().toISOString() };
   const jobs = makeNativeDispatchD1(bindings.db, controller, {
-    dispatch: () => Effect.void, listRuns: () => Effect.succeed([run]), readRun: () => Effect.succeed(run),
+    prepareDispatch: () => Effect.succeed(Effect.void), listRuns: () => Effect.succeed([run]), readRun: () => Effect.succeed(run),
   });
   await Effect.runPromise(jobs.start(request));
   await Effect.runPromise(jobs.reconcile(request));

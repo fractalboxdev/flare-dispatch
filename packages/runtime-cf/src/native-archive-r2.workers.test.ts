@@ -43,7 +43,7 @@ const zip = (members: Member[], zip64 = false) => {
 };
 const fixture = async () => {
   const candidate: NativeRequest = { repo: "owner/context", head: "1".repeat(40), base: "2".repeat(40),
-    executor_ref: "3".repeat(40), nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc",
+    executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1", nonce: "native-0123456789abcdef", target: "aarch64-pc-windows-msvc",
     mode: "gate", profile: "", command_sha256: "0".repeat(64) };
   const request = { ...candidate, command_sha256: await Effect.runPromise(nativeCommandDigest(candidate)) };
   const log = Buffer.from("complete command fixture\n"), binary = new Uint8Array(8 * 1024 * 1024 + 17).fill(87);
