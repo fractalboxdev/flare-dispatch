@@ -1,6 +1,6 @@
-// Test support: a Miniflare instance with the cache bucket, the D1 database and the `CacheLedger` Durable Object;
-// the fake presigner the suites sign with, since Miniflare has no S3 endpoint; and the leases and clock the
-// policies read.
+// Test support: a Miniflare instance with the cache bucket, the D1 database and the `CacheLedger` and `TransparencyLog`
+// Durable Objects; the fake presigner the suites sign with, since Miniflare has no S3 endpoint; and the leases and
+// clock the policies read.
 import { join } from "node:path";
 import { build } from "esbuild";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
@@ -21,7 +21,7 @@ import { protectedCloud, pullRequestNamespace } from "./namespaces.ts";
 
 export const SECRET = "test-compile-cache-secret";
 
-export const startMiniflare = async () => {
+export const startMiniflare = async (bindings: Readonly<Record<string, string>> = {}) => {
   const bundle = await build({
     entryPoints: [join(import.meta.dirname, "test-worker.test-support.ts")],
     bundle: true,
@@ -35,8 +35,11 @@ export const startMiniflare = async () => {
     compatibilityDate: "2026-05-01",
     r2Buckets: ["CACHE"],
     d1Databases: { DB: "cache-test" },
-    durableObjects: { CACHE_LEDGER: { className: "CacheLedger", useSQLite: true } },
-    bindings: { COMPILE_CACHE_SECRET: SECRET },
+    durableObjects: {
+      CACHE_LEDGER: { className: "CacheLedger", useSQLite: true },
+      TRANSPARENCY_LOG: { className: "TransparencyLog", useSQLite: true },
+    },
+    bindings: { COMPILE_CACHE_SECRET: SECRET, ...bindings },
   });
   await mf.ready;
   const bucket = (await mf.getR2Bucket("CACHE")) as unknown as Bucket;

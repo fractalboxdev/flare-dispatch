@@ -135,6 +135,10 @@ stateDiagram-v2
 
 A verifier assigns the highest tier whose conditions all hold.
 
+### Private log
+
+The `TransparencyLog` Durable Object writes the private log to the `CACHE` bucket under `tlog/private/`: each leaf's entry at `leaf/<N>`, the C2SP tlog-tiles hash tiles of height 8 at `tile/<L>/<N>` and `tile/<L>/<N>.p/<W>`, and the latest checkpoint at `checkpoint`. A checkpoint is a C2SP tlog-checkpoint body (the origin `<plane id>/private-log`, the tree size and the base64 root hash, one per line), a blank line, and the line `— <kid> <signature>`, where the signature is the log key's ES256 signature over the body's bytes in IEEE P1363 form, standard base64. Each leaf and tile object is written once; only the checkpoint is replaced.
+
 ### Verification policy
 
 The verification policy is a JSON document in a DSSE envelope signed by the policy root key. Each version holds:
