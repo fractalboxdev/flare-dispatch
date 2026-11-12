@@ -15,6 +15,7 @@ import {
   DeploySmokeEntrySchema,
   deploymentStatusDecoder,
   gateContextOf,
+  isReadOnlyScanRun,
   lookupRun,
   MatrixEntrySchema,
   offloadTestDecoder,
@@ -30,7 +31,6 @@ import {
   workerDeployDecoder,
   WorkerDeployInput,
   workerDeploySerialGroup,
-  validateReadOnlyScan,
   type CatalogEntry,
   type CheckInput,
   type DispatchEvent as CatalogEvent,
@@ -248,10 +248,7 @@ export const catalogRuns =
         ...requiredCheckOf(entry),
         ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),
         ...(manifestRecipeOf(entry)?.labelless === true ? { labelless: true } : {}),
-        ...(entry.spec.readOnlyScan === true &&
-        validateReadOnlyScan(entry.spec.name, entry).length === 0
-          ? { readOnlyScan: true }
-          : {}),
+        ...(isReadOnlyScanRun(entry.spec.name, entry) ? { readOnlyScan: true } : {}),
       })),
       Match.orElse(() => undefined),
     );

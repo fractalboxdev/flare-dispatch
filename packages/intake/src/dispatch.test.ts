@@ -324,6 +324,17 @@ describe("a dispatch of a read-only scan run", () => {
     ).toEqual({ status: 400, code: "invalid_idempotency_key" });
     expect(h.reads.calls).toEqual([]);
   });
+
+  it("[FD-IFC-092] [FD-IFC-074] an MCP dispatch with no Idempotency-Key answers 400 invalid_idempotency_key, as the HTTP route does", async () => {
+    const h = await scanHarness();
+    expect(await refusal(h, scan({ trigger: "mcp" }))).toEqual({
+      status: 400,
+      code: "invalid_idempotency_key",
+    });
+    expect(h.reads.calls).toEqual([]);
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+  });
 });
 
 describe("the route group", () => {

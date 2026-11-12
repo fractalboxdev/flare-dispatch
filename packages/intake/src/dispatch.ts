@@ -213,7 +213,7 @@ export interface DispatchAdmitted {
  * The run, the input schema, the signals caps, the installation, the manifest and the commit of an authenticated
  * dispatch, then one admission request. Every refusal carries a code of the error-model table (FD-IFC-009). A
  * dispatch of a read-only scan run carries an `Idempotency-Key`, or answers 400 `invalid_idempotency_key` before any
- * read (FD-IFC-092); an MCP call carries no header, so the rule holds the HTTP dispatch route. A scoped dispatcher's
+ * read (FD-IFC-092), over the HTTP route and the MCP `dispatch` tool alike (FD-IFC-074). A scoped dispatcher's
  * `classCeiling` reaches `resolveClass` (FD-IFC-091).
  */
 export const admitDispatch = (d: AuthenticatedDispatch) =>
@@ -223,7 +223,7 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
     const run = config.catalog(d.run);
     if (run === undefined)
       return yield* Effect.fail(intakeError(404, "run_not_found", `no run named ${d.run}`));
-    if (run.readOnlyScan === true && d.trigger === "dispatch" && d.idempotency === null)
+    if (run.readOnlyScan === true && d.idempotency === null)
       return yield* Effect.fail(
         intakeError(
           400,
