@@ -88,6 +88,7 @@ describe("triggers reaching the Worker", () => {
         run: "check",
         repo: REPOSITORY,
         sha,
+        // The caller is the token's repository and workflow ref claims, not its `sub`.
         caller: `actions:${REPOSITORY}:${REPOSITORY}/.github/workflows/ci.yml@refs/heads/main`,
       },
     ]);

@@ -7,11 +7,14 @@ import {
   CACHE_KINDS,
   cacheKey,
   compileCacheCommand,
+  imageToolchains,
   INSTALL_OUTPUTS,
   installCachedInputs,
   isCacheKind,
+  NATIVE_LIBRARY_ARCHES,
   prebuiltBinaryInputsDigest,
   restoreOrCargoRun,
+  SANDBOX_NATIVE_LIBRARIES,
   type KeyFields,
 } from "./key.ts";
 
@@ -102,6 +105,29 @@ describe("cache keys", () => {
     expect(await run(restoreOrCargoRun(Effect.succeed(null), cargoRun))).toEqual({ value: "built", restored: false });
     expect(await run(restoreOrCargoRun(Effect.fail("io"), cargoRun))).toEqual({ value: "built", restored: false });
     expect(await run(restoreOrCargoRun(Effect.succeed("cached"), cargoRun))).toEqual({ value: "cached", restored: true });
+  });
+
+  it("[FD-CACHE-036] each native library is pinned by SHA-256 for amd64 and arm64 and its version is a key toolchain", async () => {
+    expect(NATIVE_LIBRARY_ARCHES).toEqual(["amd64", "arm64"]);
+    expect(SANDBOX_NATIVE_LIBRARIES.map((l) => l.name)).toContain("libduckdb");
+    for (const library of SANDBOX_NATIVE_LIBRARIES) {
+      expect(Object.keys(library.sha256).sort()).toEqual(["amd64", "arm64"]);
+      for (const arch of NATIVE_LIBRARY_ARCHES) expect(library.sha256[arch]).toMatch(/^[0-9a-f]{64}$/);
+      expect(library.sha256.amd64).not.toBe(library.sha256.arm64);
+    }
+
+    const toolchains = imageToolchains(fields.toolchains, SANDBOX_NATIVE_LIBRARIES);
+    expect(toolchains).toEqual({ node: "22.13.0", pnpm: "11.1.3", libduckdb: "v1.5.5" });
+    // The image's pinned version replaces a caller's value of the same name.
+    expect(imageToolchains({ libduckdb: "v1.4.0" }, SANDBOX_NATIVE_LIBRARIES)["libduckdb"]).toBe("v1.5.5");
+
+    // An entry built against one library release never answers a read under another.
+    const key = await run(cacheKey({ ...fields, toolchains }));
+    expect(key).not.toBe(await run(cacheKey(fields)));
+    const bumped = SANDBOX_NATIVE_LIBRARIES.map((l) => (l.name === "libduckdb" ? { ...l, version: "v1.5.6" } : l));
+    expect(await run(cacheKey({ ...fields, toolchains: imageToolchains(fields.toolchains, bumped) }))).not.toBe(key);
+    // An image without native libraries keys on its other toolchains only.
+    expect(imageToolchains(fields.toolchains, [])).toEqual(fields.toolchains);
   });
 });
 

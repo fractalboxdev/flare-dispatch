@@ -1,6 +1,7 @@
 // The repository a `development` deployment with no GitHub App reads: one commit of one repository, as the local
 // command that starts the deployment captured it (`pnpm ci:local` writes it from the checkout). Only the facts it holds
 // answer; every other read fails, so no caller decides on a read that never happened.
+import type { ConfidentialityMode } from "@fractalboxdev/flare-dispatch-profile";
 import { Schema } from "effect";
 import { deployment, type ControlPlaneEnv } from "./config.ts";
 
@@ -28,11 +29,33 @@ export type DevRepository = typeof DevRepository.Type;
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(DevRepository));
 
 /** The captured repository, read only by a `development` deployment; a value that does not decode throws. */
-export const devRepositoryOf = (env: ControlPlaneEnv): DevRepository | undefined => {
+export const devRepositoryOf = (
+  env: Pick<ControlPlaneEnv, "DEPLOYMENT" | "FD_DEV_REPOSITORY">,
+): DevRepository | undefined => {
   const raw = env.FD_DEV_REPOSITORY;
   if (deployment(env) !== "development" || raw === undefined || raw === "") return undefined;
   return decode(raw);
 };
+
+/**
+ * A repository's confidentiality mode, the one source intake's admission, a lease's cache fields and the log route
+ * read. No policy rule classifies a repository yet; a development deployment's captured repository carries its own
+ * mode, and every other repository is `unclassified`.
+ */
+export const repositoryConfidentiality = (
+  env: Pick<ControlPlaneEnv, "DEPLOYMENT" | "FD_DEV_REPOSITORY">,
+): ((repo: string) => ConfidentialityMode) => {
+  const dev = devRepositoryOf(env);
+  return (repo) =>
+    (dev !== undefined && dev.repository === repo ? dev.confidentiality : undefined) ??
+    "unclassified";
+};
+
+/** True while a repository's mode is `confidential-compute`: no L2 read or write, and logs stay on the device. */
+export const confidentialCompute = (
+  env: Pick<ControlPlaneEnv, "DEPLOYMENT" | "FD_DEV_REPOSITORY">,
+  repo: string,
+): boolean => repositoryConfidentiality(env)(repo) === "confidential-compute";
 
 /** A captured file's text: a string, null where the path is absent, undefined where it was not captured. */
 export const devFile = (dev: DevRepository, path: string): string | null | undefined => {

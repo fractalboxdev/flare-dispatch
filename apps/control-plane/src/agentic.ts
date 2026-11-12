@@ -10,6 +10,7 @@ import {
   gitDataLayer,
   LOCAL_STORE_MIGRATIONS,
   localPortsLayer,
+  LocalSubmit,
   ReuseInputs,
   ReuseReadFailed,
   StagedWriteReadFailed,
@@ -19,8 +20,7 @@ import {
   type WriteCredentials,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { artifactPath } from "@fractalboxdev/flare-dispatch-cache";
-import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
-import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
+import { d1IntakeStore, IntakeStore, localSubmitter } from "@fractalboxdev/flare-dispatch-intake";
 import { GithubApp, GithubRead, tokenFromApp } from "@fractalboxdev/flare-dispatch-github";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
 import {
@@ -33,7 +33,7 @@ import {
 } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
-import { deployment, type ControlPlaneEnv } from "./config.ts";
+import type { ControlPlaneEnv } from "./config.ts";
 import { boundFetch } from "./github.ts";
 
 let migrated: Promise<unknown> | undefined;
@@ -206,14 +206,26 @@ export const gitDataWithoutApp = gitDataLayer({
     ),
 });
 
-/** The local-work ports: `LocalRegistration`, `ReusePolicy` and `WritebackGate`, with every read they take. */
+/**
+ * The local registration port's submit: intake's local submit over the intake services the control plane builds, so
+ * every accepted `local.register` is one admission of trigger kind `local` under `local-only` (FD-INT-061).
+ */
+export const localSubmitLayer = Layer.effect(LocalSubmit, localSubmitter);
+
+/**
+ * The local-work ports: `LocalRegistration`, `ReusePolicy` and `WritebackGate`, with every read they take. The Layer
+ * needs intake's services for the local submit.
+ */
 export const localPorts = (env: ControlPlaneEnv) =>
-  localPortsLayer({
-    db: env.DB,
-    runKnown: (run) => lookupRun(deployment(env), run)._tag === "Available",
-  }).pipe(
+  localPortsLayer({ db: env.DB }).pipe(
     Layer.provide(
-      Layer.mergeAll(reuseInputsLayer, postureLayer, writebackRecords(env), capacityUsageDeferred),
+      Layer.mergeAll(
+        localSubmitLayer,
+        reuseInputsLayer,
+        postureLayer,
+        writebackRecords(env),
+        capacityUsageDeferred,
+      ),
     ),
   );
 

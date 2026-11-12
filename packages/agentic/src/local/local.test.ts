@@ -3,11 +3,15 @@ import { Effect, Layer } from "effect";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { memoryD1 } from "./d1.test-support.ts";
-import { localRegistrationLayer, needsRegistration, ulid } from "./registration.ts";
+import {
+  type LocalSubmission,
+  LocalSubmit,
+  localRegistrationLayer,
+  needsRegistration,
+} from "./registration.ts";
 import {
   appendIntent,
   DECORATION_KINDS,
-  dedupWriteback,
   type LocalRunContext,
   type WritebackRequest,
 } from "./run-context.ts";
@@ -58,12 +62,6 @@ describe("local run context", () => {
         intents: [{ intent_key: "run:review:2", kind: "review", payload: { body: "b" } }],
       },
     ]);
-    const seen = new Set<string>();
-    expect(dedupWriteback(seen, sent[0] as WritebackRequest).duplicate).toBe(false);
-    expect(dedupWriteback(seen, sent[0] as WritebackRequest)).toEqual({
-      fresh: [],
-      duplicate: true,
-    });
   });
 
   it("[FD-LOCAL-020] fails an unregistered execution's step with RegistrationRequired", async () => {
@@ -136,26 +134,53 @@ const registration = {
   scopeId: "scope",
   executorId: "dev-1",
   repository: "o/r",
+  ref: "refs/heads/feature",
+  inputs: { sha: "c".repeat(40) },
   environmentNames: ["NODE_ENV", "CI"],
   wants: { reuse: true, writeback: false },
 };
 
+interface Submitted {
+  readonly lease: { readonly leaseId: string; readonly epoch: number };
+  readonly run: string;
+  readonly submission: LocalSubmission;
+}
+
+/**
+ * Intake's local submit as the registration port sees it: `check` is the one catalogue run, and a submit keys on the
+ * lease, run, tree hash and inputs digest, so a repeated one answers the same execution.
+ */
+const fakeSubmit = (submitted: Submitted[]) =>
+  Layer.succeed(LocalSubmit, {
+    submit: (lease, run, submission) =>
+      Effect.sync(() => {
+        submitted.push({ lease, run, submission });
+        return run === "check"
+          ? ({
+              _tag: "admitted",
+              executionId: `exec:${lease.leaseId}:${run}:${submission.treeHash}:${submission.inputsDigest}`,
+            } as const)
+          : ({ _tag: "rejected" } as const);
+      }),
+  });
+
 const harness = () => {
   const db = memoryD1();
   const store = localStoreD1(db);
+  const submitted: Submitted[] = [];
   const layer = Layer.merge(
-    localRegistrationLayer({ runKnown: (r) => r === "check" }).pipe(Layer.provide(store)),
+    localRegistrationLayer.pipe(Layer.provide(Layer.merge(store, fakeSubmit(submitted)))),
     store,
   );
   const go = <A, E>(f: Effect.Effect<A, E, LocalRegistration | LocalStore>) =>
     Effect.runPromise(f.pipe(Effect.provide(layer)));
-  return { db, go };
+  return { db, go, submitted };
 };
 
-const registerVia = (run: string, payload: unknown) =>
+const registerVia = (run: string, payload: unknown, lease = { leaseId: "L1", epoch: 1 }) =>
   Effect.gen(function* () {
     const port = yield* LocalRegistration;
-    return yield* port.register({ leaseId: "L1", epoch: 1 }, run, payload);
+    return yield* port.register(lease, run, payload);
   });
 
 describe("local registration port", () => {
@@ -169,7 +194,7 @@ describe("local registration port", () => {
     );
     expect(answer._tag).toBe("accepted");
     const { executionId, nonce } = answer as { executionId: string; nonce: string };
-    expect(executionId).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(executionId).toBe("exec:L1:check:t1:sha256:in");
     expect(nonce).toMatch(/^[0-9a-f]{64}$/);
     const record = await go(
       Effect.gen(function* () {
@@ -211,8 +236,71 @@ describe("local registration port", () => {
     expect(answer).toEqual({ _tag: "rejected" });
   });
 
-  it("issues ULIDs that sort by time", () => {
-    expect(ulid(0, new Uint8Array(10))).toBe("0".repeat(26));
-    expect(ulid(1_700_000_000_000) < ulid(1_700_000_000_001)).toBe(true);
+  it("[FD-INT-061] an accepted registration is one local submit through intake, under the admitted execution id", async () => {
+    const { go, submitted } = harness();
+    const answer = await go(registerVia("check", registration, { leaseId: "L7", epoch: 4 }));
+    expect(submitted).toEqual([
+      {
+        lease: { leaseId: "L7", epoch: 4 },
+        run: "check",
+        submission: {
+          repository: "o/r",
+          baseCommit: "c".repeat(40),
+          ref: "refs/heads/feature",
+          treeHash: "t1",
+          inputsDigest: "sha256:in",
+          inputs: { sha: "c".repeat(40) },
+        },
+      },
+    ]);
+    expect(answer).toMatchObject({ _tag: "accepted", executionId: "exec:L7:check:t1:sha256:in" });
+    const record = await go(
+      Effect.gen(function* () {
+        return yield* (yield* LocalStore).byExecution("exec:L7:check:t1:sha256:in");
+      }),
+    );
+    expect(record).toMatchObject({ leaseId: "L7", epoch: 4, run: "check" });
+  });
+
+  it("[FD-INT-061] a registration intake refuses is rejected and records no rehearsal", async () => {
+    const { go, submitted } = harness();
+    expect(await go(registerVia("unknown-run", registration))).toEqual({ _tag: "rejected" });
+    expect(submitted.map((s) => s.run)).toEqual(["unknown-run"]);
+    const recorded = await go(
+      Effect.gen(function* () {
+        return yield* (yield* LocalStore).byReuseKey("scope", "rk1");
+      }),
+    );
+    expect(recorded).toEqual([]);
+  });
+
+  it("a registration that requests neither reuse nor writeback or fails to decode submits nothing", async () => {
+    const { go, submitted } = harness();
+    await go(registerVia("check", { ...registration, wants: { reuse: false, writeback: false } }));
+    await go(registerVia("check", { ...registration, ref: undefined }));
+    expect(submitted).toEqual([]);
+  });
+
+  it("a repeated registration that intake deduplicates receives the nonce the first one did", async () => {
+    const { go } = harness();
+    const first = await go(registerVia("check", registration));
+    const again = await go(registerVia("check", registration));
+    expect(again).toEqual(first);
+  });
+
+  it("[FD-LOCAL-072] a deduplicated repeat that differs from the stored record is rejected and leaves the record unchanged", async () => {
+    const { go } = harness();
+    const first = await go(registerVia("check", registration));
+    const { executionId } = first as { executionId: string };
+    const read = () =>
+      go(
+        Effect.gen(function* () {
+          return yield* (yield* LocalStore).byExecution(executionId);
+        }),
+      );
+    const stored = await read();
+    const again = await go(registerVia("check", { ...registration, imageDigest: "sha256:other" }));
+    expect(again).toEqual({ _tag: "rejected" });
+    expect(await read()).toEqual(stored);
   });
 });

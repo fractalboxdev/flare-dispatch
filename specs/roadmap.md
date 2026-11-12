@@ -195,7 +195,7 @@ Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and adm
 **Gate 1.**
 
 - `V-MEASURE`: owned devices take more than 50% of eligible `batch` executions over 14 days ([MAMEKO-LEASE-082](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/placement-leases.md)) with zero verdict audit disagreements (FD-PROV-069, FD-PROV-070); executor channel duration in GB-s per connected executor per day is recorded for every day of the window; each preemption is reported.
-- Must pass: every phase 1 harness entry, with `V-CONF` and `V-E2E-LOCAL` on the device path; S3 · profile and S6 for their phase 1 requirements, each with its assumption tests passing.
+- Must pass: every phase 1 harness entry, with `V-CONF` and `V-E2E-LOCAL` on the device path; S3 · profile, S6 and S6 · required reader for their phase 1 requirements, each with its assumption tests passing.
 
 **Kill lines.** Devices taking under 50% of eligible control-plane executions over 30 days keep owned devices on `batch`. More than one manual intervention on a device in a week freezes features until the device heals itself. More than one audit disagreement in a week adds a nightly clean-room cloud build of the default branch.
 

@@ -82,16 +82,3 @@ export const appendIntent = (
       intents: [{ intent_key: key, kind, payload }],
     });
   });
-
-/**
- * The control plane's side of the key: a writeback whose (execution id, intent key) it already holds is a duplicate,
- * so a rerun step never writes twice (FD-LOCAL-055).
- */
-export const dedupWriteback = (
-  seen: Set<string>,
-  request: WritebackRequest,
-): { readonly fresh: readonly WritebackIntent[]; readonly duplicate: boolean } => {
-  const fresh = request.intents.filter((i) => !seen.has(`${request.execution_id}/${i.intent_key}`));
-  for (const i of fresh) seen.add(`${request.execution_id}/${i.intent_key}`);
-  return { fresh, duplicate: fresh.length === 0 };
-};

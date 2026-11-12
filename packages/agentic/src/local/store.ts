@@ -71,6 +71,10 @@ export class LocalStore extends Context.Service<
       at: number,
       since: number,
     ) => Effect.Effect<{ readonly count: number; readonly oldest: number }, LocalStoreFailed>;
+    /** The intent keys mameko's outbox holds as rows of the execution (MAMEKO-PROTO-083). */
+    readonly heldIntents: (
+      executionId: string,
+    ) => Effect.Effect<ReadonlySet<string>, LocalStoreFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-agentic/LocalStore") {}
 
@@ -158,7 +162,7 @@ const recordOf = (r: Row): RegistrationRecord => ({
   statementAccepted: Number(r["statement_accepted"]) === 1,
 });
 
-/** `LocalStore` over the control plane's D1 database, after `LOCAL_STORE_MIGRATIONS`. */
+/** `LocalStore` over the control plane's D1 database, after mameko's store migrations and `LOCAL_STORE_MIGRATIONS`. */
 export const localStoreD1 = (db: D1Binding): Layer.Layer<LocalStore> => {
   const run = (operation: string, query: string, ...values: unknown[]) =>
     Effect.tryPromise({
@@ -273,5 +277,10 @@ export const localStoreD1 = (db: D1Binding): Layer.Layer<LocalStore> => {
         );
         return { count: Number(rows[0]?.["n"] ?? 0), oldest: Number(rows[0]?.["oldest"] ?? at) };
       }),
+    heldIntents: (executionId) =>
+      Effect.map(
+        all("heldIntents", "select intent_key from outbox where execution_id = ?", executionId),
+        (rows) => new Set(rows.map((r) => r["intent_key"] as string)),
+      ),
   });
 };

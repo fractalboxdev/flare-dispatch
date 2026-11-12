@@ -10,6 +10,7 @@ import {
   compileObjectKey,
   grantCarriesNoWorkspace,
   ledgersOf,
+  logObjectName,
   lookupEntry,
   manifestPath,
   protectedCloud,
@@ -67,8 +68,10 @@ let team: AccessTeam;
 let plane: Miniflare;
 /** The same Worker on a deploy that binds no `CacheLedger`. */
 let ledgerless: Miniflare;
+/** The same Worker on a deploy whose captured repository's confidentiality mode is `confidential-compute`. */
+let confidential: Miniflare;
 
-const controlPlane = (script: string, ledger: boolean) =>
+const controlPlane = (script: string, ledger: boolean, devRepository: object = DEV_REPOSITORY) =>
   new Miniflare({
     modules: [{ type: "ESModule", path: "worker.js", contents: script }],
     compatibilityDate: "2026-05-01",
@@ -90,7 +93,7 @@ const controlPlane = (script: string, ledger: boolean) =>
       ACCESS_AUD: AUD,
       OPERATORS: JSON.stringify([OPERATOR]),
       DISPATCHERS: JSON.stringify([OPERATOR]),
-      FD_DEV_REPOSITORY: JSON.stringify(DEV_REPOSITORY),
+      FD_DEV_REPOSITORY: JSON.stringify(devRepository),
     },
   });
 
@@ -107,16 +110,20 @@ beforeAll(async () => {
   const script = bundle.outputFiles[0]!.text;
   plane = controlPlane(script, true);
   ledgerless = controlPlane(script, false);
-  await Promise.all([plane.ready, ledgerless.ready]);
+  confidential = controlPlane(script, true, {
+    ...DEV_REPOSITORY,
+    confidentiality: "confidential-compute",
+  });
+  await Promise.all([plane.ready, ledgerless.ready, confidential.ready]);
 }, 120_000);
 
 afterAll(async () => {
-  await Promise.all([plane?.dispose(), ledgerless?.dispose()]);
+  await Promise.all([plane?.dispose(), ledgerless?.dispose(), confidential?.dispose()]);
   await team?.close();
 });
 
-const bucket = async () => (await plane.getR2Bucket("CACHE")) as unknown as Bucket;
-const db = async () => (await plane.getD1Database("DB")) as unknown as D1Database;
+const bucket = async (mf: Miniflare = plane) => (await mf.getR2Bucket("CACHE")) as unknown as Bucket;
+const db = async (mf: Miniflare = plane) => (await mf.getD1Database("DB")) as unknown as D1Database;
 const ledger = async (repo: string) =>
   ledgersOf(
     (await plane.getDurableObjectNamespace("CACHE_LEDGER")) as unknown as DurableObjectNamespace,
@@ -141,22 +148,27 @@ let leases = 0;
 
 /**
  * Dispatches `check`, records the execution's trigger as `trigger` (what intake records for a webhook) and its inputs as
- * `inputs`, and claims the lease from a fresh device on the control plane's socket.
+ * `inputs`, and claims the lease from a fresh device on the control plane's socket; `executor` is that device's id.
  */
-const leaseOf = async (trigger: unknown, inputs: (dispatched: unknown) => unknown): Promise<Lease> => {
+const leaseOf = async (
+  trigger: unknown,
+  inputs: (dispatched: unknown) => unknown,
+  mf: Miniflare = plane,
+): Promise<Lease & { readonly executor: string }> => {
   const n = ++leases;
   const executorId = `conf-cache-${n}`;
   const device = await newDevice();
   const jwt = await team.jwt(OPERATOR);
   const headers = { "content-type": "application/json", "cf-access-jwt-assertion": jwt };
-  const enrolled = await plane.dispatchFetch("http://x/v1/executors/register", {
+  const enrolled = await mf.dispatchFetch("http://x/v1/executors/register", {
     method: "POST",
     headers,
-    body: JSON.stringify(registration(executorId, device.identity)),
+    // A repository that is not `non-confidential` places only on a device advertising container isolation or stronger.
+    body: JSON.stringify(registration(executorId, device.identity, ["isolation:container"])),
   });
   expect(enrolled.status).toBe(201);
   const sha = n.toString(16).padStart(40, "c");
-  const admitted = await plane.dispatchFetch("http://x/v1/dispatch/check", {
+  const admitted = await mf.dispatchFetch("http://x/v1/dispatch/check", {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -178,7 +190,7 @@ const leaseOf = async (trigger: unknown, inputs: (dispatched: unknown) => unknow
   });
   expect(admitted.status).toBe(202);
   const { execution_id: id } = (await admitted.json()) as { execution_id: string };
-  const d1 = await db();
+  const d1 = await db(mf);
   const row = await d1
     .prepare("select inputs_json from intake_records where execution_id = ?")
     .bind(id)
@@ -191,14 +203,14 @@ const leaseOf = async (trigger: unknown, inputs: (dispatched: unknown) => unknow
     .prepare("update executions set deadline_at = ? where id = ?")
     .bind(Date.now() + 3_600_000, id)
     .run();
-  const socket = await connect(plane, executorId, device.keys);
+  const socket = await connect(mf, executorId, device.keys);
   socket.send(hello(executorId));
   await socket.next("session.welcome");
   socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
   const lease = (await socket.next("exec.lease")) as unknown as Lease;
   expect(lease.execution_id).toBe(id);
   await endStandingClaim(socket);
-  return lease;
+  return { ...lease, executor: executorId };
 };
 
 /** Run inputs that name namespaces the execution row does not give it. */
@@ -427,6 +439,63 @@ describe("the executor's cache reads against the composed control plane", () => 
         get: async () => Promise.reject(new Error("R2 unavailable")),
       } as unknown as Bucket;
       expect(await Effect.runPromise(lookupEntry(reader, key, fromBucket(failing), keys))).toBeNull();
+    },
+    60_000,
+  );
+});
+
+describe("a confidential-compute repository on the composed control plane", () => {
+  let confidentialLease: (Lease & { readonly executor: string }) | undefined;
+  const confidentialPullRequest = async () =>
+    (confidentialLease ??= await leaseOf(PULL_REQUEST, namingNamespaces, confidential));
+
+  it(
+    "[FD-CACHE-008] the lease names no L2 namespace, no cache prefix and no compile-cache endpoint, whatever the run inputs name",
+    async () => {
+      const lease = await confidentialPullRequest();
+      expect(lease.cache_namespaces).toEqual({ read: [], write: null });
+      expect(lease.upload_grant.cache_prefix).toBeNull();
+      expect(lease.upload_grant.compile_cache).toBeNull();
+      // The inputs still name a namespace; nothing granted follows them.
+      expect(lease.inputs).toMatchObject({ cache_namespace: protectedCloud(REPO) });
+      // The same pull request on a repository that is not confidential reads and writes L2.
+      const open = await pullRequestLease();
+      expect(open.cache_namespaces.write).toBe(PR);
+      expect(open.upload_grant.compile_cache).not.toBeNull();
+    },
+    60_000,
+  );
+
+  it(
+    "[FD-CACHE-088] the log viewer shows the executor id and execution id as a pointer and fetches no log content",
+    async () => {
+      /** Writes one log segment of the lease's execution to a deploy's bucket and reads the viewer as an operator. */
+      const viewerOf = async (mf: Miniflare, lease: Lease) => {
+        const name = await logObjectName({
+          executionId: lease.execution_id,
+          epoch: lease.epoch,
+          journalName: "step:build",
+          stream: "stdout",
+          start: 0,
+          end: 1,
+        });
+        await (await bucket(mf)).put(name!, `${JSON.stringify({ line: "confidential build output" })}\n`, {
+          customMetadata: { executor_id: "device", executor_kind: "device" },
+        });
+        const read = await mf.dispatchFetch(
+          `${ORIGIN}/v1/executions/${lease.execution_id}/logs?format=html`,
+          { headers: { "cf-access-jwt-assertion": await team.jwt(OPERATOR) } },
+        );
+        expect(read.status).toBe(200);
+        return read.text();
+      };
+      const lease = await confidentialPullRequest();
+      const pointer = await viewerOf(confidential, lease);
+      expect(pointer).toContain(`"executionId":"${lease.execution_id}"`);
+      expect(pointer).toContain(`"executorId":"${lease.executor}"`);
+      expect(pointer).not.toContain("confidential build output");
+      // A repository that is not confidential shows the log content its executor uploaded.
+      expect(await viewerOf(plane, await prLeaseForReads())).toContain("confidential build output");
     },
     60_000,
   );

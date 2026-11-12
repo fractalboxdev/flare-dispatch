@@ -127,7 +127,7 @@ export const presignerConfigOf = (env: ControlPlaneEnv): R2PresignerConfig | und
       }
     : undefined;
 
-export const deployment = (env: ControlPlaneEnv): Deployment => deploymentOf(env.DEPLOYMENT);
+export const deployment = (env: Pick<ControlPlaneEnv, "DEPLOYMENT">): Deployment => deploymentOf(env.DEPLOYMENT);
 
 /** A rendered var holding an array arrives as the array; the API reads each identity list as JSON text. */
 const textVar = (value: unknown): string | undefined =>

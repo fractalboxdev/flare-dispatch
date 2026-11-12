@@ -5,11 +5,11 @@ import { PR_SEEDS, readKeptSeeds, seedsOf } from "../../../ops/src/verification/
 import { simulateEviction } from "./evict.sim.ts";
 
 describe("simulation: L1 eviction under the free-disk floor", () => {
-  it("[FD-CACHE-010] cache.evict(target_bytes) evicts L1 entries least recently read first until target_bytes are freed or L1 is empty, and answers the bytes freed", () => {
+  it("[FD-CACHE-010] cache.evict(target_bytes) evicts L1 entries least recently read first until target_bytes are freed or L1 is empty, and answers the bytes freed", async () => {
     const violations: string[] = [];
     const reached: Record<string, number> = {};
     for (const seed of seedsOf("evict", PR_SEEDS, readKeptSeeds())) {
-      const run = simulateEviction(seed);
+      const run = await simulateEviction(seed);
       violations.push(...run.violations.map((v) => v.message));
       for (const [k, n] of Object.entries(run.reached)) reached[k] = (reached[k] ?? 0) + n;
     }
@@ -19,9 +19,9 @@ describe("simulation: L1 eviction under the free-disk floor", () => {
     expect(reached.emptied).toBeGreaterThan(0);
   }, 120_000);
 
-  it("replays a seed exactly", () => {
-    const first = simulateEviction(5);
-    expect(simulateEviction(5).trace).toEqual(first.trace);
+  it("replays a seed exactly", async () => {
+    const first = await simulateEviction(5);
+    expect((await simulateEviction(5)).trace).toEqual(first.trace);
     expect(first.reached.evictions).toBeGreaterThan(0);
   });
 });

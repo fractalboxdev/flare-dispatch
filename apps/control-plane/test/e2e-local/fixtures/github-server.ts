@@ -66,6 +66,17 @@ export interface GithubWrite extends GithubCall {
   readonly body: unknown;
 }
 
+/**
+ * One installation token the server minted, with the scope its request named: `null` where the request named none, so
+ * the token carries every permission and repository of the installation, as GitHub mints it.
+ */
+export interface MintedToken {
+  readonly token: string;
+  readonly installation: number;
+  readonly repositories: readonly string[] | null;
+  readonly permissions: Readonly<Record<string, string>> | null;
+}
+
 /** What `oidcToken` changes of a well-formed token: claims replaced or added, and header fields. */
 export interface TokenOverrides {
   readonly claims?: Record<string, unknown>;
@@ -102,6 +113,8 @@ export interface GithubFixtureServer {
   readonly calls: readonly GithubCall[];
   /** Every REST write the recorded state answered, in order. */
   readonly writes: readonly GithubWrite[];
+  /** Every installation token minted, in order. */
+  readonly minted: readonly MintedToken[];
   /** The remaining count the last answer to `installation`'s token reported. */
   readonly remaining: (installation: number) => number;
   readonly unrecorded: readonly GithubCall[];
@@ -173,6 +186,7 @@ const restApi = (
   app: GithubAppFixture,
   writes: GithubWrite[],
   required: ReadonlyMap<string, readonly string[]>,
+  minted: MintedToken[],
 ) => {
   const { state, publicKey } = app;
   /** Each installation token minted, and the installation it acts for. */
@@ -210,6 +224,17 @@ const restApi = (
         return notFound();
       const token = `ghs_e2e${installation}${randomBytes(12).toString("hex")}`;
       tokens.set(token, installation);
+      const text = await request.text();
+      const scope = (text === "" ? {} : JSON.parse(text)) as {
+        readonly repositories?: readonly string[];
+        readonly permissions?: Readonly<Record<string, string>>;
+      };
+      minted.push({
+        token,
+        installation,
+        repositories: scope.repositories ?? null,
+        permissions: scope.permissions ?? null,
+      });
       return json(201, { token, expires_at: new Date(Date.now() + 3_600_000).toISOString() });
     }
     const scoped = /^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/.exec(url.pathname);
@@ -334,7 +359,8 @@ export const startGithubFixtureServer = async (
   const writes: GithubWrite[] = [];
   const unrecorded: GithubCall[] = [];
   const required = new Map<string, readonly string[]>();
-  const rest = app === undefined ? undefined : restApi(app, writes, required);
+  const minted: MintedToken[] = [];
+  const rest = app === undefined ? undefined : restApi(app, writes, required, minted);
   /** Each request token the runtime handed out, and the job it belongs to. */
   const requestTokens = new Map<string, ActionsJob>();
   let origin = "";
@@ -421,6 +447,7 @@ export const startGithubFixtureServer = async (
     },
     calls,
     writes,
+    minted,
     remaining: (installation) => rest?.remaining(installation) ?? RATE_LIMIT_START,
     unrecorded,
     close: () => new Promise((resolve) => server.close(() => resolve())),

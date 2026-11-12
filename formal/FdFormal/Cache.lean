@@ -1,6 +1,7 @@
 -- The model of cache namespaces and cache tiers (packages/cache/src/namespaces.ts), the commit's namespace check
--- (packages/cache/src/manifest.ts `commitEntry`), the reader's lookup and the compile-cache route's namespace choice
--- (packages/cache/src/compile-cache.ts), property S6 of specs/verification.md § Formal properties.
+-- (packages/cache/src/manifest.ts `commitEntry`), the reader's lookup (`lookupEntry`) and the compile-cache route's
+-- namespace choice (packages/cache/src/compile-cache.ts), properties S6 and S6 · required reader of
+-- specs/verification.md § Formal properties.
 --
 -- `cacheNamespaces` takes the repository as `repoSlug(execution.repo)` returns it, so each theorem holds for every
 -- slug the TypeScript validation can produce. A namespace is a constructor here and a string in TypeScript; `render`
@@ -631,5 +632,80 @@ theorem route_namespaces_from_token (scope : TokenScope) (req : Request) (hit : 
       | exact Or.inl (hl op h)
       | (simp only [List.mem_singleton] at h; exact Or.inr ⟨_, h, by assumption⟩)
       | split at h)
+
+/-! ### FD-CACHE-027: the reader's writer-kind rule -/
+
+/-- The manifest fields the reader's lookup reads (`Manifest`): the key, the namespace id and the writer's executor
+kind. -/
+structure Manifest where
+  key : String
+  nsId : String
+  writerKind : String
+  deriving DecidableEq, Repr
+
+/-- The reader's context (`ReaderContext`): its execution's class and constraints, its lease and the executor kind it
+runs on. -/
+structure Reader where
+  execution : Execution
+  lease : Lease
+  kind : String
+  deriving Repr
+
+/-- `cloudRequired`: the reader is a `required` execution on executor kind `cloudflare` or `aws`. -/
+def Reader.cloudRequired (rd : Reader) : Bool := rd.execution.cls == "required" && isCloudKind rd.kind
+
+/-- Whether the lookup takes a manifest fetched under a namespace: the manifest names the key and that namespace, a
+cloud `required` reader takes it only from a cloud writer, and its signature verifies. -/
+def Reader.takes (rd : Reader) (verify : Manifest → Bool) (nsId key : String) (m : Manifest) : Bool :=
+  m.key == key && m.nsId == nsId && !(rd.cloudRequired && !isCloudKind m.writerKind) && verify m
+
+/-- `lookupEntry`: nothing for a `release` or `cloud-only` reader, otherwise the first readable namespace, in lease
+order, whose fetched manifest the reader takes. `fetch` answers none for a namespace with no committed manifest and
+for a failed read; `verify` answers whether a manifest's signature verifies against its writer's key. -/
+def lookupEntry (rd : Reader) (key : String) (fetch : String → String → Option Manifest) (verify : Manifest → Bool) :
+    Option (String × Manifest) :=
+  if restoresNothing rd.execution then none
+  else rd.lease.read.findSome? fun ns =>
+    (fetch ns.render key).bind fun m => if rd.takes verify ns.render key m then some (ns.render, m) else none
+
+/-- Every entry the lookup restores is a manifest the reader takes, fetched under one of its lease's readable
+namespaces. -/
+theorem lookupEntry_takes (rd : Reader) (key : String) (fetch : String → String → Option Manifest)
+    (verify : Manifest → Bool) (nsId : String) (m : Manifest) (h : lookupEntry rd key fetch verify = some (nsId, m)) :
+    ∃ ns ∈ rd.lease.read, ns.render = nsId ∧ fetch nsId key = some m ∧ rd.takes verify nsId key m = true := by
+  unfold lookupEntry at h
+  split at h
+  · cases h
+  · obtain ⟨ns, hmem, hns⟩ := List.exists_of_findSome?_eq_some h
+    cases hf : fetch ns.render key with
+    | none => simp [hf] at hns
+    | some m' =>
+      simp only [hf, Option.bind_some] at hns
+      split at hns
+      · rename_i ht
+        simp only [Option.some.injEq, Prod.mk.injEq] at hns
+        obtain ⟨rfl, rfl⟩ := hns
+        exact ⟨ns, hmem, rfl, hf, ht⟩
+      · cases hns
+
+/--
+While an execution of class `required` runs on executor kind `cloudflare` or `aws`, the reader restores only entries
+whose manifest records a writer of executor kind `cloudflare` or `aws`, whatever its lease's namespaces hold and
+whichever manifests verify (FD-CACHE-027).
+-/
+theorem required_cloud_reader_restores_cloud_writer (rd : Reader) (key : String)
+    (fetch : String → String → Option Manifest) (verify : Manifest → Bool) (nsId : String) (m : Manifest)
+    (hc : rd.execution.cls = "required") (hk : rd.kind = "cloudflare" ∨ rd.kind = "aws")
+    (h : lookupEntry rd key fetch verify = some (nsId, m)) :
+    m.writerKind = "cloudflare" ∨ m.writerKind = "aws" := by
+  obtain ⟨_, _, _, _, ht⟩ := lookupEntry_takes rd key fetch verify nsId m h
+  have hcr : rd.cloudRequired = true := by
+    rcases hk with hk | hk <;> simp [Reader.cloudRequired, isCloudKind, hc, hk]
+  have hw : isCloudKind m.writerKind = true := by
+    simp only [Reader.takes, hcr, Bool.true_and, Bool.and_eq_true, Bool.not_eq_true'] at ht
+    cases hw : isCloudKind m.writerKind
+    · simp [hw] at ht
+    · rfl
+  simpa [isCloudKind] using hw
 
 end FdFormal.Cache

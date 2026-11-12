@@ -1,8 +1,6 @@
 // The check run admission opens: the `cp:check:open` row mameko's `admit` inserts with the execution, built by the
 // `checkOpenPayload` binding from the run's check name and the request's head SHA.
-import { LocalRegistration } from "@fractalboxdev/mameko-ports";
 import { checkOpenPayload } from "@fractalboxdev/flare-dispatch-profile";
-import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   admit,
@@ -13,7 +11,7 @@ import {
   REPO,
   testRun,
 } from "./harness.test-support.ts";
-import { localRegistrationLayer } from "./local.ts";
+import { submitLocal } from "./local.ts";
 
 const SHA = "e".repeat(40);
 
@@ -104,19 +102,16 @@ describe("local-only work", () => {
     const cloud = await admit(h, authenticated({ sha: HEAD, inputs: { sha: HEAD } }));
     expect(opened(h, cloud.executionId).map((r) => r.intent_key)).toEqual(["cp:check:open"]);
     const answer = await h.run(
-      Effect.gen(function* () {
-        const port = yield* LocalRegistration;
-        return yield* port.register({ leaseId: "L1", epoch: 1 }, "check", {
-          repo: REPO,
-          sha: HEAD,
-          ref: "refs/heads/feature",
-          treeHash: "tree-1",
-          inputsDigest: "inputs-1",
-          inputs: { sha: HEAD },
-        });
-      }).pipe(Effect.provide(localRegistrationLayer)),
+      submitLocal({ leaseId: "L1", epoch: 1 }, "check", {
+        repository: REPO,
+        baseCommit: HEAD,
+        ref: "refs/heads/feature",
+        treeHash: "tree-1",
+        inputsDigest: "inputs-1",
+        inputs: { sha: HEAD },
+      }),
     );
-    expect(answer).toMatchObject({ _tag: "accepted" });
+    expect(answer).toMatchObject({ _tag: "admitted" });
     const executionId = (answer as { executionId: string }).executionId;
     expect(h.executions().map((e) => e["id"])).toContain(executionId);
     expect(h.records().find((r) => r["execution_id"] === executionId)).toMatchObject({
