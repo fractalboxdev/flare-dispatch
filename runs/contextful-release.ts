@@ -282,7 +282,27 @@ const publishOrRateLimit = (
         : Effect.fail(error)),
   );
 
-const nativeRelease = (input: typeof ReleaseCellInput.Type) => Effect.gen(function* () {
+const publishAssets = (input: typeof ReleaseCellInput.Type, assets: readonly StagedAsset[], stagger: number) =>
+  Effect.gen(function* () {
+    let waitedMs = 0;
+    for (const asset of assets) {
+      for (let attempt = 0; ; attempt++) {
+        const name = attempt === 0 ? `publish-${asset.name}` : `publish-${asset.name}-retry-${attempt}`;
+        const outcome = yield* step(name, () => publishOrRateLimit(input, asset),
+          { retries: 3, retryOn: ["GitHubApiError", "StepFailed"] });
+        if (outcome.kind === "published") break;
+        const waitMs = outcome.retryAfterMs + stagger;
+        if (waitedMs + waitMs > PUBLISH_RATE_LIMIT_BUDGET_MS) {
+          return yield* Effect.fail(new GitHubApiError({ status: outcome.status, reason: "rate-limited",
+            retryAfterMs: outcome.retryAfterMs }));
+        }
+        waitedMs += waitMs;
+        yield* checkpointSleep(`${name}-rate-limit-wait`, waitMs);
+      }
+    }
+  });
+
+const nativeRelease = (input: typeof ReleaseCellInput.Type, stagger: number) => Effect.gen(function* () {
   if (input.profile !== "contextful-edge" && input.profile !== "contextful-full")
     return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release profile unsupported" }));
   if (input.target !== "x86_64-pc-windows-msvc" && input.target !== "aarch64-pc-windows-msvc")
@@ -330,17 +350,19 @@ const nativeRelease = (input: typeof ReleaseCellInput.Type) => Effect.gen(functi
   if (checksum.trim() !== `${parsed.sha256}  ${parsed.archive}`)
     return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release checksum conflicts" }));
   const assets = [parsed.archive, `${parsed.archive}.sha256`, parsed.sbom];
-  for (const assetName of assets) yield* step(`import-native-${assetName}`, () => Effect.gen(function* () {
+  const staged: StagedAsset[] = [];
+  for (const assetName of assets) staged.push(yield* step(`import-native-${assetName}`, () => Effect.gen(function* () {
     const file = yield* nativeExecution.readReleaseFile(handle, `dist/${assetName}`);
     if (assetName === parsed.archive && file.sha256 !== parsed.sha256) {
       yield* Effect.promise(() => file.body.cancel());
       return yield* Effect.fail(new NativeReceiptRefused({ reason: "native archive digest conflicts" }));
     }
+    const type = contentType(assetName);
     yield* artifact.uploadVerified({ name: assetName, body: file.body, size: file.size, sha256: file.sha256,
-      contentType: assetName.endsWith(".json") ? "application/json" : assetName.endsWith(".gz") ? "application/gzip" : "text/plain" });
-    if (!input.dryRun) yield* github.publishReleaseAsset({ repo: input.repo, releaseId: input.releaseId, artifactName: assetName,
-      contentType: assetName.endsWith(".json") ? "application/json" : assetName.endsWith(".gz") ? "application/gzip" : "text/plain", sha256: file.sha256 });
-  }));
+      contentType: type });
+    return { name: assetName, sha256: file.sha256, contentType: type };
+  })));
+  if (!input.dryRun) yield* publishAssets(input, staged, stagger);
   return { profile: input.profile, target: input.target, manifest, assets };
 });
 
@@ -364,7 +386,8 @@ export const contextfulReleaseCell = defineRun({
       if (!Number.isSafeInteger(input.releaseId) || (!input.dryRun && input.releaseId <= 0)) {
         return yield* Effect.die(new Error("release cell requires a valid draft release id"));
       }
-      if (input.target.endsWith("-pc-windows-msvc")) return yield* nativeRelease(input);
+      if (input.target.endsWith("-pc-windows-msvc")) return yield* nativeRelease(input,
+        cells.findIndex(cell => cell.profile === input.profile && cell.target === input.target) * PUBLISH_STAGGER_MS);
       const version = input.tag.slice(1);
       let ws = yield* step("checkout", () => workspace({ repo: input.repo, sha: input.sha }));
       for (let rebuild = 0; rebuild <= OUTPUT_REBUILDS; rebuild++) {
@@ -401,22 +424,7 @@ export const contextfulReleaseCell = defineRun({
         if (!input.dryRun) {
           const stagger = cells.findIndex((cell) => cell.profile === input.profile && cell.target === input.target)
             * PUBLISH_STAGGER_MS;
-          let waitedMs = 0;
-          for (const asset of collected.assets) {
-            for (let attempt = 0; ; attempt++) {
-              const name = attempt === 0 ? `publish-${asset.name}` : `publish-${asset.name}-retry-${attempt}`;
-              const outcome = yield* step(name, () => publishOrRateLimit(input, asset),
-                { retries: 3, retryOn: ["GitHubApiError", "StepFailed"] });
-              if (outcome.kind === "published") break;
-              const waitMs = outcome.retryAfterMs + stagger;
-              if (waitedMs + waitMs > PUBLISH_RATE_LIMIT_BUDGET_MS) {
-                return yield* Effect.fail(new GitHubApiError({ status: outcome.status, reason: "rate-limited",
-                  retryAfterMs: outcome.retryAfterMs }));
-              }
-              waitedMs += waitMs;
-              yield* checkpointSleep(`${name}-rate-limit-wait`, waitMs);
-            }
-          }
+          yield* publishAssets(input, collected.assets, stagger);
         }
         return { profile: input.profile, target: input.target, manifest: collected.manifest,
           assets: collected.assets.map((asset) => asset.name),
