@@ -45,11 +45,15 @@ export const SidePayloads = {
     commit_id: Schema.optionalKey(Schema.String),
   }),
   issue: Schema.Struct({
-    title: Schema.String,
-    body: Schema.String,
+    repo: Schema.optionalKey(Schema.Struct({ owner: Schema.String, name: Schema.String })),
+    /** Required to create or update an issue; a close carries neither. */
+    title: Schema.optionalKey(Schema.String),
+    body: Schema.optionalKey(Schema.String),
     labels: Schema.optionalKey(Schema.Array(Schema.String)),
     /** Updates this issue instead of creating one. */
     number: Schema.optionalKey(Schema.Number),
+    /** Closes the issue `number` names with the state reason `duplicate`, in favour of this issue. */
+    close_as_duplicate_of: Schema.optionalKey(Schema.Number),
   }),
   label: Schema.Struct({
     issue_number: Schema.Number,
@@ -403,6 +407,30 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
     apply: (ctx, p) =>
       Effect.gen(function* () {
         const w = yield* writes;
+        if (p.close_as_duplicate_of !== undefined) {
+          if (
+            p.repo !== undefined &&
+            `${p.repo.owner}/${p.repo.name}`.toLowerCase() !== ctx.repo.toLowerCase()
+          )
+            return yield* refuse("issue: close repository does not match execution scope");
+          if (p.number === undefined) return yield* refuse("issue: a close names no issue");
+          const issue = yield* w.issue({ ...ctx, issue: p.number });
+          if (issue.pull_request !== undefined)
+            return yield* refuse("issue: a close names a pull request");
+          if (issue.state_reason === "reopened")
+            return yield* refuse("issue: a maintainer reopened it");
+          if (issue.state === "closed") return applied(issue.id);
+          if (p.close_as_duplicate_of === p.number)
+            return yield* refuse("issue: a duplicate names itself");
+          const original = yield* w.issue({ ...ctx, issue: p.close_as_duplicate_of });
+          if (original.pull_request !== undefined || original.state !== "open")
+            return yield* refuse("issue: the original is not an open issue");
+          return applied(
+            (yield* w.closeIssue({ ...ctx, issue: p.number, duplicateIssueId: original.id })).id,
+          );
+        }
+        if (p.title === undefined || p.body === undefined)
+          return yield* refuse("issue: a title and a body are required");
         const marker = intentMarker(ctx.row);
         const body = withMarker(p.body, marker);
         if (p.number !== undefined)
@@ -415,8 +443,25 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
           (yield* w.createIssue({ ...ctx, title: p.title, body, labels: p.labels ?? [] })).id,
         );
       }),
-    lookup: (ctx) =>
-      Effect.flatMap(issuesWithMarker(ctx, intentMarker(ctx.row)), (is) => single(is, (i) => i.id)),
+    // A close carries no body marker. Read its current state to adopt a lost answer; an open issue needs an apply
+    // whose fresh read respects a maintainer's reopen. A failed read proves neither presence nor absence.
+    lookup: (ctx, p) =>
+      p.close_as_duplicate_of !== undefined
+        ? Effect.gen(function* () {
+            if (
+              p.repo !== undefined &&
+              `${p.repo.owner}/${p.repo.name}`.toLowerCase() !== ctx.repo.toLowerCase()
+            )
+              return yield* refuse("issue: close repository does not match execution scope");
+            if (p.number === undefined) return yield* refuse("issue: a close names no issue");
+            const issue = yield* (yield* writes).issue({ ...ctx, issue: p.number });
+            return issue.pull_request === undefined && issue.state === "closed"
+              ? Option.some(String(issue.id))
+              : Option.none<string>();
+          })
+        : Effect.flatMap(issuesWithMarker(ctx, intentMarker(ctx.row)), (is) =>
+            single(is, (i) => i.id),
+          ),
   },
   label: {
     github: true,

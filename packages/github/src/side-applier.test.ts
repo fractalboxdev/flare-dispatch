@@ -265,6 +265,34 @@ describe("comment, review and issue", () => {
     expect(w.side.issues).toHaveLength(150);
   });
 
+  it("[FD-AGT-075] an issue close as a duplicate closes with state reason duplicate and writes nothing else", async () => {
+    const w = world();
+    w.side.issues.push(
+      { id: 9, number: 9, title: "dup", body: "same crash", labels: [] },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [] },
+    );
+    const r = row("issue", { number: 9, close_as_duplicate_of: 3 }, { intentKey: "run:close:0" });
+    expect(await apply(w, r)).toMatchObject({ _tag: "applied", externalRef: "9" });
+    expect(writes(w)).toEqual(["closeIssue"]);
+    expect(w.side.issues[0]).toMatchObject({
+      title: "dup",
+      body: "same crash",
+      stateReason: "duplicate",
+      duplicateIssueId: 33,
+    });
+    expect(await lookup(w, r)).toMatchObject({ _tag: "found", externalRef: "9" });
+    expect(await apply(w, r)).toMatchObject({ _tag: "applied", externalRef: "9" });
+    expect(await apply(w, row("issue", { close_as_duplicate_of: 3 }))).toMatchObject({
+      _tag: "refused",
+      reason: "issue: a close names no issue",
+    });
+    expect(await apply(w, row("issue", { number: 9 }))).toMatchObject({
+      _tag: "refused",
+      reason: "issue: a title and a body are required",
+    });
+    expect(writes(w)).toEqual(["closeIssue"]);
+  });
+
   it("[FD-GH-092] an issue list longer than the search bound is undetermined, never absent", async () => {
     const w = world();
     for (let n = 1; n <= ISSUE_PAGES * 100; n++)
@@ -273,6 +301,96 @@ describe("comment, review and issue", () => {
     expect(await lookup(w, r)).toMatchObject({ _tag: "undetermined" });
     expect(await apply(w, r)).toMatchObject({ _tag: "retryable" });
     expect(w.side.calls.filter((c) => c === "createIssue")).toEqual([]);
+  });
+
+  it("[FD-AGT-077] a lost duplicate-close answer never closes an issue a maintainer reopened before retry", async () => {
+    const w = world();
+    w.side.issues.push(
+      { id: 9, number: 9, title: "dup", body: "same crash", labels: [] },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [] },
+    );
+    const r = row("issue", { number: 9, close_as_duplicate_of: 3 }, { intentKey: "run:close:0" });
+    w.side.lostAnswers.push(new GithubNetworkError({ sent: true, message: "reset after close" }));
+    expect(await apply(w, r)).toMatchObject({ _tag: "unknown" });
+    Object.assign(w.side.issues[0]!, { state: "open", stateReason: "reopened" });
+    expect(await lookup(w, r)).toMatchObject({ _tag: "absent" });
+    expect(await apply(w, r)).toMatchObject({ _tag: "refused" });
+    expect(w.side.issues[0]!.stateReason).toBe("reopened");
+    expect(writes(w)).toEqual(["closeIssue"]);
+  });
+
+  it("[FD-AGT-077] a failed target or original read never permits an issue close", async () => {
+    const w = world();
+    w.side.issues.push(
+      { id: 9, number: 9, title: "dup", body: "same crash", labels: [] },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [] },
+    );
+    const r = row("issue", { number: 9, close_as_duplicate_of: 3 });
+    const unavailable = () =>
+      new GithubHttpError({ status: 502, message: "bad gateway", rateLimited: false });
+    w.side.failures.push(unavailable());
+    expect(await lookup(w, r)).toMatchObject({ _tag: "undetermined" });
+    w.side.failures.push(unavailable());
+    expect(await apply(w, r)).toMatchObject({ _tag: "retryable" });
+    w.side.failures.push(null, unavailable());
+    expect(await apply(w, r)).toMatchObject({ _tag: "retryable" });
+    expect(writes(w)).toEqual([]);
+  });
+
+  it("refuses a close payload for another repository before reading or writing an issue", async () => {
+    const w = world();
+    w.side.issues.push(
+      { id: 9, number: 9, title: "dup", body: "same crash", labels: [] },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [] },
+    );
+    const wrong = row("issue", {
+      number: 9,
+      close_as_duplicate_of: 3,
+      repo: { owner: "unrelated", name: "public" },
+    });
+    expect(await apply(w, wrong)).toMatchObject({
+      _tag: "refused",
+      reason: "issue: close repository does not match execution scope",
+    });
+    expect(await lookup(w, wrong)).toMatchObject({ _tag: "undetermined" });
+    expect(w.side.calls).toEqual([]);
+    const same = row("issue", {
+      number: 9,
+      close_as_duplicate_of: 3,
+      repo: { owner: "ACME", name: "App" },
+    });
+    expect(await apply(w, same)).toMatchObject({ _tag: "applied", externalRef: "9" });
+    expect(writes(w)).toEqual(["closeIssue"]);
+  });
+
+  it("[FD-AGT-077] adopts an already closed issue and refuses a closed original or a pull request", async () => {
+    const w = world();
+    w.side.issues.push(
+      {
+        id: 9,
+        number: 9,
+        title: "dup",
+        body: "same crash",
+        labels: [],
+        state: "closed",
+        stateReason: "completed",
+      },
+      { id: 33, number: 3, title: "original", body: "crash", labels: [], state: "closed" },
+    );
+    const r = row("issue", { number: 9, close_as_duplicate_of: 3 });
+    expect(await apply(w, r)).toMatchObject({ _tag: "applied", externalRef: "9" });
+    expect(await lookup(w, r)).toMatchObject({ _tag: "found", externalRef: "9" });
+    w.side.issues[0]!.state = "open";
+    expect(await apply(w, r)).toMatchObject({
+      _tag: "refused",
+      reason: "issue: the original is not an open issue",
+    });
+    Object.assign(w.side.issues[0]!, { pull_request: { url: "pull" } });
+    expect(await apply(w, r)).toMatchObject({
+      _tag: "refused",
+      reason: "issue: a close names a pull request",
+    });
+    expect(writes(w)).toEqual([]);
   });
 
   it("[FD-GH-046] a lost answer after GitHub made the comment is adopted on the next attempt", async () => {
@@ -783,7 +901,7 @@ describe("write authority", () => {
 
   it("[FD-GH-001] only the appliers call a GitHub write for an execution", () => {
     const writeCall =
-      /\.(createCheckRun|updateCheckRun|createComment|createReview|createIssue|updateIssue|addLabels|removeLabel|createBlob|createTree|createCommit|setBranch|createPull|closePull|createDraftRelease|publishRelease|uploadAsset)\(/;
+      /\.(createCheckRun|updateCheckRun|createComment|createReview|createIssue|updateIssue|closeIssue|addLabels|removeLabel|createBlob|createTree|createCommit|setBranch|createPull|closePull|createDraftRelease|publishRelease|uploadAsset)\(/;
     expect(controlPlaneFiles.map(rel)).toContain("../apps/control-plane/src/tick.ts");
     const callers = controlPlaneFiles
       .filter((f) => writeCall.test(readFileSync(f, "utf8")))
