@@ -23,6 +23,7 @@ import {
   ProvenancePolicies,
   ProvenanceStatements,
   StatementVisibility,
+  type ControlState,
   type DispatchSubmission,
   type InclusionProofRecord,
   type ExecutionRecord,
@@ -115,6 +116,7 @@ export const baseConfig = (overrides: Partial<ApiConfigShape> = {}): ApiConfigSh
   access: { teamDomain: TEAM, aud: AUD },
   operators: [OPERATOR],
   dispatchers: [DISPATCHER],
+  containment: [],
   scoped: [],
   oidcAudience: OIDC_AUD,
   planeId: "flare-dispatch",
@@ -171,6 +173,8 @@ export interface Doubles {
   oidcKeys: OidcKeys | undefined;
   /** The error the next operator operation fails with, as the coordinator would answer. */
   opsFailure: ReturnType<typeof apiError> | undefined;
+  /** The control state the coordinator reads; a suite sets it, and by default the read fails `unavailable`. */
+  controlState: Effect.Effect<ControlState, ReturnType<typeof apiError>>;
   /** Each repository's confidentiality mode; a repository absent here is `unclassified`. */
   readonly confidentiality: Map<string, ConfidentialityMode>;
   /** The GitHub App's installations; a suite sets the live listing over a recorded `GET /app/installations`. */
@@ -197,6 +201,7 @@ export const makeDoubles = (): Doubles => {
       }),
     oidcKeys: undefined,
     opsFailure: undefined,
+    controlState: Effect.fail(apiError("unavailable", "this harness reads no control state")),
     confidentiality: new Map(),
     deliveryKeys: {
       list: Effect.fail(apiError("unavailable", "this harness reads no installations")),
@@ -292,6 +297,7 @@ export const portsContext = (doubles: Doubles) =>
                 return { target: "target" };
               }),
       health: Effect.succeed({ liveness: "ok" }),
+      controlState: Effect.suspend(() => doubles.controlState),
     }),
     Context.add(DeliveryKeys, { list: Effect.suspend(() => doubles.deliveryKeys.list) }),
     Context.add(DeviceRegistry, {

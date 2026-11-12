@@ -32,6 +32,11 @@ export interface ApiConfigShape {
   readonly operators: readonly string[];
   /** `dispatchers`: the Access identities allowed to dispatch (FD-IFC-027). */
   readonly dispatchers: readonly string[];
+  /**
+   * `containment`: the Access identities the tightening operator routes admit (FD-IFC-095), which tighten controls and
+   * never release them (FD-IFC-096 to FD-IFC-098).
+   */
+  readonly containment: readonly string[];
   /** `dispatch.scoped`: the Access identities allowed to dispatch only the runs and repositories their entry names. */
   readonly scoped: readonly ScopedDispatch[];
   /** `dispatch.oidcAudience`, the audience an Actions OIDC token must carry (FD-IFC-024). */
@@ -60,6 +65,8 @@ export interface ApiEnv {
   readonly OPERATORS?: string;
   /** A JSON array of Access identities. */
   readonly DISPATCHERS?: string;
+  /** A JSON array of Access identities: the overlay's `containment`. */
+  readonly CONTAINMENT?: string;
   readonly DISPATCH_OIDC_AUDIENCE?: string;
   /** A JSON array of `dispatch.scoped` entries `{ identity, runs, repositories, classCeiling }`. */
   readonly DISPATCH_SCOPED?: string;
@@ -251,6 +258,8 @@ export const apiConfigFromEnv = (
   if (operators instanceof ConfigInvalid) return operators;
   const dispatchers = identityList("DISPATCHERS", env.DISPATCHERS);
   if (dispatchers instanceof ConfigInvalid) return dispatchers;
+  const containment = identityList("CONTAINMENT", env.CONTAINMENT);
+  if (containment instanceof ConfigInvalid) return containment;
   const scoped = scopedList(env.DISPATCH_SCOPED);
   if (scoped instanceof ConfigInvalid) return scoped;
   const distinct = distinctLinkKey(env);
@@ -274,6 +283,7 @@ export const apiConfigFromEnv = (
     access: teamDomain !== undefined && aud !== undefined ? { teamDomain, aud } : undefined,
     operators,
     dispatchers,
+    containment,
     scoped,
     oidcAudience: present(env.DISPATCH_OIDC_AUDIENCE),
     planeId: present(env.PLANE_ID),

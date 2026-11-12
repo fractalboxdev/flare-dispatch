@@ -187,16 +187,38 @@ export const authenticateActions = (
     } as const;
   });
 
-/** The access group an Access route admits beyond any valid identity. */
-export type AccessGroup = "any" | "operators" | "dispatchers";
+/**
+ * The access group an Access route admits beyond any valid identity. `containment` admits the identities in
+ * `operators` and those in `containment`: the tightening operator routes FD-IFC-095 names.
+ */
+export type AccessGroup = "any" | "operators" | "dispatchers" | "containment";
 
-export const inGroup = (
-  config: { readonly operators: readonly string[]; readonly dispatchers: readonly string[] },
-  group: AccessGroup,
-  id: string,
-): boolean =>
-  group === "any" ||
-  (group === "operators" ? config.operators : config.dispatchers).includes(id.toLowerCase());
+export interface GroupLists {
+  readonly operators: readonly string[];
+  readonly dispatchers: readonly string[];
+  readonly containment: readonly string[];
+}
+
+export const inGroup = (config: GroupLists, group: AccessGroup, id: string): boolean => {
+  const who = id.toLowerCase();
+  return Match.value(group).pipe(
+    Match.when("any", () => true),
+    Match.when("operators", () => config.operators.includes(who)),
+    Match.when("dispatchers", () => config.dispatchers.includes(who)),
+    Match.when(
+      "containment",
+      () => config.operators.includes(who) || config.containment.includes(who),
+    ),
+    Match.exhaustive,
+  );
+};
+
+/**
+ * An identity the overlay names in `containment` and not in `operators`: it tightens controls and never releases them
+ * (FD-IFC-096 to FD-IFC-098). An identity in both lists, which the drift check refuses (FD-OPS-093), acts as an operator.
+ */
+export const isContainmentOnly = (config: GroupLists, id: string): boolean =>
+  inGroup(config, "containment", id) && !inGroup(config, "operators", id);
 
 /** The `dispatch.scoped` entry of an Access identity, or undefined where the overlay names it in none. */
 export const scopedEntryOf = (

@@ -45,7 +45,7 @@ export const DEFAULT_BODY_LIMIT = 1_048_576;
 
 /** The identity check a route's surface passes (specs/interfaces.md § Surfaces and their identity gates). */
 export type Surface =
-  /** A valid Access JWT; `group` narrows it to `operators` or `dispatchers`. */
+  /** A valid Access JWT; `group` narrows it to `operators`, `dispatchers`, or `operators` and `containment`. */
   | {
       readonly _tag: "Access";
       readonly group: AccessGroup;
@@ -235,7 +235,12 @@ const accessCheck = (
     if (outcome._tag === "LoginRedirect" || surface.group === "any") return outcome;
     const config = yield* ApiConfig;
     if (!inGroup(config, surface.group, outcome.id))
-      return yield* apiError("forbidden", `the identity is not in ${surface.group}`);
+      return yield* apiError(
+        "forbidden",
+        surface.group === "containment"
+          ? "the identity is in neither operators nor containment"
+          : `the identity is not in ${surface.group}`,
+      );
     return outcome;
   });
 

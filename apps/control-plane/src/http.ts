@@ -126,7 +126,9 @@ const POSTURE_TIER = "unmanaged" as const;
 
 /**
  * The liveness report reads the operability package's record; the operator operations need mameko's operator
- * transaction, which this deploy does not supply, so each answers `unavailable`.
+ * transaction, which this deploy does not supply, so each answers `unavailable`. The control state is that
+ * transaction's state too: the read answers `unavailable` rather than `run`, so a `containment` identity's `halt-cloud`
+ * is never checked against a guessed state (FD-IFC-097).
  */
 const operations = (env: ControlPlaneEnv) =>
   Layer.succeed(Operations)({
@@ -134,6 +136,9 @@ const operations = (env: ControlPlaneEnv) =>
       Effect.fail(
         apiError("unavailable", "operator operations need mameko's operator transaction"),
       ),
+    controlState: Effect.fail(
+      apiError("unavailable", "the control state needs mameko's operator transaction"),
+    ),
     health: Effect.promise(async () => {
       await runOpsMigrations(env.DB);
       return (await livenessReport(env.DB, Date.now())) as unknown as Readonly<
