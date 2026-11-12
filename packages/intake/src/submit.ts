@@ -11,11 +11,12 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import {
   computeDataClasses,
+  TriageIssuesInput,
   trifectaAdmission,
   type DataClasses,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { executionId as newExecutionId, type AdmitAnswer } from "@fractalboxdev/mameko-coordinator";
-import { Clock, Effect, Match } from "effect";
+import { Clock, Effect, Match, Schema } from "effect";
 import {
   Admission,
   boundsOf,
@@ -302,6 +303,22 @@ export const submit = (
     const store = yield* IntakeStore;
     const now = yield* Clock.currentTimeMillis;
     const name = checkName(s.run.name, s.label);
+
+    // Triage reads issue numbers from its input repository; the applier writes those numbers in this admission's
+    // scope. Bind the two before any trigger can admit work based on another repository's reports.
+    if (s.run.name === "triage-issues") {
+      const inputs = yield* Schema.decodeUnknownEffect(TriageIssuesInput)(s.inputs).pipe(
+        Effect.mapError(() => intakeError(400, "invalid_inputs", "invalid triage-issues inputs")),
+      );
+      if (`${inputs.repo.owner}/${inputs.repo.name}`.toLowerCase() !== s.repo.toLowerCase())
+        return yield* Effect.fail(
+          intakeError(
+            400,
+            "invalid_inputs",
+            "triage-issues inputs.repo must match the execution repository",
+          ),
+        );
+    }
 
     // The lease carries the recorded inputs to an executor, so inputs holding a write credential are refused here,
     // before any record, execution or placement row exists (FD-AGT-008).
