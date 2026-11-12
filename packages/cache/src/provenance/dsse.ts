@@ -15,7 +15,7 @@ export const DsseSignature = Schema.Struct({ keyid: Schema.String, sig: Schema.S
 export type DsseSignature = typeof DsseSignature.Type;
 
 export const DsseEnvelope = Schema.Struct({
-  payloadType: Schema.String,
+  payloadType: Schema.Literal(DSSE_PAYLOAD_TYPE),
   /** The statement's JSON serialization, standard base64. */
   payload: Schema.String,
   signatures: Schema.Array(DsseSignature),
@@ -54,7 +54,10 @@ export const parseProvenanceKey = (secret: string | undefined): ProvenanceKey | 
     ? undefined
     : Option.getOrUndefined(decodeKey(secret.trim()));
 
-/** DSSE's pre-authentication encoding of a payload: the bytes every signature in an envelope covers (DSSE v1). */
+/**
+ * DSSE's pre-authentication encoding of a payload: the bytes every signature in an envelope covers, the device key
+ * helper's and the provenance key's (DSSE v1 § Protocol).
+ */
 export const dssePae = (payloadType: string, payload: Uint8Array): Uint8Array => {
   const type = utf8(payloadType);
   const head = utf8(`DSSEv1 ${type.byteLength} ${payloadType} ${payload.byteLength} `);

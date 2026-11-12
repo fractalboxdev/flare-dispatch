@@ -15,5 +15,6 @@ export * from "./audit.ts";
 export * from "./metrics.ts";
 export * from "./workspace.ts";
 export * from "./provenance/dsse.ts";
+export * from "./provenance/statement.ts";
 export * from "./provenance/countersign.ts";
 export * from "./provenance/cloud-statement.ts";

@@ -5,7 +5,12 @@ import { sha256Hex, utf8 } from "../crypto.ts";
 import { CacheBucket } from "../manifest.ts";
 import { emptyBucket, failureOf, startMiniflare } from "../support.test-support.ts";
 import { writeCloudStatement } from "./cloud-statement.ts";
-import { countersign, countersignAccepted, CountersignOutcome, StatementBinding } from "./countersign.ts";
+import {
+  countersign,
+  countersignAccepted,
+  CountersignOutcome,
+  StatementBinding,
+} from "./countersign.ts";
 import {
   DSSE_PAYLOAD_TYPE,
   dssePae,
@@ -58,11 +63,16 @@ describe("countersignature", () => {
     // A signature the device placed under the provenance key's kid is replaced by the control plane's own.
     const forged: DsseEnvelope = {
       ...submitted,
-      signatures: [...submitted.signatures, { keyid: "prov-2026-11", sig: submitted.signatures[0]!.sig }],
+      signatures: [
+        ...submitted.signatures,
+        { keyid: "prov-2026-11", sig: submitted.signatures[0]!.sig },
+      ],
     };
     const resigned = await Effect.runPromise(countersign(forged, provenance.private));
     expect(resigned.signatures.map((s) => s.keyid)).toEqual(["device-1", "prov-2026-11"]);
-    expect(await verifyDsseSignature(provenance.public, resigned, resigned.signatures[1]!)).toBe(true);
+    expect(await verifyDsseSignature(provenance.public, resigned, resigned.signatures[1]!)).toBe(
+      true,
+    );
 
     // The active key signs: after a rotation, the new kid is the one added.
     const next = await keyPair("prov-2027-01");
@@ -117,7 +127,9 @@ describe("cloud-builder statement", () => {
     await mf?.mf.dispose();
   });
 
-  const input = (over: { kind?: "build" | "gate"; artifacts?: { name: string }[] } = {}) => ({
+  const input = (
+    over: { kind?: "build" | "gate"; artifacts?: { name: string }[]; fetches?: unknown[] } = {},
+  ) => ({
     lease: {
       execution_id: "exec-42",
       epoch: 2,
@@ -142,6 +154,11 @@ describe("cloud-builder statement", () => {
     commands: [{ name: "build", exit_status: 0 }],
     artifacts: over.artifacts ?? [{ name: "dist/app.tar.gz" }, { name: "sbom.json" }],
     lockfiles: [{ path: "pnpm-lock.yaml", digest: sha("e") }],
+    fetches: over.fetches ?? [],
+    locked_dependencies: [
+      { uri: "https://registry.npmjs.org/effect/-/effect-4.0.6.tgz", digest: sha("2") },
+      { uri: "https://registry.npmjs.org/vitest/-/vitest-3.2.0.tgz", digest: sha("3") },
+    ],
     restored_cache: [],
     egress_log_digest: sha("f"),
     step_log_digest: sha("1"),
@@ -172,7 +189,9 @@ describe("cloud-builder statement", () => {
     ]);
     // Signed once, by the provenance key: no device signature, so the verifier reads it as a cloud builder.
     expect(envelope.signatures.map((s) => s.keyid)).toEqual(["prov-2026-11"]);
-    expect(await verifyDsseSignature(provenance.public, envelope, envelope.signatures[0]!)).toBe(true);
+    expect(await verifyDsseSignature(provenance.public, envelope, envelope.signatures[0]!)).toBe(
+      true,
+    );
     const predicate = payloadOf(envelope).predicate;
     expect(payloadOf(envelope).predicateType).toBe("https://slsa.dev/provenance/v1");
     expect(predicate.runDetails.builder.id).toBe("cloudflare:cf-7");
@@ -193,15 +212,65 @@ describe("cloud-builder statement", () => {
 
     // An artifact the submission names but R2 does not hold fails the write; nothing is signed.
     expect(
-      failureOf(await run(input({ artifacts: [{ name: "dist/app.tar.gz" }, { name: "missing.bin" }] }))),
+      failureOf(
+        await run(input({ artifacts: [{ name: "dist/app.tar.gz" }, { name: "missing.bin" }] })),
+      ),
     ).toMatchObject({ reason: "artifact-missing", detail: "missing.bin" });
 
     // A gate with no artifact names the commit as its one subject, under the test-result predicate.
     const gate = await Effect.runPromise(write(input({ kind: "gate", artifacts: [] })));
-    expect(gate.statement.subject).toEqual([{ name: "commit", digest: { gitCommit: "c".repeat(40) } }]);
+    expect(gate.statement.subject).toEqual([
+      { name: "commit", digest: { gitCommit: "c".repeat(40) } },
+    ]);
     expect(gate.statement.predicateType).toBe("https://in-toto.io/attestation/test-result/v0.1");
-    expect(await verifyDsseSignature(provenance.public, gate.envelope, gate.envelope.signatures[0]!)).toBe(
-      true,
+    expect(
+      await verifyDsseSignature(provenance.public, gate.envelope, gate.envelope.signatures[0]!),
+    ).toBe(true);
+  });
+
+  it("[FD-PROV-006] a cloud-builder statement lists each dependency the job fetched with the source of its digest", async () => {
+    await emptyBucket(mf.bucket);
+    const provenance = await keyPair("prov-2026-11");
+    const fetches = [
+      {
+        host: "registry.npmjs.org",
+        method: "GET",
+        path: "/effect/-/effect-4.0.6.tgz",
+        response_digest: sha("4"),
+      },
+      {
+        host: "registry.npmjs.org",
+        method: "GET",
+        path: "/vitest/-/vitest-3.2.0.tgz",
+        response_digest: null,
+      },
+    ];
+    const write = (kind: "build" | "gate") =>
+      Effect.runPromise(
+        writeCloudStatement(input({ kind, artifacts: [], fetches }), provenance.private).pipe(
+          Effect.provide(Layer.succeed(CacheBucket, mf.bucket)),
+        ),
+      );
+    const fetched = [
+      {
+        uri: "https://registry.npmjs.org/effect/-/effect-4.0.6.tgz",
+        digest: { sha256: "4".repeat(64) },
+        annotations: { digest_source: "proxy" },
+      },
+      {
+        uri: "https://registry.npmjs.org/vitest/-/vitest-3.2.0.tgz",
+        digest: { sha256: "3".repeat(64) },
+        annotations: { digest_source: "lockfile" },
+      },
+    ];
+
+    const build = await write("build");
+    const resolved = payloadOf(build.envelope).predicate.buildDefinition
+      .resolvedDependencies as unknown[];
+    expect(resolved).toEqual(expect.arrayContaining(fetched));
+    const gate = await write("gate");
+    expect(payloadOf(gate.envelope).predicate.configuration).toEqual(
+      expect.arrayContaining(fetched),
     );
   });
 });
