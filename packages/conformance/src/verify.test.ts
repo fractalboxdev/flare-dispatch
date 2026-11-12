@@ -20,6 +20,7 @@ import {
   witnessKey,
   type VerifyFixture,
 } from "@fractalboxdev/flare-dispatch-fd/verify-test-support";
+import type { DsseEnvelope } from "@fractalboxdev/flare-dispatch-cache";
 import { Effect } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -93,6 +94,78 @@ describe("inclusion proof", () => {
   });
 });
 
+describe("Rekor inclusion proof", () => {
+  /** The device statement with only its countersignature: the device signature stripped. */
+  const stripped = (envelope: DsseEnvelope): DsseEnvelope => ({
+    ...envelope,
+    signatures: envelope.signatures.filter((s) => s.keyid === "prov-1"),
+  });
+
+  it("[FD-PROV-054] accepts a statement whose Rekor entry body is the leaf, with no witness cosignature", async () => {
+    const device = await passed(await f.input(await f.rekorBundleOf(await f.deviceEnvelope())));
+    expect(device.tier).toBe("platform");
+    expect(device.statements[0]).toMatchObject({ builder: "device", log: "rekor" });
+    const cloud = await passed(
+      await f.input(await f.rekorBundleOf(await f.cloudEnvelope(), { deviceKey: null })),
+    );
+    expect(cloud.statements[0]).toMatchObject({ builder: "cloud", log: "rekor" });
+  });
+
+  it("[FD-PROV-054] rejects a Rekor checkpoint whose signature leads with another key's hint", async () => {
+    const bundle = await f.rekorBundleOf(await f.deviceEnvelope(), {
+      keyHint: new Uint8Array([0, 1, 2, 3]),
+    });
+    const e = await rejection(await f.input(bundle));
+    expect(e.reason).toBe("inclusion-proof");
+    expect(e.message).toContain("no rekor log key");
+    const rogue = await es256Key("rekor-1");
+    const envelope = await f.deviceEnvelope();
+    const [proof] = await f.rekorLog([await f.rekorBody(envelope)], { logKey: rogue.key });
+    const forged = { statements: [{ envelope, device_key: f.device.jwk, log_entry: proof! }] };
+    expect((await rejection(await f.input(forged))).reason).toBe("inclusion-proof");
+  });
+
+  it("[FD-PROV-054] rejects a Rekor entry body whose payload hash is not the envelope's", async () => {
+    const envelope = await f.deviceEnvelope();
+    const body = await f.rekorBody(envelope, { payloadHash: "d".repeat(64) });
+    const e = await rejection(await f.input(await f.rekorBundleOf(envelope, { body })));
+    expect(e.reason).toBe("inclusion-proof");
+  });
+
+  it("[FD-PROV-054] rejects a Rekor entry body that omits or adds a signature", async () => {
+    const envelope = await f.deviceEnvelope();
+    const sigs = envelope.signatures.map((s) => s.sig);
+    const missing = await f.rekorBody(envelope, { signatures: sigs.slice(1) });
+    expect(
+      (await rejection(await f.input(await f.rekorBundleOf(envelope, { body: missing })))).reason,
+    ).toBe("inclusion-proof");
+    const other = (await f.deviceEnvelope()).signatures[0]!.sig;
+    const added = await f.rekorBody(envelope, { signatures: [...sigs, other] });
+    expect(
+      (await rejection(await f.input(await f.rekorBundleOf(envelope, { body: added })))).reason,
+    ).toBe("inclusion-proof");
+  });
+
+  it("[FD-PROV-054] rejects a Rekor-logged device statement with its device signature stripped", async () => {
+    const envelope = await f.deviceEnvelope();
+    const body = await f.rekorBody(envelope);
+    const e = await rejection(
+      await f.input(await f.rekorBundleOf(stripped(envelope), { body, deviceKey: null })),
+    );
+    expect(e.reason).toBe("inclusion-proof");
+  });
+
+  it("[FD-PROV-057] treats a stripped device statement logged on its own as the device's, never as a cloud builder's", async () => {
+    // The countersignature alone verifies under a provenance key, and a public log accepts the stripped envelope as
+    // its own entry; its signed payload still names the device that built it.
+    const envelope = stripped(await f.deviceEnvelope());
+    const bundle = await f.rekorBundleOf(envelope, { deviceKey: null });
+    expect((await rejection(await f.input(bundle))).reason).toBe("device-key");
+    const keyed = await f.rekorBundleOf(envelope);
+    expect((await rejection(await f.input(keyed))).reason).toBe("device-key");
+  });
+});
+
 describe("witness cosignature", () => {
   it("[FD-PROV-055] rejects every statement proved against a private-log checkpoint no policy witness cosigned", async () => {
     const [a, b] = [await f.deviceEnvelope(), await f.cloudEnvelope()];
@@ -154,6 +227,20 @@ describe("device key window", () => {
     expect((await rejection(await f.input(bundle))).reason).toBe("device-window");
     const at = await f.bundleOf(await f.deviceEnvelope(), { time: T0 + DAY });
     expect((await passed(await f.input(at))).tier).toBe("platform");
+  });
+
+  it("[FD-PROV-057] checks the device window of a device signature filed under a provenance key's kid", async () => {
+    // A statement is a cloud builder's only when every signature verifies under a provenance key, so a device
+    // signature under a retired provenance kid still faces the device registry.
+    const envelope = await f.deviceEnvelope({
+      signer: { ...f.compromised.key, kid: "prov-1" },
+      provenance: f.prov2.key,
+    });
+    const bundle = await f.bundleOf(envelope, {
+      time: T1 + DAY,
+      deviceKey: f.compromised.jwk,
+    });
+    expect((await rejection(await f.input(bundle))).reason).toBe("device-window");
   });
 
   it("[FD-PROV-057] rejects a statement logged at or after its device key's compromised_from", async () => {

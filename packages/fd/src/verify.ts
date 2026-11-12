@@ -349,9 +349,18 @@ const RekorDsseBody = Schema.Struct({
 });
 const decodeRekorBody = Schema.decodeUnknownOption(Schema.fromJsonString(RekorDsseBody));
 
+/** Whether two lists hold the same strings, each as many times. */
+const sameMultiset = (a: readonly string[], b: readonly string[]): boolean => {
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.length === right.length && left.every((x, i) => x === right[i]);
+};
+
 /**
  * The leaf bytes that log `proof.log` holds for `envelope`: the private log appends the envelope's canonical JSON;
- * Rekor's leaf is the entry body, which must name the envelope's payload hash and every one of its signatures.
+ * Rekor's leaf is the entry body, which must name the envelope's payload hash and exactly its signatures, no more and
+ * no fewer. A logged body with a signature the envelope lacks proves a different envelope: an envelope with its device
+ * signature stripped is not the one the log holds.
  */
 const leafOf = async (envelope: AnyEnvelope, proof: LogProof): Promise<Uint8Array | undefined> => {
   if (proof.log === "private") return utf8(canonicalJson(envelope));
@@ -361,8 +370,12 @@ const leafOf = async (envelope: AnyEnvelope, proof: LogProof): Promise<Uint8Arra
   const entry = Option.getOrUndefined(decodeRekorBody(new TextDecoder().decode(body)));
   if (entry === undefined || entry.spec.payloadHash.value !== (await sha256Hex(payload)))
     return undefined;
-  const logged = new Set(entry.spec.signatures.map((s) => s.signature));
-  return envelope.signatures.every((s) => logged.has(s.sig)) ? body : undefined;
+  return sameMultiset(
+    entry.spec.signatures.map((s) => s.signature),
+    envelope.signatures.map((s) => s.sig),
+  )
+    ? body
+    : undefined;
 };
 
 /**
@@ -420,26 +433,43 @@ const checkLogged = (
     }
   });
 
+/** A signature on an envelope that verifies under the provenance key its `keyid` names. */
+interface ProvenanceSigned {
+  readonly signature: DsseSignature;
+  readonly key: KeyHistoryEntry;
+}
+
+/** The signatures on `envelope` that verify under the provenance key their `keyid` names, whatever its window. */
+const provenanceSigned = async (
+  policy: VerificationPolicy,
+  envelope: AnyEnvelope,
+): Promise<ProvenanceSigned[]> => {
+  const payload = fromBase64(envelope.payload);
+  if (payload === undefined) return [];
+  const pae = dssePae(envelope.payloadType, payload);
+  const keys = new Map(policy.provenance_keys.map((k) => [k.kid, k]));
+  const verified: ProvenanceSigned[] = [];
+  for (const signature of envelope.signatures) {
+    const key = keys.get(signature.keyid);
+    if (key !== undefined && (await verifyDer(key.jwk, pae, signature.sig)))
+      verified.push({ signature, key });
+  }
+  return verified;
+};
+
 /**
- * The provenance keys whose signatures on `envelope` verify, each checked against the log time: a verified signature
- * by a key whose window excludes it rejects the statement (FD-PROV-056). No verified signature rejects it too: a
- * device statement needs the countersignature, a cloud statement its cloud-builder signature.
+ * Checks each verified provenance-key signature against the log time: a key whose window excludes it rejects the
+ * statement (FD-PROV-056). No verified signature rejects it too: a device statement needs the countersignature, a cloud
+ * statement its cloud-builder signature.
  */
-const checkProvenanceSignatures = (
+const checkKeyWindows = (
   policy: VerificationPolicy,
   what: string,
-  envelope: AnyEnvelope,
+  verified: readonly ProvenanceSigned[],
   time: number,
 ) =>
   Effect.gen(function* () {
-    const payload = fromBase64(envelope.payload);
-    const pae = payload === undefined ? undefined : dssePae(envelope.payloadType, payload);
-    const keys = new Map(policy.provenance_keys.map((k) => [k.kid, k]));
-    const verified: DsseSignature[] = [];
-    for (const signature of envelope.signatures) {
-      const key = keys.get(signature.keyid);
-      if (key === undefined || pae === undefined) continue;
-      if (!(yield* Effect.promise(() => verifyDer(key.jwk, pae, signature.sig)))) continue;
+    for (const { key } of verified)
       if (!inWindow(key, time))
         return yield* reject(
           "key-window",
@@ -447,15 +477,23 @@ const checkProvenanceSignatures = (
             key.not_after === undefined ? "" : ` to ${key.not_after}`
           }, and the log time is ${time}`,
         );
-      verified.push(signature);
-    }
     if (verified.length === 0)
       return yield* reject(
         "countersignature",
         `${what}: no signature by a provenance key of policy ${policy.policy_version} verifies`,
       );
-    return verified;
   });
+
+/** The provenance-key signatures on `envelope` that verify, each checked against the log time (FD-PROV-056). */
+const checkProvenanceSignatures = (
+  policy: VerificationPolicy,
+  what: string,
+  envelope: AnyEnvelope,
+  time: number,
+) =>
+  Effect.promise(() => provenanceSigned(policy, envelope)).pipe(
+    Effect.tap((verified) => checkKeyWindows(policy, what, verified, time)),
+  );
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Statements
@@ -484,6 +522,9 @@ const decodeClaims = Schema.decodeUnknownOption(
           }),
         ),
         configuration: Schema.optional(Schema.Array(Descriptor)),
+        runDetails: Schema.optional(
+          Schema.Struct({ builder: Schema.Struct({ id: Schema.String }) }),
+        ),
       }),
     }),
   ),
@@ -494,9 +535,11 @@ interface Claims {
   /** Each subject's SHA-256 digest, lowercase hex. */
   readonly subjects: readonly string[];
   readonly restoredCache: number;
+  /** The executor kind the builder id `<executor kind>:<executor_id>` names, when the statement names a builder. */
+  readonly builderKind: string | undefined;
 }
 
-/** What the verifier reads from a statement: its lease binding, subject digests and restored cache entries. */
+/** What the verifier reads from a statement: its lease binding, subject digests, restored cache entries and builder. */
 const claimsOf = (envelope: DsseEnvelope): Claims | undefined => {
   const payload = fromBase64(envelope.payload);
   const statement =
@@ -512,6 +555,10 @@ const claimsOf = (envelope: DsseEnvelope): Claims | undefined => {
       : configuration?.find((d) => d.name === "lease")?.annotations;
   const lease = Option.getOrUndefined(decodeLease(leaseRaw));
   const inputs = build?.resolvedDependencies ?? configuration ?? [];
+  const builderAnnotation = configuration?.find((d) => d.name === "builder")?.annotations?.["id"];
+  const builderId =
+    statement.predicate.runDetails?.builder.id ??
+    (typeof builderAnnotation === "string" ? builderAnnotation : undefined);
   if (lease === undefined) return undefined;
   return {
     bindingKind: lease.binding_kind,
@@ -519,8 +566,12 @@ const claimsOf = (envelope: DsseEnvelope): Claims | undefined => {
       s.digest?.["sha256"] === undefined ? [] : [s.digest["sha256"]],
     ),
     restoredCache: inputs.filter((d: Descriptor) => d.name?.startsWith("cache:") === true).length,
+    builderKind: builderId?.split(":")[0],
   };
 };
+
+/** The executor kind of a device, as a builder id `<executor kind>:<executor_id>` names it. */
+const DEVICE_EXECUTOR_KIND = "device";
 
 interface CheckedStatement {
   readonly envelopeDigest: string;
@@ -562,10 +613,15 @@ const checkStatement = (
     yield* checkLogged(policy, what, envelope, bundled.log_entry);
     const payload = fromBase64(envelope.payload)!;
     const pae = dssePae(envelope.payloadType, payload);
-    const provenanceKids = new Set(policy.provenance_keys.map((k) => k.kid));
+    // A cloud-builder statement is one every signature of which verifies under a provenance key, and whose signed
+    // builder id names no device: a device statement with its device signature stripped keeps only the
+    // countersignature, and its payload still names the device that built it.
+    const provenance = yield* Effect.promise(() => provenanceSigned(policy, envelope));
+    const byProvenance = new Set(provenance.map((p) => p.signature));
     const cloud =
+      claims.builderKind !== DEVICE_EXECUTOR_KIND &&
       envelope.signatures.length > 0 &&
-      envelope.signatures.every((s) => provenanceKids.has(s.keyid));
+      envelope.signatures.every((s) => byProvenance.has(s));
     if (!cloud) {
       const key = bundled.device_key;
       if (key === undefined)
@@ -582,7 +638,7 @@ const checkStatement = (
         );
       let signed = false;
       for (const s of envelope.signatures)
-        if (!signed && !provenanceKids.has(s.keyid))
+        if (!signed && !byProvenance.has(s))
           signed = yield* Effect.promise(() => verifyDer(key, pae, s.sig));
       if (!signed)
         return yield* reject(
@@ -602,7 +658,7 @@ const checkStatement = (
           }`,
         );
     }
-    yield* checkProvenanceSignatures(policy, what, envelope, time);
+    yield* checkKeyWindows(policy, what, provenance, time);
     if (!claims.subjects.includes(artifactHex))
       return yield* reject(
         "subject-digest",

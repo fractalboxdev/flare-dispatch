@@ -1,7 +1,7 @@
 // Test support for the offline verifier: a policy root key, a verification policy, provenance and log keys with their
-// windows, a registered device key, a private-log witness, and statements written, signed, countersigned and logged by
-// the control plane's own provenance code (statement builder, countersignature, RFC 9162 tree and checkpoint
-// signing), so a bundle the verifier accepts is one the control plane produces.
+// windows, a registered device key, a private-log witness, a Rekor log key, and statements written, signed,
+// countersigned and logged by the control plane's own provenance code (statement builder, countersignature, RFC 9162
+// tree and checkpoint signing), so a bundle the verifier accepts is one the control plane produces.
 import {
   countersign,
   dssePae,
@@ -9,6 +9,7 @@ import {
   inclusionProof,
   leafHash,
   p1363ToDer,
+  publicKeyPem,
   signCheckpoint,
   signP1363,
   signPae,
@@ -152,6 +153,7 @@ export const makeVerifyFixture = async () => {
   const prov1 = await es256Key("prov-1");
   const prov2 = await es256Key("prov-2");
   const log = await es256Key("log-1");
+  const rekor = await es256Key("rekor-1");
   const device = await es256Key("device");
   const compromised = await es256Key("device-compromised");
   const witness = await witnessKey("witness.example");
@@ -175,6 +177,7 @@ export const makeVerifyFixture = async () => {
         keys: [{ kid: "log-1", jwk: log.jwk, not_before: T0 }],
         witnesses: [{ name: witness.name, key: witness.vkey }],
       },
+      { kind: "rekor", keys: [{ kid: "rekor-1", jwk: rekor.jwk, not_before: T0 }] },
     ],
     devices: [
       {
@@ -354,6 +357,104 @@ export const makeVerifyFixture = async () => {
     };
   };
 
+  /** The `dsse` v0.0.1 entry body Rekor records for `envelope`: its payload hash and each signature with its verifier. */
+  const rekorBody = async (
+    envelope: DsseEnvelope,
+    options: {
+      readonly payloadHash?: string;
+      readonly signatures?: readonly string[];
+    } = {},
+  ): Promise<Uint8Array> => {
+    const verifier = toBase64(utf8(await publicKeyPem(prov1.jwk)));
+    const payload = Uint8Array.from(atob(envelope.payload), (c) => c.charCodeAt(0));
+    return utf8(
+      canonicalJson({
+        apiVersion: "0.0.1",
+        kind: "dsse",
+        spec: {
+          envelopeHash: { algorithm: "sha256", value: await sha256Hex(canonicalJson(envelope)) },
+          payloadHash: {
+            algorithm: "sha256",
+            value: options.payloadHash ?? (await sha256Hex(payload)),
+          },
+          signatures: (options.signatures ?? envelope.signatures.map((s) => s.sig)).map(
+            (signature) => ({ signature, verifier }),
+          ),
+        },
+      }),
+    );
+  };
+
+  /**
+   * Appends entry `bodies` to a Rekor tree, in order (each leaf the body's bytes), signs the checkpoint as Rekor does
+   * (the 4-byte key hint of `logKey`, SHA-256 of its SubjectPublicKeyInfo, then its ASN.1 DER signature over the note
+   * body), and answers each body's log proof at `time`. `keyHint` replaces the hint the signature leads with.
+   */
+  const rekorLog = async (
+    bodies: readonly Uint8Array[],
+    options: {
+      readonly time?: number;
+      readonly logKey?: ProvenanceKey;
+      readonly keyHint?: Uint8Array;
+    } = {},
+  ): Promise<LogProof[]> => {
+    const stored = new Map<string, Uint8Array>();
+    const read = (level: number, index: number) => stored.get(`${level}/${index}`)!;
+    for (const [i, body] of bodies.entries()) {
+      const added = await storedHashesForAppend(i, await leafHash(body), read);
+      for (const h of added) stored.set(`${h.level}/${h.index}`, h.hash);
+    }
+    const size = bodies.length;
+    const signer = options.logKey ?? rekor.key;
+    const noteBody = `rekor.sigstore.dev - 1193050959916656506\n${size}\n${toBase64(await treeHead(size, read))}\n`;
+    const spki = new Uint8Array(
+      (await crypto.subtle.exportKey(
+        "spki",
+        await crypto.subtle.importKey(
+          "jwk",
+          { kty: signer.kty, crv: signer.crv, x: signer.x, y: signer.y },
+          { name: "ECDSA", namedCurve: "P-256" },
+          true,
+          ["verify"],
+        ),
+      )) as ArrayBuffer,
+    );
+    const hint =
+      options.keyHint ??
+      new Uint8Array(await crypto.subtle.digest("SHA-256", buffer(spki))).subarray(0, 4);
+    const der = p1363ToDer(await signP1363(signer, utf8(noteBody)));
+    const checkpoint = `${noteBody}\n— rekor.sigstore.dev ${toBase64(new Uint8Array([...hint, ...der]))}\n`;
+    return Promise.all(
+      bodies.map(async (body, index) => ({
+        log: "rekor" as const,
+        index,
+        integrated_time: options.time ?? T0 + 2 * DAY,
+        inclusion_proof: (await inclusionProof(index, size, read)).map(toBase64),
+        checkpoint,
+        body: toBase64(body),
+      })),
+    );
+  };
+
+  /** One statement logged in Rekor, with `body` as its entry body (the envelope's own by default). */
+  const rekorBundleOf = async (
+    envelope: DsseEnvelope,
+    options: {
+      readonly body?: Uint8Array;
+      readonly time?: number;
+      readonly keyHint?: Uint8Array;
+      readonly deviceKey?: PublicKeyJwk | null;
+    } = {},
+  ): Promise<StatementBundle> => {
+    const [proof] = await rekorLog([options.body ?? (await rekorBody(envelope))], options);
+    const deviceKey = options.deviceKey === undefined ? device.jwk : options.deviceKey;
+    return {
+      statements: [
+        { envelope, log_entry: proof!, ...(deviceKey === null ? {} : { device_key: deviceKey }) },
+      ],
+    };
+  };
+
   /** A reproduced bundle: a cloud and a device statement and the record over both, all logged at `time`. */
   const reproducedBundle = async (
     options: {
@@ -411,6 +512,10 @@ export const makeVerifyFixture = async () => {
     reproductionRecord,
     privateLog,
     bundleOf,
+    rekor,
+    rekorBody,
+    rekorLog,
+    rekorBundleOf,
     reproducedBundle,
     input,
   };
