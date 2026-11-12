@@ -171,4 +171,37 @@ describe("L1 on the device", async () => {
     expect(await run(fetchFromPeers(l1, "m1", [peer("m1", forged), peer("m1", good)], NS, key(1), true))).toBe(true);
     expect(new TextDecoder().decode(disk.files.get(`${NS}/${key(1)}`)!)).toBe("peer");
   });
+
+  it("[FD-CACHE-014] a miss reaches a peer only behind the peer-cache setting, and the verified entry is served on with its manifest", async () => {
+    const good = await entryFor(keys.pair.privateKey, NS, key(2), bytes("from-peer"));
+    const tampered: L2Entry = { manifest: good.manifest, objects: new Map([[good.manifest.objects[0]!.path, bytes("from-peeR")]]) };
+    const asked: string[] = [];
+    const peer = (member: string, entry: L2Entry) => ({ member, fetch: async () => (asked.push(member), entry) });
+    const open = (enabled: boolean, peers: ReturnType<typeof peer>[], confidential = false) =>
+      openL1({
+        disk: memoryDisk(1_000_000),
+        l2: memoryL2().client,
+        keys: verification,
+        confidential: () => confidential,
+        peerCache: { enabled, member: "m1", peers },
+      });
+    expect(await run((await open(false, [peer("m1", good)])).get(NS, key(2)))).toBeNull();
+    expect(await run((await open(true, [peer("m1", good)], true)).get(NS, key(2)))).toBeNull();
+    expect(await run((await open(true, [peer("m2", good)])).get(NS, key(2)))).toBeNull();
+    expect(asked).toEqual([]);
+    const refusing = await open(true, [peer("m1", tampered)]);
+    expect(await run(refusing.get(NS, key(2)))).toBeNull();
+    expect(refusing.usage().entries).toBe(0);
+    const l1 = await open(true, [peer("m1", tampered), peer("m1", good)]);
+    expect(new TextDecoder().decode((await run(l1.get(NS, key(2))))!)).toBe("from-peer");
+    // The placed entry goes on to the next device with the manifest it was verified under.
+    const served = (await run(l1.serve(NS, key(2))))!;
+    expect(served.manifest).toEqual(good.manifest);
+    expect([...served.objects.values()].map((b) => new TextDecoder().decode(b))).toEqual(["from-peer"]);
+    // An entry from cache.put carries no manifest, so it is not served; a put over a served entry drops its manifest.
+    await run(l1.put(NS, key(3), bytes("local")));
+    expect(await run(l1.serve(NS, key(3)))).toBeNull();
+    await run(l1.put(NS, key(2), bytes("replaced")));
+    expect(await run(l1.serve(NS, key(2)))).toBeNull();
+  });
 });
