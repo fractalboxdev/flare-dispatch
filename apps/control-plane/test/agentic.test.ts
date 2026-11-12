@@ -341,7 +341,7 @@ describe("the mounted local registration port", () => {
       );
       expect(answer).toMatchObject({
         _tag: "accepted",
-        nonce: expect.stringMatching(/^[0-9a-f]{64}$/),
+        nonce: expect.stringMatching(/^[0-9a-f]{32}$/),
       });
       const { executionId } = answer as { executionId: string };
       const rows = (sql: string) => db.sqlite.prepare(sql).all(executionId);
