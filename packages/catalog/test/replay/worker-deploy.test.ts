@@ -4,7 +4,8 @@
 // twice, as an `Execution` workflow that lost the stage's journal entry runs it. The second stage and the second write
 // add no row.
 import { intentList } from "@fractalboxdev/mameko-run";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
+import { SidePayloads } from "../../../github/src/side-applier.ts";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { describe, expect, it } from "vitest";
 import { CommandExit } from "../../src/command.ts";
@@ -14,7 +15,6 @@ import {
   fakeExec,
   fakeGithub,
   memoryLedger,
-  SHA,
   type Scripted,
 } from "../../src/gate.test-support.ts";
 import type { WorkerDeployInput } from "../../src/inputs.ts";
@@ -75,7 +75,7 @@ const applied = async (run: Awaited<ReturnType<typeof ran>>) => {
   return { staged, redelivered, written, rewritten: plane.snapshot(), effects: plane.effects() };
 };
 
-const followOn = { run: "deploy-smoke", repository: SCOPE, sha: SHA, ref: ctx.ref };
+const followOn = { run: "deploy-smoke", inputs: {} };
 
 describe("a worker-deploy execution's follow-on under a redelivered batch and a repeated terminal write", () => {
   it("[FD-GATE-069] a successful deploy emits one dispatch.followOn for deploy-smoke on its commit, written once, and a failed one emits none", async () => {
@@ -85,6 +85,11 @@ describe("a worker-deploy execution's follow-on under a redelivered batch and a 
     expect(run.intents).toEqual([
       { intent_key: "deploy-smoke:0", kind: "dispatch.followOn", payload: followOn },
     ]);
+
+    // The real applier must be able to decode what the recipe emits.
+    expect(
+      Schema.decodeUnknownSync(SidePayloads["dispatch.followOn"])(run.intents[0]!.payload),
+    ).toEqual(followOn);
 
     const plane = await applied(run);
     expect(plane.staged).toEqual({ _tag: "Staged" });

@@ -116,7 +116,7 @@ export const warmStateLine = (samples: readonly KillLineVerdict[]): LineResult =
     metric: `device median time to verdict below the best cloud setup, % (run ${worst.run})`,
     value,
     threshold,
-    crossed: value < threshold,
+    crossed: worst.below < threshold,
   };
 };
 
@@ -135,13 +135,14 @@ export const availabilityLine = (count: EligibleCount): LineResult => {
       risk: KILL_LINE_RISKS.availability,
       reason: "no execution eligible for an owned device concluded in the last 30 days",
     };
-  const value = round1((Number(count.on_device) / eligible) * 100);
+  const share = (Number(count.on_device) / eligible) * 100;
+  const value = round1(share);
   return {
     risk: KILL_LINE_RISKS.availability,
     metric: "eligible executions taken by owned devices over 30 days, %",
     value,
     threshold,
-    crossed: value < threshold,
+    crossed: share < threshold,
   };
 };
 
@@ -182,13 +183,14 @@ export const requiredSlowdownLine = (samples: readonly KillLineVerdict[]): LineR
       risk: KILL_LINE_RISKS.requiredSlowdown,
       reason: "no required execution reached a verdict on a cloud setup in the last 14 days",
     };
-  const value = round1((all - cloud) / 1000);
+  const slowdown = (all - cloud) / 1000;
+  const value = round1(slowdown);
   return {
     risk: KILL_LINE_RISKS.requiredSlowdown,
     metric: "required p95 time to verdict above cloud-only p95 over 14 days, s",
     value,
     threshold,
-    crossed: value > threshold,
+    crossed: slowdown > threshold,
   };
 };
 

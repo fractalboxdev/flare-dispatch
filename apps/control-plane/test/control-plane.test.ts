@@ -1,5 +1,5 @@
 // The control plane Worker on workerd through Miniflare: the bindings of `wrangler.jsonc`, the router, admission, the
-// lease path and the record. The executor here is the test's own signed WebSocket; `pnpm dogfood` proves the real
+// lease path and the record. The executor here is the test's own signed WebSocket; `pnpm ci:local` proves the real
 // device executor.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -638,6 +638,7 @@ describe("the cache, artifact and log routes", () => {
     for (const reader of [AUTHOR, OPERATOR]) {
       const served = await as(reader, privatePath);
       expect(served.status, reader).toBe(200);
+      expect(served.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
       expect(await served.text()).toBe("private body");
       expect(await (await as(reader, listing)).json()).toMatchObject({
         artifacts: [{ artifact_id: PRIVATE_ARTIFACT }],
@@ -646,9 +647,12 @@ describe("the cache, artifact and log routes", () => {
     const token = await link("artifact", PRIVATE_ARTIFACT);
     const linked = await get(development, `${privatePath}/a/b.txt?t=${token}`);
     expect(linked.status).toBe(200);
+    expect(linked.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
     expect(await linked.text()).toBe("private browse");
     // A public repository's artifact serves every Access identity.
-    expect((await asMember(artifactPath)).status).toBe(200);
+    const publicArtifact = await asMember(artifactPath);
+    expect(publicArtifact.status).toBe(200);
+    expect(publicArtifact.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
   });
 
   it("[FD-CACHE-077] the listing writes each artifact's URL with a link token for that artifact, which opens it with no identity", async () => {

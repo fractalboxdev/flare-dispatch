@@ -107,7 +107,7 @@ export { QuarantinedFailure, quarantineAnnotations } from "./conclusion.ts";
 export {
   CHILD_CONCLUDE_KEY,
   CHILD_CONCLUSIONS_INDEXES,
-  CHILD_CONCLUSIONS_LOOKBACK_MS,
+  CHILD_CONCLUSIONS_BATCH,
   ChildConclusionsUnavailable,
   CHILDREN,
   insertChildConclusions,

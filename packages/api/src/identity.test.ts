@@ -116,6 +116,32 @@ describe("Access gate", () => {
     expect((await h.fetch("/v1/ops/health", await h.asAccess(OPERATOR))).status).toBe(200);
   });
 
+  it("[FD-IFC-016], [FD-IFC-027]: a valid service-token JWT grants only the operator or dispatcher role its common name is listed under", async () => {
+    const operator = "operator-ci.access";
+    const dispatcher = "dispatcher-ci.access";
+    const config = baseConfig({ operators: [operator], dispatchers: [dispatcher] });
+    const before = h.doubles.calls.submissions.length;
+    for (const commonName of [operator, dispatcher, "unlisted-ci.access"]) {
+      const jwt = await h.access.sign(
+        accessClaims("", { email: undefined, common_name: commonName }),
+      );
+      expect((await h.fetch("/v1/executions", { ...withJwt(jwt), config })).status).toBe(200);
+      expect((await h.fetch("/v1/ops/health", { ...withJwt(jwt), config })).status).toBe(
+        commonName === operator ? 200 : 403,
+      );
+      const dispatched = await h.fetch("/v1/dispatch/check", {
+        ...withJwt(jwt, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ repository: "acme/widgets", inputs: {} }),
+        }),
+        config,
+      });
+      expect(dispatched.status).toBe(commonName === dispatcher ? 202 : 401);
+    }
+    expect(h.doubles.calls.submissions.length).toBe(before + 1);
+  });
+
   it("[FD-IFC-088]: an identity outside operators answers 403 on executor registration", async () => {
     const init = {
       method: "POST",

@@ -1,8 +1,8 @@
 // What /roadmap/ reports under "Status now". Each capability sits in exactly one state. A claim
-// about what deploys comes from main; one about development comes from the unmerged #246 and #247;
+// about what deploys comes from main; one about development comes from the v2 branch;
 // one about the design comes from specs/, with its phase from specs/roadmap.md.
 
-export const DOGFOOD_PR = "https://github.com/fractalboxdev/flare-dispatch/pull/247";
+export const LOCAL_CI_SOURCE = "https://github.com/fractalboxdev/flare-dispatch/tree/v2/packages/local-ci";
 export const IMPL_PR = "https://github.com/fractalboxdev/flare-dispatch/pull/246";
 
 export interface Capability {
@@ -34,15 +34,15 @@ export const states: readonly State[] = [
   {
     id: "in-development",
     title: "Runs today in development",
-    lede: "v2, on draft pull requests. Nothing here deploys, and none of it is for production.",
+    lede: "v2, on the v2 branch. Nothing here deploys, and none of it is for production.",
     capabilities: [
-      { what: "Control plane on mameko's host-cloudflare", detail: "Under wrangler dev, with local D1 and Durable Objects, #247" },
-      { what: "One owned machine, through mameko's Rust device executor", detail: "batch class, one run (check), #247" },
-      { what: "Connect-signed device sessions", detail: "The upgrade's signature is verified against the enrolled device key, #247" },
+      { what: "Control plane on mameko's host-cloudflare", detail: "Under wrangler dev, with local D1 and Durable Objects" },
+      { what: "One owned machine, through mameko's Rust device executor", detail: "batch class, one run (check)" },
+      { what: "Connect-signed device sessions", detail: "The upgrade's signature is verified against the enrolled device key" },
       { what: "Device-key enrollment", detail: "Software key under development only. Production requires an attested Secure Enclave key and no verifier is wired, so it refuses every key" },
-      { what: "Leases with epochs", detail: "The record names the accepted epoch, #247" },
+      { what: "Leases with epochs", detail: "The record names the accepted epoch" },
       { what: "Production refuses host execution and software keys", detail: "The route answers 403, and the runner's catalog is empty outside development" },
-      { what: "Allow-listed job environment", detail: "The command strips credentials from every child process, #247" },
+      { what: "Allow-listed job environment", detail: "The command strips credentials from every child process" },
       { what: "Application profile and check-run applier", detail: "Packages on #246; nothing drains the outbox to them" },
     ],
   },
@@ -69,7 +69,7 @@ export const states: readonly State[] = [
   },
 ];
 
-/** What `pnpm dogfood` shows, from the verification record of #247. */
+/** What `pnpm ci:local` shows, from its own verification record. */
 export const proves: readonly string[] = [
   "A device enrolls by key, connects with a signed upgrade and takes a real execution lease from the control plane.",
   "The check run installs, lints, typechecks and tests one commit in a clean directory.",

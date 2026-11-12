@@ -1,10 +1,15 @@
 // The intake test harness: mameko's real admission over a SQLite D1, the fake
 // GitHub reads, a fixed run catalogue, recording doubles for the ports intake
 // calls, and webhook fixtures.
-import { InstallationQuota, installationQuotaLayer } from "@fractalboxdev/flare-dispatch-github";
+import {
+  ActuatorRateLimitLive,
+  CheckRunApplierLive,
+  InstallationQuota,
+  installationQuotaLayer,
+} from "@fractalboxdev/flare-dispatch-github";
 import {
   fakeGithub,
-  fakeGithubLayers,
+  fakeLayers,
   fakeReadLayer,
   fakeReads,
   fakeRepo,
@@ -13,9 +18,14 @@ import {
   type FakeRepo,
 } from "@fractalboxdev/flare-dispatch-github/testing";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
-import type { ExecutionPayload, Resolution } from "@fractalboxdev/mameko-coordinator";
+import {
+  drainOnce,
+  type ExecutionPayload,
+  type Resolution,
+} from "@fractalboxdev/mameko-coordinator";
+import { d1OutboxStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { AlarmPort, type Alarm } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
+import { Clock, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import {
   d1Admission,
@@ -186,7 +196,7 @@ export const harness = async (options: HarnessOptions = {}) => {
     protection,
     alarms,
     installationQuotaLayer(),
-    heldCheckReporterLayer.pipe(Layer.provide(Layer.merge(fakeGithubLayers(github), readLayer))),
+    heldCheckReporterLayer(db, settings.profile).pipe(Layer.provide(readLayer)),
     Layer.succeed(ManifestReporter, {
       invalid: (repo, sha, errors) =>
         Effect.sync(() => void recorded.reported.push({ repo, sha, errors })),
@@ -223,6 +233,35 @@ export const harness = async (options: HarnessOptions = {}) => {
   };
 };
 export type Harness = Awaited<ReturnType<typeof harness>>;
+
+/** Drains the real check rows under a permit; intake itself writes no execution check to GitHub. */
+export const drainHeldChecks = (h: Harness) =>
+  h.run(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      yield* drainOnce({
+        now,
+        token: (id) => `test-${id}-${now}`,
+        random: () => 0,
+        actuatorOf: Object.fromEntries(
+          Object.entries(h.settings.profile.intent_kinds).map(([kind, entry]) => [
+            kind,
+            entry.actuator,
+          ]),
+        ),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            d1OutboxStore(h.db),
+            CheckRunApplierLive.pipe(Layer.provide(fakeLayers(h.github))),
+            ActuatorRateLimitLive.pipe(
+              Layer.provide(Layer.merge(installationQuotaLayer(), fakeLayers(h.github))),
+            ),
+          ),
+        ),
+      );
+    }),
+  );
 
 // ---------------------------------------------------------------------------
 // Dispatch fixtures
@@ -313,6 +352,7 @@ export const pullRequestPayload = (
     headRepo?: string | null;
     number?: number;
     closedAt?: string | null;
+    updatedAt?: string;
   } = {},
 ) => ({
   action: overrides.action ?? "synchronize",
@@ -321,6 +361,7 @@ export const pullRequestPayload = (
   pull_request: {
     number: overrides.number ?? 12,
     ...(overrides.closedAt === undefined ? {} : { closed_at: overrides.closedAt }),
+    ...(overrides.updatedAt === undefined ? {} : { updated_at: overrides.updatedAt }),
     head: {
       sha: overrides.head ?? HEAD,
       ref: "feature",
