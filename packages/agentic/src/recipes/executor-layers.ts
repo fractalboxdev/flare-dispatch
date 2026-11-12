@@ -60,6 +60,9 @@ const runProcess = (
       clearTimeout(timer);
       resume(Effect.succeed({ exitCode: code, stdout, stderr }));
     });
+    // A started command can close stdin before consuming the prompt (or exit while it is being written).
+    // Its close/exit status still owns the result; a late pipe error must not escape into the executor process.
+    child.stdin.on("error", () => {});
     if (options.stdin !== undefined) child.stdin.end(options.stdin);
     else child.stdin.end();
     return Effect.sync(() => {
