@@ -55,6 +55,7 @@ export const opsGroup = apiGroup({
     revoke: operator,
     pauseKey: operator,
     resumeKey: operator,
+    deliveryKeys: operator,
     health: operator,
   },
   handlers: OpsHandlers,

@@ -14,6 +14,7 @@ export * from "./request-id.ts";
 export * from "./router.ts";
 export { canonicalJson, idempotencyOf, submissionOf, submit } from "./routes/dispatch.ts";
 export { d1Executions, recordOf, reportedStatus } from "./live/executions.ts";
+export { appDeliveryKeys, deliveryKeysWithoutApp } from "./live/delivery-keys.ts";
 export { oidcKeyFromSecret } from "./live/oidc-key.ts";
 export { provenancePolicies } from "./live/provenance-policy.ts";
 export { provenanceStatements, statementRecordOf } from "./live/statements.ts";

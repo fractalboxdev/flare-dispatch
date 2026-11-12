@@ -191,6 +191,12 @@ export const TopUpBody = Schema.Struct({
 });
 export const DeliveryKeyBody = Schema.Struct({ installation: Schema.NonEmptyString, ...Reason });
 
+/**
+ * Every installation of the GitHub App, by id: the delivery keys `pause-key` takes as `installation` (FD-IFC-094). The
+ * list is complete or absent; a read that cannot list every page answers `unavailable` (FD-IFC-099).
+ */
+export const DeliveryKeysView = Schema.Struct({ installations: Schema.Array(Schema.String) });
+
 // --- Enrollment ------------------------------------------------------------------------------------------------------
 
 export const DeviceIdentity = Schema.Struct({
@@ -459,6 +465,10 @@ export class OpsGroup extends HttpApiGroup.make("ops")
     op("revoke", "/v1/ops/revoke", ExecutorTarget),
     op("pauseKey", "/v1/ops/pause-key", DeliveryKeyBody),
     op("resumeKey", "/v1/ops/resume-key", DeliveryKeyBody),
+    HttpApiEndpoint.get("deliveryKeys", "/v1/ops/delivery-keys", {
+      success: DeliveryKeysView,
+      ...errors,
+    }),
     HttpApiEndpoint.get("health", "/v1/ops/health", {
       success: Schema.Record(Schema.String, Schema.Unknown),
       ...errors,
