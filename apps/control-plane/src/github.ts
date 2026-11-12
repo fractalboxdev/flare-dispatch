@@ -19,6 +19,7 @@ import {
   githubLiveLayer,
   installationQuotaObjectLayer,
   SideOutputConfig,
+  d1CommentWrites,
   type AppOptions,
 } from "@fractalboxdev/flare-dispatch-github";
 import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
@@ -47,6 +48,7 @@ export const appLoginOf = (env: ControlPlaneEnv) =>
 export const sideOutputLayer = (env: ControlPlaneEnv, app: AppOptions) => {
   const slug = env.GITHUB_APP_SLUG ?? "flare-dispatch";
   return Layer.succeed(SideOutputConfig, {
+    commentWrites: d1CommentWrites(env.DB),
     appBot: {
       login: `${slug}[bot]`,
       name: `${slug}[bot]`,

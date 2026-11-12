@@ -1,3 +1,4 @@
+import { testCommentWrites } from "./comment-writes.test-support.ts";
 // The side-output appliers over an in-memory repository: each kind's write, its idempotency marker, its refusals
 // and its lookup.
 import { createHmac } from "node:crypto";
@@ -59,6 +60,9 @@ const world = (): World => ({
   deliveries: [{ id: 10, guid: "g-1", redelivery: false }],
 });
 
+const withoutWriteReceipt = (body: string | undefined) =>
+  body?.replace(/<!-- flare-dispatch:comment-write [a-f0-9-]+ -->\n\n/g, "");
+
 const unused = () => Effect.die("not used by the side-output applier");
 
 const layers = (w: World, installations: Record<string, number> = { [REPO]: 7 }, withGate = true) =>
@@ -70,6 +74,7 @@ const layers = (w: World, installations: Record<string, number> = { [REPO]: 7 },
     Layer.succeed(AlarmPort, { deliver: (a) => Effect.sync(() => void w.alarms.push(a)) }),
     fakeConcludeFacts(fakeGithub()),
     Layer.succeed(SideOutputConfig, {
+      commentWrites: testCommentWrites(w),
       appBot: BOT,
       slack: { url: "https://hooks.example.com/verdicts", secret: "slack-secret" },
       fetch: (async (_: unknown, init?: RequestInit) => {
@@ -185,7 +190,11 @@ describe("comment, review and issue", () => {
     const again = await apply(w, r);
     expect(first).toEqual(again);
     expect(w.side.comments.get(3)).toEqual([
-      { id: expect.any(Number), body: `hello\n\n<!-- flare-dispatch:intent exec-1/run:step:0 -->` },
+      {
+        id: expect.any(Number),
+        body: `hello\n\n<!-- flare-dispatch:intent exec-1/run:step:0 -->`,
+        user: { login: BOT.login },
+      },
     ]);
     expect(await lookup(w, r)).toEqual({
       _tag: "found",
@@ -273,6 +282,115 @@ describe("comment, review and issue", () => {
     expect(await apply(w, r)).toMatchObject({ _tag: "unknown" });
     expect(await apply(w, r)).toMatchObject({ _tag: "applied" });
     expect(w.side.comments.get(3)).toHaveLength(1);
+  });
+
+  it("[FD-AGT-053] a comment whose payload names a marker updates the one comment carrying it in place", async () => {
+    const w = world();
+    const MARK = "<!-- flare-dispatch: pr-review -->";
+    w.side.comments.set(7, [{ id: 1, body: "a human comment" }]);
+    const first = row("comment", { issue_number: 7, body: `review 1\n\n${MARK}`, marker: MARK });
+    const created = await apply(w, first);
+    const second = row(
+      "comment",
+      { issue_number: 7, body: "review 2", marker: MARK },
+      { executionId: "exec-2" },
+    );
+    const updated = await apply(w, second);
+    expect(updated).toEqual(created);
+    expect(
+      w.side.comments.get(7)?.map((c) => ({ ...c, body: withoutWriteReceipt(c.body) })),
+    ).toEqual([
+      { id: 1, body: "a human comment" },
+      {
+        id: Number((created as { externalRef: string }).externalRef),
+        body: `review 2\n\n${MARK}\n\n${intentMarker(second)}`,
+        user: { login: BOT.login },
+      },
+    ]);
+    // A repeat of the row adopts the comment its earlier attempt updated, and lookup finds it.
+    expect(await apply(w, second)).toEqual(updated);
+    expect(writes(w)).toEqual(["createComment", "updateComment"]);
+    expect(await lookup(w, second)).toEqual({ ...updated, _tag: "found" });
+    // Of two comments carrying the marker, the earliest is the one kept.
+    w.side.comments.set(8, [
+      { id: 50, body: `old\n\n${MARK}`, user: { login: BOT.login } },
+      { id: 51, body: `a later duplicate\n\n${MARK}`, user: { login: BOT.login } },
+    ]);
+    expect(
+      await apply(w, row("comment", { issue_number: 8, body: `new\n\n${MARK}`, marker: MARK })),
+    ).toEqual({ _tag: "applied", externalRef: "50" });
+    expect(w.side.comments.get(8)?.[1]?.body).toBe(`a later duplicate\n\n${MARK}`);
+  });
+
+  it("[FD-AGT-053] a marked comment someone other than the App wrote is left untouched, and a new comment is created", async () => {
+    const w = world();
+    const MARK = "<!-- flare-dispatch: pr-review -->";
+    const planted = { id: 1, body: `planted\n\n${MARK}`, user: { login: "mallory" } };
+    w.side.comments.set(7, [{ ...planted }]);
+    const r = row("comment", { issue_number: 7, body: "review", marker: MARK });
+    const created = await apply(w, r);
+    expect(created).toMatchObject({ _tag: "applied" });
+    expect((created as { externalRef: string }).externalRef).not.toBe("1");
+    expect(writes(w)).toEqual(["createComment"]);
+    expect(w.side.comments.get(7)?.[0]).toEqual(planted);
+    expect(w.side.comments.get(7)).toHaveLength(2);
+  });
+
+  it("[FD-AGT-053] an older execution's row never overwrites the review a newer execution wrote", async () => {
+    const w = world();
+    const MARK = "<!-- flare-dispatch: pr-review -->";
+    const newer = row(
+      "comment",
+      { issue_number: 7, body: "review of exec-2", marker: MARK },
+      { executionId: "exec-2" },
+    );
+    const older = row("comment", { issue_number: 7, body: "review of exec-1", marker: MARK });
+    const kept = await apply(w, newer);
+    expect(await apply(w, older)).toEqual(kept);
+    expect(await apply(w, older)).toEqual(kept);
+    expect(writes(w)).toEqual(["createComment"]);
+    const comments = w.side.comments.get(7) ?? [];
+    expect(comments).toHaveLength(1);
+    expect(withoutWriteReceipt(comments[0]?.body)).toBe(
+      `review of exec-2\n\n${MARK}\n\n${intentMarker(newer)}`,
+    );
+  });
+
+  it("[FD-AGT-053] a quoted marker in review content cannot pin the comment against future reviews", async () => {
+    const w = world();
+    const MARK = "<!-- flare-dispatch: pr-review -->";
+    const older = row(
+      "comment",
+      {
+        issue_number: 7,
+        body: "An example marker:\n\n```html\n<!-- flare-dispatch:intent 7ZZZZZZZZZZZZZZZZZZZZZZZZZ/run:comment:0 -->\n```",
+        marker: MARK,
+      },
+      { executionId: "01K97WGW010000000000000000" },
+    );
+    const newer = row(
+      "comment",
+      { issue_number: 7, body: "current review", marker: MARK },
+      {
+        executionId: "01K97WGW020000000000000000",
+      },
+    );
+    const first = await apply(w, older);
+    expect(await apply(w, newer)).toEqual(first);
+    expect(w.side.comments.get(7)).toHaveLength(1);
+    expect(withoutWriteReceipt(w.side.comments.get(7)?.[0]?.body)).toBe(
+      `current review\n\n${MARK}\n\n${intentMarker(newer)}`,
+    );
+    expect(writes(w)).toEqual(["createComment", "updateComment"]);
+  });
+
+  it("[FD-AGT-053] a comment payload with an empty marker is refused", async () => {
+    const w = world();
+    w.side.comments.set(7, [{ id: 1, body: "a human comment", user: { login: "dev" } }]);
+    expect(
+      await apply(w, row("comment", { issue_number: 7, body: "review", marker: "" })),
+    ).toMatchObject({ _tag: "refused" });
+    expect(writes(w)).toEqual([]);
   });
 });
 
@@ -652,9 +770,9 @@ describe("write authority", () => {
   const rel = (f: string) => relative(root, f);
   // The control plane's own sources, plus every workspace package it depends on at runtime.
   const controlPlane = join(root, "../apps/control-plane");
-  const { dependencies } = JSON.parse(
-    readFileSync(join(controlPlane, "package.json"), "utf8"),
-  ) as { dependencies: Record<string, string> };
+  const { dependencies } = JSON.parse(readFileSync(join(controlPlane, "package.json"), "utf8")) as {
+    dependencies: Record<string, string>;
+  };
   const prefix = "@fractalboxdev/flare-dispatch-";
   const controlPlaneFiles = [
     ...sources(join(controlPlane, "src")),

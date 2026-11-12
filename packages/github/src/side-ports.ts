@@ -2,6 +2,7 @@
 // blob store, admission for a follow-on, email, the notice channel, and the
 // configuration the appliers read.
 import { Context, Schema, type Effect } from "effect";
+import type { CommentWriteStore } from "./comment-writes.ts";
 
 /** One reason the staged-write gate rejects an entry or the manifest (specs/runs/agentic.md § Staged write). */
 export const GateReason = Schema.Struct({
@@ -76,6 +77,8 @@ export class NoticeChannel extends Context.Service<
 >()("@fractalboxdev/flare-dispatch-github/NoticeChannel") {}
 
 export interface SideOutputSettings {
+  /** Durable ownership of marked comment writes; absence refuses an update rather than issuing an unfenced PATCH. */
+  readonly commentWrites?: CommentWriteStore;
   /** The identity the App commits as; a commit by any other author is a human's (FD-GH-084, FD-GH-087). */
   readonly appBot: { readonly login: string; readonly name: string; readonly email: string };
   /** The Slack verdict endpoint and its signing secret; unset refuses every `notify.slack` row. */

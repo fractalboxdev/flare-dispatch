@@ -29,7 +29,7 @@ The profile declares every kind the control plane accepts ([profile.md](profile.
 | `check.conclude` | control plane, the outcome mapping's `surface_kind` | `cp:check:conclude` | Update to `completed` with conclusion; create completed when no check run exists | `external_id` = execution id |
 | `check.summary` | run | `run:<step name>:<index>` | Title and Markdown on the check run | The check run found by `external_id` |
 | `check.annotations` | run | `run:<step name>:<index>` | Annotations on the check run, at most 50 per request | Annotations read back by check-run id |
-| `comment` | run | `run:<step name>:<index>` | Create issue or pull-request comment | Hidden marker `<!-- flare-dispatch:intent <execution_id>/<intent_key> -->` |
+| `comment` | run | `run:<step name>:<index>` | Create issue or pull-request comment; when the payload names a `marker`, update in place the earliest comment the App wrote carrying it, unless a later execution's intent marker is on it | Hidden marker `<!-- flare-dispatch:intent <execution_id>/<intent_key> -->` |
 | `review` | run | `run:<step name>:<index>` | Create pull-request review, event `COMMENT` | Hidden marker in the body |
 | `issue` | run | `run:<step name>:<index>` | Create or update an issue | Hidden marker in the body |
 | `label` | run | `run:<step name>:<index>` | Add or remove labels | Set semantics |
@@ -253,6 +253,13 @@ Every call, `lookup` included, spends budget; only `apply` calls count against t
 - **FD-GH-089** · phase 0 · `V-UNIT` `V-LIVE` — The control plane must insert each `canary.push` and `delivery.redeliver` row through `insertOpsIntent` with the repository its probe names as the scope ([MAMEKO-OUT-056](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md), [operability.md](operability.md) FD-OPS-038, FD-OPS-045), and its applier must use the App JWT for a `delivery.redeliver` row and the installation token for a `canary.push` row ([architecture.md](architecture.md) FD-ARCH-003).
 
 ## Open items
+
+- Marked review-comment writes use a durable per-PR slot independently of the outbox row claim. A unique attempt footer
+  permits recovery after a lost acknowledgement only when a complete bot-owned comment read observes that exact footer.
+  An absent, malformed or unreadable receipt never releases an uncertain write: newer reviews remain pending, including
+  after claim expiry or an isolate restart. A crash between reserving the slot and sending can therefore block that PR's
+  marked comments indefinitely. There is no timed unlock; operational recovery requires proving the old request cannot
+  still write. Availability is sacrificed rather than letting a late older PATCH overwrite a newer review.
 
 - TODO(maintainer): confirm GitHub's current secondary rate limits for content-creating requests and set the defaults of FD-GH-062 from them.
 - TODO(operator): decide whether a `check.conclude` row that reaches `expired` on a `release` or `required` execution also opens a tracking issue in an operator repository.
