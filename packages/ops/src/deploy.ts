@@ -30,6 +30,7 @@ import {
   type DeployedSettings,
   type Finding,
 } from "./drift.ts";
+import { ghaRunnerUnset, runnerWorkflowCheck } from "./gha-runner.ts";
 import {
   decodeOverlay,
   modelRegistryOf,
@@ -110,6 +111,14 @@ export class DeployTarget extends Context.Service<
     readonly requiredChecks: Effect.Effect<readonly string[], TargetFailed>;
     /** The deploying organization's AWS account's budgets and Budgets actions (FD-EXEC-083). */
     readonly awsBudgets: Effect.Effect<AwsBudgets, TargetFailed>;
+    /**
+     * The text of `.github/workflows/<workflow>` on the runner repository's default branch, or `null` when the
+     * repository holds no such file (FD-EXEC-091).
+     */
+    readonly runnerWorkflow: (
+      runnerRepo: string,
+      workflow: string,
+    ) => Effect.Effect<string | null, TargetFailed>;
     /** Applies each Worker's pending D1 migrations, in order; answers the migrations applied. */
     readonly applyD1Migrations: (
       rendered: readonly RenderedWorker[],
@@ -260,7 +269,8 @@ export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
  * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
  * policy rules (FD-PROF-025), the templates' invariants, the
  * rendered configuration, the deployed Workers against the record of the last deploy, the GitHub App's registration,
- * the default branch's ruleset, the AWS account's Budgets actions where the overlay carries the `aws` kind, and, given
+ * the default branch's ruleset, the AWS account's Budgets actions where the overlay carries the `aws` kind, the runner
+ * workflow's permissions where it carries the `gha` kind, and, given
  * `access`, the Access applications on the dispatcher's hostname, then the
  * profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
  * drift check shares). `fd deploy` passes no `access`: it checks only the hostname
@@ -298,6 +308,18 @@ export const driftFindings = (
       else
         findings.push(
           ...awsBudgetCheck(limitUsd, yield* target.awsBudgets, overlay.aws.launcherRoleArn),
+        );
+    }
+    if (overlay.gha !== undefined) {
+      const { runnerRepo, workflow } = overlay.gha;
+      if (runnerRepo === undefined || workflow === undefined) findings.push(ghaRunnerUnset);
+      else
+        findings.push(
+          ...runnerWorkflowCheck(
+            runnerRepo,
+            workflow,
+            yield* target.runnerWorkflow(runnerRepo, workflow),
+          ),
         );
     }
     if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));

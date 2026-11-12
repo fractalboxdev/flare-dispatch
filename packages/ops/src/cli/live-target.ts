@@ -28,6 +28,7 @@ import {
   type AwsPolicyStatement,
   type DeployedSettings,
 } from "../drift.ts";
+import { runnerWorkflowPath } from "../gha-runner.ts";
 import type { OverlayValues } from "../overlay.ts";
 import { parseJsonc } from "../render.ts";
 import { migrationTags, settingsFromApi, settingsFromConfig, type ApiWorker } from "../settings.ts";
@@ -605,8 +606,50 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
     } satisfies AwsBudgets;
   });
 
+  /** A token of the App's installation on `repo`, scoped to that repository and `permissions`. */
+  const installationToken = (repo: string, permissions: Readonly<Record<string, string>>) =>
+    Effect.gen(function* () {
+      const appToken = yield* jwt;
+      const installation = (yield* c.github.json(
+        "GET",
+        `/repos/${repo}/installation`,
+        appToken,
+      )) as { id: number };
+      const { token } = (yield* c.github.json(
+        "POST",
+        `/app/installations/${installation.id}/access_tokens`,
+        appToken,
+        { repositories: [repo.split("/")[1]], permissions },
+      )) as { token: string };
+      return token;
+    });
+
+  const runnerWorkflow = (runnerRepo: string, workflow: string) =>
+    Effect.gen(function* () {
+      const token = yield* installationToken(runnerRepo, { contents: "read", metadata: "read" });
+      const path = `/repos/${runnerRepo}/contents/${runnerWorkflowPath(workflow)
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`;
+      const file = (yield* c.github
+        .json("GET", path, token)
+        .pipe(
+          Effect.catchTag("TargetFailed", (e) =>
+            e.message === "404" ? Effect.succeed(null) : Effect.fail(e),
+          ),
+        )) as { content?: unknown; encoding?: unknown } | null;
+      if (file === null) return null;
+      if (typeof file.content !== "string" || file.encoding !== "base64")
+        return yield* new TargetFailed({
+          operation: `GET ${path}`,
+          message: "the response carries no base64 file content",
+        });
+      return Buffer.from(file.content, "base64").toString("utf8");
+    });
+
   return Layer.succeed(DeployTarget, {
     deployedSettings,
+    runnerWorkflow,
     awsBudgets,
     accessApplications,
     putAccessApplication: (application, id) =>
@@ -642,21 +685,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
           operation: "ruleset",
           message: "GITHUB_REPOSITORY names no <owner>/<repo>",
         });
-      const appToken = yield* jwt;
-      const installation = (yield* c.github.json(
-        "GET",
-        `/repos/${repo}/installation`,
-        appToken,
-      )) as { id: number };
-      const { token } = (yield* c.github.json(
-        "POST",
-        `/app/installations/${installation.id}/access_tokens`,
-        appToken,
-        {
-          repositories: [repo.split("/")[1]],
-          permissions: { administration: "read", metadata: "read" },
-        },
-      )) as { token: string };
+      const token = yield* installationToken(repo, { administration: "read", metadata: "read" });
       const { default_branch } = (yield* c.github.json("GET", `/repos/${repo}`, token)) as {
         default_branch: string;
       };

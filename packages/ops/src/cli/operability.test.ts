@@ -43,6 +43,7 @@ const fakeTarget = (calls: string[], opts: { probe?: boolean } = {}) =>
     appRegistration: Effect.succeed(APP_PERMISSIONS),
     requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
     awsBudgets: Effect.succeed({ account: "", observedAt: 0, budgets: [], actions: [] }),
+    runnerWorkflow: () => Effect.succeed(null),
     applyD1Migrations: () => Effect.sync(() => (calls.push("migrate"), [])),
     deployWorker: (r) =>
       Effect.sync(() => {

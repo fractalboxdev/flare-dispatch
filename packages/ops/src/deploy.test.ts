@@ -58,6 +58,7 @@ const target = (
     awsBudgets: Effect.sync(
       () => (calls.push("aws"), { account: "", observedAt: 0, budgets: [], actions: [] }),
     ),
+    runnerWorkflow: () => Effect.succeed(null),
     applyD1Migrations: () => Effect.sync(() => (calls.push("migrate"), ["0007_alarms"])),
     deployWorker: ({ worker: w }) =>
       Effect.sync((): Deployed => {
