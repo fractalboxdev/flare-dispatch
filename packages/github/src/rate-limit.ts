@@ -10,6 +10,7 @@ import {
   type PermitRequest,
 } from "@fractalboxdev/mameko-ports";
 import { Clock, Context, Effect, Layer, Ref } from "effect";
+import { InstallationDirectory } from "./directory.ts";
 
 /** What one GitHub response says about its installation's budget. */
 export interface QuotaObservation {
@@ -29,7 +30,7 @@ export interface QuotaOptions {
   /** At or below this share the lowest-rank class gets no permit unless it draws the reserve (FD-GH-059). */
   readonly lowestRankFraction: number;
   readonly lowestRank: number;
-  /** Content-creating permits per minute and per hour (FD-GH-062); only `apply` calls write. */
+  /** Content-creating permits in any 60 s and in any hour (FD-GH-062); only `apply` calls write. */
   readonly perMinute: number;
   readonly perHour: number;
   /** Permits out at once per installation (FD-GH-063). */
@@ -49,18 +50,13 @@ export const quotaOptionsDefault: QuotaOptions = {
   concurrentRetryMs: 1000,
 };
 
-interface Window {
-  readonly start: number;
-  readonly count: number;
-}
-
 interface InstallationState {
   readonly limit: number;
   readonly remaining: number;
   readonly resetAt: number;
   readonly blockedUntil: number;
-  readonly minute: Window;
-  readonly hour: Window;
+  /** The grant time of each `apply` permit of the last hour, oldest first. */
+  readonly applies: readonly number[];
   /** Granted permits not yet released. */
   readonly outstanding: number;
 }
@@ -79,13 +75,27 @@ export class InstallationQuota extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-github/InstallationQuota") {}
 
-const roll = (w: Window, now: number, span: number): Window =>
-  now - w.start >= span ? { start: now, count: 0 } : w;
+/**
+ * The instant a further `apply` permit fits under `cap` grants in any `span` ms: `now` when fewer than `cap` of
+ * `applies` fall in the span ending at `now`, else the instant enough of them leave it.
+ */
+const capFreeAt = (applies: readonly number[], now: number, span: number, cap: number): number => {
+  const inSpan = applies.filter((t) => t > now - span);
+  return inSpan.length < cap ? now : (inSpan[inSpan.length - cap] ?? now) + span;
+};
+
+/** Whether a row takes permits from the reserve: its kind draws it, or it carries the outcome (FD-GH-058). */
+const drawsReserve = (request: PermitRequest): boolean =>
+  request.drawsReserve || request.tier === "outcome";
 
 /**
  * Decides one permit at `now` and returns the state after it. The checks run in order: a `Retry-After`, the
  * concurrency bound, an exhausted window, the reserve, the lowest-rank share, then the content-creating caps,
- * which count only `apply` calls. Every call, a read included, spends one unit of the installation's budget.
+ * which count only `apply` calls over a sliding minute and hour. Every call, a read included, spends one unit of the
+ * installation's budget.
+ *
+ * mameko's terminal write inserts the outcome row with `draws_reserve` 0, so a row of the `outcome` tier draws the
+ * reserve as the profile's outcome kind does by default.
  */
 export const decidePermit = (
   options: QuotaOptions,
@@ -99,8 +109,7 @@ export const decidePermit = (
     ...state,
     remaining: reset ? state.limit : state.remaining,
     resetAt: reset ? 0 : state.resetAt,
-    minute: roll(state.minute, now, MINUTE_MS),
-    hour: roll(state.hour, now, HOUR_MS),
+    applies: state.applies.filter((t) => t > now - HOUR_MS),
   };
   const untilReset = s.resetAt > now ? s.resetAt : now + MINUTE_MS;
   const wait = (retryAt: number): readonly [PermitAnswer, InstallationState] => [
@@ -108,39 +117,41 @@ export const decidePermit = (
     s,
   ];
   const writes = request.call === "apply";
+  const reserve = drawsReserve(request);
   if (now < s.blockedUntil) return wait(s.blockedUntil);
   if (s.outstanding >= options.concurrent) return wait(now + options.concurrentRetryMs);
   if (s.remaining <= 0) return wait(untilReset);
-  if (!request.drawsReserve && s.remaining <= s.limit * options.reserveFraction)
-    return wait(untilReset);
+  if (!reserve && s.remaining <= s.limit * options.reserveFraction) return wait(untilReset);
   if (
-    !request.drawsReserve &&
+    !reserve &&
     request.classRank >= options.lowestRank &&
     s.remaining <= s.limit * options.lowestRankFraction
   )
     return wait(untilReset);
-  if (writes && s.minute.count >= options.perMinute) return wait(s.minute.start + MINUTE_MS);
-  if (writes && s.hour.count >= options.perHour) return wait(s.hour.start + HOUR_MS);
-  const counted = writes ? 1 : 0;
+  if (writes) {
+    const free = Math.max(
+      capFreeAt(s.applies, now, MINUTE_MS, options.perMinute),
+      capFreeAt(s.applies, now, HOUR_MS, options.perHour),
+    );
+    if (free > now) return wait(free);
+  }
   return [
     { _tag: "granted", permitId },
     {
       ...s,
       remaining: s.remaining - 1,
       outstanding: s.outstanding + 1,
-      minute: { ...s.minute, count: s.minute.count + counted },
-      hour: { ...s.hour, count: s.hour.count + counted },
+      applies: writes ? [...s.applies, now] : s.applies,
     },
   ];
 };
 
-const fresh = (options: QuotaOptions, now: number): InstallationState => ({
+const fresh = (options: QuotaOptions): InstallationState => ({
   limit: options.limit,
   remaining: options.limit,
   resetAt: 0,
   blockedUntil: 0,
-  minute: { start: now, count: 0 },
-  hour: { start: now, count: 0 },
+  applies: [],
   outstanding: 0,
 });
 
@@ -160,36 +171,29 @@ export const installationQuotaLayer = (options: QuotaOptions = quotaOptionsDefau
         permits: new Map(),
         issued: 0,
       });
-      const update = (key: string, f: (s: InstallationState) => InstallationState, now: number) =>
+      const update = (key: string, f: (s: InstallationState) => InstallationState) =>
         Ref.update(states, (q) => ({
           ...q,
           installations: new Map(q.installations).set(
             key,
-            f(q.installations.get(key) ?? fresh(options, now)),
+            f(q.installations.get(key) ?? fresh(options)),
           ),
         }));
       return {
         observe: (limitKey, o) =>
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis;
-            yield* update(
-              limitKey,
-              (s) => ({
-                ...s,
-                limit: o.limit ?? s.limit,
-                remaining: o.remaining ?? s.remaining,
-                resetAt: o.resetAt ?? s.resetAt,
-                blockedUntil: Math.max(s.blockedUntil, o.retryAfterAt ?? 0),
-              }),
-              now,
-            );
-          }),
+          update(limitKey, (s) => ({
+            ...s,
+            limit: o.limit ?? s.limit,
+            remaining: o.remaining ?? s.remaining,
+            resetAt: o.resetAt ?? s.resetAt,
+            blockedUntil: Math.max(s.blockedUntil, o.retryAfterAt ?? 0),
+          })),
         acquire: (request) =>
           Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis;
             return yield* Ref.modify(states, (q) => {
               const permitId = `${request.limitKey}:${q.issued + 1}`;
-              const prev = q.installations.get(request.limitKey) ?? fresh(options, now);
+              const prev = q.installations.get(request.limitKey) ?? fresh(options);
               const [answer, next] = decidePermit(options, prev, request, now, permitId);
               // Only a grant adds an outstanding permit.
               const granted = next.outstanding > prev.outstanding;
@@ -232,11 +236,45 @@ export const installationQuotaLayer = (options: QuotaOptions = quotaOptionsDefau
     }),
   );
 
-/** mameko's actuator rate limit, served by the installation quota; the limit key is the installation id. */
+/** A repository scope, `<owner>/<repo>`, as a row keyed by its scope carries it. */
+const isRepository = (limitKey: string) => limitKey.includes("/");
+
+/**
+ * mameko's actuator rate limit, served by the installation quota under the installation id, the key the client observes
+ * each response under (FD-GH-056). A row keyed by its repository, as mameko keys a row when the binding is not applied
+ * (MAMEKO-OUT-057), takes its permit from the quota of the installation that serves the repository. Any other key, an
+ * installation id or the App's own key, is the quota key as it stands. A repository no installation serves keeps its
+ * own key, since the applier refuses its row without a call; a directory read that fails answers `wait`, so no call
+ * goes out under a quota it was not counted against.
+ */
 export const ActuatorRateLimitLive = Layer.effect(
   ActuatorRateLimit,
   Effect.gen(function* () {
     const quota = yield* InstallationQuota;
-    return { acquire: quota.acquire, release: quota.release };
+    const directory = yield* InstallationDirectory;
+    const retryMs = quotaOptionsDefault.concurrentRetryMs;
+    return {
+      acquire: (request) =>
+        isRepository(request.limitKey)
+          ? directory.installationFor(request.limitKey).pipe(
+              Effect.flatMap((installation) =>
+                quota.acquire(
+                  installation === null ? request : { ...request, limitKey: String(installation) },
+                ),
+              ),
+              Effect.catch((e) =>
+                Effect.gen(function* () {
+                  const now = yield* Clock.currentTimeMillis;
+                  yield* Effect.logWarning("installation read failed; permit deferred", {
+                    limitKey: request.limitKey,
+                    reason: e.message,
+                  });
+                  return { _tag: "wait", retryAt: now + retryMs } as const;
+                }),
+              ),
+            )
+          : quota.acquire(request),
+      release: quota.release,
+    };
   }),
 );

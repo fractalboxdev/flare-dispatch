@@ -254,7 +254,9 @@ export const drainHeldChecks = (h: Harness) =>
           Layer.mergeAll(
             d1OutboxStore(h.db),
             CheckRunApplierLive.pipe(Layer.provide(fakeLayers(h.github))),
-            ActuatorRateLimitLive.pipe(Layer.provide(installationQuotaLayer())),
+            ActuatorRateLimitLive.pipe(
+              Layer.provide(Layer.merge(installationQuotaLayer(), fakeLayers(h.github))),
+            ),
           ),
         ),
       );

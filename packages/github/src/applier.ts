@@ -13,7 +13,7 @@ import {
   type LookupAnswer,
   type ReconcileAnswer,
 } from "@fractalboxdev/mameko-ports";
-import { Context, Effect, Layer, Match, Option, Schema } from "effect";
+import { Effect, Layer, Match, Option, Schema } from "effect";
 import {
   GithubClient,
   type Annotation,
@@ -33,12 +33,9 @@ import {
   truncate,
   Verdict,
 } from "./conclusion.ts";
+import { InstallationDirectory } from "./directory.ts";
 
-/** Which GitHub App installation serves a tenant scope; null when none does. */
-export class InstallationDirectory extends Context.Service<
-  InstallationDirectory,
-  { readonly installationFor: (scopeId: string) => Effect.Effect<number | null, GithubError> }
->()("@fractalboxdev/flare-dispatch-github/InstallationDirectory") {}
+export { InstallationDirectory };
 
 // ---------------------------------------------------------------------------
 // Payloads the profile's payload bindings build, one schema per kind

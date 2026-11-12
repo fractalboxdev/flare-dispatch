@@ -34,8 +34,12 @@ export const TickUnit = Schema.Union([
   Schema.TaggedStruct("sweep", {
     installation: Schema.Number,
     scheduledAt: Schema.Number,
-    /** Index of the next repository, and how many pull requests the earlier units already looked at. */
+    /**
+     * Index of the next repository, index of the next pull request among that repository's recent ones (0 when
+     * absent), and how many pull requests the earlier units already looked at.
+     */
     repoIndex: Schema.Number,
+    pullIndex: Schema.optionalKey(Schema.Number),
     pullsSeen: Schema.Number,
   }),
   Schema.TaggedStruct("schedules", {
@@ -133,16 +137,26 @@ const sweep = (unit: TickUnit & { readonly _tag: "sweep" }) =>
     for (let i = unit.repoIndex; i < repos.length; i++) {
       if (pullsSeen >= SWEEP_PULLS_PER_INSTALLATION) break;
       const repo = repos[i]!;
+      // A unit that continues another resumes at the pull request its predecessor stopped before.
+      const from = i === unit.repoIndex ? (unit.pullIndex ?? 0) : 0;
       if (!spent.spend(1))
-        return { outcome, next: { ...unit, repoIndex: i, pullsSeen }, skipped: null };
+        return {
+          outcome,
+          next: { ...unit, repoIndex: i, pullIndex: from, pullsSeen },
+          skipped: null,
+        };
       const pulls = (yield* github.openPulls(repo))
         .filter((p) => now - Date.parse(p.updated_at) <= SWEEP_WINDOW_MS)
-        .slice(0, SWEEP_PULLS_PER_INSTALLATION - pullsSeen);
-      pullsSeen += pulls.length;
-      for (const pr of pulls) {
+        .slice(from, from + SWEEP_PULLS_PER_INSTALLATION - pullsSeen);
+      for (const [k, pr] of pulls.entries()) {
         // Two reads for the required set, one for the head's check runs, and the trigger's manifest reads.
         if (!spent.spend(8))
-          return { outcome, next: { ...unit, repoIndex: i, pullsSeen }, skipped: null };
+          return {
+            outcome,
+            next: { ...unit, repoIndex: i, pullIndex: from + k, pullsSeen },
+            skipped: null,
+          };
+        pullsSeen++;
         const required = (yield* github.requiredChecks(repo, pr.base.ref)).filter((n) =>
           n.startsWith("flare-dispatch/"),
         );

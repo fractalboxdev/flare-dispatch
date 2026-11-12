@@ -2,7 +2,14 @@ import { ActuatorRateLimit, type PermitRequest } from "@fractalboxdev/mameko-por
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
-import { GithubClient, githubClientLayer, GithubHttpError, observeHeaders } from "./client.ts";
+import {
+  GithubClient,
+  githubClientLayer,
+  GithubHttpError,
+  GithubNetworkError,
+  observeHeaders,
+} from "./client.ts";
+import { InstallationDirectory } from "./directory.ts";
 import {
   ActuatorRateLimitLive,
   InstallationQuota,
@@ -24,6 +31,14 @@ const permit = (overrides: Partial<PermitRequest> = {}): PermitRequest => ({
 
 const NOW = 1_000_000;
 
+/** `acme/app` is served by installation 7, `acme/down` cannot be read and no installation serves any other repository. */
+const directory = Layer.succeed(InstallationDirectory, {
+  installationFor: (scope) =>
+    scope === "acme/down"
+      ? Effect.fail(new GithubNetworkError({ sent: false, message: "unreachable" }))
+      : Effect.succeed(scope === "acme/app" ? 7 : null),
+});
+
 /** Runs against a fresh quota at a fixed test time. */
 const withQuota = <A, E>(
   effect: Effect.Effect<A, E, ActuatorRateLimit | InstallationQuota>,
@@ -35,7 +50,12 @@ const withQuota = <A, E>(
       return yield* effect;
     }).pipe(
       // One quota instance serves both services.
-      Effect.provide(Layer.provideMerge(ActuatorRateLimitLive, installationQuotaLayer(options))),
+      Effect.provide(
+        Layer.provideMerge(
+          ActuatorRateLimitLive,
+          Layer.merge(installationQuotaLayer(options), directory),
+        ),
+      ),
       Effect.provide(TestClock.layer()),
     ),
   );
@@ -77,6 +97,45 @@ describe("applier rate limit", () => {
       }),
     );
     expect(answers).toEqual(["wait", "granted"]);
+  });
+
+  it("[FD-GH-056] MAMEKO-OUT-057 a row keyed by its repository takes its permit from its installation's quota", async () => {
+    const answers = await withQuota(
+      Effect.gen(function* () {
+        yield* observe("7", { limit: 100, remaining: 0, resetAt: NOW + 5000 });
+        return [
+          yield* acquire(permit({ limitKey: "acme/app", drawsReserve: true })),
+          (yield* acquire(permit({ limitKey: "acme/other" })))._tag,
+          (yield* acquire(permit({ limitKey: "app" })))._tag,
+        ];
+      }),
+    );
+    // The repository resolves to installation 7, which is spent; an unserved repository and the App's key are not.
+    expect(answers).toEqual([{ _tag: "wait", retryAt: NOW + 5000 }, "granted", "granted"]);
+  });
+
+  it("[FD-GH-056] permits keyed by the installation and by its repository share one concurrency bound", async () => {
+    const result = await withQuota(
+      Effect.gen(function* () {
+        const limit = yield* ActuatorRateLimit;
+        const permits: string[] = [];
+        for (let i = 0; i < 8; i++) {
+          const key = i % 2 === 0 ? "7" : "acme/app";
+          const answer = yield* limit.acquire(permit({ limitKey: key }));
+          if (answer._tag === "granted") permits.push(answer.permitId);
+        }
+        const ninth = (yield* limit.acquire(permit({ limitKey: "acme/app" })))._tag;
+        yield* limit.release(permits[1]!);
+        const afterRelease = (yield* limit.acquire(permit({ limitKey: "7" })))._tag;
+        return { granted: permits.length, ninth, afterRelease };
+      }),
+    );
+    expect(result).toEqual({ granted: 8, ninth: "wait", afterRelease: "granted" });
+  });
+
+  it("[FD-GH-056] a repository whose installation cannot be read gets no permit until a later request", async () => {
+    const answer = await withQuota(acquire(permit({ limitKey: "acme/down", drawsReserve: true })));
+    expect(answer).toEqual({ _tag: "wait", retryAt: NOW + quotaOptionsDefault.concurrentRetryMs });
   });
 
   it("[FD-GH-058] MAMEKO-OUT-041 at the reserve only check.open and check.conclude rows get a permit", async () => {
@@ -144,6 +203,63 @@ describe("applier rate limit", () => {
       { ...quotaOptionsDefault, perMinute: 3 },
     );
     expect(answers).toEqual(["granted", "granted", "granted", "granted", "granted", "wait"]);
+  });
+
+  it("[FD-GH-062] counts apply permits over any 60 s, not a window that restarts", async () => {
+    const answers = await withQuota(
+      Effect.gen(function* () {
+        const out: unknown[] = [(yield* acquire(permit()))._tag];
+        yield* TestClock.adjust("59 seconds");
+        out.push((yield* acquire(permit()))._tag, yield* acquire(permit()));
+        // 60 s on, the first grant leaves the span: one more fits, and the next waits until the 59 s grant leaves it.
+        yield* TestClock.adjust("1 second");
+        out.push((yield* acquire(permit()))._tag, yield* acquire(permit()));
+        return out;
+      }),
+      { ...quotaOptionsDefault, perMinute: 2 },
+    );
+    expect(answers).toEqual([
+      "granted",
+      "granted",
+      { _tag: "wait", retryAt: NOW + 60_000 },
+      "granted",
+      { _tag: "wait", retryAt: NOW + 119_000 },
+    ]);
+  });
+
+  it("[FD-GH-062] caps apply permits per hour at the default 500", async () => {
+    const answers = await withQuota(
+      Effect.gen(function* () {
+        let granted = 0;
+        // 81 calls a minute for 7 minutes: 80 each minute fit the minute cap until the hour's 500 are out.
+        for (let minute = 0; minute < 7; minute++) {
+          for (let i = 0; i < 81; i++) {
+            const answer = yield* acquire(permit());
+            if (answer._tag === "granted") {
+              granted++;
+              yield* ActuatorRateLimit.use((l) => l.release(answer.permitId));
+            }
+          }
+          yield* TestClock.adjust("1 minute");
+        }
+        return { granted, next: yield* acquire(permit()) };
+      }),
+    );
+    expect(quotaOptionsDefault).toMatchObject({ perMinute: 80, perHour: 500 });
+    expect(answers).toEqual({ granted: 500, next: { _tag: "wait", retryAt: NOW + 3_600_000 } });
+  });
+
+  it("[FD-GH-058] a row of the outcome tier draws the reserve though mameko writes it unflagged", async () => {
+    const answers = await withQuota(
+      Effect.gen(function* () {
+        yield* observe("7", { limit: 100, remaining: 10, resetAt: NOW + 5000 });
+        return [
+          (yield* acquire(permit({ kind: "check.conclude", tier: "outcome" })))._tag,
+          (yield* acquire(permit({ kind: "comment", tier: "effect" })))._tag,
+        ];
+      }),
+    );
+    expect(answers).toEqual(["granted", "wait"]);
   });
 
   it("[FD-GH-063] MAMEKO-OUT-039 a 9th concurrent call waits until a permit is released", async () => {
@@ -250,9 +366,39 @@ describe("live client", () => {
         yield* github.createCheckRun({ installation: 7, repo: "acme/app", body: { name: "n" } });
         const limit = yield* ActuatorRateLimit;
         return yield* limit.acquire(permit({ drawsReserve: true }));
-      }).pipe(Effect.provide(Layer.provideMerge(ActuatorRateLimitLive, live(fetch)))),
+      }).pipe(
+        Effect.provide(
+          Layer.provideMerge(ActuatorRateLimitLive, Layer.merge(live(fetch), directory)),
+        ),
+      ),
     );
     expect(calls).toEqual(["POST https://github.test/repos/acme/app/check-runs"]);
+    expect(answer).toEqual({ _tag: "wait", retryAt: 4_102_444_800_000 });
+  });
+
+  it("[FD-GH-056] headers observed under the installation reach a row keyed by its repository", async () => {
+    const fetch: typeof globalThis.fetch = async () =>
+      response(
+        201,
+        { id: 5 },
+        {
+          "x-ratelimit-limit": "100",
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": "4102444800",
+        },
+      );
+    const answer = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GithubClient;
+        yield* github.createCheckRun({ installation: 7, repo: "acme/app", body: { name: "n" } });
+        const limit = yield* ActuatorRateLimit;
+        return yield* limit.acquire(permit({ limitKey: "acme/app", drawsReserve: true }));
+      }).pipe(
+        Effect.provide(
+          Layer.provideMerge(ActuatorRateLimitLive, Layer.merge(live(fetch), directory)),
+        ),
+      ),
+    );
     expect(answer).toEqual({ _tag: "wait", retryAt: 4_102_444_800_000 });
   });
 

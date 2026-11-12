@@ -1,5 +1,5 @@
 // The cache, artifact and log area on the Worker: a lease's cache fields, the compile-cache route, the log and artifact
-// reads the router serves behind the link surface (FD-IFC-017), and the retention sweeps the minute tick runs. The
+// reads the router serves behind the link surface (FD-IFC-017), and the minute tick's steps (cache-retention.ts). The
 // compile-cache route checks its own token (FD-CACHE-057).
 import {
   apiError,
@@ -10,25 +10,23 @@ import {
 } from "@fractalboxdev/flare-dispatch-api";
 import {
   ARTIFACT_PAGE_SIZE,
-  ARTIFACT_SCHEMA,
   artifactPage,
   findArtifact,
   handleCompileCache,
   ledgersOf,
   serveArtifact,
   serveLogs,
-  sweepArtifacts,
-  sweepCache,
-  sweepLogs,
 } from "@fractalboxdev/flare-dispatch-cache";
 import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
-import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
 import { Context, Effect, Layer, Match } from "effect";
 import { HttpServerResponse, type HttpServerRequest } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 import type { ControlPlaneEnv } from "./config.ts";
 import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
+import { migrateCache } from "./cache-retention.ts";
+
+export { cacheSweeps, migrateCache } from "./cache-retention.ts";
 
 /** The bindings this area reads beside the control plane's. */
 export interface CacheEnv {
@@ -41,8 +39,6 @@ export interface CacheEnv {
   /** The public origin a compile-cache endpoint names. */
   readonly PUBLIC_ORIGIN?: string;
 }
-
-const TERMINAL = "status not in ('pending', 'running')";
 
 const first = async <T>(db: D1Like, sql: string, ...binds: unknown[]): Promise<T | undefined> =>
   (
@@ -69,17 +65,6 @@ export const leaseCache = async (
   );
   return leaseCacheAt(env, record, placement ?? { epoch: 1, kind: null }, deadlineAt);
 };
-
-let artifactsMigrated: Promise<unknown> | undefined;
-
-/** The artifact rows' table (FD-CACHE-073). */
-export const migrateCache = (db: D1Like) =>
-  (artifactsMigrated ??= (async () => {
-    for (const sql of ARTIFACT_SCHEMA) await db.prepare(sql).run();
-  })().catch((e: unknown) => {
-    artifactsMigrated = undefined;
-    throw e;
-  }));
 
 /** A binding this deploy lacks answers `unavailable` in the error model's shape (FD-IFC-009). */
 const unavailable = (what: string) =>
@@ -165,7 +150,7 @@ export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheRe
     return s !== undefined && isTerminal(s);
   };
   const artifactDeps = { db, bucket, now: Date.now, terminal };
-  const migrated = Effect.promise(() => migrateCache(env.DB));
+  const migratedDb = Effect.promise(() => migrateCache(env.DB));
   return Layer.succeed(CacheReads)({
     logs: (request, executionId, file) =>
       Effect.gen(function* () {
@@ -198,7 +183,7 @@ export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheRe
       }),
     artifact: (request, artifactId, browsePath) =>
       Effect.gen(function* () {
-        yield* migrated;
+        yield* migratedDb;
         const row = yield* Effect.promise(() => findArtifact(artifactDeps, artifactId));
         if (row === null) return yield* apiError("not_found", `no artifact ${artifactId}`);
         const read = yield* Effect.promise(() =>
@@ -217,7 +202,7 @@ export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheRe
       }),
     artifacts: (executionId, page) =>
       Effect.gen(function* () {
-        yield* migrated;
+        yield* migratedDb;
         // The listing route admits only an Access identity of the team, which reads every repository's artifacts.
         return yield* Effect.promise(() =>
           artifactPage(artifactDeps, executionId, page, async () => true),
@@ -265,52 +250,3 @@ export const ArtifactsHandlers = HttpApiBuilder.group(FlareDispatchApi, "artifac
       ),
     ),
 );
-
-/**
- * The retention sweeps (FD-CACHE-062 to FD-CACHE-066, FD-CACHE-079, FD-CACHE-089). No GitHub read answers when a pull
- * request closed, so a pull-request namespace ages out by its TTL alone; an execution with no settled reservation has
- * no end time, so its logs stay.
- */
-export const cacheSweeps =
-  (env: ControlPlaneEnv & CacheEnv) =>
-  (now: number): readonly TickStep[] => {
-    const bucket = env.CACHE;
-    const ledger = env.CACHE_LEDGER;
-    if (bucket === undefined || ledger === undefined) return [];
-    return [
-      {
-        step: "cache-sweep",
-        effect: Effect.promise(() =>
-          sweepCache(bucket, now, {
-            ledgers: ledgersOf(ledger),
-            pullRequestClosedAt: async () => null,
-          }),
-        ),
-      },
-      {
-        step: "artifact-sweep",
-        effect: Effect.promise(async () => {
-          await migrateCache(env.DB);
-          return sweepArtifacts(env.DB as unknown as D1Database, bucket, now);
-        }),
-      },
-      {
-        step: "log-sweep",
-        effect: Effect.promise(() =>
-          sweepLogs(
-            bucket,
-            async (id) =>
-              (
-                await first<{ at: number | null }>(
-                  env.DB,
-                  `select r.updated_at as at from executions e join reservations r on r.execution_id = e.id
-                 where e.id = ? and e.${TERMINAL} and r.state in ('settled', 'released')`,
-                  id,
-                )
-              )?.at ?? null,
-            now,
-          ),
-        ),
-      },
-    ];
-  };

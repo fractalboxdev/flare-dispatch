@@ -94,4 +94,12 @@ describe("the child-conclusions read", () => {
     await Effect.runPromise(migrateChildConclusions(db));
     await Effect.runPromise(migrateChildConclusions(db));
   });
+
+  it("[FD-GH-058] a child's cp:check:conclude row draws the rate limit's reserve, as the check.conclude kind does", () => {
+    for (const deployment of ["development", "production"] as const)
+      expect(concludeKindOf(buildProfile(deployment))).toMatchObject({
+        tier: "outcome",
+        drawsReserve: true,
+      });
+  });
 });
