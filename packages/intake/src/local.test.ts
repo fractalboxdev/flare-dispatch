@@ -1,6 +1,16 @@
 // The local submit (phase 1) through intake.
+import { checkProgressPayload } from "@fractalboxdev/flare-dispatch-github";
 import { describe, expect, it } from "vitest";
-import { harness, HEAD, REPO, type Harness } from "./harness.test-support.ts";
+import {
+  admit,
+  authenticated,
+  harness,
+  HEAD,
+  manifest,
+  REPO,
+  repoWithManifest,
+  type Harness,
+} from "./harness.test-support.ts";
 import { submitLocal } from "./local.ts";
 
 const register = (h: Harness, run: string, body: unknown) =>
@@ -44,5 +54,86 @@ describe("FD-INT-061 local submit", () => {
     });
     expect(h.executions()).toEqual([]);
     expect(h.records()).toEqual([]);
+  });
+});
+
+describe("FD-ARCH-018 work in a capacity lease and the check run", () => {
+  const OTHER = "d".repeat(40);
+  // `check` owns a check run; both runs are dispatchable, so a cloud dispatch of each is the contrast.
+  const dispatchable = () =>
+    harness({
+      repos: {
+        [REPO]: repoWithManifest(
+          manifest([
+            { recipe: "check", label: "ci", triggers: ["dispatch"], params: { steps: ["test"] } },
+            { recipe: "nightly", triggers: ["dispatch"] },
+          ]),
+        ),
+      },
+    });
+  const kinds = (h: Harness, executionId: string) =>
+    h
+      .rows("select kind from outbox where execution_id = ? order by id", executionId)
+      .map((r) => r["kind"]);
+  const execution = (h: Harness, executionId: string) =>
+    h.rows(
+      "select class, status, outcome_kind, surface_opened from executions where id = ?",
+      executionId,
+    )[0];
+  const admittedId = (answer: unknown) => (answer as { executionId: string }).executionId;
+
+  it("[FD-ARCH-018] a local.register admitted under a capacity lease opens no check run and binds no conclusion to it", async () => {
+    const h = await dispatchable();
+    const cloud = await admit(h, authenticated({ sha: HEAD, inputs: { sha: HEAD } }));
+    const local = admittedId(await register(h, "check", body));
+    // The same run at the same commit, admitted outside a capacity lease, opens its check run and carries the
+    // outcome kind its conclusion is written from.
+    expect(kinds(h, cloud.executionId)).toEqual(["check.open"]);
+    expect(execution(h, cloud.executionId)).toMatchObject({
+      outcome_kind: "check.conclude",
+      surface_opened: 1,
+    });
+    expect(kinds(h, local)).toEqual([]);
+    expect(execution(h, local)).toMatchObject({ outcome_kind: null, surface_opened: 0 });
+  });
+
+  it("[FD-ARCH-018] a capacity-lease execution that admission concludes writes no check.conclude row", async () => {
+    const h = await dispatchable();
+    // A batch execution of the same (run, scope) still queued is recorded `deferred` when a newer one is admitted.
+    const firstLocal = admittedId(await register(h, "check", body));
+    const secondLocal = admittedId(await register(h, "check", { ...body, treeHash: "tree-2" }));
+    const firstCloud = await admit(
+      h,
+      authenticated({ run: "nightly", label: null, sha: HEAD, inputs: { sha: HEAD } }),
+    );
+    const secondCloud = await admit(
+      h,
+      authenticated({ run: "nightly", label: null, sha: OTHER, inputs: { sha: OTHER } }),
+    );
+    expect(execution(h, firstCloud.executionId)).toMatchObject({
+      class: "batch",
+      status: "deferred",
+    });
+    expect(kinds(h, firstCloud.executionId)).toEqual(["check.open", "check.conclude"]);
+    expect(kinds(h, secondCloud.executionId)).toEqual(["check.open"]);
+    expect(execution(h, firstLocal)).toMatchObject({ class: "batch", status: "deferred" });
+    expect(kinds(h, firstLocal)).toEqual([]);
+    expect(kinds(h, secondLocal)).toEqual([]);
+  });
+
+  it("[FD-ARCH-018] a capacity-lease execution gets no check.progress payload, so its check run is never updated", async () => {
+    const h = await dispatchable();
+    const local = admittedId(await register(h, "check", body));
+    const record = h.records().find((r) => r["execution_id"] === local)!;
+    const labels = JSON.parse(record["labels_json"] as string) as string[];
+    const progress = (labels: readonly string[]) =>
+      checkProgressPayload({
+        check: { name: "flare-dispatch/check:ci", headSha: HEAD },
+        labels,
+        execution: { class: "batch", deadlineAt: 1_000 },
+        queuePosition: 1,
+      });
+    expect(progress([])).toMatchObject({ name: "flare-dispatch/check:ci", head_sha: HEAD });
+    expect(progress(labels)).toBeNull();
   });
 });
