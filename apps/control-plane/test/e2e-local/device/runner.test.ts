@@ -9,8 +9,8 @@ import { join } from "node:path";
 import type {
   ControlPlaneClient,
   ExecutionView,
-} from "@fractalboxdev/flare-dispatch-dogfood/client";
-import { startDeviceStack } from "@fractalboxdev/flare-dispatch-dogfood/stack";
+} from "@fractalboxdev/flare-dispatch-local-ci/client";
+import { startDeviceStack } from "@fractalboxdev/flare-dispatch-local-ci/stack";
 import { Effect, Exit, Scope } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
