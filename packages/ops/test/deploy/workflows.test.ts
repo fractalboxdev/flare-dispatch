@@ -28,7 +28,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { Effect, Layer } from "effect";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   buildProfile,
@@ -139,6 +139,10 @@ beforeAll(() => {
   scratch = realpathSync(mkdtempSync(join(ROOT, ".tmp", "deploy-paths-")));
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+// Most tests here block on `spawnSync` for seconds at a time. Yielding one macrotask after each lets the
+// worker read vitest's replies to its task updates, which otherwise time out across a minute of back-to-back
+// synchronous tests.
+afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
 
 /**
  * A fresh runner: a workspace, a temp dir, a home and the recorders of `recorded`, under the suite's scratch directory.
