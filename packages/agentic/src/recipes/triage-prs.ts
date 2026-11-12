@@ -33,14 +33,14 @@ export const HOLD_LABELS = ["do-not-merge", "wip", "blocked", "on-hold"] as cons
 export const PENDING_STUCK_DAYS = 1;
 /** Days a pull request without an approval waits before it routes to `nudge`. */
 export const NUDGE_AFTER_DAYS = 3;
-/** Open pull requests one execution routes, newest update first. */
-export const MAX_OPEN_PRS = 100;
 /** Characters of a digest line. */
 export const DIGEST_LINE_MAX_CHARS = 160;
 /** Characters of a pull-request title in the digest. */
 export const TITLE_MAX_CHARS = 120;
-/** Pages of 100 check runs or reviews read per pull request; a longer list fails the read rather than truncate it. */
+/** Pages of 100 open pull requests, check runs or reviews; a longer list fails rather than truncate the read. */
 export const MAX_DETAIL_PAGES = 10;
+/** Open pull requests one execution can route completely, newest update first. */
+export const MAX_OPEN_PRS = MAX_DETAIL_PAGES * 100;
 
 export interface CheckRun {
   readonly name: string;
@@ -129,8 +129,8 @@ const nextLink = (link: string | null) =>
     .find((url) => url !== undefined);
 
 /**
- * `PullRequestsRead` over GitHub's REST API: the first `MAX_OPEN_PRS` open pull requests by latest update, each with
- * every check run of its head commit and every review, following `Link: rel="next"` for up to `MAX_DETAIL_PAGES`
+ * `PullRequestsRead` over GitHub's REST API: all open pull requests by latest update, each with every check run of its
+ * head commit and every review, following `Link: rel="next"` for up to `MAX_DETAIL_PAGES`
  * pages of 100. A request that fails, an answer other than 200, a body outside the shape, a next page off the API
  * origin, a list longer than `MAX_DETAIL_PAGES` pages and check runs fewer than the answer's `total_count` each fail
  * the read, so no route is taken on a partial list (FD-AGT-042).
@@ -161,11 +161,13 @@ export const githubPullRequestsReadLayer = (
           };
           const url = (path: string, query: Record<string, string>) =>
             `${apiBase}${path}?${new URLSearchParams(query)}`;
-          const get = async (path: string, query: Record<string, string>) =>
-            (await getUrl(url(path, query))).body;
-          const getAll = async <A>(path: string, decode: (body: unknown) => readonly A[]) => {
+          const getAll = async <A>(
+            path: string,
+            decode: (body: unknown) => readonly A[],
+            query: Record<string, string> = {},
+          ) => {
             const items: A[] = [];
-            let next: string | undefined = url(path, { per_page: "100" });
+            let next: string | undefined = url(path, { ...query, per_page: "100" });
             for (let page = 0; next !== undefined; page++) {
               if (page === MAX_DETAIL_PAGES)
                 throw new Error(`GET ${path} lists more than ${MAX_DETAIL_PAGES} pages`);
@@ -176,14 +178,11 @@ export const githubPullRequestsReadLayer = (
             return items;
           };
           const root = `/repos/${repository}`;
-          const pulls = decodePulls(
-            await get(`${root}/pulls`, {
-              state: "open",
-              sort: "updated",
-              direction: "desc",
-              per_page: String(MAX_OPEN_PRS),
-            }),
-          );
+          const pulls = await getAll(`${root}/pulls`, decodePulls, {
+            state: "open",
+            sort: "updated",
+            direction: "desc",
+          });
           const out: OpenPullRequest[] = [];
           for (const p of pulls) {
             const checksPath = `${root}/commits/${p.head.sha}/check-runs`;
@@ -392,11 +391,12 @@ export const runTriagePrs = (input: TriagePrsInput) =>
     if (suppressed) return { _tag: "success" } satisfies RunResult;
     const now = yield* Clock.currentTimeMillis;
     const read = yield* PullRequestsRead;
-    // The Layer requests `MAX_OPEN_PRS`; the slice bounds any other `PullRequestsRead`.
-    const open = (yield* read.openPullRequests(`${input.repo.owner}/${input.repo.name}`)).slice(
-      0,
-      MAX_OPEN_PRS,
-    );
+    const open = yield* read.openPullRequests(`${input.repo.owner}/${input.repo.name}`);
+    if (open.length > MAX_OPEN_PRS)
+      return yield* new ReadFailed({
+        source: "pulls",
+        detail: `lists more than ${MAX_OPEN_PRS} open pull requests`,
+      });
     if (open.length === 0) return { _tag: "success" } satisfies RunResult;
     const routed: RoutedPr[] = [];
     for (const pr of open) {

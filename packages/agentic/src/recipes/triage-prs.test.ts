@@ -59,17 +59,20 @@ const run = (
   open: readonly OpenPullRequest[] | "fail",
   answer: (pr: number, request: ModelRequest) => string | ModelCallError = (n) => `Line for ${n}.`,
   suppression?: "declined",
+  readLayer?: Layer.Layer<PullRequestsRead>,
 ) => {
   const rec = recorder();
   const reads: string[] = [];
-  const pulls = Layer.succeed(PullRequestsRead, {
-    openPullRequests: (repository) => {
-      reads.push(repository);
-      return open === "fail"
-        ? Effect.fail(new ReadFailed({ source: "pulls", detail: "GET answered 502" }))
-        : Effect.succeed(open);
-    },
-  });
+  const pulls =
+    readLayer ??
+    Layer.succeed(PullRequestsRead, {
+      openPullRequests: (repository) => {
+        reads.push(repository);
+        return open === "fail"
+          ? Effect.fail(new ReadFailed({ source: "pulls", detail: "GET answered 502" }))
+          : Effect.succeed(open);
+      },
+    });
   return Effect.runPromise(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
@@ -377,6 +380,89 @@ describe("triage-prs", () => {
     );
     expect(Exit.isFailure(offOrigin)).toBe(true);
   });
+
+  it("[FD-AGT-078] includes older pull requests beyond the first page in the routed digest", async () => {
+    const API = "https://api.github.com";
+    const requests: string[] = [];
+    const pull = (n: number) => ({
+      number: n,
+      title: n === 101 ? "older stuck change" : `change ${n}`,
+      draft: false,
+      updated_at: new Date(NOW - (n === 101 ? 5 * DAY : 0)).toISOString(),
+      user: { login: "ada" },
+      author_association: "MEMBER",
+      labels: [],
+      head: { sha: `sha${n}` },
+    });
+    const fetch = (async (url: string) => {
+      const u = new URL(url);
+      requests.push(u.pathname);
+      if (u.pathname === "/repos/o/r/pulls") {
+        expect(u.searchParams.get("state")).toBe("open");
+        expect(u.searchParams.get("sort")).toBe("updated");
+        expect(u.searchParams.get("direction")).toBe("desc");
+        expect(u.searchParams.get("per_page")).toBe("100");
+        const first = !u.searchParams.has("page");
+        return Response.json(
+          first ? Array.from({ length: 100 }, (_, i) => pull(i + 1)) : [pull(101)],
+          {
+            headers: first
+              ? {
+                  link: `<${API}/repos/o/r/pulls?state=open&sort=updated&direction=desc&per_page=100&page=2>; rel="next"`,
+                }
+              : {},
+          },
+        );
+      }
+      if (u.pathname.endsWith("/check-runs"))
+        return Response.json({
+          total_count: 1,
+          check_runs: u.pathname.includes("/sha101/") ? RED : GREEN,
+        });
+      if (u.pathname.endsWith("/reviews")) return Response.json([]);
+      return new Response(null, { status: 404 });
+    }) as typeof globalThis.fetch;
+    const { result, digest } = await run(
+      [],
+      () => "",
+      undefined,
+      githubPullRequestsReadLayer({ apiBase: API, fetch }),
+    );
+    expect(result).toEqual({ _tag: "success" });
+    expect(digest).toContain("101 open pull requests:");
+    expect(digest).toContain("#101 older stuck change");
+    expect(routesIn(digest)[101]).toBe("unstick");
+    expect(Object.keys(routesIn(digest))).toHaveLength(101);
+    expect(requests.filter((p) => p === "/repos/o/r/pulls")).toHaveLength(2);
+  });
+
+  it.each(["last-page-error", "page-cap"] as const)(
+    "[FD-AGT-042] a %s in the open-pull list fails instead of staging a partial digest",
+    async (failure) => {
+      const API = "https://api.github.com";
+      const fetch = (async (url: string) => {
+        const u = new URL(url);
+        const page = Number(u.searchParams.get("page") ?? "1");
+        if (u.pathname !== "/repos/o/r/pulls") return new Response(null, { status: 404 });
+        if (failure === "last-page-error" && page === 2) return new Response(null, { status: 503 });
+        return Response.json([], {
+          headers: { link: `<${API}/repos/o/r/pulls?page=${page + 1}>; rel="next"` },
+        });
+      }) as typeof globalThis.fetch;
+      const { result, rec } = await run(
+        [],
+        () => "",
+        undefined,
+        githubPullRequestsReadLayer({ apiBase: API, fetch }),
+      );
+      expect(result).toMatchObject({ _tag: "failure" });
+      expect(JSON.stringify(result)).toContain(
+        failure === "last-page-error" ? "answered 503" : "lists more than 10 pages",
+      );
+      expect(rec.modelCalls).toEqual([]);
+      expect(rec.staged).toEqual([]);
+    },
+  );
 
   it("[FD-AGT-079] writes each pull request's digest line with one transform call", async () => {
     const { rec, digest } = await run(onePerRoute());
