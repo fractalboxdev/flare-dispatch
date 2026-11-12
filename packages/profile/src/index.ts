@@ -58,6 +58,8 @@ export {
   classNamed,
   classPlacement,
   cloudEligibleAt,
+  DEPLOYMENT_SECRET_GRANT,
+  deploymentSecretGrantLabels,
   deliveryOrder,
   drawsReserve,
   eligibleKinds,

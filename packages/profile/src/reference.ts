@@ -435,6 +435,7 @@ export const listedDifferences = (phase: Phase): readonly string[] => [
   "reason_kinds.provenance",
   "dedup_recipes[0].on_mismatch",
   "dedup_recipes[0].digest",
+  ...(phase >= 4 ? ["placement.constraints.deployment-secret-grant"] : []),
   ...(phase < 3 ? ["classes.required.cloud_kinds"] : []),
   ...(phase < 4
     ? [

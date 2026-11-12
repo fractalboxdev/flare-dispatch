@@ -146,7 +146,7 @@ def placementAnswer (j : Json) : Except String Json := do
   let (constraints, declaredLabels) := requestPlacement run publish
   let r : Request := {
     cls
-    labels := ((← strs j "labels") ++ declaredLabels).eraseDups
+    labels := ((← strs j "labels") ++ deploymentSecretLabels run ++ declaredLabels).eraseDups
     trigger := if kind == "tag-push" then some "tag-push" else none
     declaresClass := ← optBool j "declaresClass" }
   let p ← decodeProfilePlacement (← field j "profile")

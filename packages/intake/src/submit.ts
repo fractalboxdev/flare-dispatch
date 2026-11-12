@@ -1,7 +1,9 @@
 // One request to mameko's admission function (FD-INT-001). Intake writes its own
 // record and, for a refusal before admission, a shed row; every `executions`,
 // dedup-key and `placements` row is admission's.
+import { attachesDeploymentSecret } from "@fractalboxdev/flare-dispatch-catalog";
 import {
+  deploymentSecretGrantLabels,
   placementInputs,
   supersessionKey,
   type ClassName,
@@ -381,7 +383,16 @@ export const submit = (
 
     // A fork pull request's input stays untrusted on every attempt, re-runs included (FD-PROF-018).
     const untrusted = s.trigger === "fork-pr" ? ["untrusted-input"] : [];
-    const labels = [...new Set([...resolved.labels, ...s.extraLabels, ...untrusted])];
+    // An execution whose egress profiles hold a grant that attaches a deployment secret is never placed on `gha`
+    // (FD-ISO-022).
+    const deploymentSecret = deploymentSecretGrantLabels(
+      config.profile,
+      s.run.grants,
+      attachesDeploymentSecret,
+    );
+    const labels = [
+      ...new Set([...resolved.labels, ...s.extraLabels, ...untrusted, ...deploymentSecret]),
+    ];
     const notBefore = cooldown?.notBefore ?? null;
     const record: IntakeRecord = {
       executionId: id,
