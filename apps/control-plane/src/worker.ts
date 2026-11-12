@@ -7,7 +7,7 @@ import { opsFetch, scheduledHandler } from "@fractalboxdev/flare-dispatch-ops";
 import { CLASS_ORDER } from "@fractalboxdev/flare-dispatch-profile";
 import { routeExecutorUpgrade, runD1Migrations } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect } from "effect";
-import { deployment, type ControlPlaneEnv } from "./config.ts";
+import { healthOf, type ControlPlaneEnv } from "./config.ts";
 import { migrateLocalStore } from "./agentic.ts";
 import { cacheFetch, cacheSweeps } from "./cache.ts";
 import { boundFetch } from "./github.ts";
@@ -55,10 +55,13 @@ export default {
     env: ControlPlaneEnv,
     ctx: { waitUntil(p: Promise<unknown>): void },
   ): Promise<Response> {
-    const { pathname } = new URL(request.url);
-    // The deployment and plane id, which `pnpm ci:local` checks before it enrolls a device.
-    if (pathname === "/health")
-      return Response.json({ status: "ok", deployment: deployment(env), plane_id: env.PLANE_ID });
+    const { pathname, origin } = new URL(request.url);
+    // The deployment and plane id, which `pnpm ci:local` checks before it enrolls a device; `503` on a configuration
+    // the API refuses, so the post-deploy probe fails the deploy.
+    if (pathname === "/health") {
+      const health = healthOf(env, origin);
+      return Response.json(health.body, { status: health.status });
+    }
     await migrate(env);
     // The route verifies the upgrade's connect signature, the one device credential (FD-IFC-085).
     if (pathname === "/v1/executors/connect")

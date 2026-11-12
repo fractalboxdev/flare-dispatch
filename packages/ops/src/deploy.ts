@@ -19,6 +19,7 @@ import {
   awsBudgetUnset,
   failed,
   modelRegistryCheck,
+  policyRootKeyCheck,
   policyRulesCheck,
   rulesetCheck,
   settingsDrift,
@@ -268,9 +269,9 @@ export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
 /**
  * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
  * policy rules (FD-PROF-025), the templates' invariants, the
- * rendered configuration, the deployed Workers against the record of the last deploy, the GitHub App's registration,
- * the default branch's ruleset, the AWS account's Budgets actions where the overlay carries the `aws` kind, the runner
- * workflow's permissions where it carries the `gha` kind, and, given
+ * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the
+ * last deploy, the GitHub App's registration, the default branch's ruleset, the AWS account's Budgets actions where the
+ * overlay carries the `aws` kind, the runner workflow's permissions where it carries the `gha` kind, and, given
  * `access`, the Access applications on the dispatcher's hostname, then the
  * profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
  * drift check shares). `fd deploy` passes no `access`: it checks only the hostname
@@ -296,6 +297,7 @@ export const driftFindings = (
     for (const r of rendered) {
       findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config));
       const deployed = yield* target.deployedSettings(r);
+      findings.push(...policyRootKeyCheck(r.worker, r.config, deployed));
       const record = yield* target.lastRecord(r);
       if (deployed !== null && record !== null)
         findings.push(...settingsDrift(r.worker, record, deployed));

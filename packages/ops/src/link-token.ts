@@ -21,13 +21,15 @@ const LINK_BINDINGS = [
   "WEBHOOK_SECRET",
   "OIDC_SIGNING_JWK",
   "PROVENANCE_KEY",
+  "LOG_KEY",
   "COMPILE_CACHE_SECRET",
+  "CACHE_TOKEN_SECRET",
   "INSTALL_STATE_KEY",
 ] as const satisfies ReadonlyArray<keyof ApiEnv>;
 
 /**
- * The API's configuration from a Worker's env, read as the log route reads it. A link key the API refuses (FD-IFC-023)
- * or a link lifetime or epoch it cannot use answers `ConfigInvalid`.
+ * The API's configuration from a Worker's env, read as the log route reads it. A link key or provenance key the API
+ * refuses (FD-IFC-023, FD-PROV-033) or a link lifetime or epoch it cannot use answers `ConfigInvalid`.
  */
 export const linkConfigFrom = (env: Readonly<Record<string, unknown>>, requestOrigin: string) =>
   Effect.gen(function* () {
