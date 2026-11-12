@@ -20,6 +20,7 @@ export const RUNBOOK: Readonly<Record<string, string>> = {
   "operator-control": "R9",
   "delivery-key-paused": "R15",
   "advisory-snapshot-stale": "R17",
+  "record-undelivered": "R18",
   "private-log-refused": "R20",
 };
 

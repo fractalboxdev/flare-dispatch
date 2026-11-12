@@ -710,6 +710,9 @@ importers:
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../catalog
+      '@fractalboxdev/flare-dispatch-github':
+        specifier: workspace:*
+        version: link:../github
       '@fractalboxdev/flare-dispatch-profile':
         specifier: workspace:*
         version: link:../profile
@@ -738,6 +741,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
         version: 5.20261012.1
+      '@fractalboxdev/flare-dispatch-intake':
+        specifier: workspace:*
+        version: link:../intake
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1

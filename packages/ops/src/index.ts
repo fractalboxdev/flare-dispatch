@@ -17,6 +17,7 @@ export * from "./ops-intents.ts";
 export * from "./overlay.ts";
 export * from "./probes.ts";
 export * from "./raise.ts";
+export * from "./records-tick.ts";
 export * from "./render.ts";
 export * from "./routes.ts";
 export * from "./spend.ts";
