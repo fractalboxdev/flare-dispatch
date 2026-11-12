@@ -1,6 +1,6 @@
 // The `TransparencyLog` Durable Object: the only writer of the private transparency log (FD-PROV-074). One object,
-// `idFromName("private")`, assigns each leaf index in its SQLite storage and writes the log's leaves and tiles to R2
-// with create-only puts (log.ts). An append arms the object's alarm, which signs the checkpoint no later than
+// `idFromName("private")`, records each leaf at its index in its SQLite storage before it writes the leaf to R2, and
+// writes the log's leaves and tiles with create-only puts (log.ts). An append arms the object's alarm, which signs the checkpoint no later than
 // `CHECKPOINT_DELAY_MS` after it (FD-PROV-037).
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
@@ -42,22 +42,28 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
     return run;
   }
 
-  /** Appends one entry, the countersigned envelope's bytes, and arms the checkpoint alarm (FD-PROV-074). */
+  /**
+   * Appends one entry, the countersigned envelope's bytes, and arms the checkpoint alarm (FD-PROV-074). An append
+   * whose leaf write fails still arms it: the leaf is recorded, and the checkpoint run writes it first.
+   */
   append(entry: Uint8Array): Promise<AppendOutcome> {
     return this.serial(async () => {
       const config = this.config();
       const now = Date.now();
-      const outcome = await Effect.runPromise(
-        appendEntry(this.store, config, entry, now).pipe(
-          Effect.catchTag("PrivateLogWriteRefused", refusedOutcome(config)),
-        ),
-      );
-      if (
-        this.store.signedSize() < this.store.size() &&
-        (await this.ctx.storage.getAlarm()) === null
-      )
-        await this.ctx.storage.setAlarm(now + CHECKPOINT_DELAY_MS);
-      return plain(outcome);
+      try {
+        const outcome = await Effect.runPromise(
+          appendEntry(this.store, config, entry, now).pipe(
+            Effect.catchTag("PrivateLogWriteRefused", refusedOutcome(config)),
+          ),
+        );
+        return plain(outcome);
+      } finally {
+        if (
+          this.store.signedSize() < this.store.size() &&
+          (await this.ctx.storage.getAlarm()) === null
+        )
+          await this.ctx.storage.setAlarm(now + CHECKPOINT_DELAY_MS);
+      }
     });
   }
 

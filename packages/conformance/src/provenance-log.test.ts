@@ -122,25 +122,29 @@ describe("the private transparency log on the control plane", () => {
         JSON.stringify({ payloadType: "application/vnd.in-toto+json", n: i }),
       ),
     );
-    let lastAppend = 0;
+    let firstAppend: number | undefined;
     for (const [index, entry] of entries.entries()) {
       const outcome = await log.append(entry);
       expect(outcome).toMatchObject({ _tag: "Appended", index, duplicate: false });
-      lastAppend = (outcome as { integratedAt: number }).integratedAt;
+      if (firstAppend === undefined) {
+        firstAppend = (outcome as { integratedAt: number }).integratedAt;
+        // The first unsigned append binds FD-PROV-037's bound: each later one is no earlier than it.
+        const due = await log.checkpointDueAt();
+        expect(due).not.toBeNull();
+        expect(due!).toBeLessThanOrEqual(firstAppend + CHECKPOINT_BOUND_MS);
+      }
     }
-    const due = await log.checkpointDueAt();
-    expect(due).not.toBeNull();
-    expect(due!).toBeLessThanOrEqual(lastAppend + CHECKPOINT_BOUND_MS);
 
+    // The alarm may first sign a prefix of the entries; the poll waits for the checkpoint over all of them.
     const bucket = (await plane.getR2Bucket("CACHE")) as unknown as Bucket;
-    let text: string | undefined;
-    for (let waited = 0; text === undefined && waited < 30_000; waited += 250) {
+    let polled: ReturnType<typeof parseCheckpoint>;
+    for (let waited = 0; polled?.size !== entries.length && waited < 30_000; waited += 250) {
       const got = await bucket.get(`${PRIVATE_LOG_PREFIX}${CHECKPOINT_PATH}`);
-      if (got !== null) text = await got.text();
-      else await new Promise((r) => setTimeout(r, 250));
+      polled = got === null ? undefined : parseCheckpoint(await got.text());
+      if (polled?.size !== entries.length) await new Promise((r) => setTimeout(r, 250));
     }
-    expect(text).toBeDefined();
-    const checkpoint = parseCheckpoint(text!)!;
+    expect(polled).toBeDefined();
+    const checkpoint = polled!;
     expect(checkpoint).toMatchObject({ origin: `${PLANE}/private-log`, size: entries.length });
     expect(await verifyCheckpoint(checkpoint, logPublic)).toBe(true);
 

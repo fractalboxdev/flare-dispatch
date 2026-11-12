@@ -179,6 +179,7 @@ interface LogStub {
   checkpointDueAt(): Promise<number | null>;
   size(): Promise<number>;
   usePrefix(prefix: string): Promise<void>;
+  failLeafWrites(n: number): Promise<void>;
   delivered(): Promise<readonly Alarm[]>;
 }
 
@@ -216,6 +217,23 @@ describe("the TransparencyLog Durable Object", () => {
   const refusals = async (log: LogStub) =>
     (await log.delivered()).filter((a) => a.name === PRIVATE_LOG_REFUSED_ALARM);
 
+  /** The published checkpoint once it covers `size` leaves: the alarm may first sign a prefix of them. */
+  const checkpointOf = async (prefix: string, size: number) => {
+    for (let waited = 0; waited < 20_000; waited += 200) {
+      const got = await bucket.get(`${prefix}${CHECKPOINT_PATH}`);
+      const checkpoint = got === null ? undefined : parseCheckpoint(await got.text());
+      if (checkpoint?.size === size) return checkpoint;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return undefined;
+  };
+
+  /** A checkpoint run's outcome once the tree is signed at `size`, by this run or by the alarm before it. */
+  const expectSignedAt = (outcome: CheckpointOutcome, size: number) => {
+    expect(["Published", "Unchanged"]).toContain(outcome._tag);
+    expect(outcome).toMatchObject({ size });
+  };
+
   it("[FD-PROV-074] assigns each leaf the next index in its SQLite storage, answers a repeated entry with its first index, and writes each leaf to R2", async () => {
     const { log, prefix } = await freshLog();
     const entries = ["a", "b", "c"].map((e) => utf8(`envelope-${e}`));
@@ -240,23 +258,15 @@ describe("the TransparencyLog Durable Object", () => {
   it("[FD-PROV-074] [FD-PROV-037] an append arms the alarm within 60 s, and the alarm signs a checkpoint over the RFC 9162 root with the log key", async () => {
     const { log, prefix } = await freshLog();
     const entries = ["x", "y", "z", "w", "v"].map((e) => utf8(`statement-${e}`));
-    let appendedAt = 0;
-    for (const entry of entries) {
-      const outcome = (await log.append(entry)) as { integratedAt: number };
-      appendedAt = Math.max(appendedAt, outcome.integratedAt);
-    }
+    const firstAppend = ((await log.append(entries[0]!)) as { integratedAt: number }).integratedAt;
+    // The first unsigned append binds FD-PROV-037's bound: each later one is no earlier than it.
     const due = await log.checkpointDueAt();
     expect(due).not.toBeNull();
-    expect(due!).toBeLessThanOrEqual(appendedAt + CHECKPOINT_BOUND_MS);
+    expect(due!).toBeLessThanOrEqual(firstAppend + CHECKPOINT_BOUND_MS);
+    for (const entry of entries.slice(1)) await log.append(entry);
 
-    let text: string | undefined;
-    for (let waited = 0; text === undefined && waited < 20_000; waited += 200) {
-      const got = await bucket.get(`${prefix}${CHECKPOINT_PATH}`);
-      if (got !== null) text = await got.text();
-      else await new Promise((r) => setTimeout(r, 200));
-    }
-    expect(text).toBeDefined();
-    const checkpoint = parseCheckpoint(text!)!;
+    const checkpoint = (await checkpointOf(prefix, entries.length))!;
+    expect(checkpoint).toBeDefined();
     expect(checkpoint).toMatchObject({ origin: "ci.example.com/private-log", size: 5 });
     expect(hex(checkpoint.root)).toBe(hex(await referenceRoot(entries)));
     expect(await verifyCheckpoint(checkpoint, logKey.public)).toBe(true);
@@ -274,7 +284,8 @@ describe("the TransparencyLog Durable Object", () => {
     const { log, prefix } = await freshLog();
     const entries = Array.from({ length: 260 }, (_, i) => utf8(`grow-${i}`));
     for (const entry of entries.slice(0, 257)) await log.append(entry);
-    expect(await log.checkpoint()).toMatchObject({ _tag: "Published", size: 257 });
+    // The alarm may sign first; either way a checkpoint over 257 leaves is published.
+    expectSignedAt(await log.checkpoint(), 257);
     const fullTile = await object(`${prefix}tile/0/000`);
     expect(fullTile?.byteLength).toBe(256 * HASH_SIZE);
     const levelOne = await object(`${prefix}tile/1/000.p/1`);
@@ -282,7 +293,7 @@ describe("the TransparencyLog Durable Object", () => {
     expect(hex(levelOne!)).toBe(hex(await referenceRoot(entries.slice(0, 256))));
     const firstPartial = await object(`${prefix}tile/0/001.p/1`);
     for (const entry of entries.slice(257)) await log.append(entry);
-    expect(await log.checkpoint()).toMatchObject({ _tag: "Published", size: 260 });
+    expectSignedAt(await log.checkpoint(), 260);
     expect(await object(`${prefix}tile/0/001.p/1`)).toEqual(firstPartial);
     expect((await object(`${prefix}tile/0/001.p/4`))?.byteLength).toBe(4 * HASH_SIZE);
     const checkpoint = parseCheckpoint(
@@ -292,7 +303,46 @@ describe("the TransparencyLog Durable Object", () => {
     expect(hex(checkpoint.root)).toBe(hex(await referenceRoot(entries)));
   });
 
-  it("[FD-PROV-038] refuses an append whose leaf would overwrite an existing leaf object with other bytes, records nothing and raises a page alarm", async () => {
+  it("[FD-PROV-074] a leaf put whose answer is lost keeps its index: the next append writes it again and takes the next index, with no page", async () => {
+    const { log, prefix } = await freshLog();
+    await log.append(utf8("before"));
+    await log.failLeafWrites(1);
+    await expect(log.append(utf8("lost"))).rejects.toThrow();
+    expect(await object(`${prefix}${leafPath(1)}`)).toEqual(utf8("lost"));
+    expect(await log.append(utf8("next"))).toMatchObject({
+      _tag: "Appended",
+      index: 2,
+      duplicate: false,
+    });
+    expect(await log.append(utf8("lost"))).toMatchObject({
+      _tag: "Appended",
+      index: 1,
+      duplicate: true,
+    });
+    expect(await object(`${prefix}${leafPath(2)}`)).toEqual(utf8("next"));
+    expect(await log.size()).toBe(3);
+    expect(await refusals(log)).toEqual([]);
+    expect(await log.checkpointDueAt()).not.toBeNull();
+  });
+
+  it("[FD-PROV-038] refuses an append while a recorded leaf's object holds other bytes, and raises a page alarm", async () => {
+    const { log, prefix } = await freshLog();
+    await log.failLeafWrites(1);
+    await expect(log.append(utf8("recorded"))).rejects.toThrow();
+    await bucket.put(`${prefix}${leafPath(0)}`, utf8("overwritten"));
+    expect(await log.append(utf8("after"))).toMatchObject({
+      _tag: "Refused",
+      reason: "leaf-changed",
+      path: `${prefix}${leafPath(0)}`,
+    });
+    expect(await log.size()).toBe(1);
+    expect((await refusals(log))[0]).toMatchObject({
+      severity: "page",
+      detail: { reason: "leaf-changed", detail: { index: 0, recorded: true } },
+    });
+  });
+
+  it("[FD-PROV-038] refuses an append whose leaf would overwrite a foreign leaf object at an index no leaf held, records nothing and raises a page alarm", async () => {
     const { log, prefix } = await freshLog();
     await log.append(utf8("first"));
     await bucket.put(`${prefix}${leafPath(1)}`, utf8("planted"));

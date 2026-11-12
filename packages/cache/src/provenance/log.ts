@@ -3,16 +3,20 @@
 //
 //   tlog_leaves   idx (the leaf index the object assigns), entry_digest, leaf_hash, integrated_at
 //   tlog_hashes   (level, idx) → the hash of each complete subtree (merkle.ts § stored hashes)
+//   tlog_pending  idx → the entry bytes of each recorded leaf whose R2 object is not yet confirmed written
 //   tlog_meta     signed_size, signed_at: the tree size of the last checkpoint the object signed
 //
 //   <prefix>leaf/<N>             each leaf's entry bytes
 //   <prefix>tile/<L>/<N>[.p/<W>] C2SP tlog-tiles hash tiles
 //   <prefix>checkpoint           the latest checkpoint, signed by the log key
 //
-// Every leaf and tile is written once, with a create-only `onlyIf` put. An append assigns the next index, writes the
-// leaf and records it; the checkpoint run writes the new tiles and signs the checkpoint. A write that would change an
-// existing leaf or tile, or a checkpoint that would reduce the published tree size or change its root, is refused,
-// and the writer raises the `private-log-refused` page alarm (FD-PROV-038).
+// SQLite is the authority on which entry holds which index. An append assigns the next index and records the leaf,
+// its stored hashes and its entry bytes as pending in one synchronous step, then writes the leaf with a create-only
+// `onlyIf` put and clears the pending row. A put that fails leaves the row pending, and every later append and
+// checkpoint run writes each pending leaf again first, so a lost write never hands its index to another entry. The
+// checkpoint run writes the new tiles, each create-only, and signs the checkpoint. A leaf or tile object with other
+// bytes at its path, or a checkpoint that would reduce the published tree size or change its root, is refused, and
+// the writer raises the `private-log-refused` page alarm (FD-PROV-038).
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Data, Effect, Layer, Schema } from "effect";
 import { hex, sha256Hex } from "../crypto.ts";
@@ -48,22 +52,28 @@ export const PRIVATE_LOG_NAME = "private";
 /** The page alarm a refused private-log write raises (FD-PROV-038). */
 export const PRIVATE_LOG_REFUSED_ALARM = "private-log-refused";
 
-/** Why the object refused a private-log write. */
-export type RefusalReason =
-  /** A leaf object already exists at the assigned index with other bytes. */
-  | "leaf-changed"
-  /** A tile object already exists at its path with other bytes. */
-  | "tile-changed"
-  /** The published checkpoint's tree is larger than the object's: signing would reduce the tree size. */
-  | "tree-size-reduced"
-  /** The published checkpoint's root differs from the object's root at that size: an existing leaf would change. */
-  | "root-changed"
-  /** The published checkpoint changed under the object's write. */
-  | "checkpoint-changed";
+/**
+ * Why the object refused a private-log write:
+ *
+ * - `leaf-changed`: a leaf object already exists at the leaf's index with other bytes.
+ * - `tile-changed`: a tile object already exists at its path with other bytes.
+ * - `tree-size-reduced`: the published checkpoint's tree is larger than the object's; signing would reduce the size.
+ * - `root-changed`: the published checkpoint's root differs from the object's root at that size; an existing leaf
+ *   would change.
+ * - `checkpoint-changed`: the published checkpoint does not parse, or changed under the object's write.
+ */
+export const RefusalReason = Schema.Literals([
+  "leaf-changed",
+  "tile-changed",
+  "tree-size-reduced",
+  "root-changed",
+  "checkpoint-changed",
+]);
+export type RefusalReason = typeof RefusalReason.Type;
 
 export class PrivateLogWriteRefused extends Schema.TaggedError<PrivateLogWriteRefused>()(
   "PrivateLogWriteRefused",
-  { reason: Schema.String, path: Schema.String, detail: Schema.Unknown },
+  { reason: RefusalReason, path: Schema.String, detail: Schema.Unknown },
 ) {}
 
 export class PrivateLogStoreFailed extends Schema.TaggedError<PrivateLogStoreFailed>()(
@@ -121,6 +131,7 @@ const SCHEMA = [
      idx integer not null,
      hash text not null,
      primary key (level, idx))`,
+  "create table if not exists tlog_pending (idx integer primary key, entry blob not null)",
   "create table if not exists tlog_meta (k text primary key, v integer not null)",
 ];
 
@@ -150,7 +161,9 @@ export const logStore = (sql: SqlStorage) => {
     sql.exec<{ v: number }>("select v from tlog_meta where k = ?", k).toArray()[0]?.v;
   return {
     read,
-    size: (): number => sql.exec<{ n: number }>("select count(*) as n from tlog_leaves").one().n,
+    // `idx` is the integer primary key, so `max` reads one row where `count(*)` scans the log.
+    size: (): number =>
+      sql.exec<{ n: number }>("select coalesce(max(idx) + 1, 0) as n from tlog_leaves").one().n,
     byDigest: (digest: string) =>
       sql
         .exec<{ idx: number; leaf_hash: string; integrated_at: number }>(
@@ -158,12 +171,14 @@ export const logStore = (sql: SqlStorage) => {
           digest,
         )
         .toArray()[0],
+    /** Records a leaf, its stored hashes and its entry bytes as pending, in one synchronous step. */
     record: (
       leaf: {
         readonly index: number;
         readonly digest: string;
         readonly hash: Uint8Array;
         readonly at: number;
+        readonly entry: Uint8Array;
       },
       hashes: ReadonlyArray<{
         readonly level: number;
@@ -185,6 +200,32 @@ export const logStore = (sql: SqlStorage) => {
           h.index,
           hex(h.hash),
         );
+      sql.exec(
+        "insert into tlog_pending (idx, entry) values (?, ?)",
+        leaf.index,
+        leaf.entry.slice().buffer,
+      );
+    },
+    /** Removes a leaf `record` added whose R2 write was refused: the index was never the leaf's. */
+    forget: (
+      index: number,
+      hashes: ReadonlyArray<{ readonly level: number; readonly index: number }>,
+    ) => {
+      sql.exec("delete from tlog_pending where idx = ?", index);
+      for (const h of hashes)
+        sql.exec("delete from tlog_hashes where level = ? and idx = ?", h.level, h.index);
+      sql.exec("delete from tlog_leaves where idx = ?", index);
+    },
+    /** The recorded leaves whose R2 objects are not yet confirmed written, in index order. */
+    pending: () =>
+      sql
+        .exec<{ idx: number; entry: ArrayBuffer }>(
+          "select idx, entry from tlog_pending order by idx",
+        )
+        .toArray()
+        .map((row) => ({ index: row.idx, entry: new Uint8Array(row.entry) })),
+    written: (index: number) => {
+      sql.exec("delete from tlog_pending where idx = ?", index);
     },
     signedSize: (): number => meta("signed_size") ?? 0,
     signed: (size: number, at: number) => {
@@ -249,6 +290,20 @@ const pageRefusal = (config: TransparencyLogConfig, refused: PrivateLogWriteRefu
     yield* Effect.logError("private log write refused", refused.reason, refused.path);
   }).pipe(Effect.provide(config.alarms));
 
+/**
+ * Writes each recorded leaf whose earlier write was not confirmed. A `same` answer confirms it; other bytes at a
+ * recorded index are a foreign object and refuse.
+ */
+const writePending = (store: LogStore, config: TransparencyLogConfig) =>
+  Effect.gen(function* () {
+    for (const { index, entry } of store.pending()) {
+      const path = `${config.prefix}${leafPath(index)}`;
+      if ((yield* putCreateOnly(config.bucket, path, entry)) === "different")
+        return yield* refuse("leaf-changed", path, { index, recorded: true });
+      store.written(index);
+    }
+  });
+
 /** Appends `entry` as the next leaf, or answers its earlier index when the same bytes were appended before. */
 export const appendEntry = (
   store: LogStore,
@@ -258,6 +313,7 @@ export const appendEntry = (
 ) =>
   Effect.gen(function* () {
     const digest = yield* Effect.promise(() => sha256Hex(entry));
+    yield* writePending(store, config);
     const earlier = store.byDigest(digest);
     if (earlier !== undefined)
       return AppendOutcome.Appended({
@@ -270,9 +326,14 @@ export const appendEntry = (
     const hash = yield* Effect.promise(() => leafHash(entry));
     const hashes = yield* Effect.promise(() => storedHashesForAppend(index, hash, store.read));
     const path = `${config.prefix}${leafPath(index)}`;
-    if ((yield* putCreateOnly(config.bucket, path, entry)) === "different")
+    store.record({ index, digest, hash, at: now, entry }, hashes);
+    // A failed put leaves the leaf pending: the index stays this entry's, and the next append or checkpoint writes it.
+    if ((yield* putCreateOnly(config.bucket, path, entry)) === "different") {
+      // Every leaf write follows its record, so an object at an index no leaf held before is foreign.
+      store.forget(index, hashes);
       return yield* refuse("leaf-changed", path, { index });
-    store.record({ index, digest, hash, at: now }, hashes);
+    }
+    store.written(index);
     return AppendOutcome.Appended({
       index,
       leafHash: hex(hash),
@@ -282,11 +343,12 @@ export const appendEntry = (
   });
 
 /**
- * Signs a checkpoint over every recorded leaf: checks the published checkpoint is a prefix of the object's tree,
- * writes the tiles the growth adds, then replaces the checkpoint with one signed by the log key.
+ * Signs a checkpoint over every recorded leaf: writes any pending leaf, checks the published checkpoint is a prefix of
+ * the object's tree, writes the tiles the growth adds, then replaces the checkpoint with one signed by the log key.
  */
 export const publishCheckpoint = (store: LogStore, config: TransparencyLogConfig, now: number) =>
   Effect.gen(function* () {
+    yield* writePending(store, config);
     const size = store.size();
     const path = `${config.prefix}${CHECKPOINT_PATH}`;
     const object = yield* Effect.tryPromise({
@@ -343,7 +405,7 @@ export const refusedOutcome =
   (config: TransparencyLogConfig) => (refused: PrivateLogWriteRefused) =>
     Effect.as(pageRefusal(config, refused), {
       _tag: "Refused" as const,
-      reason: refused.reason as RefusalReason,
+      reason: refused.reason,
       path: refused.path,
     });
 
