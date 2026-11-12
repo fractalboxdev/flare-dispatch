@@ -72,6 +72,7 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     catalog: catalogRuns(deployment(env)),
     profile: profileOf(env),
     appId: Number(env.GITHUB_APP_ID ?? 0),
+    appLogin: appLoginOf(env),
     webhookSecret: env.WEBHOOK_SECRET === "" ? undefined : env.WEBHOOK_SECRET,
     webhookEvents: events.length === 0 ? undefined : events,
     allows: () => true,

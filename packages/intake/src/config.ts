@@ -43,6 +43,11 @@ export interface IntakeSettings {
   readonly profile: Profile;
   /** The GitHub App's id; a check run of another App is foreign (FD-INT-055). */
   readonly appId: number;
+  /**
+   * The App's bot login, `<app slug>[bot]`, which authors every release pull request (FD-INT-066). Unset, intake reads
+   * no `pull_request` event as a release approval.
+   */
+  readonly appLogin?: string;
   /** Unset when the deployment holds no webhook secret (FD-INT-022). */
   readonly webhookSecret: string | undefined;
   /** `intake.webhookEvents`; undefined admits every supported event (FD-INT-027). */

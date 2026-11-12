@@ -98,6 +98,7 @@ export const submission = (
   classInput: null,
   idempotency: null,
   followOn: null,
+  release: null,
   attempt: 1,
   cronMinute: null,
   local: null,

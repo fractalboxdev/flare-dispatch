@@ -25,10 +25,13 @@ import {
   parseCommitLog,
   parseConventionalCommit,
   parseReleaseNotesMarker,
+  RELEASE_BODY_MAX_CHARS,
   RELEASE_NOTES_BRANCH,
+  releaseBody,
   releaseBump,
   releaseNotesPath,
   type RangeCommit,
+  type ReleasePublishInput,
 } from "./release-notes.ts";
 import { releaseNotesRun } from "./runs.ts";
 import { Checkout, ModelCallError, Shell } from "./services.ts";
@@ -421,5 +424,101 @@ describe("release-notes: the release pull request", () => {
   it("[FD-AGT-084] reads no marker from a body without one", () => {
     expect(parseReleaseNotesMarker("Release notes")).toBeNull();
     expect(parseReleaseNotesMarker(null)).toBeNull();
+  });
+});
+
+describe("release-notes: the publish execution", () => {
+  const COMMIT = "f".repeat(40);
+  const NOTES_COMMIT = "9".repeat(40);
+  const publish: ReleasePublishInput = {
+    version: "v1.4.0",
+    commit: COMMIT,
+    notesCommit: NOTES_COMMIT,
+    pullRequest: 40,
+  };
+  const NOTES = "# v1.4.0\n\n## Features\n\n- search (#7)\n";
+
+  /** A checkout without the release pull request's head until it is fetched, then holding the notes file there. */
+  const notesShell = (options: { readonly present?: boolean; readonly show?: "fail" } = {}) => {
+    let fetched = options.present === true;
+    return (command: string) => {
+      if (command.startsWith("git cat-file -e"))
+        return { exitCode: fetched ? 0 : 1, stdout: "", stderr: "" };
+      if (command === `git fetch -q origin ${NOTES_COMMIT}`) {
+        fetched = true;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (command === `git show ${NOTES_COMMIT}:${releaseNotesPath("v1.4.0")}`)
+        return fetched && options.show !== "fail"
+          ? { exitCode: 0, stdout: NOTES, stderr: "" }
+          : { exitCode: 128, stdout: "", stderr: "fatal: path not in tree" };
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+  };
+
+  const runPublish = (options: FakeOptions) => {
+    const rec = recorder();
+    return Effect.runPromise(
+      releaseNotesRun.workflow
+        .execute(payload("release-notes", { repo, baseBranch: "main", publish }))
+        .pipe(
+          Effect.provide(Layer.provideMerge(releaseNotesRun.layer, fakeServices(rec, options))),
+        ),
+    ).then((result) => ({ result, rec }));
+  };
+
+  it("[FD-AGT-088] returns one release.draft with the approved notes at the approved commit, then one release.publish for that tag", async () => {
+    const { result, rec } = await runPublish({ shell: notesShell() });
+    expect(result).toEqual({ _tag: "success" });
+    expect(rec.intents).toEqual([
+      {
+        step: "release-draft",
+        kind: "release.draft",
+        payload: { tag: "v1.4.0", target: COMMIT, name: "v1.4.0", body: NOTES },
+      },
+      { step: "release-publish", kind: "release.publish", payload: { tag: "v1.4.0" } },
+    ]);
+    // The notes come from the release pull request's approved head, fetched because the checkout lacked it.
+    const fetchAt = rec.commands.indexOf(`git fetch -q origin ${NOTES_COMMIT}`);
+    expect(fetchAt).toBeGreaterThan(-1);
+    expect(fetchAt).toBeLessThan(rec.commands.findIndex((c) => c.startsWith("git show")));
+    // A publish proposes nothing: no model call, no range read and no staged write.
+    expect(rec.modelCalls).toEqual([]);
+    expect(rec.staged).toEqual([]);
+    expect(rec.commands.some((c) => c.startsWith("git log") || c.startsWith("git tag"))).toBe(
+      false,
+    );
+    expect(rec.suppressionLookups).toEqual([]);
+  });
+
+  it("[FD-AGT-088] reads the notes without a fetch when the checkout holds the approved head", async () => {
+    const { result, rec } = await runPublish({ shell: notesShell({ present: true }) });
+    expect(result).toEqual({ _tag: "success" });
+    expect(rec.commands.some((c) => c.startsWith("git fetch"))).toBe(false);
+    expect(rec.intents.map((i) => i.kind)).toEqual(["release.draft", "release.publish"]);
+  });
+
+  it("[FD-AGT-088] a notes read that fails returns no intent and concludes failure", async () => {
+    const { result, rec } = await runPublish({ shell: notesShell({ show: "fail" }) });
+    expect(result).toEqual({
+      _tag: "failure",
+      reason: "infra: read notes: fatal: path not in tree",
+    });
+    expect(rec.intents).toEqual([]);
+  });
+
+  it("[FD-AGT-088] cuts notes longer than a release body holds at a line and points at the notes file", () => {
+    const line = `- ${"x".repeat(98)}\n`;
+    const long = line.repeat(Math.ceil(RELEASE_BODY_MAX_CHARS / line.length) + 10);
+    const body = releaseBody("v1.4.0", long);
+    expect(body.length).toBeLessThanOrEqual(RELEASE_BODY_MAX_CHARS);
+    expect(body.endsWith(`The full notes are in \`${releaseNotesPath("v1.4.0")}\`.\n`)).toBe(true);
+    expect(
+      body
+        .split("\n")
+        .filter((l) => l.startsWith("- "))
+        .every((l) => l === line.trimEnd()),
+    ).toBe(true);
+    expect(releaseBody("v1.4.0", NOTES)).toBe(NOTES);
   });
 });
