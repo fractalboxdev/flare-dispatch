@@ -60,8 +60,10 @@ interface ManifestRecipe {
   readonly decoder: (params: unknown, view: EntryView) => Option.Option<RequestDecoder>;
   readonly requiredCheck?: IntakeRun["requiredCheck"];
   readonly pullNumber?: IntakeRun["pullNumber"];
-  /** The run starts from a dispatch alone, and reports under its check name with no label. */
+  /** The run starts from a dispatch alone. */
   readonly dispatchOnly?: true;
+  /** The run reports under `flare-dispatch/<run>` alone, so its manifest entry names no label. */
+  readonly labelless?: true;
 }
 
 const recipe = <A>(
@@ -158,7 +160,10 @@ const MANIFEST_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
   ),
   deploySmoke: gateRecipe(DeploySmokeEntrySchema, (p) => deploymentStatusDecoder(p)),
   sandboxImage: gateRecipe(SandboxImageEntrySchema, (p) => sandboxImageDecoder(p)),
-  securityGate: gateRecipe(SecurityGateEntrySchema, () => securityGateDecoder()),
+  securityGate: {
+    ...gateRecipe(SecurityGateEntrySchema, () => securityGateDecoder()),
+    labelless: true,
+  },
   "pr-review": {
     ...recipe(PrReviewParams, prReviewDecoder),
     requiredCheck: prReviewRequiredCheck,
@@ -176,6 +181,7 @@ const RUN_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
   "security-rescan": {
     ...gateRecipe(SecurityGateEntrySchema, () => securityRescanDecoder()),
     dispatchOnly: true,
+    labelless: true,
   },
 };
 
@@ -240,6 +246,7 @@ export const catalogRuns =
         ...serialKeyOf(entry),
         ...requiredCheckOf(entry),
         ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),
+        ...(manifestRecipeOf(entry)?.labelless === true ? { labelless: true } : {}),
       })),
       Match.orElse(() => undefined),
     );

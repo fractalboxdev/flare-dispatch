@@ -205,6 +205,8 @@ export const prepareScanCheckout = (
       MergeGroup: ({ baseSha }) => `+${baseSha}:${TARGET_REF}`,
       DefaultBranch: () => `+HEAD:${TARGET_REF}`,
     });
+    // The fetch reaches the repository's git host, an egress FD-GATE-110 does not grant: the open item in
+    // specs/runs/gate.md decides whether the control plane stages this history or the spec allows that host.
     yield* run("init", `git init -q . && git remote add origin ${shellQuote(ctx.repo)}`);
     yield* run(
       "fetch",

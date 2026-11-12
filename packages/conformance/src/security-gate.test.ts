@@ -225,7 +225,7 @@ const strings = (value: unknown): readonly string[] =>
 const ADDRESSES_HOST = /(?:^|[^a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/|^[^\s/@]+@[^\s/:]+:/i;
 
 describe("the lease of a security scan's job sandbox on the composed control plane", () => {
-  it("[FD-GATE-110] gives security-gate and security-rescan a lease that names no egress host and carries no tenant-scope secret", async () => {
+  it("[FD-GATE-110] gives security-gate and security-rescan a lease that carries no tenant-scope secret and names no host beside the repository", async () => {
     let n = 0;
     for (const run of ["security-gate", "security-rescan"]) {
       const lease = await leaseOf(run, ++n);
@@ -237,7 +237,8 @@ describe("the lease of a security scan's job sandbox on the composed control pla
         expect(sent).not.toContain(secret);
       expect(sent).not.toContain(ORIGIN_HOST);
       expect(sent).not.toMatch(/cc3\./);
-      // Beside the repository URL its inputs name, no value of the lease names a host.
+      // Beside the repository URL its inputs name, no value of the lease names a host. The scan body fetches that
+      // URL, so the sandbox still reaches the repository's git host: see the pending case below.
       expect(
         strings(lease).filter(
           (s) => ADDRESSES_HOST.test(s) && s !== `https://github.com/${REPO}.git`,
@@ -249,4 +250,11 @@ describe("the lease of a security scan's job sandbox on the composed control pla
     expect(JSON.stringify(check["upload_grant"])).toContain(`https://${ORIGIN_HOST}/v1/compile-cache/`);
     expect(JSON.stringify(check["upload_grant"])).toMatch(/cc3\./);
   }, 120_000);
+
+  // Pending a spec decision on how a scan obtains its checkout: the control plane stages the head and base history
+  // on a read-only path, or the spec names the repository's git host as the one allowed egress. Until then the scan
+  // body runs `git fetch` against the repository URL, so FD-GATE-110's egress half holds for the lease alone.
+  it.todo(
+    "gives a security scan's job sandbox no egress host, the repository's git host included (FD-GATE-110)",
+  );
 });

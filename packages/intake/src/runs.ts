@@ -72,10 +72,14 @@ export interface IntakeRun {
   readonly pullNumber?: (inputs: unknown) => number | null;
   /**
    * The run starts only from a dispatch: a follow-on intent and a local submission refuse it, and its request decoder
-   * answers no webhook or schedule. A manifest entry of it takes no label, so it reports under `flare-dispatch/<run>`
-   * alone (FD-GATE-111).
+   * answers no webhook or schedule (FD-GATE-111).
    */
   readonly dispatchOnly?: boolean;
+  /**
+   * The run reports under `flare-dispatch/<run>` alone, the check name its body emits its summary under, so a
+   * manifest entry of it takes no label (FD-GATE-099, FD-GATE-111).
+   */
+  readonly labelless?: boolean;
 }
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */

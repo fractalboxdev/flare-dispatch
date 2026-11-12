@@ -459,4 +459,5 @@ sequenceDiagram
 - TODO(maintainer): confirm that a Cloudflare Container can register QEMU `binfmt_misc` handlers for FD-GATE-082, and measure the emulated smoke slowdown against a native `linux-arm64` run.
 - TODO(maintainer): decide whether a finding that already exists at the base commit, in a lockfile or workflow the range changes, concludes `failure`, or whether the recipe subtracts the base commit's fingerprints. FD-GATE-091 concludes `failure` until this is decided.
 - TODO(maintainer): set the default `scan.advisoryEcosystems` from measured archive sizes; the npm archive is 209 MiB.
+- TODO(maintainer): decide how a `security-gate` or `security-rescan` job sandbox obtains the head and base history under FD-GATE-110: the control plane stages it on a read-only path (for example a git bundle in CAS, as FD-GATE-104 places the scan bundle), or the spec names the repository's git host as the one allowed egress. The scan body fetches from the repository URL until this is decided.
 - TODO(maintainer): decide whether `worker-deploy` waits for every required check on its commit to conclude `success` before the deploy command starts.

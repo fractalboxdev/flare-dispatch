@@ -323,6 +323,26 @@ describe("the security gate recipes as intake reads them", () => {
     expect(checkName(rescan.name, null)).toBe("flare-dispatch/security-rescan");
   });
 
+  it("[FD-GATE-099] refuses a label on a security-gate entry, so intake opens the check its summary names", () => {
+    const gate = production("security-gate")!;
+    expect(gate.labelless).toBe(true);
+    expect(
+      validateManifest(
+        manifest([{ recipe: "security-gate", label: "x", triggers: ["pull_request"] }]),
+        200,
+        production,
+      ),
+    ).toEqual({ _tag: "Invalid", errors: ["runs[0].label: security-gate takes no label"] });
+    expect(
+      validateManifest(
+        manifest([{ recipe: "security-gate", triggers: ["pull_request"] }]),
+        200,
+        production,
+      )._tag,
+    ).toBe("Valid");
+    expect(checkName(gate.name, null)).toBe("flare-dispatch/security-gate");
+  });
+
   it("[FD-GATE-111] starts security-rescan from a dispatch under flare-dispatch/security-rescan, and from no follow-on or local submission", async () => {
     const h = await harness({
       repos: {
