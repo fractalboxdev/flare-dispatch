@@ -291,8 +291,7 @@ describe("statement builder", () => {
     expect(bare.predicateType).toBe(TEST_RESULT_V0_1);
   });
 
-  // FD-PROV-043's statement-builder half; the control plane's own statements and log entries are not covered here.
-  it("writes only digests, ids, names, timestamps and verdicts into a device statement, never source, file contents, diffs, logs, prompts or completions (FD-PROV-043, statement builder)", async () => {
+  it("[FD-PROV-043] writes only digests, ids, names, timestamps and verdicts into a device statement, never source, file contents, diffs, logs, prompts or completions", async () => {
     for (const kind of ["build", "gate"] as const)
       expect(disallowedContent(await build(input(kind)))).toBeNull();
 

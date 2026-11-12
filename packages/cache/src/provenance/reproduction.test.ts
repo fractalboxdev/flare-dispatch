@@ -43,7 +43,7 @@ import {
   type ReleaseExecution,
   type ReproductionRequest,
 } from "./reproduction.ts";
-import { statementOf, type StatementBody } from "./statement.ts";
+import { envelopeDisallowedContent, statementOf, type StatementBody } from "./statement.ts";
 
 const keyPair = async (kid: string) => {
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
@@ -328,6 +328,26 @@ describe("reproduction", () => {
       expect(await t.run()).toMatchObject({ _tag: "Success", value: { _tag: "Awaiting" } });
       expect(t.store.intents.size).toBe(2);
     }
+  });
+
+  it("[FD-PROV-043] the reproduction record names only the two envelope digests, and a record that would carry any other text is neither signed nor logged", async () => {
+    const { provenance, cloud, reproduction } = await fixture();
+    const repro = await reproduction([SBOM, ARCHIVE]);
+    const s = await settle([cloud, repro], provenance);
+    const exit = await s.run();
+    const digest = exit._tag === "Success" && exit.value._tag === "Reproduced" ? exit.value.recordEnvelopeDigest : "";
+    const envelope = JSON.parse(s.store.intents.get(digest)!.envelope) as AnyDsseEnvelope;
+    expect(envelopeDisallowedContent(envelope)).toBeNull();
+
+    // A release statement held under a key that is not a digest, such as a line of the release's log, would put that
+    // line into the record: the comparison refuses it and records no intent.
+    const line = "release v1.2.3: build passed, 2 artifacts uploaded";
+    const t = await settle([{ ...cloud, envelopeDigest: line }, repro], provenance);
+    expect(failureOf(await t.run())).toMatchObject({
+      _tag: "StatementContentRefused",
+      path: "$.envelope_digests[0]",
+    });
+    expect(t.store.intents.size).toBe(2);
   });
 
   it("[FD-PROV-067] differing subject digests refuse the publish with `provenance: reproduction mismatch` and raise a page alarm", async () => {
