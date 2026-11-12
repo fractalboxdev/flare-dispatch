@@ -20,6 +20,7 @@ export default [
   "packages/*",
   "packages/runtime-cf/vitest.workers.config.ts",
   "packages/runtime-cf/vitest.check-command.workers.config.ts",
+  "packages/runtime-cf/vitest.native-workflow.workers.config.ts",
   "runs",
   "apps/dispatcher",
   "apps/substrate",

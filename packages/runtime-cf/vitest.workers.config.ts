@@ -26,6 +26,7 @@ export default defineWorkersConfig({
     exclude: [
       "src/check-command-storage.workers.test.ts",
       "src/check-command-live.workers.test.ts",
+      "src/native-workflow.workers.test.ts",
     ],
     setupFiles: ["./src/apply-migrations.ts"],
     poolOptions: {
