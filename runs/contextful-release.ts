@@ -14,6 +14,11 @@ const SHA = /^[a-f0-9]{40}$/;
 const DRY_RUN_TAG_PREFIX = "refs/tags/dry-run/v";
 const PROFILES = ["contextful-control", "contextful-edge", "contextful-full"] as const;
 const LINUX = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"] as const;
+/** Each Linux target's image platform, in image-index order. */
+const IMAGE_ARCH: Readonly<Record<string, "amd64" | "arm64">> = {
+  "x86_64-unknown-linux-musl": "amd64",
+  "aarch64-unknown-linux-musl": "arm64",
+};
 const DARWIN = ["x86_64-apple-darwin", "aarch64-apple-darwin"] as const;
 /** The build command's own deadline; the supervisor ends the process at it. */
 const RELEASE_BUILD_TIMEOUT_SEC = 14400;
@@ -116,7 +121,7 @@ const ReleaseCellOutput = Schema.Struct({
   manifest: Schema.String,
   assets: Schema.Array(Schema.String),
   imageLayer: Schema.optional(Schema.Struct({
-    name: Schema.String, archiveName: Schema.String,
+    name: Schema.String, imageName: Schema.String, arch: Schema.String,
     size: Schema.Number, digest: Schema.String, diffId: Schema.String,
   })),
 });
@@ -150,7 +155,7 @@ const requireValidRequest = (repo: string, tag: string, sha: string): void => {
   }
 };
 
-type ImageLayer = { name: string; archiveName: string; size: number; digest: string; diffId: string };
+type ImageLayer = { name: string; imageName: string; arch: string; size: number; digest: string; diffId: string };
 type StagedAsset = { name: string; sha256: string; contentType: string };
 type Collected =
   | { kind: "lost" }
@@ -199,29 +204,37 @@ const collect = (input: { profile: string; target: string }, version: string, ws
       yield* artifact.upload({ name: asset, path, container: ws.container });
       assets.push({ name: asset, sha256, contentType: contentType(asset) });
     }
-    if (input.target !== "x86_64-unknown-linux-musl") return { kind: "staged", manifest, assets } as Collected;
-    const layerName = `${input.profile}-${version}-linux-amd64.layer.tar.gz`;
-    const archiveName = `${input.profile}-${version}-linux-amd64.oci.tar`;
-    const base = `${ws.dir}/dist/${input.profile}-${version}-image`;
-    const binary = `${ws.dir}/target/release-artifacts/${input.target}/release/contextful`;
+    const arch = IMAGE_ARCH[input.target];
+    if (arch === undefined) return { kind: "staged", manifest, assets } as Collected;
+    const layerName = `${input.profile}-${version}-linux-${arch}.layer.tar.gz`;
+    const imageName = `${input.profile}-${version}-linux-${arch}.image.json`;
+    const binary = `target/release-artifacts/${input.target}/release/contextful`;
     const footprint = yield* sandbox.exec({ container: ws.container, cwd: ws.dir,
       command: ["cargo", "run", "--locked", "-q", "-p", "contextful-ci", "--", "footprint",
-        "--profile", input.profile, binary], timeoutSec: 600 });
+        "--profile", input.profile, `${ws.dir}/${binary}`], timeoutSec: 600 });
     if (footprint.exitCode !== 0) return yield* Effect.die(new Error(`image footprint failed for ${input.profile}`));
+    // `assurance.build.release-image`: this platform's layer, config and
+    // manifest, and the manifest's index entry; the parent composes the index.
     const built = yield* sandbox.exec({ container: ws.container, cwd: ws.dir,
-      command: ["/opt/build-oci-layer.sh", binary, `${base}/root`,
-        `${ws.dir}/dist/${layerName}`, `${ws.dir}/dist/${archiveName}`, version],
+      command: ["cargo", "run", "--locked", "-q", "-p", "contextful-ci", "--", "image",
+        "--profile", input.profile, "--version", version, "--binary", `${input.target}=${binary}`,
+        "--ca-bundle", "/etc/ssl/certs/ca-certificates.crt", "--out", "dist"],
       timeoutSec: 600 });
-    const lines = built.stdout.trim().split("\n");
-    const diffId = lines[0]?.match(/^([a-f0-9]{64})\s/)?.[1];
-    const digest = lines[1]?.match(/^([a-f0-9]{64})\s/)?.[1];
-    const size = Number(lines[2]);
-    if (built.exitCode !== 0 || diffId === undefined || digest === undefined || !Number.isSafeInteger(size)) {
-      return yield* Effect.die(new Error("OCI image layer failed"));
+    if (built.exitCode !== 0) return yield* Effect.die(new Error(`OCI image failed for ${input.profile}/${input.target}`));
+    const image = JSON.parse(yield* readOutput(`${ws.dir}/dist/${imageName}`)) as {
+      target?: string; platform?: { architecture?: string };
+      layer?: { digest?: string; size?: number; diffId?: string; path?: string };
+    };
+    const digest = image.layer?.digest?.match(/^sha256:([a-f0-9]{64})$/)?.[1];
+    const diffId = image.layer?.diffId?.match(/^sha256:([a-f0-9]{64})$/)?.[1];
+    const size = image.layer?.size;
+    if (image.target !== input.target || image.platform?.architecture !== arch || image.layer?.path !== layerName ||
+      digest === undefined || diffId === undefined || size === undefined || !Number.isSafeInteger(size)) {
+      return yield* Effect.die(new Error("OCI image descriptor does not match its inputs"));
     }
     yield* artifact.upload({ name: layerName, path: `${ws.dir}/dist/${layerName}`, container: ws.container });
-    yield* artifact.upload({ name: archiveName, path: `${ws.dir}/dist/${archiveName}`, container: ws.container });
-    return { kind: "staged", manifest, assets, imageLayer: { name: layerName, archiveName, size, digest, diffId } } as Collected;
+    yield* artifact.upload({ name: imageName, path: `${ws.dir}/dist/${imageName}`, container: ws.container });
+    return { kind: "staged", manifest, assets, imageLayer: { name: layerName, imageName, arch, size, digest, diffId } } as Collected;
   });
 
 /**
@@ -246,8 +259,9 @@ const publishOrRateLimit = (
 
 export const contextfulReleaseCell = defineRun({
   name: "contextful-release-cell",
+  // 1.3.0 — every Linux cell stages its platform's image descriptor and layer.
   // 1.2.0 — a rate-limited asset upload waits out its retry hint durably.
-  version: "1.2.0",
+  version: "1.3.0",
   sandboxImage: "release",
   inputs: ReleaseCellInput,
   outputs: ReleaseCellOutput,
@@ -362,10 +376,11 @@ export const contextfulReleaseFormula = defineRun({
 
 export const contextfulRelease = defineRun({
   name: "contextful-release",
+  // 1.4.0 — each profile's image is an index of its amd64 and arm64 manifests.
   // 1.3.0 — a `dry-run/v<version>` tag push starts a dry run of `v<version>`.
   // 1.2.0 — publishes the formula step's release notes as the release body.
   // 1.1.0 — release pool, sliding window of cells.
-  version: "1.3.0",
+  version: "1.4.0",
   // The parent makes no sandbox call and hands its admission row off after
   // its first spawn. On the release pool it queues only behind other
   // releases, never behind pull-request gates on the lean pool.
@@ -563,26 +578,27 @@ export const contextfulRelease = defineRun({
     }
     const { assets: formulaAssets, notes } = JSON.parse(formulaChildren[0].summaryJson ?? "{}") as { assets?: string[]; notes?: string };
     if (formulaAssets?.length !== 6) return yield* Effect.die(new Error("release formula output is incomplete"));
-    const imageChildren = children.filter((child) => {
-      const output = JSON.parse(child.summaryJson ?? "{}") as { target?: string };
-      return output.target === "x86_64-unknown-linux-musl";
+    const version = input.tag.slice(1);
+    const images = children.flatMap((child) => {
+      const output = JSON.parse(child.summaryJson ?? "{}") as {
+        profile?: string; target?: string; imageLayer?: { imageName?: string; arch?: string };
+      };
+      const arch = output.target === undefined ? undefined : IMAGE_ARCH[output.target];
+      return arch === undefined ? [] : [{ executionId: child.executionId, profile: output.profile, arch,
+        imageName: output.imageLayer?.arch === arch ? output.imageLayer.imageName : undefined }];
     });
-    if (imageChildren.length !== 3 || imageChildren.some((child) => {
-      const output = JSON.parse(child.summaryJson ?? "{}") as { profile?: string; imageLayer?: { archiveName?: string } };
-      return output.imageLayer?.archiveName !== `${output.profile}-${input.tag.slice(1)}-linux-amd64.oci.tar`;
-    })) return yield* Effect.die(new Error("release needs three Linux amd64 OCI image archives"));
+    if (images.length !== PROFILES.length * LINUX.length || images.some((image) =>
+      image.imageName !== `${image.profile}-${version}-linux-${image.arch}.image.json`)) {
+      return yield* Effect.die(new Error("release needs a Linux amd64 and arm64 image descriptor for every profile"));
+    }
     if (dryRun) return { tag: input.tag, sha: tag.commitSha, dryRun: true, releaseId: 0,
       cells: CELLS.length, assets: CELLS.length * 3 + formulaAssets.length };
-    for (const child of imageChildren) {
-      const output = JSON.parse(child.summaryJson!) as {
-        profile: string; imageLayer?: { name: string; archiveName: string; size: number; digest: string; diffId: string };
-      };
-      if (output.imageLayer === undefined) return yield* Effect.die(new Error("release image layer is missing"));
-      yield* step(`publish-image-${output.profile}`, () => github.publishContainerImage({
-        repo: input.repo, profile: output.profile, version: input.tag.slice(1),
-        sourceExecutionId: child.executionId,
-        layerArtifactName: output.imageLayer!.name, layerSize: output.imageLayer!.size,
-        layerDigest: output.imageLayer!.digest, diffId: output.imageLayer!.diffId,
+    for (const profile of PROFILES) {
+      const platforms = LINUX.map((target) => images.find((image) =>
+        image.profile === profile && image.arch === IMAGE_ARCH[target])!);
+      yield* step(`publish-image-${profile}`, () => github.publishContainerImage({
+        repo: input.repo, profile, version,
+        platforms: platforms.map((image) => ({ sourceExecutionId: image.executionId, imageArtifactName: image.imageName! })),
       }));
     }
     const verified = yield* step("verify-tag-for-publish", () => github.tagTarget({ repo: input.repo, tag: input.tag }));
