@@ -175,7 +175,7 @@ export const makeVerifyFixture = async () => {
       {
         kind: "private",
         keys: [{ kid: "log-1", jwk: log.jwk, not_before: T0 }],
-        witnesses: [{ name: witness.name, key: witness.vkey }],
+        witnesses: [{ name: witness.name, key: witness.vkey, url: "https://witness.example" }],
       },
       { kind: "rekor", keys: [{ kid: "rekor-1", jwk: rekor.jwk, not_before: T0 }] },
     ],

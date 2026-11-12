@@ -152,6 +152,73 @@ export const verifyInclusion = async (
   return sn === 0 && equalBytes(r, root);
 };
 
+/**
+ * RFC 9162 § 2.1.4.1: the consistency proof from the tree of `from` leaves to the tree of `size` leaves. It is empty
+ * when `from` is 0 or equals `size`, as C2SP tlog-witness sends it.
+ */
+export const consistencyProof = async (
+  from: number,
+  size: number,
+  read: ReadStoredHash,
+): Promise<readonly Uint8Array[]> => {
+  const sub = async (
+    m: number,
+    start: number,
+    end: number,
+    complete: boolean,
+  ): Promise<Uint8Array[]> => {
+    const n = end - start;
+    if (m === n) return complete ? [] : [await rangeHash(start, end, read)];
+    const k = splitOf(n);
+    return m <= k
+      ? [...(await sub(m, start, start + k, complete)), await rangeHash(start + k, end, read)]
+      : [...(await sub(m - k, start + k, end, false)), await rangeHash(start, start + k, read)];
+  };
+  return from === 0 || from >= size ? [] : sub(from, 0, size, true);
+};
+
+/**
+ * RFC 9162 § 2.1.4.2: whether `proof` proves the tree of `from` leaves with root `fromRoot` is a prefix of the tree of
+ * `size` leaves with root `root`. From an empty tree, or between equal sizes with equal roots, the proof is empty.
+ */
+export const verifyConsistency = async (
+  from: number,
+  size: number,
+  fromRoot: Uint8Array,
+  root: Uint8Array,
+  proof: readonly Uint8Array[],
+): Promise<boolean> => {
+  if (from > size) return false;
+  if (from === 0) return proof.length === 0;
+  if (from === size) return proof.length === 0 && equalBytes(fromRoot, root);
+  const path = isPowerOfTwo(from) ? [fromRoot, ...proof] : [...proof];
+  if (path.length === 0) return false;
+  let fn = from - 1;
+  let sn = size - 1;
+  while (fn % 2 === 1) {
+    fn = Math.floor(fn / 2);
+    sn = Math.floor(sn / 2);
+  }
+  let fr = path[0]!;
+  let sr = path[0]!;
+  for (const c of path.slice(1)) {
+    if (sn === 0) return false;
+    if (fn % 2 === 1 || fn === sn) {
+      fr = await nodeHash(c, fr);
+      sr = await nodeHash(c, sr);
+      while (fn % 2 === 0 && fn !== 0) {
+        fn = Math.floor(fn / 2);
+        sn = Math.floor(sn / 2);
+      }
+    } else {
+      sr = await nodeHash(sr, c);
+    }
+    fn = Math.floor(fn / 2);
+    sn = Math.floor(sn / 2);
+  }
+  return sn === 0 && equalBytes(fr, fromRoot) && equalBytes(sr, root);
+};
+
 // ---- R2 layout ----
 
 /** C2SP tlog-tiles' index encoding: 3-digit groups, every group but the last prefixed `x` (1234067 → x001/x234/067). */

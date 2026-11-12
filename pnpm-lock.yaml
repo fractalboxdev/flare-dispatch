@@ -91,6 +91,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
         version: 5.20261012.1
+      '@fractalboxdev/flare-dispatch-fd':
+        specifier: workspace:*
+        version: link:../../packages/fd
       '@fractalboxdev/flare-dispatch-local-ci':
         specifier: workspace:*
         version: link:../../packages/local-ci

@@ -72,6 +72,8 @@ export class TransparencyLog extends LogObject<Env> {
             sql.exec("insert into test_alarms (alarm) values (?)", JSON.stringify(alarm));
           }),
       }),
+      witnesses: Effect.succeed([]),
+      fetch: (url, init) => fetch(url, init),
     };
   }
 

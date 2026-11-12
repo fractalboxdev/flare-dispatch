@@ -10,6 +10,11 @@ import {
 } from "@fractalboxdev/flare-dispatch-intake";
 import { parseProvenanceKey } from "@fractalboxdev/flare-dispatch-cache/provenance";
 import {
+  d1PolicyStore,
+  PolicyStore,
+  privateLogWitnesses,
+} from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
+import {
   PRIVATE_LOG_PREFIX,
   TransparencyLog as PrivateLogObject,
   type TransparencyLogConfig,
@@ -159,7 +164,8 @@ type LogEnv = ControlPlaneEnv & {
 
 /**
  * The one `TransparencyLog` object, `idFromName("private")`: the only writer of the private transparency log
- * (FD-PROV-074). Its checkpoints name the plane as their origin; a refused write pages through the alarm port.
+ * (FD-PROV-074). Its checkpoints name the plane as their origin; a refused write pages through the alarm port. Each
+ * checkpoint goes to the witnesses the current verification policy in `DB` names (FD-PROV-039).
  */
 export class TransparencyLog extends PrivateLogObject<LogEnv> {
   protected config(): TransparencyLogConfig {
@@ -169,6 +175,10 @@ export class TransparencyLog extends PrivateLogObject<LogEnv> {
       origin: `${this.env.PLANE_ID}/private-log`,
       logKey: parseProvenanceKey(this.env.LOG_KEY),
       alarms: alarmPortFromEnv(this.env),
+      witnesses: privateLogWitnesses.pipe(
+        Effect.provideService(PolicyStore, d1PolicyStore(this.env.DB as unknown as D1Database)),
+      ),
+      fetch: (url, init) => fetch(url, init),
     };
   }
 }
