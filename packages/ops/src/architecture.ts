@@ -91,7 +91,8 @@ export const architectureFindings = (
 
 /**
  * The application ports § Composition requires a Layer for in a phase. A `development` deployment supplies no
- * attestation verifier.
+ * attestation verifier. The credential minter is required where a grant names an application credential, and no grant
+ * of the profile does.
  */
 export const requiredPorts = (
   phase: Phase,
@@ -103,7 +104,6 @@ export const requiredPorts = (
   "alarm-port",
   "actuator-rate-limit",
   "object-store-presigner",
-  "credential-minter",
   ...(phase >= 1 ? ["posture-source", "local-registration"] : []),
   ...(phase >= 1 && deployment === "production" ? ["attestation-verifier"] : []),
   ...(phase >= 2 ? ["writeback-gate", "reuse-policy"] : []),
@@ -119,6 +119,83 @@ export const compositionFindings = (
   requiredPorts(phase, deployment)
     .filter((p) => !supplied.includes(p))
     .map((p) => fail("composition", p, `phase ${phase} requires a Layer for ${p}`));
+
+/** The bindings the App's appliers sign with: the App id var and the App key secret. */
+export const APP_BINDINGS = ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"] as const;
+
+/** The bindings the object-store presigner signs with: two vars and the presign token's two secrets (FD-CACHE-091). */
+export const PRESIGNER_BINDINGS = [
+  "R2_ACCOUNT_ID",
+  "CACHE_BUCKET_NAME",
+  "R2_PRESIGN_ACCESS_KEY_ID",
+  "R2_PRESIGN_SECRET_ACCESS_KEY",
+] as const;
+
+const allSet = (env: Readonly<Record<string, unknown>>, names: readonly string[]) =>
+  names.every((n) => env[n] !== undefined && env[n] !== null && env[n] !== "");
+
+/**
+ * The application ports the dispatcher's composition (`apps/control-plane/src/composition.ts`) supplies a Layer for
+ * over an env of vars and secrets, by mameko port id, which configuration validation reads (MAMEKO-HOST-046). The
+ * Worker reads its own env through it, and the deploy stage reads the rendered vars and the Worker's secrets.
+ */
+export const composedPorts = (env: Readonly<Record<string, unknown>>): readonly string[] => [
+  // `ConfigurationSourceLive` and `GateDecisionSourceLive` from the profile package.
+  "configuration-source",
+  "gate-decision-source",
+  // `alarmPortFromEnv` from this package.
+  "alarm-port",
+  // `githubLiveLayer`'s applier of every GitHub kind and its rate limit over the `InstallationQuota` objects.
+  ...(allSet(env, APP_BINDINGS) ? ["actuator", "actuator-rate-limit"] : []),
+  // `presignerLayer`: the cache package's `R2PresignerLive` under `ObjectStorePresignerLive`.
+  ...(allSet(env, PRESIGNER_BINDINGS) ? ["object-store-presigner"] : []),
+  // `PostureSource` and the agentic package's `localPortsLayer`.
+  "posture-source",
+  "local-registration",
+  "writeback-gate",
+  "reuse-policy",
+];
+
+/**
+ * The env a deployed Worker runs with: the rendered configuration's vars and each secret the account holds for the
+ * Worker, by name; a secret's value is write-only to the deploy, so each stands as a non-empty marker.
+ */
+export const renderedEnv = (
+  config: WorkerConfig,
+  secrets: readonly string[],
+): Readonly<Record<string, unknown>> => ({
+  ...(typeof config["vars"] === "object" && config["vars"] !== null
+    ? (config["vars"] as Record<string, unknown>)
+    : {}),
+  ...Object.fromEntries(secrets.map((name) => [name, "secret"])),
+});
+
+/**
+ * The deploy stage's composition check (FD-ARCH-039): each port the phase requires that the rendered env's
+ * composition supplies no Layer for. The deployment is the rendered `DEPLOYMENT` var.
+ */
+export const deployedCompositionFindings = (
+  worker: string,
+  config: WorkerConfig,
+  secrets: readonly string[],
+  phase: Phase,
+): readonly Finding[] => {
+  const env = renderedEnv(config, secrets);
+  const deployment: Deployment = env["DEPLOYMENT"] === "development" ? "development" : "production";
+  const needs: Readonly<Record<string, readonly string[]>> = {
+    actuator: APP_BINDINGS,
+    "actuator-rate-limit": APP_BINDINGS,
+    "object-store-presigner": PRESIGNER_BINDINGS,
+  };
+  return compositionFindings(phase, composedPorts(env), deployment).map((f) => {
+    const unset = (needs[f.path] ?? []).filter((n) => !allSet(env, [n]));
+    return {
+      ...f,
+      path: `${worker}.ports.${f.path}`,
+      detail: unset.length === 0 ? f.detail : `${f.detail}; unset: ${unset.join(", ")}`,
+    };
+  });
+};
 
 /** The Layers this package and `packages/profile` supply, by mameko port id. */
 export const SUPPLIED_HERE: Readonly<Record<string, string>> = {

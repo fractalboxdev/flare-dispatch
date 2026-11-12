@@ -53,6 +53,12 @@ export const RENDERED = Effect.runSync(
   ),
 );
 export const OVERLAY = JSON.stringify(placeholderOverlay);
+/** The Worker secrets the control plane's composition reads: the App key and the presign token. */
+export const COMPOSITION_SECRETS: readonly (readonly [string, string])[] = [
+  ["GITHUB_APP_PRIVATE_KEY", "app-key"],
+  ["R2_PRESIGN_ACCESS_KEY_ID", "presign-key-id"],
+  ["R2_PRESIGN_SECRET_ACCESS_KEY", "presign-secret"],
+];
 const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 })
   .privateKey.export({ type: "pkcs1", format: "pem" })
   .toString();
@@ -97,7 +103,9 @@ export interface Script {
 export const world = (opts: { readonly access?: "committed" | "none" } = {}) => {
   const calls: string[] = [];
   const scripts = new Map<string, Script>();
-  const secrets = new Map<string, Map<string, string>>();
+  // The control plane's App key and presign token, which the operator sets as Worker secrets before the first deploy
+  // so the composition supplies every port phase 0 requires (FD-ARCH-039).
+  const secrets = new Map<string, Map<string, string>>([[SCRIPT, new Map(COMPOSITION_SECRETS)]]);
   const objects = new Map<string, string>();
   const files = new Map<string, string>();
   const runs: (readonly string[])[] = [];
@@ -345,6 +353,13 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     }
     const m = /^\/workers\/scripts\/([^/]+)\/(settings|schedules|deployments)$/.exec(path);
     const s = m === null ? undefined : scripts.get(m[1]!);
+    // `wrangler secret put` on a Worker never deployed leaves a Worker that holds only its secrets.
+    if (m !== null && s === undefined && secrets.has(m[1]!) && m[2] !== "deployments")
+      return ok(
+        m[2] === "settings"
+          ? { compatibility_date: "", compatibility_flags: [], bindings: secretBindings(m[1]!) }
+          : { schedules: [] },
+      );
     if (m === null || s === undefined) return new Response(null, { status: 404 });
     if (m[2] === "settings")
       return ok({

@@ -25,10 +25,11 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+/** Each Worker holds the secrets the control plane's composition reads: the App key and the presign token. */
 const settings: DeployedSettings = {
   bindings: [],
   vars: {},
-  secrets: [],
+  secrets: ["GITHUB_APP_PRIVATE_KEY", "R2_PRESIGN_ACCESS_KEY_ID", "R2_PRESIGN_SECRET_ACCESS_KEY"],
   crons: ["* * * * *"],
   routes: [],
   compatibility_date: "",
