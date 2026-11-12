@@ -162,7 +162,9 @@ const start = async (
   }
   const admitted = await plane.dispatchFetch(`http://x/v1/dispatch/${run}`, {
     method: "POST",
-    headers,
+    // A dispatch of the read-only scan run carries an Idempotency-Key (FD-IFC-092).
+    headers:
+      run === "security-rescan" ? { ...headers, "idempotency-key": `rescan-${commit}` } : headers,
     body: JSON.stringify({
       repository: REPO,
       sha: commit,

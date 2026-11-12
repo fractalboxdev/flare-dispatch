@@ -112,6 +112,24 @@ describe("scoped dispatch", () => {
     expect((await dispatch(DISPATCHER, "check", "acme/other")).status).toBe(202);
   });
 
+  it("[FD-IFC-091]: a scoped identity's dispatch carries its entry's classCeiling to intake; any other caller's none", async () => {
+    expect((await dispatch(SCANNER, "security-rescan")).status).toBe(202);
+    expect(h.doubles.calls.submissions.at(-1)).toMatchObject({
+      run: "security-rescan",
+      caller: SCANNER,
+      classCeiling: "batch",
+    });
+    const interactive = await h.fetch("/v1/dispatch/security-rescan", {
+      ...(await h.asAccess(SCANNER, dispatchInit())),
+      config: baseConfig({ scoped: [{ ...SCOPED, classCeiling: "interactive" }] }),
+    });
+    expect(interactive.status).toBe(202);
+    expect(h.doubles.calls.submissions.at(-1)?.classCeiling).toBe("interactive");
+    expect((await dispatch(DISPATCHER, "check")).status).toBe(202);
+    expect(h.doubles.calls.submissions.at(-1)).toMatchObject({ caller: DISPATCHER });
+    expect(h.doubles.calls.submissions.at(-1)?.classCeiling).toBeUndefined();
+  });
+
   it("[FD-IFC-093]: a dispatch of security-gate answers 403 for every identity", async () => {
     const before = h.doubles.calls.submissions.length;
     const listing = baseConfig({

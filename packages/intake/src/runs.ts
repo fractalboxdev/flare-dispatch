@@ -80,6 +80,12 @@ export interface IntakeRun {
    * manifest entry of it takes no label (FD-GATE-099, FD-GATE-111).
    */
   readonly labelless?: boolean;
+  /**
+   * The run is a read-only scan run: its declaration sets `readOnlyScan` and passes the registry validator's rule
+   * (FD-GATE-113), so a `dispatch.scoped` identity may name it, and a dispatch of it carries an `Idempotency-Key`
+   * (FD-IFC-092).
+   */
+  readonly readOnlyScan?: boolean;
 }
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */

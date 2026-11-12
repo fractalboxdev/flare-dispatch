@@ -163,6 +163,7 @@ export const profileRequestOf = (r: ClassRequest, callerProtected: boolean): Pro
   const qosClass = classOf(r.run.defaultClass);
   const qosCeiling = classOf(r.run.qosCeiling);
   const classInput = classOf(r.classInput);
+  const classCeiling = classOf(r.classCeiling);
   const caller = r.caller;
   return {
     run: r.run.name,
@@ -173,6 +174,7 @@ export const profileRequestOf = (r: ClassRequest, callerProtected: boolean): Pro
     ...(qosClass === undefined ? {} : { qosClass }),
     ...(qosCeiling === undefined ? {} : { qosCeiling }),
     ...(classInput === undefined ? {} : { classInput }),
+    ...(classCeiling === undefined ? {} : { classCeiling }),
     ...(r.run.hostedModelCalls === true ? { hostedModelCalls: true } : {}),
     ...(caller?.kind === "actions-oidc" && caller.workflowRef !== undefined
       ? {

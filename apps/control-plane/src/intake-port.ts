@@ -31,6 +31,7 @@ export const authenticatedOf = (s: DispatchSubmission): AuthenticatedDispatch =>
   inputs: s.inputs,
   signals: s.signals,
   classInput: s.class ?? null,
+  classCeiling: s.classCeiling ?? null,
   caller:
     s.workflowRef === undefined
       ? { kind: "access", id: s.caller }

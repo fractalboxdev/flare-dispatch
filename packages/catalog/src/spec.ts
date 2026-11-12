@@ -241,13 +241,15 @@ export const validateReadOnlyScan = (
   ].map((reason) => ({ run, reason: `readOnlyScan: ${reason}` }));
 };
 
-/** The runs of a registry that are read-only scan runs: each sets `readOnlyScan` and passes its rule (FD-OPS-091). */
+/** A run is a read-only scan run when its declaration sets `readOnlyScan` and passes its rule (FD-GATE-113). */
+export const isReadOnlyScanRun = (run: string, declaration: RunDeclaration): boolean =>
+  declaration.spec.readOnlyScan === true && validateReadOnlyScan(run, declaration).length === 0;
+
+/** The runs of a registry that are read-only scan runs (FD-OPS-091). */
 export const readOnlyScanRunsOf = (registry: RunRegistry): ReadonlySet<string> =>
   new Set(
     Object.entries(registry)
-      .filter(
-        ([run, d]) => d.spec.readOnlyScan === true && validateReadOnlyScan(run, d).length === 0,
-      )
+      .filter(([run, d]) => isReadOnlyScanRun(run, d))
       .map(([run]) => run),
   );
 

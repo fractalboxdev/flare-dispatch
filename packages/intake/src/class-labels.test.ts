@@ -33,6 +33,7 @@ const request = (run: string): ClassRequest => ({
   refProtection: null,
   checkName: `flare-dispatch/${run}`,
   classInput: null,
+  classCeiling: null,
   caller: null,
 });
 

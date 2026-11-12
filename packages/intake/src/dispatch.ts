@@ -116,6 +116,7 @@ export const lowerOnlyClass = (r: {
   readonly label: string | null;
   readonly caller: Caller;
   readonly requested: string | null;
+  readonly classCeiling: string | null;
 }) =>
   Effect.gen(function* () {
     const config = yield* IntakeConfig;
@@ -131,6 +132,7 @@ export const lowerOnlyClass = (r: {
       refProtection: null,
       checkName: checkName(r.run.name, r.label),
       classInput: null,
+      classCeiling: r.classCeiling,
       caller: r.caller,
     });
     const ranks = (name: string) => classNamed(config.profile, name)?.rank;
@@ -192,6 +194,8 @@ export interface AuthenticatedDispatch {
   readonly inputs: unknown;
   readonly signals: readonly unknown[] | undefined;
   readonly classInput: string | null;
+  /** The `classCeiling` of the caller's `dispatch.scoped` entry (FD-IFC-091); null for a caller in no entry. */
+  readonly classCeiling: string | null;
   readonly caller: Caller;
   /** The commit an Actions OIDC token vouches for; any other commit must be the head of a branch of the repository. */
   readonly vouchedSha: string | undefined;
@@ -207,7 +211,10 @@ export interface DispatchAdmitted {
 
 /**
  * The run, the input schema, the signals caps, the installation, the manifest and the commit of an authenticated
- * dispatch, then one admission request. Every refusal carries a code of the error-model table (FD-IFC-009).
+ * dispatch, then one admission request. Every refusal carries a code of the error-model table (FD-IFC-009). A
+ * dispatch of a read-only scan run carries an `Idempotency-Key`, or answers 400 `invalid_idempotency_key` before any
+ * read (FD-IFC-092), over the HTTP route and the MCP `dispatch` tool alike (FD-IFC-074). A scoped dispatcher's
+ * `classCeiling` reaches `resolveClass` (FD-IFC-091).
  */
 export const admitDispatch = (d: AuthenticatedDispatch) =>
   Effect.gen(function* () {
@@ -216,6 +223,14 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
     const run = config.catalog(d.run);
     if (run === undefined)
       return yield* Effect.fail(intakeError(404, "run_not_found", `no run named ${d.run}`));
+    if (run.readOnlyScan === true && d.idempotency === null)
+      return yield* Effect.fail(
+        intakeError(
+          400,
+          "invalid_idempotency_key",
+          `a dispatch of the read-only scan run ${run.name} carries an Idempotency-Key`,
+        ),
+      );
     const repo = d.repository;
     const decoded = yield* decodeOr(run.input, "invalid_inputs")(d.inputs ?? {});
     yield* checkSignals(d.signals, d.inputs);
@@ -253,6 +268,7 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
             label: d.label,
             caller: d.caller,
             requested: d.classInput,
+            classCeiling: d.classCeiling,
           })
         : d.classInput;
     // Intake's own required-set fact replaces any the caller sent, whatever the trigger (FD-AGT-092, FD-AGT-093).
@@ -275,6 +291,7 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
         installation,
         caller: d.caller,
         classInput,
+        classCeiling: d.classCeiling,
         idempotency: d.idempotency,
       }),
     );

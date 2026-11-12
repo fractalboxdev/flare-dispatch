@@ -12,6 +12,7 @@ export {
   deploymentOf,
   deploySmokeSpec,
   gateJobSpec,
+  isReadOnlyScanRun,
   lookupRun,
   offloadTestSpec,
   oxlintSpec,
