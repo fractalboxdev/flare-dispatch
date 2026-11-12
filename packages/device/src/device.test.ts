@@ -138,12 +138,12 @@ const lease = (read: string[], write: string | null) => ({
 });
 
 describe("device extension", () => {
-  it("MAMEKO-EXEC-140 says hello naming the plane, the version and its operations, without a statement operation", () => {
+  it("MAMEKO-EXEC-140 says hello naming the plane, the version and its operations, with the statement operation", () => {
     const h = hello("plane-1");
     expect(answerHello(h, { planeId: "plane-1", accepted: { min: 1, max: 1 } }).type).toBe(
       "extension.welcome",
     );
-    expect(h.operations).not.toContain("statement");
+    expect(h.operations).toContain("statement");
   });
 
   it("[FD-EXEC-007] restores only from a namespace a lease handed to the extension may read", async () => {
@@ -300,7 +300,8 @@ describe("device extension", () => {
       code: "invalid",
     });
     expect(await send(s, { type: "statement", id: "9", input: {} })).toMatchObject({
-      code: "unsupported",
+      type: "extension.error",
+      code: "invalid",
       ref: "9",
     });
   });
