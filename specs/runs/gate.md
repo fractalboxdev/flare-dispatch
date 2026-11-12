@@ -162,6 +162,7 @@ Every gate job outcome maps to exactly one verdict and reason. [github-output.md
 | Scan bundle or advisory snapshot unusable | `failure` | `config: <field>` |
 | A scanner or baseline check reports a finding | `failure` | `scan: <scanner or control ids>` |
 | A scanner or baseline check exit maps to `tool-error` or to nothing | `failure` | `scan-error: <scanner or control id> exit <code>` |
+| A scanner or baseline check ends with no exit code: a signal, the job timeout, `deadline_at`, output over 64 MiB, or a binary that cannot start | `failure` | `scan-error: <scanner or control id> <end>` (FD-GATE-090) |
 | Parent or execution superseded | `cancelled` | `superseded` |
 
 ```mermaid
@@ -424,7 +425,7 @@ sequenceDiagram
 - **FD-GATE-087** · phase 2 · `V-UNIT` — When a scan runs, the recipe must run every scanner and every baseline check, including those after a `finding`.
 - **FD-GATE-088** · phase 2 · `V-UNIT` — When a scanner has no input in the scan range, the recipe must record `nothing-in-scope` for that scanner with no invocation.
 - **FD-GATE-089** · phase 2 · `V-UNIT` — When every scan result is `clean` or `nothing-in-scope`, the recipe must record `success`.
-- **FD-GATE-090** · phase 2 · `V-UNIT` — If a scanner or baseline check's exit code maps to `tool-error` or is absent from its exit map, then the recipe must record `failure` with the reason `scan-error: <scanner or control id> exit <code>`, ahead of any `scan:` reason.
+- **FD-GATE-090** · phase 2 · `V-UNIT` — If a scanner or baseline check's exit code maps to `tool-error` or is absent from its exit map, or the subprocess ends with no exit code, then the recipe must record `failure` with the reason `scan-error: <scanner or control id> <end>`, ahead of any `scan:` reason, where `<end>` is `exit <code>`, `signal <name>`, `timeout`, `deadline`, `output over limit` or `not started`.
 - **FD-GATE-091** · phase 2 · `V-UNIT` — If a scan result is `finding` and no result is `tool-error`, then the recipe must record `failure` with the reason `scan: <scanners and control ids>`.
 - **FD-GATE-092** · phase 2 · `V-UNIT` — The recipe must fetch every commit of the scan range before any scanner runs.
 - **FD-GATE-093** · phase 2 · `V-UNIT` `V-E2E-LOCAL` — Before any scanner runs, the recipe must restore from the base commit each file whose base name `suppression.files` lists and the range changes, and must delete that file where the base commit has none.

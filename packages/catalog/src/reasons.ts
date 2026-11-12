@@ -133,10 +133,11 @@ export const ScanConfigReason = {
 
 /**
  * The reasons a security-gate scan concludes with from its scan results (specs/runs/gate.md FD-GATE-090, FD-GATE-091):
- * a scanner or baseline check whose exit maps to `tool-error` or to nothing, and the scanners and baseline checks that
- * report a finding, in the order they ran.
+ * a scanner or baseline check that ends as a tool error, with how it ended (`exit <code>`, `signal <name>`, `timeout`,
+ * `deadline`, `output over limit` or `not started`), and the scanners and baseline checks that report a finding, in the
+ * order they ran.
  */
 export const ScanReason = {
-  error: (id: string, code: number): Reason => `scan-error: ${id} exit ${code}`,
+  error: (id: string, end: string): Reason => `scan-error: ${id} ${end}`,
   finding: (ids: readonly string[]): Reason => `scan: ${ids.join(", ")}`,
 } as const;

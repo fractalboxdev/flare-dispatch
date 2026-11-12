@@ -15,6 +15,7 @@ import { validPayload } from "./scan-bundle.test-support.ts";
 import { prepareScanCheckout, ScanBase, type ScanRange } from "./scan-checkout.ts";
 import {
   OSV_DB_ENV,
+  resultOf,
   runScanTools,
   scannerInvocation,
   scanVerdict,
@@ -399,12 +400,25 @@ describe("security-gate scan verdict", () => {
     expect(outcome).toEqual(Outcome.failure("scan: SC-28"));
   });
 
-  it("a subprocess that ends without an exit code is a tool error with its job reason", async () => {
+  it("[FD-GATE-090] records scan-error naming the end of a subprocess that ends without an exit code", async () => {
     const { outcome, steps } = await scan([
       { match: "gitleaks git", exit: exited(42) },
       { match: "semgrep", exit: CommandExit.TimedOut() },
     ]);
     expect(byId(steps)["SC-28"]).toBe("tool-error");
-    expect(outcome).toEqual(Outcome.failure("timeout: job"));
+    expect(outcome).toEqual(Outcome.failure("scan-error: SC-28 timeout"));
+    const ends: ReadonlyArray<readonly [CommandExit, string]> = [
+      [CommandExit.Signalled({ signal: "SIGKILL" }), "signal SIGKILL"],
+      [CommandExit.TimedOut(), "timeout"],
+      [CommandExit.DeadlineReached(), "deadline"],
+      [CommandExit.OverLimit(), "output over limit"],
+      [CommandExit.NotStarted({ detail: "ENOENT" }), "not started"],
+    ];
+    for (const [exit, end] of ends) {
+      expect(resultOf("gitleaks", { "0": "clean" }, exit)).toEqual({
+        result: "tool-error",
+        reason: `scan-error: gitleaks ${end}`,
+      });
+    }
   });
 });

@@ -21,7 +21,6 @@ import {
   type ScanResult,
 } from "./scan-bundle.ts";
 import type { ScanRange } from "./scan-checkout.ts";
-import { verdictOf } from "./verdict.ts";
 
 /** A bundle exit map: each exit code, as a decimal string, to its scan result. */
 type ExitMap = Readonly<Record<string, ScanResult>>;
@@ -149,30 +148,27 @@ export const scannerInvocation = (
   );
 
 /**
- * The scan result of one subprocess's end: an exit code reads through `exitMap`, and a code it does not list is a
- * tool error. An end with no exit code, at a signal, the job timeout, the deadline or the output limit, is a tool error
- * with that end's job reason (specs/runs/gate.md § Exit to verdict).
+ * The scan result of one subprocess's end (FD-GATE-090): an exit code reads through `exitMap`, and a code it does not
+ * list is a tool error. An end with no exit code, at a signal, the job timeout, the deadline or the output limit, or a
+ * binary that cannot start, is a tool error that names the end.
  */
-export const resultOf = (id: string, exitMap: ExitMap, exit: CommandExit): ScanResultOf =>
-  Match.value(exit).pipe(
-    Match.tag("Exited", ({ code }): ScanResultOf => {
-      const key = String(code);
-      const result = Object.hasOwn(exitMap, key) ? exitMap[key] : undefined;
-      return result === undefined || result === "tool-error"
-        ? { result: "tool-error", reason: ScanReason.error(id, code) }
-        : { result };
+export const resultOf = (id: string, exitMap: ExitMap, exit: CommandExit): ScanResultOf => {
+  const toolError = (end: string): ScanResultOf => ({ result: "tool-error", reason: ScanReason.error(id, end) });
+  return Match.value(exit).pipe(
+    Match.tagsExhaustive({
+      Exited: ({ code }): ScanResultOf => {
+        const key = String(code);
+        const result = Object.hasOwn(exitMap, key) ? exitMap[key] : undefined;
+        return result === undefined || result === "tool-error" ? toolError(`exit ${code}`) : { result };
+      },
+      Signalled: ({ signal }) => toolError(`signal ${signal}`),
+      TimedOut: () => toolError("timeout"),
+      DeadlineReached: () => toolError("deadline"),
+      OverLimit: () => toolError("output over limit"),
+      NotStarted: () => toolError("not started"),
     }),
-    Match.orElse(
-      (ended): ScanResultOf => ({ result: "tool-error", reason: failureReason(verdictOf(ended)) }),
-    ),
   );
-
-/** A job end's `failure` reason; `verdictOf` gives every end without an exit code one. */
-const failureReason = (outcome: Outcome): Reason =>
-  Match.value(outcome).pipe(
-    Match.tag("failure", ({ reason }) => reason),
-    Match.orElse(() => "infra" as const),
-  );
+};
 
 /**
  * The outcome scan results conclude (FD-GATE-089 to FD-GATE-091): the first `tool-error`'s reason, else `scan:` with
