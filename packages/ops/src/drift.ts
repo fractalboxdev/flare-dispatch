@@ -9,6 +9,7 @@ import {
   validateDeclaration,
   type RegistryEntry,
 } from "@fractalboxdev/flare-dispatch-agentic";
+import { validateReadOnlyScan, type RunRegistry } from "@fractalboxdev/flare-dispatch-catalog";
 import {
   loadProfile,
   poolAdmissionCaps,
@@ -25,6 +26,7 @@ import {
   type CommittedAccess,
   type DeployedAccessApplication,
 } from "./access-application.ts";
+import type { OverlayValues } from "./overlay.ts";
 import { placeholdersOf, type WorkerConfig } from "./render.ts";
 
 /** One finding of the drift check. A `warning` is reported and does not fail the check (FD-OPS-023). */
@@ -294,6 +296,99 @@ export const agenticRegistryCheck = (registry: AgenticRegistry): readonly Findin
       fail("agentic-registry", `runs.${r.run}.declaration`, r.reason),
     ),
   );
+
+/**
+ * The registry validator over the run catalogue's read-only scan declarations (specs/runs/gate.md § Terms): one
+ * failure per command input, model call site or non-`check.*` intent kind of a declaration that sets `readOnlyScan`
+ * (FD-GATE-113).
+ */
+export const readOnlyScanCheck = (registry: RunRegistry): readonly Finding[] =>
+  Object.entries(registry).flatMap(([run, declaration]) =>
+    validateReadOnlyScan(run, declaration).map((r) =>
+      fail("read-only-scan", `runs.${r.run}.readOnlyScan`, r.reason),
+    ),
+  );
+
+/** The class ceilings a `dispatch.scoped` entry may set (FD-OPS-092). */
+export const SCOPED_CLASS_CEILINGS: ReadonlySet<string> = new Set(["interactive", "batch"]);
+
+/** An Access identity as the overlay lists it, compared case-insensitively, as the Access gate compares it. */
+const identityKey = (s: string) => s.trim().toLowerCase();
+
+/** The overlay lists among `lists` that hold `identity`, by list name. */
+const listsHolding = (
+  identity: string,
+  lists: readonly (readonly [string, readonly string[]])[],
+): readonly string[] =>
+  lists
+    .filter(([, members]) => members.some((m) => identityKey(m) === identityKey(identity)))
+    .map(([name]) => name);
+
+/**
+ * The overlay's identity lists against each other (specs/operability.md § Scoped identities): a `dispatch.scoped`
+ * identity that is also in `dispatchers`, `operators` or `containment` (FD-OPS-090), a scoped entry naming a run that
+ * is not one of `readOnlyScanRuns` (FD-OPS-091), a scoped entry whose `classCeiling` is neither `interactive` nor
+ * `batch` (FD-OPS-092), and a `containment` identity that is also in `operators` or `dispatchers` (FD-OPS-093). Each
+ * failure names the identity or the run.
+ */
+export const scopedIdentityCheck = (
+  overlay: Pick<OverlayValues, "operators" | "dispatchers" | "containment" | "dispatch">,
+  readOnlyScanRuns: ReadonlySet<string>,
+): readonly Finding[] => {
+  const operators = overlay.operators;
+  const dispatchers = overlay.dispatchers ?? [];
+  const containment = overlay.containment ?? [];
+  const scoped = overlay.dispatch?.scoped ?? [];
+  const entryFindings = scoped.flatMap((entry, i): readonly Finding[] => {
+    const at = `dispatch.scoped.${i}`;
+    const overlaps = listsHolding(entry.identity, [
+      ["dispatchers", dispatchers],
+      ["operators", operators],
+      ["containment", containment],
+    ]);
+    return [
+      ...(overlaps.length === 0
+        ? []
+        : [
+            fail(
+              "scoped-identity",
+              `${at}.identity`,
+              `${entry.identity} is also in ${overlaps.join(", ")}`,
+            ),
+          ]),
+      ...entry.runs
+        .filter((run) => !readOnlyScanRuns.has(run))
+        .map((run) =>
+          fail("scoped-identity", `${at}.runs`, `run ${run} is not a read-only scan run`),
+        ),
+      ...(SCOPED_CLASS_CEILINGS.has(entry.classCeiling)
+        ? []
+        : [
+            fail(
+              "scoped-identity",
+              `${at}.classCeiling`,
+              `${entry.identity}: classCeiling ${entry.classCeiling} is neither interactive nor batch`,
+            ),
+          ]),
+    ];
+  });
+  const containmentFindings = containment.flatMap((identity, i): readonly Finding[] => {
+    const overlaps = listsHolding(identity, [
+      ["operators", operators],
+      ["dispatchers", dispatchers],
+    ]);
+    return overlaps.length === 0
+      ? []
+      : [
+          fail(
+            "containment-identity",
+            `containment.${i}`,
+            `${identity} is also in ${overlaps.join(", ")}`,
+          ),
+        ];
+  });
+  return [...entryFindings, ...containmentFindings];
+};
 
 /** mameko's profile validator over the document the deploy carries, every rejection listed (FD-OPS-021). */
 export const profileCheck = (document: ProfileDocument, context: ValidationContext) =>

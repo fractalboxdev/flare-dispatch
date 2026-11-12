@@ -26,7 +26,17 @@ import {
   requiredPorts,
 } from "../../src/index.ts";
 import { profileDriftFindings, staticDrift, type WorkerSpec } from "../../src/cli/index.ts";
-import { CONTROL_PLANE, deploy, fd, isWrite, OVERLAY, ROOT, SCRIPT, world } from "./support.ts";
+import {
+  CONTROL_PLANE,
+  deploy,
+  fd,
+  isWrite,
+  OVERLAY,
+  ROOT,
+  SCRIPT,
+  withRescan,
+  world,
+} from "./support.ts";
 
 const TEMPLATE = readFileSync(join(ROOT, CONTROL_PLANE.templatePath), "utf8");
 
@@ -341,5 +351,114 @@ describe("the drift check over the production profile", () => {
     expect(phase4).toEqual(
       expect.arrayContaining(["placement.launcher_kinds", "placement.constraints"]),
     );
+  });
+});
+
+/** The placeholder overlay with operators, dispatchers and containment identities, and `scoped` entries. */
+const identityOverlay = (
+  scoped: readonly Record<string, unknown>[],
+  lists: { operators?: string[]; dispatchers?: string[]; containment?: string[] } = {},
+) =>
+  JSON.stringify({
+    ...placeholderOverlay,
+    operators: lists.operators ?? ["operator@example.com"],
+    dispatchers: lists.dispatchers ?? ["dispatcher@example.com"],
+    containment: lists.containment ?? ["responder@example.com"],
+    dispatch: { scoped },
+  });
+const entry = (identity: string, over: Record<string, unknown> = {}) => ({
+  identity,
+  runs: ["security-rescan"],
+  repositories: ["acme/app"],
+  classCeiling: "batch",
+  ...over,
+});
+
+/** `fd deploy` over `overlay` with `security-rescan` a read-only scan run: its report and whether it wrote. */
+const deployIdentities = async (overlay: string) => {
+  const w = world();
+  const report = await deploy(w, overlay, { runRegistry: withRescan() });
+  return { report, wrote: w.calls.filter(isWrite).length > 0 };
+};
+
+/** Asserts `fd deploy` stopped at the drift stage, before any write, with each of `lines` in its detail. */
+const expectDriftFailure = async (overlay: string, lines: readonly string[]) => {
+  const { report, wrote } = await deployIdentities(overlay);
+  expect(report.ok).toBe(false);
+  expect(report.stages.at(-1)).toMatchObject({ stage: "drift", ok: false });
+  for (const line of lines) expect(report.stages.at(-1)?.detail).toContain(line);
+  expect(wrote).toBe(false);
+};
+
+describe("the drift stage over the overlay's scoped and containment identities", () => {
+  it("[FD-OPS-090] fd deploy fails before any write when a dispatch.scoped identity is also in dispatchers, operators or containment, naming the identity", async () => {
+    const clean = await deployIdentities(identityOverlay([entry("scanner@example.com")]));
+    expect(clean.report.ok).toBe(true);
+    expect(clean.report.stages.find((s) => s.stage === "drift")?.detail ?? "").not.toContain(
+      "dispatch.scoped",
+    );
+
+    for (const [identity, list] of [
+      ["dispatcher@example.com", "dispatchers"],
+      ["operator@example.com", "operators"],
+      ["responder@example.com", "containment"],
+    ] as const)
+      await expectDriftFailure(identityOverlay([entry(identity)]), [
+        `dispatch.scoped.0.identity: ${identity} is also in ${list}`,
+      ]);
+
+    const checked = await Effect.runPromise(
+      fd(world(), { runRegistry: withRescan() }).doctor(
+        identityOverlay([entry("operator@example.com")]),
+      ),
+    );
+    expect(checked.ok).toBe(false);
+    expect(checked.stages.find((s) => s.stage === "drift")?.detail).toContain(
+      "operator@example.com is also in operators",
+    );
+  });
+
+  it("[FD-OPS-091] fd deploy fails before any write when a dispatch.scoped entry names a run that is not a read-only scan run, naming the run", async () => {
+    await expectDriftFailure(
+      identityOverlay([
+        entry("scanner@example.com", { runs: ["security-rescan", "worker-deploy"] }),
+      ]),
+      ["dispatch.scoped.0.runs: run worker-deploy is not a read-only scan run"],
+    );
+    // The committed catalogue holds no read-only scan run, so a scoped entry naming one it lacks fails.
+    const w = world();
+    const report = await deploy(w, identityOverlay([entry("scanner@example.com")]));
+    expect(report.ok).toBe(false);
+    expect(report.stages.at(-1)?.detail).toContain(
+      "dispatch.scoped.0.runs: run security-rescan is not a read-only scan run",
+    );
+    expect(w.calls.filter(isWrite)).toEqual([]);
+  });
+
+  it("[FD-OPS-092] fd deploy fails before any write when a dispatch.scoped entry's classCeiling is neither interactive nor batch, naming the identity", async () => {
+    const interactive = await deployIdentities(
+      identityOverlay([entry("scanner@example.com", { classCeiling: "interactive" })]),
+    );
+    expect(interactive.report.ok).toBe(true);
+    for (const ceiling of ["required", "release"])
+      await expectDriftFailure(
+        identityOverlay([entry("scanner@example.com", { classCeiling: ceiling })]),
+        [
+          `dispatch.scoped.0.classCeiling: scanner@example.com: classCeiling ${ceiling} is neither interactive nor batch`,
+        ],
+      );
+  });
+
+  it("[FD-OPS-093] fd deploy fails before any write when a containment identity is also in operators or dispatchers, naming the identity", async () => {
+    for (const [identity, list] of [
+      ["operator@example.com", "operators"],
+      ["dispatcher@example.com", "dispatchers"],
+    ] as const)
+      await expectDriftFailure(
+        identityOverlay([], { containment: ["responder@example.com", identity] }),
+        [`containment.1: ${identity} is also in ${list}`],
+      );
+    const clean = await deployIdentities(identityOverlay([]));
+    expect(clean.report.ok).toBe(true);
   });
 });

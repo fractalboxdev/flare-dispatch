@@ -13,7 +13,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { buildProfile, deploymentOf, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import type { Capability } from "@fractalboxdev/mameko-run";
-import { Match, type Schema } from "effect";
+import { Match, SchemaAST, type Schema } from "effect";
 import {
   CHECK_MAX_DURATION_SEC,
   CheckInput,
@@ -65,6 +65,12 @@ export interface RunSpecFields {
   readonly intentKinds: readonly string[];
   /** A run's own schedules, beside any a manifest entry names. */
   readonly schedules?: readonly { readonly cron: string }[];
+  /**
+   * The run is a read-only scan run (specs/runs/gate.md § Terms): it takes no command input, declares no model call
+   * site and declares only `check.*` intent kinds. The registry validator rejects a declaration that sets it and holds
+   * any of them (FD-GATE-113).
+   */
+  readonly readOnlyScan?: boolean;
 }
 
 /** An agentic recipe's declaration as the catalogue carries it (specs/runs/agentic.md § Declaration and catalog). */
@@ -135,6 +141,101 @@ export interface CatalogEntry {
    */
   readonly workflowVersion: number;
 }
+
+/** What the registry validator reads of one run declaration to hold a read-only scan run to its definition. */
+export interface RunDeclaration {
+  readonly spec: Pick<RunSpecFields, "needsModel" | "intentKinds" | "readOnlyScan">;
+  readonly input: { readonly ast: SchemaAST.AST };
+  readonly agentic?: {
+    readonly declaration: {
+      readonly callSites: readonly { readonly name: string }[];
+      readonly intentKinds: readonly string[];
+    };
+  };
+}
+
+/** The run declarations the registry validator checks at deploy, each by run name. */
+export type RunRegistry = Readonly<Record<string, RunDeclaration>>;
+
+/** One rejection of a read-only scan declaration, naming the run. */
+export interface ReadOnlyScanRejection {
+  readonly run: string;
+  readonly reason: string;
+}
+
+/** The input field names that carry a command a job would run: a shell line, an install or discovery line, an argv. */
+export const COMMAND_INPUT_FIELDS: ReadonlySet<string> = new Set([
+  "command",
+  "commands",
+  "install",
+  "discover",
+  "script",
+  "argv",
+]);
+
+/** The dotted path of every input field whose name is a command field, at any depth of the input schema. */
+export const commandInputsOf = (ast: SchemaAST.AST): readonly string[] => {
+  const found: string[] = [];
+  const seen = new Set<SchemaAST.AST>();
+  const walk = (node: SchemaAST.AST, path: string): void => {
+    if (seen.has(node)) return;
+    seen.add(node);
+    if (SchemaAST.isObjects(node)) {
+      for (const p of node.propertySignatures) {
+        const name = String(p.name);
+        const at = path === "" ? name : `${path}.${name}`;
+        if (COMMAND_INPUT_FIELDS.has(name)) found.push(at);
+        walk(p.type, at);
+      }
+      for (const i of node.indexSignatures) walk(i.type, `${path}.*`);
+    } else if (SchemaAST.isArrays(node)) {
+      for (const e of [...node.elements, ...node.rest]) walk(e, `${path}[]`);
+    } else if (SchemaAST.isUnion(node)) {
+      for (const t of node.types) walk(t, path);
+    } else if (SchemaAST.isSuspend(node)) {
+      walk(node.thunk(), path);
+    } else if (SchemaAST.isDeclaration(node)) {
+      for (const t of node.typeParameters) walk(t, path);
+    }
+  };
+  walk(ast, "");
+  return found;
+};
+
+/**
+ * The registry validator's rule for a read-only scan run (FD-GATE-113): a declaration that sets `readOnlyScan` is
+ * rejected for each command input its input schema holds, each model call site it declares (and for `needsModel`
+ * where it names none), and each intent kind outside the `check.*` kinds. A declaration that does not set it passes.
+ */
+export const validateReadOnlyScan = (
+  run: string,
+  declaration: RunDeclaration,
+): readonly ReadOnlyScanRejection[] => {
+  if (declaration.spec.readOnlyScan !== true) return [];
+  const callSites = declaration.agentic?.declaration.callSites ?? [];
+  const kinds = [
+    ...new Set([
+      ...declaration.spec.intentKinds,
+      ...(declaration.agentic?.declaration.intentKinds ?? []),
+    ]),
+  ];
+  return [
+    ...commandInputsOf(declaration.input.ast).map((field) => `command input ${field}`),
+    ...callSites.map((site) => `model call site ${site.name}`),
+    ...(declaration.spec.needsModel && callSites.length === 0 ? ["needsModel"] : []),
+    ...kinds.filter((kind) => !kind.startsWith("check.")).map((kind) => `intent kind ${kind}`),
+  ].map((reason) => ({ run, reason: `readOnlyScan: ${reason}` }));
+};
+
+/** The runs of a registry that are read-only scan runs: each sets `readOnlyScan` and passes its rule (FD-OPS-091). */
+export const readOnlyScanRunsOf = (registry: RunRegistry): ReadonlySet<string> =>
+  new Set(
+    Object.entries(registry)
+      .filter(
+        ([run, d]) => d.spec.readOnlyScan === true && validateReadOnlyScan(run, d).length === 0,
+      )
+      .map(([run]) => run),
+  );
 
 const JOB: readonly Capability[] = ["Workspace", "Exec", "Artifact"];
 
@@ -315,6 +416,9 @@ const agenticEntries: Readonly<Record<string, CatalogEntry>> = Object.fromEntrie
 );
 
 const entries: Readonly<Record<string, CatalogEntry>> = { ...gateEntries, ...agenticEntries };
+
+/** Every run of the catalogue by name, the registry the deploy's registry validator checks (FD-GATE-113). */
+export const RUN_CATALOG: Readonly<Record<string, CatalogEntry>> = entries;
 
 /** The placement of a `sandbox-image` execution (FD-GATE-080): a publish runs `release`, cloud-pinned, on an executor
  * labelled `container-artifact`; a pull request runs `required` anywhere eligible. */
