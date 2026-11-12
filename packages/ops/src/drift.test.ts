@@ -196,7 +196,10 @@ const denyAction = (over: Partial<AwsBudgetAction> = {}): AwsBudgetAction => ({
   ...over,
 });
 const scpAction = (targets: string[], statements: AwsPolicyStatement[] = [DENY_LAUNCH]) =>
-  denyAction({ actionType: "APPLY_SCP_POLICY", policy: { id: "p-deny", targets, statements } });
+  denyAction({
+    actionType: "APPLY_SCP_POLICY",
+    policy: { id: "p-deny", targets, statements, policyType: "SERVICE_CONTROL_POLICY" },
+  });
 const withStatements = (...statements: AwsPolicyStatement[]) =>
   denyAction({ policy: { ...denyAction().policy!, statements } });
 const check = (limitUsd: number, actions: AwsBudgetAction[], read = budgets) =>
@@ -208,6 +211,7 @@ const check = (limitUsd: number, actions: AwsBudgetAction[], read = budgets) =>
       actions,
       organization: {
         managementAccount: "999900001111",
+        scpEnabled: true,
         ancestors: ["ou-abcd-11111111", "r-abcd"],
       },
     },
@@ -346,10 +350,38 @@ describe("AWS budget check", () => {
       failed(
         awsBudgetCheck(400, {
           ...read,
-          organization: { managementAccount: ACCOUNT, ancestors: ["r-abcd"] },
+          organization: { managementAccount: ACCOUNT, ancestors: ["r-abcd"], scpEnabled: true },
         }),
       ),
     ).toBe(true);
+  });
+
+  it("[FD-EXEC-083] requires an actual SCP and an enabled root SCP policy type", () => {
+    const action = scpAction([ACCOUNT]);
+    const read = {
+      account: ACCOUNT,
+      budgets,
+      actions: [action],
+      organization: {
+        managementAccount: "999900001111",
+        ancestors: ["r-abcd"],
+        scpEnabled: true,
+      },
+    };
+    expect(
+      failed(
+        awsBudgetCheck(400, { ...read, organization: { ...read.organization, scpEnabled: false } }),
+      ),
+    ).toBe(true);
+    for (const policyType of [undefined, "TAG_POLICY"])
+      expect(
+        failed(
+          awsBudgetCheck(400, {
+            ...read,
+            actions: [{ ...action, policy: { ...action.policy!, policyType } }],
+          }),
+        ),
+      ).toBe(true);
   });
 
   it("[FD-EXEC-083] fails closed on malformed spend thresholds, amounts and periods", () => {

@@ -124,6 +124,9 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     /** The documents of the account's IAM managed policies, by ARN, and of its SCPs, by policy id. */
     awsPolicies: Record<string, unknown>;
     awsManagementAccount: string;
+    awsRoots: Record<string, unknown>[];
+    awsRootsReadFails: boolean;
+    awsPolicyTypes: Record<string, string>;
     /** ListParents answers, keyed by child; tests can inject incomplete or cyclic ancestry. */
     awsParents: Record<string, Record<string, unknown>>;
   } = {
@@ -139,6 +142,11 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     awsActions: [],
     awsPolicies: {},
     awsManagementAccount: "999900001111",
+    awsRoots: [
+      { Id: "r-abcd", PolicyTypes: [{ Type: "SERVICE_CONTROL_POLICY", Status: "ENABLED" }] },
+    ],
+    awsRootsReadFails: false,
+    awsPolicyTypes: {},
     awsParents: { [AWS_ACCOUNT]: { Parents: [{ Id: "r-abcd", Type: "ROOT" }] } },
   };
 
@@ -473,6 +481,16 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
       const { ChildId = "" } = JSON.parse(body) as { ChildId?: string };
       return Response.json(state.awsParents[ChildId] ?? { Parents: [] });
     }
+    if (target === "AWSOrganizationsV20161128.ListRoots") {
+      if (state.awsRootsReadFails)
+        return Response.json({ __type: "AccessDeniedException" }, { status: 403 });
+      const { NextToken = "0" } = JSON.parse(body) as { NextToken?: string };
+      const at = Number(NextToken);
+      return Response.json({
+        Roots: state.awsRoots.slice(at, at + 1),
+        ...(at + 1 < state.awsRoots.length ? { NextToken: String(at + 1) } : {}),
+      });
+    }
     const { PolicyId: id = "" } = JSON.parse(body) as { PolicyId?: string };
     const document = state.awsPolicies[id];
     if (target !== "AWSOrganizationsV20161128.DescribePolicy")
@@ -481,7 +499,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
       return Response.json({ __type: "PolicyNotFoundException" }, { status: 400 });
     return Response.json({
       Policy: {
-        PolicySummary: { Id: id, Type: "SERVICE_CONTROL_POLICY" },
+        PolicySummary: { Id: id, Type: state.awsPolicyTypes[id] ?? "SERVICE_CONTROL_POLICY" },
         Content: JSON.stringify(document),
       },
     });

@@ -480,6 +480,8 @@ export const AwsActionPolicy = Schema.Struct({
   targets: Schema.Array(Schema.String),
   /** IAM role names, kept separate so a same-named user or group cannot stand in for the launcher. */
   roles: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** Organizations' actual policy type; an SCP action must reference SERVICE_CONTROL_POLICY. */
+  policyType: Schema.optionalKey(Schema.String),
   /** The statements of the policy's document: the IAM policy's default version, or the SCP's content. */
   statements: Schema.Array(AwsPolicyStatement),
 });
@@ -514,6 +516,8 @@ export const AwsBudgets = Schema.Struct({
       managementAccount: Schema.String,
       /** The account's parents, up to and including its organization root. */
       ancestors: Schema.Array(Schema.String),
+      /** ListRoots proved the account's root has the SCP policy type enabled. */
+      scpEnabled: Schema.Boolean,
     }),
   ),
 });
@@ -583,10 +587,14 @@ const policyGap = (
   if (!deniesLaunches(policy.statements))
     return `applies policy ${policy.id}, which does not deny ${LAUNCH_CALLS.join(" and ")} on every resource under no condition`;
   if (action.actionType === "APPLY_SCP_POLICY") {
+    if (policy.policyType !== "SERVICE_CONTROL_POLICY")
+      return `applies policy ${policy.id}, which is not a verified SERVICE_CONTROL_POLICY`;
     if (read.organization === undefined)
       return "cannot prove the SCP affects the account: organization membership was not read";
     if (read.organization.managementAccount === account)
       return `cannot deny launches in organization management account ${account}: SCPs do not affect it`;
+    if (!read.organization.scpEnabled)
+      return "cannot deny launches through an SCP: the account's organization root has no enabled SCP policy type";
     return policy.targets.some((t) => t === account || read.organization!.ancestors.includes(t))
       ? null
       : `attaches policy ${policy.id} to neither account ${account} nor one of its organization ancestors`;

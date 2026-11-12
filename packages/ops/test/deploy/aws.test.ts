@@ -96,6 +96,7 @@ describe("the AWS budget check of the drift check", () => {
       // Prove the deploying account is affected by this SCP, then read its policy document.
       "POST organizations.us-east-1.amazonaws.com/",
       "POST organizations.us-east-1.amazonaws.com/",
+      "POST organizations.us-east-1.amazonaws.com/",
       // The SCP's content; the SSM action applies no policy, so nothing reads one for it.
       "POST organizations.us-east-1.amazonaws.com/",
     ]);
@@ -334,6 +335,58 @@ describe("the AWS budget check of the drift check", () => {
       w.state.awsActions = [action("act-deny")];
       expect((await doctor(w)).ok).toBe(false);
     }
+  });
+
+  it("[FD-EXEC-083] requires the account root's SCP type enabled and the actual policy to be an SCP", async () => {
+    const enabled = {
+      Id: "r-abcd",
+      PolicyTypes: [{ Type: "SERVICE_CONTROL_POLICY", Status: "ENABLED" }],
+    };
+    const paged = awsWorld();
+    paged.state.awsRoots = [{ Id: "r-other", PolicyTypes: [] }, enabled];
+    paged.state.awsActions = [action("act-deny")];
+    expect((await doctor(paged)).ok).toBe(true);
+
+    for (const PolicyTypes of [
+      [],
+      [{ Type: "SERVICE_CONTROL_POLICY", Status: "PENDING_ENABLE" }],
+      [{ Type: "TAG_POLICY", Status: "ENABLED" }],
+    ]) {
+      const w = awsWorld();
+      w.state.awsRoots = [{ Id: "r-abcd", PolicyTypes }];
+      w.state.awsActions = [action("act-deny")];
+      const report = await doctor(w);
+      expect(report.ok).toBe(false);
+      expect(driftStage(report)?.detail).toContain("no enabled SCP policy type");
+    }
+    for (const roots of [
+      [],
+      [{ Id: "r-other", PolicyTypes: [] }],
+      [{ Id: "r-abcd" }],
+      Array.from({ length: 33 }, (_, n) => ({ Id: `r-other${n}`, PolicyTypes: [] })),
+    ]) {
+      const w = awsWorld();
+      w.state.awsRoots = roots;
+      w.state.awsActions = [action("act-deny")];
+      const report = await deploy(w, AWS_OVERLAY);
+      expect(report.ok).toBe(false);
+      expect(driftStage(report)?.detail).toContain("aws-organizations membership");
+      expect(awsCalls(w).length).toBeLessThan(40);
+      expect(w.calls.filter(isWrite)).toEqual([]);
+    }
+    const unreadable = awsWorld();
+    unreadable.state.awsActions = [action("act-deny")];
+    unreadable.state.awsRootsReadFails = true;
+    expect(driftStage(await doctor(unreadable))?.detail).toContain(
+      "aws-organizations ListRoots: 403",
+    );
+
+    const wrongType = awsWorld();
+    wrongType.state.awsActions = [action("act-deny")];
+    wrongType.state.awsPolicyTypes = { "p-denyrunt": "TAG_POLICY" };
+    expect(driftStage(await doctor(wrongType))?.detail).toContain(
+      "not a verified SERVICE_CONTROL_POLICY",
+    );
   });
 
   it("[FD-EXEC-083] fails the drift stage when the deploy job carries no AWS credentials, or the overlay sets no aws.budgetUsd", async () => {

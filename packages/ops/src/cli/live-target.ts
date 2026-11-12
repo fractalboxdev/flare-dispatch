@@ -279,7 +279,12 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       ),
       (text) =>
         Effect.try({
-          try: () => JSON.parse(text) as Record<string, unknown>,
+          try: () => {
+            const parsed: unknown = JSON.parse(text);
+            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+              throw new Error("the AWS JSON response is not an object");
+            return parsed as Record<string, unknown>;
+          },
           catch: (e) => new TargetFailed({ operation, message: String(e) }),
         }),
     );
@@ -367,8 +372,8 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       return yield* statementsOf("aws-iam GetPolicyVersion", document);
     });
 
-  /** An SCP's content: AWS Organizations `DescribePolicy`. */
-  const scpStatements = (policyId: string) =>
+  /** A policy's actual type and content: AWS Organizations `DescribePolicy`. */
+  const scpPolicy = (policyId: string) =>
     Effect.gen(function* () {
       const described = yield* jsonCall(
         "aws-organizations DescribePolicy",
@@ -377,13 +382,20 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
         "AWSOrganizationsV20161128.DescribePolicy",
         { PolicyId: policyId },
       );
-      const content = (described["Policy"] as { Content?: unknown } | undefined)?.Content;
-      if (typeof content !== "string")
+      const policy = described["Policy"] as
+        | { Content?: unknown; PolicySummary?: { Type?: unknown } }
+        | undefined;
+      const content = policy?.Content;
+      const policyType = policy?.PolicySummary?.Type;
+      if (typeof content !== "string" || typeof policyType !== "string")
         return yield* new TargetFailed({
           operation: "aws-organizations DescribePolicy",
-          message: `policy ${policyId} carries no content`,
+          message: `policy ${policyId} carries no known type or content`,
         });
-      return yield* statementsOf("aws-organizations DescribePolicy", content);
+      return {
+        policyType,
+        statements: yield* statementsOf("aws-organizations DescribePolicy", content),
+      };
     });
 
   type ActionDefinition = {
@@ -416,7 +428,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
         return {
           id: scp.PolicyId,
           targets: arr<string>(scp.TargetIds),
-          statements: yield* scpStatements(scp.PolicyId),
+          ...(yield* scpPolicy(scp.PolicyId)),
         } satisfies AwsActionPolicy;
       return null;
     });
@@ -492,7 +504,40 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
           return yield* failed("the account's organization ancestry is incomplete or cyclic");
         if (parent.Type === "ROOT" && /^r-[a-z0-9]+$/.test(parent.Id)) {
           ancestors.push(parent.Id);
-          return { managementAccount, ancestors };
+          const rootId = parent.Id;
+          let next: string | undefined;
+          const tokens = new Set<string>();
+          // ALL features does not prove SCPs are enabled: a root can disable that policy type independently.
+          for (let rootPage = 0; rootPage < 32; rootPage++) {
+            const roots = yield* call("ListRoots", next === undefined ? {} : { NextToken: next });
+            const listed = arr<{ Id?: unknown; PolicyTypes?: unknown }>(roots["Roots"]);
+            if (
+              !Array.isArray(roots["Roots"]) ||
+              listed.some((r) => typeof r !== "object" || r === null)
+            )
+              return yield* failed("the organization root listing is unreadable");
+            const root = listed.find((r) => r.Id === rootId);
+            if (root !== undefined) {
+              const policyTypes = arr<{ Type?: unknown; Status?: unknown }>(root.PolicyTypes);
+              if (
+                !Array.isArray(root.PolicyTypes) ||
+                policyTypes.some((p) => typeof p !== "object" || p === null)
+              )
+                return yield* failed(`root ${rootId} carries no readable policy types`);
+              const scpEnabled = policyTypes.some(
+                (p) => p.Type === "SERVICE_CONTROL_POLICY" && p.Status === "ENABLED",
+              );
+              return { managementAccount, ancestors, scpEnabled };
+            }
+            const token = roots["NextToken"];
+            if (token === undefined || token === null || token === "")
+              return yield* failed(`ListRoots does not contain the account's root ${rootId}`);
+            if (typeof token !== "string" || tokens.has(token))
+              return yield* failed("the organization root listing is incomplete or cyclic");
+            tokens.add(token);
+            next = token;
+          }
+          return yield* failed("the organization root listing exceeds the 32-page read bound");
         }
         if (parent.Type !== "ORGANIZATIONAL_UNIT" || !/^ou-[a-z0-9]+-[a-z0-9]+$/.test(parent.Id))
           return yield* failed(
