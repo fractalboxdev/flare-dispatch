@@ -65,6 +65,8 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly ALERT_SINK?: string;
   /** The rendered `{{spend}}`: the overlay's spend values in USD, each it leaves out at its default (FD-PROF-054). */
   readonly SPEND?: unknown;
+  /** The rendered `{{policy.rules}}`: each repository's synced policy rules (FD-PROF-025, `policy.ts`). */
+  readonly POLICY_RULES?: unknown;
   readonly DEPLOYMENT?: string;
   readonly PLANE_ID: string;
   /** The GitHub App's id and private key (a Worker secret); without both, nothing is applied to GitHub. */

@@ -43,6 +43,7 @@ import { cancelledLease } from "@fractalboxdev/mameko-store-sqlite";
 import { Context, Effect, Layer, Scope } from "effect";
 import { deployment, presignerConfigOf, presignerMissingOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { repositoryConfidentiality } from "./dev-repository.ts";
+import { policyRulesOf } from "./policy.ts";
 import {
   gitData,
   gitDataWithoutApp,
@@ -64,6 +65,12 @@ const listOf = (value: unknown): readonly string[] => {
   }
 };
 
+/** Each repository's synced policy rules, the `policy-rules` input of class resolution (FD-PROF-025). */
+const policyRulesFor = (env: ControlPlaneEnv) => {
+  const rules = policyRulesOf(env);
+  return (repo: string) => rules[repo] ?? [];
+};
+
 /** Intake's configuration from the bindings; every repository may run every run its manifest lists. */
 export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
   const raw = env as unknown as Readonly<Record<string, unknown>>;
@@ -77,6 +84,7 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     webhookEvents: events.length === 0 ? undefined : events,
     allows: () => true,
     confidentiality: repositoryConfidentiality(env),
+    policyRules: policyRulesFor(env),
     writeCredentialIn: writeCredentialIn(env),
   };
 };

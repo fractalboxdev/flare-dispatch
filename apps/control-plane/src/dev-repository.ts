@@ -1,9 +1,10 @@
 // The repository a `development` deployment with no GitHub App reads: one commit of one repository, as the local
 // command that starts the deployment captured it (`pnpm ci:local` writes it from the checkout). Only the facts it holds
 // answer; every other read fails, so no caller decides on a read that never happened.
-import type { ConfidentialityMode } from "@fractalboxdev/flare-dispatch-profile";
+import { confidentialityOf, type ConfidentialityMode } from "@fractalboxdev/flare-dispatch-profile";
 import { Schema } from "effect";
 import { deployment, type ControlPlaneEnv } from "./config.ts";
+import { policyRulesOf } from "./policy.ts";
 
 export const DevRepository = Schema.Struct({
   /** `<owner>/<name>`. */
@@ -37,25 +38,31 @@ export const devRepositoryOf = (
   return decode(raw);
 };
 
+/** The bindings a repository's confidentiality mode reads. */
+export type ConfidentialityEnv = Pick<
+  ControlPlaneEnv,
+  "DEPLOYMENT" | "FD_DEV_REPOSITORY" | "POLICY_RULES"
+>;
+
 /**
  * A repository's confidentiality mode, the one source intake's admission, a lease's cache fields and the log route
- * read. No policy rule classifies a repository yet; a development deployment's captured repository carries its own
- * mode, and every other repository is `unclassified`.
+ * read: the mode the repository's synced policy rules set (FD-PROF-025), else the mode a development deployment's
+ * captured repository carries, else `unclassified`.
  */
 export const repositoryConfidentiality = (
-  env: Pick<ControlPlaneEnv, "DEPLOYMENT" | "FD_DEV_REPOSITORY">,
+  env: ConfidentialityEnv,
 ): ((repo: string) => ConfidentialityMode) => {
+  const rules = policyRulesOf(env);
   const dev = devRepositoryOf(env);
   return (repo) =>
+    confidentialityOf(rules[repo] ?? []) ??
     (dev !== undefined && dev.repository === repo ? dev.confidentiality : undefined) ??
     "unclassified";
 };
 
 /** True while a repository's mode is `confidential-compute`: no L2 read or write, and logs stay on the device. */
-export const confidentialCompute = (
-  env: Pick<ControlPlaneEnv, "DEPLOYMENT" | "FD_DEV_REPOSITORY">,
-  repo: string,
-): boolean => repositoryConfidentiality(env)(repo) === "confidential-compute";
+export const confidentialCompute = (env: ConfidentialityEnv, repo: string): boolean =>
+  repositoryConfidentiality(env)(repo) === "confidential-compute";
 
 /** A captured file's text: a string, null where the path is absent, undefined where it was not captured. */
 export const devFile = (dev: DevRepository, path: string): string | null | undefined => {

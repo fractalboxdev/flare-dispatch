@@ -55,13 +55,13 @@ No class declares `device_eligible` or `deadline_offset`, so every class may run
 
 ### Class resolution
 
-`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. It applies six steps in order.
+`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. A policy rule sets a class, the repository's confidentiality mode, or both, and a rule that sets only a confidentiality mode takes no part in class resolution. `resolveClass` applies six steps in order.
 
 | Step | Rule |
 | --- | --- |
 | 1 | A run on the in-code `release` allowlist triggered by a release trigger resolves to `release`. The release triggers are a push of a tag a ruleset protects, a `check_suite` or `deployment_status` event on the default branch, a `push` to a ruleset-protected branch named by `workerDeploy.branch`, an Actions dispatch whose OIDC `ref` is that branch, and a follow-on intent of a `release` execution |
 | 2 | A gating run (`check`, `oxlint`, `offload-test`) on `pull_request`, `merge_group` or a `gh-readonly-queue/*` push resolves to `required` when its check name is in the target branch's required set, and to `interactive` when it is not |
-| 3 | The first matching policy rule may lower the class, and raises it only to a `required` that step 2 verified and only up to the run's `limits.qosCeiling`, unless the rule lifts the ceiling |
+| 3 | The first matching policy rule that sets a class may lower the class, and raises it only to a `required` that step 2 verified and only up to the run's `limits.qosCeiling`, unless the rule lifts the ceiling |
 | 4 | The run default `limits.qosClass`, capped at `limits.qosCeiling`; a run that declares no `limits.qosClass` resolves to `batch` with the `local-only` constraint |
 | 5 | A child takes the lower of its parent's class and its own result |
 | 6 | The dispatch `class` input lowers freely, and raises only as a policy rule allows for the caller's OIDC identity scoped to (repository, workflow ref) on a protected branch |
@@ -73,7 +73,7 @@ flowchart TB
   s1{1. On the release allowlist and a release trigger?}
   s2{2. Gating run whose check the target branch requires?}
   look{Protection snapshot}
-  s3["3. First matching policy rule: may lower; raises only to a verified required"]
+  s3["3. First matching policy rule that sets a class: may lower; raises only to a verified required"]
   s4[4. Run default limits.qosClass, capped by limits.qosCeiling]
   s5[5. Lower of parent class and result]
   s6["6. Class input: lowers freely; raises only as a rule allows for the caller"]
