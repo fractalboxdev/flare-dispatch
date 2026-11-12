@@ -72,10 +72,10 @@ export {
   ManifestSource,
   manifestSourceLayer,
   RepoManifest,
+  ReuseBlock,
   validateManifest,
   type ManifestRead,
 } from "./manifest.ts";
-export { AccessIdentity, mcpDispatch, McpDispatchArgs } from "./mcp.ts";
 export {
   heldCheckOf,
   HeldCheckReporter,

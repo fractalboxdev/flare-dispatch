@@ -82,6 +82,8 @@ describe("the lease fields that name the execution", () => {
     placementConstraint: null,
     cacheTrigger: { _tag: "PullRequest", number: 7 },
     eligibleKinds: null,
+    repositoryPublic: null,
+    inputAssociations: [],
     createdAt: 0,
   };
   const execution = { scope_id: "acme/app", deadline_at: Date.UTC(2026, 10, 4, 13) };

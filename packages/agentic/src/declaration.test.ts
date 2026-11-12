@@ -87,9 +87,7 @@ describe("trifecta", () => {
     confidentiality: "non-confidential",
     inputAssociations: ["MEMBER"],
     forkHead: false,
-    egressHosts: ["models.internal", "github.com"],
-    modelGatewayHost: "models.internal",
-    gitRemoteHost: "github.com",
+    egressGrants: ["model-gateway", "git-remote"],
     intentRepositories: ["o/r"],
     repository: "o/r",
   };
@@ -103,7 +101,7 @@ describe("trifecta", () => {
     const all = computeDataClasses({
       ...facts,
       inputAssociations: ["NONE"],
-      egressHosts: ["evil.example"],
+      egressGrants: ["model-gateway", "git-remote", "cf-api"],
     });
     expect(all).toEqual({ privateData: true, untrustedInput: true, outbound: true });
     expect(trifectaAdmission(all)).toEqual({ _tag: "refuse", reason: "policy: trifecta" });

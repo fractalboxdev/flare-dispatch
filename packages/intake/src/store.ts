@@ -31,6 +31,8 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     placement_constraint text,
     cache_trigger_json text,
     eligible_kinds text,
+    repository_public integer,
+    input_associations_json text not null default '["NONE"]',
     created_at integer not null)`,
   `create index if not exists intake_records_family on intake_records (family_root)`,
   `create index if not exists intake_records_commit on intake_records (repo, sha)`,
@@ -78,8 +80,41 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     primary key (repo, number, delivery_id))`,
 ];
 
-export const migrateIntake = (db: D1Like): Effect.Effect<void> =>
-  Effect.promise(() => db.batch(INTAKE_MIGRATIONS.map((s) => db.prepare(s)))).pipe(Effect.asVoid);
+const DATA_CLASS_COLUMNS = [
+  ["repository_public", "integer"],
+  // Existing requests carry no evidence of a trusted author. The default backfills those rows conservatively;
+  // new submissions explicitly write their observed associations, including an empty list when appropriate.
+  ["input_associations_json", `text not null default '["NONE"]'`],
+] as const;
+
+const intakeColumns = async (db: D1Like): Promise<ReadonlySet<string>> => {
+  const { results } = await db.prepare("pragma table_info(intake_records)").all();
+  return new Set((results as readonly { name: string }[]).map((r) => r.name));
+};
+
+/** Creates fresh tables and upgrades existing deployments without changing their recorded request facts. */
+export const migrateIntake = (db: D1Like): Effect.Effect<void, StoreUnavailable> =>
+  Effect.tryPromise({
+    try: async () => {
+      await db.batch(INTAKE_MIGRATIONS.map((s) => db.prepare(s)));
+      const columns = await intakeColumns(db);
+      for (const [name, declaration] of DATA_CLASS_COLUMNS) {
+        if (columns.has(name)) continue;
+        try {
+          await db.prepare(`alter table intake_records add column ${name} ${declaration}`).run();
+        } catch (cause) {
+          // Two cold isolates can observe the old schema concurrently. Ignore only the duplicate-column error when
+          // the other isolate demonstrably added this column; permission, storage and other migration errors fail.
+          if (
+            !String(cause).includes("duplicate column name") ||
+            !(await intakeColumns(db)).has(name)
+          )
+            throw cause;
+        }
+      }
+    },
+    catch: (cause) => new StoreUnavailable({ message: `intake migration: ${String(cause)}` }),
+  });
 
 export interface IntakeRecord {
   readonly executionId: string;
@@ -110,6 +145,13 @@ export interface IntakeRecord {
    * null until admission answers.
    */
   readonly eligibleKinds: readonly string[] | null;
+  /**
+   * Whether the repository is public, as the trigger stated it; null when it did not say. A re-run and a follow-on
+   * carry it, so the attempt's data classes are the first attempt's (FD-AGT-005).
+   */
+  readonly repositoryPublic: boolean | null;
+  /** The `author_association` of every principal whose text the trigger's payload carries (FD-AGT-005). */
+  readonly inputAssociations: readonly string[];
   readonly createdAt: number;
 }
 
@@ -297,6 +339,8 @@ interface Row {
   readonly placement_constraint: string | null;
   readonly cache_trigger_json: string | null;
   readonly eligible_kinds: string | null;
+  readonly repository_public: number | null;
+  readonly input_associations_json: string | null;
   readonly created_at: number;
   readonly status: string | null;
 }
@@ -393,6 +437,11 @@ const fromRow = (r: Row): RecordWithStatus => ({
   placementConstraint: r.placement_constraint,
   cacheTrigger: cacheTriggerOfRow(r.cache_trigger_json),
   eligibleKinds: r.eligible_kinds === null ? null : (JSON.parse(r.eligible_kinds) as string[]),
+  repositoryPublic: r.repository_public === null ? null : r.repository_public === 1,
+  inputAssociations:
+    r.input_associations_json === null
+      ? ["NONE"]
+      : (JSON.parse(r.input_associations_json) as string[]),
   createdAt: r.created_at,
   status: r.status,
 });
@@ -405,7 +454,8 @@ const SELECT = `select r.*,
 
 const RECORD_COLUMNS = `execution_id, trigger, run, label, repo, sha, ref, inputs_json,
   class, labels_json, attempt, family_root, installation, caller, not_before, spend_line,
-  placement_constraint, cache_trigger_json, eligible_kinds, created_at`;
+  placement_constraint, cache_trigger_json, eligible_kinds, repository_public, input_associations_json,
+  created_at`;
 
 const recordValues = (r: IntakeRecord) =>
   [
@@ -428,6 +478,8 @@ const recordValues = (r: IntakeRecord) =>
     r.placementConstraint,
     JSON.stringify(r.cacheTrigger),
     r.eligibleKinds === null ? null : JSON.stringify(r.eligibleKinds),
+    r.repositoryPublic === null ? null : r.repositoryPublic ? 1 : 0,
+    JSON.stringify(r.inputAssociations),
     r.createdAt,
   ] as const;
 

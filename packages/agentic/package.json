@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fractalboxdev/flare-dispatch-cache": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
     "@fractalboxdev/mameko-gateway": "workspace:*",
     "@fractalboxdev/mameko-kernel": "workspace:*",

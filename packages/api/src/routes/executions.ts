@@ -111,6 +111,7 @@ export const ExecutionsHandlers = HttpApiBuilder.group(FlareDispatchApi, "execut
           ...(query.class === undefined ? {} : { class: query.class }),
           ...(query.executor_kind === undefined ? {} : { executorKind: query.executor_kind }),
           ...(query.before === undefined ? {} : { before: query.before }),
+          ...(query.finished_since === undefined ? {} : { finishedSince: query.finished_since }),
         });
         const last = rows.at(-1);
         return {

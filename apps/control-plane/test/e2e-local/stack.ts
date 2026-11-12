@@ -33,7 +33,7 @@ import {
 
 const APP = join(import.meta.dirname, "../..");
 
-/** The repository the stack's GitHub holds: its manifest lists `check` for dispatch and pull requests. */
+/** The repository the stack's GitHub holds: its manifest lists `check` for dispatch, MCP dispatch and pull requests. */
 export const REPOSITORY = "acme/widgets";
 /** Its default branch head, which is the head of the recorded pull request too. */
 export const HEAD = "1".repeat(40);
@@ -50,7 +50,7 @@ const MANIFEST = {
   runs: [
     {
       recipe: "check",
-      triggers: ["dispatch", "pull_request"],
+      triggers: ["dispatch", "mcp", "pull_request"],
       params: { steps: [{ label: "test", command: "pnpm test", timeoutSec: 600 }] },
     },
   ],

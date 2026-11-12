@@ -15,6 +15,7 @@ import {
   executorsGroup,
   JwksSourceLive,
   logsGroup,
+  mcpGroup,
   mount,
   operabilityGroup,
   oidcKeyFromSecret,
@@ -71,7 +72,9 @@ export const intakeGroup = routerGroup(
 /**
  * The groups the Worker mounts; `/v1/executors/connect` is answered before the router, since it upgrades. The log and
  * artifact reads pass the link surface's gate like every other route (FD-IFC-017); the fleet view, the phase gate's
- * records, the spend view and the install flow pass the operability group's gates.
+ * records, the spend view and the install flow pass the operability group's gates. The MCP server at `/mcp` reads the
+ * same per-request ports as the routes its tools wrap, so its `dispatch` reaches intake's admission through the
+ * declared dispatch route's `Intake` port, as trigger `mcp` (FD-IFC-072, FD-IFC-074, FD-INT-062).
  */
 export const router = mount(
   wellKnownGroup,
@@ -83,6 +86,7 @@ export const router = mount(
   executorsGroup,
   logsGroup(LogsHandlers),
   artifactsGroup(ArtifactsHandlers),
+  mcpGroup,
 );
 
 const handler = toFetchHandler(router, { shared: JwksSourceLive });

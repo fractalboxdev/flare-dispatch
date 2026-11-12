@@ -340,8 +340,8 @@ flowchart LR
 
 ### Executions API
 
-- **FD-IFC-037** · phase 0 · `V-UNIT` — When the dispatcher answers `GET /v1/executions`, the dispatcher must filter by run, repository, status, class, executor kind and `before`, return at most `limit` rows (default 50, maximum 200), and return a `next_before` cursor when more rows exist.
-- **FD-IFC-038** · phase 0 · `V-UNIT` — The dispatcher must include in each execution it returns the placement, executor id and kind, class, lease epoch, verdict, conclusion, reserved cost and settled cost.
+- **FD-IFC-037** · phase 0 · `V-UNIT` — When the dispatcher answers `GET /v1/executions`, the dispatcher must filter by run, repository, status, class, executor kind, `before` and `finished_since` (a finish time at or after the given epoch milliseconds), return at most `limit` rows (default 50, maximum 200), and return a `next_before` cursor when more rows exist.
+- **FD-IFC-038** · phase 0 · `V-UNIT` — The dispatcher must include in each execution it returns the placement, executor id and kind, class, lease epoch, verdict, conclusion, reserved cost, settled cost and finish time.
 - **FD-IFC-039** · phase 0 · `V-UNIT` — The dispatcher must not return an execution's `input_json` or any secret value from any route.
 - **FD-IFC-040** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — When `GET /v1/executions/:id` carries `wait` of 1 to 60 s, the dispatcher must hold the response until the execution is `done` or the wait ends.
 - **FD-IFC-041** · phase 0 · `V-UNIT` — If `wait` is not a whole number from 1 to 60, then the dispatcher must answer 400 `invalid_wait`.

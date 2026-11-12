@@ -48,6 +48,8 @@ const record = (cacheTrigger: IntakeRecord["cacheTrigger"]): IntakeRecord => ({
   placementConstraint: null,
   cacheTrigger,
   eligibleKinds: null,
+  repositoryPublic: null,
+  inputAssociations: [],
   createdAt: 0,
 });
 
