@@ -416,6 +416,42 @@ describe("the result-acceptance check over the control plane's D1 statement reco
     expect(await w.quarantined("mac-1")).toBe(false);
   }, 60_000);
 
+  it("[FD-PROV-019] rejects the previous holder's statement for its own epoch after a reclaim with stale-epoch, not wrong-executor", async () => {
+    const w = await world();
+    const before = await w.leaseStatement();
+    expect(await w.check(submission(), before)).toEqual(passesChecks1To11);
+    // mac-1 falls silent: the liveness reclaim invalidates epoch 1's nonce, then frees the placement at epoch 2,
+    // which mac-2 claims with a fresh nonce.
+    const reclaimed = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* invalidateLeaseNonce(w.db, LEASED, 1, w.now + 1);
+        const queued = yield* PlacementStore.use((p) =>
+          p.reclaim(LEASED, { expectedEpoch: 1, floor: 0, reason: "expiry" }),
+        );
+        const claimed = yield* PlacementStore.use((p) =>
+          p.claim(LEASED, { expectedEpoch: queued!.epoch, executorId: "mac-2", floor: 0 }),
+        );
+        const nonce = yield* leaseNonce(w.db, LEASED, claimed!.epoch, w.now + 2);
+        return { epoch: claimed!.epoch, nonce };
+      }).pipe(Effect.orDie, Effect.provide(d1PlacementStore(w.db))),
+    );
+    expect(reclaimed.epoch).toBe(2);
+
+    // mac-1's statement still names the lease issued to mac-1, at an epoch the execution has left.
+    expect(await w.check(submission(), before)).toEqual(rejected("stale-epoch"));
+    // A stale statement is the execution's failure alone: the previous holder is not quarantined.
+    expect(await w.quarantined("mac-1")).toBe(false);
+    // The current holder's statement for the current epoch passes check 7.
+    const current = await signed(
+      w.mac2.signing,
+      body({ epoch: reclaimed.epoch, nonce: reclaimed.nonce, executor_id: "mac-2" }),
+    );
+    expect(
+      await w.check(submission({ epoch: reclaimed.epoch, executor_id: "mac-2" }), current),
+    ).toEqual(passesChecks1To11);
+    expect(await w.quarantined("mac-2")).toBe(false);
+  }, 60_000);
+
   it("[FD-PROV-020] rejects a statement whose nonce differs from the nonce issued for its execution and epoch with nonce-mismatch", async () => {
     const w = await world();
     expect(await w.check(submission(), await w.leaseStatement({ nonce: "f".repeat(32) }))).toEqual(
