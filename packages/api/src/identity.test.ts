@@ -189,6 +189,31 @@ describe("dispatch identity", () => {
     expect(response.status).toBe(202);
   });
 
+  it("[FD-IFC-027]: an Access identity in dispatch.scoped may dispatch, and one in no list still answers 401", async () => {
+    const scanner = "scan-bot.access";
+    const config = baseConfig({
+      scoped: [
+        {
+          identity: scanner,
+          runs: ["check"],
+          repositories: ["acme/widgets"],
+          classCeiling: "batch",
+        },
+      ],
+    });
+    const scoped = await h.fetch("/v1/dispatch/check", {
+      ...(await h.asAccess(scanner, dispatchInit({}))),
+      config,
+    });
+    expect(scoped.status).toBe(202);
+    expect(h.doubles.calls.submissions.at(-1)?.caller).toBe(scanner);
+    const unscoped = await h.fetch("/v1/dispatch/check", {
+      ...(await h.asAccess(scanner, dispatchInit({}))),
+      config: baseConfig(),
+    });
+    expect(unscoped.status).toBe(401);
+  });
+
   it("[FD-IFC-024]: an Actions token needs GitHub's issuer, the overlay audience and a key from GitHub's JWKS", async () => {
     const good = await h.actions.sign(actionsClaims("acme/widgets"));
     expect(

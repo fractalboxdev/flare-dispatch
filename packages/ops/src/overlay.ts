@@ -284,14 +284,20 @@ export type RenderValues = Omit<
   readonly dispatchers: readonly string[];
   /** `null` where the overlay sets no list: absent admits every supported event, `[]` none (FD-INT-027). */
   readonly intake: { readonly webhookEvents: readonly string[] | null };
-  /** Empty where the overlay sets none, which refuses every Actions token. */
-  readonly dispatch: { readonly oidcAudience: string };
+  /**
+   * `oidcAudience` empty where the overlay sets none, which refuses every Actions token, and `scoped` empty where it
+   * sets none, which admits no scoped caller (FD-IFC-089).
+   */
+  readonly dispatch: {
+    readonly oidcAudience: string;
+    readonly scoped: readonly ScopedDispatchEntry[];
+  };
 };
 
 /**
  * The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults,
  * its policy rules and dispatchers, an empty set where it holds none, its Actions OIDC audience, empty where it sets
- * none, its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
+ * none, its `dispatch.scoped` entries, none where it sets none (FD-IFC-089), its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
  * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
  * it sets none (FD-PROV-016), its advisory ecosystems, none where it sets none (FD-OPS-100), its advisory snapshot
  * age, at its default where it sets none (FD-OPS-103), and its `records.url`, empty where it sets none (FD-GH-093).
@@ -302,7 +308,10 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   policy: { ...overlay.policy, rules: policyRulesOf(overlay) },
   dispatchers: overlay.dispatchers ?? [],
   intake: { webhookEvents: overlay.intake?.webhookEvents ?? null },
-  dispatch: { oidcAudience: overlay.dispatch?.oidcAudience ?? "" },
+  dispatch: {
+    oidcAudience: overlay.dispatch?.oidcAudience ?? "",
+    scoped: overlay.dispatch?.scoped ?? [],
+  },
   records: { url: overlay.records?.url ?? "" },
   scan: {
     ...overlay.scan,

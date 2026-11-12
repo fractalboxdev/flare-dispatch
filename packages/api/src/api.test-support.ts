@@ -115,6 +115,7 @@ export const baseConfig = (overrides: Partial<ApiConfigShape> = {}): ApiConfigSh
   access: { teamDomain: TEAM, aud: AUD },
   operators: [OPERATOR],
   dispatchers: [DISPATCHER],
+  scoped: [],
   oidcAudience: OIDC_AUD,
   planeId: "flare-dispatch",
   publicOrigin: ORIGIN,
