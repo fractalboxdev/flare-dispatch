@@ -73,7 +73,7 @@ export const releaseNotesRun = defineRun(
   catalogue,
 );
 
-/** The agentic runs whose bodies ship at this phase, in catalogue order. */
+/** The eight agentic runs, in catalogue order (FD-AGT-001). */
 export const agenticRuns = [
   prReviewRun,
   improvePrRun,
