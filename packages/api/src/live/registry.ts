@@ -1,12 +1,14 @@
 // Device enrollment through mameko's `registerDevice` under the profile's `registration` (FD-IFC-086). The slots are
 // the profile's device defaults; a refusal answers `registration_refused` naming the reason and writes no executor row
-// (FD-IFC-087).
+// (FD-IFC-087). The device's code hash is the code-signing hash its verified attestation evidence names, never the
+// `code_hash` the device reports (FD-PROV-031).
 import { deviceSlotDefaults, type Profile } from "@fractalboxdev/flare-dispatch-profile";
 import { registerDevice } from "@fractalboxdev/mameko-coordinator";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
 import { cloudflareRuntimeLayer } from "@fractalboxdev/mameko-host-cloudflare/runtime";
 import { Effect, Layer, Match } from "effect";
 import { apiError } from "../errors.ts";
+import { codeSigningHashOf } from "./attestation.ts";
 import { DeviceRegistry } from "../ports.ts";
 
 export interface D1RegistryOptions {
@@ -18,7 +20,10 @@ export interface D1RegistryOptions {
   readonly posture: (
     executorId: string,
   ) => Effect.Effect<"attested-dedicated" | "managed-workstation" | "unmanaged" | "failing">;
-  /** FlareDispatch's attestation verifier; a profile whose registration requires one refuses every key without it. */
+  /**
+   * FlareDispatch's attestation verifier (`attestationVerifier`); a profile whose registration requires one refuses
+   * every key without it.
+   */
   readonly verify: ((publicKey: string, evidence: unknown) => Effect.Effect<boolean>) | undefined;
 }
 
@@ -39,7 +44,12 @@ export const d1DeviceRegistry = (options: D1RegistryOptions): Layer.Layer<Device
             labels: body.labels,
             slots: { interactive, batch },
             protocolVersion: body.protocol_version,
-            codeHash: body.code_hash,
+            // Only a profile whose registration verifies the evidence admits a key on it, so only there does the
+            // evidence's code-signing requirement say anything the device could not make up.
+            codeHash:
+              options.profile.registration.attestation === "verifier"
+                ? codeSigningHashOf(body.identity.evidence)
+                : null,
           },
           {
             registration: options.profile.registration,
