@@ -187,6 +187,7 @@ export const apiEnvOf = (env: ControlPlaneEnv): ApiEnv => {
     ...(raw as ApiEnv),
     OPERATORS: textVar(raw["OPERATORS"]),
     DISPATCHERS: textVar(raw["DISPATCHERS"]),
+    CONTAINMENT: textVar(raw["CONTAINMENT"]),
     DISPATCH_SCOPED: textVar(raw["DISPATCH_SCOPED"]),
   } as ApiEnv;
 };

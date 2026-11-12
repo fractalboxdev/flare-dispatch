@@ -115,8 +115,11 @@ export class FailureSummaries extends Context.Service<
 
 // --- Operator operations ---------------------------------------------------------------------------------------------
 
+/** The plane's control state, which `POST /v1/ops/halt` sets. */
+export type ControlState = "run" | "halt-cloud" | "halt-all";
+
 export type OperatorOperation =
-  | { readonly _tag: "halt"; readonly state: "run" | "halt-cloud" | "halt-all" }
+  | { readonly _tag: "halt"; readonly state: ControlState }
   | { readonly _tag: "quarantine"; readonly target: OperationTarget }
   | { readonly _tag: "release"; readonly target: OperationTarget }
   | { readonly _tag: "force-admit"; readonly executionId: string; readonly expiresAt: number }
@@ -151,6 +154,11 @@ export class Operations extends Context.Service<
     ) => Effect.Effect<{ readonly target: string }, ApiError>;
     /** The liveness report with installation and delivery health (FD-OPS-036). */
     readonly health: Effect.Effect<Readonly<Record<string, unknown>>, ApiError>;
+    /**
+     * The current control state, which a `containment` identity's `halt-cloud` is checked against (FD-IFC-097). A state
+     * the coordinator cannot read fails `unavailable`; it never defaults to `run`.
+     */
+    readonly controlState: Effect.Effect<ControlState, ApiError>;
   }
 >()("@fractalboxdev/flare-dispatch-api/Operations") {}
 

@@ -78,7 +78,7 @@ export const failureSummary = (id: string) =>
     return boundIncident(mode === "confidential-compute" ? confidentialIncident(pack) : pack);
   });
 
-/** Only the identity that dispatched an execution, or an operator, may cancel it (FD-IFC-046). */
+/** Only the identity that dispatched an execution, an operator or a `containment` identity may cancel it (FD-IFC-046). */
 export const cancelExecution = (id: string) =>
   Effect.gen(function* () {
     const identity = yield* CurrentIdentity;
@@ -91,11 +91,11 @@ export const cancelExecution = (id: string) =>
     );
     const allowed =
       caller !== undefined &&
-      (record.dispatchedBy === caller || inGroup(config, "operators", caller));
+      (record.dispatchedBy === caller || inGroup(config, "containment", caller));
     if (!allowed)
       return yield* apiError(
         "forbidden",
-        "only the dispatcher or an operator may cancel this execution",
+        "only the dispatcher, an operator or a containment identity may cancel this execution",
       );
     const cancellation = yield* Cancellation;
     yield* cancellation.cancel({ executionId: id, identity: caller, requestId });
