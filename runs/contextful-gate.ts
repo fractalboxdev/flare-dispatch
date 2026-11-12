@@ -274,12 +274,15 @@ export const stageCommand = (
   stage: string,
   baseSha: string,
   prebuilt: PrebuiltBinary | null,
-): string => {
-  const args = `gate --predecessors --stage ${stage} --base ${baseSha}`;
-  return prebuilt === null
+  opts: { readonly compileOnly?: boolean } = {},
+): string =>
+  ciCommand(`gate --predecessors --stage ${stage} --base ${baseSha}${opts.compileOnly === true ? " --compile-only" : ""}`, prebuilt);
+
+/** `contextful-ci <args>`: the prebuilt binary when there is one, `cargo run` otherwise. */
+export const ciCommand = (args: string, prebuilt: PrebuiltBinary | null): string =>
+  prebuilt === null
     ? `${CARGO_RUN_CI} ${args}`
     : prebuiltCommand({ path: prebuilt.path, fallback: CARGO_RUN_CI, args });
-};
 
 /**
  * The `--affected` subset of the head's required parts. Empty output is a valid
