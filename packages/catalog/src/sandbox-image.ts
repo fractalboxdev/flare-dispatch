@@ -67,8 +67,9 @@ const sh = (text: string): string => `'${text.replaceAll("'", `'\\''`)}'`;
 export const buildCommand = (image: ImageSpec, arch: Arch): string =>
   `docker buildx build --platform ${arch} -f ${sh(image.dockerfile)} -t ${tagOf(image, arch)} --load ${sh(image.context ?? ".")}`;
 
+/** One smoke command inside the built image, run by `sh` whatever entrypoint the image declares. */
 export const smokeCommand = (image: ImageSpec, arch: Arch, command: string): string =>
-  `docker run --rm --platform ${arch} ${tagOf(image, arch)} sh -c ${sh(command)}`;
+  `docker run --rm --platform ${arch} --entrypoint sh ${tagOf(image, arch)} -c ${sh(command)}`;
 
 export const publishCommand = (
   image: ImageSpec,

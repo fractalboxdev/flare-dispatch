@@ -1,0 +1,9 @@
+# The scan bundle's gitleaks configuration for the smoke check: the default rules plus one rule that matches the
+# planted value, which is no real credential.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "fd-smoke-planted"
+description = "The planted value of the gate image's smoke fixture"
+regex = '''fdsmoke_[0-9a-f]{32}'''

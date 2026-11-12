@@ -12,6 +12,29 @@
           { "label": "test", "command": "pnpm test", "timeoutSec": 1800 }
         ]
       }
+    },
+    {
+      "recipe": "sandbox-image",
+      "triggers": ["pull_request"],
+      "params": {
+        "paths": ["infra/v2/**"],
+        "images": [
+          {
+            "name": "gate",
+            "dockerfile": "infra/v2/Dockerfile.gate",
+            "smoke": [
+              "fd-runner --version",
+              "for tool in $(grep -v -e '^#' -e '^$' /etc/flare-dispatch/scan-tools); do command -v \"$tool\" || exit 1; done",
+              "/opt/flare-dispatch/scan-smoke/run.sh gitleaks finding",
+              "/opt/flare-dispatch/scan-smoke/run.sh gitleaks tool-error",
+              "/opt/flare-dispatch/scan-smoke/run.sh zizmor finding",
+              "/opt/flare-dispatch/scan-smoke/run.sh zizmor tool-error",
+              "/opt/flare-dispatch/scan-smoke/run.sh osv-scanner finding",
+              "/opt/flare-dispatch/scan-smoke/run.sh osv-scanner tool-error"
+            ]
+          }
+        ]
+      }
     }
   ]
 }

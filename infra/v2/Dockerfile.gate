@@ -12,11 +12,46 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CI=true \
     FD_WORKSPACE_ROOT=/workspaces
 
-# git fetches the execution's commit; ca-certificates lets it and the jobs trust the egress proxy's upstreams.
+# git fetches the execution's commit; ca-certificates lets it and the jobs trust the egress proxy's upstreams; curl
+# fetches the scanners below.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git ca-certificates && \
+    apt-get install -y --no-install-recommends git ca-certificates curl && \
     rm -rf /var/lib/apt/lists/* && \
     git --version
+
+# The security gate's scanners (specs/runs/gate.md § Security gate), each a release download checked against its
+# SHA-256 for the architecture buildx targets. A scan bundle's `scanners.<name>.versions` must accept these versions.
+ARG TARGETARCH
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      arm64) \
+        gitleaks_asset=linux_arm64; gitleaks_sha256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080; \
+        zizmor_asset=aarch64-unknown-linux-gnu; zizmor_sha256=cb152b207f815116d7fa1c1ee4614f61578803351395052908095e79adfd9fd0; \
+        osv_asset=linux_arm64; osv_sha256=4061ef4c021ed3c47f203b818f337e351336cc5cd67c0274fc36bd1dfc728dd7 ;; \
+      amd64) \
+        gitleaks_asset=linux_x64; gitleaks_sha256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb; \
+        zizmor_asset=x86_64-unknown-linux-gnu; zizmor_sha256=bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b; \
+        osv_asset=linux_amd64; osv_sha256=160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b ;; \
+      *) echo "no scanner build for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    tmp=$(mktemp -d); \
+    curl -fsSL -o "$tmp/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_${gitleaks_asset}.tar.gz"; \
+    curl -fsSL -o "$tmp/zizmor.tar.gz" "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-${zizmor_asset}.tar.gz"; \
+    curl -fsSL -o "$tmp/osv-scanner" "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_${osv_asset}"; \
+    printf '%s  %s\n' "$gitleaks_sha256" "$tmp/gitleaks.tar.gz" "$zizmor_sha256" "$tmp/zizmor.tar.gz" \
+      "$osv_sha256" "$tmp/osv-scanner" | sha256sum -c -; \
+    tar -xzf "$tmp/gitleaks.tar.gz" -C "$tmp" gitleaks; \
+    tar -xzf "$tmp/zizmor.tar.gz" -C "$tmp"; \
+    install -m 0755 "$tmp/gitleaks" "$tmp/osv-scanner" /usr/local/bin/; \
+    install -m 0755 "$(find "$tmp" -type f -name zizmor | head -n 1)" /usr/local/bin/zizmor; \
+    rm -rf "$tmp"; \
+    gitleaks version && zizmor --version && osv-scanner --version
+
+# The binaries a baseline check may run (FD-GATE-109), and the fixtures the image's smoke commands scan
+# (FD-GATE-114, FD-GATE-115).
+COPY infra/v2/scan-tools /etc/flare-dispatch/scan-tools
+COPY infra/v2/scan-smoke /opt/flare-dispatch/scan-smoke
+RUN chmod 0644 /etc/flare-dispatch/scan-tools && chmod 0755 /opt/flare-dispatch/scan-smoke/run.sh
 
 # Corepack resolves the `packageManager` pin of the repository under test.
 RUN npm install -g corepack@0.35.0 && corepack enable && corepack prepare pnpm@11.1.3 --activate && pnpm --version
