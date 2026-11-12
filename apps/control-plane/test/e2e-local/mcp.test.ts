@@ -140,8 +140,11 @@ describe("the MCP server at /mcp", () => {
     expect(stack.requests.filter((r) => r.path === "/mcp" && r.method === "POST").length).toBe(2);
   });
 
-  it("[FD-INT-062] [FD-IFC-072] a dispatch call runs as trigger mcp under the caller's identity, and get_verdict waits for its verdict", async () => {
+  it("[FD-ARCH-002] [FD-INT-062] [FD-IFC-072] a dispatch call runs as trigger mcp under the caller's identity, and get_verdict waits for its verdict", async () => {
     const sha = "6".repeat(40);
+    const mcpPosts = () =>
+      stack.requests.filter((r) => r.path === "/mcp" && r.method === "POST").length;
+    const before = mcpPosts();
     const dispatched = await call("dispatch", {
       run: "check",
       repo: REPOSITORY,
@@ -149,6 +152,8 @@ describe("the MCP server at /mcp", () => {
       inputs: inputs(sha),
     });
     expect(dispatched.isError).toBe(false);
+    // The call reached the Worker's `/mcp` route, which admitted it.
+    expect(mcpPosts()).toBe(before + 1);
     const id = String(dispatched.value["execution_id"]);
     const record = (
       await (
