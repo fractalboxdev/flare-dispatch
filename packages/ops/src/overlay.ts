@@ -207,14 +207,33 @@ export const spendValuesOf = (overlay: OverlayValues): Required<SpendValues> => 
 /** The overlay's policy rules, none for a repository the overlay names no rule for (FD-PROF-025). */
 export const policyRulesOf = (overlay: OverlayValues): PolicyRules => overlay.policy?.rules ?? {};
 
+/** The values a template's placeholders resolve against (`renderValuesOf`). */
+export type RenderValues = Omit<
+  OverlayValues,
+  "spend" | "policy" | "dispatchers" | "intake" | "dispatch"
+> & {
+  readonly spend: Required<SpendValues>;
+  readonly policy: { readonly rules: PolicyRules };
+  readonly dispatchers: readonly string[];
+  /** `null` where the overlay sets no list: absent admits every supported event, `[]` none (FD-INT-027). */
+  readonly intake: { readonly webhookEvents: readonly string[] | null };
+  /** Empty where the overlay sets none, which refuses every Actions token. */
+  readonly dispatch: { readonly oidcAudience: string };
+};
+
 /**
- * The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults
- * and its policy rules, an empty set where it holds none.
+ * The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults,
+ * its policy rules and dispatchers, an empty set where it holds none, its Actions OIDC audience, empty where it sets
+ * none, and its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
+ * supported event) from an empty one (none) (FD-INT-027).
  */
-export const renderValuesOf = (overlay: OverlayValues): OverlayValues => ({
+export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
   spend: spendValuesOf(overlay),
   policy: { ...overlay.policy, rules: policyRulesOf(overlay) },
+  dispatchers: overlay.dispatchers ?? [],
+  intake: { webhookEvents: overlay.intake?.webhookEvents ?? null },
+  dispatch: { oidcAudience: overlay.dispatch?.oidcAudience ?? "" },
 });
 
 /** The overlay's provider registry as the deploy check reads it, each entry under its key as its id. */

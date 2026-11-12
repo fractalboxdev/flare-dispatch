@@ -20,6 +20,13 @@
     "ACCESS_TEAM_DOMAIN": "{{access.teamDomain}}",
     "ACCESS_AUD": "{{access.aud}}",
     "OPERATORS": "{{operators}}",
+    // The identities allowed to dispatch through `fd` and `/mcp`, none where the overlay names none (FD-IFC-027).
+    "DISPATCHERS": "{{dispatchers}}",
+    // The Actions OIDC audience of a dispatch; empty where the overlay sets none, which refuses every Actions token.
+    "DISPATCH_OIDC_AUDIENCE": "{{dispatch.oidcAudience}}",
+    // The webhook events intake admits: `null` where the overlay sets no list, which admits every supported event,
+    // and `[]` for an empty list, which admits none (FD-INT-027).
+    "WEBHOOK_EVENTS": "{{intake.webhookEvents}}",
     "GITHUB_APP_ID": "{{github.appId}}",
     // The repository the 15-minute synthetic webhook canary pushes to; with the App's key, the tick also runs the
     // installation and delivery probes (FD-OPS-038, FD-OPS-041, FD-OPS-044).

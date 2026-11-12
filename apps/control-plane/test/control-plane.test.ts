@@ -33,6 +33,8 @@ import {
   type AccessTeam,
 } from "./support.ts";
 import { authenticatedOf, refusalOf } from "../src/intake-port.ts";
+import { intakeSettings } from "../src/composition.ts";
+import type { ControlPlaneEnv } from "../src/config.ts";
 
 const SHA = "a".repeat(40);
 
@@ -1443,5 +1445,22 @@ describe("the MCP server at /mcp", () => {
     expect(entry).toMatch(/requested\W+release/);
     expect(entry).toMatch(/assigned\W+batch/);
     expect(entry).toContain(OPERATOR);
+  });
+});
+
+describe("the WEBHOOK_EVENTS var", () => {
+  const eventsOf = (delivered: unknown) =>
+    intakeSettings({
+      DEPLOYMENT: "production",
+      ...(delivered === undefined ? {} : { WEBHOOK_EVENTS: delivered }),
+    } as unknown as ControlPlaneEnv).webhookEvents;
+
+  it("[FD-INT-027] intake admits every supported event where the var is null or unset, only the listed events for a list, and none for an empty list", () => {
+    for (const absent of [undefined, null, "null", ""]) expect(eventsOf(absent)).toBeUndefined();
+    for (const empty of [[], "[]"]) expect(eventsOf(empty)).toEqual([]);
+    for (const listed of [["push", "ping"], '["push","ping"]'])
+      expect(eventsOf(listed)).toEqual(["push", "ping"]);
+    // A value that is no list never widens what intake admits.
+    for (const malformed of ["push", "{}", 7]) expect(eventsOf(malformed)).toEqual([]);
   });
 });
