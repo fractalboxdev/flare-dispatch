@@ -2,7 +2,7 @@
   // The v2 control plane. `DEPLOYMENT` is `production` here, and only the local CI command overrides it, so a
   // deploy of this file refuses host execution and the software key. Every account-specific value is a `{{path}}`
   // placeholder the renderer fills from the operator overlay; secrets (the App key, webhook secret, link key, cache
-  // token secrets, the presigner's R2 API token) are Worker secrets.
+  // token secrets, the presigner's R2 API token, the log key) are Worker secrets.
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "flare-dispatch-control-plane",
   "main": "src/worker.ts",
@@ -69,6 +69,9 @@
       { "name": "CONTROL_POOL", "class_name": "ControlPool" },
       // One per GitHub App installation: its tick units, one per alarm (FD-INT-067).
       { "name": "INTAKE_UNITS", "class_name": "IntakeUnits" },
+      // The only writer of the private transparency log: one object, `idFromName("private")`, writing to `CACHE`
+      // under `tlog/private/` and signing checkpoints with the `LOG_KEY` Worker secret (FD-PROV-074).
+      { "name": "TRANSPARENCY_LOG", "class_name": "TransparencyLog" },
     ],
   },
   // One Container class per cloud pool, each running the gate image; `max_instances` sits above the pool's admission
@@ -129,5 +132,6 @@
       ],
     },
     { "tag": "v3", "new_sqlite_classes": ["IntakeUnits"] },
+    { "tag": "v4", "new_sqlite_classes": ["TransparencyLog"] },
   ],
 }

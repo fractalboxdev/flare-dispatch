@@ -2,7 +2,7 @@
   "name": "@fractalboxdev/flare-dispatch-cache",
   "version": "0.0.1",
   "private": true,
-  "description": "FlareDispatch's cache, artifact and log stores on R2: cache namespaces and tiers, the cache key, the CacheLedger, fenced manifest commits, the object-store presigner, the compile-cache route, sweeps, artifacts, logs, the OIDC issuer and the verdict audit.",
+  "description": "FlareDispatch's cache, artifact and log stores on R2: cache namespaces and tiers, the cache key, the CacheLedger, fenced manifest commits, the object-store presigner, the compile-cache route, sweeps, artifacts, logs, the OIDC issuer, the verdict audit and the private transparency log.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -11,7 +11,8 @@
     "./device": "./src/device/index.ts",
     "./log-names": "./src/log-names.ts",
     "./oidc": "./src/oidc.ts",
-    "./provenance": "./src/provenance/index.ts"
+    "./provenance": "./src/provenance/index.ts",
+    "./transparency-log": "./src/provenance/log-object.ts"
   },
   "scripts": {
     "test": "vitest run"
