@@ -1,5 +1,6 @@
 // `pr-review`: the review diff, the risk tier, one reviewer per persona in its own Activity, the deterministic
 // coordination, one review comment updated in place and the check-run annotations (specs/runs/agentic.md § `pr-review`).
+import { canonicalJson, sha256Hex } from "@fractalboxdev/flare-dispatch-cache/crypto";
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Exit, Match, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
@@ -17,7 +18,8 @@ export const LINT_MAX_CHARS = 8000;
 /** The run ceiling the repo manifest sets for `pr-review` (FD-AGT-047). */
 export const PR_REVIEW_MAX_DURATION_SEC = 1500;
 
-export const Finding = Schema.Struct({
+/** A finding as a reviewer's model answers it. Any identity the model sends is dropped on decode. */
+export const ReviewerFinding = Schema.Struct({
   path: Schema.String.check(Schema.isMaxLength(400)),
   startLine: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
   endLine: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
@@ -25,7 +27,35 @@ export const Finding = Schema.Struct({
   title: Schema.String.check(Schema.isMaxLength(200)),
   message: Schema.String.check(Schema.isMaxLength(2000)),
 });
+export type ReviewerFinding = typeof ReviewerFinding.Type;
+
+/**
+ * A reviewer finding with its identity: `ruleId` is `pr-review/<reviewer>` (FD-AGT-089), and `fingerprint` is the
+ * lowercase hex SHA-256 of the canonical JSON of `ruleId`, `path` and `startLine` (FD-AGT-090).
+ */
+export const Finding = Schema.Struct({
+  ...ReviewerFinding.fields,
+  ruleId: Schema.String.check(Schema.isPattern(/^pr-review\/[a-z][a-z-]*$/)),
+  fingerprint: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+});
 export type Finding = typeof Finding.Type;
+
+/** The `ruleId` of a finding that `reviewer` reports (FD-AGT-089). */
+export const reviewRuleId = (reviewer: string) => `pr-review/${reviewer}`;
+
+/** The SHA-256 of the canonical JSON of a finding's `ruleId`, `path` and `startLine` (FD-AGT-090). */
+export const findingFingerprint = (f: {
+  readonly ruleId: string;
+  readonly path: string;
+  readonly startLine: number;
+}) => sha256Hex(canonicalJson({ ruleId: f.ruleId, path: f.path, startLine: f.startLine }));
+
+/** A decoded reviewer finding with the identity of the reviewer that reported it. */
+export const identifyFinding = (reviewer: string, f: ReviewerFinding) =>
+  Effect.promise(async (): Promise<Finding> => {
+    const ruleId = reviewRuleId(reviewer);
+    return { ...f, ruleId, fingerprint: await findingFingerprint({ ...f, ruleId }) };
+  });
 
 export const PrReviewInput = Schema.Struct({
   repo: Schema.Struct({ owner: Schema.String, name: Schema.String }),
@@ -285,7 +315,7 @@ export class ReviewerFailed extends Schema.TaggedError<ReviewerFailed>()("Review
   ]),
 }) {}
 
-const ReviewerOutput = Schema.Struct({ findings: Schema.Array(Finding) });
+const ReviewerOutput = Schema.Struct({ findings: Schema.Array(ReviewerFinding) });
 const decodeOutput = Schema.decodeUnknownExit(ReviewerOutput);
 
 /** The first JSON object of a completion, with any code fence or reasoning text around it dropped. */
@@ -338,7 +368,7 @@ const reviewOnce = (input: PrReviewInput, reviewer: string, diff: string, lint: 
     const decoded = decodeOutput(extractJson(text));
     if (Exit.isFailure(decoded))
       return yield* new ReviewerFailed({ reviewer, kind: "invalid-output" });
-    return decoded.value.findings;
+    return yield* Effect.forEach(decoded.value.findings, (f) => identifyFinding(reviewer, f));
   });
 
 const kindOf = (e: ModelCallError) => e.kind;
@@ -413,7 +443,7 @@ export const reviewComment = (
     "",
     ...shown.map(
       (f) =>
-        `- **${f.level}** \`${f.path.replaceAll("`", "'")}:${f.startLine}\` ${sanitizeModelText(f.title)}: ${sanitizeModelText(f.message)}`,
+        `- **${f.level}** \`${f.path.replaceAll("`", "'")}:${f.startLine}\` ${sanitizeModelText(f.title)}: ${sanitizeModelText(f.message)} (\`${f.ruleId}\`) <!-- fingerprint: ${f.fingerprint} -->`,
     ),
     ...(findings.length > shown.length
       ? ["", `${findings.length - shown.length} more findings are in the check run.`]
@@ -424,7 +454,10 @@ export const reviewComment = (
   return lines.join("\n");
 };
 
-/** Each finding with a path and a line, as a check-run annotation, at most 50 (FD-AGT-054). */
+/**
+ * Each finding with a path and a line, as a check-run annotation, at most 50 (FD-AGT-054). The annotation's raw
+ * details carry the finding's `ruleId` and `fingerprint`.
+ */
 export const reviewAnnotations = (findings: readonly Finding[]) =>
   findings
     .filter((f) => f.path !== "" && f.startLine > 0)
@@ -436,6 +469,7 @@ export const reviewAnnotations = (findings: readonly Finding[]) =>
       annotation_level: f.level,
       title: sanitizeModelText(f.title),
       message: sanitizeModelText(f.message),
+      raw_details: `ruleId: ${f.ruleId}\nfingerprint: ${f.fingerprint}`,
     }));
 
 /** The verdict: `advisory` always succeeds; `gating` fails on `request-changes` (FD-AGT-055, FD-AGT-056). */

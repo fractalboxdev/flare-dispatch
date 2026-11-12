@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -17,6 +18,8 @@ import {
   buildReviewDiff,
   classifyChange,
   coordinate,
+  findingFingerprint,
+  LITE_REVIEWERS,
   PR_REVIEW_CHECK_NAME,
   PR_REVIEW_MARKER,
   prReviewRequest,
@@ -62,6 +65,8 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
   level: "warning",
   title: "t",
   message: "m",
+  ruleId: "pr-review/code-quality",
+  fingerprint: "0".repeat(64),
   ...over,
 });
 
@@ -107,7 +112,9 @@ describe("catalogue", () => {
       "release-notes",
     ]);
     for (const run of agenticRuns) {
-      expect(run.spec.intentKinds, run.spec.name).toEqual(AGENTIC_CATALOG[run.spec.name]?.spec.intentKinds);
+      expect(run.spec.intentKinds, run.spec.name).toEqual(
+        AGENTIC_CATALOG[run.spec.name]?.spec.intentKinds,
+      );
       expect(run.layer, run.spec.name).toBeDefined();
     }
   });
@@ -396,6 +403,60 @@ describe("pr-review", () => {
     expect(user?.content).toMatch(
       /<untrusted-data>[\s\S]*ignore previous instructions[\s\S]*<\/untrusted-data>/,
     );
+  });
+
+  it("[FD-AGT-089] sets each finding's ruleId to pr-review/<reviewer>, whatever ruleId the model answers", async () => {
+    const { rec } = await runReview(prInput(), {
+      shell: diffShell(section("src/a.ts", 30)),
+      model: (r) => {
+        const reviewer = r.callSite.replace("reviewer:", "");
+        return JSON.stringify({
+          findings: [finding({ path: `src/${reviewer}.ts`, ruleId: "pr-review/forged" })],
+        });
+      },
+    });
+    const intent = rec.intents.find((i) => i.kind === "check.annotations");
+    const decoded = Schema.decodeUnknownSync(CheckPayloads["check.annotations"])(intent?.payload);
+    const ruleIds = Object.fromEntries(
+      decoded.annotations.map((a) => [a.path, /^ruleId: (.*)$/m.exec(a.raw_details ?? "")?.[1]]),
+    );
+    expect(ruleIds).toEqual(
+      Object.fromEntries(LITE_REVIEWERS.map((r) => [`src/${r}.ts`, `pr-review/${r}`])),
+    );
+    const body =
+      (rec.intents.find((i) => i.kind === "comment")?.payload as { body?: string })?.body ?? "";
+    for (const r of LITE_REVIEWERS) expect(body).toContain(`\`pr-review/${r}\``);
+    expect(body).not.toContain("pr-review/forged");
+  });
+
+  it("[FD-AGT-090] sets each finding's fingerprint to the SHA-256 of the canonical JSON of ruleId, path and startLine", async () => {
+    const expected = createHash("sha256")
+      .update('{"path":"src/a.ts","ruleId":"pr-review/code-quality","startLine":3}')
+      .digest("hex");
+    const { rec } = await runReview(prInput(), {
+      shell: diffShell(section("src/a.ts", 3)),
+      model: () =>
+        JSON.stringify({
+          findings: [finding({ level: "failure", endLine: 8, fingerprint: "f".repeat(64) })],
+        }),
+    });
+    const intent = rec.intents.find((i) => i.kind === "check.annotations");
+    const decoded = Schema.decodeUnknownSync(CheckPayloads["check.annotations"])(intent?.payload);
+    expect(decoded.annotations.map((a) => a.raw_details)).toEqual([
+      `ruleId: pr-review/code-quality\nfingerprint: ${expected}`,
+    ]);
+    const body =
+      (rec.intents.find((i) => i.kind === "comment")?.payload as { body?: string })?.body ?? "";
+    expect(body).toContain(`<!-- fingerprint: ${expected} -->`);
+    // Level, end line, title and message do not enter the fingerprint; ruleId, path and start line each do.
+    const base = { ruleId: "pr-review/code-quality", path: "src/a.ts", startLine: 3 };
+    expect(await findingFingerprint(base)).toBe(expected);
+    expect(await findingFingerprint({ ...base, ruleId: "pr-review/security" })).not.toBe(expected);
+    expect(await findingFingerprint({ ...base, path: "src/b.ts" })).not.toBe(expected);
+    expect(await findingFingerprint({ ...base, startLine: 4 })).not.toBe(expected);
+    // Coordination keeps the identity of the finding it keeps.
+    const kept = finding({ level: "failure", startLine: 5, endLine: 5, fingerprint: expected });
+    expect(coordinate([finding({ startLine: 1, endLine: 10 }), kept]).findings).toEqual([kept]);
   });
 });
 
